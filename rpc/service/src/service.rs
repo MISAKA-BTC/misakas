@@ -2000,9 +2000,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.base_class_id.to_string(),
             _ => return Ok(GetPalwRegistrationTermsResponse::default()),
         };
+        // One owned session. The virtual DAA is read before the await and again with the terms,
+        // on that same session. Mempool contents are not part of this answer.
         let session = self.consensus_manager.consensus().unguarded_session();
-        let tip_daa = session.get_virtual_daa_score();
-        let (terms, families) = session.spawn_blocking(|c| (c.palw_v2_registration_terms(), c.palw_certified_families_v1())).await;
+        let read = PalwRegistrationReadV1::open(session.get_virtual_daa_score());
+        let (tip_with_terms, terms, families) = session
+            .spawn_blocking(|c| (c.get_virtual_daa_score(), c.palw_v2_registration_terms(), c.palw_certified_families_v1()))
+            .await;
+        let tip_daa = read.finish(tip_with_terms).map_err(|why| RpcError::General(why.into()))?;
         let Some(terms) = terms else {
             return Ok(GetPalwRegistrationTermsResponse { base_class_id, tip_daa, ..Default::default() });
         };
@@ -6823,6 +6828,27 @@ fn rpc_palw_model_version(
     }
 }
 
+/// One registration-terms read. It records the virtual DAA before the terms are read and
+/// refuses the answer if that DAA moved. Mempool contents are not part of the read. The same
+/// DAA does not freeze every virtual mutation.
+struct PalwRegistrationReadV1 {
+    virtual_daa: u64,
+}
+
+impl PalwRegistrationReadV1 {
+    fn open(virtual_daa: u64) -> Self {
+        Self { virtual_daa }
+    }
+
+    fn finish(&self, virtual_daa: u64) -> Result<u64, &'static str> {
+        if self.virtual_daa == virtual_daa {
+            Ok(virtual_daa)
+        } else {
+            Err("registration terms changed virtual state during the read; retry")
+        }
+    }
+}
+
 fn palw_settlement_read_agrees_v1(
     before_sink: kaspa_consensus_core::BlockHash,
     before_pruning: kaspa_consensus_core::BlockHash,
@@ -6960,6 +6986,13 @@ mod palw_settlement_read_tests {
             assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, sink, sink, &base, generation));
         }
         assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, sink, pruning, &base, Some(pruning)));
+    }
+
+    #[test]
+    fn registration_terms_refuse_a_virtual_daa_that_moved_during_the_read() {
+        let read = PalwRegistrationReadV1::open(10);
+        assert_eq!(read.finish(10), Ok(10));
+        assert!(read.finish(11).is_err());
     }
 }
 

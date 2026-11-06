@@ -9414,22 +9414,34 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_epoch(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.epoch_counters, false, "native epoch_counters writer")?;
-        let old = match &new {
-            Some(record) => self.state.epoch_counters.insert(key, record.clone()),
-            None => self.state.epoch_counters.remove(&key),
-        };
-        self.entries.push(PalwDeltaEntryV2::Epoch { key, old, new });
-        Ok(())
+        self.write_epoch_counter::<false>(key, new)
     }
 
     pub(super) fn write_receipt_epoch(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.receipt_epoch_counters, false, "native receipt_epoch_counters writer")?;
-        let old = match &new {
-            Some(record) => self.state.receipt_epoch_counters.insert(key, record.clone()),
-            None => self.state.receipt_epoch_counters.remove(&key),
+        self.write_epoch_counter::<true>(key, new)
+    }
+
+    /// Map, reservation label and delta variant are one choice. A later copy cannot keep the
+    /// epoch map while recording a receipt delta, because the const selects all three.
+    fn write_epoch_counter<const RECEIPT: bool>(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) -> Result<(), PalwStateV2Error> {
+        let old = if RECEIPT {
+            self.reserve_map_row_v1(&key, &new, |s| &s.receipt_epoch_counters, false, "native receipt_epoch_counters writer")?;
+            match &new {
+                Some(record) => self.state.receipt_epoch_counters.insert(key, record.clone()),
+                None => self.state.receipt_epoch_counters.remove(&key),
+            }
+        } else {
+            self.reserve_map_row_v1(&key, &new, |s| &s.epoch_counters, false, "native epoch_counters writer")?;
+            match &new {
+                Some(record) => self.state.epoch_counters.insert(key, record.clone()),
+                None => self.state.epoch_counters.remove(&key),
+            }
         };
-        self.entries.push(PalwDeltaEntryV2::ReceiptEpoch { key, old, new });
+        self.entries.push(if RECEIPT {
+            PalwDeltaEntryV2::ReceiptEpoch { key, old, new }
+        } else {
+            PalwDeltaEntryV2::Epoch { key, old, new }
+        });
         Ok(())
     }
 

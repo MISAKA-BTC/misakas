@@ -930,12 +930,9 @@ impl WorkerSupervisor {
         on_token: &mut dyn FnMut(u32, &[u8]),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<PalwFpWorkerResultV3, String> {
-        let mut guard = self.pool.acquire();
-        // **A request whose client left while it waited for this slot is not run** (RFC-0001 §2.7): the slot goes straight
-        // to the next in line and the worker is untouched.
-        if cancelled() {
-            return Err(serving::CANCELLED_BY_CLIENT.to_string());
-        }
+        let mut guard = self.pool.acquire_unless_cancelled(cancelled).map_err(|_| serving::CANCELLED_BY_CLIENT.to_string())?;
+        // The slot is held from here until this function returns. A cancel that arrives after the
+        // job has started is answered by the worker, and the slot is not returned early.
         let slot = guard.get_mut();
         if slot.is_none() {
             *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
@@ -961,10 +958,7 @@ impl WorkerSupervisor {
         on_token: &mut dyn FnMut(u32, &[u8]),
         cancelled: &dyn Fn() -> bool,
     ) -> Result<AnswerRun, String> {
-        let mut guard = self.pool.acquire();
-        if cancelled() {
-            return Err(serving::CANCELLED_BY_CLIENT.to_string());
-        }
+        let mut guard = self.pool.acquire_unless_cancelled(cancelled).map_err(|_| serving::CANCELLED_BY_CLIENT.to_string())?;
         let slot = guard.get_mut();
         if slot.is_none() {
             *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out, &self.worker_args)?);
@@ -2811,13 +2805,18 @@ fn main() {
         // The per-source connection share: counted here, before the thread, so a source over its
         // share costs a 503 and not a thread.
         let peer = stream.peer_addr().map(|a| a.ip()).ok();
-        if let Some(peer) = peer
-            && gate.open_connection(peer).is_err()
-        {
-            connections.fetch_sub(1, Ordering::AcqRel);
-            respond(&mut stream, "429 Too Many Requests", &error_body("per-source connection share exceeded"));
-            continue;
-        }
+        let connection_share = if let Some(peer) = peer {
+            match gate.open_connection_owned(peer) {
+                Ok(share) => Some(share),
+                Err(_) => {
+                    connections.fetch_sub(1, Ordering::AcqRel);
+                    respond(&mut stream, "429 Too Many Requests", &error_body("per-source connection share exceeded"));
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         std::thread::spawn(move || {
             serve_connection(
                 &mut stream,
@@ -2832,9 +2831,7 @@ fn main() {
                 &gate,
                 &services,
             );
-            if let Some(peer) = peer {
-                gate.close_connection(peer);
-            }
+            drop(connection_share);
             connections.fetch_sub(1, Ordering::AcqRel);
         });
     }
@@ -2865,21 +2862,6 @@ struct Services {
 impl Services {
     fn open(outbox: &Path) -> Self {
         Self { idempotency: idempotency::IdempotencyStore::open(outbox), book: status::RequestBook::default() }
-    }
-}
-
-/// A source's share of in-flight jobs, given back when the request ends however it ends.
-struct SourceJobsGuard<'a> {
-    gate: &'a pool::SourceGate,
-    source: Option<IpAddr>,
-    jobs: u32,
-}
-
-impl Drop for SourceJobsGuard<'_> {
-    fn drop(&mut self) {
-        if let Some(source) = self.source {
-            self.gate.finish_jobs(source, self.jobs);
-        }
     }
 }
 
@@ -3172,13 +3154,17 @@ fn serve_connection(
                     return;
                 }
             };
-            if let Some(source) = source
-                && gate.start_jobs(source, jobs).is_err()
-            {
-                respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
-                return;
-            }
-            let _source_share = SourceJobsGuard { gate, source, jobs };
+            let _source_share = if let Some(source) = source {
+                match gate.reserve_jobs(source, jobs) {
+                    Ok(share) => Some(share),
+                    Err(_) => {
+                        respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
             let link: Box<dyn serving::ClientLink> = match serving::TcpLink::new(stream) {
                 Some(link) if config.cancel_on_disconnect => Box::new(link),
                 _ => Box::new(serving::AlwaysPresent),
@@ -3331,13 +3317,17 @@ fn serve_connection(
                     return;
                 }
             };
-            if let Some(source) = source
-                && gate.start_jobs(source, 1).is_err()
-            {
-                respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
-                return;
-            }
-            let _source_share = SourceJobsGuard { gate, source, jobs: 1 };
+            let _source_share = if let Some(source) = source {
+                match gate.reserve_jobs(source, 1) {
+                    Ok(share) => Some(share),
+                    Err(_) => {
+                        respond(stream, "429 Too Many Requests", &error_body("per-source jobs in flight exceeded"));
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
             let outcome = handle_embeddings(config, worker, &parsed, &admitted);
             match outcome {
                 Ok(Some(body)) => respond(stream, "200 OK", &body),

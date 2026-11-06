@@ -50,11 +50,11 @@ mkdir -p "$LOG_DIR" || exit 125
 # and is what a pre-commit hook or an impatient human should run. `build` needs a toolchain and
 # a compiled workspace.
 # ---------------------------------------------------------------------------------------------
-GATE_IDS="toolchain-pin workflow-parity artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check build-devnet-prealloc check-evm-send nextest derive-suite doctest hashes-no-asm doctest-hashes-no-asm doc example-kip10 context-vectors"
+GATE_IDS="toolchain-pin workflow-parity palw-boundaries artifact-conformance artifact-stranger artifact-roundtrip artifact-thirdparty fmt clippy pq-guard check build-devnet-prealloc check-evm-send nextest derive-suite doctest hashes-no-asm doctest-hashes-no-asm doc example-kip10 context-vectors"
 
 gate_group() {
     case "$1" in
-        toolchain-pin|workflow-parity|artifact-*) echo fast ;;
+        toolchain-pin|workflow-parity|palw-boundaries|artifact-*) echo fast ;;
         *) echo build ;;
     esac
 }
@@ -76,6 +76,7 @@ gate_desc() {
     case "$1" in
         toolchain-pin)        echo "rust-toolchain.toml exists, and no workflow job installs a floating toolchain" ;;
         workflow-parity)      echo "every build gate below is spelled the same way in ci.yaml" ;;
+        palw-boundaries)      echo "PALW source guards see nested modules and the same-chain recovery paths stay named" ;;
         artifact-conformance) echo "the format checker refuses five specific injuries BY NAME" ;;
         artifact-stranger)    echo "the Python re-derivation agrees with the shipped Rust's own oracles" ;;
         artifact-roundtrip)   echo "artifacts re-derived in Python are then opened by the format checker" ;;
@@ -300,12 +301,12 @@ gate_coverage() {
         example-kip10)
             grep -E '^ +Running ' "$log" 2>/dev/null | sed 's/^ */    coverage: ran /' || true
             ;;
-        artifact-*|toolchain-pin|workflow-parity)
+        artifact-*|toolchain-pin|workflow-parity|palw-boundaries)
             # These print their own coverage; echo the lines that carry it. Indentation varies
             # between the scripts, so the anchors are the words, not the columns -- an earlier
             # version of this pattern required two leading spaces and silently printed nothing
             # for the one gate whose output has none.
-            grep -E '^[[:space:]]*(refused|OK|AGREE|SKIP|WRONG|FAIL)[[:space:]]|^[[:space:]]*(selftest:|libraries:|interpreter:|covered kinds:|checked [0-9]|PIN OK|PARITY OK|rust-toolchain\.toml pins|SELFTEST FAILED|PIN FAILED|PARITY FAILED)|^[0-9]+ agreed' "$log" 2>/dev/null \
+            grep -E '^[[:space:]]*(refused|OK|AGREE|SKIP|WRONG|FAIL)[[:space:]]|^[[:space:]]*(selftest:|libraries:|interpreter:|covered kinds:|checked [0-9]|PIN OK|PARITY OK|PALW BOUNDARIES OK|rust-toolchain\.toml pins|SELFTEST FAILED|PIN FAILED|PARITY FAILED)|^[0-9]+ agreed|mergeset guard refused' "$log" 2>/dev/null \
                 | sed 's/^/    /' || true
             ;;
     esac
@@ -328,6 +329,44 @@ gate_toolchain_pin() {
 # command CI runs that is not here is a gate nobody can run before pushing. Checked by string.
 gate_workflow_parity() {
     python3 "$REPO_ROOT/scripts/ci/ci-toolchain-pin-check.py" --parity
+}
+
+# Nested PALW modules and production that follows a test item stay inside the mergeset scan.
+# The same-chain note keeps its six recovery paths. This is a fast gate, so ci.yaml's existing
+# `bash scripts/ci-gates.sh --group fast` runs it without a new one-line gate spelling.
+gate_palw_boundaries() {
+    python3 "$REPO_ROOT/scripts/ci/test_check_palw_mergeset_access.py"
+    python3 - "$REPO_ROOT" <<'PY'
+import sys
+from pathlib import Path
+root = Path(sys.argv[1]) / "docs/design/palw/integration"
+contract = (root / "same-chain-update-contract-2026-11-06.md").read_text()
+needed = (
+    "old-data startup",
+    "snapshot import",
+    "replay",
+    "reorg",
+    "pruned recovery",
+    "resume after interrupt",
+)
+missing = [phrase for phrase in needed if phrase not in contract]
+if missing:
+    raise SystemExit("same-chain contract dropped: " + ", ".join(missing))
+holding = (root / "palw-holding-lifetimes-2026-11-06.md").read_text()
+for phrase in ("loaded artifact", "running job", "retained evidence", "reservation"):
+    if phrase not in holding:
+        raise SystemExit("holding lifetimes dropped " + phrase)
+print("same-chain recovery paths: 6")
+duties = (root.parents[3] / "consensus/core/src/palw_state_item_duties_v1.rs").read_text()
+writer = (root.parents[3] / "consensus/core/src/palw_state_v2/transition_builder.rs").read_text()
+for phrase in ("rollback", "root_order", "restore", "resource_estimate"):
+    if phrase not in duties:
+        raise SystemExit("state-item duties dropped " + phrase)
+if "write_epoch_counter::<false>" not in writer or "write_epoch_counter::<true>" not in writer:
+    raise SystemExit("epoch map and delta are not bound by one writer")
+print("state-item writer binding: epoch and receipt")
+print("PALW BOUNDARIES OK")
+PY
 }
 
 ARTIFACT_DIR="$LOG_DIR/artifacts"
@@ -469,6 +508,7 @@ dispatch() {
     case "$1" in
         toolchain-pin)        run_gate "$1" 'PIN OK'                    -- gate_toolchain_pin ;;
         workflow-parity)      run_gate "$1" 'PARITY OK'                 -- gate_workflow_parity ;;
+        palw-boundaries)      run_gate "$1" 'mergeset guard refused 2 planted productions@@PALW BOUNDARIES OK@@same-chain recovery paths: 6@@state-item writer binding: epoch and receipt' -- gate_palw_boundaries ;;
         # The five injuries BY NAME, not the summary line: losing one shrinks the checker's
         # coverage and shrinks no number a reader sees.
         artifact-conformance) run_gate "$1" 'refused +midi: header declares 2 tracks@@refused +midi: end-of-track short of the chunk end@@refused +glb: declared total length is 4 bytes over@@refused +stl: count says 3, file holds 1@@refused +glb: alpha 0.5 with the OPAQUE default@@selftest: every injury refused by name' -- gate_artifact_conformance ;;

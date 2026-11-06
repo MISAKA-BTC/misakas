@@ -54,6 +54,7 @@ pub mod improve_eval;
 /// RFC-0004's objects (A10), built and signed offline: policy, hard cases, setter sets, datasets, teaching
 /// artifacts, licences, candidates, rollbacks — what `palw-class improve …` writes.
 pub mod improve_objects;
+pub mod chain_registered;
 pub mod lineage;
 pub mod lineages {
     pub mod dense;

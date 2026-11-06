@@ -111,6 +111,8 @@ pub struct PalwClassSdk {
     /// instance when the memory the duty can reserve calls for it; an instance nobody narrows — the
     /// executor's shared one included — runs at this, and is priced at it.
     prefill_run_cap: Option<u32>,
+    /// Families past the dense and Qwen3.6 compatibility arms. Empty unless a caller appends one.
+    chain_registered_extensions: Vec<std::sync::Arc<dyn crate::chain_registered::ChainRegisteredFamilyV1>>,
 }
 
 /// The model a row is a revision OF: `"Qwen/Qwen2.5-1.5B/graph-v2"` → `"Qwen/Qwen2.5-1.5B"`.
@@ -172,6 +174,7 @@ impl PalwClassSdk {
             attempt_rules: Default::default(),
             held_answerability: false,
             prefill_run_cap: None,
+            chain_registered_extensions: Vec::new(),
         }
     }
 
@@ -242,10 +245,15 @@ impl PalwClassSdk {
         let mut lineages = std::mem::take(&mut self.lineages);
         lineages.push(lineage);
         let (attempt_rules, held_answerability, prefill_run_cap) = (self.attempt_rules, self.held_answerability, self.prefill_run_cap);
-        Self::with_lineages(lineages, self.court, self.prompt_ids_form, std::mem::take(&mut self.network_id))
+        let chain_classes = self.chain_classes;
+        let chain_registered_extensions = std::mem::take(&mut self.chain_registered_extensions);
+        let mut sdk = Self::with_lineages(lineages, self.court, self.prompt_ids_form, std::mem::take(&mut self.network_id))
             .with_attempt_rules_v1(attempt_rules)
             .with_held_answerability_v1(held_answerability)
-            .with_prefill_run_cap_v1(prefill_run_cap)
+            .with_prefill_run_cap_v1(prefill_run_cap);
+        sdk.chain_classes = chain_classes;
+        sdk.chain_registered_extensions = chain_registered_extensions;
+        sdk
     }
 
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
@@ -587,6 +595,17 @@ impl PalwClassSdk {
         self
     }
 
+    /// Append a chain-registered family after the dense and Qwen3.6 compatibility arms.
+    /// The resolver body does not name the family. A [`crate::chain_registered::ChainRegisteredAnswerV1::Refused`]
+    /// answer is not passed to a later family.
+    pub fn with_chain_registered_family(
+        mut self,
+        family: std::sync::Arc<dyn crate::chain_registered::ChainRegisteredFamilyV1>,
+    ) -> Self {
+        self.chain_registered_extensions.push(family);
+        self
+    }
+
     /// **ADR-0067 Decisions 1–2: serve a class this build's tables never heard of, from the
     /// registration the chain carries.** The caller hands in what the chain holds — the
     /// admission carriage's profile and canonical job — and gets an execution backend whose
@@ -678,6 +697,22 @@ impl PalwClassSdk {
                     .with_held_answerability_v1(self.held_answerability),
             )));
         }
+        for family in &self.chain_registered_extensions {
+            match family.resolve_registered(
+                class_id,
+                artifact_root,
+                holdings,
+                profile,
+                canonical,
+                &self.network_id,
+                &self.court,
+                self.prompt_ids_form,
+            ) {
+                crate::chain_registered::ChainRegisteredAnswerV1::NotThisFamily => {}
+                crate::chain_registered::ChainRegisteredAnswerV1::Refused(why) => return Err(why),
+                crate::chain_registered::ChainRegisteredAnswerV1::Ready(backend) => return Ok(self.ruled_v1(backend)),
+            }
+        }
         Err(format!(
             "this node holds no artifact whose digest is the registered root {artifact_root} — fetch the class's \
              artifact and load it (--palw-class-artifact); registration does not obligate possession (ADR-0067 Decision 6)"
@@ -723,6 +758,9 @@ impl PalwClassSdk {
         chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
         shape: &PalwAdmissionShapeV1,
     ) -> Result<PalwClassCatalogEntryV2, String> {
+        let registration_moment = crate::chain_registered::PalwRuleMomentKindV1::ClassRegistration;
+        crate::chain_registered::registration_moment_matches_sdk_v1(self.attempt_rules, self.attempt_rules, registration_moment)
+            .map_err(str::to_string)?;
         let canonical = self.registration_canonical_v1(entry)?;
         // The ONE probe (`palw_admission_probe_v1`): the share this class may take, the object counted against the ruleset's ladder, and the
         // gate asked with the court, ladder, HELD regime and fences of `shape` — the manifest verifier calls the same function.
@@ -962,6 +1000,175 @@ mod chain_arm_tests {
             .resolve_chain_registered(class_id, root, &holdings, &profile, &canonical)
             .expect("a servable chain-registered class resolves");
         assert_eq!(backend.model_id(), "PALW-A16/chain-registered");
+    }
+
+    /// A third family is appended. The resolver body does not name it. Its refusal is not turned
+    /// into another family's success, and a dense root is still served by the compatibility arm.
+    #[test]
+    fn a_third_family_resolves_without_a_new_branch_in_the_resolver() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let source = include_str!("sdk.rs");
+        let arm = &source[source.find("pub fn resolve_chain_registered(").expect("arm")..];
+        let arm = &arm[..arm.find("\n    pub fn ").expect("the next method")];
+        assert!(!arm.contains("probe-family-v1"), "the third family is not a branch of the resolver");
+        assert_eq!(arm.matches("dense_artifact_by_registered_root").count(), 1);
+        assert_eq!(arm.matches("qwen36_artifact_by_registered_root").count(), 1);
+
+        let root = Hash64::from_u64_word(0x7A1);
+        let (artifact, profile) = class();
+        let class_id = profile.shape_profile_id();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let later_called = Arc::new(AtomicBool::new(false));
+        let refusing = Arc::new(ProbeFamily {
+            family_id: "probe-family-v1",
+            root,
+            called: Arc::new(AtomicBool::new(false)),
+            serve: false,
+        });
+        let later = Arc::new(ProbeFamily {
+            family_id: "probe-family-later",
+            root,
+            called: Arc::clone(&later_called),
+            serve: true,
+        });
+        let armed = PalwClassSdk::with_lineages(
+            Vec::new(),
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1()
+        .with_attempt_rules_v1(kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1)
+        .with_chain_registered_family(refusing)
+        .with_chain_registered_family(later);
+        let err = match armed.resolve_chain_registered(class_id, root, &[], &profile, &canonical) {
+            Err(err) => err,
+            Ok(_) => panic!("the owning family's refusal must not become another family's success"),
+        };
+        assert!(err.contains("probe-family-v1 owns this root"), "{err}");
+        assert!(!later_called.load(Ordering::SeqCst), "a later family must not turn the refusal into success");
+
+        let serving = Arc::new(ProbeFamily {
+            family_id: "probe-family-v1",
+            root,
+            called: Arc::new(AtomicBool::new(false)),
+            serve: true,
+        });
+        let armed = PalwClassSdk::with_lineages(
+            Vec::new(),
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1()
+        .with_attempt_rules_v1(kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1)
+        .with_chain_registered_family(serving);
+        let backend = armed.resolve_chain_registered(class_id, root, &[], &profile, &canonical).expect("the probe family serves");
+        assert_eq!(backend.model_id(), "probe-family-v1");
+        assert_eq!(backend.attempt_rules_v1(), kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1);
+
+        let dense_called = Arc::new(AtomicBool::new(false));
+        let dense_root = artifact.artifact_digest();
+        let watcher = Arc::new(ProbeFamily {
+            family_id: "probe-family-v1",
+            root: dense_root,
+            called: Arc::clone(&dense_called),
+            serve: true,
+        });
+        let armed = PalwClassSdk::builtin_v1(
+            court(),
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            b"misaka-palw-rc".to_vec(),
+        )
+        .with_chain_classes_v1()
+        .with_chain_registered_family(watcher);
+        let backend = armed
+            .resolve_chain_registered(class_id, dense_root, &[holding(artifact)], &profile, &canonical)
+            .expect("the dense compatibility arm still serves");
+        assert_eq!(backend.model_id(), "PALW-A16/chain-registered");
+        assert!(!dense_called.load(Ordering::SeqCst), "a dense root is not offered to the extension");
+
+        let mismatched = crate::chain_registered::registration_moment_matches_sdk_v1(
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy,
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1,
+            crate::chain_registered::PalwRuleMomentKindV1::ClassRegistration,
+        );
+        assert!(mismatched.is_err());
+        assert!(crate::chain_registered::registration_moment_matches_sdk_v1(
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1,
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1,
+            crate::chain_registered::PalwRuleMomentKindV1::ClaimOrigin { accepted_daa: 1 },
+        )
+        .is_err());
+    }
+
+    struct ProbeFamily {
+        family_id: &'static str,
+        root: Hash64,
+        called: Arc<std::sync::atomic::AtomicBool>,
+        serve: bool,
+    }
+
+    impl crate::chain_registered::ChainRegisteredFamilyV1 for ProbeFamily {
+        fn family_id(&self) -> &'static str {
+            self.family_id
+        }
+        fn resolve_registered(
+            &self,
+            _class_id: Hash64,
+            artifact_root: Hash64,
+            _holdings: &[PalwLoadedArtifactV1],
+            _profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+            _canonical: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+            _network_id: &[u8],
+            _court: &PalwCourtParamsV2,
+            _prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        ) -> crate::chain_registered::ChainRegisteredAnswerV1 {
+            use std::sync::atomic::Ordering;
+            if artifact_root != self.root {
+                return crate::chain_registered::ChainRegisteredAnswerV1::NotThisFamily;
+            }
+            self.called.store(true, Ordering::SeqCst);
+            if self.serve {
+                crate::chain_registered::ChainRegisteredAnswerV1::Ready(Box::new(ProbeBackend::default()))
+            } else {
+                crate::chain_registered::ChainRegisteredAnswerV1::Refused(format!("{} owns this root and refuses it", self.family_id))
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct ProbeBackend {
+        rules: std::sync::Mutex<kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1>,
+    }
+
+    impl PalwExecutionBackendV1 for ProbeBackend {
+        fn model_id(&self) -> &str {
+            "probe-family-v1"
+        }
+        fn job_for_anchor(&self, _anchor: Hash64) -> Result<(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>), String> {
+            Err("probe".into())
+        }
+        fn set_attempt_rules_v1(&mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) {
+            *self.rules.lock().expect("rules") = rules;
+        }
+        fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+            *self.rules.lock().expect("rules")
+        }
+        fn execute(
+            &self,
+            _job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+            _prompt: &[usize],
+        ) -> Result<kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1, String> {
+            Err("probe".into())
+        }
+        fn verify_material(
+            &self,
+            _material: &[u8],
+            _claim: kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+        ) -> kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1 {
+            kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Unverifiable
+        }
     }
 
     /// **ADR-0067 security amendment SA-4, which is a note rather than a mechanism — recorded here
