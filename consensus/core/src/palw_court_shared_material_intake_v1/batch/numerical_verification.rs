@@ -14,6 +14,11 @@ const SIGNATURE_BYTES: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 const SIGNED_BODY_BYTES: u64 = (2 + 4 * 64 + 8 + 64 + 4 + 4 + SIGNATURE_BYTES) as u64;
 const VERIFICATION_CARRIER_BYTES: u64 = SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1;
 
+/// Fixed BCT1 bytes of one numerical verification carrier, before retained fault bytes.
+pub(crate) const fn verification_carrier_bytes_v1() -> u64 {
+    VERIFICATION_CARRIER_BYTES
+}
+
 /// The native profile supplies the replay ceilings and the costs outside the
 /// arithmetic meter. Admission and acceptance use the same service quote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

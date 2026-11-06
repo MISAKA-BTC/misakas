@@ -257,6 +257,9 @@ impl PalwFundedOriginalScheduleV1 {
 /// `tir_public_conviction_active` is set, the pinned estimate
 /// ([`crate::palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1`]) is the schedule. Below that fence, and while
 /// the fence is unset, the answer stays [`PalwFundedOriginalMissingV1::Schedule`].
+/// While `batch_court_active_v1` is also set, that schedule carries
+/// [`crate::palw_g14_values_v1::palw_g14_funded_batch_schedule_estimate_v1`], the same replay budget the
+/// accepting extras put on `batch_numerical_profile_v1`. No shipped preset sets the Batch Court fence.
 pub fn palw_funded_original_schedule_v1(
     extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
 ) -> Result<PalwFundedOriginalScheduleV1, PalwFundedOriginalMissingV1> {
@@ -265,7 +268,12 @@ pub fn palw_funded_original_schedule_v1(
         return Ok(schedule);
     }
     if extras.tir_public_conviction_active {
-        return Ok(crate::palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1());
+        let schedule = crate::palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1();
+        return Ok(if extras.batch_court_active_v1 {
+            schedule.with_batch_v1(crate::palw_g14_values_v1::palw_g14_funded_batch_schedule_estimate_v1())
+        } else {
+            schedule
+        });
     }
     Err(PalwFundedOriginalMissingV1::Schedule)
 }

@@ -3040,7 +3040,27 @@ impl Params {
         if self.palw_batch_court_v1_fence().is_none() {
             return Err(InvalidParams("Batch Court requires lifecycle audit and native TIR conviction at or below its fence"));
         }
-        Err(InvalidParams("Batch Court requires a complete native profile and accepted carrier fold before activation"))
+        // The funded schedule, the replay profile and the carrier fold share one budget.
+        // Activation still requires this preset to name the fence; no shipped preset does.
+        let Some(service) = crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1 else {
+            return Err(InvalidParams("Batch Court requires the adopted court service profile"));
+        };
+        let service_profile = crate::palw_court_service_state_v2::court_service_profile_id_v2(service.id());
+        let replay = crate::palw_g14_values_v1::palw_g14_batch_replay_profile_estimate_v1(service_profile);
+        let batch = crate::palw_g14_values_v1::palw_g14_funded_batch_schedule_estimate_v1();
+        let Some(cost) = replay.budget.service_cost_v1() else {
+            return Err(InvalidParams("Batch Court replay budget does not price a verification packet"));
+        };
+        let fits = cost.bytes <= service.budget.bytes
+            && cost.work <= service.budget.work
+            && cost.io <= service.budget.io
+            && cost.controls == service.budget.controls
+            && replay.budget == batch.delivery.numerical_verification
+            && replay.budget.covers_terminal_recheck_v1(batch.delivery.terminal);
+        if !fits {
+            return Err(InvalidParams("Batch Court replay profile, funded schedule and service budget disagree"));
+        }
+        Ok(())
     }
 
     pub fn validate_palw_staged_public_court_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {

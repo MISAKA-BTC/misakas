@@ -6084,6 +6084,8 @@ mod batch_lifecycle_gate_tests {
         assert_ne!(base.consensus_params_id(), scheduled.consensus_params_id());
         assert_ne!(base.consensus_schedule_id(), scheduled.consensus_schedule_id());
         assert_eq!(base.consensus_identity_id(), scheduled.consensus_identity_id());
+        // This preset resolves neither the audit fence nor native TIR conviction, so naming
+        // Batch Court at DAA 20 stays refused. No shipped preset names the fence.
         assert!(scheduled.validate_palw_batch_court_v1().is_err());
     }
 }

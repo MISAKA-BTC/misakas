@@ -357,10 +357,10 @@
                 assert_eq!(base.signer_packets, derivation.signer_packets);
                 assert_eq!(base.branch_count(), liable * service_profile.packets_per_signer + 1);
                 assert_eq!(base_book.state.claims[&claim].packet_ids, base.packet_ids());
-                let (quote, batch) = reserve_native_batch_delivery_v1(
+                let (quote, batch_book) = reserve_native_batch_delivery_v1(
                     base_book, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
                 ).unwrap();
-                let batch_packets = &batch.state.claims[&claim].packet_ids;
+                let batch_packets = &batch_book.state.claims[&claim].packet_ids;
                 assert!(quote.required_daa <= 10_000 && base.packet_ids().is_subset(batch_packets));
                 assert!(derivation.source_packets.iter().all(|packet| !batch_packets.contains(&packet.id)));
                 // The original payer consent accepted above cannot authorize
@@ -403,7 +403,7 @@
                     e.tir_public_conviction_active = true;
                     e.batch_court_active_v1 = true;
                     e.batch_numerical_profile_v1 = Some(crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1 {
-                        service_profile: batch.state.profile_id, budget: costs.numerical_verification,
+                        service_profile: batch_book.state.profile_id, budget: costs.numerical_verification,
                     });
                     e
                 };
@@ -421,13 +421,13 @@
                 let installed = crate::palw_court_shared_tir_state_v1::context(&accepted.state, claim).unwrap();
                 assert!(installed.batch_notice_only_v1());
                 assert_eq!(installed.hard_daa, ctx.daa_score + 10_000);
-                assert_eq!(accepted.state.court_service_row_v3_v1(), Some(&batch));
+                assert_eq!(accepted.state.court_service_row_v3_v1(), Some(&batch_book));
                 assert_eq!(accepted.state.funded_escrows_v1()[&checked.consent().terms.id_v1()].funding_outpoint, batch_pairing.outpoint());
                 assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
-                assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
-                assert_eq!(batch.causal[&terminal], [verification]);
-                assert_eq!(batch.causal[&verification].len(), envelope.maximums_v1().len());
-                let book = &batch.state.book;
+                assert!(batch_book.state.claims[&claim].packet_ids.contains(&terminal));
+                assert_eq!(batch_book.causal[&terminal], [verification]);
+                assert_eq!(batch_book.causal[&verification].len(), envelope.maximums_v1().len());
+                let book = &batch_book.state.book;
                 assert!(book.assigned_daa(&terminal).unwrap() > book.assigned_daa(&verification).unwrap());
                 // The served book itself is untouched by the dry run.
                 assert!(b.state.court_service_state_v1().unwrap().claims.is_empty());

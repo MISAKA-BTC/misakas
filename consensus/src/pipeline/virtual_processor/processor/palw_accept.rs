@@ -2564,6 +2564,20 @@ impl VirtualStateProcessor {
         ))
     }
 
+    /// Replay profile for this DAA. `None` below the Batch Court fence. The budget is the funded
+    /// schedule's numerical verification budget, and the service id is the adopted profile's book id.
+    fn palw_batch_replay_profile_v1(
+        &self,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1> {
+        if !self.palw_lifecycle_kind_fences.batch_court_in_force_at(daa_score) {
+            return None;
+        }
+        let service = kaspa_consensus_core::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1?;
+        let service_profile = kaspa_consensus_core::palw_court_service_state_v2::court_service_profile_id_v2(service.id());
+        Some(kaspa_consensus_core::palw_g14_values_v1::palw_g14_batch_replay_profile_estimate_v1(service_profile))
+    }
+
     /// The extras every production fold and every acceptance rehearsal carry (ADR-0088 D11,
     /// ADR-0089 D9). The action list is the EVM step's and is added by the caller that has it.
     /// The fold's extras for the block `point` names — every fence resolved at its DAA score, and
@@ -2640,8 +2654,10 @@ impl VirtualStateProcessor {
                 .map(|_| kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
             staged_tir_route_active: self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(daa_score)),
             batch_court_active_v1: self.palw_lifecycle_kind_fences.batch_court_in_force_at(daa_score),
-            // Numerical verification needs the measured, admitted service profile.
-            batch_numerical_profile_v1: None,
+            // Same replay budget the funded schedule carries while this fence is in force.
+            // The service id is the one the adopted profile writes into the rooted book.
+            // Accepted carriers are attached later, on this same extras value.
+            batch_numerical_profile_v1: self.palw_batch_replay_profile_v1(daa_score),
             batch_court_carriers_v1: Vec::new(),
             // Filled below only after every native dependency (including Panel and shard inputs)
             // has been resolved at this block. Neither field is a carrier-provided limit/domain.
