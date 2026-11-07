@@ -1,0 +1,17 @@
+{
+  "base": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "candidate": "78e274630c2330a8c4aff418a4c1855aa50cf00c",
+  "v1_admission_entire_file_equal_after_only_three_visibility_normalizations": true,
+  "unchanged_critical_paths": [
+    "consensus/core/src/palw_tir_class_v1.rs",
+    "consensus/core/src/palw_tir_class_record_v2.rs",
+    "consensus/core/src/palw_tir_profile_resolver_v2.rs",
+    "consensus/core/src/palw_tir_v1.rs",
+    "consensus/core/src/config/params.rs",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs",
+    "consensus/core/src/palw_state_v2/objects.rs",
+    "consensus/src/pipeline/virtual_processor/processor/palw_validate/class_registration.rs"
+  ],
+  "new_unit_test_source_count": 10,
+  "typecheck_or_execution_claimed": false
+}

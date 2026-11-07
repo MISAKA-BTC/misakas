@@ -1,0 +1,54 @@
+{
+  "date_jst": "2026-11-01",
+  "candidate": "78e274630c2330a8c4aff418a4c1855aa50cf00c",
+  "candidate_tree": "9ec4782510506a67adacbcfd54c9f3581f0904e8",
+  "base": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "branch": "codex/a1-wide-admission-v2",
+  "source_clean_at_static_capture": true,
+  "source_sha256": {
+    "Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+    "Cargo.toml": "5b1cf91b2106e81e3c4046c125ec062d33dae86e7b5d8361ec4a2ce187e51efc",
+    "consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+    "consensus/core/src/lib.rs": "77042e7f00aeeeef3614653255df4335253cc1840be0ba6e20d6dc91a802e601",
+    "consensus/core/src/palw_tir_admission_v1.rs": "5fcbe9e2c0cf57a536320789b49289a72d27a095a5a03bf37c5f512d68dc4925",
+    "consensus/core/src/palw_tir_admission_v2.rs": "490c900d295c8e1bfb316b1766bd98e3ff47177da58231e5290d5427a53204dd",
+    "consensus/core/src/palw_tir_admission_v2/registration.rs": "88235ad696e90915f4cf9f5ac46bac470b8dc7f03b1dd4c25fbb57cea57fdc00",
+    "consensus/core/src/palw_tir_admission_v2/tests.rs": "964dc2974dc0f8a69728cafca4b324737a0f0fc6fb95232ba851fc441005ec23",
+    "consensus/core/src/palw_tir_class_v1.rs": "0785d6f7b9c3341b8f4c6e7216e7a0d4f353a6cb1c37dd32d2fa48258a4082d9",
+    "consensus/core/src/palw_tir_class_record_v2.rs": "5d74d78fb95b6751143df581bc38f6facd397f50ec0778364f521345e2a13c22",
+    "consensus/core/src/palw_tir_profile_resolver_v2.rs": "f2f7055ba0a1ce12fc616075226371957295b161b8dfb06838f10e692893c86c",
+    "consensus/core/src/palw_tir_step_v1.rs": "7dc8c66373bc13dcbdbdec0bee52b0ad6edd40e0e44e6cd51b08877acb4664da",
+    "consensus/core/src/palw_tir_step_v1/wide_v2.rs": "5abe3db73130998fc73b5e600f02cc8dd8a0623124b152ef663cc29b02d5c28b",
+    "consensus/core/src/palw_tir_close_size_v1.rs": "f3414bdb4733caf80dbf47775ec3b5ae40cdc9c4b6c14640c9fd92767ff35abb",
+    "consensus/core/src/palw_tir_close_range_v1.rs": "3b79c901f3af95563db10ced0b32e96cbf623ee631000e9e5890876bddaa5432",
+    "consensus/core/src/palw_tir_close_size_v2.rs": "7f26ec26e7de4a8257db526dcf4d2c3c67edc74bd61360152392751ca67b74a1",
+    "consensus/core/tests/palw_tir_close_size_wide_v2.rs": "2fc8e8fcfb92974e6fac7067e7bca55e04464c22d5d28874d3c7b2127282e3ca",
+    "misaka/palw/tir/core/src/program.rs": "ef9eed8581b0a43673c5fa9eb1a84fbf5ec5e2ae77a9316b442907d1c4f92f23",
+    "misaka/palw/tir/core/src/validate.rs": "b95af832779a177854b2e1eea23fa1f58afc593c864f52222c52e96034c7ab65",
+    "misaka/palw/tir/core/src/admit.rs": "223a8a1dff68716f2fb04d3c50572446b4571fc50196bcea7e3955453e0d4fef",
+    "misaka/palw/tir/exec/A1-WIDE-ADMISSION-V2-HANDOFF.md": "cb44eb32770b5b759031b2d19ebe3eece1d170aa45fb8534da5f898c25ec474f"
+  },
+  "dependencies": [
+    {
+      "original": "77fced38a9ce66d8748261128eb36fa9ea80791b",
+      "selected": "ab8325fb1",
+      "built_by_a1_at_this_stage": false
+    },
+    {
+      "original": "82cde2aecf889c40c4d434c0ce7c91fa0c2607ae",
+      "selected": "479688659",
+      "built_by_a1_at_this_stage": false
+    },
+    {
+      "original": "13e1fe21337a81fedfc4353e1066fae3d0583c58",
+      "selected": "2e85254f1",
+      "built_by_a1_at_this_stage": false
+    }
+  ],
+  "build_status": "not_run_awaiting_explicit_grant",
+  "instruction": "Cargo/target/newcacheはgrantまで不可",
+  "cargo_rustc_clippy_tests_executed": false,
+  "target_or_cache_accessed": false,
+  "new_target_or_cache_created": false,
+  "binary_or_archive_evidence": null
+}

@@ -1,0 +1,56 @@
+{
+  "date_jst": "2026-11-01",
+  "root_candidate": "c85d5a9c92632e81a2880d3159bf95ce38e0e370",
+  "root_tree": "475220512a2830d1d98da9849eb72e52ba6c3c12",
+  "a1_source_freeze": "78e274630c2330a8c4aff418a4c1855aa50cf00c",
+  "a1_static_evidence": "54d4658c8",
+  "a1_code_and_test_paths": [
+    {
+      "path": "consensus/core/src/palw_tir_admission_v2.rs",
+      "sha256": "490c900d295c8e1bfb316b1766bd98e3ff47177da58231e5290d5427a53204dd",
+      "root_candidate_byte_identical": true
+    },
+    {
+      "path": "consensus/core/src/palw_tir_admission_v2/registration.rs",
+      "sha256": "88235ad696e90915f4cf9f5ac46bac470b8dc7f03b1dd4c25fbb57cea57fdc00",
+      "root_candidate_byte_identical": true
+    },
+    {
+      "path": "consensus/core/src/palw_tir_admission_v2/tests.rs",
+      "sha256": "964dc2974dc0f8a69728cafca4b324737a0f0fc6fb95232ba851fc441005ec23",
+      "root_candidate_byte_identical": true
+    },
+    {
+      "path": "consensus/core/src/palw_tir_admission_v1.rs",
+      "sha256": "5fcbe9e2c0cf57a536320789b49289a72d27a095a5a03bf37c5f512d68dc4925",
+      "root_candidate_byte_identical": true
+    }
+  ],
+  "critical_identity_record_selector_tag_paths_byte_identical": [
+    "consensus/core/src/palw_tir_class_v1.rs",
+    "consensus/core/src/palw_tir_class_record_v2.rs",
+    "consensus/core/src/palw_tir_profile_resolver_v2.rs",
+    "consensus/core/src/palw_tir_v1.rs",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs"
+  ],
+  "fold_comparison": {
+    "path": "consensus/core/src/palw_state_v2/objects.rs",
+    "full_file_identical": false,
+    "reason": "Root contains stack-oriented dispatch batch refactor",
+    "only_tag61_arm_compared": true,
+    "tag61_arm_exact_bytes_equal": true,
+    "tag61_arm_utf8_bytes": 3036,
+    "tag61_arm_sha256": "54fb78670db95ce0af5ea4487bc8bac48d9e86ff46c84c191b691ae2d71497c1",
+    "legacy_record_factory_retained": true,
+    "full_dispatch_behavior_or_runtime_equivalence_claimed": false
+  },
+  "owner_style_fix_read_only_review": {
+    "commit": "1a23ce8f25f5eb522e56c5cb7433915ad1fd1721",
+    "change": "Equivalent nested-if to let-chain only; no pricing, arithmetic, field, width or limit change"
+  },
+  "execution_owner": "A0 Root",
+  "root_execution_status_at_capture": "in_progress; no PASS inferred",
+  "a1_heavy_build_or_cache_target_access": false,
+  "static_only": true,
+  "correction": "An initial chat report incorrectly included whole objects.rs among identical files. That assertion failed, was retracted immediately, and is replaced here by the exact tag61-arm comparison."
+}
