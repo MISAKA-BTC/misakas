@@ -51,6 +51,34 @@ fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Digest {
     )
 }
 
+pub(crate) fn case_relay_rotation_reservation_v2(
+    origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+    case_reservation: AcceptedMaterial,
+    pending_reservation: AcceptedMaterial,
+) -> AcceptedMaterial {
+    let digest = blake2b_simd::Params::new()
+        .hash_length(64)
+        .key(b"misaka/positive/case-relay-rotation/v2/r1")
+        .to_state()
+        .update(&case_reservation.digest.0)
+        .update(&pending_reservation.digest.0)
+        .finalize();
+    AcceptedMaterial { origin, digest: Digest(*digest.as_array()) }
+}
+
+pub(crate) fn relay_origin_precedes_v2(
+    accepted: misaka_palw_positive_contract::rows::AcceptedOrigin,
+    origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+) -> bool {
+    if accepted.accepting_block == origin.accepting_block {
+        accepted.accepted_daa == origin.accepted_daa
+            && accepted.accepted_blue_score == origin.accepted_blue_score
+            && (accepted.accepted_tx_ordinal, accepted.event_ordinal) < (origin.accepted_tx_ordinal, origin.event_ordinal)
+    } else {
+        accepted.accepted_daa <= origin.accepted_daa && accepted.accepted_blue_score < origin.accepted_blue_score
+    }
+}
+
 pub type AssignmentFundingLocksV2 =
     HashMap<TransactionOutpoint, (AssignmentFundingRow, Option<AssignmentSpendAuthorizationV2>)>;
 
@@ -558,29 +586,33 @@ pub(crate) fn check_assignment_funding_carriage_v2(
     current_entry: Option<&UtxoEntry>,
     now: u64,
 ) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
+    let (outpoint, amount) = check_assignment_funding_literal_v2(bundle, transaction, payer_key, now)?;
+    let output = &transaction.outputs[outpoint.index as usize];
+    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
+    if entry.amount != output.value || entry.script_public_key != output.script_public_key || entry.is_coinbase {
+        return Err(AssignmentFundsErrorV2::CurrentUtxo);
+    }
+    Ok((outpoint, amount))
+}
+
+fn check_assignment_funding_literal_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    transaction: &Transaction,
+    payer_key: &[u8; PUBKEY_BYTES],
+    now: u64,
+) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
     bundle.validate_shape()?;
     if principal(payer_key) != bundle.terms.payer
-        || Digest(kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes())
-            != bundle.terms.refund_payload
+        || Digest(kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes()) != bundle.terms.refund_payload
     {
         return Err(AssignmentFundsErrorV2::Payer);
     }
     if now >= bundle.funding.admission_expiry || now >= bundle.terms.accept_before_daa {
         return Err(AssignmentFundsErrorV2::Expired);
     }
-    let output = transaction
-        .outputs
-        .get(bundle.funding.funding_output_index as usize)
-        .ok_or(AssignmentFundsErrorV2::Output)?;
+    let output = transaction.outputs.get(bundle.funding.funding_output_index as usize).ok_or(AssignmentFundsErrorV2::Output)?;
     if payload(output) != Some(bundle.terms.refund_payload) {
         return Err(AssignmentFundsErrorV2::Output);
-    }
-    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
-    if entry.amount != output.value
-        || entry.script_public_key != output.script_public_key
-        || entry.is_coinbase
-    {
-        return Err(AssignmentFundsErrorV2::CurrentUtxo);
     }
     if output.value < bundle.terms.worker_reward
         || output.value > bundle.funding.max_locked
@@ -588,13 +620,47 @@ pub(crate) fn check_assignment_funding_carriage_v2(
     {
         return Err(AssignmentFundsErrorV2::Contract(ContractError::Budget));
     }
-    Ok((
-        point(TransactionOutpoint::new(
-            transaction.id(),
-            bundle.funding.funding_output_index,
-        )),
-        output.value,
-    ))
+    Ok((point(TransactionOutpoint::new(transaction.id(), bundle.funding.funding_output_index)), output.value))
+}
+
+pub(crate) fn check_archived_assignment_funding_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    funding: &AssignmentFundingRow,
+    transaction: &Transaction,
+    money: &AssignmentMoneyQuoteV2,
+) -> Result<(), AssignmentFundsErrorV2> {
+    funding.validate_shape()?;
+    if !transaction.id_is_current()
+        || transaction.is_coinbase()
+        || funding.authorization != bundle.funding
+        || money.id() != bundle.quote
+    {
+        return Err(AssignmentFundsErrorV2::Input);
+    }
+    let (outpoint, amount) =
+        check_assignment_funding_literal_v2(bundle, transaction, &funding.payer_key, funding.funding_origin.accepted_daa)?;
+    let split = split_assignment_funding_v2(bundle, outpoint, amount, money.fee, money.capital)?;
+    if split.outpoint() != funding.original_outpoint
+        || split.amount() != funding.initial_locked
+        || split.initial_legs().map(|leg| leg.initial)
+            != [funding.worker.initial, funding.fee.initial, funding.capital.initial, funding.surplus.initial]
+    {
+        return Err(AssignmentFundsErrorV2::Conservation);
+    }
+    Ok(())
+}
+
+fn split_assignment_funding_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    outpoint: NativeOutpoint,
+    amount: u64,
+    required_fee: u64,
+    required_capital: u64,
+) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
+    bundle.check_quoted_amounts(required_fee, required_capital, amount).map_err(AssignmentFundsErrorV2::Contract)?;
+    let allocated = add([bundle.terms.worker_reward, required_fee, required_capital])?;
+    let surplus = amount.checked_sub(allocated).ok_or(AssignmentFundsErrorV2::Conservation)?;
+    Ok(AssignmentFundingOutputV2 { outpoint, amount, worker: bundle.terms.worker_reward, fee: required_fee, capital: required_capital, surplus })
 }
 
 /// Exact initial F/R contract match. Native must derive the funding
@@ -1177,6 +1243,12 @@ impl AssignmentSpendPlanV2 {
                 .is_ok_and(|checked| checked == *self)
     }
 
+    pub fn matches_cooperative_refund_v2(&self, row: &AssignmentFundingRow, tx: &Transaction, amounts: &[u64], daa: u64) -> bool {
+        self.burned_now == 0
+            && self.paid_now == 0
+            && qualify_assignment_spend_v2(row, &self.authorization, tx, amounts, daa).is_ok_and(|expected| expected == *self)
+    }
+
     /// Called only after native accepted-prefix provenance has supplied the
     /// actual op12 material. A tentative preview cannot manufacture this row.
     pub(crate) fn accepted_funding_row_v2(
@@ -1222,6 +1294,40 @@ impl AssignmentSpendPlanV2 {
 /// Native authorizes exact op12 receipts, not arbitrary payload bytes. Ordinary
 /// scripts remain mandatory. All fees/change outside this account use foreign
 /// inputs and the shared spend classifier rejects any second locked input.
+pub(crate) fn qualify_unconsumed_assignment_refund_v2(
+    funding: AssignmentFundingRow,
+    receipt: AcceptedMaterial,
+    tx: &Transaction,
+    amounts: &[u64],
+    now: u64,
+    max_frame_bytes: u64,
+    max_history_frames: u32,
+) -> Result<AssignmentSpendPlanV2, AssignmentFundsErrorV2> {
+    use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2;
+    let dues = [(0, funding.worker.remaining), (3, funding.surplus.remaining)]
+        .into_iter()
+        .filter(|&(_, amount)| amount != 0)
+        .map(|(source_leg, amount)| AssignmentAuthorizedDueV2 {
+            source_leg,
+            kind: AssignmentSettlementLegV2::Refund,
+            party: funding.authorization.payer,
+            recipient: funding.authorization.refund_payload,
+            amount,
+            receipt,
+        })
+        .collect();
+    let authorization = AssignmentSpendAuthorizationV2 {
+        protected_after: [0, funding.earned_service_due, funding.liability_floor, 0],
+        before: funding,
+        dues,
+        daa: now,
+        max_frame_bytes,
+        max_history_frames,
+        payload: tx.payload.clone(),
+    };
+    qualify_assignment_spend_v2(&authorization.before, &authorization, tx, amounts, now)
+}
+
 pub fn qualify_assignment_spend_v2(
     row: &AssignmentFundingRow,
     authorization: &AssignmentSpendAuthorizationV2,

@@ -1004,7 +1004,7 @@ fn install_original_frame_rows_v1(
     // would have two incompatible d0 contracts; it is refused here rather than extended later (X3: no extension past d0).
     // G14 r5 (item 2): clock v2 takes precedence over X3 when it governs (`palw_claim_route_hard_v2`: a + 10,000), else X3's hard.
     if let Some(hard) = crate::palw_court_clock_v2::palw_claim_route_hard_v2(b.params, c)
-        && hard < p.terms.collect_until_daa
+        && !crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, p.terms.collect_until_daa)
     {
         return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
     }

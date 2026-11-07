@@ -385,6 +385,12 @@ pub fn palw_claim_route_hard_v2(params: &PalwStateParamsV2, claim: &PalwClaimSta
     crate::palw_ruling_fences_v1::palw_claim_hard_deadline_of_v1(params, claim)
 }
 
+/// The original collection door may close on the route hard deadline and not after it.
+/// `collect_until == hard` still fits. A later door is a second d0 contract and is refused.
+pub fn palw_collection_door_within_route_hard_v1(hard: u64, collect_until_daa: u64) -> bool {
+    collect_until_daa <= hard
+}
+
 /// **G14 r6 (item 3): X3's cap, under the X3 × clock-v2 combined rule** — the hard deadline every site that CAPS a claim by X3's
 /// `dispute_hard_deadline` reads. `None` where X3 does not govern the claim (no cap, the old rule — unchanged whether or not clock v2
 /// governs). Where X3 governs: clock v2's finish line `a + 10,000` when clock v2 also governs (it takes precedence, as the pursuit start
@@ -557,6 +563,17 @@ mod tests {
 
     fn ok(a: u64, ext: bool) -> PalwCourtClocksV2 {
         palw_court_clocks_v2(a, ext, W, a + DISPUTE_WINDOW_DAA + W, 0).unwrap()
+    }
+
+    #[test]
+    fn collection_door_fits_the_observed_route_hard_and_refuses_the_long_fixture() {
+        // Acceptance 100, clock v2 extended hard 10,100. Equality still fits; the next DAA does not.
+        let hard = 100 + DISPUTE_WINDOW_DAA;
+        assert_eq!(hard, 10_100);
+        assert!(palw_collection_door_within_route_hard_v1(hard, 10_099));
+        assert!(palw_collection_door_within_route_hard_v1(hard, 10_100));
+        assert!(!palw_collection_door_within_route_hard_v1(hard, 10_101));
+        assert!(!palw_collection_door_within_route_hard_v1(hard, 1_798_149));
     }
 
     #[test]

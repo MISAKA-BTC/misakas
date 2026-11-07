@@ -37,6 +37,23 @@ use misaka_palw_positive_contract::{
     },
 };
 
+/// Checked first close of an Assignment that never opened a Case.
+/// The settlement owner qualifies the refund carrier against this snapshot.
+#[allow(dead_code)]
+pub struct CheckedUnconsumedAssignmentCloseV2 {
+    assignment: misaka_palw_positive_contract::assignment::AssignmentId,
+    original: misaka_palw_positive_contract::rows::AcceptedMaterial,
+    status: misaka_palw_positive_contract::assignment::rows::AssignmentStatusV2,
+    receipt: misaka_palw_positive_contract::rows::AcceptedMaterial,
+    journal_tip: Digest,
+    funding_image: Digest,
+    limits: crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
+    max_frame_bytes: u64,
+    max_history_frames: u32,
+    history_storage_limit: u64,
+    cooperative: bool,
+}
+
 pub(super) enum InitialRelayFeeStageV2 {
     Preview,
     Observed,

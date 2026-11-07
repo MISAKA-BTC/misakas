@@ -288,7 +288,7 @@ fn source_response_for_unknown_case_does_not_stall_other_accepted_transactions()
     let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     let mut cursor = 0;
     let mut previous = None;
-    super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, &mut cursor, &mut previous).unwrap();
+    super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, None, &mut cursor, &mut previous).unwrap();
     assert_eq!((cursor, previous), (2, Some(2)));
     assert_eq!(builder.state.state_root_preimage(), state.state_root_preimage());
     assert!(builder.entries.is_empty());

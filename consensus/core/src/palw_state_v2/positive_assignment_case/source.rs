@@ -945,13 +945,18 @@ impl TransitionBuilder<'_> {
 
 /// The exact Case settlement validated from rooted history and populated
 /// inputs. The ordinary script check and the accepted-event fold still run.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QualifiedCaseSourceSpendV2 {
     transaction: crate::TransactionId,
     carrier_hash: crate::TransactionHash,
     inputs: Digest,
     debit: crate::tx::TransactionOutpoint,
     continuation: Option<crate::tx::TransactionOutpoint>,
+}
+impl crate::palw_native_resource_v1::NativeHeapV1 for QualifiedCaseSourceSpendV2 {
+    fn native_heap_v1(&self, _: &str) -> crate::palw_native_resource_v1::NativeCoverageV1 {
+        crate::palw_native_resource_v1::NativeCoverageV1::zero()
+    }
 }
 impl QualifiedCaseSourceSpendV2 {
     pub fn matches_v2(&self, transaction: &crate::tx::Transaction, entries: &[crate::tx::UtxoEntry]) -> bool {

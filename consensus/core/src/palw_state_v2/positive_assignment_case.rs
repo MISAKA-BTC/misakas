@@ -2638,6 +2638,57 @@ fn qualify_checked_worker_payment_v2(
 }
 
 impl TransitionBuilder<'_> {
+    pub(super) fn advance_due_positive_cases_v2(
+        &mut self,
+        parent: &PalwChainStateV2,
+        ctx: &PalwBlockContextV2,
+        input: PositiveCaseReplayInputV2<'_>,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(route) = parent.kernel_route_state_v1() else { return Ok(()) };
+        if route
+            .ready_positive_certification_subjects_v2(ctx.daa_score)
+            .take(input.live_case_cap.saturating_add(1))
+            .count()
+            > input.live_case_cap
+        {
+            return Err(refuse("due Positive Cases exceed native live capacity"));
+        }
+        for subject in route.ready_positive_certification_subjects_v2(ctx.daa_score) {
+            let subject = Digest(subject.as_bytes());
+            let Some((case, result)) = crate::palw_positive_certification_v2::ready_positive_certification_case_v2(
+                &self.state,
+                subject,
+                ctx.daa_score,
+            )?
+            else {
+                continue;
+            };
+            let Some((_, before)) = parent.assigned_case_journal_pin_v2(case, Some(result))? else {
+                return Err(missing());
+            };
+            let Some((_, current)) = self.state.assigned_case_journal_pin_v2(case, Some(result))? else {
+                return Err(missing());
+            };
+            if current != before {
+                continue;
+            }
+            let NativeAssignedCaseBackingV2::Committed(backing) = (input.load)(case, result)? else {
+                return Err(missing());
+            };
+            if backing.parent_state_root() != parent.state_root() {
+                return Err(refuse("due Case replay is not rooted at selected parent"));
+            }
+            let (_, bundle, pin) = rooted_bundle(&self.state, backing.assignment().id())?;
+            if pin.case != case || pin.result != result {
+                continue;
+            }
+            let machine = replay_assigned_court_history_v2(&self.state, &backing, &bundle)?;
+            let session = machine.certification_session(&self.state, ctx, &backing)?;
+            self.advance_positive_certification_session_v2(ctx, &session)?;
+        }
+        Ok(())
+    }
+
     pub(in crate::palw_state_v2) fn process_positive_certification_history_v2(
         &mut self,
         ctx: &PalwBlockContextV2,

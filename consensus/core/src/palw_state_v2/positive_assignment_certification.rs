@@ -955,6 +955,45 @@ pub(super) struct PositiveCertificationSweepReportV2 {
     pub waiting_native_session: u64,
 }
 impl TransitionBuilder<'_> {
+    /// Draw protected Cases whose original archive is still at the selected parent.
+    pub(super) fn draw_due_positive_cases_v2(
+        &mut self,
+        parent: &PalwChainStateV2,
+        ctx: &PalwBlockContextV2,
+        input: &mut PositiveCaseReplayInputV2<'_>,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(route) = parent.kernel_route_state_v1() else { return Ok(()) };
+        if route
+            .undrawn_positive_certification_subjects_v2(ctx.daa_score)
+            .take(input.live_case_cap.saturating_add(1))
+            .count()
+            > input.live_case_cap
+        {
+            return Err(refuse("undrawn Positive Cases exceed native live capacity"));
+        }
+        let mut parent_root = None;
+        for subject in route.undrawn_positive_certification_subjects_v2(ctx.daa_score) {
+            let subject = Digest(subject.as_bytes());
+            let Some((case, result)) =
+                crate::palw_positive_certification_v2::undrawn_positive_certification_case_v2(&self.state, subject)?
+            else {
+                continue;
+            };
+            let NativeAssignedCaseBackingV2::Committed(backing) = (input.load)(case, result)? else {
+                return Err(unavailable("missing original Case for protected draw"));
+            };
+            if backing.parent() != input.selected_parent
+                || backing.parent_state_root() != *parent_root.get_or_insert_with(|| parent.state_root())
+                || backing.pin().case != case
+                || backing.pin().result != result
+            {
+                return Err(refuse("protected draw archive differs from the selected parent Case"));
+            }
+            self.draw_from_committed_positive_case_v2(ctx, subject, &backing)?;
+        }
+        Ok(())
+    }
+
     /// Run after the legacy sweep so both use the SAME actual N claim-unit
     /// owner. A full queue/missinglaterseed defers; after certify_by the original
     /// frozen clock expires. No fallback policy or synthetic seed is supplied.
