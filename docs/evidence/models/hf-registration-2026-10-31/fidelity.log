@@ -1,0 +1,11 @@
+[    1.2s] GPTNeoForCausalLM — TIR program v1: 4 blocks, 12 layers, 473 nodes, 110 params, 12 consts (3436 B), 4 states, 19469 bytes encoded
+[    1.2s] calibration statistics from /tmp/misaka-hf-registration-20261031/gpt-neo-full-pack/stats.json
+[    1.3s] materialising the integer artifact
+[   11.9s]   materialise 8/14
+[   21.0s]   materialise 14/14
+[   21.0s] artifact: 600 tensors, 166.1 MiB; residual scale 1.276e-5, logit scale 5.960e-8
+[   21.0s] float reference on 1 sequences
+[   28.4s]   float 8/14
+[   32.2s] integer program on the typed backend (misaka-palw-tir-exec)
+[   42.8s]   integer seq 0: 4/4
+[   42.8s] top-1 1.0000  KL mean 0.02512 max 0.0918  ppl float 414.053 int 443.747 (Δ +7.17%)

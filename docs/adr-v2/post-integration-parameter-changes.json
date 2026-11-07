@@ -1,0 +1,16 @@
+{
+  "schema": "misaka.docs.post-integration-metadata-changes.v1",
+  "adoption": "2026-10-31 user: 全モデルproducerをG14の1席経路に切り替え、mainを更新しt12へ配備する。移行高さは未配備候補18600から18640へ延期。",
+  "documents": [
+    "docs/rfc/0042-all-model-g14-panel-one.md",
+    "docs/adr/0210-all-model-g14-panel-one.md"
+  ],
+  "changes": [
+    {
+      "path": "docs/governance/parameter-register.md",
+      "baseline_sha256": "179b7918109466970b2f36a5037e1b83a48495d283417e11358d1b0fed0d58cc",
+      "updated_sha256": "e9c3c8e0862114a25cf9843418819430df6ead0659c3fe33b398b72097823c6d",
+      "reason": "Record the explicitly requested all-model migration and the undeployed 18640 rollout boundary in the required parameter ledger. Preserve the import baseline digest, numbered source documents, old candidate identities, and original evidence."
+    }
+  ]
+}

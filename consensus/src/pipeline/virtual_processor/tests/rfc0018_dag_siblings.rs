@@ -366,3 +366,101 @@ async fn rfc18_with_the_sibling_fence_retention_and_arrival_order_independence_h
     run_all_retained(true).await;
     run_arrival_order(true).await;
 }
+
+/// Inference does not finish at the same time for every model. Keep the third
+/// model's already-built block off the network while the other two advance, then
+/// deliver it, restart the database and replay the same DAG in another order.
+#[tokio::test]
+async fn rfc18_a_delayed_model_joins_without_stopping_other_models_and_survives_restart_and_replay() {
+    use super::t12_round_lane_e2e::{t12_genesis_chain_on, t12_reopened_chain};
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+
+    kaspa_core::log::try_init_logger("warn");
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (config, bundle, premine, floats) = parts(true);
+    let (sender, _receiver) = async_channel::unbounded();
+    let consensus = TestConsensus::with_db(db.clone(), &config, sender);
+    let mut c = t12_genesis_chain_on(consensus, &config, &bundle, &premine, &floats);
+    let mut history = Vec::new();
+    for _ in 0..20 {
+        history.push(c.heartbeat(1_000, Vec::new()).await);
+    }
+    let mut a = Rig::finish(c, &bundle, history);
+    let mut siblings = Vec::new();
+    for (card, class) in [(1, a.classes[0]), (2, a.classes[1]), (3, a.classes[2])] {
+        let (block, claim) = a.build_of(class, card);
+        siblings.push(Sibling { block: block.to_immutable(), claim, card, class });
+    }
+    assert!(siblings.windows(2).all(|w| w[0].block.header.direct_parents() == w[1].block.header.direct_parents()));
+    let mut delivered = Vec::new();
+    for sibling in &siblings[..2] {
+        a.insert(&sibling.block).await;
+        delivered.push(sibling.block.clone());
+    }
+    for _ in 0..3 {
+        delivered.push(a.c.heartbeat(1_000, Vec::new()).await);
+    }
+    // A fast model can start AND land its next claim before the slow model lands
+    // its first. This exercises block production on a moving DAG, not just an
+    // artificially synchronized single batch of siblings.
+    let (next, next_claim) = a.build_of(a.classes[1], 4);
+    let next = next.to_immutable();
+    a.insert(&next).await;
+    delivered.push(next.clone());
+    let (_, before) = a.c.tip_state();
+    assert!(siblings[..2].iter().all(|s| before.claim(&s.claim).is_some()));
+    assert!(before.claim(&next_claim).is_some(), "the fast model progresses independently");
+    assert!(before.claim(&siblings[2].claim).is_none(), "the slow block has not arrived yet");
+
+    a.insert(&siblings[2].block).await;
+    delivered.push(siblings[2].block.clone());
+    for _ in 0..3 {
+        let join = a.c.heartbeat(1_000, Vec::new()).await;
+        let complete =
+            siblings.iter().all(|s| a.c.ctx.consensus.services.reachability_service.is_dag_ancestor_of(s.block.hash(), join.hash()));
+        delivered.push(join);
+        if complete {
+            break;
+        }
+    }
+    let merger = delivered.last().unwrap().hash();
+    assert_retained_and_attributed("delayed model", &a, &siblings, merger);
+    assert!(a.c.tip_state().1.claim(&next_claim).is_some());
+    assert!(
+        delivered.iter().any(|b| {
+            let data = a.c.vp().ghostdag_store.get_data(b.hash()).unwrap();
+            siblings.iter().any(|s| data.mergeset_reds.contains(&s.block.hash()))
+        }),
+        "the retained claims include work from an actual RED sibling"
+    );
+
+    let (sink, state) = a.c.tip_state();
+    let (simulated_time, heartbeat_nonce) = (a.c.ctx.simulated_time, a.c.nonce_for_reopen());
+    let Rig { c, classes, nonce, history } = a;
+    drop(c);
+    let mut resumed = config.clone();
+    resumed.process_genesis = false;
+    let (sender, _resumed_receiver) = async_channel::unbounded();
+    let consensus = TestConsensus::with_db(db, &resumed, sender);
+    let c = t12_reopened_chain(consensus, &resumed, &bundle, simulated_time, heartbeat_nonce);
+    let mut a = Rig { c, classes, nonce, history };
+    assert_eq!(a.c.sink(), sink);
+    assert_eq!(a.c.tip_state().1.state_root(), state.state_root(), "restart preserves the merged economic state");
+    assert_retained_and_attributed("restart", &a, &siblings, merger);
+
+    // Full-block catch-up, with the slow sibling arriving first at this peer.
+    let mut b = Rig::replica(parts(true), &a).await;
+    b.insert(&siblings[2].block).await;
+    for block in &delivered {
+        if block.hash() != siblings[2].block.hash() {
+            b.insert(block).await;
+        }
+    }
+    assert_eq!(b.c.sink(), sink);
+    assert_eq!(b.c.tip_state().1.state_root(), state.state_root(), "opposite delivery and restart converge");
+    assert_eq!(b.c.tip_state().1.round_seed_anchor(), state.round_seed_anchor());
+    assert_retained_and_attributed("full-block replay", &b, &siblings, merger);
+    let continued = a.c.heartbeat(1_000, Vec::new()).await;
+    b.insert(&continued).await;
+    assert_eq!(a.c.tip_state().1.state_root(), b.c.tip_state().1.state_root(), "both nodes continue from the joined DAG");
+}

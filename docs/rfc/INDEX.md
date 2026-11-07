@@ -2,6 +2,8 @@
 
 [入口](README.md) / [トピック別](TOPICS.md) / [番号台帳](../maintenance/numbering.md)。自動生成の探索用索引です。原文の過去のStatusを現在の稼働保証へ昇格させません。
 
+> **旧番号の履歴索引。** 現行の閲覧・更新先は [RFC v2](../rfc-v2/README.md)。[旧→新対応表](../rfc-v2/MAPPING.md)。
+
 **画像・動画（RFC-0003）とモデル改善（RFC-0004）はmainnet後へ延期・当面無効。** [現行方針](../governance/post-mainnet-scope.md)。
 
 | 番号 | 文書 | 状態の入口 |

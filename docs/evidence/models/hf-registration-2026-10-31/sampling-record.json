@@ -1,0 +1,42 @@
+{
+  "scope": "predeclared resource-bounded random sample; not Hub-wide coverage",
+  "seed": 2594629074128423707,
+  "listing_query": "https://huggingface.co/api/models?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=200&expand[]=safetensors&expand[]=sha&expand[]=gated&expand[]=config",
+  "listing_entries": 200,
+  "size_limit_parameters": 200000000,
+  "first_draw": "shibing624/macbert4csc-base-chinese",
+  "first_draw_result": "REJECTED: BertForMaskedLM has no causal adapter; preserved selected-preflight.json",
+  "causal_candidates": [
+    "EleutherAI/gpt-neo-125m",
+    "EleutherAI/pythia-70m-deduped",
+    "trl-internal-testing/tiny-Qwen3ForCausalLM",
+    "EleutherAI/pythia-14m",
+    "HuggingFaceTB/SmolLM2-135M",
+    "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "llamafactory/tiny-random-Llama-3",
+    "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+  ],
+  "selected_causal": "EleutherAI/gpt-neo-125m",
+  "revision": "21def0189f5705e2521767faed922f1f15e7d7db",
+  "source_file_verification": "9 files, byte lengths plus publisher git/LFS data identity",
+  "profile_context": 2048,
+  "profile_attention_window": 2048,
+  "full_weights": true,
+  "source_advertised_context": 2048,
+  "public_network": false,
+  "registration_status": "PASS_PRIVATE_NATIVE_CHAIN_AND_INDEPENDENT_REPLAY",
+  "conformance_status": "PASS_REFERENCE_TYPED_BACKEND_INDEPENDENT",
+  "exploratory_profiles": "64-position and uncapped-window pack runs interrupted; neither counted as passed",
+  "private_acceptance_ruleset": "testnet-12 launch rules plus existing IR fence at genesis; private harness cards",
+  "shipped_admission": "ADMISSIBLE at testnet-12 DAA 17400, context 2048",
+  "calibration_stats_sha256": "0bf7383b8e22b0f875d8bc9a4ea023907c422b2c044fa552a26f65ab5b6a8809",
+  "conformance_job": {
+    "prompts": 1,
+    "prefill_limit": 4,
+    "actual_prefill": 3,
+    "decode": 2,
+    "actual_positions": 5,
+    "not_full_context_reexecution": true
+  },
+  "runtime_pack_digest": "d18ad7f0b3b6d1de8ad15fecdf7cecc26ac98dcaa6cd6fa9a8a580a24702a5d0"
+}

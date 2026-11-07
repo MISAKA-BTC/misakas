@@ -149,13 +149,14 @@ pub struct TirClassRunnerV1<'a> {
     /// **The decode rule** of a free-prompt job (G14's TIR replay hook): `(generated so far, row, row index) -> id`. `None` is
     /// the attempt lane's shipped rule (`base0_decode_token_select_v1`), which every attempt commits.
     selector: Option<TirDecodeSelectorV1>,
+    wide_sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2,
 }
 
 /// The leaf lanes of values of `dtype` (PALW-TIR-5): `i8`/`i16`/`i32` as little-endian `i32`,
 /// `idx` as little-endian `u32`.
 fn lanes_le(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
     out.clear();
-    out.reserve(n * 4);
+    out.reserve(n * if data.dtype() == DType::I64 {8} else {4});
     with_slice!(data, v => lanes_typed(&v[from..from + n], out));
 }
 
@@ -167,7 +168,9 @@ pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<
 
 fn lanes_typed<T: Elem>(v: &[T], out: &mut Vec<u8>) {
     // A committed value is i8, i16, i32 or idx (NF-17); each is exactly one 4-byte lane.
-    if T::DTYPE == DType::Idx {
+    if T::DTYPE == DType::I64 {
+        for x in v { out.extend_from_slice(&x.to_i64().to_le_bytes()); }
+    } else if T::DTYPE == DType::Idx {
         for x in v {
             out.extend_from_slice(&(x.to_i64() as u32).to_le_bytes());
         }
@@ -197,7 +200,7 @@ impl<'a> TirClassRunnerV1<'a> {
             }
             tiles.push(row);
         }
-        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false, boundary_lie: None, selector: None })
+        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false, boundary_lie: None, selector: None, wide_sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY })
     }
 
     /// **Run with a consistent lie at a shard boundary** (the drill's D-S3; see [`TirBoundaryLieV1`]).
@@ -289,6 +292,20 @@ impl<'a> TirClassRunnerV1<'a> {
         self.commit(ctx, cap, d)
     }
 
+    /// The explicit v2 result, retaining every natural-unit Q24 lane at 64 bits.
+    pub fn run_wide_q24_v2(&self, ctx: &PalwJobContextV2, prompt: &[u32], cap:u64, on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>)) -> Result<TirWideJobRunV2,String> {
+        if !self.plan.program.wide_logits_q24() || ctx.trace_scheme_id != kaspa_consensus_core::palw_logits_q24_v2::scheme_id() { return Err("wide runner profile/context scheme mismatch".into()); }
+        let d = self.drive(ctx,prompt,cap,true,None,None,None,on_leaf,None,None)?;
+        let total = d.hashes.len() as u64;
+        let step_merkle_root = step_merkle_root_capped_v1(&d.hashes,cap).map_err(|e|e.to_string())?;
+        let trace_root = kaspa_consensus_core::palw_logits_q24_v2::trace_root(ctx,&d.rows,&d.generated).ok_or("wide trace shape")?;
+        let execution_root = palw_tir_execution_root_v1(&ctx.context_hash(),&trace_root,&self.class_id,total,&step_merkle_root);
+        let output_root = palw_attempt_output_root_v1(ctx,&d.generated);
+        Ok(TirWideJobRunV2 {leaf_count:total,step_merkle_root,logits_rows:d.rows,generated:d.generated,trace_root,execution_root,output_root,leaf_hashes:d.hashes})
+    }
+
+    pub fn with_wide_sampling_v2(mut self, sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2) -> Self { self.wide_sampling=sampling; self }
+
     /// [`Self::run`], also recording a [`TirResumePointV1`] after every checkpoint position.
     pub fn run_recording(
         &self,
@@ -297,6 +314,7 @@ impl<'a> TirClassRunnerV1<'a> {
         cap: u64,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<(TirJobRunV1, Vec<TirResumePointV1>), String> {
+        if self.plan.program.wide_logits_q24() { return Err("wide profile requires wide capture API".into()); }
         let mut points = Vec::new();
         let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf, None, None, None)?;
         Ok((self.commit(ctx, cap, d)?, points))
@@ -307,17 +325,19 @@ impl<'a> TirClassRunnerV1<'a> {
         debug_assert_eq!(d.first_index, 0);
         let total = d.hashes.len() as u64;
         let step_merkle_root = step_merkle_root_capped_v1(&d.hashes, cap).map_err(|e| e.to_string())?;
+        if self.plan.program.wide_logits_q24() { return Err("wide run requires wide result API".into()); }
+        let rows = narrow_rows(d.rows)?;
         let trace_root = if d.tiled {
-            tiled_logits_trace_root_v1(ctx, &d.rows, &d.generated).ok_or("the logits rows build no trace")?
+            tiled_logits_trace_root_v1(ctx, &rows, &d.generated).ok_or("the logits rows build no trace")?
         } else {
-            base0_logits_trace_root_v1(ctx, &d.rows, &d.generated)
+            base0_logits_trace_root_v1(ctx, &rows, &d.generated)
         };
         let execution_root = palw_tir_execution_root_v1(&ctx.context_hash(), &trace_root, &self.class_id, total, &step_merkle_root);
         let output_root = palw_attempt_output_root_v1(ctx, &d.generated);
         Ok(TirJobRunV1 {
             leaf_count: total,
             step_merkle_root,
-            logits_rows: d.rows,
+            logits_rows: rows,
             generated: d.generated,
             trace_root,
             execution_root,
@@ -424,7 +444,7 @@ impl<'a> TirClassRunnerV1<'a> {
         until: Option<u32>,
         mut record: Option<&mut Vec<TirResumePointV1>>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
-        mut stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
+        mut stream_rows: Option<&mut dyn FnMut(u32, &[i64]) -> Result<(), String>>,
         last_resume: Option<&mut Option<TirResumePointV1>>,
         mut observer: Option<&mut dyn TirRunObserverV1>,
         required: Option<(&super::memory::TirMemoryReserverV1, Hash64)>,
@@ -439,7 +459,7 @@ impl<'a> TirClassRunnerV1<'a> {
         }
         let total = space.leaf_count_capped(ctx, cap).map_err(|e| e.to_string())?;
         let scheme = Hash64::from_bytes(self.plan.program.logits_scheme_id);
-        let tiled = if scheme == tiled_logits_scheme_id_v1() {
+        let tiled = if scheme == tiled_logits_scheme_id_v1() || self.plan.program.wide_logits_q24() {
             true
         } else if scheme == flat_logits_scheme_id_v1() {
             false
@@ -510,7 +530,7 @@ impl<'a> TirClassRunnerV1<'a> {
             error: None,
             meta: verify.then(Vec::new),
         };
-        let mut rows: Vec<Vec<i32>> = Vec::new();
+        let mut rows: Vec<Vec<i64>> = Vec::new();
         if stream_rows.is_none() {
             rows.try_reserve_exact(selections_through - selections_before).map_err(|_| "cannot reserve replay trace headers")?;
         }
@@ -583,9 +603,12 @@ impl<'a> TirClassRunnerV1<'a> {
                 if row.is_empty() {
                     return Err("an empty logits row selects no token".into());
                 }
-                let id = match self.selector.as_ref() {
-                    Some(select) => select(&generated, &row, generated.len() as u32),
-                    None => base0_decode_token_select_v1(&row) as u32,
+                let id = if self.plan.program.wide_logits_q24() {
+                    if self.selector.is_some() { return Err("legacy selector refuses wide logits".into()); }
+                    kaspa_consensus_core::palw_logits_q24_v2::select(&row,&self.wide_sampling,generated.len() as u32).ok_or("empty wide logits")? as u32
+                } else {
+                    let narrow = narrow_row(&row)?;
+                    match self.selector.as_ref() { Some(select) => select(&generated,&narrow,generated.len() as u32), None => base0_decode_token_select_v1(&narrow) as u32 }
                 };
                 if let Some(observe) = observer.as_mut() {
                     let dtype = self.plan.program.blocks[self.plan.program.schedule.post as usize].nodes
@@ -606,6 +629,7 @@ impl<'a> TirClassRunnerV1<'a> {
             // Fixed-state checkpoints: every instance after this position's write.
             let checkpoint = (a + 1) % space.layout.checkpoint_interval == 0;
             if checkpoint {
+                emit.leaf.version = PALW_TIR_STEP_LEAF_VERSION_V1;
                 for (k, inst) in space.fixed_instances().iter().enumerate() {
                     let v = exec
                         .fixed_value(inst.state, inst.layer)
@@ -620,6 +644,7 @@ impl<'a> TirClassRunnerV1<'a> {
             }
             // History tiles: the last h_tile rows of every history, one leaf per sub-row.
             if (a + 1) % space.layout.h_tile == 0 {
+                emit.leaf.version = PALW_TIR_STEP_LEAF_VERSION_V1;
                 let base = space.program_slots() + space.fixed_instances().len() as u32;
                 for (k, inst) in space.hist_instances().iter().enumerate() {
                     let tail = exec
@@ -735,7 +760,7 @@ impl<'a> TirClassRunnerV1<'a> {
 struct Driven {
     first_index: u64,
     hashes: Vec<Hash64>,
-    rows: Vec<Vec<i32>>,
+    rows: Vec<Vec<i64>>,
     generated: Vec<u32>,
     tiled: bool,
     // Keep executor/working reservation through whole-job root/trace construction.
@@ -833,6 +858,7 @@ impl StepSink for CommitSink<'_, '_, '_> {
             return;
         }
         let n = v.data.len();
+        self.emit.leaf.version = if v.data.dtype() == DType::I64 { 2 } else { PALW_TIR_STEP_LEAF_VERSION_V1 };
         for (tile, from) in (0..n).step_by(t).enumerate() {
             let count = t.min(n - from);
             lanes_le(v.data, from, count, &mut self.emit.leaf.values_le);
@@ -864,3 +890,11 @@ fn check_position(
     }
     Ok(())
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TirWideJobRunV2 {
+    pub leaf_count:u64, pub step_merkle_root:Hash64, pub logits_rows:Vec<Vec<i64>>, pub generated:Vec<u32>,
+    pub trace_root:Hash64, pub execution_root:Hash64, pub output_root:Hash64, pub leaf_hashes:Vec<Hash64>,
+}
+fn narrow_row(row: &[i64]) -> Result<Vec<i32>,String> { row.iter().map(|v| i32::try_from(*v).map_err(|_| "legacy i32 consumer refuses wide logit".into())).collect() }
+fn narrow_rows(rows: Vec<Vec<i64>>) -> Result<Vec<Vec<i32>>,String> { rows.iter().map(|r|narrow_row(r)).collect() }

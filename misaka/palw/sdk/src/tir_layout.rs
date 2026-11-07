@@ -257,7 +257,7 @@ pub fn tir_layout_tiles_v1(params: &Params, program: &TirProgramV1, choice: &Tir
     if max_context == 0 || max_context > widest {
         return Err(format!("a context of {max_context} positions: the program's history bound and the network admit 1..={widest}"));
     }
-    let tiled = Hash64::from_bytes(program.logits_scheme_id) == tiled_logits_scheme_id_v1();
+    let tiled = program.wide_logits_q24() || Hash64::from_bytes(program.logits_scheme_id) == tiled_logits_scheme_id_v1();
     let mut commit_tiles = Vec::new();
     for (bi, block) in program.blocks.iter().enumerate() {
         for (ni, node) in block.nodes.iter().enumerate() {
@@ -534,8 +534,7 @@ pub fn tir_class_admission_offline_v1(
     }
     let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class)
         .ok_or_else(|| format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context))?;
-    let facts = kaspa_consensus_core::palw_tir_attempt_v1::PalwTirJobFactsV1::of(class, &program, class_id);
-    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&facts, canonical);
+    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, class_id, canonical).ok_or("canonical program decode")?;
     let bond = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
         kaspa_consensus_core::tx::TransactionId::from_bytes([0; 64]),
         0,
@@ -650,7 +649,7 @@ pub fn tir_choose_layout_judged_v1(
     };
     // The logits tiles to try: the one asked for, else — under the tiled scheme — every divisor of
     // the scheme's 4,096 lanes, widest first, until the terminal close is one the chain can carry.
-    let tiled = Hash64::from_bytes(program.logits_scheme_id) == tiled_logits_scheme_id_v1();
+    let tiled = program.wide_logits_q24() || Hash64::from_bytes(program.logits_scheme_id) == tiled_logits_scheme_id_v1();
     let logits_tiles: Vec<Option<u32>> = match (choice.logits_tile, tiled) {
         (Some(t), _) => vec![Some(t)],
         (None, true) => (2..=12).rev().map(|k| Some(1u32 << k)).collect(),

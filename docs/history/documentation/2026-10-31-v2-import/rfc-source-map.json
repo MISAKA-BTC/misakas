@@ -1,0 +1,1401 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-29",
+  "source_archive": "misakas-pre(5).zip",
+  "source_archive_sha256": "f11e757b2cf49886fc0f9c0998c15129bf03c29f2899c5aa66ee3d0b0367985b",
+  "scope": "editorial-consolidation-not-runtime-change",
+  "old_count": 41,
+  "new_active_count": 15,
+  "sources": [
+    {
+      "old_id": "RFC-0001",
+      "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "sha256": "cf5d0a773fa10221d09ec0e4f5f28cbede209fdfda1c97e4e993ed4bfa941486",
+      "lines": 431,
+      "bytes": 49564,
+      "primary_new_id": "RFC-v2-0001",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0001",
+          "path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+          "start_line": 1,
+          "end_line": 431,
+          "anchor": "source-v1-0001-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "c9889a326bbeee041c0a0c25438b5777a1957428fb4f59e838a44172274d89ee"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0002",
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "sha256": "146a6db24530aa8a5440e9b6904a3f3bf7f643fe21c4d63325be6c7eb6d78d87",
+      "lines": 4748,
+      "bytes": 383102,
+      "primary_new_id": "RFC-v2-0002",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 1,
+          "end_line": 455,
+          "anchor": "source-v1-0002-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "9e70aa55f3b62fb02ffecf21267da325db748d19ab465245ec93c092f9d29194"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 456,
+          "end_line": 504,
+          "anchor": "source-v1-0002-L00456",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "38867923ab9ad524ecde400a24dbf4e80437dc5b48436d8cead56ac86e642d19"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 505,
+          "end_line": 731,
+          "anchor": "source-v1-0002-L00505",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "85736dc9be1d4887c176034147363ab8c1d0862fe7242017829b6e2c9c33d238"
+        },
+        {
+          "new_id": "RFC-v2-0003",
+          "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+          "start_line": 732,
+          "end_line": 1244,
+          "anchor": "source-v1-0002-L00732",
+          "reason": [
+            "TIR文書内のonboarding手順をモデル登録RFCへ",
+            "onboardingの概要をモデル登録RFCへ"
+          ],
+          "fragment_sha256": "39503c55bc873334aa7de05298166b22a8a849b30049fd2da363d962d05326ae"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 1245,
+          "end_line": 1417,
+          "anchor": "source-v1-0002-L01245",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "ad5760b004604e7745a700cd25606f43691690e6e00c46a310aad3bf4989f957"
+        },
+        {
+          "new_id": "RFC-v2-0003",
+          "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+          "start_line": 1418,
+          "end_line": 2078,
+          "anchor": "source-v1-0002-L01418",
+          "reason": [
+            "TIR文書内のonboarding手順をモデル登録RFCへ"
+          ],
+          "fragment_sha256": "8d5e1e399a0fb8cd1f4f1932e9d45850eaace01a6a80d3e40b64914bc3c25d10"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 2079,
+          "end_line": 2295,
+          "anchor": "source-v1-0002-L02079",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "3c2596b4e152f87ad099bab0343b6626c8b2972555d4c244f511f2e547fc57be"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 2296,
+          "end_line": 2314,
+          "anchor": "source-v1-0002-L02296",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "1a9755152bd60d2327aed6fe5f37e9d217f514a81ef4590a3488418cdc00e472"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 2315,
+          "end_line": 2357,
+          "anchor": "source-v1-0002-L02315",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "decf9d5f3fd310071edfc1966e4b6b49a4f25f58686d9ae540aad4e042e44cc2"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 2358,
+          "end_line": 2383,
+          "anchor": "source-v1-0002-L02358",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "012747541ce5be8d3b029d7e30a5ce167b132b6b0aead5d956cc1b5c3a1987ca"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 2384,
+          "end_line": 2645,
+          "anchor": "source-v1-0002-L02384",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "4f9c58fd720fdd9407c7d8bfa64eaa1ef0710a50c0ecb763a30eda00eef0a5dd"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 2646,
+          "end_line": 2802,
+          "anchor": "source-v1-0002-L02646",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "33b2bbe07caa48fc07d85033615f668971ee1103ceb17a3b8c6bea68778a0f97"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 2803,
+          "end_line": 2854,
+          "anchor": "source-v1-0002-L02803",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "afedd7311ae182d3cc288044737816ada49276a38e109d27c3dda9fd8932ad7c"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 2855,
+          "end_line": 2928,
+          "anchor": "source-v1-0002-L02855",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "8c06de6cd2101ed0b7b68ede5cacef17e614676144b3c8090c01294ef6b2e768"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 2929,
+          "end_line": 2980,
+          "anchor": "source-v1-0002-L02929",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "ef2f33e3fee3af8e2a21ec315a51fb23da5386c31a1893480b59f129ae3e84d7"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 2981,
+          "end_line": 3097,
+          "anchor": "source-v1-0002-L02981",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "c4c0f21a322741d72c1af1ffd88f32641a4a5fa35988c84e9ac5223b915d358f"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 3098,
+          "end_line": 3373,
+          "anchor": "source-v1-0002-L03098",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "663460a050958017c3e3f70dd0413a9db19a57b947a3153ed20834e20754e5aa"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 3374,
+          "end_line": 3409,
+          "anchor": "source-v1-0002-L03374",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "ac10bada1752f6a65482f05657d592de0661d8a39cfe814839b438e435b9d88a"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 3410,
+          "end_line": 3515,
+          "anchor": "source-v1-0002-L03410",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "d0e50232752c09622f86614311e8416c204b998c9db1a043128406fb96817144"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 3516,
+          "end_line": 3586,
+          "anchor": "source-v1-0002-L03516",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "22cde0bac7fd148279d1d2f57d63df57a488a7ef623ac43e5cbd76d7543e87a5"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 3587,
+          "end_line": 3876,
+          "anchor": "source-v1-0002-L03587",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "0a0483461748bd40fc095f0ee7783aa0647516cdf2d4e7b90dbc7b6fd4ad27ae"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 3877,
+          "end_line": 3905,
+          "anchor": "source-v1-0002-L03877",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "2559015bed5c11a495c1b1c4d25149cf9bfb7a6e2859f0f942de4db1570fbc0e"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 3906,
+          "end_line": 4059,
+          "anchor": "source-v1-0002-L03906",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "4990b81ae464f7cedd50b443f140d98fc9378d3704e747a02f33e0c67e6f4692"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 4060,
+          "end_line": 4092,
+          "anchor": "source-v1-0002-L04060",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "850da3c62f621ca931ee622697750250f49bad90a9608843796161912a51efe1"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 4093,
+          "end_line": 4367,
+          "anchor": "source-v1-0002-L04093",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "f2d8068d6e671272aa01c2653d17fd465a5b8c78e147df58a60616f53bc23342"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 4368,
+          "end_line": 4420,
+          "anchor": "source-v1-0002-L04368",
+          "reason": [
+            "TIRのCourt専用契約をCourt統合RFCへ"
+          ],
+          "fragment_sha256": "0436c3733aa68be816c17a8e50a6f781a7fdf213f3f8f5a075777f761c8025c3"
+        },
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 4421,
+          "end_line": 4748,
+          "anchor": "source-v1-0002-L04421",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "de974fce6410de1e656dbfa9a500ff7324e467e5c4f5c9755a9d430a44cd7505"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0003",
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "sha256": "2e6c459f7c1f2aceb4233f4c9b71364486d78f625e948aacf6e4c4fa1fe951b5",
+      "lines": 2621,
+      "bytes": 210123,
+      "primary_new_id": "RFC-v2-0001",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0001",
+          "path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+          "start_line": 1,
+          "end_line": 1070,
+          "anchor": "source-v1-0003-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "bf9f8f6ac933abb83b4d54077bbb8dbbdcb3286794aaa18b4a7f7280ba40e074"
+        },
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 1071,
+          "end_line": 1793,
+          "anchor": "source-v1-0003-L01071",
+          "reason": [
+            "画像・動画の延期profileを管理RFCへ"
+          ],
+          "fragment_sha256": "bfbcc5a5febf50a661177ef3b1d1f8b3ec13d8ffb486f6fd8768ff3e514218e5"
+        },
+        {
+          "new_id": "RFC-v2-0001",
+          "path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+          "start_line": 1794,
+          "end_line": 2252,
+          "anchor": "source-v1-0003-L01794",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "5f79f89cd54725ace055e94ae9a1e84d5bebc9bfa524c8d2fde2087571f42a9d"
+        },
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 2253,
+          "end_line": 2289,
+          "anchor": "source-v1-0003-L02253",
+          "reason": [
+            "画像・動画の延期profileを管理RFCへ"
+          ],
+          "fragment_sha256": "c42f5df59dd9ebbf5d1ec401ffa69daaafa166c4cecc84768077f58d793e5111"
+        },
+        {
+          "new_id": "RFC-v2-0001",
+          "path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+          "start_line": 2290,
+          "end_line": 2621,
+          "anchor": "source-v1-0003-L02290",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "ba85a9b20a6a20ea7275ec6abbb715ef083ebb178fe1547f19b51f46b38aae41"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0004",
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "sha256": "6abaa2eba4f2ef5aa97774b93154858365f116370cec0b7a64465240252deb42",
+      "lines": 1155,
+      "bytes": 95917,
+      "primary_new_id": "RFC-v2-0015",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 1,
+          "end_line": 1155,
+          "anchor": "source-v1-0004-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "225d3ae7f65f6a127c030f33874f5fdc5b0049511e346939b448127d0c8f1e49"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0005",
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "sha256": "cc096f4afa7bc81205e50f8123553a81d1b4ece4ed7ea6084cf6118aaa41676f",
+      "lines": 15,
+      "bytes": 2996,
+      "primary_new_id": "RFC-v2-0015",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 1,
+          "end_line": 15,
+          "anchor": "source-v1-0005-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "27d250cabfc20eb9ce9f2c0fd511c04fd1999cf385305451b9bd3b7bd19f0151"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0006",
+      "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "sha256": "06ae27140abd9812a80678750240b9e84785ecbd3871fc48fd64483af029f50c",
+      "lines": 1328,
+      "bytes": 96980,
+      "primary_new_id": "RFC-v2-0006",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0006",
+          "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+          "start_line": 1,
+          "end_line": 1328,
+          "anchor": "source-v1-0006-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "cfb98148013d44c15b50ecb08dbd4bc4c0b6d22b76f0970d0be608a576d98d5e"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0007",
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "sha256": "eadad4e17cc30e8acf0b0f882d664fa1bedb871af9e6e63fb7bd1c00d924c07b",
+      "lines": 1497,
+      "bytes": 143742,
+      "primary_new_id": "RFC-v2-0006",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0006",
+          "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+          "start_line": 1,
+          "end_line": 507,
+          "anchor": "source-v1-0007-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "9911730fb92a7ae70533776b6ec487e83fa427fd6c3f6c37b87ba2597372955f"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 508,
+          "end_line": 532,
+          "anchor": "source-v1-0007-L00508",
+          "reason": [
+            "異議・exact courtへのescalationを一元化"
+          ],
+          "fragment_sha256": "5506a23557fc50631d95f406cea9cdde9207ea81bc3d051dc4bd9ba1c6eb7699"
+        },
+        {
+          "new_id": "RFC-v2-0006",
+          "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+          "start_line": 533,
+          "end_line": 1497,
+          "anchor": "source-v1-0007-L00533",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "62fce9e13ed70bc81b524bf82240fed5586188c959a314f9c68409924ed91893"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0008",
+      "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "sha256": "710936edcb883c09baa8b7daea0c8a3d953a02f521315bfa34d5cc266eb17324",
+      "lines": 361,
+      "bytes": 52096,
+      "primary_new_id": "RFC-v2-0007",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0007",
+          "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+          "start_line": 1,
+          "end_line": 153,
+          "anchor": "source-v1-0008-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "2a101f0d4838fe8bd2f99d041031c8a73dd23c0ae2689846a1de07c83d197d77"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 154,
+          "end_line": 192,
+          "anchor": "source-v1-0008-L00154",
+          "reason": [
+            "EXEC固有の裁定・証拠保持契約を一元化"
+          ],
+          "fragment_sha256": "6ecc36b5503a494571613cfa7e2b9920047aca0c689f1a190989163608f7386d"
+        },
+        {
+          "new_id": "RFC-v2-0007",
+          "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+          "start_line": 193,
+          "end_line": 361,
+          "anchor": "source-v1-0008-L00193",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "2da269f30d0917fe136ca95eddceae5eac2be7934b1bd229015a1c6cc0ac281d"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0009",
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "sha256": "14a7202db577ccbe68b1f4ca4c929ad558e51fa31f9b4c468ca602db92243ddc",
+      "lines": 330,
+      "bytes": 46681,
+      "primary_new_id": "RFC-v2-0009",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0009",
+          "path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+          "start_line": 1,
+          "end_line": 330,
+          "anchor": "source-v1-0009-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "f8b8454ff472c8c4e8d35096fc6dc9cf1e63a674e0ed47e8ce31b7db5dad51e9"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0010",
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "sha256": "127e4c2429955ff112c13b0fd2a4e54dcc01dd3b8c243ca83ebe75e101f0210f",
+      "lines": 254,
+      "bytes": 42156,
+      "primary_new_id": "RFC-v2-0006",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0006",
+          "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+          "start_line": 1,
+          "end_line": 254,
+          "anchor": "source-v1-0010-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "a64988c84315c6bc3a3fc87d1ed7282bd26be6a2fcd541b6111743c0277a5697"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0011",
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "sha256": "7b90b55124990629f5b00ab4b14ac189edb3bb2a22416ee493bf7ca6e229b083",
+      "lines": 746,
+      "bytes": 124418,
+      "primary_new_id": "RFC-v2-0003",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0003",
+          "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+          "start_line": 1,
+          "end_line": 746,
+          "anchor": "source-v1-0011-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "5a7b15b2767d33cfddae561c8bf65b505ae48499a37867e3ea47f4a561e835a5"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0012",
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "sha256": "95a70735174361d070ca69e17f44907f70bb8ee30f25a9ea77e8c7e5c728b9f9",
+      "lines": 607,
+      "bytes": 57041,
+      "primary_new_id": "RFC-v2-0010",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0010",
+          "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+          "start_line": 1,
+          "end_line": 607,
+          "anchor": "source-v1-0012-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "d6455807bdb92a3f8d6712c2406a78cc12fefb6ff0a962e0779a63a4205cf753"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0013",
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "sha256": "8c9c2a6e3b5cb2b1c95d62da8a60670d826b5ecd27e56c661819a171102c2df0",
+      "lines": 394,
+      "bytes": 36800,
+      "primary_new_id": "RFC-v2-0003",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0003",
+          "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+          "start_line": 1,
+          "end_line": 394,
+          "anchor": "source-v1-0013-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "d2c1ebd23a3724797c4f8cd2f6b5d0463096111835b5e66f10c32f5ef09bf8d2"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0014",
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "sha256": "b6abbf1fcc2c62fe91397078274339ac6cb11942ccd4632dc6a00296a2d3bab8",
+      "lines": 1043,
+      "bytes": 89592,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 746,
+          "anchor": "source-v1-0014-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "9d7f619b79278601348f2421b4f49c139448326fc8c03d1e6487335ac2b6020a"
+        },
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 747,
+          "end_line": 898,
+          "anchor": "source-v1-0014-L00747",
+          "reason": [
+            "共通経済規則を会計RFCへ"
+          ],
+          "fragment_sha256": "a45863bc4c91a80e0df999f1e31653153251693993d0e3e4dbde33067fef48ea"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 899,
+          "end_line": 904,
+          "anchor": "source-v1-0014-L00899",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "27214d61b3ea9e0502ee5591cc3a767dd88bc7bdedb5820518dc05d932ddea6a"
+        },
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 905,
+          "end_line": 913,
+          "anchor": "source-v1-0014-L00905",
+          "reason": [
+            "共通経済規則を会計RFCへ"
+          ],
+          "fragment_sha256": "b06c58e10e2b5b352f3b9daccb542bc69ed393e57856f44f969516d61a62a868"
+        },
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 914,
+          "end_line": 1043,
+          "anchor": "source-v1-0014-L00914",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "fb71491b8f7881dc6a49cc404606131396611ee666ee3136d6d9a1f750437e6a"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0015",
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "sha256": "9f005a05fd7c732069baa47195f4c56ef9995b423e9cf35876937f8d1046618c",
+      "lines": 968,
+      "bytes": 81978,
+      "primary_new_id": "RFC-v2-0015",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 1,
+          "end_line": 379,
+          "anchor": "source-v1-0015-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "64596910f0691e134856485d1e5be1de6f8cff8b195cf302a88d388620df35c5"
+        },
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 380,
+          "end_line": 524,
+          "anchor": "source-v1-0015-L00380",
+          "reason": [
+            "Panel=0に依存しない共通bond・配分の採用規則を分離"
+          ],
+          "fragment_sha256": "e6c1e023b808d25618ca81d1a135b4004f85790d342b5f335f54ee10c84b6a7d"
+        },
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 525,
+          "end_line": 543,
+          "anchor": "source-v1-0015-L00525",
+          "reason": [
+            "Panel=0固有の予約引下げ案は休眠管理を維持"
+          ],
+          "fragment_sha256": "d66bf311b4926a65f5cd03e9815ba685193b49f498767ba0005aa312272125a7"
+        },
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 544,
+          "end_line": 679,
+          "anchor": "source-v1-0015-L00544",
+          "reason": [
+            "Panel=0に依存しない共通bond・配分の採用規則を分離"
+          ],
+          "fragment_sha256": "ff5d38bd89dacea7791c9701956309fa53574232326bfbd901178c0043acd608"
+        },
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 680,
+          "end_line": 953,
+          "anchor": "source-v1-0015-L00680",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "963367c0832cf2469bdbb0fc907182a5341a17f40ef9be29b278b6d48555a9bd"
+        },
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 954,
+          "end_line": 968,
+          "anchor": "source-v1-0015-L00954",
+          "reason": [
+            "Panel=0に依存しない共通bond・配分の採用規則を分離"
+          ],
+          "fragment_sha256": "985fe3c36db95e785133c29f996c97bdff9b366a36a0f11c0471c2f9a749183c"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0016",
+      "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "sha256": "e821fe260743d5b9bad78d8918647c6f71a946818d1ac0bcd410c1673984f47a",
+      "lines": 674,
+      "bytes": 61265,
+      "primary_new_id": "RFC-v2-0011",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 1,
+          "end_line": 111,
+          "anchor": "source-v1-0016-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "c27b900d3684a67e397a0ff63ac1d760508affa68439e898b3e441befa511f4d"
+        },
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 112,
+          "end_line": 156,
+          "anchor": "source-v1-0016-L00112",
+          "reason": [
+            "Panel=0の有効化禁止条件を集約"
+          ],
+          "fragment_sha256": "d0f978cfe301722612a6c0c8200a7d3456fa6a2f60f948f10c03fd2cf6abc11b"
+        },
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 157,
+          "end_line": 674,
+          "anchor": "source-v1-0016-L00157",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "fcd6cc514014213f5a8c1ea8bdfb1893d0c33a98a08cb656c6f039f694ef89cd"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0017",
+      "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "sha256": "6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc",
+      "lines": 46,
+      "bytes": 5637,
+      "primary_new_id": "RFC-v2-0004",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0004",
+          "path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+          "start_line": 1,
+          "end_line": 43,
+          "anchor": "source-v1-0017-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "6590824fd4974a4b737a9508b14bcc1c0983c1e3cf50bdc512f89de473102f4b"
+        },
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 44,
+          "end_line": 46,
+          "anchor": "source-v1-0017-L00044",
+          "reason": [
+            "廃止審査の履歴を集約"
+          ],
+          "fragment_sha256": "57821eac5f9f77c344dd800ce0e94f3069376a0ebd62495ccea7ca55a4a384a3"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0018",
+      "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "sha256": "3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390",
+      "lines": 429,
+      "bytes": 56280,
+      "primary_new_id": "RFC-v2-0010",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0010",
+          "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+          "start_line": 1,
+          "end_line": 429,
+          "anchor": "source-v1-0018-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "7c18140231c0cf064dec571a222218c7db07f47fe5cf20a92044632879d65838"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0019",
+      "path": "docs/rfc/0019-annual-model-upgrade.md",
+      "sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e",
+      "lines": 446,
+      "bytes": 60831,
+      "primary_new_id": "RFC-v2-0004",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0004",
+          "path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+          "start_line": 1,
+          "end_line": 446,
+          "anchor": "source-v1-0019-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "82f6167474d05b57997d85860c0cf3fbcce2a8feabe8fa2c7d0dd210b901b48f"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0020",
+      "path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "sha256": "9ea21859e194f85dedd83868df1c397b982df9f65f30e34de281fa2a355f6fce",
+      "lines": 187,
+      "bytes": 22702,
+      "primary_new_id": "RFC-v2-0005",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0005",
+          "path": "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+          "start_line": 1,
+          "end_line": 187,
+          "anchor": "source-v1-0020-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "d1bee09e8686ffd2b973834a77267be9d28c5122a2bdd4ed3f66a663f8b250c7"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0021",
+      "path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "sha256": "1d780be260b557208bf4bdf3310e09bb3b1b7f463d1dbc13cfe6a0f81b68183a",
+      "lines": 23,
+      "bytes": 1628,
+      "primary_new_id": "RFC-v2-0015",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 1,
+          "end_line": 23,
+          "anchor": "source-v1-0021-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "835f65dfce7a452a09a41f2e49f30a3f20d63c903cbd8b35280a51633dcb1a03"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0022",
+      "path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "sha256": "753f83e076fc1228ddf8b29ae0520c9a61457ff66842da20d3fd31e773df4717",
+      "lines": 28,
+      "bytes": 2195,
+      "primary_new_id": "RFC-v2-0015",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 1,
+          "end_line": 28,
+          "anchor": "source-v1-0022-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "6a954612648580b9b95275fd585f894cc9d7a888d6271e5240a3831905cbe98d"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0023",
+      "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "sha256": "cfe54859d881c7201abbd9e2253d29fff83af7615b170f1e5b9efb4932cf8759",
+      "lines": 201,
+      "bytes": 53538,
+      "primary_new_id": "RFC-v2-0008",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0008",
+          "path": "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+          "start_line": 1,
+          "end_line": 201,
+          "anchor": "source-v1-0023-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "2ea2c1e0c0228df7ad44f3aa04010d56b541eb59b97f2f7df7cf3c5759d1d15f"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0024",
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "sha256": "ab4f29ce187abefcc408a26fcd0b9c0f4e4e862311a0406bab3a658037a9f62f",
+      "lines": 600,
+      "bytes": 51926,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 600,
+          "anchor": "source-v1-0024-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "3aa638c3e5c16bdfefdf6f105b349469496a674533b12ede57365a817eb313f5"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0025",
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "sha256": "c4cf2e50999f29623cde90fff5e96b70b07f8e2f0c7fcf24d7df82c02a78f8db",
+      "lines": 705,
+      "bytes": 57889,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 705,
+          "anchor": "source-v1-0025-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "29b4ad53220732eb3e1dcb073c581657eef6f8d57ae746b7c116492f0bed9916"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0026",
+      "path": "docs/rfc/0026-court-policy-master-contract.md",
+      "sha256": "8dfdc4e80aa7a50f7f2b00f1dc302c347bb50a8da8e8f169865cef6fe038c687",
+      "lines": 194,
+      "bytes": 22213,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 194,
+          "anchor": "source-v1-0026-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "c372ed1b37ca35023613983b6bc6ffea9d4d11f9f091acc3622549bfe1a91cda"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0027",
+      "path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "sha256": "337747d946ea2685c2920767eb9c552705fc38f42f2e299139808470ab582053",
+      "lines": 437,
+      "bytes": 49014,
+      "primary_new_id": "RFC-v2-0015",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 1,
+          "end_line": 437,
+          "anchor": "source-v1-0027-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "7886e55b5f321bc2ec8dd8af8e0d5a66a30f0c22209148cfdb416b07ed313bf6"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0028",
+      "path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "sha256": "8bfeec2011ee648014ff4ee4207167189ff74d3828e99a70649d38832bd273b8",
+      "lines": 92,
+      "bytes": 13221,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 92,
+          "anchor": "source-v1-0028-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "636b0840b9da3791e16ccdbfbc4289e5ce02e28597ceff58c675c32648fbb589"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0029",
+      "path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "sha256": "9fb6257c28155e32e66c3dba004f6baf2e2c0661ad49ca858ff0c9a7ba6c723e",
+      "lines": 224,
+      "bytes": 55657,
+      "primary_new_id": "RFC-v2-0002",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0002",
+          "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+          "start_line": 1,
+          "end_line": 224,
+          "anchor": "source-v1-0029-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "9b320869a2b934c2ab86d268d035d17f0462e3a33b71a3cf65728eadc21b4c57"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0030",
+      "path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "sha256": "1c46304fa175f2b1f214c397c682b829f3c0e3a23ef2729c7234746453ae501d",
+      "lines": 170,
+      "bytes": 30534,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 170,
+          "anchor": "source-v1-0030-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "00cba59a367ba2cbe606960d83f167d2a94df34d650fec89777d2f804c19eac6"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0031",
+      "path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "sha256": "5a969226d9d4b4a805d6e2f80df6df2b05dd5bac745927d717e2cc8f53d83b2f",
+      "lines": 47,
+      "bytes": 4469,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 47,
+          "anchor": "source-v1-0031-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "a622d8adb2f5f8be6eb77e9f796902160b1419c0d1ca7bdf0db08387a4209477"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0032",
+      "path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "sha256": "da14fa673ee16cbf368bf1caa10b27a388a06aa4425de5d51062be75a6c1ae36",
+      "lines": 68,
+      "bytes": 10680,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 68,
+          "anchor": "source-v1-0032-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "450a4e514f024b45a7aa815c5e5d2d9ce19fd54c8ade1392560bab4952286b63"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0033",
+      "path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "sha256": "3339abc3303c7e80e22a64778b65643d7bcaea049f6241fa040b8d0726d5215e",
+      "lines": 32,
+      "bytes": 4087,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 32,
+          "anchor": "source-v1-0033-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "a781511f78442acf9573dc1042242799b8c718c449e35a81b3cb7ac4eddd480a"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0034",
+      "path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "sha256": "9f23efd19a8949949a1c8abfa192226e552de303045f33b3dbbc1102d2ad2ae8",
+      "lines": 99,
+      "bytes": 15659,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 99,
+          "anchor": "source-v1-0034-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "86ef249e3d673bd0f9c3f833d0ad5072cc8e4b255c7775d210b71efe9cb81260"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0035",
+      "path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "sha256": "746be1d58ec259fb8aaca4b55dd988025f9f558cd05b7c7d145cc0a468786042",
+      "lines": 135,
+      "bytes": 24380,
+      "primary_new_id": "RFC-v2-0014",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0014",
+          "path": "docs/rfc-v2/0014-court-master-contract.md",
+          "start_line": 1,
+          "end_line": 135,
+          "anchor": "source-v1-0035-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "c8f7fa99187543e7e0652a04cc475928213dc032f1b95db76cc67103a99532bc"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0036",
+      "path": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "sha256": "2a7da16331868ede8756e30c9e2d069a4827dee36b07ef62fa1729123b690920",
+      "lines": 90,
+      "bytes": 11418,
+      "primary_new_id": "RFC-v2-0012",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0012",
+          "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+          "start_line": 1,
+          "end_line": 90,
+          "anchor": "source-v1-0036-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "8ac394453452bb4a1792bfe6db06fc3c1daf18cd7d4eb44611d5bd99ec8c0dfa"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0037",
+      "path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "sha256": "55f9c44976a289045f147c59f0a5cddbfe56efa1e0c81689d7cf5384b59515d3",
+      "lines": 89,
+      "bytes": 7447,
+      "primary_new_id": "RFC-v2-0012",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0012",
+          "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+          "start_line": 1,
+          "end_line": 89,
+          "anchor": "source-v1-0037-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "96a1a9e8e68100afc334021d80c7eb15627a339595fe85f6a5631b69ea4173a6"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0038",
+      "path": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "sha256": "c6f5f27e7426fb99920201e90dba22931029b54128ede4f81b9f127c0bd75bbf",
+      "lines": 49,
+      "bytes": 3770,
+      "primary_new_id": "RFC-v2-0007",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0007",
+          "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+          "start_line": 1,
+          "end_line": 49,
+          "anchor": "source-v1-0038-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "8975c05366bcb23ea4795c4afa3759c274d0f5771500248e95a95a02fe45560b"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0039",
+      "path": "docs/rfc/0039-finite-fee-consent-and-provider-payment-bounds.md",
+      "sha256": "cbfd09fe01ac1ffd3068666c292ad1ba6103cc2e313caacf3c6ad123eb263474",
+      "lines": 92,
+      "bytes": 16635,
+      "primary_new_id": "RFC-v2-0011",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 1,
+          "end_line": 23,
+          "anchor": "source-v1-0039-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "aa4bbde5eddbb97d6e1ca4f0ea6e08d3ecf602df2d1a8f8c748b86fff460f95a"
+        },
+        {
+          "new_id": "RFC-v2-0015",
+          "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+          "start_line": 24,
+          "end_line": 50,
+          "anchor": "source-v1-0039-L00024",
+          "reason": [
+            "未採択のprovider有限役務A/Bを採択済みfee-onlyから分離"
+          ],
+          "fragment_sha256": "bd615bf9c34ac7c646d9c5334e210cbfe7b5fe23b0f534c73e37ae0571ba2a16"
+        },
+        {
+          "new_id": "RFC-v2-0011",
+          "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+          "start_line": 51,
+          "end_line": 92,
+          "anchor": "source-v1-0039-L00051",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "50b80092343c9c546f8ada78e2fd5ddba9cb58d1ce4696ef5f7079de1f06c62a"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0040",
+      "path": "docs/rfc/0040-authenticated-prefix-work-dependencies.md",
+      "sha256": "73c697298446b50af899349f1f32147c5da5300beef81c8c19b39c60b2fcf7e3",
+      "lines": 43,
+      "bytes": 6115,
+      "primary_new_id": "RFC-v2-0008",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0008",
+          "path": "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+          "start_line": 1,
+          "end_line": 43,
+          "anchor": "source-v1-0040-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "0846d95c98bdd882b4b4bf66ac4b8a05c4564f23506b0f4c78fc0d80cb009ec8"
+        }
+      ]
+    },
+    {
+      "old_id": "RFC-0041",
+      "path": "docs/rfc/0041-genesis-bond-free-bootstrap.md",
+      "sha256": "eb0d90281513b079f0075ae58ca66dbef383eee2e30bd5e2cd9478d0f8ea582d",
+      "lines": 30,
+      "bytes": 4093,
+      "primary_new_id": "RFC-v2-0013",
+      "segments": [
+        {
+          "new_id": "RFC-v2-0013",
+          "path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+          "start_line": 1,
+          "end_line": 30,
+          "anchor": "source-v1-0041-L00001",
+          "reason": [
+            "主題別統合"
+          ],
+          "fragment_sha256": "f6d65409f43e5899094824e21c5b9dffb0e86f97ad673d8f34329fe1ffe51ed4"
+        }
+      ]
+    }
+  ]
+}

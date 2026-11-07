@@ -1,0 +1,17 @@
+{
+  "artifact_root": "963c172b3a90e86e66c67ae211c9f0eb6fcfd8084dbb6182cd3a5be6737ea6f5a09ee3320cba95f191cec0276acf53efed4c87de0463c1e33251a2dfd28e9186",
+  "artifact_sha256": "26cf443107dafbe84c45a0ae838613a118204b93cce94b0fbb279ea472bd3bc6",
+  "carrier_txid": "4bc29578cf2e946b00bd4dcde987f21ae2e93e6cc34f803126a7e390ff080732622a2c279abed8be9b8dee0c941fa57d438be6d6297081caa610848df60eea7e",
+  "claim_certified": false,
+  "class_id": "2d966d22fd9e808b91fbdf4f498ab9242f65ce647559704aa04eb5d0f9c64ad3df83b0f817e7c0abe6c303844425f582800eeb2adee93b399c87d028b8946d86",
+  "independent_node_replay": true,
+  "max_context": 32768,
+  "mempool_accepted": true,
+  "name": "checkpoint",
+  "persisted_registry_read": true,
+  "public_network": false,
+  "registration_mined": true,
+  "schema": "misaka.hf-registration-local-acceptance.v1",
+  "sink": "85b3a7f9e43e79242b28241f4ca534c4a3ca09c9818656ae9493f2d8276b7333c7885a4357f2d0a5f57a5ffed01ca698b05a6e57c50a5de21e93ab6dfa870321",
+  "state_root": "5c8c162bed458a4625eddbaba47793b942e3916c8cfd1baf23022c4ceefd0471426024051e90cf613e6a513b84c09a80df64b2e871bf9c717e3554e929207f79"
+}

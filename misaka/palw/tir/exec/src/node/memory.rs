@@ -177,7 +177,7 @@ pub fn tir_retained_storage_need_v1(
     let post = space.program.schedule.post as usize;
     let logits = space.program.blocks[post].nodes[space.program.logits as usize].out.elements_at(1) as u128;
     let decode = u128::from(ctx.exact_decode_tokens);
-    let trace = mul(decode, add(mul(logits, 4)?, 24 + 4)?)?;
+    let trace = mul(decode, add(mul(logits, 12)?, 24 + 4)?)?;
     let data = add(add(mul(count, 256)?, mul(points, 2)?)?, add(trace, mul(u128::from(job.prefill), 4)?)?)?;
     bytes(add(data, add(mul(class.program.len() as u128, 64)?, 16 << 20)?)?)
 }

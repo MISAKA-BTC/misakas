@@ -199,6 +199,7 @@ impl<'a> Reader<'a> {
     }
 }
 
+struct Decoded<T> { binding: PalwTirStepBindingV1, prompt:Vec<u32>, logits_rows:Vec<Vec<T>>, generated:Vec<u32>, leaves:Vec<PalwStepTileLeafV1> }
 fn decode_with_limit(body: &[u8], limit: usize) -> Result<TirCaptureV1, String> {
     let mut r = Reader::new(body, limit, std::mem::size_of::<TirCaptureV1>(), false)?;
     let binding = r.binding(&BindingCaps::LEGACY)?;

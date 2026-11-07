@@ -1,0 +1,17 @@
+test_broken_new_link_is_rejected (__main__.IntegrityTests.test_broken_new_link_is_rejected) ... ok
+test_changed_appendix_is_rejected (__main__.IntegrityTests.test_changed_appendix_is_rejected) ... ok
+test_changed_status_quote_is_rejected (__main__.IntegrityTests.test_changed_status_quote_is_rejected) ... ok
+test_changed_synthesis_is_rejected (__main__.IntegrityTests.test_changed_synthesis_is_rejected) ... ok
+test_colliding_numbers_cannot_be_merged (__main__.IntegrityTests.test_colliding_numbers_cannot_be_merged) ... ok
+test_complete_package_passes (__main__.IntegrityTests.test_complete_package_passes) ... ok
+test_duplicate_owner_is_rejected (__main__.IntegrityTests.test_duplicate_owner_is_rejected) ... ok
+test_missing_current_document_is_rejected (__main__.IntegrityTests.test_missing_current_document_is_rejected) ... ok
+test_missing_original_is_rejected (__main__.IntegrityTests.test_missing_original_is_rejected) ... ok
+test_missing_owner_is_rejected (__main__.IntegrityTests.test_missing_owner_is_rejected) ... ok
+test_missing_rfc_is_rejected (__main__.IntegrityTests.test_missing_rfc_is_rejected) ... ok
+test_original_source_edit_is_rejected (__main__.IntegrityTests.test_original_source_edit_is_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 6.599s
+
+OK

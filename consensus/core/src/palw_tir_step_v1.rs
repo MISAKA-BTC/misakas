@@ -1083,7 +1083,7 @@ impl<'s> PalwTirStepLegBuilderV1<'s> {
     /// Commit the next leaf's values.
     pub fn push(&mut self, values: &[i128]) -> Result<PalwTirLeafV1, PalwTirStepError> {
         let leaf = self.next_leaf().ok_or_else(|| PalwTirStepError::NotCanonical("the leg is already complete".into()))?;
-        let preimage = palw_tir_leaf_preimage_v1(&leaf, values)?;
+        let preimage = palw_tir_leaf_preimage_profile_v2(&leaf, values, self.space.program.wide_logits_q24())?;
         self.leaf_hashes.push(step_tile_leaf_hash_v1(&self.context_hash, &self.class_id, &preimage));
         Ok(leaf)
     }
@@ -1161,7 +1161,7 @@ pub fn verify_tir_binding_v1(
     if binding.version != PALW_TIR_STEP_BINDING_VERSION_V1 {
         return Err(PalwTirStepError::Binding("unsupported binding version"));
     }
-    crate::palw_slash::check_job_context_shape(&binding.job_context).map_err(|_| PalwTirStepError::Binding("job context shape"))?;
+    check_tir_context_profile_v2(&binding.job_context, &binding.class).map_err(|_| PalwTirStepError::Binding("job context shape"))?;
     let class_id = binding.class.class_id(&binding.artifact_root);
     if binding.job_context.shape_profile_id != class_id {
         return Err(PalwTirStepError::Binding("the job context names another class"));
@@ -1381,5 +1381,29 @@ mod native_step_space_inventory_tests_v1 {
         let mut bytes = vec![0u8; 2 + 64 + 4 + 4];
         bytes.extend_from_slice(&u32::MAX.to_le_bytes());
         assert!(crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&bytes).is_err());
+    }
+}
+
+/// Explicit v2 leaf encoding. Only a structurally validated wide profile may call with `wide`.
+/// Old leaves use exactly v1 bytes; wide output leaves carry version 2 and eight-byte i64 lanes.
+pub fn palw_tir_leaf_preimage_profile_v2(leaf: &PalwTirLeafV1, values: &[i128], wide: bool) -> Result<PalwStepTileLeafV1, PalwTirStepError> {
+    if leaf.dtype != DType::I64 { return palw_tir_leaf_preimage_v1(leaf,values); }
+    if !wide || values.len() != leaf.value_count as usize { return Err(PalwTirStepError::NotCanonical("wide output profile/count".into())); }
+    let mut bytes = Vec::with_capacity(values.len()*8);
+    for value in values { bytes.extend_from_slice(&i64::try_from(*value).map_err(|_| PalwTirStepError::NotCanonical("wide lane overflow".into()))?.to_le_bytes()); }
+    Ok(PalwStepTileLeafV1 {version: 2, coord: leaf.coord, value_count:leaf.value_count, values_le:bytes})
+}
+
+/// Scope the new scheme to a class whose canonical program explicitly declares it.
+/// Legacy context validation is unchanged for every other family.
+pub(crate) fn check_tir_context_profile_v2(ctx: &PalwJobContextV2, class: &PalwTirClassV1) -> Result<(), &'static str> {
+    if ctx.trace_scheme_id == crate::palw_logits_q24_v2::scheme_id() {
+        if !class.decode_program().map_err(|_| "wide program decode")?.wide_logits_q24() { return Err("wide context/program mismatch"); }
+        let mut shape = ctx.clone();
+        shape.trace_scheme_id = crate::palw_step_refute::tiled_logits_scheme_id_v1();
+        crate::palw_slash::check_job_context_shape(&shape).map_err(|_| "wide context shape")
+    } else {
+        if class.decode_program().is_ok_and(|p|p.wide_logits_q24()) { return Err("wide class needs wide context scheme"); }
+        crate::palw_slash::check_job_context_shape(ctx).map_err(|_| "context shape")
     }
 }

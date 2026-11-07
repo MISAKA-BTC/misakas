@@ -797,7 +797,7 @@ native_struct!(crate::palw_attn_court_v1::PalwAttnChunkOpeningV1; chunk_index, c
 native_struct!(crate::palw_execution_lane_v1::PalwExecSignedRoundV1; pre_pow_hash, timestamp_ms, nonce, signature);
 native_tuple_struct!(crate::palw_verification_v2::PalwSegmentMaskV2; f0);
 native_enum!(crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2; StepNode { level, index }, CheckpointNode { level, index }, KernelWitness { leaf }, PromptIds { chunk }, FpJob);
-native_enum!(crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV1; Flat { binding, pin }, Tiled { binding, generated_token_ids, row_root, row_opening, tile_lanes, tile_opening }, OutOfRange { binding });
+native_enum!(crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV1; Flat { binding, pin }, Tiled { binding, generated_token_ids, row_root, row_opening, tile_lanes, tile_opening }, OutOfRange { binding }, WideQ24V2 { binding, event });
 native_struct!(crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1; binding, preimage, opening, decode, row_pin);
 native_struct!(crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1; binding, frontier, siblings);
 native_struct!(crate::palw_tir_court_v1::PalwTirRowNodeDisclosureV1; binding, generated_token_ids, frontier, siblings);

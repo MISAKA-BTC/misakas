@@ -9,6 +9,7 @@
 **トークンの表示名は Misaka、ticker は BILI。** `misaka` 系アドレスプレフィックスと既存のprotocol/CLI/API識別子は維持する（[ADR-0174](../adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)）。
 
 * **Status:** Draft — 2026-10-15。レビュー検証(§1)、設計(§4–§9)、休眠fenceの下の実装(**implemented, dormant, unverified**、§13)。build/test/実node試験は未実施で、どの項目もPASSではない。
+  * **実装・検証の後続記録 (2026-10-31):** 上記は初版時点の状態。現在は DAG 幅 reader も接続されている。モデル別並行生成、遅延到着、再起動・replay と driver の現行 RPC 対応は [検証記録](../evidence/rfc/0018-parallel-dag-2026-10-31.md) を参照する。設計採用、有効化、実プロセス受入の完了を意味しない。
 * **Decision:**
   1. 同じ親から同時に生成された異なるモデルのsibling blockは全て保持・mergeされ、各claimはBLUE/REDに関わらず独立に記録・検証・帰属される。共有上限で競合するときの採否は、mergeset集合の関数(色・merge順に依存しない)とする(§4)。
   2. Panel anchorのgenesis operator特権を除去し、bond済み・成熟済みの任意の採用attemptの集約seedで置き換える(§5)。

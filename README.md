@@ -50,7 +50,7 @@ The adopted zero-genesis-bond startup path is described in [RFC-0041](docs/rfc/0
 ## Documentation
 
 Start at the [documentation map](docs/README.md): architecture ([overview](docs/architecture/overview.md), [what is different from
-Kaspa](docs/architecture/differences-from-kaspa.md)), the [ADRs](docs/adr/README.md), [RFCs 0001–0015](docs/rfc/), specs, design
+Kaspa](docs/architecture/differences-from-kaspa.md)), the [ADRs (50 books)](docs/adr-v2/README.md), [RFCs (15 books)](docs/rfc-v2/README.md), specs, design
 records, operations and retained history. The previous, much longer README (testnet-11 era) is kept in
 [docs/history/README-2026-10-12.md](docs/history/README-2026-10-12.md).
 

@@ -1,0 +1,177 @@
+{
+  "schema": "misaka.palw.preflight.v1",
+  "mode": "model",
+  "input": {
+    "kind": "remote",
+    "label": "https://huggingface.co/shibing624/macbert4csc-base-chinese/resolve/615e6e09ef9a69ec487bc7c641ec3a311e2c11b9",
+    "bytes_read": 24419
+  },
+  "depth": {
+    "requested": "shape",
+    "reached": "headers",
+    "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network": null,
+  "source": {
+    "files": [
+      {
+        "name": "added_tokens.json",
+        "bytes": 2
+      },
+      {
+        "name": "config.json",
+        "bytes": 659
+      },
+      {
+        "name": "model.safetensors",
+        "bytes": 409189104
+      },
+      {
+        "name": "special_tokens_map.json",
+        "bytes": 112
+      },
+      {
+        "name": "tokenizer_config.json",
+        "bytes": 330
+      },
+      {
+        "name": "vocab.txt",
+        "bytes": 109540
+      }
+    ],
+    "config_sha256": "648c8a2b51c12551f94bae19a66c21a59c9bd8aa0ebb99f2a0af7236cdb99daa",
+    "shards": [
+      {
+        "file": "model.safetensors",
+        "header_bytes": 23760,
+        "declared_data_bytes": 409165344,
+        "file_bytes": 409189104,
+        "complete": true,
+        "header_sha256": "cbe8023a40da99c81000495089ea30afb672272270b22bb6ad227fe46d296a19",
+        "tensors": 203
+      }
+    ],
+    "missing_shards": [],
+    "weight_bytes": 409165344,
+    "index_total_size": null
+  },
+  "model": {
+    "model_type": "bert",
+    "architectures": [
+      "BertForMaskedLM"
+    ],
+    "level": "C",
+    "adapter": {
+      "kind": "none"
+    },
+    "features": [],
+    "assumed_defaults": [],
+    "unmapped_config_keys": [],
+    "missing": [
+      {
+        "what": "an adapter for `BertForMaskedLM`",
+        "why": "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class",
+        "general_primitive": null
+      }
+    ],
+    "new_consensus_primitive_required": false,
+    "new_court_kernel_required": false,
+    "lowerable": false,
+    "reason": "NOT_LOWERABLE(`BertForMaskedLM` has no adapter and is not a causal language model class (`…ForCausalLM`): the standard decoder template is not applied to it (encoder-only, encoder–decoder, vision/audio, or a decoder not modelled yet))",
+    "spec_digest": null,
+    "history_bound": 262144
+  },
+  "scope": {
+    "schema": "misaka.palw.feature-scope.v1",
+    "task": "text-generation",
+    "input": "token ids",
+    "output": "next-token logits",
+    "text_only": false,
+    "excluded": []
+  },
+  "storage": {
+    "quant_method": null,
+    "quant_descriptor": null,
+    "rows": [
+      {
+        "storage": "F32",
+        "tensors": 202,
+        "bytes": 409161248,
+        "status": "float",
+        "descriptor": {
+          "name": "F32",
+          "digest": "d76c4c1a79bba6791a6ad8ecf5600bf16f541701ad2d94b8e83e750dcd9db771"
+        },
+        "note": null
+      },
+      {
+        "storage": "I64",
+        "tensors": 1,
+        "bytes": 4096,
+        "status": "other",
+        "descriptor": null,
+        "note": null
+      }
+    ]
+  },
+  "tensors": {
+    "checked": "none (no program to bind the tensors to)",
+    "bound": 0,
+    "missing": [],
+    "missing_total": 0,
+    "shape_mismatch": [],
+    "shape_mismatch_total": 0,
+    "unverified": [],
+    "unverified_total": 0,
+    "unused": [],
+    "unused_total": 0,
+    "unused_bytes": 0
+  },
+  "artifact": null,
+  "residency": null,
+  "admission": null,
+  "chain": [],
+  "seat": null,
+  "forecast": null,
+  "verdict": {
+    "convert": {
+      "status": "blocked",
+      "blockers": [
+        {
+          "stage": "convert",
+          "code": "ARCH_NEEDS_FEATURE",
+          "arg": "an adapter for `BertForMaskedLM`",
+          "what": "the model needs `an adapter for `BertForMaskedLM``, which the generic lowerer does not lower yet",
+          "evidence": [
+            "no built-in adapter claims this architecture and it is not a `…ForCausalLM` class"
+          ],
+          "have": null,
+          "need": null,
+          "unit": null,
+          "safe_paths": [
+            "a data adapter (--adapter) can map a missing key or tensor name, never a missing computation"
+          ]
+        }
+      ],
+      "unknown_because": null
+    },
+    "register": {
+      "status": "unknown",
+      "blockers": [],
+      "unknown_because": "no program to judge: the convert stage is blocked"
+    },
+    "mine": {
+      "status": "unknown",
+      "blockers": [],
+      "unknown_because": "no program to judge: the convert stage is blocked"
+    }
+  },
+  "notes": [],
+  "registries": {
+    "adapter_pack": "0e38e0e03bec0fbc59b96c624d6da4992cd64641b5f167a18468e038e289577a5e2dce90263fc513b6f91e532b1a519ffadb7bed522f3ed65f8f7c42c8a9f178",
+    "feature_registry": "00be0cadf60f53e7cf3eeb7c78369bb0ec2b13be3b628bc9c3f1ed11c6ea1e14",
+    "quant_registry": "f032dca45dd7feeaeea5ef89620c651a59bb1d4ee7a1db0b0cb52d2091f9b0b0",
+    "lowering": "misaka.palw.lowering.v1",
+    "tool_version": "1.1.0"
+  }
+}

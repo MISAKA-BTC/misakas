@@ -175,7 +175,8 @@ fn values_of_lanes(dtype: DType, le: &[u8]) -> Vec<i128> {
 }
 
 fn lanes_of(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
-    crate::cellstep::lanes_le_of_v1(data, from, n, out);
+    if data.dtype() == DType::I64 { super::run::lanes_le_v1(data,from,n,out); }
+    else { crate::cellstep::lanes_le_of_v1(data, from, n, out); }
 }
 
 /// What the cell's sink collected at one position: every committed tile, by `(node slot, tile)`.
@@ -1029,4 +1030,196 @@ pub fn tir_kernel_backend_v1(want_device: bool) -> (Box<dyn KernelBackendV1 + Se
 /// Whether a device is registered in this process.
 pub fn tir_kernel_backend_registered_v1() -> bool {
     DEVICE_V1.get().is_some()
+}
+
+pub fn verify_cell_stepping_wide_q24_v2(req: &TirCellRequestV1<'_>, exec: &mut dyn crate::cellstep_v2::TirCellStepperV2) -> TirCellVerdictV1 {
+    if !req.plan.program.wide_logits_q24() { return TirCellVerdictV1::Refused("v2 cell requires wide Q24".into()); }
+    let (space, ctx, cell) = (req.space, req.ctx, req.cell);
+    let job = match space.job_shape(ctx) {
+        Ok(job) => job,
+        Err(e) => return TirCellVerdictV1::Refused(format!("the job: {e}")),
+    };
+    let n_occ = space.occurrences().len();
+    if cell.occ.start >= cell.occ.end || cell.occ.end > n_occ {
+        return TirCellVerdictV1::Refused(format!("a cell of occurrences {:?} of {n_occ}", cell.occ));
+    }
+    let (p, q) = (cell.positions.start, cell.positions.end.min(job.positions));
+    if p >= q {
+        return TirCellVerdictV1::Verified { leaves: 0, positions: 0 };
+    }
+    if req.tokens.len() < job.positions as usize {
+        return TirCellVerdictV1::Refused(format!("{} committed tokens for a job of {} positions", req.tokens.len(), job.positions));
+    }
+    let ctx_hash = ctx.context_hash();
+    let (owned_fixed, owned_hist) = written_instances(space, &cell.occ);
+    let h_tile = space.layout.h_tile as usize;
+    let c_interval = space.layout.checkpoint_interval;
+    // The commit tile length of every committed node slot of the cell's occurrences.
+    let mut collected = Collected::default();
+    for o in cell.occ.clone() {
+        let (block, _) = space.occurrences()[o];
+        for (ni, node) in space.program.blocks[block as usize].nodes.iter().enumerate() {
+            if node.commit
+                && let (Some(slot), Some(t)) = (space.node_slot(o, ni as u16), space.commit_tile_len(block, ni as u16))
+            {
+                collected.tile_len.insert(slot, t as usize);
+            }
+        }
+    }
+    let keep = |state: u16, layer: Option<u16>| -> bool {
+        owned_fixed.iter().any(|k| {
+            let i = &space.fixed_instances()[*k];
+            i.state == state && i.layer == layer
+        }) || owned_hist.iter().any(|k| {
+            let i = &space.hist_instances()[*k];
+            i.state == state && i.layer == layer
+        })
+    };
+    // Resuming a segment: the checkpoint and history rows of the cell's own instances, handed as committed leaves.
+    if p > 0 {
+        match restore_state(req, &job, p, &owned_fixed, &owned_hist) {
+            Ok(st) => {
+                if let Err(e) = exec.resume(&st.0, &keep, &st.1) {
+                    return TirCellVerdictV1::Refused(format!("the cell's state at position {p}: {e}"));
+                }
+            }
+            Err(v) => return v,
+        }
+    }
+    let mut leaves_checked = 0u64;
+    for a in p..q {
+        let listed = space.leaves_of_position(ctx, a);
+        let runs_post = job.runs_post(a);
+        let end = if runs_post { cell.occ.end } else { cell.occ.end.min(n_occ - 1) };
+        // The leaves of this position the cell recomputes, by coordinate.
+        let mut own: BTreeMap<(u32, u32), (u64, u32)> = BTreeMap::new();
+        let mut own_state: Vec<(PalwTirLeafV1, bool)> = Vec::new();
+        for leaf in &listed {
+            match leaf.kind {
+                PalwTirLeafKindV1::Commit { occurrence, .. } if cell.occ.contains(&(occurrence as usize)) => {
+                    own.insert((leaf.coord.node_slot, leaf.coord.tile_index), (leaf.index, leaf.value_count));
+                }
+                PalwTirLeafKindV1::State { instance, .. } if owned_fixed.contains(&(instance as usize)) => {
+                    own_state.push((*leaf, false))
+                }
+                PalwTirLeafKindV1::HistTile { instance, .. } if owned_hist.contains(&(instance as usize)) => {
+                    own_state.push((*leaf, true))
+                }
+                _ => {}
+            }
+        }
+        let (call, position) = job.call_position(a);
+        let mut faulted: Option<u64> = None;
+        let mut note = |index: u64| {
+            faulted = Some(faulted.map_or(index, |f| f.min(index)));
+        };
+        if end > cell.occ.start {
+            // The carry-in: the committed carry-out of the occurrence before the cell's first.
+            let carry_in: Vec<Vec<i128>> = if cell.occ.start == 0 {
+                Vec::new()
+            } else {
+                match carry_in_of(req, &listed, cell.occ.start - 1) {
+                    Ok(c) => c,
+                    Err(leaf) => return TirCellVerdictV1::Unavailable { leaf },
+                }
+            };
+            collected.tiles.clear();
+            collected.error = None;
+            let token = req.tokens[a as usize];
+            let r = exec.step_cell(token, cell.occ.start..end, &carry_in, &mut CellSink { c: &mut collected });
+            if let Err(e) = r {
+                return TirCellVerdictV1::Refused(format!("position {a}: {e}"));
+            }
+            if let Some(e) = collected.error.take() {
+                return TirCellVerdictV1::Refused(e);
+            }
+            // Every committed tile the cell recomputed, against the committed hash of the same leaf.
+            for ((slot, tile), (count, lanes)) in &collected.tiles {
+                let Some(&(index, expected_count)) = own.get(&(*slot, *tile)) else {
+                    return TirCellVerdictV1::Refused(format!(
+                        "position {a}: a tile (slot {slot}, tile {tile}) the step space does not list"
+                    ));
+                };
+                if *count != expected_count {
+                    note(index);
+                    continue;
+                }
+                let leaf = PalwStepTileLeafV1 {
+                    version: if space.leaf_at(ctx,index).is_some_and(|l|l.dtype==misaka_palw_tir::DType::I64) {2} else {PALW_TIR_STEP_LEAF_VERSION_V1},
+                    coord: PalwStepCoordinateV1 { call_index: call, node_slot: *slot, position, tile_index: *tile },
+                    value_count: *count,
+                    values_le: lanes.clone(),
+                };
+                let mine = step_tile_leaf_hash_v1(&ctx_hash, &req.class_id, &leaf);
+                match req.inputs.leaf_hash(index) {
+                    None => return TirCellVerdictV1::Unavailable { leaf: index },
+                    Some(committed) if committed != mine => note(index),
+                    Some(_) => {}
+                }
+                leaves_checked += 1;
+            }
+            if collected.tiles.len() != own.len() {
+                // A committed tile of the cell that the executor did not produce: the step space and the executor disagree.
+                return TirCellVerdictV1::Refused(format!(
+                    "position {a}: {} tiles recomputed, the step space lists {} for the cell",
+                    collected.tiles.len(),
+                    own.len()
+                ));
+            }
+            // The generated id this position selects: the greedy selection over the committed logits (the last shard's).
+            if end == n_occ && runs_post {
+                let row: Vec<i64> = exec.logits_lanes();
+                if !row.is_empty() && a + 1 < job.positions && a + 1 >= job.prefill {
+                    let want = kaspa_consensus_core::palw_logits_q24_v2::select(&row,&kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY, a+1-job.prefill).unwrap_or(0) as u32;
+                    if want != req.tokens[(a + 1) as usize] {
+                        return TirCellVerdictV1::TokenFault { position: a };
+                    }
+                }
+            }
+        }
+        // `Fixed` checkpoints and `Hist` tiles of the instances the cell writes, after this position's write.
+        for (leaf, is_hist) in &own_state {
+            let mine = match (*is_hist, leaf.kind) {
+                (false, PalwTirLeafKindV1::State { instance, first_element, .. }) => {
+                    let inst = &space.fixed_instances()[instance as usize];
+                    let mut lanes = Vec::new();
+                    if let Err(e) =
+                        exec.fixed_lanes(inst.state, inst.layer, first_element as usize, leaf.value_count as usize, &mut lanes)
+                    {
+                        return TirCellVerdictV1::Refused(e);
+                    }
+                    lanes
+                }
+                (true, PalwTirLeafKindV1::HistTile { instance, first_lane, row_lanes, .. }) => {
+                    let inst = &space.hist_instances()[instance as usize];
+                    let mut lanes = Vec::with_capacity(leaf.value_count as usize * 4);
+                    if let Err(e) =
+                        exec.hist_tile_lanes(inst.state, inst.layer, h_tile, first_lane as usize, row_lanes as usize, &mut lanes)
+                    {
+                        return TirCellVerdictV1::Refused(e);
+                    }
+                    lanes
+                }
+                _ => continue,
+            };
+            let committed_leaf = PalwStepTileLeafV1 {
+                version: PALW_TIR_STEP_LEAF_VERSION_V1,
+                coord: leaf.coord,
+                value_count: leaf.value_count,
+                values_le: mine,
+            };
+            let mine = step_tile_leaf_hash_v1(&ctx_hash, &req.class_id, &committed_leaf);
+            match req.inputs.leaf_hash(leaf.index) {
+                None => return TirCellVerdictV1::Unavailable { leaf: leaf.index },
+                Some(committed) if committed != mine => note(leaf.index),
+                Some(_) => {}
+            }
+            leaves_checked += 1;
+        }
+        let _ = c_interval;
+        if let Some(leaf) = faulted {
+            return TirCellVerdictV1::Faulted { leaf, position: a };
+        }
+    }
+    TirCellVerdictV1::Verified { leaves: leaves_checked, positions: q - p }
 }

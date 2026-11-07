@@ -62,6 +62,7 @@ path = "src/bin/palw-fork-choice-issuer.rs"
 required-features = ["rpc"]
 
 [dev-dependencies]
+misaka-palw-tir-exec = { path = "../tir/exec", features = ["node"] }
 # DA16: the sketch's fixture weights (an artifact, its inventory, its kernel commitments).
 misaka-palw-tir-sketch = { path = "../tir/sketch" }
 # Carrier fixtures for the relay tests: a free-prompt commitment built through the shipped builder.

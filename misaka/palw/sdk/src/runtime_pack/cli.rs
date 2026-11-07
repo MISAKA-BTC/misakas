@@ -265,6 +265,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             }
             req.max_window = num(&mut args, "--max-window")?;
             req.gdn_core_wide = take_bool(&mut args, "--gdn-core-wide");
+            req.logits_bits = num(&mut args, "--logits-bits")?.unwrap_or(32);
             req.linear_weight_bits = num(&mut args, "--linear-weight-bits")?.unwrap_or(8);
             req.logits_bits = num(&mut args, "--logits-bits")?.unwrap_or(32);
             if !matches!(req.logits_bits, 32 | 64) {

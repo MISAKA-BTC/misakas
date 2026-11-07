@@ -2,6 +2,8 @@
 
 [番号順](INDEX.md) / [入口](README.md)。分類は探索用で、採用状態・権威の順位ではありません。
 
+> **旧番号の履歴索引。** 現行の閲覧・更新先は [ADR v2](../adr-v2/README.md)。[旧→新対応表](../adr-v2/MAPPING.md)。
+
 ## Consensus / architecture
 
 - [ADR-0005 — Mass / DoS policy for ML-DSA P2PKH transactions](0005-mass-policy.md)

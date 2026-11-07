@@ -115,3 +115,40 @@ up is the operator's job, not the joiner's.
 Deploy: `app.js` first, then `index.html` (the reverse order 404s the versioned asset for a moment).
 Backups on `.113`: `app.js.bak-ord-<ts>`, `index.html.bak-ord-<ts>`,
 `/root/misakascan-nginx.bak-{,h2-,rv-}<ts>`.
+
+## 2026-10-30 — t12 model / G14 / settlement display update (deployed)
+
+Updated `misakascan.com` over SSH on 169.58.232.113. Only
+`/var/www/misaka-explorer/app.js` and `index.html` were replaced, preserving the
+live site's realtime block and mobile changes. The repository explorer source
+contains the same presentation changes; it also retains newer native settlement
+and dynamic LLM-seat work that was already present locally.
+
+- Models show real-model classes with claims in flight, rather than counting
+  every `Active` row (including BASE-0) as an actively producing model.
+- Artifact sizes, registered-class context and available names come from node
+  reads; cards open the execution-class view with seats and claims.
+- Current two-tier specification (1.0 / 0.3, no model review) is separate from
+  legacy lifecycle fields returned by the connected node.
+- G14 Panel=1, route-specific receipts, post-Final liability and Gate C
+  certification are described without assuming seven seats or 3-of-5 universally.
+- Settlement handles unavailable responses, missing certification fields and
+  native snapshots explicitly. Final is not treated as SecurityCertified.
+- The obsolete October 5 upcoming-upgrade notice was replaced.
+
+Live verification at DAA 18,028–18,029 found fingerprint
+`ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e` and
+fences `[750,1000,1300,1700,2000,3600,5300,5395,5490,5585,15500]`.
+That node does **not** advertise the G14 17,400 upgrade; merely exceeding the
+height does not establish activation. No node binaries, consensus parameters,
+chain state or services were changed by this website deployment.
+
+Backup on server: `/root/misakascan-backups/t12-g14-models-20261030T100748Z/`.
+Cache version: `t12-g14-models-20261030`. Deployed SHA-256:
+
+- app.js: `3d3b15b582c59e027d5e870a640285080198b48c1bb30da7133e92aa4b8948b5`
+- index.html: `bc956b453e31bcd5b86a1138661b4a8bbde4bbcd3606e4b89f2f0c344bec45b4`
+
+Validation: both JavaScript sources parse; classification + registry tests
+9 passed; existing native-settlement regression script passed; HTTP source hash
+and browser-rendered Models / Settlement checked after deployment.

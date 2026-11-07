@@ -269,7 +269,7 @@ enum Gate {
 /// `tir_class_admission_offline_v1`, typed: the object admission v10 judges, built the way the node builds it, and the
 /// gate the acceptance path runs at `daa` (`palw_tir_registration_preflight_at_v1`).
 fn gate(params: &Params, bundle: &PalwConsensusParamsV2, class: &PalwTirClassV1, artifact_root: Hash64, daa: u64) -> Gate {
-    let program = match class.decode_program() {
+    let _program = match class.decode_program() {
         Ok(p) => p,
         Err(e) => return Gate::Unbuildable(format!("the program does not decode: {e}")),
     };
@@ -280,8 +280,7 @@ fn gate(params: &Params, bundle: &PalwConsensusParamsV2, class: &PalwTirClassV1,
     let Some(canonical) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class) else {
         return Gate::Unbuildable(format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context));
     };
-    let facts = PalwTirJobFactsV1::of(class, &program, class_id);
-    let job = palw_tir_job_context_v1(&facts, canonical);
+    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, class_id, canonical).expect("decoded program");
     let object = match palw_tir_post_genesis_registration_v1(
         class.clone(),
         job,

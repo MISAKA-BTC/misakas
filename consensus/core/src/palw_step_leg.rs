@@ -2127,6 +2127,8 @@ pub enum PalwStepFaultV1 {
     TirOutputDigestMismatch {
         value_index: u32,
     } = 21,
+    /// The separately identified wide-Q24 leaf does not contain eight bytes per value.
+    WideStepBytesNotEightPerValue = 22,
 }
 
 impl PalwStepFaultV1 {
@@ -2138,6 +2140,7 @@ impl PalwStepFaultV1 {
             PalwStepFaultV1::StepCoordinatesNotCanonical => (2, 0),
             PalwStepFaultV1::StepLeafIndexNotCanonical => (3, 0),
             PalwStepFaultV1::StepBytesNotFourPerValue => (4, 0),
+            PalwStepFaultV1::WideStepBytesNotEightPerValue => (22, 0),
             PalwStepFaultV1::StepValueCountNotCanonical => (5, 0),
             PalwStepFaultV1::StepNonFinite { value_index } => (6, value_index),
             PalwStepFaultV1::KvChunkNotCanonical => (7, 0),

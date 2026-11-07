@@ -283,13 +283,13 @@ function llmInCell(text, ids, anchorDerived){
 function llmPromptOnChain(extra){
   const title = "testnet-12 arms both prompt modes. Mode 1 (PublicDa): the prompt's token ids are carried WHOLE in the "
     + "payload of the commitment transaction, so the prompt is public on chain and permanent. Mode 2 (PanelDa): the "
-    + "commitment carries only a digest, and the ids reach the five drawn seats over an authenticated pull. This site "
+    + "commitment carries only a digest, and the ids reach the selected seats over an authenticated pull. This site "
     + "chooses not to render either; that is not privacy. Even under mode 2 a data-availability court close carries the "
     + "ids, so a disputed prompt becomes public: private unless disputed, never confidential.";
   return `<span class="dim" title="${esc(title)}">\u{1F310} prompt — <b>committed</b>, not shown here${extra||""}</span>`;
 }
 function llmSealed(what, commitment, extra){
-  const title = `${what} is committed on chain and not published: the bytes reach the claim's five drawn seats over an `
+  const title = `${what} is committed on chain and not published: the bytes reach the claim's selected seats over an `
     + `authenticated pull. A data-availability accusation is what makes a piece of it public, and it costs the accuser `
     + `if the executor answers (ADR-0062).`;
   return `<span class="dim" title="${esc(title)}">🔒 ${esc(what)} — committed, not disclosed${commitment?` <span class="hash">${esc(commitment)}</span>`:""}</span>${extra||""}`;
@@ -638,7 +638,7 @@ const MODEL_DISPLAY = {
   "QWEN36":      { name: "Qwen 3.6 35B",       sub: "Large reasoning model",                              size: "~34 GB", icon: "🤖" },
   "QWEN25-A16":  { name: "Qwen 2.5 1.5B @512", sub: "Lightweight model — chat and reasoning",             size: "~1.7 GB",icon: "🤖" },
   "QWEN25-A16-8K":{ name: "Qwen 2.5 1.5B @8k",  sub: "Held-context lightweight model — graph-v7@8192",    size: "~1.7 GB",icon: "🤖" },
-  "QWEN25-A16-2M":{ name: "Qwen 2.5 1.5B @2M",  sub: "Held-context lightweight model — graph-v7@2097152 · closed at launch, takes no claims", size: "~2.7 GB",icon: "🤖" },
+  "QWEN25-A16-2M":{ name: "Qwen 2.5 1.5B @2M",  sub: "Held-context lightweight model — graph-v7@2097152", size: "~2.7 GB",icon: "🤖" },
   "QWEN38-27B":  { name: "Qwen 3.8 27B",       sub: "Dense reasoning model",                              size: null,     icon: "🤖" },
 };
 function modelDisplay(classId) {
@@ -664,130 +664,84 @@ function wireTech(rerender) {
   if (t) t.addEventListener("change", () => { setTech(t.checked); rerender(); });
 }
 
+// Presentation follows node facts; a height alone never establishes activation.
+function registryProtocolView(node, tipDaa) {
+  const schedule = Array.isArray(node && node.fenceSchedule) ? node.fenceSchedule : [];
+  const scheduled = schedule.includes(17400);
+  const knownLegacy = node && node.consensusParamsId === "ef379378f09bf33f29e97854bbee157a8f86fa1dd8248e1a847f08c5c6e7f15e";
+  return `<div class="note"><b>Connected node · DAA ${num(tipDaa)}</b><br>${knownLegacy
+    ? "Legacy ruleset: this node does not advertise the G14 17,400 upgrade. Its readiness and lifecycle values below are legacy node reports."
+    : scheduled ? "The node advertises the G14 17,400 fence. Per-claim assignments and settlement below remain the source of live status."
+    : "G14 activation is not established by this node response."}
+    ${node && node.consensusParamsId ? `<br>Rules fingerprint <span class="mono" style="overflow-wrap:anywhere">${esc(node.consensusParamsId)}</span>` : ""}</div>`;
+}
+function claimRulesView() {
+  return `<div class="note"><b>Current protocol specification</b><br>
+    Genesis / annual-fork designated models have allocation coefficient <b>1.0</b>; later registrations have <b>0.3</b> immediately, with no model review, probation, promotion, renewal or expiry. Only annual-fork designation changes a registered model to 1.0.
+    <br>Verification is per claim for every model. An enabled <b>G14 Panel=1</b> route can reach <b>Final with one selected panel seat</b>, subject to its receipts, disclosure, court and timing rules. Panel size is route-specific; seven ready seats and 3-of-5 receipts are not universal requirements.
+    <br><b>Final and SecurityCertified are separate.</b> Under Gate C, consensus and settlement credit require the selected verifiers' approvals and the public accusation window, under an explicit honest-stake assumption. Final or a matching local replay alone does not grant that credit. G14 permits public evidence and deterministic court action, including after Final within the applicable liability window.</div>`;
+}
+function registrySettlementView(s) {
+  const heading = `<h2 class="sec">Settlement <span style="font-size:13px;color:var(--mut)">PALW · node report</span></h2>`;
+  if (!s || s.available !== true) return heading + `<div class="note">Settlement unavailable from this node. Safe and finalized are not inferred from the tip.</div>`;
+  const premise = s.securityCertificationPremise;
+  const rows = [
+    ["At DAA", num(s.daaScore)], ["Sink DAA", num(s.sinkDaa)],
+    ["Settled at requested DAA", s.settled ? "yes" : "not yet"],
+    ["Credited anchor depth", `${num(s.depth)}${s.depthIsLowerBound ? " (lower bound)" : ""}`],
+    ["Pending anchors", num(s.pendingAnchors)], ["Safe frontier DAA", num(s.safeFrontierDaa)],
+    ["Final without certification", s.uncertifiedFinalAnchors == null ? "not reported" : num(s.uncertifiedFinalAnchors)],
+    ["Gate C premise", premise ? esc(premise) : "not reported by this node; certification is not inferred"],
+  ];
+  const native = s.nativeSettlement;
+  const nativeHtml = s.dnsRetiredAt != null ? `<p>DNS validator role retired at DAA ${num(s.dnsRetiredAt)}.</p>` + (native
+    ? `<div class="cards">${["latest", "safe", "finalized"].map(k => `<div class="card"><div class="k">${k}</div><div class="v sm">${native[k] ? linkBlock(native[k]) : "unavailable"}</div></div>`).join("")}</div>${native.stop ? `<div class="note">Native settlement: ${esc(native.stop)}</div>` : ""}${native.stop === "finalizedConflict" ? '<div class="note"><b>Safety alarm:</b> finalized-head conflict; safe/finalized labels are withheld by the node.</div>' : ""}`
+    : '<div class="note">Native settlement snapshot unavailable.</div>') : "";
+  return heading + `<p style="color:var(--mut)">Depth follows this node's credited PALW anchors. Heartbeats and block counts do not establish settlement. Under Gate C only SecurityCertified claims count; Final alone is insufficient.</p>` + nativeHtml +
+    `<div class="kv">${rows.map(([k,v]) => `<div class="row"><div class="key">${k}</div><div class="val">${v}</div></div>`).join("")}</div>` +
+    (typeof nativeReadinessView === "function" ? nativeReadinessView(s.nativeReadiness) : "");
+}
 async function renderRegistry() {
   const __g = routeGen;
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Models</div>
-    <h1 class="page">Models</h1><div class="loading">Loading…</div>`;
-
+  viewFor(__g).innerHTML = `<h1 class="page">Models</h1><div class="loading">Loading…</div>`;
   const paint = async () => {
-    const reg = await palwRead("getPalwModelRegistry");
-    if (curSeg() !== "registry") return;
-    if (reg.__unsupported) { viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Models</div>
-      <h1 class="page">Models</h1>${palwUnsupportedNote("getPalwModelRegistry")}`; return; }
+    const [reg, node] = await Promise.all([palwRead("getPalwModelRegistry"), palwRead("getPalwNodeStatus")]);
+    if (__g !== routeGen || curSeg() !== "registry") return;
+    if (reg.__unsupported) { viewFor(__g).innerHTML = `<h1 class="page">Models</h1>${palwUnsupportedNote("getPalwModelRegistry")}`; return; }
     if (reg.__error) return showErrFor(__g, "getPalwModelRegistry failed: " + reg.__error);
-    const r = reg.registry || reg;
-    const cls = r.classes || [];
-
-    // **"Armed" and "in force" are two different questions and the page asks both.** A registry
-    // that is scheduled but not yet crossed reports every class as Legacy with no row, which is
-    // the truthful answer and reads like an empty registry unless the fence is shown beside it.
-    const gate = [
-      ["Fence (DAA)", r.fenceDaa == null ? "—" : num(r.fenceDaa)],
-      ["In force", r.active ? `<span style="color:var(--ok,#4ade80)">yes</span>` :
-        `<span style="color:var(--mut)">not yet — the chain is at DAA ${num(r.tipDaa)}</span>`],
-      ["Served by this node", r.available ? "yes" : "no"],
-      ["Panel seats", num(r.seatCount)],
-      ["Bonds active / with headroom", `${num(r.bondsActive)} / ${num(r.bondsWithHeadroom)}`],
-      ["Grace until (DAA)", r.graceUntilDaa == null ? "—" : num(r.graceUntilDaa)],
-    ];
-    const counts = [
-      ["Registered", r.classesRegistered], ["Active", r.classesActive],
-      ["Active (limited)", r.classesActiveLimited], ["Probation", r.classesProbation],
-      ["Prefetching", r.classesPrefetching], ["Held", r.classesHeld],
-    ].filter(([, v]) => v != null);
-
-    // **Cards first, table behind Technical.** A reader came for "which models can I use and are
-    // they working"; the ids are what the chain signs and stay one click away, never removed.
-    const live = cls.filter(c => /^Active/.test(String(c.state || "")));
-    const cards = cls.map(c => {
-      const id = String(c.classId || "");
-      const d = modelDisplay(id);
-      const ok = /^Active/.test(String(c.state || ""));
-      const ready = c.readySeatsNow, need = c.requiredReadySeats;
-      const shortOf = ready != null && need > 0 && ready < need;
-      return `<a class="card" href="#/line/${encodeURIComponent(id)}" style="display:block;text-align:left">
-        <b style="font-size:15px">${d.icon} ${d.name ? esc(d.name) : `<span class="mono">${esc(short(id, 8))}</span>`}</b>
-        <span style="display:block;color:var(--mut);margin:2px 0 8px">${esc(d.sub)}</span>
-        <span style="display:block">${stateBadge(c.state)}${c.isBaseClass ? ` <span style="color:var(--mut)">· built in</span>` : ""}</span>
-        ${c.isBaseClass
-          ? `<span style="display:block;margin-top:6px;color:var(--mut)" title="every node verifies the floor by construction; it never files SeatReadinessProved and is not readiness-gated">Checkers: every node · not gated</span>`
-          : `<span style="display:block;margin-top:6px${shortOf ? ";color:var(--bad,#f87171)" : ""}">Checkers ready
-          <b>${ready == null ? "—" : num(ready)}</b>${need ? ` of ${num(need)}` : ""}</span>`}
-        ${d.size ? `<span style="display:block;color:var(--mut)">Model size ${esc(d.size)}</span>` : ""}
-        <span style="display:block;margin-top:6px;color:var(--mut)" class="mono">${esc(short(id, 8))}</span>
-      </a>`;
+    const r = reg.registry || reg, cls = r.classes || [];
+    if (!r.available) { viewFor(__g).innerHTML = `<h1 class="page">Models</h1><div class="note">Model registry unavailable from this node.</div>`; return; }
+    // Names are metadata, never an approval or a guess based on an identifier.
+    const models = await Promise.all(cls.map(c => palwRead("getPalwModel", {classId: c.classId})));
+    if (__g !== routeGen || curSeg() !== "registry") return;
+    const live = cls.filter(c => !c.isBaseClass && Number(c.inflightClaims || c.inflightNow) > 0);
+    const cards = cls.map((c, i) => {
+      const id = String(c.classId || ""), d = modelDisplay(id), m = models[i];
+      const name = d.name || (m && m.found && m.modelName) || "Registered model";
+      const size = !c.isBaseClass && Number(c.artifactBytes) > 0 ? `${(Number(c.artifactBytes) / 1e9).toFixed(2)} GB` : null;
+      return `<a class="card" href="#/models/${encodeURIComponent(id)}" style="display:block;text-align:left">
+        <b style="font-size:15px">${d.icon} ${esc(name)}</b>
+        <span style="display:block;color:var(--mut);margin:2px 0 8px">${esc(d.name ? d.sub : "Registered execution class")}${m && Number(m.nCtx) > 0 ? ` · context ${num(m.nCtx)}` : ""}</span>
+        <span style="display:block">${c.isBaseClass ? "Built-in idle fallback" : `${num(c.inflightClaims || c.inflightNow || 0)} claims in flight`}</span>
+        <span style="display:block;color:var(--mut)">Node-reported state: ${stateBadge(c.state)}</span>
+        ${c.isBaseClass ? '<span style="display:block">Readiness not gated</span>' : `<span style="display:block">Ready seats ${c.readySeatsNow == null ? "unavailable" : num(c.readySeatsNow)} · node requirement ${c.requiredReadySeats == null ? "unavailable" : num(c.requiredReadySeats)}</span>`}
+        ${size ? `<span style="display:block;color:var(--mut)">Artifact ${esc(size)}</span>` : ""}
+        <span style="display:block;margin-top:6px;color:var(--mut)" class="mono">${esc(short(id, 8))}</span></a>`;
     }).join("");
-
-    const rows = cls.map(c => {
-      const id = String(c.classId || "");
-      const d = modelDisplay(id);
-      const link = `<a href="#/line/${encodeURIComponent(id)}" class="mono">${esc(short(id, 10))}</a>`;
-      const ready = c.readySeatsNow == null ? "—" : num(c.readySeatsNow);
-      const need = c.requiredReadySeats == null ? "—" : num(c.requiredReadySeats);
-      const short_ = c.readySeatsNow != null && c.requiredReadySeats > 0 && c.readySeatsNow < c.requiredReadySeats;
-      return `<tr>
-        <td>${d.name ? esc(d.name) : `<span style="color:var(--mut)">unnamed</span>`}${d.code ? ` <span style="color:var(--mut)">${esc(d.code)}</span>` : ""}</td>
-        <td>${link}</td>
-        <td>${stateBadge(c.state)}</td>
-        <td style="text-align:right${short_ && !c.isBaseClass ? ";color:var(--bad,#f87171)" : ""}">${c.isBaseClass ? `<span style="color:var(--mut)" title="the floor is not readiness-gated">not gated</span>` : `${ready} / ${need}`}</td>
-        <td style="text-align:right">${c.probesPassed == null ? "—" : num(c.probesPassed)}</td>
-        <td class="mono" style="color:var(--mut)">${esc(short(c.artifactRoot, 8))}</td>
-        <td style="color:var(--mut)">${esc(c.reason || "")}</td></tr>`;
-    }).join("");
-
-    const tech = techOn() ? `
-      <h2 class="sec">Registry gate <span style="font-size:13px;color:var(--mut)">ADR-0135 · getPalwModelRegistry</span></h2>
-      <div class="kv">${gate.map(x => `<div class="row"><div class="key">${x[0]}</div><div class="val">${x[1]}</div></div>`).join("")}</div>
-      ${counts.length ? `<h2 class="sec">Classes by lifecycle state</h2>
-        <div class="cards">${counts.map(([k, v]) => `<div class="card"><b>${num(v)}</b><span>${esc(k)}</span></div>`).join("")}</div>` : ""}
-      <h2 class="sec">Execution classes (${cls.length})</h2>
-      <p style="color:var(--mut);margin:0 0 8px">A class is a model at ONE runtime shape — <span class="mono">class_id</span>
-        hashes the whole profile, so the same weights at a different context size is a different
-        class. <b>Ready / required</b> is the chain's own count of panel seats holding the artifact
-        now; below the requirement no claim of that class can be licensed.</p>
-      <div class="tblscroll"><table class="tbl">
-        <thead><tr><th>Model</th><th>class_id</th><th>State</th><th style="text-align:right">Ready / required</th>
-        <th style="text-align:right">Probes</th><th>artifact_root</th><th>Reason</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="7" style="color:var(--mut)">no classes</td></tr>`}</tbody>
-      </table></div>` : "";
-
-    viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Models</div>
-      <h1 class="page">Models ${techToggle()}</h1>
-      <p style="color:var(--mut);margin:0 0 10px">AI models running on the MISAKA network.
-        <b>${num(cls.length)}</b> model${cls.length === 1 ? "" : "s"} ·
-        <b>${num(live.length)}</b> actively producing${r.active ? "" :
-        ` · <span title="The registry's rules start applying at this height.">the registry starts at
-          network progress ${num(r.fenceDaa)} and the chain is at ${num(r.tipDaa)}</span>`}</p>
-      <div class="cards">${cards || `<div class="card off">no models</div>`}</div>
-      ${tech}
-      <div id="settleBox"></div>`;
+    const tech = techOn() ? `<h2 class="sec">Raw registry reports</h2><p>These fields describe the connected node. Legacy Candidate / Probation values do not define model review in the current specification.</p>
+      <div class="tblscroll"><table class="tbl"><thead><tr><th>Class</th><th>Node state</th><th>Ready / reported requirement</th><th>Node reason</th></tr></thead><tbody>${cls.map(c => `<tr><td class="mono">${esc(short(c.classId, 10))}</td><td>${stateBadge(c.state)}</td><td>${num(c.readySeatsNow)} / ${num(c.requiredReadySeats)}</td><td>${esc(c.reason || "")}</td></tr>`).join("")}</tbody></table></div>` : "";
+    viewFor(__g).innerHTML = `<div class="crumbs"><a href="#/">Home</a> › Models</div><h1 class="page">Models ${techToggle()}</h1>
+      <p style="color:var(--mut)">AI execution classes on the MISAKA network. <b>${num(cls.length)}</b> classes · <b>${num(live.length)}</b> with claims in flight. Built-in fallback is counted separately from real-model work.</p>
+      ${registryProtocolView(node, r.tipDaa)}${claimRulesView()}<div class="cards">${cards || "No models reported."}</div>${tech}<div id="settleBox"></div>`;
     wireTech(paint);
-
-    // ADR-0127: settlement is counted in Final PALW anchors, never in blocks — so a depth of 3
-    // here is three settled anchors, which is a much stronger statement than three confirmations.
-    const s = await palwRead("getPalwSettlement", { daaScore: Number(r.tipDaa || 0) });
+    const s = await palwRead("getPalwSettlement", {daaScore: Number(r.tipDaa || 0)});
+    if (__g !== routeGen || curSeg() !== "registry") return;
     const box = document.getElementById("settleBox");
-    if (!box || curSeg() !== "registry") return;
-    if (s.__unsupported) { box.innerHTML = `<h2 class="sec">Settlement</h2>${palwUnsupportedNote("getPalwSettlement")}`; return; }
-    if (s.__error) { box.innerHTML = `<h2 class="sec">Settlement</h2><div class="card off">getPalwSettlement failed: ${esc(s.__error)}</div>`; return; }
-    const sr = [
-      ["At DAA", num(s.daaScore)],
-      ["Settled", s.settled ? `<span style="color:var(--ok,#4ade80)">yes</span>` : `<span style="color:var(--mut)">not yet</span>`],
-      ["Depth (settled anchors)", `${num(s.depth)}${s.depthIsLowerBound ? " (lower bound)" : ""}`],
-      ["Anchors pending", num(s.pendingAnchors)],
-      ["Safe frontier (DAA)", num(s.safeFrontierDaa)],
-      ["Sink (DAA)", num(s.sinkDaa)],
-    ];
-    box.innerHTML = `<h2 class="sec">Settlement <span style="font-size:13px;color:var(--mut)">ADR-0127</span></h2>
-      <p style="color:var(--mut);margin:0 0 8px">Depth is counted in <b>settled PALW anchors</b> —
-        blocks whose claim reached Final — never in blocks. Execution and heartbeat blocks add no
-        anchor, however many of them there are.</p>
-      <div class="kv">${sr.map(x => `<div class="row"><div class="key">${x[0]}</div><div class="val">${x[1]}</div></div>`).join("")}</div>`;
+    if (box) box.innerHTML = s.__unsupported ? palwUnsupportedNote("getPalwSettlement") : s.__error ? `<div class="note">Settlement unavailable: ${esc(s.__error)}</div>` : registrySettlementView(s);
   };
-
   await paint();
-  armPoll(() => curSeg() === "registry", paint, 30000);
+  if (__g === routeGen) armPoll(() => curSeg() === "registry", paint, 30000);
 }
 
 // The node's own per-claim execution rows (getPalwRoundLane.recentExecutions, next node release); nothing before it.
@@ -1249,6 +1203,7 @@ async function renderModelClass(arg){
     <h2 class="sec">Panel assignments (${assignments.length})${panels && panels.truncated ? ' <span class="dim" style="font-size:13px">node response capped at 512 across all classes</span>' : ""}</h2>
     <div class="tblscroll"><table class="tbl"><thead><tr><th>Claim</th><th>State</th><th>Receipts</th><th>Drawn seats</th><th class="num">Deadline DAA</th></tr></thead>
       <tbody>${panelHtml || `<tr><td colspan="5" class="dim">${panels && panels.__unsupported ? "getPalwPanelAssignments is not served by this node" : "no active panel assignment for this class"}</td></tr>`}</tbody></table></div>
+    ${claimRulesView()}
     <h2 class="sec">Claims (${claims.length}) <span class="dim" style="font-size:13px">Final / Court / Expired · rounds spent/permitted</span></h2>
     <div class="tblscroll"><table class="tbl"><thead><tr><th>Claim</th><th>State</th><th class="num">Accepted DAA</th><th>Rounds</th><th>Producer</th></tr></thead>
       <tbody>${claimHtml || `<tr><td colspan="5" class="dim">no claim of this class among the known producers</td></tr>`}</tbody></table></div>`;
@@ -1283,6 +1238,7 @@ async function renderClaim(arg){
   const rc = a ? `${num(a.validReceiptSeats)} Valid receipt seat(s) of ${num(a.selectedPanelSeats)} · ${esc(a.licensedState || "")}${a.fullSeat ? " · full seat " + esc(short(a.fullSeat, 8)) : ""}` : "assignment not reported by this node";
   steps.push({ k: st(["receipt_licensed", "final"].includes(phase), phase === "panel_bound", isVoid && c.boundDaa != null && !isFinal), n: "Receipts", d: rc + (phase === "panel_bound" && c.deadlineDaa ? ` · receipt window ends DAA ${num(c.deadlineDaa)}` : "") });
   steps.push({ k: st(isFinal, ["receipt_licensed", "default_disputed"].includes(phase), isVoid), n: "Final / Court", d: isFinal ? `Final at DAA ${num(c.phaseDaa)}` : isVoid ? `voided at DAA ${num(c.phaseDaa)} · ${esc(c.voidReason || "")}` : phase === "default_disputed" || Number(c.openCourts) > 0 ? `court open (${num(c.openCourts)}) · deadline DAA ${num(c.deadlineDaa)}` : phase === "receipt_licensed" ? `licensed; Final floor at DAA ${num(c.deadlineDaa)}` : "—" });
+  steps.push({ k: c.securityCertification === "certified" ? "done" : "", n: "SecurityCertified", d: c.securityCertification ? esc(c.securityCertification) : "not reported by this node; Final alone does not establish certification" });
   const stg = String(c.execStage || "");
   steps.push({ k: st(stg === "scheduled", stg === "credited" || stg === "maturing", false), n: "Maturity", d: stg ? `execution lane: ${esc(stg)} (span ${num(c.execSpan)}, credit ${num(c.execCredit)})${c.vestingStage ? " · reward " + esc(c.vestingStage) : ""}` : isFinal ? "earned no execution credit, or the state no longer keeps it" : "—" });
   const t = Number(c.execTickets) || 0, n = Number(c.execTicketsSpent) || 0;
@@ -3821,10 +3777,10 @@ function renderLlm(){
       halves before signing.</div>
     <div class="note" style="margin-top:4px"><b>What this page shows, and what the chain publishes — two different
       things.</b> A claim puts COMMITMENTS on chain for its ANSWER — the roots over its trace, its output and its
-      execution — and those bytes stay with the executor, reaching the five drawn seats over an authenticated pull.
+      execution — and those bytes stay with the executor, reaching the selected seats over an authenticated pull.
       <b>The prompt depends on its mode, and testnet-12 arms both.</b> Under mode 1 (PublicDa) the commitment
       transaction carries the prompt's token ids <b>whole</b>: public and permanent, readable by anyone with a node.
-      Under mode 2 (PanelDa) it carries only a digest, and the ids reach the five drawn seats over an authenticated
+      Under mode 2 (PanelDa) it carries only a digest, and the ids reach the selected seats over an authenticated
       pull. This page renders neither, which is a courtesy and not a protection — <b>do not submit a mode-1 prompt
       you would not publish</b>. Even under mode 2 a data-availability court close carries the ids, so a disputed
       prompt becomes public. Private unless disputed, never confidential. An attempt-lane input is shown outright because
@@ -4297,19 +4253,19 @@ async function fillBlockVerification(blockHash){
   // So it uses what is already free (the LLM Jobs page's sweep fills `llmEvents` for the session)
   // and otherwise says where the list is and why it is not here. The PHASE above is the
   // load-bearing answer either way, and it is the node's own state rather than this page's
-  // arithmetic: `receipt_licensed` means three of the five drawn seats signed matching receipts.
+  // arithmetic: `receipt_licensed` means the route licensing rule was met.
   const seatBox = document.getElementById("blkSeats");
   if (!seatBox) return;
   const swept = llmEvents.find(e => e.kind === "ReceiptLicensed" && e.claim === claim);
   const receipts = swept ? (swept.receipts || []) : null;
   if (!receipts){
     seatBox.innerHTML = `<div class="note">${ph.judged
-        ? `Three of the five drawn seats signed matching receipts — that is what <b>${esc(ph.label)}</b> is, and it is
+        ? `The claim met its route's licensing rule — that is what <b>${esc(ph.label)}</b> is, and it is
            the node's own state that says so, not this page. Which bonds those were rides the licensing carrier, a
            transaction in a later block, so this page does not walk out to fetch it: the seats are
            listed on the <a href="#/llm">LLM Jobs</a> page under <b>Verification &amp; approvals</b>.`
-        : `No seat has filed a receipt yet, and that is what this phase means: ${esc(meaning)}. Five bonded seats are
-           drawn on chain — the producer cannot pick its judges — and the licence is carried once three of them agree.`}</div>`;
+        : `The node has not reported a licensed claim here: ${esc(meaning)}. The route-selected seats are
+           drawn on chain — the producer cannot pick its judges — and the licence follows the route-required receipts.`}</div>`;
     return;
   }
   const tally = receipts.reduce((m,x)=>{ m[x.verdict]=(m[x.verdict]||0)+1; return m; },{});

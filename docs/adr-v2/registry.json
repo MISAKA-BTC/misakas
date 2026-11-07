@@ -1,0 +1,865 @@
+{
+  "schema_version": 1,
+  "namespace": "ADR-v2",
+  "editorial_date": "2026-10-30",
+  "current_count": 50,
+  "legacy_namespace": "ADR",
+  "legacy_file_count": 204,
+  "legacy_number_count": 201,
+  "legacy_mode": "immutable-source-history",
+  "source_identity": "complete-relative-path-not-number-alone",
+  "source_snapshot": "misakas-pre(5).zip",
+  "prior_rfc_package": "misakas-rfc-v2-15.zip",
+  "protocol_identifiers_changed": false,
+  "runtime_changed": false,
+  "adoption_status_changed": false,
+  "future_decision_records_prohibited": false,
+  "documents": [
+    {
+      "id": "ADR-v2-0001",
+      "file": "0001-network-identity-and-fingerprint.md",
+      "title": "ネットワーク分離・Hash64・識別子・fingerprint",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0001-network-isolation.md",
+        "0008-hash64-consensus-identity.md",
+        "0150-the-fingerprint-must-see-the-rule-not-only-the-height.md",
+        "0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0013",
+        "RFC-v2-0010"
+      ],
+      "authored_section_sha256": "1031e62d89f78277d94109d5e4d69d7d68e8d03002e6633b71cacbce5ab8130d"
+    },
+    {
+      "id": "ADR-v2-0002",
+      "file": "0002-post-quantum-signatures-and-interfaces.md",
+      "title": "耐量子署名・アドレス・RPC／WASM／SDK型",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0002-mldsa65-p2pkh.md",
+        "0006-rpc-wasm-sdk-types.md",
+        "0019-mldsa87-migration.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0009",
+        "RFC-v2-0013"
+      ],
+      "authored_section_sha256": "0ab678da992b8b28f72dc494f7ed04871814e1de7cdfe017c061534c3fb389fe"
+    },
+    {
+      "id": "ADR-v2-0003",
+      "file": "0003-utxo-accumulator-and-commitment.md",
+      "title": "UTXO accumulatorと64-byte commitment",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0003-lthash-utxo-accumulator.md",
+        "0004-utxo-commitment64.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0012"
+      ],
+      "authored_section_sha256": "5cf599dd0485483ba9e51cf640a0ceb1dcd1f7a7ba4ebb74e3da23aca334b8f0"
+    },
+    {
+      "id": "ADR-v2-0004",
+      "file": "0004-mass-carriage-and-transaction-relay.md",
+      "title": "Mass・DoS上限・合意object搬送・再送",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0005-mass-policy.md",
+        "0029-palw-chain-carriage.md",
+        "0046-palw-v2-consensus-object-carriage.md",
+        "0115-a-pending-transaction-is-announced-until-it-lands.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0007",
+        "RFC-v2-0009",
+        "RFC-v2-0010"
+      ],
+      "authored_section_sha256": "7bdece9f2ec9473ee54bc6ded054894548df2b167800ada85c025ba9ca094193"
+    },
+    {
+      "id": "ADR-v2-0005",
+      "file": "0005-palw-consensus-architecture.md",
+      "title": "PALW合意構造・実行family・旧PoWからの移行",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0007-layered-pow.md",
+        "0026-current-palw-testnet11-architecture.md",
+        "0026-palw-v2-runtime-separated-verification.md",
+        "0037-palw-async-job-state-machine.md",
+        "0038-palw-is-the-consensus-work.md",
+        "0039-palw-only-block-production.md",
+        "0042-palw-mainnet-candidate-ruleset.md",
+        "0053-palw-one-execution-family.md",
+        "0180-palw-only-consensus-no-bft-validators.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0010"
+      ],
+      "authored_section_sha256": "517638580e03eb0ee22e1dbedeb08e17effba9dc36a4b8cbc86359847338734e"
+    },
+    {
+      "id": "ADR-v2-0006",
+      "file": "0006-fork-choice-participation-and-settlement.md",
+      "title": "Fork choice・参加重み・merged work・settlement",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0025-chain-participation-and-ibd-candidate-selection.md",
+        "0055-palw-position-is-earned-not-declared.md",
+        "0058-palw-merged-work-is-counted.md",
+        "0127-palw-settles-on-its-own-and-its-terms-are-not-dns-terms.md",
+        "0129-a-double-spend-needs-the-anchors-not-the-blocks.md",
+        "0178-fork-choice-heals-a-partition-on-bonded-participation.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0010"
+      ],
+      "authored_section_sha256": "e319b3b227f9ae1e6d551b7a6532874795acfc55ad2a564b085cc3b197c91366"
+    },
+    {
+      "id": "ADR-v2-0007",
+      "file": "0007-evm-exec-lane-and-anchors.md",
+      "title": "EVM／EXEC実行lane・anchor・gas budget",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0020-selected-parent-evm-lane.md",
+        "0089-the-fold-is-the-truth-and-the-evm-is-its-window-and-its-hand.md",
+        "0125-the-execution-lane-is-a-second-lane-inside-the-cadence-and-it-widens-one-permit-at-a-time.md",
+        "0139-the-execution-lanes-gas-is-one-budget-a-round.md",
+        "0168-an-execution-block-is-a-third-class-and-the-chain-reaches-it-through-an-anchor.md",
+        "0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0007",
+        "RFC-v2-0010"
+      ],
+      "authored_section_sha256": "c826f9a0a8c4ed5bed31ecebaadd8ce855dbca232de52fa9ba833eb4cb3de759"
+    },
+    {
+      "id": "ADR-v2-0008",
+      "file": "0008-daa-difficulty-and-consensus-clock.md",
+      "title": "DAA・difficulty・retarget・合意時計",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md",
+        "0083-the-difficulty-window-counts-only-rows-priced-by-bits.md",
+        "0138-the-daa-score-is-the-anchors-clock.md",
+        "0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0007",
+        "RFC-v2-0010"
+      ],
+      "authored_section_sha256": "f7a028ff57e00289545ef9e27847d82f2177042bb52d7b1d2a11d78ad780d293"
+    },
+    {
+      "id": "ADR-v2-0009",
+      "file": "0009-heartbeat-floor-and-liveness.md",
+      "title": "Heartbeat・BASE floor・停止回復・liveness",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0060-the-liveness-doctrine.md",
+        "0064-trustless-recovery-from-a-total-stop.md",
+        "0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md",
+        "0105-a-heartbeat-never-turns-a-bonded-block-red.md",
+        "0140-the-heartbeat-is-the-emergency-generator.md",
+        "0151-liveness-is-structural-collateral-covers-fraud.md",
+        "0165-the-floor-is-a-reserve-and-the-work-carries-the-clock.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0010",
+        "RFC-v2-0013"
+      ],
+      "authored_section_sha256": "370dfbf270754933b40c800c9cea909295a584b4a66acd39ccb37d3890693504"
+    },
+    {
+      "id": "ADR-v2-0010",
+      "file": "0010-genesis-emission-and-bond-free-bootstrap.md",
+      "title": "Genesis発行上限・bondゼロ起動",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0059-the-10b-premine-cap.md",
+        "0061-zero-seat-genesis-and-right-sized-collateral.md",
+        "0209-genesis-bond-free-bootstrap.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0013"
+      ],
+      "authored_section_sha256": "27f23a457227f9f6e0dfcd9d933b29b71724047f6afc77be6d5c43b0d908872f"
+    },
+    {
+      "id": "ADR-v2-0011",
+      "file": "0011-release-activation-and-flag-days.md",
+      "title": "公開testnet・release・有効化・flag day",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0035-palw-public-testnet-strategy.md",
+        "0036-palw-mainnet-activation-model.md",
+        "0130-bps1-is-hardened-before-it-is-widened.md",
+        "0154-testnet-12-flag-day-daa-750.md",
+        "0155-testnet-12-flag-day-daa-1300.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0013"
+      ],
+      "authored_section_sha256": "e7d4760a02204e0773e2df2f50bb5c44ac87288786b2d5f7ec667988b620015d"
+    },
+    {
+      "id": "ADR-v2-0012",
+      "file": "0012-state-root-pruning-and-snapshots.md",
+      "title": "状態root・pruning proof・snapshot同期",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0022-pruned-ibd-evm-overlay-snapshot.md",
+        "0041-palw-pruning-proof-verification.md",
+        "0043-palw-v2-state-root-ordering.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0012"
+      ],
+      "authored_section_sha256": "dbd87e24cfece55d3ea4888f75df0bd98dce690e612c076efa1708372df48e02"
+    },
+    {
+      "id": "ADR-v2-0013",
+      "file": "0013-tir-arithmetic-and-determinism.md",
+      "title": "TIR算術・tile・BASE-0・決定論",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0030-palw-step-function-shape-profile.md",
+        "0031-palw-canonical-transcendentals.md",
+        "0040-palw-base-0-integer-arithmetic.md",
+        "0047-palw-a16-activation-tier.md",
+        "0050-palw-base0-residual-site.md",
+        "0052-palw-qwen36-hybrid-class.md",
+        "0116-an-attention-history-is-the-classs-and-the-held-regime-reduces-over-its-own-width.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0002"
+      ],
+      "authored_section_sha256": "80a76dd24c4030e158749792ceebcb687bb0f3d48de10b21d1d5a5989f782876"
+    },
+    {
+      "id": "ADR-v2-0014",
+      "file": "0014-versioned-kernels-and-backends.md",
+      "title": "Versioned kernel・拡張境界・runtime backend",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0057-palw-base0-runtime-acceleration.md",
+        "0067-classes-are-chain-data-kernels-are-the-build.md",
+        "0102-the-embedding-lift-is-read-per-token-and-an-unarmed-kernel-is-not-in-the-identity.md",
+        "0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0002",
+        "RFC-v2-0003"
+      ],
+      "authored_section_sha256": "4fb6958cec6ae62b6c2e1f02c8c5fc4131fe90a9f9776a88f032d8dbd9b21e14"
+    },
+    {
+      "id": "ADR-v2-0015",
+      "file": "0015-permissionless-model-registration.md",
+      "title": "Permissionlessモデル登録・class profile・不変性",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0034-palw-execution-class-model-band-routing.md",
+        "0056-palw-permissionless-class-admission-and-share-economy.md",
+        "0100-a-model-is-data-and-the-court-the-measure-and-the-licence-are-built-for-a-shard.md",
+        "0135-a-model-is-data-the-permissionless-registry-derives-its-profile-proves-its-panel-and-walks-its-lifecycle.md",
+        "0175-registered-models-are-permanently-immutable.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0003"
+      ],
+      "authored_section_sha256": "1c06fdff25d9815a66f3b06e02acd12748f58b1d2223f98713d12909bd94a476"
+    },
+    {
+      "id": "ADR-v2-0016",
+      "file": "0016-artifact-ownership-and-model-lineage.md",
+      "title": "Artifact所有・モデルlineage・adapter",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md",
+        "0143-an-artifact-root-has-one-owner-on-the-chain.md",
+        "0163-an-adapter-class-is-its-parent-plus-an-adapter-and-is-listed.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0003"
+      ],
+      "authored_section_sha256": "20f0c709b19b4cb49cd4ff3132f2f47aac6d30e60c5a0b10e2b281a9aaa5895e"
+    },
+    {
+      "id": "ADR-v2-0017",
+      "file": "0017-model-streaming-and-memory-bounds.md",
+      "title": "モデルstreaming・mmap・weight／captureメモリ上限",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0106-an-inventory-is-a-stream-of-leaves-not-a-copy-of-the-model.md",
+        "0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+        "0121-a-held-capture-is-served-from-its-fold-as-the-replay-streams-and-a-node-holds-two-ladders.md",
+        "0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0005"
+      ],
+      "authored_section_sha256": "c755393fecfbaa010378d62671e88a9f0e8b1000ee4163e2b004a63c259adac8"
+    },
+    {
+      "id": "ADR-v2-0018",
+      "file": "0018-long-context-measurement-and-admission.md",
+      "title": "長文脈profile・公開計測・context有効化",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0070-the-model-tiers-step-spaces-are-adjudicable.md",
+        "0092-the-ladder-is-minted-once-and-the-clock-is-what-binds.md",
+        "0097-a-models-fit-is-a-lookup-and-the-entrance-says-its-limits-before-the-first-token.md",
+        "0110-a-context-limit-is-activated-from-reproducible-public-vectors-not-the-maintainers-workstation.md",
+        "0118-the-held-regime-arrives-at-a-height-and-a-held-class-carries-its-own-prompt-form.md",
+        "0119-a-held-class-is-walked-at-the-regimes-ladder-and-the-chain-records-which-classes-those-are.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0003",
+        "RFC-v2-0005"
+      ],
+      "authored_section_sha256": "cbca2a55f0016731337182f31d7a2475234390309473ecd6802018772a4321cf"
+    },
+    {
+      "id": "ADR-v2-0019",
+      "file": "0019-model-tiers-and-annual-catalog.md",
+      "title": "モデル二階層・年次指定・非共有リスクの境界",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0177-model-bond-allocation-without-availability-consensus.md",
+        "0179-model-tiers-genesis-annual-1-0-registered-0-3.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0004",
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "197837c41354a07c4b8dfe4018c04e979ee81c42ad8c0e6299355c1f16f99daf"
+    },
+    {
+      "id": "ADR-v2-0020",
+      "file": "0020-class-share-and-allocation-evolution.md",
+      "title": "Class share・epoch配分・経済係数の変遷",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0045-palw-class-economy-on-chain.md",
+        "0054-palw-share-follows-production.md",
+        "0068-the-llm-primary-economy-and-the-floors-minimum.md",
+        "0107-a-share-grows-on-work-that-reached-final.md",
+        "0123-the-epoch-progressively-releases-unused-class-budget.md",
+        "0137-a-block-buys-one-unit-of-work-from-any-model-and-a-share-is-a-result-not-an-input.md",
+        "0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0004",
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "493476479c90085b9ccc6740b95b9f6e96ea7aff7846e3497ff858fb03e9db04"
+    },
+    {
+      "id": "ADR-v2-0021",
+      "file": "0021-positions-and-membership.md",
+      "title": "Position・curve・membership・非譲渡性",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0087-a-position-is-bought-from-the-curve-and-sold-back-to-it.md",
+        "0095-a-position-is-a-membership-not-an-income.md",
+        "0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "cdfe59e1ba295e3eadb212f3f9a0d0a3913e6e6955e8c138e65d41856ca5a7da"
+    },
+    {
+      "id": "ADR-v2-0022",
+      "file": "0022-liquidity-seeding-and-virtual-reserves.md",
+      "title": "流動性seed・分割入金・virtual reserve",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0090-the-pair-is-seeded-with-real-msk-locked-for-good-and-a-position-is-whole.md",
+        "0094-a-seed-is-paid-in-as-many-transactions-as-it-takes.md",
+        "0120-the-least-seed-is-one-million-msk-and-it-arrives-at-a-height.md",
+        "0162-the-pair-opens-on-a-virtual-reserve.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "9dce6221937629707ab0c1ad78d4570bb84d6024a0080bd78340aee1421c7eef"
+    },
+    {
+      "id": "ADR-v2-0023",
+      "file": "0023-model-reward-routing-and-owner-leg.md",
+      "title": "モデル報酬の送金先・owner leg",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0091-the-reward-buys-the-pair-and-no-holder-is-paid.md",
+        "0114-the-owners-leg-is-five-percent-and-it-arrives-at-a-height.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "fdfdf6f52c8e9e3aa2dff78ea10a669dc3653c7d7b4abd303aa18d66fc955e7b"
+    },
+    {
+      "id": "ADR-v2-0024",
+      "file": "0024-inference-input-output-contract.md",
+      "title": "推論Job・prompt・構造化出力・入口契約",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md",
+        "0096-the-app-you-already-use-is-the-entrance-and-the-shape-of-the-answer-is-committed.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0001"
+      ],
+      "authored_section_sha256": "4e51359465c764e5c4c1cafcac3fe05c80c86093df74c9536a6a9bd204c59248"
+    },
+    {
+      "id": "ADR-v2-0025",
+      "file": "0025-context-and-input-commitments.md",
+      "title": "Context／入力state・commitment・取得単位",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0078-what-was-made-from-it-is-committed-the-thing-never-rides.md",
+        "0084-the-ids-ride-the-capture-stays-home.md",
+        "0103-the-context-is-held-off-the-chain-and-the-chain-carries-a-root-an-opening-and-a-logarithm.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0001",
+        "RFC-v2-0008"
+      ],
+      "authored_section_sha256": "2789c60dff79cf9c8874dfb069abb3ac98b2e6d4d926e18f46ceca9997941646"
+    },
+    {
+      "id": "ADR-v2-0026",
+      "file": "0026-canonical-work-and-answer-accounting.md",
+      "title": "正規仕事量・PWU・推論対価・回答の二重計上防止",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0073-real-demand-work-bears-the-weight.md",
+        "0117-a-draw-is-one-forward.md",
+        "0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md",
+        "0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+        "0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md",
+        "0145-canonical-work-is-derived-and-admission-is-earned.md",
+        "0148-the-free-prompt-lane-prices-compute.md",
+        "0149-an-attempts-pwu-is-the-derivation.md",
+        "0205-a-decoded-answer-is-not-paid-twice.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0007",
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "85083397488c87b8993b03bf78cd4166875959819a4dafab6d6c80b9c6a63a75"
+    },
+    {
+      "id": "ADR-v2-0027",
+      "file": "0027-claim-lifecycle-and-liability.md",
+      "title": "Free-prompt claim・lock・native責任期間",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0044-palw-free-prompt-receipts.md",
+        "0109-a-lock-is-its-own-claim-and-finality-is-a-label-not-a-pause.md",
+        "0184-native-liability-horizon-panel-record-and-single-certified-leg.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0007"
+      ],
+      "authored_section_sha256": "b86e8d3c361b93899d74ff4cfd2bf3fa03071e6325008c368d1f5c3318734381"
+    },
+    {
+      "id": "ADR-v2-0028",
+      "file": "0028-attempt-ticket-and-seed-anchor.md",
+      "title": "Attempt・ticket・抽選・seed anchor",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0071-the-attempt-lanes-price-and-the-tickets-bound.md",
+        "0072-the-ticket-is-the-execution.md",
+        "0074-the-attempt-is-a-claim-drawn-by-the-chain.md",
+        "0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md",
+        "0170-the-seed-anchor-is-a-window-not-a-span.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0007"
+      ],
+      "authored_section_sha256": "ff76ed64617e21800c6de9ccb5d3582c59552bce8a524bf33c12efe7cf6d177e"
+    },
+    {
+      "id": "ADR-v2-0029",
+      "file": "0029-remote-client-mining-and-host-sandbox.md",
+      "title": "Remote client・miner操作・署名・host sandbox",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0063-operator-tooling-the-missing-half.md",
+        "0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md",
+        "0122-mining-is-a-purpose-an-operator-runs-one-command-and-reads-one-work-id.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0009"
+      ],
+      "authored_section_sha256": "42ca27f342945d93599c889a0f314f27c10d0173737cf2c1c142c1b5518f010c"
+    },
+    {
+      "id": "ADR-v2-0030",
+      "file": "0030-sharded-verification-and-model-measurement.md",
+      "title": "Shard検証・登録時計測・2M実装計画",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0099-the-adder-measures-the-chain-recomputes-and-a-seat-holds-a-shard.md",
+        "0153-2m-verification-sharding-plan.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0003",
+        "RFC-v2-0006"
+      ],
+      "authored_section_sha256": "739317b04aaa766a6907750e13d28ae961e52eb59c4071d6826105a2e3c7822b"
+    },
+    {
+      "id": "ADR-v2-0031",
+      "file": "0031-panel-independence-and-unavailability.md",
+      "title": "Panel独立性・coverage・取得不能と不正の区別",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md",
+        "0098-the-panels-coverage-is-a-number-and-a-seat-that-found-a-lie-files-nothing-else.md",
+        "0147-independence-is-drawn-not-declared.md",
+        "0166-verifier-unavailability-is-not-producer-fraud.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0006"
+      ],
+      "authored_section_sha256": "90597b74552edef4e6f74789f763724f6d738eabdab93a92df99608ba7c9a52c"
+    },
+    {
+      "id": "ADR-v2-0032",
+      "file": "0032-sampling-beacon-and-receipts.md",
+      "title": "検証抽選・beacon・認証receipt・paid lock乱数",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0028-palw-challenge-sampling-protocol.md",
+        "0075-certification-is-a-consensus-object.md",
+        "0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+        "0185-paid-lock-randomness-bootstrap-and-paid-sources.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0006",
+        "RFC-v2-0010"
+      ],
+      "authored_section_sha256": "f39039601d3118cdf9dc80dee4942b1963adf9de443a17afeaa8ca6c3b5f0c7a"
+    },
+    {
+      "id": "ADR-v2-0033",
+      "file": "0033-probabilistic-checks-and-exact-court.md",
+      "title": "確率的constraint検査とexact courtの分担",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0171-probabilistic-constraint-checks-and-court-on-dispute.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0006",
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "d5df71a073571131a5f3597ff1d1106b0d8d8bb8444239eaa29d079f9dfb2015"
+    },
+    {
+      "id": "ADR-v2-0034",
+      "file": "0034-verification-spans-and-service-clock.md",
+      "title": "検証span・class別service時計・starvation境界",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0006"
+      ],
+      "authored_section_sha256": "ac74fe1b8057abad7d2b90ed6befee195c3bf97a69c16c5214250e047034a706"
+    },
+    {
+      "id": "ADR-v2-0035",
+      "file": "0035-bond-budget-and-shared-reservations.md",
+      "title": "Bond・責任予算・共有担保・段階reserve",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0152-account-stake-staged-reserve-and-vested-rewards.md",
+        "0160-claim-capacity-separation.md",
+        "0176-bond-bounds-palw-production-rewards-and-final-weight.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "0b602d9911e9cf46cbfd47817d9a485003647b5319f6f14ba2b2ec9f77e60f91"
+    },
+    {
+      "id": "ADR-v2-0036",
+      "file": "0036-capacity-scaling-and-emission-budget.md",
+      "title": "Claim容量拡張・固定発行予算・breaker",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0161-a-claim-is-not-an-emission.md",
+        "0167-the-x1000-capacity-package-a-fixed-per-daa-reward-budget-riders-and-a-lower-only-breaker.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0007",
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "6f27c840a253f5c0f9c2c39ebd09f83a1890211f37fe453b8e8dc247847e8806"
+    },
+    {
+      "id": "ADR-v2-0037",
+      "file": "0037-fee-escrow-and-role-consent.md",
+      "title": "Fee escrow・Panel報酬・verifier／provider同意",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0032-palw-fee-bond-escrow.md",
+        "0124-the-panel-is-paid-out-of-the-claims-reward-a-seat-holds-exposure-and-a-claim-is-paid-for-the-compute-it-certifies.md",
+        "0207-finite-fee-consent-and-provider-payment-bounds.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0011"
+      ],
+      "authored_section_sha256": "0d61a6e38c0454471cf694b7bb82b9b9edb0ad5c4c19d3fdb70df52cb87bf008"
+    },
+    {
+      "id": "ADR-v2-0038",
+      "file": "0038-g14-public-prosecution-and-completeness.md",
+      "title": "G14公開訴追・adjudicability・裁定保証の前提",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0027-palw-slash-unilateral-fraud-proofs.md",
+        "0049-palw-adjudication-contract.md",
+        "0069-e2e-adjudicability-is-the-price-of-weight.md",
+        "0173-public-verifier-dispute-completeness-is-misaka-purpose.md",
+        "0183-g14-court-capacity-panel-floor-retention-detection.md",
+        "0187-g14-native-public-filing-and-post-final-mining-accusation.md",
+        "0188-d2-x3-arm-records-composition-and-pause-credit.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "3e8fb04265024149644a2d3f08bf6b105a69c0f120a868ba94e509a98fc4426e"
+    },
+    {
+      "id": "ADR-v2-0039",
+      "file": "0039-data-availability-court-and-panel-da.md",
+      "title": "DA court・claim資料請求・PanelDa期限付き開示",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0062-data-availability-court.md",
+        "0111-a-seat-may-demand-the-committed-leaf-it-needs-to-judge.md",
+        "0206-panel-da-mandatory-disclosure-g14-route.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "61ac00a7420e1b64d60e5075856cf44a94195bf76f566aaa7b010f90a18c3f5f"
+    },
+    {
+      "id": "ADR-v2-0040",
+      "file": "0040-tir-terminal-proof-and-local-opening.md",
+      "title": "TIR終端証拠・fold opening・局所裁定",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0082-the-close-is-flat-in-the-context.md",
+        "0085-the-close-is-assembled-from-what-was-served.md",
+        "0086-the-opening-carries-the-fold-not-the-leaves.md",
+        "0093-the-court-can-try-a-fused-row-and-the-responder-is-what-is-missing.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0002",
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "6c62153458052e0dc1a95cd7e763787c39267df265001e0b990b4519dc3837e2"
+    },
+    {
+      "id": "ADR-v2-0041",
+      "file": "0041-long-context-court-decomposition.md",
+      "title": "長文脈court・sparse read set・dispute分解",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0189-tir-court-read-set-door-options.md",
+        "0190-tir-door-sparse-fetch-designated-answers-tenure-split.md",
+        "0191-tir-dispute-local-decomposition-long-context.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "b9f5d947d9b912f5be033269c24175cf25cf7727d809b5ec92eaef5afa5fb4c2"
+    },
+    {
+      "id": "ADR-v2-0042",
+      "file": "0042-court-service-and-versioned-clock.md",
+      "title": "Court処理機会・共有訴追・versioned clock",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0192-court-service-opportunity-and-shared-pursuit.md",
+        "0193-sequential-witness-filing-clock.md",
+        "0194-dormant-g14-integration-and-service-schema.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "8d82a5a42b390fafeb8e06a2f5aae139880f26eca4cd2208d6be755b8afe13de"
+    },
+    {
+      "id": "ADR-v2-0043",
+      "file": "0043-court-eligibility-and-initial-notice.md",
+      "title": "Court応答資格履歴・initial notice境界",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0195-rooted-court-response-eligibility-history.md",
+        "0198-shared-court-initial-notice-boundary.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "b084ea0075937e8b7693774604e2ef673a7786be7124cedfce7918e6190a9112"
+    },
+    {
+      "id": "ADR-v2-0044",
+      "file": "0044-shared-tir-query-data.md",
+      "title": "Owner非依存の共有TIR query・認証data",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0196-owner-independent-shared-tir-query-data.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0002",
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "e3e059b945e4cc0a2689ea7cb43402ccf4a03e233cf67eb5c7468fe2db9d68c8"
+    },
+    {
+      "id": "ADR-v2-0045",
+      "file": "0045-terminal-material-and-readiness.md",
+      "title": "終端material受付・非独占提出・readiness opening",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0199-shared-court-terminal-material-and-nonblocking-ingress.md",
+        "0200-d2-readiness-root-opening-availability.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "517b713942cde360a1fc6367d319735b399c5d6b31b8b86482dce52497bcb7c8"
+    },
+    {
+      "id": "ADR-v2-0046",
+      "file": "0046-court-close-and-liability-archive.md",
+      "title": "Court終了効果・未解決責任archive・金融解除",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0197-court-end-effects-and-pending-liability-archive.md",
+        "0201-archived-close-qualified-financial-discharge.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "affc49727e8258f79e02fcb194488150f4bfbce01b0b772b86daa3cc60124150"
+    },
+    {
+      "id": "ADR-v2-0047",
+      "file": "0047-funded-original-and-role-authorization.md",
+      "title": "Court originalの実原資・予約・役割別署名",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0202-court-original-funded-contract-and-role-consent.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0011",
+        "RFC-v2-0014"
+      ],
+      "authored_section_sha256": "976f01c0840e1d573ae6aa24bd670c4647d72f4609f84801ed61b33de1dd9f10"
+    },
+    {
+      "id": "ADR-v2-0048",
+      "file": "0048-claim-dependencies-and-prefix-origin.md",
+      "title": "Claim依存関係・独立進行・prefix生成元",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0186-hold-unresolved-liability-advance-independent-claims.md",
+        "0208-authenticated-prefix-work-dependencies.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0008"
+      ],
+      "authored_section_sha256": "5c34a5b3271a55efee2875ae417b1bb53edfc6c61ee294b60aee56ab93d81b20"
+    },
+    {
+      "id": "ADR-v2-0049",
+      "file": "0049-authenticated-state-map-and-row-stream.md",
+      "title": "認証state map・IBD row stream・世代別保存",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0203-authenticated-palw-state-map-and-row-access.md",
+        "0204-ibd-bounded-row-stream-and-storage-generations.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0012"
+      ],
+      "authored_section_sha256": "784b09559c10e01eb7d1bd5cd133af4bba88a72b802031fb32893598e1437208"
+    },
+    {
+      "id": "ADR-v2-0050",
+      "file": "0050-freeze-deferred-rejected-and-governance.md",
+      "title": "設計凍結・延期・撤回・不採用・未採択・変更管理",
+      "status": "EDITORIAL_CONSOLIDATION_SOURCE_STATUS_INHERITED",
+      "primary_sources": [
+        "0009-dns-probabilistic-finality.md",
+        "0010-validator-node-architecture.md",
+        "0011-validator-deployment-and-equivocation-safety.md",
+        "0012-mainnet-validator-sortition-commit-reveal.md",
+        "0013-validator-reward-distribution.md",
+        "0014-coordinated-failover-protocol.md",
+        "0015-remote-signer-hsm-protocol.md",
+        "0016-stake-locked-bond-utxos.md",
+        "0017-all-active-staker-attestation.md",
+        "0018-quality-gated-stakescore-inclusion-economics.md",
+        "0021-palw-llm-pow.md",
+        "0023-base-three-lane-execution.md",
+        "0024-verified-llm-token-weighted-bft.md",
+        "0033-palw-credit-gate-wiring.md",
+        "0051-palw-metal-gguf-execution-family.md",
+        "0080-the-answer-is-long-the-verified-unit-is-short.md",
+        "0081-long-context-the-input-is-a-state-chain.md",
+        "0126-the-validator-carve-drops-to-a-fifth-and-the-stake-reorg-gate-stays.md",
+        "0128-dns-validators-vote-bft-by-bonded-stake-and-that-vote-decides-the-stake-reorg-gate.md",
+        "0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md",
+        "0173-a-seat-holds-a-root-not-a-class-and-possession-gates-activation.md",
+        "0181-design-freeze-and-controlled-change.md",
+        "0182-defer-media-and-model-improvement-until-post-mainnet.md",
+        "0193-miner-account-bond-for-panel-incentives.md"
+      ],
+      "related_rfcs": [
+        "RFC-v2-0015"
+      ],
+      "authored_section_sha256": "bd545af6222835aa11aa102226556039dfea272fd8328e473e5a706164caa5ea"
+    }
+  ],
+  "post_consolidation_documents": [
+    {
+      "kind": "adr",
+      "id": "ADR-0210",
+      "path": "docs/adr/0210-all-model-g14-panel-one.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0042",
+      "path": "docs/rfc/0042-all-model-g14-panel-one.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0043",
+      "path": "docs/rfc/0043-wide-q24-llm-output.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0211",
+      "path": "docs/adr/0211-wide-q24-llm-output.md"
+    }
+  ]
+}

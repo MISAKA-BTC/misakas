@@ -8062,6 +8062,10 @@ impl NativeWireScanV1 for crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV
                     sum.merge(<Box<crate::palw_tir_step_v1::PalwTirStepBindingV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            3 => {
+                let sum = <Box<crate::palw_tir_step_v1::PalwTirStepBindingV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+                sum.merge(<crate::palw_logits_q24_v2::WideLogitsEventV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11369,3 +11373,5 @@ impl NativeWireScanV1 for misaka_palw_tir::types::Dim {
     }
 }
 wire_struct!(misaka_palw_tir::types::TensorType; misaka_palw_tir::types::DType, Vec<misaka_palw_tir::types::Dim>);
+
+wire_struct!(crate::palw_logits_q24_v2::WideLogitsEventV2; u32, Vec<u32>, crate::Hash64, crate::palw_step_leg::PalwStepOpeningV1, Vec<i64>, crate::palw_step_leg::PalwStepOpeningV1);

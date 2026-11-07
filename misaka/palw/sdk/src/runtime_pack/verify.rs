@@ -241,6 +241,7 @@ pub fn verify(opts: &VerifyOpts, log: &dyn Fn(String)) -> Result<VerifyReport, S
                 };
                 req.max_window = pack.profile.max_window;
                 req.gdn_core_wide = pack.profile.gdn_core_wide;
+                req.logits_bits = pack.profile.logits_bits;
                 req.linear_weight_bits = pack.profile.linear_weight_bits;
                 req.logits_bits = pack.profile.logits_bits;
                 req.context = pack.profile.context;

@@ -16,3 +16,5 @@
 ## 3. RFC・ADR・仕様の更新
 
 採用済み設計は原則凍結。重大問題時には新規 RFC と新規 ADR の両方、レビュー、明示的採択、対象仕様の改定、試験・移行と別途の有効化判断を必要とします。[変更管理](governance/design-freeze.md)
+
+現行の設計文書: [RFC 15本](rfc-v2/README.md) / [ADR 50本](adr-v2/README.md)。[RFC対応表](rfc-v2/MAPPING.md) / [ADR対応表](adr-v2/MAPPING.md)。

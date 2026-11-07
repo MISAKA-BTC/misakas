@@ -46,7 +46,7 @@ use crate::palw_class_admission_v2::{PalwClassAdmissionError, PalwCourtCostV1, P
 use crate::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2};
 use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
 use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
-use crate::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1, palw_tir_job_context_v1};
+use crate::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_of_v1};
 use crate::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirClassV1};
 use crate::palw_tir_step_v1::PalwTirStepSpaceV1;
 use crate::palw_tir_v1::PalwTirFenceV1;
@@ -534,6 +534,7 @@ pub fn verify_class_admission_v10(
     }
     let scheme = Hash64::from_bytes(program.logits_scheme_id);
     if scheme != crate::palw_step_refute::flat_logits_scheme_id_v1() && scheme != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+        && !(program.wide_logits_q24() && rules.fence.court_version == crate::palw_tir_v1::PALW_TIR_COURT_VERSION_WIDE_Q24_V2)
     {
         return Err(PalwClassAdmissionError::TirLayout(format!(
             "the program commits its logits under scheme {scheme}, which this build cannot adjudicate"
@@ -663,7 +664,8 @@ pub fn verify_class_admission_v10(
                 }
             }
             exceeds("IR cone evaluation work (tile and state replay)", work, work_limit)?;
-            let close = (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(opened);
+            let extra = if program.wide_logits_q24() { 4u64.saturating_mul(tile_len as u64) } else {0};
+            let close = (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(opened).saturating_add(extra);
             exceeds("IR close bytes", close, bundle.court.max_close_bytes())?;
             worst_close = worst_close.max(close);
             worst_macs = worst_macs.max(tile.macs);
@@ -680,7 +682,7 @@ pub fn verify_class_admission_v10(
             layout.max_context
         ))
     })?;
-    let expected = palw_tir_job_context_v1(&facts, formula);
+    let expected = crate::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, derived_id, formula).ok_or_else(|| PalwClassAdmissionError::TirLayout("canonical program".into()))?;
     if *canonical != expected {
         return Err(PalwClassAdmissionError::TirCanonicalNotTheFormula(format!(
             "the canonical job must be the attempt formula's yardstick context at ({}, {})",

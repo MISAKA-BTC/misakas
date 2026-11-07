@@ -1,0 +1,46 @@
+{
+  "schema": "misaka.hf-onboarding-run.v1",
+  "status": "FAILED",
+  "stages": [
+    {
+      "name": "preflight",
+      "argv": [
+        "/Users/wata/Downloads/MISAKA-testnet/target/debug/palw-class",
+        "preflight",
+        "--network",
+        "testnet-12",
+        "hf://shibing624/macbert4csc-base-chinese@615e6e09ef9a69ec487bc7c641ec3a311e2c11b9",
+        "--max-context",
+        "512",
+        "--json"
+      ],
+      "status": "FAILED",
+      "exit_code": 2,
+      "elapsed_seconds": 8.138
+    }
+  ],
+  "registration": "NOT_RUN",
+  "public_network": false,
+  "claim_certified": false,
+  "repository": "shibing624/macbert4csc-base-chinese",
+  "revision": "615e6e09ef9a69ec487bc7c641ec3a311e2c11b9",
+  "tools": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/palw-class",
+      "sha256": "c54b781be155103f1b9ee929aa42e246fcae9355af91c207d77f12ebd37e7361"
+    }
+  ],
+  "scripts": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/scripts/models/onboard_hf_checkpoint.py",
+      "sha256": "ec213e0ded611e7b87838b81d809c0594970723ea6ae6942e01eda3c2db37280"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/scripts/models/fetch_hf_checkpoint.py",
+      "sha256": "b56725ff3c739d5700f11b17a989393aefa972c9fa8d9869ddda480aaf5132b4"
+    }
+  ],
+  "source_context": 512,
+  "calibration_sha256": "2f9cce1c59968d378fc9455b02f8ea49d51d4bcedced72a2eafa86a86aad9222",
+  "error": "preflight: exit 2; see retained stage logs"
+}

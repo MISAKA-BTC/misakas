@@ -138,6 +138,15 @@ pub fn source_dir(model: &Path) -> PathBuf {
 
 /// `(params, bundle)` of a network preset with a PALW V2 bundle.
 pub fn network(raw: &str) -> Result<kaspa_consensus_core::config::params::Params, String> {
+    // An explicitly named private ruleset; never aliases a public preset's identity.
+    if raw == "private-wide-q24" {
+        let mut params = network("testnet-12")?;
+        let mut fence = kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1::testnet12_v1(kaspa_consensus_core::config::params::ForkActivation::new(0));
+        fence.court_version = kaspa_consensus_core::palw_tir_v1::PALW_TIR_COURT_VERSION_WIDE_Q24_V2;
+        params.palw_tir_v1 = Some(fence);
+        params.sync_palw_tir_v1();
+        return Ok(params);
+    }
     let id: kaspa_consensus_core::network::NetworkId = raw.parse().map_err(|e| format!("--declare {raw}: {e}"))?;
     let params: kaspa_consensus_core::config::params::Params = id.into();
     match &params.palw_consensus_mode {

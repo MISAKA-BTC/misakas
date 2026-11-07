@@ -49,6 +49,10 @@ use misaka_palw_kernel::ledger::{ClaimRowV1, KernelLedgerV1, LedgerEventV1, Pros
 use misaka_palw_kernel::lifecycle::ClaimStateV1;
 use misaka_palw_kernel::route::{AuthV1, KernelRouteObjectV1};
 
+/// R2's additional Panel work plan. Old `Clean => None` behavior is retained
+/// below; a Positive plan constructs evidence and never grants credit.
+pub mod positive;
+
 /// **What the verifier's own check concluded** (its deterministic finding from public material and the registered model).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KernelGoalV1 {
