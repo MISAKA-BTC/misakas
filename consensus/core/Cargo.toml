@@ -75,6 +75,8 @@ misaka-palw-positive-contract.workspace = true
 # court's derived inputs and output digests). A leaf crate (blake2b + borsh).
 misaka-palw-gen.workspace = true
 misaka-palw-panel.workspace = true
+# A6 implements the A0 recovery port; no new native activation.
+misaka-palw-positive-contract.workspace = true
 misaka-palw-challenge.workspace = true
 # G14 lane D: the kernel route's consensus-embeddable ledger (`KernelLedgerV1`, `KernelRouteObjectV1`, receipts, settlement instructions) —
 # folded into `PalwChainStateV2` behind the dormant fence `palw_probabilistic_constraints_v1` (`palw_kernel_route_v1`).
