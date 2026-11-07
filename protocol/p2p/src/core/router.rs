@@ -610,6 +610,7 @@ mod candidate_summary_route_tests {
             outgoing_route,
             hub_sender,
             mutable_state: Mutex::new(RouterMutableState::new(None, None)),
+            outgoing_budget: connection_budget(),
         }
     }
 

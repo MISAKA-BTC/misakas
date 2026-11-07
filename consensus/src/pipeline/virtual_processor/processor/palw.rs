@@ -15616,3 +15616,28 @@ mod pruning_snapshot_read_fault_tests_v1 {
         }
     }
 }
+
+#[cfg(test)]
+mod pruning_snapshot_read_fault_tests_v1 {
+    use super::pruning_snapshot_read_error_v1;
+    use kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1 as ReadError;
+    use kaspa_database::prelude::{DbKey, StoreError};
+
+    #[test]
+    fn snapshot_local_faults_preserve_category_without_store_payload() {
+        for (error, expected) in [
+            (StoreError::LocalResourceUnavailable("private diagnostic payload".into()), ReadError::ResourceUnavailable),
+            (StoreError::DataInconsistency("private row payload".into()), ReadError::Corrupt),
+            (StoreError::KeyNotFound(DbKey::prefix_only(&[0x81])), ReadError::Corrupt),
+            (
+                StoreError::DeserializationError(Box::new(bincode::ErrorKind::Custom("private codec payload".into()))),
+                ReadError::Corrupt,
+            ),
+        ] {
+            let classified = pruning_snapshot_read_error_v1(error);
+            assert_eq!(classified, expected);
+            assert!(!classified.to_string().contains("private"));
+            assert!(!format!("{classified:?}").contains("private"));
+        }
+    }
+}

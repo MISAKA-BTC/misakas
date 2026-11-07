@@ -9,6 +9,7 @@ pub mod palw_heartbeat_relay;
 pub mod palw_prefix_history;
 pub mod palw_round_relay;
 mod palw_snapshot_chunks;
+mod snapshot_memory;
 pub mod service;
 mod snapshot_memory;
 pub mod v7;
