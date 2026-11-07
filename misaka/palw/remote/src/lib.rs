@@ -43,6 +43,10 @@ pub mod proof;
 pub mod public_material;
 /// Lane G14-R: the kernel route's public prosecution planner — what to send next, rebuilt from public reads (restart, reorg, IBD, RPC).
 pub mod pursuit;
+#[cfg(feature = "positive-panel")]
+pub mod positive_panel;
+#[cfg(feature = "positive-panel")]
+pub mod positive_panel_sources;
 pub mod register;
 pub mod relay;
 pub mod resubmit;
