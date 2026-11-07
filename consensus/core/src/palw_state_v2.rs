@@ -333,6 +333,9 @@ pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 mod palw_claim_local_fold_v1;
 #[path = "palw_claim_local_prefix_court_v1.rs"]
 mod palw_claim_local_prefix_court_v1;
+#[cfg(test)]
+#[path = "palw_claim_local_prefix_tir_context_v2.rs"]
+mod palw_claim_local_prefix_tir_context_v2;
 #[path = "palw_claim_local_prefix_reservation_v1.rs"]
 mod palw_claim_local_prefix_reservation_v1;
 #[cfg(test)]
@@ -23535,10 +23538,13 @@ pub(crate) fn apply_delta_prefix_v2(
     for entry in entries {
         apply_delta_entry(&mut state, entry, false)?;
     }
+    palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state,delta,false,params)?;
+    palw_claim_local_context_gc_v3::settle_state_v3(&mut state).map_err(palw_claim_local_paid_archive_v2::state_error)?;
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
     rebuild_deadline_free_indices(&mut state);
     rebuild_deadline_index_v2(&mut state, params)?;
     rebuild_capacity_weight_index_v1(&mut state, params);
+    palw_claim_local_execution_cohort_census_v15::settle_replay_boundary_v15(&mut state,params)?;
     Ok(state)
 }
 
@@ -23657,6 +23663,8 @@ pub(crate) fn replay_delta_owned_v1(
             }
         }
     }
+    palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state,delta,true,params)?;
+    palw_claim_local_context_gc_v3::settle_state_v3(&mut state).map_err(palw_claim_local_paid_archive_v2::state_error)?;
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
     rebuild_deadline_free_indices(&mut state);
     rebuild_deadline_index_v2(&mut state, params)?;

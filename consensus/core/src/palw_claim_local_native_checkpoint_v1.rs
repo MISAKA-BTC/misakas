@@ -1022,3 +1022,150 @@ mod scoped_kernel_checkpoint_tests {
         assert_eq!(context(&d.state).unwrap().settlements.len(), 13);
     }
 }
+
+#[cfg(test)]
+mod scoped_kernel_checkpoint_tests {
+    use super::*;
+    use super::super::super::palw_claim_local_kernel_current_birth_v9 as scoped;
+    use misaka_palw_kernel::{ledger::{ClaimBodyV1,ClaimRowV1},spec::{SpecClaimV1,SpecClaimBodyV1,retrieval::RetrievalClaimV1},lifecycle::{ClaimLifecycleV1,LifecyclePolicyV1}};
+    fn h(n:u64)->Hash64{Hash64::from_u64_word(n)}
+    fn point(n:u64)->PalwBlockContextV2{PalwBlockContextV2{block:h(100+n),daa_score:n,blue_score:n,subsidy:77}}
+    fn row(n:u64)->ClaimRowV1 {
+        let body=SpecClaimV1::Retrieval(RetrievalClaimV1{job_id:[7;64],producer_bond:[8;64],result:vec![]});
+        ClaimRowV1{producer:[8;64],class_binding_id:[9;64],job_id:[7;64],body:ClaimBodyV1::Spec(Box::new(SpecClaimBodyV1{claim:body,pre_state:vec![],pre_source:None})),committed_daa:n,life:ClaimLifecycleV1::new(LifecyclePolicyV1{check_window_daa:10,challenge_window_daa:10}),reserved:0,liability_until:None,convicted:false,rewarded:false,sealed_daa:0}
+    }
+    fn fixture()->(PalwChainStateV2,PalwStateParamsV2,PalwTransitionExtrasV1){
+        let params=PalwStateParamsV2::new(100,10,10,20,500,1000,h(1),4,1000,100,1000,0).unwrap().with_claim_local_settlement_from_daa(Some(0));
+        let mut state=PalwChainStateV2::genesis();
+        state.last_point=Some(point(1));
+        state.kernel_route=Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h(1),h(2)),None,misaka_palw_kernel::rows::LedgerScalarsV1{daa:1,burned:0}));
+        let extras=PalwTransitionExtrasV1{kernel_route:Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1{network_domain:h(1),ruleset_digest:h(2),..Default::default()}),..Default::default()};
+        (state,params,extras)
+    }
+
+    #[test]
+    fn rfc23s2_kernel_checkpoint_actual_native_birth_without_full_f_cold_and_reorg(){
+        let (state,params,extras)=fixture();let id=h(300);let original=row(2);let table=misaka_palw_kernel::rows::TABLE_CLAIMS_V1;
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        b.write_kernel_row_encoded_v1(table,id.as_byte_slice(),Some(&original)).unwrap();
+        scoped::capture_native_admissions_v9(&mut b,&point(2)).unwrap();b.state.last_point=Some(point(2));
+        assert_eq!(rewards::frames(&b.state).count(),0,"native writer seam has no historical world frame");
+        let c=context(&b.state).unwrap();let work=PalwClaimLocalWorkRefV1::KernelClaim{claim:id};
+        assert!(c.births[&work].native_coordinate);assert!(!c.births[&work].full_frame);
+        let mut records=BTreeMap::from([(work,PalwClaimLocalRecordV1{work,accepted_daa:2,accepted_blue_score:0,accepting_block:ZERO_HASH64,anchors:false,inputs:BTreeSet::new(),execution_root:ZERO_HASH64,reservations:BTreeSet::new(),final_claim:false,certified:false,voided:false,liability_closed:false,material:BTreeSet::new()})]);
+        let mut material=BTreeMap::new();attach(&b.state,&params,2,&c,&mut records,&mut material).unwrap();
+        assert_eq!(records[&work].accepting_block,point(2).block);assert_eq!(records[&work].accepted_blue_score,2);
+        assert!(!records[&work].certified,"actual birth marker grants no selected approval");
+        let proof=material.clone();assert!(proof.len()>=2,"actual native row and typed source-only projection are retained");
+        let bytes=borsh::to_vec(b.state.kernel_route().unwrap()).unwrap();let mut cold=b.state.clone();cold.kernel_route=Some(borsh::from_slice(&bytes).unwrap());
+        scoped::validate_current_births_v9(&cold).unwrap();let c=context(&cold).unwrap();let mut cold_records=records.clone();let mut cold_material=BTreeMap::new();attach(&cold,&params,2,&c,&mut cold_records,&mut cold_material).unwrap();assert_eq!(cold_material,proof);
+        let mut updated=original.clone();updated.reserved=3;
+        let prior=cold.clone();let mut u=TransitionBuilder::new(&prior,&params,false,false,false,false,&extras);u.write_kernel_row_encoded_v1(table,id.as_byte_slice(),Some(&updated)).unwrap();scoped::capture_native_admissions_v9(&mut u,&point(3)).unwrap();
+        let mut changed=BTreeMap::new();scoped::visit_current_checkpoint_material_v10(&u.state,id,|raw|{changed.insert(palw_liability_material_id_v1(raw),raw.to_vec());Ok(())}).unwrap();assert_ne!(changed,proof,"actual current native mutation changes its scoped material");
+        for entry in u.entries.iter().rev(){let PalwDeltaEntryV2::KernelRouteRow{table,key,old,new}=entry else{panic!("native journal only")};super::super::super::apply_kernel_route_row_v1(&mut u.state,*table,key,old,new,true).unwrap();}
+        let mut restored=BTreeMap::new();scoped::visit_current_checkpoint_material_v10(&u.state,id,|raw|{restored.insert(palw_liability_material_id_v1(raw),raw.to_vec());Ok(())}).unwrap();assert_eq!(restored,proof);
+    }
+    #[test]
+    fn rfc23s2_native_prefix_keeps_actual_f_carriage_integrity_and_birth(){
+        // Accounting/codec seam: the common native row writer and real F1
+        // canonical carriage factory, not a signed public claim admission.
+        let(state,params,extras)=fixture();let id=h(300);let original=row(2);let table=misaka_palw_kernel::rows::TABLE_CLAIMS_V1;
+        let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        b.write_kernel_row_encoded_v1(table,id.as_byte_slice(),Some(&original)).unwrap();
+        scoped::capture_native_admissions_v9(&mut b,&point(2)).unwrap();
+        let prior=PalwStateCarriageV2::from_state_for_claim_local_frame_v1(&state);
+        let mut current=PalwStateCarriageV2::from_state_for_claim_local_frame_v1(&b.state);current.last_point=Some(point(2));
+        let mut frame=PalwClaimLiabilityFrameV1{
+            point:point(2),network_identity:[11;32],fired_forks:[12;32],
+            policy:crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1::from_rules_v1(&params,2),
+            claims:BTreeSet::new(),native_changes:vec![PalwClaimLocalNativeChangeV1{owner:PalwClaimLocalRowOwnerV1::KernelRoute,table,key:id.as_byte_slice().to_vec(),old:None,new:Some(borsh::to_vec(&original).unwrap())}],
+            prior_state:borsh::to_vec(&prior).unwrap(),current_state:borsh::to_vec(&current).unwrap(),accepted_objects:vec![],origin_headers:BTreeMap::new(),inputs:vec![],
+        };
+        frame.validate_context_v1().unwrap();
+        assert!(frame.native_credit_events_v1().unwrap().is_empty());
+        let key=crate::palw_claim_local_v1::palw_claim_liability_frame_key_v1(point(2).block);
+        b.write_kernel_row_encoded_v1(PALW_CLAIM_LOCAL_TABLE_V1,&key,Some(&frame)).unwrap();
+        let view=context(&b.state).unwrap();let work=PalwClaimLocalWorkRefV1::KernelClaim{claim:id};
+        assert_eq!(view.births[&work].point,point(2));assert!(view.births[&work].native_coordinate);
+        assert!(view.settlements.is_empty());drop(view);
+        // A valid prefix with a corrupt carriage tail must NEVER become valid
+        // because this frame happens to contain no native EXEC event.
+        frame.current_state.push(0xff);
+        b.write_kernel_row_encoded_v1(PALW_CLAIM_LOCAL_TABLE_V1,&key,Some(&frame)).unwrap();
+        assert!(matches!(context(&b.state),Err(PalwStateV2Error::CarriageInconsistent(_))));
+    }
+    fn exec_root_row() -> crate::palw_work_slice_v2::PalwWorkRootV2 {
+        crate::palw_work_slice_v2::PalwWorkRootV2 {
+            class_id: h(10),
+            canonical_job_id: h(11),
+            job_work_id: h(12),
+            kernel_version: 1,
+            plan_root: h(13),
+            total_work: 2,
+            boundaries: vec![1, 2],
+            initial_state_root: h(14),
+            evidence_policy_root: h(15),
+            root_bond: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(16), 0)),
+            extra_executors: vec![],
+            executor_exposure: 0,
+            anchor: point(2).block,
+            opened_daa: 2,
+            expiry_daa: 100,
+            next_index: 0,
+            last_state_root: h(14),
+            accepted_work: 0,
+            verified_work: 0,
+            pending: 0,
+            phase: crate::palw_work_slice_v2::PalwWorkRootPhaseV2::Open,
+            prefix_claim: ZERO_HASH64,
+            prefix: crate::palw_work_slice_v2::PalwWorkPrefixStageV2::Unbound,
+        }
+    }
+    fn exec_slice_row() -> crate::palw_work_slice_v2::PalwWorkSliceRowV2 {
+        crate::palw_work_slice_v2::PalwWorkSliceRowV2 {
+            slice_id: h(20),
+            range: crate::palw_exec_v2::PalwWorkRangeV1 { start: 1, end: 2 },
+            executor: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(16), 0)),
+            carrier: h(21),
+            accepted_daa: 2,
+            predecessor_state_root: h(14),
+            result_state_root: h(22),
+            evidence_root: h(23),
+            da_root: h(24),
+            stage: crate::palw_work_slice_v2::PalwWorkSliceStageV2::Verified {
+                verified_daa: 2,
+                leg_cap: 4,
+                route_reward: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn rfc23s2_exec_checkpoint_typed_no_f_multiple_event_leases_cold_and_inverse(){
+        // Actual native writer/checkpoint provenance seam. This does not mint
+        // a chain original, selected approval or signed EXEC admission.
+        let(state,params,extras)=fixture();let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+        for n in 0..13u64 {
+            let id=h(500+n);let mut root=exec_root_row();root.job_work_id=h(1000+n);
+            b.write_exec_job(root.job_work_id,Some(id)).unwrap();b.write_exec_root(id,Some(root.clone())).unwrap();
+            let mut slice=exec_slice_row();slice.slice_id=h(2000+n);b.write_exec_slice((id,0),Some(slice)).unwrap();
+            root.next_index=1;root.accepted_work=1;root.verified_work=1;root.phase=crate::palw_work_slice_v2::PalwWorkRootPhaseV2::Settled{settled_daa:2};b.write_exec_root(id,Some(root)).unwrap();
+        }
+        use super::super::super::palw_claim_local_exec_archive_v10 as archive;
+        archive::capture_executed_exec_v10(&mut b,&state,&point(2)).unwrap();b.state.last_point=Some(point(2));
+        assert_eq!(rewards::frames(&b.state).count(),0);
+        let requests=super::super::resources::requests(&b.state).unwrap();
+        let _context_lease=crate::palw_native_resource_v1::reserve_native_requests_v1(requests).unwrap();
+        let c=context(&b.state).unwrap();assert_eq!(c.settlements.len(),13);assert_eq!(c._event_leases.len(),13);
+        assert_eq!(c.births.len(),26);assert!(c.births.values().all(|birth|birth.scoped_exec&&!birth.full_frame));
+        let first=PalwClaimLocalWorkRefV1::ExecSettlement{root:h(500),block:point(2).block};
+        assert_eq!(c.settlements[&first].0.inputs,BTreeSet::from([PalwClaimLocalWorkRefV1::ExecSession{root:h(500)},PalwClaimLocalWorkRefV1::ExecSlice{root:h(500),index:0}]));
+        assert!(c.settlements[&first].2);drop(c);
+        let state_root=b.state.state_root();let wire=borsh::to_vec(b.state.kernel_route().unwrap()).unwrap();let mut cold=b.state.clone();cold.kernel_route=Some(borsh::from_slice(&wire).unwrap());archive::validate_exec_archive_v10(&cold).unwrap();assert_eq!(context(&cold).unwrap().settlements.len(),13);assert_eq!(cold.state_root(),state_root);
+        let prior=cold.clone();let mut d=TransitionBuilder::new(&prior,&params,false,false,false,false,&extras);d.write_exec_slice((h(500),0),None).unwrap();d.write_exec_job(h(1000),None).unwrap();d.write_exec_root(h(500),None).unwrap();archive::capture_executed_exec_v10(&mut d,&prior,&point(3)).unwrap();
+        assert_eq!(context(&d.state).unwrap().settlements.len(),12);
+        for entry in d.entries.iter().rev(){super::super::super::apply_delta_entry(&mut d.state,entry,true).unwrap();}
+        assert_eq!(d.state.state_root(),state_root);assert_eq!(context(&d.state).unwrap().settlements.len(),13);
+    }
+
+}

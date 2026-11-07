@@ -2304,6 +2304,26 @@ mod tests {
     }
 
     #[test]
+    fn same_native_model_distinct_prompts_reexecute_before_original_signing() {
+        let kp=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x5b;32]);
+        let key=kp.verification_key.as_ref();let network=Hash64::from_u64_word(0x425037);
+        let (old,..)=source_tokenizer_frame_v1(Some(key),Some(network),false);
+        let (same,..)=source_tokenizer_frame_with_prompt_v1(Some(key),Some(network),false,Some(&old.execution.prompt));
+        assert_eq!(borsh::to_vec(&old.frame).unwrap(),borsh::to_vec(&same.frame).unwrap(),"explicit unchanged prompt preserves native bytes");
+        let different=old.execution.prompt.iter().map(|id|1-id).collect::<Vec<_>>();
+        let (other,..)=source_tokenizer_frame_with_prompt_v1(Some(key),Some(network),false,Some(&different));
+        assert_eq!(old.frame.original_v1().job.class_id,other.frame.original_v1().job.class_id);
+        assert_eq!(other.execution.prompt,different);
+        assert_ne!(old.frame.plan_v1().original_claim,other.frame.plan_v1().original_claim);
+        for f in [&old,&other] {
+            assert_eq!(f.frame.original_v1().job.executor_pubkey,key);
+            f.frame.check_structure_v1(&f.frame.key_v1()).unwrap();
+            assert_eq!(f.frame.original_v1().job.prompt_token_ids_hash,
+                crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(f.rules.prompt_form,&f.execution.prompt).unwrap());
+        }
+    }
+
+    #[test]
     fn family_source_and_prefix_consumer_share_real_class_and_prefix_with_only_source_fault() {
         use crate::palw_tir_court_v1::*;
         let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x6d; 32]);

@@ -1,6 +1,6 @@
 //! Exact native aux codecs; no opaque row size stands for nested decoded demand.
 use super::*;
-use std::{collections::BTreeMap, io::Read, mem::size_of};
+use std::{io::Read,mem::size_of,collections::BTreeMap};
 impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         let mut sum = crate::palw_kernel_route_v1::PalwKernelRouteHeaderV1::scan_native_wire_v1(reader)?;

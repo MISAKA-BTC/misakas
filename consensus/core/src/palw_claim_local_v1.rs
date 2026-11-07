@@ -1186,3 +1186,23 @@ impl PalwOwnedValidatedClaimCheckpointV1 {
         })
     }
 }
+
+/// Read-only allocation facts of the actually returned owned checkpoint. Output
+/// fit is a necessary check, not a proof of the complete construction peak.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct PalwCheckpointOwnedFootprintV20{
+    pub heap_bytes:u64,pub canonical_bytes:u64,pub records:u64,pub material_rows:u64,pub material_bytes:u64,
+    pub input_references:u64,pub material_references:u64,
+}
+impl PalwOwnedValidatedClaimCheckpointV1{
+    pub fn allocation_footprint_v20(&self)->Result<PalwCheckpointOwnedFootprintV20,crate::palw_native_resource_v1::NativeCoverageV1>{
+        use crate::palw_native_resource_v1::{NativeHeapV1,NativeCoverageV1};
+        let overflow=||NativeCoverageV1::overflow::<PalwClaimLocalCheckpointV1>("owned checkpoint footprint");
+        let heap=self.checkpoint.native_heap_v1("actual owned checkpoint data");let heap_bytes=heap.bytes().ok_or(heap)?;
+        let canonical_bytes=borsh::object_length(&*self.checkpoint).map_err(|_|overflow())?as u64;
+        let material_bytes=self.checkpoint.material.values().try_fold(0u64,|n,raw|n.checked_add(raw.len()as u64).ok_or_else(overflow))?;
+        let input_references=self.checkpoint.records.values().try_fold(0u64,|n,r|n.checked_add(r.inputs.len()as u64).ok_or_else(overflow))?;
+        let material_references=self.checkpoint.records.values().try_fold(0u64,|n,r|n.checked_add(r.material.len()as u64).ok_or_else(overflow))?;
+        Ok(PalwCheckpointOwnedFootprintV20{heap_bytes,canonical_bytes,records:self.checkpoint.records.len()as u64,material_rows:self.checkpoint.material.len()as u64,material_bytes,input_references,material_references})
+    }
+}
