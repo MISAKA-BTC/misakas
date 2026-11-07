@@ -2224,6 +2224,10 @@ impl VirtualStateProcessor {
         if self.is_consensus_exiting.load(Ordering::Acquire) { Err(PalwLocalTransitionFaultV1::Shutdown) } else { Ok(()) }
     }
 
+    fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
+        if self.is_consensus_exiting.load(Ordering::Acquire) { Err(PalwLocalTransitionFaultV1::Shutdown) } else { Ok(()) }
+    }
+
     fn resolve_virtual(self: &Arc<Self>) -> Result<(), PalwLocalTransitionFaultV1> {
         self.check_shutdown_boundary()?;
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
