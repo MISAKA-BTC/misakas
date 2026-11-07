@@ -975,6 +975,75 @@ fn reserve_family_plans_inner_v2(
             book.book.reserve(&holding, hard).map_err(|e| refused(format!("supplier holding after material barrier: {e:?}")))?;
         }
     }
+    if new {
+        let barrier = family_material_barrier_v2(plans)?;
+        let source_ids = graph.packet_ids_v3();
+        #[cfg(test)]
+        {
+            let source_earliest = original.iter().filter(|p| source_ids.contains(&p.id)).map(|p| p.service_before).min();
+            let signer_earliest =
+                original.iter().filter(|p| p.cost.io > 0 && !source_ids.contains(&p.id)).map(|p| p.service_before).min();
+            let transfer_count = plans.iter().map(|p| p.row.targets.iter().map(|t| t.packets.len()).sum::<usize>()).sum::<usize>();
+            let total = plans.iter().map(|p| p.packets.len()).sum::<usize>();
+            eprintln!(
+                "[native-family-temporal-capacity] claim={} materialBarrier={} earliestOriginalSource={:?} earliestSigner={:?} familyTransfers={} familyHolding={} nativeBudget={:?}",
+                claim,
+                barrier,
+                source_earliest,
+                signer_earliest,
+                transfer_count,
+                total - transfer_count,
+                book.book.budget
+            );
+            for p in plans.iter() {
+                for w in &p.windows {
+                    let t = p.row.targets.iter().find(|t| t.id == w.target).unwrap();
+                    eprintln!(
+                        "[native-family-target-window] role={:?} target={} first={} stride={} transfers={} finish={} afterFinish={}",
+                        p.row.consent.terms.role,
+                        t.id,
+                        w.first_daa,
+                        w.span_daa,
+                        t.packets.len(),
+                        w.first_daa + (t.packets.len() as u64 - 1) * w.span_daa,
+                        w.first_daa + t.packets.len() as u64 * w.span_daa
+                    );
+                }
+            }
+        }
+
+        let mut sources = Vec::new();
+        let mut signers = Vec::new();
+        let mut holding = Vec::new();
+        for mut p in original {
+            if p.cost.io > 0 {
+                p.release_daa = p.release_daa.max(barrier);
+                if p.release_daa >= p.service_before {
+                    return Err(refused("material barrier cannot precede an existing Court early deadline"));
+                }
+            }
+            if source_ids.contains(&p.id) {
+                sources.push(p)
+            } else if p.cost.io > 0 {
+                signers.push(p)
+            } else {
+                holding.push(p)
+            }
+        }
+        let hard = book.claims.get(&claim).ok_or_else(|| refused("material barrier original lost"))?.hard_deadline_daa;
+        book.book.reserve(&signers, hard).map_err(|e| refused(format!("material to signer barrier: {e:?}")))?;
+        graph.bind_projection_v3(sources).map_err(refused)?.reserve_v3(&mut book.book, hard).map_err(refused)?;
+        book.book.reserve(&holding, hard).map_err(|e| refused(format!("original holding after material barrier: {e:?}")))?;
+        for plan in plans.iter() {
+            let holding = plan
+                .packets
+                .iter()
+                .filter(|p| !plan.row.targets.iter().any(|t| t.packets.contains(&p.id)))
+                .cloned()
+                .collect::<Vec<_>>();
+            book.book.reserve(&holding, hard).map_err(|e| refused(format!("supplier holding after material barrier: {e:?}")))?;
+        }
+    }
     book.check_live_v1().map_err(refused)
 }
 pub(super) fn family_material_barrier_v2(plans: &[FamilySupplierPlanV1]) -> Result<u64, PalwStateV2Error> {

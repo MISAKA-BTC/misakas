@@ -881,6 +881,52 @@ impl VirtualStateProcessor {
         })
     }
 
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    pub(super) fn palw_v2_accepted_objects_with_native_original_context_v19(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
+        escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        native_original_context: Option<&kaspa_consensus_core::palw_state_v2::PalwNativeOriginalInputContextV19<'_>>,
+    ) -> Result<
+        (
+            Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+            >,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+            >,
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
+            kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1,
+            std::collections::BTreeMap<kaspa_hashes::Hash64, Vec<kaspa_hashes::Hash64>>,
+        ),
+        PalwLocalTransitionFaultV1,
+    > {
+        kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
+            self.palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+                state,
+                state_params,
+                point,
+                objects,
+                block,
+                own_attempt_class,
+                round_fee_incomes,
+                escrow_settlements,
+                native_original_context,
+            )
+        })
+    }
+
     pub(super) fn palw_v2_accepted_objects_and_refunds_inner(
         &self,
         (state, state_params, point): (
@@ -978,6 +1024,53 @@ impl VirtualStateProcessor {
     }
 
     #[allow(clippy::type_complexity,clippy::too_many_arguments)]
+    pub(super) fn palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        // The class of the block's own attempt (from its header), `None` for a block with none: past
+        // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
+        // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+        round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
+        escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        native_original_context: Option<&kaspa_consensus_core::palw_state_v2::PalwNativeOriginalInputContextV19<'_>>,
+    ) -> Result<
+        (
+            Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+            Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+            >,
+            std::collections::BTreeMap<
+                kaspa_consensus_core::Hash64,
+                kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+            >,
+            kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
+            kaspa_consensus_core::palw_claim_local_v1::prefix_v1::PalwPrefixDependenciesV1,
+            std::collections::BTreeMap<kaspa_hashes::Hash64, Vec<kaspa_hashes::Hash64>>,
+        ),
+        PalwLocalTransitionFaultV1,
+    > {
+        self.palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+            state,
+            state_params,
+            point,
+            objects,
+            block,
+            own_attempt_class,
+            round_fee_incomes,
+            escrow_settlements,
+            None,
+        )
+    }
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub(super) fn palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

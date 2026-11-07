@@ -4594,7 +4594,7 @@ impl PalwChainStateV2 {
                 continue;
             }
             // Lane LG14-A: a claim a live dispute reservation holds owes none (DL-1's reservation row; empty below the fence).
-            if self.palw_legacy_dispute_holds_v1(id) || self.court_service_holds_retirement_v1(id, claim) {
+            if self.palw_legacy_dispute_holds_v1(id) {
                 continue;
             }
             // RFC-0010: the engine clocks a claim it tracks until the claim is licensed (it owes no V2 deadline).
@@ -5063,9 +5063,6 @@ impl PalwChainStateV2 {
         }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
-            if self.court_service_holds_retirement_v1(id, claim) {
-                continue;
-            }
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {

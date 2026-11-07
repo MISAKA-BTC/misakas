@@ -987,6 +987,17 @@ impl TransitionBuilder<'_> {
                 return Err(error);
             }
         }
+        // Native engine writes and admitted bound have succeeded. Observe
+        // the exact borrowed operation journal before publishing its delta.
+        if let Some(point) = self.claim_local_lock_point_v6
+            && let Err(error) = super::palw_claim_local_material_income_lineage_v7::observe_operation_v7(self, point, &journal)
+        {
+            let mut book = self.state.bond_budget.take().expect("existing native engine");
+            let restored = super::palw_claim_local_material_income_lineage_v7::restore_engine_v7(&mut book, &journal);
+            self.state.bond_budget = Some(book);
+            restored?;
+            return Err(error);
+        }
         self.journal_bond_budget(journal);
         Ok(Some(out))
     }
