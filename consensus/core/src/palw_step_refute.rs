@@ -4672,6 +4672,41 @@ pub fn check_execution_step_refutation_routed_v2(
     max_step_leaf_count: u64,
     bound_router: Option<u32>,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    match compare_authenticated_step_v1(refutation, weights, prompt_ids_opening, max_step_leaf_count, bound_router)? {
+        AuthenticatedStepComparisonV1::StructuralFault(verdict) => Ok(verdict),
+        AuthenticatedStepComparisonV1::Matches => Err(PalwStepRefuteError::NoFaultFound),
+        AuthenticatedStepComparisonV1::Mismatch(value_index) => {
+            let fault = PalwStepFaultV1::ComputationMismatch { value_index };
+            Ok(PalwStepRefutationVerdictV1 {
+                fault,
+                evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                    &refutation.binding.committed_execution_root,
+                    5,
+                    refutation.output_opening.leaf_index,
+                    fault,
+                ),
+            })
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AuthenticatedStepComparisonV1 {
+    StructuralFault(PalwStepRefutationVerdictV1),
+    Matches,
+    Mismatch(u32),
+}
+
+/// Compare one committed tile against deterministic recomputation. The caller
+/// binds the execution to the accepted claim and supplies its scoped weights.
+/// A match covers only this tile and the operands checked here.
+fn compare_authenticated_step_v1(
+    refutation: &PalwExecutionStepRefutationV1,
+    weights: &dyn PalwWeightOracleV1,
+    prompt_ids_opening: Option<&crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>,
+    max_step_leaf_count: u64,
+    bound_router: Option<u32>,
+) -> Result<AuthenticatedStepComparisonV1, PalwStepRefuteError> {
     use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1, check_step_refutation_capped_v1};
 
     let binding = &refutation.binding;
@@ -4685,7 +4720,7 @@ pub fn check_execution_step_refutation_routed_v2(
         },
     };
     match check_step_refutation_capped_v1(&structural, max_step_leaf_count) {
-        Ok(verdict) => return Ok(verdict),                              // structural conviction subsumes
+        Ok(verdict) => return Ok(AuthenticatedStepComparisonV1::StructuralFault(verdict)),
         Err(crate::palw_step_leg::PalwStepLegError::NoFaultFound) => {} // structurally honest
         Err(e) => return Err(e.into()),
     }
@@ -4708,19 +4743,10 @@ pub fn check_execution_step_refutation_routed_v2(
     let recomputed = recomputed_row
         .get(local_start..local_start + committed.len())
         .ok_or(PalwStepRefuteError::InputSetNotCanonical("recomputed row is shorter than the tile claims"))?;
-    if let Some(i) = recomputed.iter().zip(committed.iter()).position(|(a, b)| a != b) {
-        let fault = PalwStepFaultV1::ComputationMismatch { value_index: i as u32 };
-        return Ok(PalwStepRefutationVerdictV1 {
-            fault,
-            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
-                &binding.committed_execution_root,
-                5,
-                refutation.output_opening.leaf_index,
-                fault,
-            ),
-        });
-    }
-    Err(PalwStepRefuteError::NoFaultFound)
+    Ok(match recomputed.iter().zip(committed.iter()).position(|(a, b)| a != b) {
+        Some(i) => AuthenticatedStepComparisonV1::Mismatch(i as u32),
+        None => AuthenticatedStepComparisonV1::Matches,
+    })
 }
 
 /// **Step 2 of the one-move court at `out_coord`** — the anchor verified before the canonical input set is derived from it, and every

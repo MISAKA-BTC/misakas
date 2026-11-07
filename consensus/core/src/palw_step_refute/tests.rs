@@ -720,8 +720,6 @@ pub(crate) fn base0_matmul_weights() -> Vec<i8> {
 /// `InputSetNotCanonical` rather than arithmetic.
 pub(crate) fn base0_honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
     let p = base0_matmul_profile();
-    let mut ctx = context();
-    ctx.shape_profile_id = p.shape_profile_id();
     let w = base0_matmul_weights();
     let slots = p.global_node_count();
     let mut rows: Vec<Vec<Vec<u32>>> = vec![vec![Vec::new(); slots as usize]; 3];
@@ -735,6 +733,16 @@ pub(crate) fn base0_honest_execution() -> (PalwStepBindingV2, crate::palw_step_l
         row[2] =
             crate::palw_base0_ops::silu(&row[1].iter().map(|v| *v as i32).collect::<Vec<_>>()).into_iter().map(|v| v as u32).collect();
     }
+    let (binding, material) = commit_matmul_fixture(p, &rows);
+    (binding, material, rows)
+}
+
+fn commit_matmul_fixture(
+    p: PalwShapeProfileV3,
+    rows: &[Vec<Vec<u32>>],
+) -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1) {
+    let mut ctx = context();
+    ctx.shape_profile_id = p.shape_profile_id();
     let mut b = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
     for i in 0..b.expected_main_leaves() {
         let coord = canonical_step_coordinates(&p, &ctx, i).unwrap();
@@ -778,7 +786,122 @@ pub(crate) fn base0_honest_execution() -> (PalwStepBindingV2, crate::palw_step_l
         checkpoint_merkle_root: checkpoint_empty_root_v2(&ctx_hash),
         committed_execution_root: committed,
     };
-    (binding, material, rows)
+    (binding, material)
+}
+
+#[test]
+fn authenticated_a16_tile_distinguishes_wrong_arithmetic_from_altered_material() {
+    use crate::palw_artifact::{PalwArtifactInventoryV1, PalwArtifactOperandV1, PalwProvenOperandsV1, open_artifact_leaves_v1};
+    use crate::palw_base0_a16::A16QuantParams;
+    use crate::palw_shard_court_v1::{
+        PalwOneMoveClaimV2, PalwShardCourtError, PalwShardCourtVerdictV1, palw_one_move_verdict_bound_v2,
+    };
+
+    const WIDTH: usize = 32;
+    const TILE: usize = 16;
+    const BAD_VALUE: usize = 3;
+    let mut profile = base0_matmul_profile();
+    profile.gdn_nodes[0].kernel_semantics_id = kernel_semantics_id_v1(KDESC_A16_MATMUL_REQUANT);
+    let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 1 };
+    let params = A16QuantParams { multiplier: 1, shift: 0, zero: 7 };
+    let operand = |tensor_name: &str, row_start, bytes| PalwArtifactOperandV1 {
+        tensor_name: tensor_name.to_string(),
+        layer: Some(0),
+        row_start,
+        bytes,
+    };
+    // Two registered tiles. Each weight row has a single nonzero diagonal code.
+    // The verifier receives only the last tile's codes and quantization parameters.
+    let inventory = PalwArtifactInventoryV1::new(vec![
+        operand("blk.{layer}.w", 0, (0..TILE * WIDTH).map(|i| if i / WIDTH == i % WIDTH { 2 } else { 0 }).collect()),
+        operand(
+            "blk.{layer}.w",
+            (TILE * WIDTH) as u32,
+            (0..TILE * WIDTH).map(|i| if TILE + i / WIDTH == i % WIDTH { 2 } else { 0 }).collect(),
+        ),
+        operand("blk.{layer}.w.a16", 0, params.to_wire().repeat(TILE)),
+        operand("blk.{layer}.w.a16", (TILE * A16QuantParams::WIRE_BYTES) as u32, params.to_wire().repeat(TILE)),
+    ])
+    .unwrap();
+    let artifact_root = inventory.root();
+    let openings = open_artifact_leaves_v1(inventory.operands(), &[1, 3]).unwrap();
+    let proven = PalwProvenOperandsV1::from_openings_v1(&openings, artifact_root).unwrap();
+
+    let make_claim = |wrong_arithmetic| {
+        // These activations exceed int8. The diagonal matrix makes the expected
+        // A16 output independently calculable as 2 * input + 7.
+        let input: Vec<u32> = (200..200 + WIDTH as u32).collect();
+        let output: Vec<u32> = input.iter().map(|v| 2 * v + 7).collect();
+        let mut rows = vec![vec![input, output.clone(), output]; 3];
+        if wrong_arithmetic {
+            rows[2][1][TILE + BAD_VALUE] += 1;
+        }
+        let (binding, material) = commit_matmul_fixture(profile.clone(), &rows);
+        let accepted = PalwOneMoveClaimV2 {
+            execution_root: binding.committed_execution_root,
+            class_id: profile.shape_profile_id(),
+            artifact_root,
+        };
+        let evidence = build_refutation(&binding, &material, &rows, coord);
+        // Use the existing material encoding across the fixture's producer and
+        // independent checker boundary.
+        let wire = borsh::to_vec(&evidence).unwrap();
+        (accepted, borsh::from_slice::<PalwExecutionStepRefutationV1>(&wire).unwrap())
+    };
+    let (honest_claim, honest) = make_claim(false);
+    let (wrong_claim, wrong) = make_claim(true);
+    let compare =
+        |tile: &PalwExecutionStepRefutationV1| compare_authenticated_step_v1(tile, &proven, None, tile.binding.step_leaf_count, None);
+    let adjudicate = |tile: &PalwExecutionStepRefutationV1, claim: &PalwOneMoveClaimV2| {
+        palw_one_move_verdict_bound_v2(tile, &openings, None, honest.output_opening.leaf_index, claim, honest.binding.step_leaf_count)
+    };
+    assert_eq!(compare(&honest), Ok(AuthenticatedStepComparisonV1::Matches));
+    assert_eq!(compare(&wrong), Ok(AuthenticatedStepComparisonV1::Mismatch(BAD_VALUE as u32)));
+    assert_eq!(adjudicate(&honest, &honest_claim), Ok(PalwShardCourtVerdictV1::FalseAccusation));
+    assert_eq!(adjudicate(&wrong, &wrong_claim), Ok(PalwShardCourtVerdictV1::ExecutorGuilty));
+    assert!(matches!(adjudicate(&wrong, &honest_claim), Err(PalwShardCourtError::NotTheClaimsExecution { .. })));
+    let fault = PalwStepFaultV1::ComputationMismatch { value_index: BAD_VALUE as u32 };
+    assert_eq!(
+        check_execution_step_refutation_v1(&wrong, &proven),
+        Ok(PalwStepRefutationVerdictV1 {
+            fault,
+            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                &wrong_claim.execution_root,
+                5,
+                wrong.output_opening.leaf_index,
+                fault,
+            ),
+        })
+    );
+
+    let mut altered = honest.clone();
+    altered.output_preimage.values_le[4 * BAD_VALUE] ^= 1;
+    let not_committed = PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::LeafPreimageMismatch { leaf: "step tile" });
+    assert_eq!(compare(&altered), Err(not_committed.clone()));
+    assert_eq!(adjudicate(&altered, &honest_claim), Err(PalwShardCourtError::Refutation(not_committed.clone())));
+    let missing_params = PalwProvenOperandsV1::from_openings_v1(&openings[..1], artifact_root).unwrap();
+    assert_eq!(
+        compare_authenticated_step_v1(&honest, &missing_params, None, honest.binding.step_leaf_count, None),
+        Err(PalwStepRefuteError::Unadjudicable)
+    );
+    assert_eq!(
+        check_execution_step_refutation_v1(&altered, &missing_params),
+        Err(not_committed),
+        "authenticate the output before trying to read a missing operand"
+    );
+    let mut altered_openings = openings;
+    altered_openings[1].operand.bytes[0] ^= 1;
+    assert!(matches!(
+        palw_one_move_verdict_bound_v2(
+            &honest,
+            &altered_openings,
+            None,
+            honest.output_opening.leaf_index,
+            &honest_claim,
+            honest.binding.step_leaf_count,
+        ),
+        Err(PalwShardCourtError::ArtifactOpenings(_))
+    ));
 }
 
 /// An HONEST BASE-0 execution and the artifact openings a challenger would carry against it.
