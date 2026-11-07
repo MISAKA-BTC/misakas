@@ -1,4 +1,0 @@
-Independent Python3 stdlib vector regeneration: byte-identical PASS
-source_sha256=1d087885518f33d82c8817e15681ea6d4eb96a62b39262bfac9bf9d986361665
-regenerated_sha256=1d087885518f33d82c8817e15681ea6d4eb96a62b39262bfac9bf9d986361665
-records=[('initial_zero_aux_body_envelope', 754), ('continued_finish_with_lexicographic_aux', 1394), ('opaque_native_transaction_preimage', 686)]

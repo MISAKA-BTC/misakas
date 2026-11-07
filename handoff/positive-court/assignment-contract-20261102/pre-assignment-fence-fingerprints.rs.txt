@@ -1,6 +1,0 @@
-use kaspa_consensus_core::config::params::*;
-fn main() {
- for (name, p) in [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("testnet11", TESTNET11_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS), ("testnet12", palw_t12_shipped_params())] {
-  println!("{},{},{},{}", name, p.consensus_params_id(), p.consensus_schedule_id(), p.consensus_identity_id());
- }
-}

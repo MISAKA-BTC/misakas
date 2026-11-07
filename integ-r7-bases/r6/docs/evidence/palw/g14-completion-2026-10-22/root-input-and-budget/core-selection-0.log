@@ -1,6 +1,0 @@
-
-running 1 test
-test palw_tir_public_source_v1::parameter_cover_v1::native_owner_tests::native_original_parameter_cover_preserves_actual_all_root_relation ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4758 filtered out; finished in 0.70s
-

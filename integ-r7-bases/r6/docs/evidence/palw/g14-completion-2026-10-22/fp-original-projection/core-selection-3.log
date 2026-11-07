@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_derived_v1::tests::golden_vector_ids_are_frozen ... ok
-test palw_freeprompt_v3::tests::golden_vector_ids_are_frozen ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 4746 filtered out; finished in 0.00s
-

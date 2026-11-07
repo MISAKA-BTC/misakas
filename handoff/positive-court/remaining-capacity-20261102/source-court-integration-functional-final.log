@@ -1,8 +1,0 @@
-error: unexpected argument '--message-format' found
-
-  tip: 'test --message-format' exists
-
-Usage: cargo [+toolchain] [OPTIONS] [COMMAND]
-       cargo [+toolchain] [OPTIONS] -Zscript <MANIFEST_RS> [ARGS]...
-
-For more information, try '--help'.

@@ -1,8 +1,0 @@
-
-running 3 tests
-test ibd::row_stream::tests::row_snapshot_native_refusal_keeps_the_typed_local_capacity_cause ... ok
-test palw_snapshot_chunks::tests::row_snapshot_never_filters_unknown_or_duplicate_declarations ... ok
-test palw_snapshot_chunks::tests::row_snapshot_reserves_typed_shape_before_decode_and_preserves_capacity_failure ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 181 filtered out; finished in 0.01s
-

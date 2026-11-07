@@ -1,3 +1,0 @@
-Initial absolute --directory verification failed because macOS /var is a symlink; no source modification. Retried git apply from resolved temporary cwd.
-exit=0
-Both reconstructed sources match current source byte-for-byte.

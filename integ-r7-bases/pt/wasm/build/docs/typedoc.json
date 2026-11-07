@@ -1,8 +1,0 @@
-{
-    "$schema": "https://typedoc.org/schema.json",
-    "treatWarningsAsErrors": false,
-    "cleanOutputDir": true,
-    "disableSources": true,
-    "categoryOrder": ["*", "Other"],
-    "tsconfig": "./tsconfig.json"
-}

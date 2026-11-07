@@ -1,9 +1,0 @@
-
-running 4 tests
-test a_layout_that_is_not_the_programs_is_refused ... ok
-test an_honest_run_commits_through_the_builder_and_its_binding_verifies ... ok
-test the_closed_form_is_the_walk_on_every_program_layout_and_job ... ok
-test the_lanes_are_four_bytes_and_idx_is_unsigned ... ok
-
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
-

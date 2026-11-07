@@ -1,2 +1,0 @@
-$ cargo clippy -p misaka-palw-positive-contract --all-targets --offline -- -D warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.56s

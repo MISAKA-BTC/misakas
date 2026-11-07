@@ -1,8 +1,0 @@
-registration_source_sha256=7a07c81601189fecb0222f9190ee1a72c75d1002cfbf3b9a46923629503ac380
-
-running 3 tests
-test registration_state::tests::stopped_generation_cannot_send_to_or_purge_a_restarted_listener ... ok
-test registration_state::tests::last_full_state_replaces_scope_and_unregister_cannot_resurrect_it ... ok
-test registration_state::tests::churn_retains_current_registrations_without_command_history_or_tombstones ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s

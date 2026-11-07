@@ -1,7 +1,0 @@
-{
-  "patch_sha256": "c76487d62a4c13c1566b4fb8283791e91b5e885960fb1522ad5fbdbc69b9fc6f",
-  "reviewer": "positive_tests",
-  "source_equivalence": "153 rawarms/patterns/comments and156variant mappings checked; common3guards/2rollbackwrappers/tail unchanged, all11batchpre/post/signatures independently checked beyond verifier",
-  "scope": "Proceed-to-test only. No native/rules/schema/price changes. Actual default-stack improvement, golden/rollback/SDK runtime verification still pending",
-  "tests_executed": false
-}

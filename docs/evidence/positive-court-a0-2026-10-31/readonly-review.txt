@@ -1,8 +1,0 @@
-A0 contract read-only review, 2026-10-31
-Reviewer: subagent /root/positive_g14 (no edits or tests performed by reviewer)
-Initial findings:
-1. require_next did not reject a Direct-profile / wrong-version witness under an Exact descriptor.
-2. Public EvidenceFrame fields could bypass decode and payload length validation.
-3. AdmissionContext did not pin canonical job/execution/Miner/input, permitting a changed execution nonce to create another case budget.
-Additional interface clarifications: revalidate atomic preparation at current commit state; same-case/same-result idempotency versus different-result rejection; MinerSource duty/request binding; source signature authentication alone is not service authorization.
-Root applied fixes and added counterexamples. Follow-up review confirmed all three findings closed and interfaces clarified. No remaining critical A0 contract gap identified in this review. Native implementation, funding, consumers and execution correctness remain A1-A7 work.

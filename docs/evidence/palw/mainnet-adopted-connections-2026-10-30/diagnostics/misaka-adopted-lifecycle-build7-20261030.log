@@ -1,6 +1,0 @@
-
-running 1 test
-test palw_state_v2::tests::claim_local_rewards_v1::rfc23s2_legacy_actual_journal_source_survives_retirement_and_closes_at_first_maturity_block ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5364 filtered out; finished in 0.16s
-

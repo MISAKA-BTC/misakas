@@ -1,7 +1,0 @@
-{
-  "parent": "87b97e56594f2421bd07a7857c6223ac1879c726",
-  "file": "consensus/core/src/palw_tir_court_v1.rs",
-  "sha256": "9d3c4ff84182824964ce4ce4968b004948f82495e35f655a99bee39fbaa33990",
-  "patch_sha256": "35b572b2a9cef51892ff1dae29b5d3e18cb5f6c47b11ac51cb56c0a77b4838eb",
-  "exact_reconstruction": true
-}

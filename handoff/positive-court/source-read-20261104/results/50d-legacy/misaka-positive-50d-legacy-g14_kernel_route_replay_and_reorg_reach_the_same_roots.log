@@ -1,6 +1,0 @@
-
-running 1 test
-test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_replay_and_reorg_reach_the_same_roots ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1465 filtered out; finished in 5.26s
-

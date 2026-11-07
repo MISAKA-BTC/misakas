@@ -1,5 +1,0 @@
-# Preserve raw Cargo output, including its trailing blank line.
-*.log -whitespace
-
-# Preserve exact raw patch context (blank context lines carry one space).
-*.patch -whitespace

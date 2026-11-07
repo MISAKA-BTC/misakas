@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_state_v2::palw_monetary_material_fold_v1::tests::finite_provider_fee_sdk_signs_distinct_service_fee_and_atomic_sponsor_messages ... ok
-test palw_state_v2::palw_monetary_material_fold_v1::tests::finite_provider_fee_horizon_default_and_original_contract_are_separate ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5338 filtered out; finished in 0.01s
-

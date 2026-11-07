@@ -1,5 +1,0 @@
-wrote /tmp/misaka-hf-registration-20261031/gpt-neo-full-declared.palwtir (file digest 85afa99806fcf7b9de92e23f150fa2182b8d15d6636058208223a2337fbb4c112655ec6ba44a693836319ffc7ef966e1c92f7307daedcc7f49b0a415f9c61671)
-  layout          max_context 2048, checkpoint interval 65536, h_tile 64, 23 commit tiles ({64, 512} distinct), 4 state tiles
-  class id        07c7a10a741c0f2e92dbfa82174dbec890f33c895bcdcc6462de54cc2fc5813c4d916b07dd1c841066b0173bc67b820044319c78722b9839282b2fa02ce094ac
-  inventory root  dabe6aaa926bccd5143fe34c5b78ba258809527bcaf7a1a497873d36c40c4bdbde1a87b8868274b30a7fe56a63f2f78972de84d139e05f8cc3722cd5f20b0ffc
-  ADMISSIBLE      admission v10 at DAA 17400 (every fence this network schedules in force, palw_tir_v1 among them)

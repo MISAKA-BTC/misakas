@@ -1,6 +1,0 @@
-
-running 1 test
-test wide_profile_pin_rebuilds_on_both_pack_paths_and_cannot_relabel_an_artifact ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 6.16s
-

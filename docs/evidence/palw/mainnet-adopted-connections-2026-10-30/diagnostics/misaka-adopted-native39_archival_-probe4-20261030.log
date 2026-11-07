@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_native39_settlement_checkpoint_v1::tests::native39_archival_generic_policy_does_not_reuse_covered_quantity_for_new_effects ... ok
-test palw_native39_settlement_checkpoint_v1::tests::native39_archival_schema_preserves_exact_policy_clocks_and_concentration ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5363 filtered out; finished in 0.00s
-

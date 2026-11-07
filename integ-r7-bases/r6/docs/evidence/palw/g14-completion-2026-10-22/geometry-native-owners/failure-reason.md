@@ -1,1 +1,0 @@
-Compilation failed E0369: an extra > in btree_node_envelope_bytes_v1::<Hash64,Vec<Hash64>>>() parsed as comparison against (). Both failing source files/patch/commands/diagnostics are preserved. Repair removes exactly one extra >; quota/geometry logic and limits are unchanged.

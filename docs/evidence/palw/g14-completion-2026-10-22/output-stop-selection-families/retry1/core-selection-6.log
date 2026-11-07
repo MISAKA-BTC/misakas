@@ -1,6 +1,0 @@
-
-running 1 test
-test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::root_input_material_store_obeys_actual_retained_flat_and_merkle_forms ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4774 filtered out; finished in 1.01s
-

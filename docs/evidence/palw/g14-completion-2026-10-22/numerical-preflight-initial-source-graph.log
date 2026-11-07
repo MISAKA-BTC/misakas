@@ -1,9 +1,0 @@
-
-running 4 tests
-test palw_court_source_material_graph_v3::tests::short_body_tail_slots_are_unused_and_used_parts_match_the_native_cursor_rule ... ok
-test palw_court_source_material_graph_v3::tests::native_source_universe_and_all_role_streams_are_closed_without_owner_slots ... ok
-test palw_court_source_material_graph_v3::tests::projection_reload_and_repair_refuse_a_partial_packet_universe_atomically ... ok
-test palw_court_source_material_graph_v3::tests::relative_identity_excludes_actual_acceptance_but_binds_source_and_profile ... ok
-
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4728 filtered out; finished in 0.11s
-

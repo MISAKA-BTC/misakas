@@ -1,6 +1,0 @@
-{
-  "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-core-compatibility-library-l0jf62ar/libkaspa_consensus_core-307e14f11070efe4.rlib",
-  "sha256": "461b43233b91ae404e504d71f1af8824e4af11667ecf07b069687a4dc224fb4f",
-  "copied_from": "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet/target/release/deps/libkaspa_consensus_core-307e14f11070efe4.rlib",
-  "scope": "Preserved unchanged core input/compatibility types used by the native boundary harness, before later Cargo builds overwrite target artifacts."
-}

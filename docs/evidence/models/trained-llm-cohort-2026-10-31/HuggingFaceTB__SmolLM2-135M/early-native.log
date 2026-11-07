@@ -1,7 +1,0 @@
-
-running 1 test
-[hf-registration] HuggingFaceTB/SmolLM2-135M@93efa2f097d58c2a74874c7e644dbc9b0cee75a2 context=8192 class=7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625 root=8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4
-test pipeline::virtual_processor::tests::g14_registration_e2e::g14_downloaded_hf_artifact_registration_mined_and_replayed ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1235 filtered out; finished in 2.25s
-

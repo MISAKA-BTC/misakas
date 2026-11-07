@@ -1,7 +1,0 @@
-
-running 2 tests
-test gather_and_select_single_execution_read_sets_are_not_a_potential_cover ... ok
-test potential_cover_contains_every_sampled_native_finalize_parameter ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.08s
-

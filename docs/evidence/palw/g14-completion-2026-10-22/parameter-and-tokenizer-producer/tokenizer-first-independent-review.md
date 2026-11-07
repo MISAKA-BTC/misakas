@@ -1,7 +1,0 @@
-# Independent read review of initial producer.patch (before revision)
-
-Read only; no repo edits/build/test. Initial candidate had one blocking issue: final hunk removed existing generated native_resource_inventory_v1 child declaration in palw_tokenizer_table_stream_v1.rs, dropping its NativeHeap/WireScan impl. Keep that declaration. Reviewer also recommended real localchecker q−1/success-held/Drop-zero test: max_requests=0 tests a requested-capacity bound, not actual ticket ownership.
-
-Initial major semantics otherwise consistent by source inspection: pending_overrun before proof selection, key_insertions delta distinguishes duplicate membership from insert, all raw bytes still hashed through Invalid/WorkBoundExceeded and finish exact raw EOF, root equality checked before/after transitions, two-context equality required plus independent old Book. Parser maxdepth127 check before push; lex word16/UTF8 4. Two parsers active+rollback; p+3 sibling capacities cover retained output/clone/full expansion; codec90000 cap covers transient writer; map≤513p. Output NativeRetained keeps conservative construction lease. Producer hashes only path/present/node; source widths72/64/130 agree; defaults/parser/verifier hashes and actual CPU explicitly excluded.
-
-Parent subsequently reported inventory declaration restored and localchecker coverage added. This file records INITIAL read review, not an independent compile or read audit of later revision. No real measurement or complete grammar/fee claim.

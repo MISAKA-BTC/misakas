@@ -1,8 +1,0 @@
-
-running 3 tests
-test existing_sdk_builder_uses_trusted_wide_rules_and_preserves_tag61_message ... ok
-test narrow_sdk_carriers_stay_byte_identical_for_every_legacy_committable_dtype ... ok
-test wide_sdk_does_not_select_from_peer_scheme_or_inactive_unknown_rules ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
-

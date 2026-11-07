@@ -1,9 +1,0 @@
-    Finished `test` profile [unoptimized] target(s) in 0.25s
-     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
-
-running 2 tests
-test palw_state_v2::tests::court_deadline_workspace_v2::actual_court_timeout_capacity_refuses_before_copies_or_verdict_and_retry_keeps_original_outcome ... ok
-test palw_state_v2::tests::court_deadline_workspace_v2::actual_court_timeout_flags_off_parity_and_not_due_boundary_preserve_state_and_journal ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5493 filtered out; finished in 0.00s
-

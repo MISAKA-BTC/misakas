@@ -1,6 +1,0 @@
-(lldb) target create "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893"
-Current executable set to '/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893' (arm64).
-(lldb) command source -s 0 '/tmp/positive-a0-stack-prologues.lldb'
-Executing commands in '/tmp/positive-a0-stack-prologues.lldb'.
-(lldb) disassemble --name kaspa_consensus_core::palw_state_v2::objects::apply_object_inner --count 22
-error: Unable to find symbol with name 'kaspa_consensus_core::palw_state_v2::objects::apply_object_inner'.

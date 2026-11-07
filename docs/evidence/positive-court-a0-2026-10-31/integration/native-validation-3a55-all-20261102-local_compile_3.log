@@ -1,8 +1,0 @@
-
-running 3 tests
-test plan::compile_quote_v2::tests::actual_compile_const_slabs_row_groups_transpose_and_state_instances ... ok
-test plan::compile_quote_v2::tests::exact_and_one_below_compiler_caps_refuse_before_compile ... ok
-test plan::compile_quote_v2::tests::shared_vec_tree_arithmetic_overflow_is_fixed_and_nonallocating ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 53 filtered out; finished in 0.00s
-

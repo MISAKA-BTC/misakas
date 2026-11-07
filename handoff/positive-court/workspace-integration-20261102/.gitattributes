@@ -1,3 +1,0 @@
-# Preserve captured logs and patch context exactly as recorded.
-*.log -whitespace
-*.diff -whitespace

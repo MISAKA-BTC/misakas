@@ -1,5 +1,0 @@
-
-running 1 test
-test pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore ... 
-thread 'pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore' (4548682) has overflowed its stack
-fatal runtime error: stack overflow, aborting

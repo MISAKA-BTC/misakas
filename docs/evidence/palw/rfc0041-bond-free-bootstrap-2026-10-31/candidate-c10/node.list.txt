@@ -1,3 +1,0 @@
-pipeline::virtual_processor::tests::t12_round_lane_e2e::bond_free_bootstrap::rfc0041_production_recovery_pays_then_public_bonds_start_palw: test
-
-1 test, 0 benchmarks

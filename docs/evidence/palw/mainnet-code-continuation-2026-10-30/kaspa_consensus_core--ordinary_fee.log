@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_state_v2::palw_monetary_material_fold_v1::tests::ordinary_fee_physical_queue_updates_the_exact_covenant_payment_history ... ok
-test palw_state_v2::tests::settlement_liability_v1::ordinary_fee_fate_requires_exact_rooted_draw_timely_fate_and_no_clean_consent ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5338 filtered out; finished in 0.00s
-

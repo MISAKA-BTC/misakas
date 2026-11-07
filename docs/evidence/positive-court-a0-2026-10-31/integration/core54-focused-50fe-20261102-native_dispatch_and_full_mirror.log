@@ -1,9 +1,0 @@
-
-running 4 tests
-test palw_tir_registration_dispatch_v1::tests::exact_profile_and_selected_fence_route_without_narrow_reinterpretation ... ok
-test palw_tir_registration_dispatch_v1::tests::full_runtime_mirror_is_skipped_and_old_height_setter_clears_wide ... ok
-test palw_tir_registration_dispatch_v1::tests::legacy_errors_and_missing_runtime_mirror_keep_old_preflight_order ... ok
-test palw_tir_registration_dispatch_v1::tests::params_reject_every_full_mirror_substitution ... ok
-
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 5525 filtered out; finished in 0.08s
-

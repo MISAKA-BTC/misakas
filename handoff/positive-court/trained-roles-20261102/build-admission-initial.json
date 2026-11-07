@@ -1,8 +1,0 @@
-{
-  "status": "NOT_RUN",
-  "observed_free_bytes": 1059688448,
-  "required_initial_free_bytes": 1073741824,
-  "cargo_started": false,
-  "source": "original runner prelaunch assertion observed in tool output",
-  "subsequent_action": "preserve four exact previous own runtime binaries and release their regenerable cache aliases"
-}

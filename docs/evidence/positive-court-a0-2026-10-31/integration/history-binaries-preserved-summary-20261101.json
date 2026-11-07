@@ -1,9 +1,0 @@
-{
-  "files": 74,
-  "apparent_original_bytes": 2573434120,
-  "gzip_bytes": 728743053,
-  "unlinked_inode_groups": 74,
-  "free_bytes_after": 2960855040,
-  "manifest": "/Users/wata/.codex/worktrees/positive-court-a0/target/history-binaries-preserved-20261101/manifest.json",
-  "manifest_sha256": "12d1a2807ca56ff5c7debb889e91940712a2a9121f24036b09ff5ecd69062f77"
-}

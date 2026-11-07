@@ -1,8 +1,0 @@
-
-running 3 tests
-test palw_court_funding_preflight_v1::tests::mismatched_root_scope_signature_and_input_conservation_never_make_a_plan ... ok
-test palw_court_funding_preflight_v1::tests::actual_principal_is_not_fee_and_all_obligations_share_one_checked_budget ... ok
-test palw_court_funding_preflight_v1::tests::full_transaction_and_every_entry_fact_are_bound_beyond_the_raw_txid ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4736 filtered out; finished in 0.00s
-

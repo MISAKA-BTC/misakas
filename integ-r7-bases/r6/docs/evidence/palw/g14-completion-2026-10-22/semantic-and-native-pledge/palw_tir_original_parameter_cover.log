@@ -1,9 +1,0 @@
-
-running 4 tests
-test parameter_free_original_keeps_all_roots_but_has_no_model_byte_dependencies ... ok
-test every_original_budget_is_global_and_refuses_without_partial_success ... ok
-test substituted_registration_layout_or_header_does_not_authorize_an_original_quote ... ok
-test whole_original_relation_equals_every_native_named_cover_and_its_union ... ok
-
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
-

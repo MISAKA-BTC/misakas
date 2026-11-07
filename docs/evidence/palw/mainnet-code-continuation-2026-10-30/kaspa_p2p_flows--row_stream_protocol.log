@@ -1,6 +1,0 @@
-
-running 1 test
-test flow_context::row_stream_protocol_tests::row_stream_protocol_is_dormant_until_a_version_is_adopted ... ok
-
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 183 filtered out; finished in 0.00s
-

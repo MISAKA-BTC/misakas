@@ -1,6 +1,0 @@
-{
-  "error": "AssertionError: Rust source changed while frozen",
-  "phase": "before first cargo command",
-  "cause": "Wrapper rg inventory included newly copied .rs evidence snapshots under docs. No cargo or native executable was invoked.",
-  "repair": "Exclude docs/** from the actual workspace Rust inventory; preserve exact added source snapshots separately."
-}

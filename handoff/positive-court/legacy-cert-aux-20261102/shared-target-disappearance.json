@@ -1,9 +1,0 @@
-{
-  "observed_at_utc": "2026-11-02T10:49:27.118538+00:00",
-  "shared_target_exists": true,
-  "shared_debug_deps_exists": false,
-  "free_bytes": 133265387520,
-  "no_compression_completed": true,
-  "source_scope": "all source changes remain; generated shared artifacts disappeared after terminal disk-floor attempts, not restored as fresh cache",
-  "git_status": " M consensus/core/src/palw_native_resource_v1/generated.rs\n M consensus/core/src/palw_native_resource_v1/wire_kernel_aux.rs\n M scripts/drills/gen_rfc06_native_inventory.py\n M scripts/drills/gen_rfc06_native_wire.py\n?? consensus/core/tests/legacy_certification_aux_codec.rs\n?? handoff/positive-court/legacy-cert-aux-20261102/\n"
-}

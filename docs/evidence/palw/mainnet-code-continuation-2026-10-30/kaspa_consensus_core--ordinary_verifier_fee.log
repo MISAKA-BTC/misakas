@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_native_resource_v1::aux_registry_tests::ordinary_verifier_fee_rows_have_exact_versioned_aux_codecs ... ok
-test palw_state_v2::tests::settlement_liability_v1::ordinary_verifier_fee_deadline_refund_late_verdict_and_replay_conserve_escrow ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5338 filtered out; finished in 0.00s
-

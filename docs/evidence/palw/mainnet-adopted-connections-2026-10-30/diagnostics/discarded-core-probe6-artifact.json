@@ -1,6 +1,0 @@
-{
-  "classification": "superseded diagnostic-only test executable, rebuildable from probe6 source; current six-package build7 executables retained",
-  "file": "/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/agent-aa4dfb62c6c3c943d/target-rc/debug/deps/kaspa_consensus_core-210c32867c0e9198",
-  "sha256": "d480f80cc45aae84014464bd56cc8b4e19b63cf35afe962989d9235f8ebb115b",
-  "bytes": 241835440
-}

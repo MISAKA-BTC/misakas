@@ -1,8 +1,0 @@
-node::owned_artifact_params_v2::loaded::tests::bad_actual_root_retries_keep_read_work_and_claims_until_attempt_cap: test
-node::owned_artifact_params_v2::loaded::tests::bridge_floor_precedes_prepared_path_and_terminal_serve_preserves_upstream_usage: test
-node::owned_artifact_params_v2::loaded::tests::header_source_compile_and_params_failures_keep_precharges_and_release_whole_guard: test
-node::owned_artifact_params_v2::loaded::tests::regular_file_to_private_source_compile_native_values_and_wide_cpu_endpoints: test
-node::owned_artifact_params_v2::loaded::tests::truncated_regular_file_is_refused_by_split_table_before_any_owned_payload: test
-node::owned_artifact_params_v2::loaded::tests::unsupported_build_explicitly_refuses_without_startup_success_claim: test
-
-6 tests, 0 benchmarks

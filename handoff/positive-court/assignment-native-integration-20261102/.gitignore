@@ -1,2 +1,0 @@
-# Exact raw captures remain local; tracked gzip files preserve every byte.
-*.log

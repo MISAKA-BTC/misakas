@@ -1,8 +1,0 @@
-palw_producer_view_guard_v1_sha256=d5a8ce5b2fc069bd7d3850d91181414b6756e9f8d2cf7e2df847c2750ad3b1f7
-palw_producer_epoch_guard_v1_sha256=5a2f47e97db3e554e2bac8a75c14a7c50aef2101d778081b3d31ca8b21032ebb
-
-running 2 tests
-test tests::producer_publication_allows_parent_progress_but_rejects_replaced_import ... ok
-test tests::producer_context_hold_does_not_authorize_new_execution ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

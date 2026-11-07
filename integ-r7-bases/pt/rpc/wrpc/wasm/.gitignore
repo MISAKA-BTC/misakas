@@ -1,6 +1,0 @@
-/target
-/Cargo.lock
-/web/kaspa-rpc
-/nodejs/kaspa-rpc
-/nodejs/node_modules
-/nodejs/package-lock.json

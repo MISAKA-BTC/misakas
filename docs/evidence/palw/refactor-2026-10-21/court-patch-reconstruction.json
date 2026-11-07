@@ -1,8 +1,0 @@
-{
-  "base": "1b83142a2",
-  "reconstructed_directory": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-court-patch-audit-s_kdp288",
-  "patch_sha256": "db125184f1ed371fa350f0e5218562e6b26dd6964401dfaae729894bf156b418",
-  "files": 36,
-  "matched": 36,
-  "meaning": "Exact byte reconstruction of the changed source files, including the new outbox. Not an execution correctness certificate."
-}

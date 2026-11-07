@@ -1,8 +1,0 @@
-{
-  "qualification": "INCOMPLETE before selected test artifact; harness did not run",
-  "compiler_errors": [],
-  "script_exit_code": 1,
-  "cargo_exit_and_stop": "not serialized before artifact-count assertion",
-  "log": "source-court-integration-functional-r2.log",
-  "log_sha256": "a3b9844bc984c9f069c4d63cabb85388979fe1ab3ef88626afcd283a7b84f6cd"
-}

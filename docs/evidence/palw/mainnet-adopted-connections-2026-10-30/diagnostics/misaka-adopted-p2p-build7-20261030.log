@@ -1,8 +1,0 @@
-
-running 3 tests
-test ibd::palw_snapshot_chunks::row_fallback_tests::rfc37_fallback_is_once_for_explicit_unavailability_and_never_authentication_failure ... ok
-test palw_snapshot_chunks::tests::rfc37_early_row_failure_checks_the_owned_disk_prefix_before_blaming_peer ... ok
-test palw_snapshot_chunks::row_stream_peer_tests::rfc37_real_peer_serves_bounded_chunks_and_imports_the_same_native_state ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 184 filtered out; finished in 1.14s
-

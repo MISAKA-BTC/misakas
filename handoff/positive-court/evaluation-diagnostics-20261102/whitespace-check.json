@@ -1,7 +1,0 @@
-{
-  "full_check_exit": 2,
-  "full_check_stdout": "handoff/positive-court/evaluation-diagnostics-20261102/pythia-diagnostics-first.log:25: new blank line at EOF.\nhandoff/positive-court/evaluation-diagnostics-20261102/runtime-diagnostics-r2.log:476: trailing whitespace.\n+test evaluation_diagnostics_tests::actual_work_read_and_workspace_refusals_keep_legacy_outcomes_and_charges ... \nhandoff/positive-court/evaluation-diagnostics-20261102/runtime-diagnostics-r3.log:489: new blank line at EOF.\nhandoff/positive-court/evaluation-diagnostics-20261102/runtime-measured-terms.log:489: new blank line at EOF.\n",
-  "non_raw_log_check_exit": 0,
-  "non_raw_log_check_stdout": "",
-  "raw_logs_preserved_unchanged": true
-}

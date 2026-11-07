@@ -1,7 +1,0 @@
-
-running 2 tests
-test palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::failed_step_increments_and_refused_skip_observes_no_bytes ... ok
-test palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::observed_memory_port_keeps_legacy_error_kind_and_text ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5527 filtered out; finished in 0.00s
-
