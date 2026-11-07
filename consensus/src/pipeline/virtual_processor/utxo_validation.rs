@@ -346,9 +346,12 @@ impl PalwEscrowSpendLocksV1 {
             }
             // Cross-purpose exclusivity: neither legacy escrow nor A/C may
             // count a second locked input as the first account's fee funding.
-            if self.rows.contains_key(&outpoint) || self.assignment.contains_key(&outpoint) {
-                locked_count += 1;
-                if locked_count > 1 || (self.rows.contains_key(&outpoint) && self.assignment.contains_key(&outpoint)) {
+            let kinds = usize::from(case_locked)
+                + usize::from(self.rows.contains_key(&outpoint))
+                + usize::from(self.assignment.contains_key(&outpoint));
+            if kinds != 0 {
+                locked_count += kinds;
+                if locked_count > 1 {
                     return Some(outpoint);
                 }
             }
@@ -1135,6 +1138,91 @@ impl VirtualStateProcessor {
         Ok((spends, owner))
     }
 
+    /// Qualify only a literal op12 whose first input is the rooted Case coin.
+    /// Local archive/capacity faults propagate outside transaction rejection so
+    /// pruning or resource pressure cannot change the accepted UTXO set.
+    fn prepare_case_source_spends_v2(
+        &self,
+        state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        parent: BlockHash,
+        txs: &[Transaction],
+        view: &impl UtxoView,
+        daa: u64,
+        locks: &PalwEscrowSpendLocksV1,
+    ) -> Result<
+        (
+            std::collections::HashMap<TransactionId, kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2>,
+            Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+        ),
+        NativeCoverageV1,
+    > {
+        use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::reserve_native_requests_v1,
+            palw_state_v2::{PalwStateV2Error, QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2},
+        };
+        let mut spends = std::collections::HashMap::new();
+        let mut owner: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1> = None;
+        let Some(state) = state else { return Ok((spends, owner)) };
+        if locks.positive_case.is_empty()
+            || locks.assignment_invalid
+            || !self.palw_state_params_v2.as_ref().is_some_and(|params| params.settlement_once_active_at(daa))
+        {
+            return Ok((spends, owner));
+        }
+        let unavailable = |detail| NativeCoverageV1::unsupported::<Self>("Case source spend archive", detail);
+        for tx in txs {
+            if tx.payload.get(..3) != Some(&[1, 0, 176])
+                || tx.payload.get(7) != Some(&12)
+                || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            {
+                continue;
+            }
+            let Some(funding) = tx.inputs.first().and_then(|input| locks.positive_case.get(&input.previous_outpoint)) else {
+                continue;
+            };
+            // The fixed op12 Case field follows its version, kind and
+            // Assignment ID. Reject foreign/missing Case tags before I/O.
+            if tx.payload.get(72) != Some(&1) || tx.payload.get(73..137) != Some(funding.consent.case.0.0.as_slice()) {
+                continue;
+            }
+            let bytes = (tx.inputs.len() as u64)
+                .checked_mul(size_of::<UtxoEntry>() as u64)
+                .ok_or_else(|| NativeCoverageV1::overflow::<UtxoEntry>("Case source populated inputs"))?;
+            let mut entry_owner = reserve_native_requests_v1(bytes)?.ok_or_else(|| unavailable("populated input owner"))?;
+            let mut entries = Vec::new();
+            entries.try_reserve_exact(tx.inputs.len()).map_err(|_| unavailable("populated input allocation"))?;
+            for input in &tx.inputs {
+                let Some(entry) = view.get(&input.previous_outpoint) else { break };
+                entry_owner.grow_memory_v1(entry.script_public_key.script().len() as u64)?;
+                entries.push(entry);
+            }
+            if entries.len() != tx.inputs.len() {
+                continue;
+            }
+            let backing = match self.prepare_committed_case_history_v2(parent, state, (funding.consent.case, None)) {
+                Ok(Some(kaspa_consensus_core::palw_state_v2::NativeAssignedCaseBackingV2::Committed(backing))) => backing,
+                Err(E::Resource(why)) => return Err(why),
+                Err(E::InvalidContinuation) => continue,
+                _ => return Err(unavailable("actual selected-parent Case history is unavailable")),
+            };
+            let spend = match qualify_case_source_spend_v2(state, &backing, tx, &entries, daa) {
+                Ok(spend) => spend,
+                Err(PalwStateV2Error::NativeResource(why)) => return Err(why),
+                Err(PalwStateV2Error::NativeContextUnavailable(_)) => return Err(unavailable("Case replay context is unavailable")),
+                Err(_) => continue,
+            };
+            let bytes = (4 * size_of::<(TransactionId, QualifiedCaseSourceSpendV2)>()) as u64;
+            match &mut owner {
+                Some(lease) => lease.grow_memory_v1(bytes)?,
+                None => owner = Some(reserve_native_requests_v1(bytes)?.ok_or_else(|| unavailable("qualified spend map owner"))?),
+            }
+            spends.try_reserve(1).map_err(|_| unavailable("qualified spend map allocation"))?;
+            spends.insert(tx.id(), spend);
+        }
+        Ok((spends, owner))
+    }
+
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
@@ -1150,6 +1238,7 @@ impl VirtualStateProcessor {
             pov_daa_score,
             case_source_state,
             None,
+            case_source_state,
         )
     }
 
@@ -1164,6 +1253,7 @@ impl VirtualStateProcessor {
         pov_daa_score: u64,
         case_source_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
+        case_source_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<(), NativeCoverageV1> {
         let relay_plan = ctx.relay_fee_plan.take();
         let accepting = ctx

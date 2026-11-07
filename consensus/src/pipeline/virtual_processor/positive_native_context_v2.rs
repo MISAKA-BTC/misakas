@@ -973,8 +973,11 @@ impl PositiveCarrierPhaseTwoV2 {
             let mut initial_c = None;
             let output = if let Some(physical) = relay_cap {
                 let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], physical.max_frame_bytes) else { continue };
-                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. }) {
-                    continue; // Other purposes need their own original account owner.
+                let case_relay = body.terms.funding_purpose == RelayFundingPurposeV2::CaseC;
+                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. })
+                    && !(case_relay && matches!(body.terms.target, RelayTargetV2::Continuation { .. }))
+                {
+                    continue;
                 }
                 if let Some(state) = selected_parent_state {
                     pending_relay = processor.check_exact_relay_archive_v2(
@@ -1224,6 +1227,12 @@ impl PositiveCarrierPhaseTwoV2 {
             };
             let action = match open_carriage {
                 Some((carriage, material)) => action.with_original_open_carriage_v2(carriage, material)?,
+                None => action,
+            };
+            let action = match case_backing {
+                Some(backing) => action
+                    .with_native_case_backing_v2(backing)
+                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("native Case predecessor owner", &format!("{why:?}")))?,
                 None => action,
             };
             let action = match case_backing {

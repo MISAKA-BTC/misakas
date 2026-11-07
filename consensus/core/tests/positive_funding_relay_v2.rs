@@ -358,6 +358,7 @@ fn native_fixed_row_scanner_matches_all_targets_and_optional_bound_package() {
             RelayTargetV2::Continuation { original_funding, predecessor, original_contract, .. } => {
                 (original_funding, Some(predecessor), original_contract)
             }
+            RelayTargetV2::InitialAssignment { bundle, .. } => (body.terms.funding_outpoint, None, bundle),
             _ => (body.terms.funding_outpoint, None, d(74)),
         };
         let custody = FundingRelayCustodyRowV2 {

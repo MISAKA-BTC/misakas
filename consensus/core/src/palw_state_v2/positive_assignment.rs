@@ -2023,6 +2023,33 @@ impl TransitionBuilder<'_> {
         Ok(Some(checked))
     }
 
+    fn check_initial_assignment_relay_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+        bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
+        (funding, amount): (NativeOutpoint, u64),
+        payer_key: &[u8; PUBKEY_BYTES],
+    ) -> Result<Option<CheckedInitialFundingRelayV2>, PalwStateV2Error> {
+        if !action.rules().funding_relay_profile().requires_relay() {
+            return Ok(None);
+        }
+        let checked =
+            self.check_pending_initial_f_relay_v2(ctx, action, RelayFundingPurposeV2::PosterA, funding, payer_key, &|terms| {
+                crate::palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2(
+                    terms,
+                    bundle,
+                    funding,
+                    amount,
+                    ctx.daa_score,
+                )
+            })?;
+        if checked.service_cutoff < bundle.terms.reserve_until_daa {
+            return Err(refusal("initial Assignment relay does not cover the signed reservation"));
+        }
+        Ok(Some(checked))
+    }
+
     fn same_block_case_relay_material_v2(
         &self,
         assignment: &AssignmentRow,

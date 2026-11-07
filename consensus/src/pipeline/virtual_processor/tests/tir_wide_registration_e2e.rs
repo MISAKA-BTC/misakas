@@ -653,12 +653,28 @@ fn isolated_wide_carrier_origin_boxed_verification(
         assert_eq!(origin.daa_score, mined.env.chain.daa_of(sink));
         assert_eq!(origin.door, PalwClassRegistrationDoorV1::Tir);
         assert_eq!(origin.admission_digest, Some(palw_class_admission_digest_v1(&**admission).unwrap()));
+        {
+            use super::super::processor::positive_assignment_archive::tir_registration_admission_bytes_v2;
+            use kaspa_consensus_core::palw_class_registration_origin_v1::palw_class_admission_bytes_digest_v1;
+            use misaka_palw_positive_contract::identity::Digest;
+
+            let class = Digest(class_id.as_bytes());
+            let artifact = Digest(class_row.artifact_root.as_bytes());
+            let payload = &mined.carrier.payload;
+            let literal = tir_registration_admission_bytes_v2(payload, class, artifact).unwrap();
+            assert_eq!(Some(palw_class_admission_bytes_digest_v1(literal)), origin.admission_digest);
+            assert!(tir_registration_admission_bytes_v2(&payload[..32], class, artifact).is_none());
+            let mut wrong_artifact = artifact;
+            wrong_artifact.0[0] ^= 1;
+            assert!(tir_registration_admission_bytes_v2(payload, class, wrong_artifact).is_none());
+        }
         // registered() already checked this exact carrier's accepted transaction
         // entry and its class-table writer at the same accepting DAA.
         let expected_root = state.state_root();
         let expected_record = state.tir_class_v1(&class_id).cloned().unwrap();
         let expected_class = class_row.clone();
         let change = TransactionOutpoint::new(mined.carrier.id(), 0);
+        let carrying_block = mined.carrying.header.hash;
         let time = mined.env.chain.ctx.simulated_time;
         let nonce = mined.env.chain.nonce_for_reopen();
         drop(mined);
@@ -674,6 +690,27 @@ fn isolated_wide_carrier_origin_boxed_verification(
         assert_eq!(restored.tir_class_v1(&class_id), Some(&expected_record));
         assert_eq!(palw_class_registration_origin_row_v1(restored.kernel_route(), &class_id), Some(origin));
         assert!(reopened.ctx.consensus.get_virtual_utxo_entry(change).is_some());
+
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1};
+        use misaka_palw_positive_contract::identity::Digest;
+        let limit = 1 << 30;
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: limit }));
+        let vp = reopened.vp();
+        let class = Digest(class_id.as_bytes());
+        assert!(vp.discover_tir_registration_archive_v2(sink, &restored, class, limit, 0).unwrap().is_none());
+        assert!(vp.discover_tir_registration_archive_v2(sink, &restored, class, 0, limit).unwrap().is_none());
+        let discovered = vp.discover_tir_registration_archive_v2(sink, &restored, class, limit, limit).unwrap().unwrap();
+        assert_eq!(discovered.registration.digest.0, origin.admission_digest.unwrap().as_bytes());
+        assert_eq!(discovered.registration.origin.accepting_block.0, sink.as_bytes());
+        assert_eq!(discovered.registration.origin.carrier_block.0, carrying_block.as_bytes());
+        assert_eq!(discovered.registration.origin.carrier_transaction.0, change.transaction_id.as_bytes());
+        let acceptance = vp.acceptance_data_store.get(sink).unwrap();
+        let ordinal = acceptance
+            .iter()
+            .flat_map(|block| &block.accepted_transactions)
+            .position(|tx| tx.transaction_id == change.transaction_id)
+            .unwrap();
+        assert_eq!(discovered.registration.origin.accepted_tx_ordinal as usize, ordinal);
     })
 }
 

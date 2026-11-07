@@ -1995,6 +1995,12 @@ impl Params {
                 h.write(b"assignment-native-preimages-v2");
                 h.write(preimages.root().as_byte_slice());
             }
+            if let Some(capacity) = fence.service_capacity {
+                h.write(b"assignment-service-capacity-v2");
+                for dimension in capacity.dimensions_v2() {
+                    h.write(dimension.to_le_bytes());
+                }
+            }
         }
         if let Some(fence) = &self.palw_positive_funding_relay_v2 {
             h.write(b"palw_positive_funding_relay_v2");
@@ -5746,6 +5752,12 @@ impl Params {
             if let Some(preimages) = &fence.native_preimages {
                 h.write(b"assignment-native-preimages-v2");
                 h.write(preimages.root().as_byte_slice());
+            }
+            if let Some(capacity) = fence.service_capacity {
+                h.write(b"assignment-service-capacity-v2");
+                for dimension in capacity.dimensions_v2() {
+                    h.write(dimension.to_le_bytes());
+                }
             }
         }
         if let Some(fence) = palw_positive_funding_relay_v2 {
