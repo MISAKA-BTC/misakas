@@ -1,0 +1,15 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/positive-contract)
+    Finished `test` profile [unoptimized] target(s) in 4.66s
+     Running tests/execution_record.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/execution_record-0c846fbd06b29fca)
+
+running 6 tests
+test independent_python_struct_pack_vector_matches_every_record_byte ... ok
+test record_result_artifact_execution_and_decode_bindings_cannot_be_substituted ... ok
+test fixed_record_has_no_class_program_job_or_second_dtype_and_preserves_u32_ids ... ok
+test truncation_trailing_bytes_budget_and_hostile_counts_are_rejected_without_token_allocation ... ok
+test framing_and_binding_do_not_assert_arithmetic_or_terminal_correctness ... ok
+test unknown_magic_and_contract_versions_are_not_old_capture_fallbacks ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -18,6 +18,10 @@ extern crate self as kaspa_consensus_core;
 #[path = "../tests/palw_tir_fixture_common.rs"]
 pub(crate) mod palw_tir_corpus_fixture_v1;
 
+// Pure bounded Positive checker; no mapped artifacts or model runtime.
+pub mod palw_positive_check_v2;
+pub mod palw_positive_contract_v2;
+
 pub mod palw_mergeset_v1;
 pub mod palw_native_readiness_v1;
 // Pure bounded Positive checker; no mapped artifacts or model runtime.
