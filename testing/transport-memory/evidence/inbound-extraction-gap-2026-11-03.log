@@ -1,0 +1,23 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on artifact directory
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/lib.rs (/tmp/misaka-transport-target/debug/deps/misaka_transport_memory_harness-5edf3293e2221b36)
+
+running 1 test
+test inbound_gap_tests::queue_only_ticket_must_outlive_production_payload_extraction ... OWNER_GAP charged_in_queue=80608 live_payload_heap=80184 bank_after_extraction=0
+
+thread 'inbound_gap_tests::queue_only_ticket_must_outlive_production_payload_extraction' (1165823) panicked at src/inbound_gap_tests.rs:112:5:
+KNOWN GAP: outer-only lease returned while extracted payload remains alive
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    inbound_gap_tests::queue_only_ticket_must_outlive_production_payload_extraction
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
