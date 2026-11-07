@@ -1,4 +1,4 @@
-   Compiling misaka-transport-memory-harness v0.1.0 (/Users/wata/.codex/worktrees/oom-transport/MISAKA-testnet/testing/transport-memory)
+   Compiling misaka-transport-memory-harness v0.1.0 (<checkout>/testing/transport-memory)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
      Running unittests src/lib.rs (/tmp/oom-transport-target/debug/deps/misaka_transport_memory_harness-8c464033c6f84546)
 

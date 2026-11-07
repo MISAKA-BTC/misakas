@@ -8,12 +8,12 @@
 
 | 対象 | この時点の状態 | 言える範囲 |
 |---|---|---|
-| production 95 / 先行65 | PID `1616922`、invocation `3c3c023c46014ee0be042c9022fdc34a`、実行ファイル `/root/t12-rel/65c52b77772f/bin/kaspad` | encoder の大きな buffer 保持への先行対応。Node 全体の予約・readiness・新 GC 修正を配備したとは扱わない |
-| 中央統合候補 | `/Users/wata/.codex/worktrees/oom-integration/MISAKA-testnet`、branch `codex/oom-integration`、HEAD `5494107fb71b098824317e9281a9bbc35bafff4b` | 後述の段階別 build/実試験に合格。production での持続的負荷・reorg・実モデル実行の合格証拠ではない |
-| IBM の統合 release | root が別 source/target で準備中 | 浅い65 snapshot からの clone が終了128となり staging を診断中。release artifact 完成・配備成功とは記録しない。live Node 不変 |
-| Linux 5.104 の DHAT 診断 | 65 + heap-only timer patch の隔離 build、jobs=1 で進行中 | 小 smoke 2 ケース成功は root 報告。実 Node の DHAT report は未取得。DB copy も未検証 |
+| 公開 Node / 先行65 | canary で同一稼働世代を確認。実行ファイルの SHA-256 は下記 | encoder の大きな buffer 保持への先行対応。Node 全体の予約・readiness・新 GC 修正を配備したとは扱わない |
+| 中央統合候補 | commit `5494107fb71b098824317e9281a9bbc35bafff4b` | 後述の段階別 build/実試験に合格。production での持続的負荷・reorg・実モデル実行の合格証拠ではない |
+| 別 Linux ホストの統合 release | root が別 source/target で準備中 | 浅い65 snapshot からの clone が終了128となり staging を診断中。release artifact 完成・配備成功とは記録しない。live Node 不変 |
+| 隔離 Linux ホストの DHAT 診断 | 65 + heap-only timer patch の隔離 build、jobs=1 で進行中 | 小 smoke 2 ケース成功は root 報告。実 Node の DHAT report は未取得。DB copy も未検証 |
 
-95 の実行ファイル SHA-256 は `4cba41363cdbe8c8ce05c8b10d8829965b3d1cb38ee43c5b72d0dac1ed72e0a8`。65 の source 証跡は12,621 files、source proof SHA-256 `7c49ad2f24e1b1860f50dce3f8fd917e6b4f4f67da1b5818a3ab81c92591d309`。旧4128は通常 shutdown が20分停止待ちとなり、root の記録では第3回 SIGINT による application forced exit、SIGKILL は不使用。独立した cold app backup と SHA/inode 証跡を保持し、元の derived UTXO index は退避、65 で再構築した。正常終了の根因修復を示すものではない。
+公開 Node の実行ファイル SHA-256 は `4cba41363cdbe8c8ce05c8b10d8829965b3d1cb38ee43c5b72d0dac1ed72e0a8`。65 の source 証跡は12,621 files、source proof SHA-256 `7c49ad2f24e1b1860f50dce3f8fd917e6b4f4f67da1b5818a3ab81c92591d309`。旧4128は通常 shutdown が20分停止待ちとなり、root の記録では第3回 SIGINT による application forced exit、SIGKILL は不使用。独立した cold app backup と SHA/inode 証跡を保持し、元の derived UTXO index は退避、65 で再構築した。正常終了の根因修復を示すものではない。
 
 production の identity は最新 canary で以下と一致した。
 
@@ -40,7 +40,7 @@ LLM/モデル計算の暗号学的正しさ証明は導入しない。モデル�
 
 最終 canary の PID/invocation/executable は不変、RPC `isSynced=true` / `isUtxoIndexed=true`、public backend の selected head context と index が一致し、address projection lag は0だった。一方 `Pss_Anon=9,225,188 kB`、`LazyFree=583,504 kB`、memory event の `high=1951` / `oom=0` / `oom_kill=0` を記録した。`MemoryHigh=9,663,676,416` / `MemoryMax=10,737,418,240` / `MemorySwapMax=6,442,450,944` は維持されていた。**OOM counter が増えていないことを、余裕がある・増加が解消した証拠とは扱わない。** PSS/LazyFree/cgroup 値は異なる量であり、単純な差引きで live heap を断定しない。
 
-同じ最終観測の `receiptBlocks=0`、`laneLastWorkDaa=19,254`、`exec-priced-attempt=0`。95 自身は producer off / draws0 / produced0 / panel false。過去の attempt が lane window に残ることは、現在の実モデル実行・公開 chain での新たな認証済み work 復旧を意味しない。
+同じ最終観測の `receiptBlocks=0`、`laneLastWorkDaa=19,254`、`exec-priced-attempt=0`。公開 Node 自身は producer off / draws0 / produced0 / panel false。過去の attempt が lane window に残ることは、現在の実モデル実行・公開 chain での新たな認証済み work 復旧を意味しない。
 
 ## 統合候補で実装・レビューした範囲
 
@@ -58,7 +58,7 @@ LLM/モデル計算の暗号学的正しさ証明は導入しない。モデル�
 
 ## 中央の actual build / 試験
 
-証跡ディレクトリ: `/tmp/misaka-t12-oom-20261102/`。試験は root が資源枠を管理して実行した。下表は**段階別の実行ログ**であり、最終 HEAD に対する全 suite 一括実行や全 feature の合格表ではない。異なる filter の重複や child test を合計して独立試験数を水増ししない。`running 0 tests` は合格対象として数えない。
+証跡原本は非公開で保存し、下表に識別名とハッシュを記載した。試験は運用担当者が資源枠を管理して実行した。下表は**段階別の実行ログ**であり、最終 HEAD に対する全 suite 一括実行や全 feature の合格表ではない。異なる filter の重複や child test を合計して独立試験数を水増ししない。`running 0 tests` は合格対象として数えない。
 
 | 対象 / filter | 実際の結果 | ログ |
 |---|---|---|
@@ -87,9 +87,9 @@ GC の中間 check は ConsensusSession に追加 API が直接見えない `E05
 
 ## モデル実行・private branch と identity 診断
 
-B0 の保存観測（2026-11-02 12:09 UTC）は PID136821 / source30acb77e23f8 / P2P `6a349e2d-5fb0-4606-92bc-36579ac66f9b`、DAA19,315、`isSynced=true`、draws56 / produced56 / receipts0。近い時刻の公開側はDAA19,364。params/schedule/genesis は同じでも、B0 は既知 public head を `DominanceViolation` で拒否し、自枝で Qwen 生成を続けていた。`COURT_RETENTION_BELOW_GUARANTEE raw20607 < required20608` も記録された。保存ログ SHA-256 は `dfb954a1791f6405a0d48145d9f3be44b053d401fbe5b10ae4fa3b214c8c6fa5`。この B0 観測は latest と偽らず、private branch / model fleet の復旧完了証跡がまだない事項として残す。既存 claim・key・retention 資料は保全対象で、fork-choice bypass、署名変更、旧 claim の書換えを行わない。
+B0 の保存観測（2026-11-02 12:09 UTC）は source `30acb77e23f8` の記録済み稼働世代、DAA19,315、`isSynced=true`、draws56 / produced56 / receipts0。近い時刻の公開側はDAA19,364。params/schedule/genesis は同じでも、B0 は既知 public head を `DominanceViolation` で拒否し、自枝で Qwen 生成を続けていた。`COURT_RETENTION_BELOW_GUARANTEE raw20607 < required20608` も記録された。保存ログ SHA-256 は `dfb954a1791f6405a0d48145d9f3be44b053d401fbe5b10ae4fa3b214c8c6fa5`。この B0 観測は latest と偽らず、private branch / model fleet の復旧完了証跡がまだない事項として残す。既存 claim・key・retention 資料は保全対象で、fork-choice bypass、署名変更、旧 claim の書換えを行わない。
 
-113 の recovery summary 不一致は source false mismatch ではなかった。primary `bcf08f15…`（RPC26314）は full params253/scheduleec5、別 seat7 `944ecf45-6198-4f0d-8141-af1756851db6`（RPC26354）は params `edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189` / schedule `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`。root が95の peer `169.58.232.113:40092` を seat7 ID と照合した。同 genesis でも full params が違うため summary は正常に拒否される。future-fence 互換 handshake が接続を許すことと両立する。生成・wire bytes fields・比較は source69e3 と中央で同じで、比較 guard の緩和や peer IP 単位の blacklist を追加していない。
+復旧用ホストで観測した recovery summary 不一致は source false mismatch ではなかった。主インスタンスは full params253/scheduleec5、同じホストの別インスタンスは params `edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189` / schedule `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`。運用担当者は公開 Node の peer を別インスタンスの ID と照合した。接続先と稼働世代の詳細は非公開の原本に保持した。同 genesis でも full params が違うため summary は正常に拒否される。future-fence 互換 handshake が接続を許すことと両立する。生成・wire bytes fields・比較は source69e3 と中央で同じで、比較 guard の緩和や peer IP 単位の blacklist を追加していない。
 
 ## DHAT：実 Node の結果待ち
 
@@ -97,7 +97,7 @@ B0 の保存観測（2026-11-02 12:09 UTC）は PID136821 / source30acb77e23f8 /
 
 | 項目 | 15:13 UTC の状態 / 待ち欄 |
 |---|---|
-| 隔離対象 | Linux5.104.81.23、`/root/misaka-oom-profile-20261102/source65`。65 + heap feature 限定 timer main patch、その他12,620 tracked files は exact source と root が検証 |
+| 隔離対象 | 隔離 Linux ホスト。65 + heap feature 限定 timer main patch、その他12,620 tracked files は exact source と root が検証 |
 | patch | SHA-256 `bda770eb302e20310a68c919cae7b3ec3ba3ba6d2720c9e7f64807af32963203`、production 統合対象外 |
 | smoke | root による実 Linux2ケース成功（独立 timer / early normal return）。実 Node のメモリ増加原因を示す結果ではない |
 | build | 最初の jobs4 は MemAvailable guard により停止、OOM ではない。jobs1 / CPU250% / RAM12 GiB / swap2 GiB / 最低 available6 GiB / 時間2700秒等の枠で再開中 |
@@ -124,11 +124,11 @@ heap feature は通常の MiMalloc を DHAT/System に切り替える。Rust Glo
 
 ## 証跡の所在
 
-原本は root の incident directory とローカル `/tmp/misaka-t12-oom-20261102/` にある。本節の hash は本記録作成時にローカル原本を読み取った値。raw log の保存責任と source/実行対象の対応を保持し、後から異なる試験や更新された `current-state.json` に差し替えない。`current-state.json` 内の旧 snapshot 項目より、ここで明記した最新 canary・actual result を優先した。
+運用担当者が原本を非公開で保管している。本節の hash は本記録作成時にローカル原本を読み取った値。raw log の保存責任と source/実行対象の対応を保持し、後から異なる試験や更新された `current-state.json` に差し替えない。`current-state.json` 内の旧 snapshot 項目より、ここで明記した最新 canary・actual result を優先した。
 
-既存の設計/試験資料: [保持・provider](../oom-retention-2026-11-02/README.md)、[producer readiness](../oom-producer-readiness-2026-11-02/README.md)、[notification control と shutdown/index recovery](../oom-notification-control-2026-11-02/README.md)。統合側の補足は `docs/evidence/oom-memory-budget-2026-11-02.md` と `testing/transport-memory/REMAINING.md`。DHAT patch/手順はローカル `/tmp/misaka-t12-oom-20261102/dhat-profile-65/` に隔離保存した。
+既存の設計/試験資料: [保持・provider](../oom-retention-2026-11-02/README.md)、[producer readiness](../oom-producer-readiness-2026-11-02/README.md)、[notification control と shutdown/index recovery](../oom-notification-control-2026-11-02/README.md)。統合側の補足は `docs/evidence/oom-memory-budget-2026-11-02.md` と `testing/transport-memory/REMAINING.md`。DHAT patch と手順の原本も別に保全した。
 
-| 原本ファイル（上記 local incident directory 相対） | bytes | SHA-256 |
+| 原本の識別名 | bytes | SHA-256 |
 |---|---:|---|
 | `canary-20261102T134913000473Z.json` | 11114 | `cd7c63e4ff8868f34cf19a85b95d406318ea4271fe5ea77147473eda06f0debb` |
 | `canary-20261102T135419626978Z.json` | 11123 | `c854ded39776c665107565a5fbd8dbd958949d356173bfeb545522539acb86ab` |
@@ -154,6 +154,6 @@ heap feature は通常の MiMalloc を DHAT/System に切り替える。Rust Glo
 | `integration-node-check-gc.log` | 6467 | `e34d53ec17e1a97c1ccf6c86bce6ccee9278ea137f1c1b41fdab193a6c518495` |
 | `integration-node-test-build-gc.log` | 5650 | `7edc8d637a5a4ab74fc5579da6259be93c4c17f4e5abcd414c489ff478b2dc14` |
 | `b0-rpc-1209.json` | 7900 | `a6e8ce5416381c542c4d4c855e4c3d8a3a4d002e789bc7c3800c1ca6ffb4b2d4` |
-| `113-seat7-rpc-1404.json` | 8588 | `4750b025c21808e0e183d0516ff35ffd8864c7727edac1d7f20f1af14ded1d5b` |
-| `95-peers-1404.json` | 3246 | `97a184948935b3c9c094ace475e5b06274b0009988399121f4dd18ef664c1faf` |
+| 別インスタンスの RPC 観測（14:04 UTC） | 8588 | `4750b025c21808e0e183d0516ff35ffd8864c7727edac1d7f20f1af14ded1d5b` |
+| 公開 Node の peer 観測（14:04 UTC） | 3246 | `97a184948935b3c9c094ace475e5b06274b0009988399121f4dd18ef664c1faf` |
 | `dhat-profile-65/heap-profile-65c52.patch` | 6560 | `bda770eb302e20310a68c919cae7b3ec3ba3ba6d2720c9e7f64807af32963203` |

@@ -7,7 +7,7 @@ warning: function `capacity_from` is never used
     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
 
 warning: `misaka-transport-memory-harness` (lib) generated 1 warning
-   Compiling misaka-transport-memory-harness v0.1.0 (/Users/wata/.codex/worktrees/oom-transport/MISAKA-testnet/testing/transport-memory)
+   Compiling misaka-transport-memory-harness v0.1.0 (<checkout>/testing/transport-memory)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 2.35s
      Running unittests src/lib.rs (/tmp/oom-transport-target/debug/deps/misaka_transport_memory_harness-8c464033c6f84546)
 

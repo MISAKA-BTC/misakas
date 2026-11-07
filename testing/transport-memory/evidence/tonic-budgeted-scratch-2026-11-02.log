@@ -1,4 +1,4 @@
-   Compiling tonic v0.14.5 (/Users/wata/.codex/worktrees/oom-transport/MISAKA-testnet/vendor/tonic)
+   Compiling tonic v0.14.5 (<checkout>/vendor/tonic)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.97s
      Running unittests src/lib.rs (/tmp/oom-transport-target/debug/deps/tonic-2f8b8e8a836b3661)
 
