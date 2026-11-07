@@ -1,0 +1,2 @@
+PASS: an exited parent does not hide its SIGTERM-ignoring child; own group gone after SIGKILL
+No Cargo, database test, old executable compression/unlink or stack override was used

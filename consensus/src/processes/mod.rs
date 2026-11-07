@@ -11,6 +11,7 @@ pub mod palw_positive_journal_v2;
 #[cfg(test)]
 pub mod palw_state_v2_sync;
 pub mod palw_state_walk;
+pub mod palw_positive_journal_v2;
 pub mod parents_builder;
 pub mod past_median_time;
 pub mod pruning;

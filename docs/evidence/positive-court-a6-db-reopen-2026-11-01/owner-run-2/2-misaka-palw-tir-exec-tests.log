@@ -1,0 +1,22 @@
+
+running 17 tests
+test a6_journal_replay::actual_checker_panel_failure_keeps_charged_wire_without_miner_refutation ... ok
+test a6_journal_replay::bounded_budget_refusal_precedes_native_authentication_and_external_callbacks ... ok
+test a6_journal_replay::actual_tir_journal_replay_recomputes_pass_and_genuine_miner_mismatch ... ok
+test a6_journal_replay::current_clock_expiry_and_final_generation_or_clock_changes_are_rechecked ... ok
+test a6_journal_replay::current_historical_frame_role_is_rechecked_under_the_step_guard ... ok
+test a6_journal_replay::pinned_tail_and_exact_native_material_references_cannot_be_shortened ... ok
+test a6_journal_replay::omitted_record_or_relation_and_future_or_idempotent_court_deliveries_are_not_journal_events ... ok
+test a6_journal_replay::real_source_replay::copied_source_request_or_completed_response_cannot_append_or_charge_a_second_fee ... ok
+test a6_journal_replay::real_source_replay::bad_current_panel_frame_after_source_completion_preserves_global_cost_receipts_and_first_fees ... ok
+test a6_journal_replay::real_source_replay::interleaved_real_g14_and_tir_replay_reconstructs_receipts_union_and_global_usage_exactly_once ... ok
+test a6_journal_replay::real_source_replay::local_source_due_never_supplies_the_missing_qualified_native_settlement_port ... ok
+test a6_journal_replay::real_source_replay::missing_duty_or_canonical_history_and_partial_global_basis_or_origin_substitution_are_rejected ... ok
+test a6_journal_replay::real_source_replay::policy_failure_after_real_source_apply_poisons_every_getter_and_a_fresh_replay_is_clean ... ok
+test a6_journal_replay::real_source_replay::real_db_replay::an_older_persisted_caller_pin_replays_only_its_prefix_while_future_raw_tail_is_retained ... ok
+test a6_journal_replay::real_source_replay::real_db_replay::clean_db_reopen_replays_the_same_actual_court_source_and_once_only_due_from_persisted_delta_pin ... ok
+test a6_journal_replay::real_source_replay::real_db_replay::reopened_missing_middle_or_tail_and_corrupted_tail_never_fall_back_to_fixture_records ... ok
+test a6_journal_replay::unsupported_source_and_native_settlement_ports_refuse_without_any_live_commit ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 6.05s
+

@@ -1,0 +1,125 @@
+{
+  "method": "read-only artifact/fingerprint inspection and selected cargo tree; no compiler or stack patch applied",
+  "owner_target": "/Users/wata/Downloads/MISAKA-testnet/target",
+  "root_target": "/Users/wata/.cache/misaka-positive-a1-target",
+  "known_owner_links": [
+    {
+      "test_unit": "misaka-palw-tir-exec-a21d9f9a1e95c479",
+      "core_dependency_fingerprint": "84b164e78df8d75f",
+      "matching_current_cache_artifacts": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-ca2b2aea093a5c86.rlib",
+          "bytes": 365450584
+        }
+      ]
+    },
+    {
+      "test_unit": "kaspa-consensus-cdd71196065befc6",
+      "core_dependency_fingerprint": "824e5b664f921ea6",
+      "matching_current_cache_artifacts": [
+        {
+          "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-8532c7c589116352.rlib",
+          "bytes": 364165272
+        }
+      ]
+    }
+  ],
+  "known_executables": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus-cdd71196065befc6",
+      "bytes": 448055536,
+      "modified_utc": "2026-10-31T15:20:41.925406+00:00"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-b2df9d40a9b2c4d1",
+      "bytes": 244237528,
+      "modified_utc": "2026-10-31T15:55:11.690967+00:00"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_court_a4_integration-a21d9f9a1e95c479",
+      "bytes": 29887472,
+      "modified_utc": "2026-10-31T15:57:55.926018+00:00"
+    }
+  ],
+  "old_main_consensus_candidates": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus-580728bc4925887f.rlib",
+      "bytes": 333374352,
+      "mtime_utc": "2026-10-31T09:54:26.683016+00:00",
+      "features": "[\"default\", \"evm\", \"pq-only\"]",
+      "profile_hash": 3529655162674907694,
+      "dep_info_contains_new_positive_journal_store": false,
+      "dep_info_contains_new_accepted_reader": false,
+      "source_commit": "unproven shared-cache candidate; not certified current source"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus-77f730d374e8fefd.rlib",
+      "bytes": 505173344,
+      "mtime_utc": "2026-10-30T10:02:43.768797+00:00",
+      "features": "[\"default\", \"evm\", \"pq-only\"]",
+      "profile_hash": 1317616522025455466,
+      "dep_info_contains_new_positive_journal_store": false,
+      "dep_info_contains_new_accepted_reader": false,
+      "source_commit": "unproven shared-cache candidate; not certified current source"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus-7933f223970e2662.rlib",
+      "bytes": 506353552,
+      "mtime_utc": "2026-10-30T01:58:57.549920+00:00",
+      "features": "[\"default\", \"evm\", \"pq-only\"]",
+      "profile_hash": 1317616522025455466,
+      "dep_info_contains_new_positive_journal_store": false,
+      "dep_info_contains_new_accepted_reader": false,
+      "source_commit": "unproven shared-cache candidate; not certified current source"
+    }
+  ],
+  "selected_native_normal_build_packages": 301,
+  "selected_test_features": [
+    [
+      [
+        "kaspa-consensus-core",
+        "1.1.0"
+      ],
+      "default,pq-only"
+    ],
+    [
+      [
+        "kaspa-consensus",
+        "1.1.0"
+      ],
+      "default,pq-only"
+    ]
+  ],
+  "owner_missing_library_candidates": [],
+  "root_missing_library_candidates": [
+    "crossbeam-channel",
+    "duration-string",
+    "kaspa-consensus",
+    "kaspa-consensus-notify",
+    "kaspa-consensusmanager",
+    "kaspa-notify",
+    "kaspa-pow",
+    "misaka-palw-base0",
+    "misaka-palw-host-security",
+    "num",
+    "num-bigint",
+    "num-complex",
+    "num-integer",
+    "num-iter",
+    "num-rational",
+    "tinyvec",
+    "tinyvec_macros",
+    "unicode-normalization",
+    "unicode-properties"
+  ],
+  "artifact_caveat": "cargo tree selected package default features, normal/build closure; file-presence only, not a profile/feature/version/source freshness guarantee or exact Rust unit plan",
+  "normal_consensus_rebuild": "selected default/pq-only + new journal source not covered by old mainlib default/evm/pq-only candidates",
+  "root_stack_plan": {
+    "owner_source_sha256": "83c4b63f76c8cb1ea5498740bc61c86ef393f51f2f3e0d48e56bec4491ba92c6",
+    "root_parent_source_sha256": "3e4b2eacee502a2ab835c0bc2e73907e5e85729da6499f8ced975e4a5ae58b61",
+    "exact_equal": false,
+    "apply_check_only": "git apply --check of complete 5a2f patch succeeded; no source was applied",
+    "source_unmodified": true
+  },
+  "status": "A0 heavy-build HOLD remains; ownership plan only, no patch or runtime test executed"
+}
