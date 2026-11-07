@@ -11,7 +11,6 @@ use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireScanV1,NativeWireReaderV1,NativeWireShapeV1};
-use crate::palw_native_resource_v1::wire::wire_struct;
 wire_struct!(crate::palw_prefix_gdn_paged_v1::PalwGdnPagedStateV1; crate::Hash64, u32, u32, u32, u32, u32, u8, crate::Hash64, [u8; 68], crate::palw_prefix_gdn_paged_v1::PhaseV1, u32, u32, i64, i32, i64, i64, Vec<i32>, Vec<i32>);
 impl NativeWireScanV1 for crate::palw_prefix_gdn_paged_v1::PhaseV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {

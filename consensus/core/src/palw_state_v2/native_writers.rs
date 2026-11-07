@@ -45,6 +45,38 @@ impl NativeWriteQuoteV1 {
     pub(super) fn new(path: &'static str) -> Self {
         Self { q: TirNativeRequestsV1::new(), slots: 0, path }
     }
+
+    /// The existing keyed-row quote, computed from an immutable table borrow.
+    /// Indexed writers may still add their dependent quotes before mutation.
+    pub(super) fn map_row<K, V>(
+        key: &K,
+        new: &Option<V>,
+        rows: &BTreeMap<K, V>,
+        clone_old: bool,
+        path: &'static str,
+    ) -> Result<Self, PalwStateV2Error>
+    where
+        K: Ord + NativeHeapV1,
+        V: NativeHeapV1,
+    {
+        let mut q = Self::new(path);
+        let old = rows.get(key);
+        q.copy(new)?.copy(new)?.copy(key)?.copy(key)?.member_if::<K, V>(old.is_none() && new.is_some())?.slots(1)?;
+        if clone_old && let Some(old) = old {
+            q.copy(old)?;
+        }
+        Ok(q)
+    }
+
+    /// Admission needs the existing construction owner and journal, not access
+    /// to the entire transition or any primary state table.
+    pub(super) fn admit(
+        self,
+        reservation: &mut crate::palw_native_resource_v1::NativeTransitionReservationV1,
+        entries: &mut Vec<PalwDeltaEntryV2>,
+    ) -> Result<(), PalwStateV2Error> {
+        super::native_mutation::reserve_mutation_sequence_v1(reservation, entries, self.q.bytes_v1(), self.slots)
+    }
     /// One deep copy of an actual typed value (a map clone, a journal clone, a scratch copy).
     pub(super) fn copy<T: NativeHeapV1 + ?Sized>(&mut self, value: &T) -> Result<&mut Self, PalwStateV2Error> {
         let heap = value.native_heap_v1(self.path);

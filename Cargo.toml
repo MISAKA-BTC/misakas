@@ -62,6 +62,7 @@ members = [
     "misaka/palw/positive-contract",
     "misaka/palw/positive-accounting",
     "misaka/palw/positive-accounting-node",
+    "misaka/palw/positive-recovery",
     "simpa",
     "wasm",
     "wasm/core",
@@ -189,6 +190,7 @@ default-members = [
     "misaka/palw/positive-contract",
     "misaka/palw/positive-accounting",
     "misaka/palw/positive-accounting-node",
+    "misaka/palw/positive-recovery",
     "simpa",
     "wasm",
     "wasm/core",
@@ -332,6 +334,7 @@ misaka-palw-tir = { path = "misaka/palw/tir/core" }
 misaka-palw-gen = { path = "misaka/palw/gen" }
 misaka-palw-panel = { path = "misaka/palw/panel" }
 misaka-palw-positive-contract = { path = "misaka/palw/positive-contract" }
+misaka-palw-positive-recovery = { path = "misaka/palw/positive-recovery" }
 misaka-palw-positive-accounting = { path = "misaka/palw/positive-accounting" }
 misaka-palw-positive-accounting-node = { path = "misaka/palw/positive-accounting-node" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }

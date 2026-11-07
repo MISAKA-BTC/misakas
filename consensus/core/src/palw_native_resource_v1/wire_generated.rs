@@ -3105,7 +3105,6 @@ impl NativeWireScanV1 for crate::palw_security_certification_v1::PalwCertificati
     }
 }
 wire_struct!(crate::palw_security_certification_v1::PalwClaimCertificationRowV1; crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, crate::palw_model_eligibility_v1::EligDigestV1, bool, u64, u64, u64, Option<(u64, crate::palw_model_eligibility_v1::EligDigestV1)>, Vec<crate::palw_model_eligibility_v1::EligDigestV1>, u64, u64, Vec<crate::palw_model_eligibility_v1::PalwEligibilityAttestationRowV1>, u64, crate::palw_model_eligibility_v1::EligDigestV1, Option<(crate::palw_security_certification_v1::PalwCertificationOutcomeV1, u64)>);
-wire_struct!(crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1; u16, [u8; 64], [u8; 64], [u8; 64], [u8; 64], [u8; 64], u64, u64);
 wire_struct!(crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1; u16, u16, u16, u64, u64, u64, u64, u64, u64, u32, u64);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventAnswerV1; crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::palw_selected_event_source_v1::PalwSelectedEventCoordinateV1, crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1);
 wire_struct!(crate::palw_selected_event_source_v1::PalwSelectedEventBindingV1; Box<crate::palw_step_leg::PalwStepBindingV2>, crate::palw_constraint_stream_carriage_v1::PalwRetainedCourtProfileV1);

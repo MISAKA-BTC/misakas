@@ -146,8 +146,6 @@ mod palw_positive_source_apply_v2;
 mod palw_mesh_fold_v1;
 #[path = "palw_model_panel_one_fold_v1.rs"]
 mod palw_model_panel_one_fold_v1;
-#[path = "palw_positive_source_apply_v2.rs"]
-mod palw_positive_source_apply_v2;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_flat_model_vector_fold_v3.rs"]
 mod palw_flat_model_vector_fold_v3;
@@ -338,9 +336,6 @@ mod palw_claim_local_prefix_court_v1;
 mod palw_claim_local_prefix_tir_context_v2;
 #[path = "palw_claim_local_prefix_reservation_v1.rs"]
 mod palw_claim_local_prefix_reservation_v1;
-#[cfg(test)]
-#[path = "palw_claim_local_prefix_tir_context_v2.rs"]
-mod palw_claim_local_prefix_tir_context_v2;
 #[path = "palw_claim_local_rewards_v1.rs"]
 mod palw_claim_local_rewards_v1;
 #[path = "palw_security_certification_fold_v1.rs"]
@@ -14259,6 +14254,8 @@ mod block_preparation;
 mod input_views;
 mod native_mutation;
 mod native_writers;
+mod row_writer;
+mod row_writers;
 mod transition_builder;
 mod vesting_workspace_v2;
 // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.
@@ -19533,7 +19530,7 @@ fn apply_receipt_licensed_v2(
     // exactly as the V1 quorum does. Before this rule the V2 arm carried no independence
     // check of any kind, so a network arming Verification V2 beside the bundle would have
     // licensed a bought class through the one door the rule never looked at.
-    palw_licence_names_its_outsider_v1(&builder.state, claim_id, &claim, &verdicts, builder.extras.admission_independence_daa)?;
+    builder.extras.rules_for_claim(&claim).check_licence_outsider(&builder.state, claim_id, &verdicts)?;
     builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
     builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
     builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score)?;
@@ -21013,10 +21010,9 @@ fn apply_receipt_spend(
     }
     // ADR-0148: a compute-era claim weighs one network quantum a spend and counts in the lane's
     // pooled census; a leaves-era claim weighs `pwu / quanta` and counts in its class's, as ever.
-    let pricing = builder.fp_pricing();
-    let per_quantum = palw_fp_spend_weight_v1(&builder.state, &claim, *quanta, &pricing);
-    let census_key =
-        if pricing.prices_in_compute(&claim) { crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1() } else { claim.class_id };
+    let rules = builder.extras.rules_for_claim(&claim);
+    let per_quantum = rules.free_prompt_spend_weight(&builder.state, builder.params, *quanta);
+    let census_key = rules.receipt_census_key(builder.params);
     // **ADR-0069 Decision 7 is deliberately NOT applied here, and this is an open question rather
     // than an oversight.**
     //
@@ -26781,6 +26777,8 @@ pub fn palw_state_v2_fold_source_v1() -> &'static str {
             include_str!("palw_state_v2/chain_state.rs"),
             include_str!("palw_state_v2/fold_read.rs"),
             include_str!("palw_state_v2/transition_builder.rs"),
+            include_str!("palw_state_v2/row_writer.rs"),
+            include_str!("palw_state_v2/row_writers.rs"),
             include_str!("palw_state_v2/block_preparation.rs"),
             include_str!("palw_state_v2/input_views.rs"),
             include_str!("palw_state_v2/da_sessions.rs"),

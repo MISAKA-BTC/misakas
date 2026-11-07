@@ -207,37 +207,6 @@ impl AssignmentRegisteredDescriptorV2 {
         }
         Ok(())
     }
-
-    pub(crate) fn check_rooted_class_v2(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), ContractError> {
-        use crate::palw_class_registration_origin_v1::{
-            PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1, PalwClassRegistrationDoorV1, palw_class_registration_origin_row_v1,
-        };
-
-        let class_id = Hash64::from_bytes(self.class.0);
-        let class = state.class(&class_id).ok_or(ContractError::Identity)?;
-        let tir = state.tir_class_v1(&class_id).ok_or(ContractError::Identity)?;
-        let origin = self.registration.origin;
-        if tir.facts.class_id != class_id
-            || class.artifact_root.as_bytes() != self.artifact.0
-            || tir.graph_ir_root.as_bytes() != self.program.0
-            || tir.layout_digest.as_bytes() != self.layout.0
-            || tir.tokenizer_id.as_bytes() != self.registered_tokenizer.0
-            || class.registered_daa != origin.accepted_daa
-        {
-            return Err(ContractError::Identity);
-        }
-        if let Some(saved) = palw_class_registration_origin_row_v1(state.kernel_route_state_v1(), &class_id)
-            && (saved.version != PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1
-                || saved.door != PalwClassRegistrationDoorV1::Tir
-                || saved.class_id != class_id
-                || saved.daa_score != origin.accepted_daa
-                || saved.block.as_bytes() != origin.accepting_block.0
-                || saved.admission_digest.map(|digest| Digest(digest.as_bytes())) != Some(self.registration.digest))
-        {
-            return Err(ContractError::Identity);
-        }
-        Ok(())
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct AssignmentSourceQuoteDescriptorV2 {
@@ -502,9 +471,9 @@ impl AssignmentAdmissionMaterialV2 {
         {
             return Err(ContractError::Identity);
         }
-        if self.custody.retained_bytes != self.money.usage.retained_bytes
-            || self.custody.replay_bytes != self.money.usage.replay_bytes
-            || self.custody.heap_bytes != self.money.usage.heap_bytes
+        if self.custody.retained_bytes < self.money.usage.retained_bytes
+            || self.custody.replay_bytes < self.money.usage.replay_bytes
+            || self.custody.heap_bytes < self.money.usage.heap_bytes
             || self.custody.replay_work == 0
             || self.custody.replay_work > self.assignment_policy.max_replay_work
             || self.source.units == 0

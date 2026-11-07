@@ -16,6 +16,60 @@ fn encoded<T: borsh::BorshSerialize>(q: &mut TirNativeRequestsV1, value: &T) -> 
     })? as u64;
     q.vec_v1::<u8>(n.max(1024)).map_err(PalwStateV2Error::NativeResource)
 }
+
+/// Reserve a whole dependent-writer sequence before its first mutation.
+/// Only the construction owner and journal are borrowed; no primary state can
+/// be changed while admission computes or grows its existing allocation quote.
+pub(super) fn reserve_mutation_sequence_v1(
+    native_reservation: &mut crate::palw_native_resource_v1::NativeTransitionReservationV1,
+    entries: &mut Vec<PalwDeltaEntryV2>,
+    bytes: u64,
+    slots: usize,
+) -> Result<(), PalwStateV2Error> {
+    if !native_reservation.is_tracking_v1() {
+        return Ok(());
+    }
+    if cfg!(not(target_pointer_width = "64")) {
+        return Err(PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwDeltaEntryV2>(
+            "native mutation sequence",
+            "pinned tree profile requires 64-bit",
+        )));
+    }
+    let needed = entries.len().checked_add(slots).ok_or_else(|| {
+        PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation journal slots"))
+    })?;
+    let mut capacity = entries.capacity();
+    if needed > capacity {
+        capacity = capacity.max(2);
+        while capacity < needed {
+            capacity = capacity.checked_mul(2).ok_or_else(|| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation journal growth"))
+            })?;
+        }
+    }
+    let journal = if capacity > entries.capacity() {
+        (capacity as u64).checked_mul(std::mem::size_of::<PalwDeltaEntryV2>() as u64).ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation journal bytes"))
+        })?
+    } else {
+        0
+    };
+    native_reservation
+        .grow_v1(bytes.checked_add(journal).ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation coexisting requests"))
+        })?)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    if capacity > entries.capacity() {
+        entries.try_reserve_exact(capacity - entries.len()).map_err(|_| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwDeltaEntryV2>(
+                "native mutation journal",
+                "allocator refused pre-admitted journal",
+            ))
+        })?;
+    }
+    Ok(())
+}
+
 impl<'a> TransitionBuilder<'a> {
     pub(super) fn reserve_final_journal_v1(&mut self, slots: usize) -> Result<(), PalwStateV2Error> {
         if !self.native_writers_tracking_v1() {
@@ -33,48 +87,7 @@ impl<'a> TransitionBuilder<'a> {
     /// Reserve a whole dependent-writer sequence before its first mutation.
     /// Existing and replacement journal frames coexist through realloc.
     pub(super) fn reserve_mutation_sequence_v1(&mut self, bytes: u64, slots: usize) -> Result<(), PalwStateV2Error> {
-        if !self.native_reservation.is_tracking_v1() {
-            return Ok(());
-        }
-        if cfg!(not(target_pointer_width = "64")) {
-            return Err(PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwDeltaEntryV2>(
-                "native mutation sequence",
-                "pinned tree profile requires 64-bit",
-            )));
-        }
-        let needed = self.entries.len().checked_add(slots).ok_or_else(|| {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation journal slots"))
-        })?;
-        let mut capacity = self.entries.capacity();
-        if needed > capacity {
-            capacity = capacity.max(2);
-            while capacity < needed {
-                capacity = capacity.checked_mul(2).ok_or_else(|| {
-                    PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation journal growth"))
-                })?;
-            }
-        }
-        let journal = if capacity > self.entries.capacity() {
-            (capacity as u64).checked_mul(std::mem::size_of::<PalwDeltaEntryV2>() as u64).ok_or_else(|| {
-                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation journal bytes"))
-            })?
-        } else {
-            0
-        };
-        self.native_reservation
-            .grow_v1(bytes.checked_add(journal).ok_or_else(|| {
-                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("native mutation coexisting requests"))
-            })?)
-            .map_err(PalwStateV2Error::NativeResource)?;
-        if capacity > self.entries.capacity() {
-            self.entries.try_reserve_exact(capacity - self.entries.len()).map_err(|_| {
-                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwDeltaEntryV2>(
-                    "native mutation journal",
-                    "allocator refused pre-admitted journal",
-                ))
-            })?;
-        }
-        Ok(())
+        reserve_mutation_sequence_v1(&mut self.native_reservation, &mut self.entries, bytes, slots)
     }
     /// The returned count includes journal slots for all existing dependent
     /// rows this one claim write can delete, including every actual forfeit.

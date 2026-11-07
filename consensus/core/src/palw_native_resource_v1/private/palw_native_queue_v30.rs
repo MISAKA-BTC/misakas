@@ -11,6 +11,5 @@ use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireScanV1,NativeWireReaderV1,NativeWireShapeV1};
-use crate::palw_native_resource_v1::wire::wire_struct;
 wire_struct!(crate::palw_native_queue_v30::NativeQueueGlobalV30; u16, [u8;64], [u8;64], u32, u32, u64, Vec<crate::palw_native_queue_v30::QueueEntryV30>);
 wire_struct!(crate::palw_native_queue_v30::QueueEntryV30; [u8;64], [u8;64], [u8;64], u32, u64);

@@ -11,6 +11,7 @@ native_enum!(crate::palw_prefix_public_source_v1::PalwPrefixPublicAttemptV1; Wai
 use super::*;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};
+use crate::palw_native_resource_v1::wire::wire_struct;
 impl NativeWireScanV1 for crate::palw_prefix_public_source_v1::PalwPrefixPublicAttemptV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;

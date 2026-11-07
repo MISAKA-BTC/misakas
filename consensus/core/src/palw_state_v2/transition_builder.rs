@@ -263,15 +263,6 @@ impl<'a> TransitionBuilder<'a> {
         self.weight_cap_retotal(before, self.weight_cap_term(&bond));
     }
 
-    pub(super) fn write_exposure(&mut self, key: PalwBondKeyV2, new: Option<u128>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.reserved_exposure, false, "native reserved_exposure writer")?;
-        let old = match new {
-            Some(value) => self.state.reserved_exposure.insert(key, value),
-            None => self.state.reserved_exposure.remove(&key),
-        };
-        self.entries.push(PalwDeltaEntryV2::Exposure { key, old, new });
-        Ok(())
-    }
 
     /// **One exposure ceiling for both arms that ACCUSE** (ADR-0062 SA-7(c)).
     ///
@@ -385,15 +376,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_registration_exposure(&mut self, key: PalwBondKeyV2, new: Option<u128>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.registration_exposure, false, "native registration_exposure writer")?;
-        let old = match new {
-            Some(value) => self.state.registration_exposure.insert(key, value),
-            None => self.state.registration_exposure.remove(&key),
-        };
-        self.entries.push(PalwDeltaEntryV2::RegistrationExposure { key, old, new });
-        Ok(())
-    }
 
     /// Reserve this writer's actual row copy, absent membership and journal
     /// replacement before either collection changes. This accounts requested
@@ -1062,42 +1044,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_payout(&mut self, key: Hash64, new: Option<PalwPayoutV2>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.pending_payouts, false, "native pending_payouts writer")?;
-        let old = match new {
-            Some(record) => self.state.pending_payouts.insert(key, record),
-            None => self.state.pending_payouts.remove(&key),
-        };
-        self.entries.push(PalwDeltaEntryV2::Payout { key, old, new });
-        Ok(())
-    }
-
-    pub(super) fn write_model_market(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_model_market_v1::PalwModelMarketV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.model_markets, false, "native model_markets writer")?;
-        let old = match new {
-            Some(record) => self.state.model_markets.insert(key, record),
-            None => self.state.model_markets.remove(&key),
-        };
-        self.entries.push(PalwDeltaEntryV2::ModelMarket { key, old, new });
-        Ok(())
-    }
-
-    pub(super) fn write_model_position(&mut self, key: (Hash64, Hash64), units: u64) -> Result<(), PalwStateV2Error> {
-        let new = (units > 0).then_some(units);
-        self.reserve_map_row_v1(&key, &new, |s| &s.model_positions, false, "native model_positions writer")?;
-        let old = match new {
-            Some(record) => self.state.model_positions.insert(key, record),
-            None => self.state.model_positions.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ModelPosition { key, old, new });
-        }
-        Ok(())
-    }
 
     /// **ADR-0095 §4.5 — the tenure clock, moved from the one place a balance changes.**
     ///
@@ -1135,38 +1081,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    /// ADR-0095 §4.1.
-    pub(super) fn write_model_benefits(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_model_benefits_v1::PalwModelBenefitsV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.model_benefits, false, "native model_benefits writer")?;
-        let old = match &new {
-            Some(record) => self.state.model_benefits.insert(key, record.clone()),
-            None => self.state.model_benefits.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ModelBenefits { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_model_line(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_model_lines_v1::PalwModelLineV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.model_lines, false, "native model_lines writer")?;
-        let old = match &new {
-            Some(record) => self.state.model_lines.insert(key, record.clone()),
-            None => self.state.model_lines.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ModelLine { key, old, new });
-        }
-        Ok(())
-    }
 
     pub(super) fn write_model_version(
         &mut self,
@@ -1225,53 +1139,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_model_proposal(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_model_lines_v1::PalwModelProposalV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.model_proposals, false, "native model_proposals writer")?;
-        let old = match &new {
-            Some(record) => self.state.model_proposals.insert(key, record.clone()),
-            None => self.state.model_proposals.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ModelProposal { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_model_evaluation(
-        &mut self,
-        key: (Hash64, u32, PalwBondKeyV2),
-        new: Option<crate::palw_model_lines_v1::PalwModelEvaluationV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.model_evaluations, false, "native model_evaluations writer")?;
-        let old = match &new {
-            Some(record) => self.state.model_evaluations.insert(key, record.clone()),
-            None => self.state.model_evaluations.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ModelEvaluation { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_evm_settlement(
-        &mut self,
-        key: u32,
-        new: Option<crate::evm::model_market::PalwEvmSettlementV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.evm_settlements, false, "native evm_settlements writer")?;
-        let old = match new {
-            Some(row) => self.state.evm_settlements.insert(key, row),
-            None => self.state.evm_settlements.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::EvmSettlement { key, old, new });
-        }
-        Ok(())
-    }
 
     pub(super) fn write_class_shard_plan(
         &mut self,
@@ -1301,37 +1168,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_shard_licensing(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.shard_licensing, false, "native shard_licensing writer")?;
-        let old = match &new {
-            Some(row) => self.state.shard_licensing.insert(key, row.clone()),
-            None => self.state.shard_licensing.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ShardLicensing { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_held_da_missing(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_held_da_v1::PalwHeldMissingV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.held_da_missing, false, "native held_da_missing writer")?;
-        let old = match new {
-            Some(row) => self.state.held_da_missing.insert(key, row),
-            None => self.state.held_da_missing.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::HeldDaMissing { key, old, new });
-        }
-        Ok(())
-    }
 
     pub(super) fn write_class_step_ladder(&mut self, key: Hash64, new: Option<u64>) -> Result<(), PalwStateV2Error> {
         self.reserve_map_journal_v1(&key, &new, !self.state.class_step_ladders.contains_key(&key), "native class_step_ladder writer")?;
@@ -1510,82 +1346,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    /// **RFC-0006: the one writer of `tir_shard_claims`**, journaled `TirShardClaim`.
-    pub(super) fn write_tir_shard_claim(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_tir_shard_v1::PalwTirShardClaimV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.tir_shard_claims, false, "native tir_shard_claims writer")?;
-        let old = match &new {
-            Some(row) => self.state.tir_shard_claims.insert(key, row.clone()),
-            None => self.state.tir_shard_claims.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::TirShardClaim { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_seat_root_readiness(
-        &mut self,
-        key: (PalwBondKeyV2, Hash64, Hash64),
-        new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.seat_root_readiness, false, "native seat_root_readiness writer")?;
-        let old = match new {
-            Some(row) => self.state.seat_root_readiness.insert(key, row),
-            None => self.state.seat_root_readiness.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::SeatRootReadiness { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_seat_availability(
-        &mut self,
-        key: PalwBondKeyV2,
-        new: Option<crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.seat_availability, false, "native seat_availability writer")?;
-        let old = match new.clone() {
-            Some(row) => self.state.seat_availability.insert(key, row),
-            None => self.state.seat_availability.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::SeatAvailability { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_held_leaf_demands(
-        &mut self,
-        key: Hash64,
-        new: Option<BTreeMap<PalwBondKeyV2, u64>>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.held_leaf_demands, false, "native held_leaf_demands writer")?;
-        let old = match new.clone() {
-            Some(row) => self.state.held_leaf_demands.insert(key, row),
-            None => self.state.held_leaf_demands.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::HeldLeafDemands { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_panel_duties(&mut self, key: Hash64, new: Option<PalwPanelDutyRowV1>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.panel_duties, false, "native panel_duties writer")?;
-        let old = match new.clone() {
-            Some(row) => self.state.panel_duties.insert(key, row),
-            None => self.state.panel_duties.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::PanelDuties { key, old, new });
-        }
-        Ok(())
-    }
 
     pub(super) fn write_panel_reserve(&mut self, new: u64) -> Result<(), PalwStateV2Error> {
         self.reserve_journal_slots_v1(1, "native panel_reserve writer")?;
@@ -1607,77 +1367,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_round_final(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_execution_lane_v1::PalwExecFinalV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.round_finals, false, "native round_finals writer")?;
-        let old = match new {
-            Some(row) => self.state.round_finals.insert(key, row),
-            None => self.state.round_finals.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::RoundFinal { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_round_schedule(
-        &mut self,
-        key: u64,
-        new: Option<crate::palw_execution_lane_v1::PalwExecScheduleV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.round_schedules, false, "native round_schedules writer")?;
-        let old = match new.clone() {
-            Some(row) => self.state.round_schedules.insert(key, row),
-            None => self.state.round_schedules.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::RoundSchedule { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_round_permits_used(&mut self, key: (u64, u64), new: Option<u16>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.round_permits_used, false, "native round_permits_used writer")?;
-        let old = match new {
-            Some(bits) => self.state.round_permits_used.insert(key, bits),
-            None => self.state.round_permits_used.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::RoundPermitsUsed { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_round_equivocations(&mut self, key: (u64, u64), new: Option<u16>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.round_equivocations, false, "native round_equivocations writer")?;
-        let old = match new {
-            Some(bits) => self.state.round_equivocations.insert(key, bits),
-            None => self.state.round_equivocations.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::RoundEquivocations { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_round_pending(
-        &mut self,
-        key: u64,
-        new: Option<crate::palw_execution_lane_v1::PalwExecSnapshotV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.round_pending, false, "native round_pending writer")?;
-        let old = match new.clone() {
-            Some(row) => self.state.round_pending.insert(key, row),
-            None => self.state.round_pending.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::RoundPending { key, old, new });
-        }
-        Ok(())
-    }
 
     pub(super) fn write_round_seed_anchor(
         &mut self,
@@ -1710,37 +1399,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_seat_readiness(
-        &mut self,
-        key: (PalwBondKeyV2, Hash64),
-        new: Option<crate::palw_model_registry_v1::PalwSeatReadinessRowV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.seat_readiness, false, "native seat_readiness writer")?;
-        let old = match new {
-            Some(row) => self.state.seat_readiness.insert(key, row),
-            None => self.state.seat_readiness.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::SeatReadiness { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_claim_economics(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_economic_payout_v1::PalwClaimEconomicsV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.claim_economics, false, "native claim_economics writer")?;
-        let old = match new {
-            Some(row) => self.state.claim_economics.insert(key, row),
-            None => self.state.claim_economics.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ClaimEconomics { key, old, new });
-        }
-        Ok(())
-    }
 
     pub(super) fn write_work_target_shadow(
         &mut self,
@@ -2102,50 +1760,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    /// **The 2026-09-25 sweep's V03(2)/V05: write or drop a class's probation memory** — the rooted
-    /// write and its delta entry (81). An empty memory is no row.
-    /// **ADR-0160 F-Q: the one writer of `audit_receipts`**, journaled `AuditReceipts` (83).
-    pub(super) fn write_audit_receipts_v1(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_audit_door_v1::PalwAuditStatusV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.audit_receipts, false, "native audit_receipts writer")?;
-        let old = match new.clone() {
-            Some(status) => self.state.audit_receipts.insert(key, status),
-            None => self.state.audit_receipts.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::AuditReceipts { key, old, new });
-        }
-        Ok(())
-    }
-
-    /// **ADR-0160 F-Q (§5.9 (g)): the one writer of `excluded_auditors`**, journaled `AuditorExcluded` (84).
-    pub(super) fn write_auditor_excluded_v1(&mut self, key: PalwBondKeyV2, new: Option<u64>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.excluded_auditors, false, "native excluded_auditors writer")?;
-        let old = match new {
-            Some(daa) => self.state.excluded_auditors.insert(key, daa),
-            None => self.state.excluded_auditors.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::AuditorExcluded { key, old, new });
-        }
-        Ok(())
-    }
-
-    /// **ADR-0160 F-N: the one writer of `network_demand`**, journaled `NetworkDemand` (86).
-    pub(super) fn write_network_demand_v1(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<u64>) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.network_demand, false, "native network_demand writer")?;
-        let old = match new {
-            Some(until) => self.state.network_demand.insert(key, until),
-            None => self.state.network_demand.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::NetworkDemand { key, old, new });
-        }
-        Ok(())
-    }
 
     /// **RFC-0002 Phase F: the one writer of `tir_classes`**, journaled `TirClass` (88).
     pub(super) fn write_tir_class(
@@ -2494,39 +2108,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    /// **ADR-0164: the one writer of `capacity_ledger`**, journaled `CapacityLedger` (the last variant).
-    pub(super) fn write_capacity_ledger_v1(
-        &mut self,
-        key: crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1,
-        new: Option<crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.capacity_ledger, false, "native capacity_ledger writer")?;
-        let old = match &new {
-            Some(row) => self.state.capacity_ledger.insert(key, row.clone()),
-            None => self.state.capacity_ledger.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::CapacityLedger { key, old, new });
-        }
-        Ok(())
-    }
-
-    /// **ADR-0160 F-S: the one writer of `issuance_buckets`**, journaled `IssuanceBucket` (85).
-    pub(super) fn write_issuance_bucket_v1(
-        &mut self,
-        key: PalwBondKeyV2,
-        new: Option<crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.issuance_buckets, false, "native issuance_buckets writer")?;
-        let old = match new {
-            Some(bucket) => self.state.issuance_buckets.insert(key, bucket),
-            None => self.state.issuance_buckets.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::IssuanceBucket { key, old, new });
-        }
-        Ok(())
-    }
 
     /// **ADR-0160 F-N: register the attempt's bond's unmet demand for its class** through `now + H_L`, when
     /// `refused` is a refusal for want of a unit — lane N's `NetworkRoomExhausted`, or the class room's
@@ -2585,56 +2166,6 @@ impl<'a> TransitionBuilder<'a> {
         self.read().check_network_room_v1(bond, claim, now_daa)
     }
 
-    /// **ADR-0160 lane liab (AG-3): the one writer of `bond_freezes`**, journaled `BondFreeze` (82).
-    pub(super) fn write_bond_freeze_v1(
-        &mut self,
-        key: PalwBondKeyV2,
-        new: Option<crate::palw_aggregate_liability_v1::PalwBondFreezeV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.bond_freezes, false, "native bond_freezes writer")?;
-        let old = match new {
-            Some(freeze) => self.state.bond_freezes.insert(key, freeze),
-            None => self.state.bond_freezes.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::BondFreeze { key, old, new });
-        }
-        Ok(())
-    }
-
-    pub(super) fn write_probation_memory_v1(
-        &mut self,
-        key: Hash64,
-        new: Option<crate::palw_model_registry_v1::PalwProbationMemoryV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        let new = new.filter(|memory| !memory.is_empty());
-        self.reserve_map_row_v1(&key, &new, |s| &s.probation_memory, false, "native probation_memory writer")?;
-        let old = match &new {
-            Some(memory) => self.state.probation_memory.insert(key, memory.clone()),
-            None => self.state.probation_memory.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::ProbationMemory { key, old, new });
-        }
-        Ok(())
-    }
-
-    /// **4-ter.3 step 6: write or drop one held forfeit** — the rooted write and its delta entry (80).
-    pub(super) fn write_held_forfeit(
-        &mut self,
-        key: (Hash64, Hash64),
-        new: Option<PalwHeldForfeitV1>,
-    ) -> Result<(), PalwStateV2Error> {
-        self.reserve_map_row_v1(&key, &new, |s| &s.held_forfeits, false, "native held_forfeits writer")?;
-        let old = match &new {
-            Some(record) => self.state.held_forfeits.insert(key, record.clone()),
-            None => self.state.held_forfeits.remove(&key),
-        };
-        if old != new {
-            self.entries.push(PalwDeltaEntryV2::HeldForfeit { key, old, new });
-        }
-        Ok(())
-    }
 
     /// **4-ter.3 step 6 (the forger's race): the acquitting close's record** — past
     /// `palw_offence_attribution`, a PROVEN `ChallengerDefeated` on a dissection whose bottom read an
@@ -9412,37 +8943,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    pub(super) fn write_epoch(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) -> Result<(), PalwStateV2Error> {
-        self.write_epoch_counter::<false>(key, new)
-    }
-
-    pub(super) fn write_receipt_epoch(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) -> Result<(), PalwStateV2Error> {
-        self.write_epoch_counter::<true>(key, new)
-    }
-
-    /// Map, reservation label and delta variant are one choice. A later copy cannot keep the
-    /// epoch map while recording a receipt delta, because the const selects all three.
-    fn write_epoch_counter<const RECEIPT: bool>(&mut self, key: Hash64, new: Option<PalwEpochCounterV2>) -> Result<(), PalwStateV2Error> {
-        let old = if RECEIPT {
-            self.reserve_map_row_v1(&key, &new, |s| &s.receipt_epoch_counters, false, "native receipt_epoch_counters writer")?;
-            match &new {
-                Some(record) => self.state.receipt_epoch_counters.insert(key, record.clone()),
-                None => self.state.receipt_epoch_counters.remove(&key),
-            }
-        } else {
-            self.reserve_map_row_v1(&key, &new, |s| &s.epoch_counters, false, "native epoch_counters writer")?;
-            match &new {
-                Some(record) => self.state.epoch_counters.insert(key, record.clone()),
-                None => self.state.epoch_counters.remove(&key),
-            }
-        };
-        self.entries.push(if RECEIPT {
-            PalwDeltaEntryV2::ReceiptEpoch { key, old, new }
-        } else {
-            PalwDeltaEntryV2::Epoch { key, old, new }
-        });
-        Ok(())
-    }
 
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 

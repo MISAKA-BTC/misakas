@@ -62,9 +62,6 @@ use exact_geometry::{ExactBindingGeometry, ExactGeometry};
 #[doc(hidden)]
 pub mod source_only;
 
-/// Source membership and bounded direct evaluation for local prototypes only.
-#[doc(hidden)]
-pub mod source_only;
 
 use std::{
     cell::Cell,

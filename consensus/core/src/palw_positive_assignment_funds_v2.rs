@@ -558,21 +558,6 @@ pub(crate) fn check_assignment_funding_carriage_v2(
     current_entry: Option<&UtxoEntry>,
     now: u64,
 ) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
-    let (outpoint, amount) = check_assignment_funding_literal_v2(bundle, transaction, payer_key, now)?;
-    let output = &transaction.outputs[outpoint.index as usize];
-    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
-    if entry.amount != output.value || entry.script_public_key != output.script_public_key || entry.is_coinbase {
-        return Err(AssignmentFundsErrorV2::CurrentUtxo);
-    }
-    Ok((outpoint, amount))
-}
-
-fn check_assignment_funding_literal_v2(
-    bundle: &AssignmentAdmissionBundleV2,
-    transaction: &Transaction,
-    payer_key: &[u8; PUBKEY_BYTES],
-    now: u64,
-) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
     bundle.validate_shape()?;
     if principal(payer_key) != bundle.terms.payer
         || Digest(kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes())
@@ -832,41 +817,6 @@ pub fn check_initial_case_relay_target_v2(
     }
     if amount > consent.max_locked || amount > bounds.max_case_locked {
         return Err(ContractError::Budget);
-    }
-    Ok(())
-}
-
-/// Exact initial F/R contract match. Native must derive the funding
-/// outpoint and amount from the actual carrier and current UTXO, authenticate
-/// the pending R archive, and reserve current-slot custody before binding.
-pub fn check_initial_assignment_relay_target_v2(
-    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
-    bundle: &AssignmentAdmissionBundleV2,
-    funding: NativeOutpoint,
-    amount: u64,
-    now: u64,
-) -> Result<(), ContractError> {
-    use misaka_palw_positive_contract::assignment::funding_relay::{RelayFundingPurposeV2, RelayTargetV2};
-    terms.validate_shape()?;
-    bundle.validate_shape()?;
-    if now >= terms.funding_admission_before_daa || now >= bundle.funding.admission_expiry || now >= bundle.terms.accept_before_daa {
-        return Err(ContractError::Range);
-    }
-    let target = RelayTargetV2::InitialAssignment { bundle: bundle.id(), poster_nonce: bundle.terms.poster_nonce };
-    if terms.funding_purpose != RelayFundingPurposeV2::PosterA
-        || terms.target != target
-        || terms.assignment != bundle.terms.id()
-        || terms.contract_network != bundle.terms.network
-        || terms.contract_ruleset != bundle.terms.ruleset
-        || terms.contract_anchor != bundle.terms.branch_anchor
-        || terms.payer_bond != bundle.terms.poster
-        || terms.payer != bundle.terms.payer
-        || terms.refund_payload != bundle.terms.refund_payload
-        || terms.funding_outpoint != funding
-        || funding.index != bundle.funding.funding_output_index
-        || terms.expected_amount != amount
-    {
-        return Err(ContractError::Identity);
     }
     Ok(())
 }
@@ -1266,42 +1216,6 @@ impl AssignmentSpendPlanV2 {
         new.validate_shape()?;
         Ok(new)
     }
-}
-
-/// Build the monetary part of a first unconsumed refund. The native caller
-/// has already matched the accepted close, original funding and journal.
-pub(crate) fn qualify_unconsumed_assignment_refund_v2(
-    funding: AssignmentFundingRow,
-    receipt: AcceptedMaterial,
-    tx: &Transaction,
-    amounts: &[u64],
-    now: u64,
-    max_frame_bytes: u64,
-    max_history_frames: u32,
-) -> Result<AssignmentSpendPlanV2, AssignmentFundsErrorV2> {
-    use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2;
-    let dues = [(0, funding.worker.remaining), (3, funding.surplus.remaining)]
-        .into_iter()
-        .filter(|&(_, amount)| amount != 0)
-        .map(|(source_leg, amount)| AssignmentAuthorizedDueV2 {
-            source_leg,
-            kind: AssignmentSettlementLegV2::Refund,
-            party: funding.authorization.payer,
-            recipient: funding.authorization.refund_payload,
-            amount,
-            receipt,
-        })
-        .collect();
-    let authorization = AssignmentSpendAuthorizationV2 {
-        protected_after: [0, funding.earned_service_due, funding.liability_floor, 0],
-        before: funding,
-        dues,
-        daa: now,
-        max_frame_bytes,
-        max_history_frames,
-        payload: tx.payload.clone(),
-    };
-    qualify_assignment_spend_v2(&authorization.before, &authorization, tx, amounts, now)
 }
 
 /// Qualifies exactly one current native Assignment A input at index zero.

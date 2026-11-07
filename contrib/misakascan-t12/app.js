@@ -3747,23 +3747,20 @@ function renderLlm(){
       An enabled G14 whole-claim route draws one bonded verifier; historical claims retain their original panel.
       Approval requires the claim's route-specific signed receipts. Final, court liability and SecurityCertified
       are separate; neither a block's presence nor this page grants verification or payment credit.</div>
-    <h2 class="sec">Execution classes</h2>
-    <div id="llmWeight"></div>
-    <div id="llmClasses" class="cards"><div class="loading">Loading class facts…</div></div>
-    <div id="llmClaimLinks"></div>
-    <h2 class="sec">Verifier seats — who can verify what</h2>
-    <div class="note">The node reports registered classes, bonded seats and historical readiness below.
-      These possession records do not gate new claims on an enabled G14 ModelOne route.
-      A selected seat must still obtain the model and material and check the whole claim before signing.
-      Historical claims keep their original panel and readiness rules. See each claim's actual assignment and phase.</div>
+    ${claimRulesView()}
+    <h2 class="sec">Execution classes</h2><div id="llmWeight"></div>
+    <div id="llmClasses" class="cards"><div class="loading">Loading class facts…</div></div><div id="llmClaimLinks"></div>
+    <h2 class="sec">Verifier seats — live node reports</h2>
+    <div class="note">Readiness counts and per-claim panel assignments are separate. The connected node reports its own requirement;
+      no fixed seven-seat or 3-of-5 rule is assumed for every route. File holdings do not establish claim approval.</div>
     <div id="llmSeatMatrix" class="tblscroll"></div>
     <h2 class="sec">The lifecycle a claim walks</h2>
     <div class="palw-flow" style="margin-bottom:6px">
       <div class="palw-stage ok"><span class="n">1</span><div class="t">Submitted</div><div class="d">A producer runs the class's model and mines the block with the execution committed in its header (roots over trace, output and execution).</div></div>
-      <div class="palw-stage ok"><span class="n">2</span><div class="t">Panel bound</div><div class="d">The claim route draws its bonded seat(s) on-chain; the producer cannot pick its judges.</div></div>
+      <div class="palw-stage ok"><span class="n">2</span><div class="t">Panel bound</div><div class="d">The route-selected bonded seats are drawn on-chain (<code>PanelBound</code>) — the producer cannot pick its judges.</div></div>
       <div class="palw-stage ok"><span class="n">3</span><div class="t">Verified</div><div class="d">Each seat re-derives the job from the served material and signs a receipt: <b>Valid</b>, <b>Unavailable</b> or <b>Incapable</b>.</div></div>
-      <div class="palw-stage ok"><span class="n">4</span><div class="t">Approved</div><div class="d"><code>ReceiptLicensed</code> carries the route-required signed receipts; a withholding producer gets <code>ProducerDefaulted</code> and is slashed.</div></div>
-      <div class="palw-stage wait"><span class="n">5</span><div class="t">Final</div><div class="d">The node reports <b>Final</b> after the applicable claim window. Court liability and Gate C / SecurityCertified remain separate; Final alone grants no settlement credit.</div></div>
+      <div class="palw-stage ok"><span class="n">4</span><div class="t">Approved</div><div class="d"><code>ReceiptLicensed</code> carries the route-required quorum of signed receipts; a withholding producer gets <code>ProducerDefaulted</code> and is slashed.</div></div>
+      <div class="palw-stage wait"><span class="n">5</span><div class="t">Final</div><div class="d">A licensed claim can still be disputed in court; after the applicable timing and court rules it becomes <b>Final</b>. G14 liability can continue after Final. Under Gate C only <b>SecurityCertified</b> claims receive consensus credit.</div></div>
     </div>
     <div class="sec-row"><h2 class="sec">Submitted LLM work</h2><span class="sec-more dim" id="llmSubCount"></span></div>
     <div class="note" style="margin-top:4px">The <b>input</b> of an attempt-lane job is not chosen by anyone: it is a

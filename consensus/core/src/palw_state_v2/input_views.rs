@@ -79,6 +79,28 @@ impl PalwRulesForClaimV1<'_> {
     pub fn canonical_weight(&self, state: &PalwChainStateV2) -> Option<u128> {
         state.palw_claim_canonical_weight_v1(self.claim, self.extras.canonical_work_daa)
     }
+    /// The spend, conviction reversal and retirement must price the same
+    /// recorded claim. No reading-block DAA can be supplied at these call sites.
+    pub fn free_prompt_spend_weight(&self, state: &PalwChainStateV2, params: &PalwStateParamsV2, quanta: u32) -> u128 {
+        palw_fp_spend_weight_v1(state, self.claim, quanta, &PalwFpPricingV1::of(params, self.extras.canonical_work_daa))
+    }
+    /// Compute-era receipts share the pooled census; an older claim keeps its
+    /// class census even when its receipt lands after the canonical-work fence.
+    pub fn receipt_census_key(&self, params: &PalwStateParamsV2) -> Hash64 {
+        if self.prices_in_compute(params) {
+            crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1()
+        } else {
+            self.claim.class_id
+        }
+    }
+    pub fn check_licence_outsider(
+        &self,
+        state: &PalwChainStateV2,
+        claim_id: &Hash64,
+        verdicts: &[PalwSeatVerdictV2],
+    ) -> Result<(), PalwStateV2Error> {
+        palw_licence_names_its_outsider_v1(state, claim_id, self.claim, verdicts, self.extras.admission_independence_daa)
+    }
 }
 
 impl PalwTransitionExtrasV1 {

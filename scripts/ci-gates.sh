@@ -358,12 +358,16 @@ for phrase in ("loaded artifact", "running job", "retained evidence", "reservati
         raise SystemExit("holding lifetimes dropped " + phrase)
 print("same-chain recovery paths: 6")
 duties = (root.parents[3] / "consensus/core/src/palw_state_item_duties_v1.rs").read_text()
-writer = (root.parents[3] / "consensus/core/src/palw_state_v2/transition_builder.rs").read_text()
+writer = (root.parents[3] / "consensus/core/src/palw_state_v2/row_writers.rs").read_text()
 for phrase in ("rollback", "root_order", "restore", "resource_estimate"):
     if phrase not in duties:
         raise SystemExit("state-item duties dropped " + phrase)
-if "write_epoch_counter::<false>" not in writer or "write_epoch_counter::<true>" not in writer:
+epoch = writer.split("fn write_epoch(", 1)[-1].split("fn write_receipt_epoch", 1)[0]
+receipt = writer.split("fn write_receipt_epoch(", 1)[-1]
+if "self.state.epoch_counters" not in epoch or "PalwDeltaEntryV2::Epoch" not in epoch:
     raise SystemExit("epoch map and delta are not bound by one writer")
+if "self.state.receipt_epoch_counters" not in receipt or "PalwDeltaEntryV2::ReceiptEpoch" not in receipt:
+    raise SystemExit("receipt epoch map and delta are not bound by one writer")
 print("state-item writer binding: epoch and receipt")
 print("PALW BOUNDARIES OK")
 PY

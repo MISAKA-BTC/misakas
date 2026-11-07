@@ -93,9 +93,6 @@ pub(super) struct CheckedAssignedSourceResponseV2 {
     fee: SourceFeeDeltaIntent,
     duty: AcceptedMaterial,
     data_bytes: u64,
-    additional_work: u64,
-    reserved_fee: u64,
-    reserved_delivery: SourceDeliveryReserveV2,
 }
 
 fn source_material(origin: AcceptedOrigin) -> Result<AcceptedMaterial, PalwStateV2Error> {
@@ -110,290 +107,6 @@ pub(super) fn capacity() -> PalwStateV2Error {
 }
 
 impl NativeAssignedCourtV2 {
-    pub(super) fn check_source_fee_projection_v2(&self, row: &CaseRow) -> Result<(), PalwStateV2Error> {
-        if row.usage.fee != self.source_fees.earned {
-            return Err(refuse("rooted source fee usage differs from literal first responses"));
-        }
-        Ok(())
-    }
-
-    pub(super) fn check_source_union_projection_v2(&self, state: &PalwChainStateV2, case: &CaseRow) -> Result<(), PalwStateV2Error> {
-        if case.usage.rounds != self.source_unions.rounds
-            || case.usage.unique_source_bytes != self.source_unions.unique_bytes
-            || case.miner_data != self.source_unions.miner_data()
-        {
-            return Err(refuse("Case source usage differs from the accepted source union"));
-        }
-        for kind in [SourceKind::ArtifactInventory, SourceKind::Input] {
-            let source = self.source.geometry.source_root(kind);
-            let key = NativeRowKey::SourceUnion { case: case.case, kind, source };
-            let saved = PositiveRowsV2::new(state).read(key).map_err(refuse)?.map(|row| row.body);
-            if saved != self.source_unions.rows[source_index(kind)].map(NativeRowBody::SourceUnion) {
-                return Err(refuse("rooted source union differs from the literal request history"));
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn prepare_source_request_union_v2(
-        &mut self,
-        material: &AssignmentAdmissionMaterialV2,
-        prefix: &PalwChainStateV2,
-        prior: &CaseRow,
-        origin: AcceptedOrigin,
-        body: &PositiveNativeBodyV2,
-        body_heap: u64,
-    ) -> Result<SourceUnionRow, PalwStateV2Error> {
-        let PositiveNativeOperationV2::SourceRequest { request, .. } = &body.operation else {
-            return Err(refuse("expected source request"));
-        };
-        if self.source_requests.contains_key(&request.id()) {
-            return Err(refuse("duplicate source request in the Case journal"));
-        }
-        let kind = request.kind;
-        let index = source_index(kind);
-        let previous = &self.source_unions.ranges[index];
-        let slots = (previous.len() as u64).checked_add(1).ok_or_else(capacity)?;
-        let units = request.end.checked_sub(request.first).ok_or_else(capacity)?;
-        let source_policy = &material.native_preimages.source_policy;
-        let per_unit = u64::from(slots.ilog2()) + u64::from(source_policy.max_parameter_instances.max(1).ilog2()) + 8;
-        let controls = slots.checked_mul(4).and_then(|n| n.checked_add(units.checked_mul(per_unit)?)).ok_or_else(capacity)?;
-        let work = source_policy.work.court_operation_work(0, controls, 0, 0).map_err(refuse)?;
-        self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(|| refuse("source union replay work"))?;
-        let mut quote = TirNativeRequestsV1::new();
-        quote.exact_v1::<(u64, u64)>(slots).map_err(PalwStateV2Error::NativeResource)?;
-        let bytes = quote.bytes_v1();
-        let heap = self.checker_heap.checked_add(bytes).ok_or_else(capacity)?;
-        if heap.checked_add(self.candidate_heap).and_then(|n| n.checked_add(body_heap)).is_none_or(|n| n > self.available_heap) {
-            return Err(capacity());
-        }
-        let range_lease = reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
-        let ranges = merge(previous, (request.first, request.end));
-        if ranges.capacity() as u64 > slots
-            || (ranges.len() as u64)
-                .checked_add(self.source_unions.ranges[1 - index].len() as u64)
-                .is_none_or(|n| n > source_policy.max_intervals)
-        {
-            return Err(refuse("source union exceeds original interval bounds"));
-        }
-        let requested_units = interval_units(&ranges).map_err(refuse)?;
-        let fresh_units = requested_units
-            .checked_sub(self.source_unions.rows[index].map_or(0, |row| row.requested_units))
-            .ok_or_else(|| refuse("source union lost earlier requests"))?;
-        let mut unique_bytes = self.source_unions.unique_bytes;
-        let mut pending_fee = self.source_unions.pending_fee;
-        let mut pending = self.source_unions.pending;
-        let fees = &material.native_preimages.case_fees;
-        for unit in request.first..request.end {
-            if !contains(previous, unit) {
-                let bound = self.source.geometry.unit_bound(kind, unit).map_err(refuse)?;
-                unique_bytes = unique_bytes.checked_add(bound.max_data_bytes).ok_or_else(capacity)?;
-                let fee = fees.source_unit_due(bound.max_unit_bytes).map_err(refuse)?;
-                pending_fee = pending_fee.checked_add(fee).ok_or_else(capacity)?;
-                let max_body = bound.max_unit_bytes.checked_add(SOURCE_RESPONSE_BODY_OVERHEAD_V2).ok_or_else(capacity)?;
-                let delivery = SourceDeliveryReserveV2::quote(max_body, &source_policy.work)?;
-                pending = pending.combine(delivery, u64::checked_add).ok_or_else(capacity)?;
-            }
-        }
-        let NativeRowBody::Funding(funding) = required(prefix, NativeRowKey::Funding(prior.case))? else {
-            return Err(refuse("missing source request funding"));
-        };
-        if funding.current_outpoint.is_none()
-            || funding.consent.id().0 != prior.service.funding_consent
-            || funding.basis.schedule != fees.id()
-            || funding.consent.scope != funding_scope(self.court.result(), &prior.service, &funding.basis)
-            || self.source_fees.pending_with(pending_fee, funding.fee.remaining, prior.service.budget.fee).is_none()
-        {
-            return Err(refuse("source request does not reserve all outstanding first-response fees"));
-        }
-        self.source_unions.pending_fee = pending_fee;
-        self.source_unions.pending = pending;
-        self.source_unions.unique_bytes = unique_bytes;
-        self.source_unions.rounds = self.source_unions.rounds.checked_add(u64::from(fresh_units != 0)).ok_or_else(capacity)?;
-        if self.source_unions.unique_bytes > prior.service.budget.unique_source_bytes
-            || self.source_unions.rounds > prior.service.budget.rounds
-        {
-            return Err(refuse("source request exceeds original source budget"));
-        }
-        let union = SourceUnionRow {
-            case: prior.case,
-            kind,
-            source: request.source,
-            source_units: self.source.geometry.source_units(kind),
-            requested_units,
-            completed_units: self.source_unions.rows[index].map_or(0, |row| row.completed_units),
-            union: source_material(origin)?,
-        };
-        self.source_unions.rows[index] = Some(union);
-        self.source_unions.ranges[index] = ranges;
-        let old = self.source_unions.range_leases[index].replace(range_lease);
-        self.checker_heap = heap.checked_sub(old.as_ref().map_or(0, NativeDemandLeaseV1::memory_v1)).ok_or_else(capacity)?;
-        drop(old);
-        Ok(union)
-    }
-
-    fn prepare_source_response_union_v2(
-        &mut self,
-        response: &CheckedAssignedSourceResponseV2,
-    ) -> Result<SourceUnionRow, PalwStateV2Error> {
-        let NativeRowKey::ServiceReceipt { kind, source, unit, .. } = response.fee.receipt_key else {
-            return Err(refuse("source response receipt key"));
-        };
-        let index = source_index(kind);
-        let union = self.source_unions.rows[index].as_mut().ok_or_else(|| refuse("source response has no accepted union"))?;
-        if union.source != source || !contains(&self.source_unions.ranges[index], unit) {
-            return Err(refuse("source response is outside the accepted union"));
-        }
-        union.completed_units = union
-            .completed_units
-            .checked_add(1)
-            .filter(|n| *n <= union.requested_units)
-            .ok_or_else(|| refuse("source response exceeds its accepted union"))?;
-        self.source_unions.pending_fee = self
-            .source_unions
-            .pending_fee
-            .checked_sub(response.reserved_fee)
-            .ok_or_else(|| refuse("source response has no reserved service fee"))?;
-        self.source_unions.pending = self
-            .source_unions
-            .pending
-            .combine(response.reserved_delivery, u64::checked_sub)
-            .ok_or_else(|| refuse("source response has no reserved service capacity"))?;
-        Ok(*union)
-    }
-
-    pub(super) fn consume_court_transport_reserve_v2(
-        &mut self,
-        material: &AssignmentAdmissionMaterialV2,
-        case: &CaseRow,
-        prior: (u64, u64),
-        journal_bytes: u64,
-        transport_bytes: u64,
-    ) -> Result<(), PalwStateV2Error> {
-        self.source_court_reserve = self.source_court_reserve.checked_sub(transport_bytes).ok_or_else(capacity)?;
-        self.check_source_journal_reserve_v2(material, prior, journal_bytes)?;
-        let pending = self.source_unions.pending;
-        misaka_palw_positive_contract::reservations::RemainingCapacity {
-            transmitted_bytes: pending.body.checked_add(self.source_court_reserve).ok_or_else(capacity)?,
-            additional_work: pending.work,
-            retained_bytes: pending.journal,
-        }
-        .check(&case.usage, &case.service.budget)
-        .map_err(refuse)
-    }
-
-    fn check_source_journal_reserve_v2(
-        &self,
-        material: &AssignmentAdmissionMaterialV2,
-        prior: (u64, u64),
-        next_bytes: u64,
-    ) -> Result<(), PalwStateV2Error> {
-        let pending = self.source_unions.pending;
-        if prior
-            .0
-            .checked_add(next_bytes)
-            .and_then(|n| n.checked_add(pending.journal))
-            .and_then(|n| n.checked_add(self.source_court_reserve))
-            .is_none_or(|n| n > material.positive_policy.max_case_journal_bytes)
-            || prior
-                .1
-                .checked_add(1)
-                .and_then(|n| n.checked_add(pending.units))
-                .is_none_or(|n| n > u64::from(material.assignment_policy.max_history_frames))
-        {
-            return Err(refuse("event consumes reserved source or Court history"));
-        }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn prepare_assigned_source_event_v2(
-        &mut self,
-        material: &AssignmentAdmissionMaterialV2,
-        prefix: &PalwChainStateV2,
-        assignment: &AssignmentRow,
-        prior: &CaseRow,
-        origin: AcceptedOrigin,
-        body: &PositiveNativeBodyV2,
-        raw_bytes: u64,
-        prior_journal: (u64, u64),
-        body_heap: u64,
-    ) -> Result<Option<PreparedAssignedSourceEventV2>, PalwStateV2Error> {
-        let policy = &material.native_preimages.source_policy;
-        if raw_bytes > policy.max_native_body_bytes {
-            return Err(refuse("source carrier body exceeds original source policy"));
-        }
-        let cost = SourceDeliveryReserveV2::quote(raw_bytes, &policy.work)?;
-        let (union, receipt) = match &body.operation {
-            PositiveNativeOperationV2::SourceRequest { request, .. } => {
-                if self.source_requests.contains_key(&request.id()) {
-                    return Ok(None);
-                }
-                let union = self.prepare_source_request_union_v2(material, prefix, prior, origin, body, body_heap)?;
-                self.remember_source_request_v2(material, origin, body, body_heap)?;
-                (union, None)
-            }
-            PositiveNativeOperationV2::SourceResponse { .. } => {
-                let Some(response) = self.check_source_response_v2(prefix, assignment, material, prior, origin, body, body_heap)?
-                else {
-                    return Ok(None);
-                };
-                let union = self.prepare_source_response_union_v2(&response)?;
-                let NativeRowKey::ServiceReceipt { case, kind, source, unit } = response.fee.receipt_key else {
-                    return Err(refuse("source response receipt key"));
-                };
-                let receipt = ServiceReceiptRow {
-                    case,
-                    kind,
-                    source,
-                    unit,
-                    result: prior.result,
-                    duty: response.duty,
-                    response: response.fee.accepted_response,
-                    provider: response.fee.provider,
-                    bytes: response.data_bytes,
-                    additional_work: response.additional_work,
-                    settlement: None,
-                };
-                self.remember_source_response_v2(material, response, body_heap)?;
-                (union, Some(receipt))
-            }
-            _ => return Err(refuse("source event must be a literal request or response")),
-        };
-        let used = self.source_unions.used.combine(cost, u64::checked_add).ok_or_else(capacity)?;
-        let full_source = used.combine(self.source_unions.pending, u64::checked_add).ok_or_else(capacity)?;
-        let court = self.source_court_reserve;
-        let budget = &prior.service.budget;
-        let pending = self.source_unions.pending;
-        if full_source.units > policy.max_history_events
-            || full_source.body > policy.max_history_bytes
-            || (self.source_responses.len() as u64).checked_add(pending.units).is_none_or(|n| n > policy.max_responses)
-            || full_source.body.checked_add(court).is_none_or(|n| n > budget.transmitted_bytes)
-        {
-            return Err(refuse("source event consumes reserved Case transport or history"));
-        }
-        self.check_source_journal_reserve_v2(material, prior_journal, cost.journal)?;
-        let mut next = *prior;
-        let usage = &mut next.usage;
-        usage.rounds = self.source_unions.rounds;
-        usage.unique_source_bytes = self.source_unions.unique_bytes;
-        usage.fee = self.source_fees.earned;
-        usage.transmitted_bytes = usage.transmitted_bytes.checked_add(cost.body).ok_or_else(capacity)?;
-        usage.additional_work = usage.additional_work.checked_add(cost.work).ok_or_else(capacity)?;
-        usage.retained_bytes = usage.retained_bytes.checked_add(cost.journal).ok_or_else(capacity)?;
-        misaka_palw_positive_contract::reservations::RemainingCapacity {
-            transmitted_bytes: pending.body.checked_add(court).ok_or_else(capacity)?,
-            additional_work: pending.work,
-            retained_bytes: pending.journal,
-        }
-        .check(usage, budget)
-        .map_err(refuse)?;
-        next.miner_data = self.source_unions.miner_data();
-        next.last_event = origin;
-        self.source_unions.used = used;
-        Ok(Some(PreparedAssignedSourceEventV2 { case: next, union, receipt }))
-    }
-
     fn admit_source_index_entry_v2<K, V>(&mut self, body_heap: u64) -> Result<(), PalwStateV2Error> {
         let mut quote = TirNativeRequestsV1::new();
         quote.exact_v1::<BTreeNodeEnvelopeV1<K, V>>(1).map_err(PalwStateV2Error::NativeResource)?;
@@ -649,10 +362,8 @@ impl NativeAssignedCourtV2 {
         {
             return Err(refuse("duplicate or over-budget first source response"));
         }
-        let earned = self.source_fees.earned.checked_add(checked.fee.amount).ok_or_else(|| refuse("source fee overflow"))?;
         self.admit_source_index_entry_v2::<Digest, CheckedAssignedSourceResponseV2>(body_heap)?;
         self.source_responses.insert(id, checked);
-        self.source_fees.earned = earned;
         Ok(())
     }
 
@@ -756,14 +467,13 @@ impl NativeAssignedCourtV2 {
         let fee = schedule.source_unit_due(canonical_bytes).map_err(refuse)?;
         let schedule = schedule.id();
         let scope = funding_scope(result, &prior.service, &funding.basis);
-        self.check_source_fee_projection_v2(prior)?;
         if funding.current_outpoint.is_none()
             || funding.consent.scope != scope
             || funding.consent.case != *case
             || funding.consent.id().0 != prior.service.funding_consent
             || funding.basis.schedule != schedule
-            || fee > reserved_fee
-            || self.source_fees.pending_with(total_new_due, funding.fee.remaining, prior.service.budget.fee).is_none()
+            || funding.fee.remaining < fee
+            || prior.usage.fee.checked_add(fee).is_none_or(|n| n > prior.service.budget.fee)
         {
             return Err(refuse("source response fee exceeds the original C funding and service limits"));
         }
@@ -779,9 +489,6 @@ impl NativeAssignedCourtV2 {
             },
             duty: duty.material,
             data_bytes,
-            additional_work,
-            reserved_fee,
-            reserved_delivery,
         }))
     }
 }
@@ -833,12 +540,6 @@ fn source_fee_obligation_v2(assignment: AssignmentId, fee: &SourceFeeDeltaIntent
         fee.provider.0.0,
         0,
     )
-}
-
-fn is_case_source_payment_carrier_v2(tx: &crate::tx::Transaction) -> bool {
-    tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-        && tx.payload.get(..3) == Some(&[1, 0, 176])
-        && tx.payload.get(7) == Some(&12)
 }
 
 impl NativeAssignedCourtV2 {
@@ -963,11 +664,6 @@ impl NativeAssignedCourtV2 {
         let NativeRowBody::Funding(mut funding) = required(state, NativeRowKey::Funding(prior.case))? else {
             return Err(refuse("missing Case funding for settlement"));
         };
-        self.check_source_fee_projection_v2(prior)?;
-        let payable = self
-            .source_fees
-            .settlement_limit(self.source_unions.pending_fee, funding.fee.remaining, prior.service.budget.fee)
-            .ok_or_else(|| refuse("unpaid and reserved source fees exceed Case funding"))?;
         let debit = funding.current_outpoint.ok_or_else(missing)?;
         let point = native_assignment_outpoint_v2(debit);
         let controls = (receipts.len() as u64)
@@ -1002,13 +698,13 @@ impl NativeAssignedCourtV2 {
         quote.exact_v1::<BTreeNodeEnvelopeV1<Digest, ()>>(receipts.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
         quote.exact_v1::<u8>(64).map_err(PalwStateV2Error::NativeResource)?;
         let bytes = quote.bytes_v1();
-        let available_heap = self
+        if self
             .available_heap
             .checked_sub(self.checker_heap)
             .and_then(|n| n.checked_sub(self.candidate_heap))
             .and_then(|n| n.checked_sub(decode_heap))
-            .ok_or_else(capacity)?;
-        if bytes > available_heap {
+            .is_none_or(|n| bytes > n)
+        {
             return Err(capacity());
         }
         let _scratch = reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
@@ -1037,7 +733,6 @@ impl NativeAssignedCourtV2 {
                 || rooted.provider != provider
                 || rooted.duty != checked.duty
                 || rooted.bytes != checked.data_bytes
-                || rooted.additional_work != checked.additional_work
                 || route.aux.contains_key(&(PALW_SETTLEMENT_ONCE_TABLE_V1, obligation.id_v1().to_vec()))
                 || tx
                     .outputs
@@ -1048,8 +743,8 @@ impl NativeAssignedCourtV2 {
             }
             total = total
                 .checked_add(fee.amount)
-                .filter(|n| *n <= payable)
-                .ok_or_else(|| refuse("source settlement exceeds the unpaid first-response total"))?;
+                .filter(|n| *n <= funding.fee.remaining)
+                .ok_or_else(|| refuse("source settlement exceeds remaining Case fees"))?;
         }
 
         let continuation = locked.checked_sub(total).ok_or_else(|| refuse("source settlement conservation"))?;
@@ -1069,8 +764,8 @@ impl NativeAssignedCourtV2 {
         funding.current_outpoint = if continuation == 0 {
             None
         } else {
-            Some(NativeOutpoint {
-                transaction: NativeHash64(tx.id().as_bytes()),
+            Some(misaka_palw_positive_contract::rows::NativeOutpoint {
+                transaction: misaka_palw_positive_contract::rows::NativeHash64(tx.id().as_bytes()),
                 index: u32::try_from(receipts.len()).map_err(refuse)?,
             })
         };
@@ -1090,24 +785,20 @@ impl NativeAssignedCourtV2 {
         Ok(CaseSourcePaymentV2 { funding, debit, successor, source_paid: total })
     }
 
-    fn qualify_literal_case_source_payment_v2(
+    pub(super) fn replay_case_source_payment_v2(
         &mut self,
         backing: &NativeCommittedAssignedCaseV2,
         prefix: &PalwChainStateV2,
+        after: &PalwChainStateV2,
         prior: &CaseRow,
-        carriage: (&crate::tx::Transaction, &[crate::tx::UtxoEntry], u64),
-        clock: (u64, Option<NativeHash64>),
-    ) -> Result<(CaseSourcePaymentV2, Vec<AcceptedMaterial>, NativeDemandLeaseV1), PalwStateV2Error> {
+        carriage: &NativeAcceptedCaseCarriageV2,
+    ) -> Result<(), PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::assignment_body::{
             PositiveAssignmentNativeOperationV2, decode_assignment_body_v2,
         };
         let original = backing.material();
         let rules = NativeAssignmentRulesV2::from_original_material_data_v2(backing.assignment(), original).map_err(refuse)?;
-        let tx = carriage.0;
-        if !is_case_source_payment_carrier_v2(tx) || !tx.id_is_current() {
-            return Err(refuse("source settlement carrier differs"));
-        }
-        let raw = &tx.payload[3..];
+        let raw = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
         let quote = original.native_preimages.source_policy.work.court_body_work(raw.len() as u64).map_err(refuse)?;
         self.remaining_work = self.remaining_work.checked_sub(quote).ok_or_else(|| refuse("source payment replay codec work"))?;
         let limits = rules.body_limits().map_err(refuse)?;
@@ -1121,7 +812,7 @@ impl NativeAssignedCourtV2 {
         {
             return Err(capacity());
         }
-        let decode_lease = reserve_native_requests_v1(summary.heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
+        let _decode = reserve_native_requests_v1(summary.heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
         let body = decode_assignment_body_v2(raw, limits).map_err(refuse)?;
         let PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, case: Some(case), receipts } = body.operation else {
             return Err(refuse("Case settlement journal requires the literal op12"));
@@ -1129,39 +820,9 @@ impl NativeAssignedCourtV2 {
         if case != prior.case {
             return Err(refuse("settlement journal names a different Case"));
         }
-        let payment =
-            self.qualify_case_source_payment_v2(prefix, backing, prior, carriage, assignment, &receipts, (summary.heap, clock))?;
-        Ok((payment, receipts, decode_lease))
-    }
-
-    fn check_case_payment_journal_reserve_v2(
-        &mut self,
-        backing: &NativeCommittedAssignedCaseV2,
-        tx: &crate::tx::Transaction,
-        prior: (u64, u64),
-    ) -> Result<(), PalwStateV2Error> {
-        let payload = borsh::object_length(tx).map_err(refuse)? as u64;
-        let bytes = crate::palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2(payload)
-            .ok_or_else(capacity)?;
-        self.check_source_journal_reserve_v2(backing.material(), prior, bytes)?;
-        let work = backing.material().native_preimages.source_policy.work.court_body_work(bytes).map_err(refuse)?;
-        self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(|| refuse("Case payment journal replay work cap"))?;
-        Ok(())
-    }
-
-    pub(super) fn replay_case_source_payment_v2(
-        &mut self,
-        backing: &NativeCommittedAssignedCaseV2,
-        prefix: &PalwChainStateV2,
-        after: &PalwChainStateV2,
-        prior: &CaseRow,
-        carriage: &NativeAcceptedCaseCarriageV2,
-        prior_journal: (u64, u64),
-    ) -> Result<(), PalwStateV2Error> {
-        self.check_case_payment_journal_reserve_v2(backing, carriage.transaction(), prior_journal)?;
-        let (mut payment, receipts, _decode) = self.qualify_literal_case_source_payment_v2(
-            backing,
+        let mut payment = self.qualify_case_source_payment_v2(
             prefix,
+            backing,
             prior,
             (carriage.transaction(), carriage.entries(), carriage.fee()),
             assignment,
@@ -1222,31 +883,25 @@ impl TransitionBuilder<'_> {
         &mut self,
         ctx: &PalwBlockContextV2,
         action: &PositiveAssignmentRawActionV2,
+        assignment: AssignmentId,
         case: CaseId,
+        receipts: &[AcceptedMaterial],
     ) -> Result<(), PalwStateV2Error> {
         use super::super::palw_settlement_once_fold_v1::PalwSettleOnceV1;
         if !self.params.settlement_once_active_at(ctx.daa_score) {
             return Err(refuse("actual settlement-once owner is dormant"));
         }
         let (backing, mut machine, mut prior) = self.prepare_case_subject_v2(action, case, None)?;
-        let prior_journal =
-            backing.records().iter().map(|record| record.raw().len() as u64).try_fold(0u64, u64::checked_add).ok_or_else(capacity)?;
-        machine.check_case_payment_journal_reserve_v2(
-            backing,
-            action.transaction(),
-            (prior_journal, backing.records().len() as u64),
-        )?;
         let origin = action.origin();
-        let (mut payment, receipts, _decode) = machine.qualify_literal_case_source_payment_v2(
-            backing,
+        let mut payment = machine.qualify_case_source_payment_v2(
             &self.state,
+            backing,
             &prior,
             (action.transaction(), action.entries(), action.fee()),
             assignment,
             receipts,
             (0, ctx.daa_score, Some(origin.accepting_block)),
         )?;
-        let assignment = backing.assignment().id();
         let material = source_material(origin)?;
         payment.funding.last_settlement = Some(material);
         if let Some(point) = payment.funding.current_outpoint {
@@ -1254,7 +909,7 @@ impl TransitionBuilder<'_> {
         }
         // The active raw op12 owns the enclosing checkpoint, including every
         // once marker, source receipt, funding row and retained journal entry.
-        for supplied in &receipts {
+        for supplied in receipts {
             let checked = machine.source_responses.get(&supplied.digest).ok_or_else(missing)?;
             let fee = &checked.fee;
             let obligation = source_fee_obligation_v2(assignment, fee);
@@ -1290,91 +945,15 @@ impl TransitionBuilder<'_> {
 
 /// The exact Case settlement validated from rooted history and populated
 /// inputs. The ordinary script check and the accepted-event fold still run.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub struct QualifiedCaseSourceSpendV2 {
     transaction: crate::TransactionId,
     carrier_hash: crate::TransactionHash,
     inputs: Digest,
-    journal_carrier: Digest,
-    case: CaseId,
-    case_reservation: AcceptedMaterial,
-    locked: u64,
-    paid: u64,
     debit: crate::tx::TransactionOutpoint,
     continuation: Option<crate::tx::TransactionOutpoint>,
-    successor_relay: Option<AcceptedMaterial>,
-}
-impl crate::palw_native_resource_v1::NativeHeapV1 for QualifiedCaseSourceSpendV2 {
-    fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
-        NativeCoverageV1::zero()
-    }
 }
 impl QualifiedCaseSourceSpendV2 {
-    pub(in crate::palw_state_v2) fn matches_payment_journal_v2(
-        &self,
-        header: misaka_palw_positive_contract::journal::CaseJournalHeader,
-        raw: &[u8],
-    ) -> bool {
-        header.case == self.case
-            && header.origin.carrier_transaction.0 == self.transaction.as_bytes()
-            && crate::palw_positive_assignment_case_material_v2::case_payment_journal_digest_v2(raw) == self.journal_carrier
-    }
-
-    pub(in crate::palw_state_v2) fn matches_funding_delta_v2(
-        &self,
-        before: &FundingRow,
-        after: &FundingRow,
-        origin: AcceptedOrigin,
-    ) -> bool {
-        use crate::palw_positive_assignment_funds_v2::{AssignmentLegDebitV2, debit_assignment_leg_v2, native_assignment_outpoint_v2};
-        let locked =
-            [before.fee.remaining, before.capital.remaining, before.surplus.remaining].into_iter().try_fold(0u64, u64::checked_add);
-        let Ok(fee) = debit_assignment_leg_v2(before.fee, AssignmentLegDebitV2 { paid: self.paid, ..Default::default() }, 0) else {
-            return false;
-        };
-        let Ok(settlement) = source_material(origin) else {
-            return false;
-        };
-        before.consent.case == self.case
-            && locked == Some(self.locked)
-            && before.current_outpoint.map(native_assignment_outpoint_v2) == Some(self.debit)
-            && after.current_outpoint.map(native_assignment_outpoint_v2) == self.continuation
-            && *after
-                == FundingRow { current_outpoint: after.current_outpoint, fee, last_settlement: Some(settlement), ..before.clone() }
-    }
-
-    pub(in crate::palw_state_v2) fn matches_successor_relay_delta_v2(
-        &self,
-        funding: &FundingRow,
-        delta: Option<(&FundingRelayCustodyRowV2, &FundingRelayCustodyRowV2)>,
-        origin: AcceptedOrigin,
-    ) -> bool {
-        use crate::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2;
-
-        let Some(reservation) = self.successor_relay else {
-            return delta.is_none();
-        };
-        let (Some((before, after)), Some(predecessor)) = (delta, funding.current_outpoint) else {
-            return false;
-        };
-        if before.purpose != RelayFundingPurposeV2::CaseC
-            || Some(native_assignment_outpoint_v2(before.funding_outpoint)) != self.continuation
-            || before.reservation != reservation
-            || before.binding.is_some()
-        {
-            return false;
-        }
-        let binding = case_successor_relay_binding_v2(
-            origin,
-            self.case_reservation,
-            reservation,
-            funding.original_outpoint,
-            predecessor,
-            funding.consent.id().0,
-        );
-        *after == FundingRelayCustodyRowV2 { binding: Some(binding), ..before.clone() }
-    }
-
     pub fn matches_v2(&self, transaction: &crate::tx::Transaction, entries: &[crate::tx::UtxoEntry]) -> bool {
         transaction.id() == self.transaction
             && transaction.id_is_current()
@@ -1388,31 +967,45 @@ impl QualifiedCaseSourceSpendV2 {
     pub fn continuation_v2(&self) -> Option<crate::tx::TransactionOutpoint> {
         self.continuation
     }
-    /// The pending registration selected by the literal successor output.
-    /// Consensus must authenticate its accepted carrier before allowing the
-    /// locked input to be spent.
-    pub fn successor_relay_v2(&self) -> Option<AcceptedMaterial> {
-        self.successor_relay
-    }
 }
 
 pub fn qualify_case_source_spend_v2(
     state: &PalwChainStateV2,
-    parent: BlockHash,
     backing: &NativeCommittedAssignedCaseV2,
     transaction: &crate::tx::Transaction,
     entries: &[crate::tx::UtxoEntry],
     daa: u64,
 ) -> Result<QualifiedCaseSourceSpendV2, PalwStateV2Error> {
     use crate::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2;
-    if !is_case_source_payment_carrier_v2(transaction) || !transaction.id_is_current() {
-        return Err(refuse("Case spend differs from the actual selected-parent carrier"));
+    use crate::palw_positive_court_v2::coordinator::assignment_body::{
+        PositiveAssignmentNativeOperationV2, decode_assignment_body_v2, scan_assignment_body_v2,
+    };
+    if transaction.payload.get(..3) != Some(&[1, 0, 176])
+        || transaction.payload.get(7) != Some(&12)
+        || transaction.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+        || !transaction.id_is_current()
+        || state.state_root() != backing.parent_state_root()
+    {
+        return Err(refuse("Case spend differs from the actual selected-parent funding or carrier"));
     }
-    super::super::positive_assignment_materials::quote_assigned_case_payment_journal_v2(backing, transaction)?;
-    let (mut machine, prior) = recover_case_subject_v2(state, backing, parent, backing.pin().case, None)?;
-    let prior_journal =
-        backing.records().iter().map(|record| record.raw().len() as u64).try_fold(0u64, u64::checked_add).ok_or_else(capacity)?;
-    machine.check_case_payment_journal_reserve_v2(backing, transaction, (prior_journal, backing.records().len() as u64))?;
+    let assignment = backing.assignment();
+    let rules = NativeAssignmentRulesV2::from_original_material_data_v2(assignment, backing.material()).map_err(refuse)?;
+    let limits = rules.body_limits().map_err(refuse)?;
+    let raw = &transaction.payload[3..];
+    let summary = scan_assignment_body_v2(raw, limits).map_err(refuse)?;
+    let _decode = reserve_native_requests_v1(summary.heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
+    let body = decode_assignment_body_v2(raw, limits).map_err(refuse)?;
+    let PositiveAssignmentNativeOperationV2::SettleAssignment { assignment: supplied, case: Some(case), receipts } = body.operation
+    else {
+        return Err(refuse("Case spend must name its Case"));
+    };
+    if supplied != assignment.id() || case != backing.pin().case {
+        return Err(refuse("Case spend names a different Assignment or Case"));
+    }
+    let (_, bundle, pin) = rooted_bundle(state, supplied)?;
+    if pin != *backing.pin() {
+        return Err(missing());
+    }
     let fee = entries
         .iter()
         .map(|entry| entry.amount)
@@ -1443,140 +1036,7 @@ pub fn qualify_case_source_spend_v2(
         carrier_hash: crate::hashing::tx::hash(transaction),
         inputs: crate::palw_positive_assignment_case_material_v2::assigned_case_inputs_id_v2(transaction.id(), entries)
             .map_err(refuse)?,
-        journal_carrier: crate::palw_positive_assignment_case_material_v2::case_payment_carrier_digest_v2(transaction),
-        case: prior.case,
-        case_reservation: prior.reservation,
-        locked: entries[0].amount,
-        paid: payment.amount,
         debit: native_assignment_outpoint_v2(payment.debit),
         continuation: payment.funding.current_outpoint.map(native_assignment_outpoint_v2),
-        successor_relay: payment.successor.as_ref().map(|successor| successor.custody.reservation),
     })
-}
-
-#[cfg(test)]
-mod source_fee_tests {
-    use super::{CaseSourceFeesV2, SourceDeliveryReserveV2};
-
-    #[test]
-    fn accepted_case_coin_and_literal_journal_must_reconcile() {
-        use super::*;
-        use crate::{
-            palw_positive_assignment_case_material_v2::case_payment_carrier_digest_v2,
-            palw_positive_assignment_funds_v2::native_assignment_outpoint_v2,
-            tx::{Transaction, TransactionOutpoint},
-        };
-        use misaka_palw_positive_contract::journal::{CaseJournalEventKind, CaseJournalHeader};
-
-        let (_, _, case, before, _, _) = crate::palw_positive_rows_v2::tests::signed_bundle();
-        let tx = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, vec![]);
-        let next = NativeOutpoint { transaction: NativeHash64(tx.id().as_bytes()), index: 1 };
-        let origin = AcceptedOrigin { carrier_transaction: next.transaction, ..before.funding_origin };
-        let header = CaseJournalHeader {
-            version: 2,
-            revision: 1,
-            scope: case.coverage.scope,
-            case: case.case,
-            result: case.result,
-            sequence: 2,
-            previous: Digest([3; 64]),
-            origin,
-            kind: CaseJournalEventKind::NativeTransaction,
-        };
-        let proof = QualifiedCaseSourceSpendV2 {
-            transaction: tx.id(),
-            carrier_hash: crate::hashing::tx::hash(&tx),
-            inputs: Digest([0; 64]),
-            journal_carrier: case_payment_carrier_digest_v2(&tx),
-            case: case.case,
-            case_reservation: case.reservation,
-            locked: before.initial_locked,
-            paid: 1,
-            debit: native_assignment_outpoint_v2(before.original_outpoint),
-            continuation: Some(TransactionOutpoint::new(tx.id(), 1)),
-            successor_relay: None,
-        };
-        let mut raw = borsh::to_vec(&tx).unwrap();
-        assert!(proof.matches_payment_journal_v2(header, &raw));
-        raw.push(0);
-        assert!(!proof.matches_payment_journal_v2(header, &raw));
-
-        let mut after = before.clone();
-        after.current_outpoint = Some(next);
-        after.fee.paid += 1;
-        after.fee.remaining -= 1;
-        after.last_settlement = Some(source_material(origin).unwrap());
-        assert!(proof.matches_funding_delta_v2(&before, &after, origin));
-        after.fee.paid += 1;
-        after.fee.remaining -= 1;
-        assert!(!proof.matches_funding_delta_v2(&before, &after, origin));
-        assert!(!proof.matches_funding_delta_v2(&before, &before, origin));
-
-        let reservation = AcceptedMaterial { origin: before.funding_origin, digest: Digest([21; 64]) };
-        let pending = FundingRelayCustodyRowV2 {
-            funding_outpoint: next,
-            purpose: RelayFundingPurposeV2::CaseC,
-            terms: Digest([22; 64]),
-            relay_signature: [0; misaka_palw_positive_contract::identity::SIGNATURE_BYTES],
-            material: reservation,
-            reservation,
-            retention_until_daa: 100,
-            binding: None,
-        };
-        let binding = case_successor_relay_binding_v2(
-            origin,
-            case.reservation,
-            reservation,
-            before.original_outpoint,
-            before.original_outpoint,
-            before.consent.id().0,
-        );
-        let bound = FundingRelayCustodyRowV2 { binding: Some(binding), ..pending.clone() };
-        let relay_proof = QualifiedCaseSourceSpendV2 { successor_relay: Some(reservation), ..proof };
-        assert!(proof.matches_successor_relay_delta_v2(&before, None, origin));
-        assert!(!proof.matches_successor_relay_delta_v2(&before, Some((&pending, &bound)), origin));
-        assert!(relay_proof.matches_successor_relay_delta_v2(&before, Some((&pending, &bound)), origin));
-        assert!(!relay_proof.matches_successor_relay_delta_v2(&before, None, origin));
-        assert!(!relay_proof.matches_successor_relay_delta_v2(&before, Some((&pending, &pending)), origin));
-        let wrong = FundingRelayCustodyRowV2 { binding: Some(FundingRelayBindingV2 { predecessor: Some(next), ..binding }), ..bound };
-        assert!(!relay_proof.matches_successor_relay_delta_v2(&before, Some((&pending, &wrong)), origin));
-    }
-
-    #[test]
-    fn first_delivery_releases_only_its_own_capacity_in_every_dimension() {
-        let first = SourceDeliveryReserveV2 { units: 1, body: 15, work: 70, journal: 1120 };
-        let second = SourceDeliveryReserveV2 { units: 1, body: 20, work: 95, journal: 1125 };
-        let pending = first.combine(second, u64::checked_add).unwrap();
-        let remaining = pending.combine(first, u64::checked_sub).unwrap();
-        assert_eq!((remaining.units, remaining.body, remaining.work, remaining.journal), (1, 20, 95, 1125));
-        let oversized = SourceDeliveryReserveV2 { journal: 1126, ..second };
-        assert!(remaining.combine(oversized, u64::checked_sub).is_none());
-    }
-
-    #[test]
-    fn partial_settlement_keeps_the_future_delivery_reserve() {
-        let fees = CaseSourceFeesV2 { earned: 90, paid: 40 };
-        assert_eq!(fees.settlement_limit(10, 60, 100), Some(50));
-        assert_eq!(fees.settlement_limit(10, 59, 100), None);
-        assert_eq!(fees.settlement_limit(10, 60, 99), None);
-        let after = CaseSourceFeesV2 { paid: 90, ..fees };
-        assert_eq!(after.settlement_limit(10, 10, 100), Some(0));
-        assert_eq!(after.settlement_limit(10, 9, 100), None);
-    }
-
-    #[test]
-    fn case_funding_covers_the_entire_unpaid_source_balance() {
-        let mut fees = CaseSourceFeesV2 { earned: 90, paid: 0 };
-        assert_eq!(fees.pending_with(10, 100, 110), Some(100));
-        assert_eq!(fees.pending_with(11, 100, 110), None);
-        fees.paid = 40;
-        assert_eq!(fees.pending_with(10, 60, 100), Some(60));
-        assert_eq!(fees.pending_with(10, 60, 99), None);
-        assert_eq!(fees.pending_with(0, 49, 100), None);
-        fees.paid = 91;
-        assert_eq!(fees.pending_with(0, 100, 100), None);
-        assert_eq!(fees.pending_with(1, 100, 100), None);
-        fees.earned = u64::MAX;
-        assert_eq!(fees.pending_with(1, u64::MAX, u64::MAX), None);
-    }
 }

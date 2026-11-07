@@ -17,5 +17,3 @@ cfg_if::cfg_if! {
         pub mod task;
     }
 }
-
-pub mod memory_budget;

@@ -168,14 +168,14 @@ impl TransitionBuilder<'_> {
         if &decoded != body {
             return Err(refused("raw op12 body changed"));
         }
-        if let PositiveAssignmentNativeOperationV2::SettleAssignment { case: Some(case), .. } = &body.operation
+        if let PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, case: Some(case), receipts } = &body.operation
             && let Some(NativeRowBody::Funding(funding)) =
                 PositiveRowsV2::new(&self.state).read(NativeRowKey::Funding(*case)).map_err(refused)?.map(|row| row.body)
             && funding.current_outpoint.is_some_and(|point| {
                 tx.inputs.first().is_some_and(|input| input.previous_outpoint == native_assignment_outpoint_v2(point))
             })
         {
-            return self.apply_case_source_settlement_v2(ctx, action, *case);
+            return self.apply_case_source_settlement_v2(ctx, action, *assignment, *case, receipts);
         }
         if self.native_writers_tracking_v1() {
             let mut quote = native_writers::NativeWriteQuoteV1::new("Assignment settlement input amount workspace");
@@ -288,9 +288,7 @@ impl TransitionBuilder<'_> {
                     },
                 )? {
                     super::palw_settlement_once_fold_v1::PalwSettleOnceV1::First => {}
-                    _ => {
-                        return Err(refused("settlement is dormant, refused or already consumed"));
-                    }
+                    _ => return Err(refused("settlement is dormant, refused or already consumed")),
                 }
                 let ordinal = self.next_assignment_settlement_ordinal_v2(id, due.kind, due.party)?;
                 let row = AssignmentSettlementRow {

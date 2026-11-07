@@ -214,36 +214,6 @@ pub(super) fn readiness(
             } else {
                 result = result.join(RewardReadinessV1::Hold(u64::MAX));
             }
-            Ok(())
-        };
-        let visited=lineage::visit_consumer_facts_v9(state,cursor_id,cursor.accepting_point(),&mut visit)
-            .and_then(|found|if found{Ok(true)}else{
-                // REQUIRED Item5 reader: only actual retained/signed legacy
-                // spend provenance may create these borrowed fact views.
-                lineage::visit_legacy_consumer_facts_v9(state,params,&cursor,&mut visit)
-            });
-        drop(visit);
-        // Native visitor propagates callback Err immediately. The private flag
-        // is set only after an authenticated semantic Denied and prevents ANY
-        // later source hydration from masking it. No error string is matched.
-        if saw_denied{return Ok(RewardReadinessV1::Denied)}
-        let found=visited?;
-        if !found{
-            // No scoped facts and no complete authenticated legacy inventory.
-            // Never equate absence with an independent/empty input set.
-            result=result.join(RewardReadinessV1::Hold(u64::MAX));
-        }
-        if result==RewardReadinessV1::Denied{return Ok(result)}
-        if let Some(consumed)=cursor.prefix_use()?{
-            let identity=consumed.intent.source;
-            let point=match state.claim_local_prefix_source_point_v1(&identity){
-                Ok(point)=>point,
-                Err(PalwStateV2Error::NativeResource(e))=>return Err(PalwStateV2Error::NativeResource(e)),
-                Err(_)=>{result=result.join(RewardReadinessV1::Hold(u64::MAX));continue}
-            };
-            if let Some(next)=SourceOriginV8::at_point(state,params,identity.source_claim,&point)?{
-                enqueue(&mut pending,next)?;
-            }else{result=result.join(RewardReadinessV1::Hold(u64::MAX));}
         }
     }
     Ok(result)
