@@ -710,6 +710,28 @@ mod tests {
     }
 
     #[test]
+    fn rooted_facts_require_exact_id_and_every_eog_member() {
+        let (mut statement, mut table) = fixture();
+        table.eog_token_ids = vec![1, 2];
+        statement.table_root = table.root();
+        let eog = table.eog_opening().unwrap();
+        let facts = derive_tokenizer_rendering_v2(statement, RAW, &eog, BUDGET).unwrap();
+        assert_eq!(facts.verified_eog(&eog), Some([1, 2].as_slice()));
+        let mut shortened = eog.clone();
+        shortened.ids.pop();
+        assert_eq!(facts.verified_eog(&shortened), None);
+        let mut changed = eog;
+        changed.ids[1] = 3;
+        assert_eq!(facts.verified_eog(&changed), None);
+        let opening = table.opening_of(0).unwrap();
+        assert!(facts.verifies_rendering(0, &opening));
+        assert!(!facts.verifies_rendering(1, &opening));
+        let mut oversized = opening;
+        oversized.rendering = Some(b"unregistered".to_vec());
+        assert!(!facts.verifies_rendering(0, &oversized));
+    }
+
+    #[test]
     fn rejects_wrong_table_even_with_its_own_valid_eog_opening() {
         let (mut statement, mut table) = fixture();
         table.entries[2] = Some(b"x".to_vec());
