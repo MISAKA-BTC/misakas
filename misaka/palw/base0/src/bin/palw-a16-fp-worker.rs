@@ -48,6 +48,9 @@
 //! Set `MISAKA_PALW_MODEL_ID=Qwen/Qwen2.5-1.5B/graph-v7@8192` to serve the exact Testnet 12
 //! genesis artifact. With the selector unset, the worker serves the historical 512-wide class.
 //!
+//! Set `MISAKA_PALW_MODEL_ID=Qwen/Qwen2.5-1.5B/graph-v7@8192` to serve the exact Testnet 12
+//! genesis artifact. With the selector unset, the worker serves the historical 512-wide class.
+//!
 //! The artifact and tokenizer arrive by environment (`MISAKA_PALW_ARTIFACT`,
 //! `MISAKA_PALW_TOKENIZER`) because the gateway spawns the worker with only the mode flags — the
 //! same shape as `palw-worker`'s pinned-model env.
