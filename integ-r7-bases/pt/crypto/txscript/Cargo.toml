@@ -1,0 +1,66 @@
+[package]
+name = "kaspa-txscript"
+description = "Kaspa txscript engine library"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[example]]
+name = "kip-10"
+# kaspa-pq PQ-only: this example is built entirely on legacy secp256k1 P2PKH/P2SH
+# scripts, so it is skipped unless `legacy-secp256k1` is enabled (ADR-0019 §14).
+required-features = ["legacy-secp256k1"]
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` (default) builds the consensus
+# signature engine with ML-DSA-87 only — no secp256k1 in the dependency tree.
+# `legacy-secp256k1` re-enables the legacy Schnorr/ECDSA verify paths, opcodes,
+# and their tests; it is off in release builds.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1", "kaspa-txscript-errors/legacy-secp256k1"]
+wasm32-core = []
+wasm32-sdk = []
+
+[dependencies]
+blake2b_simd.workspace = true
+borsh.workspace = true
+cfg-if.workspace = true
+hexplay.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-txscript-errors.workspace = true
+kaspa-utils.workspace = true
+kaspa-wasm-core.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+secp256k1 = { workspace = true, optional = true }
+libcrux-ml-dsa.workspace = true
+serde_json.workspace = true
+serde-wasm-bindgen.workspace = true
+serde.workspace = true
+sha2.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+wasm-bindgen.workspace = true
+workflow-wasm.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+smallvec.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "bench"
+harness = false
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "camembert",
+ "doc": "CamemBERT: RoBERTa under another name (positions from padding_idx + 1). Third-party adapter (lane H): data only.",
+ "extends": [
+  "roberta"
+ ],
+ "vars": [
+  {
+   "name": "model_type",
+   "value": "camembert"
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+{
+  "exit": 0,
+  "seconds": 17.250732000000003,
+  "stopReason": null,
+  "ownedDbBytesBeforeCleanup": 167821131,
+  "files": {
+    "OPTIONS-000007": 7864,
+    "IDENTITY": 36,
+    "LOCK": 0,
+    "CURRENT": 16,
+    "LOG": 39576,
+    "000009.sst": 167773339,
+    "MANIFEST-000005": 300,
+    "000008.log": 0
+  },
+  "native100kAccepted": false,
+  "realP2pAccepted": false,
+  "rssAccepted": false
+}

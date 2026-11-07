@@ -1,0 +1,137 @@
+[
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "palw_tir_public_fold_v1"
+    ],
+    "log": "archive-material-native.log",
+    "exit_code": 0,
+    "elapsed_seconds": 346.28
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "palw_state_v2::tests::public_prefix_fold_v1::"
+    ],
+    "log": "archive-material-prefix.log",
+    "exit_code": 0,
+    "elapsed_seconds": 5.728
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "held_close_chunks_clock::"
+    ],
+    "log": "archive-material-ordinary-0.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.018
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "a_court_session_cannot_outlive_its_claim_and_stop_the_chain"
+    ],
+    "log": "archive-material-ordinary-1.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.017
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "a_lapsed_dissection_move_loses_on_the_movers_side"
+    ],
+    "log": "archive-material-ordinary-2.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.018
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "a_lapsed_child_choice_loses_on_the_challengers_side"
+    ],
+    "log": "archive-material-ordinary-3.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.018
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "a_non_fused_class_is_not_charged_for_a_root_claim_it_cannot_file"
+    ],
+    "log": "archive-material-ordinary-4.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.017
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence"
+    ],
+    "log": "archive-material-ordinary-5.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.017
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "a_responder_that_never_files_the_root_claim_loses_on_its_own_side"
+    ],
+    "log": "archive-material-ordinary-6.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.017
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain"
+    ],
+    "log": "archive-material-ordinary-7.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.152
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "palw_court_v2::"
+    ],
+    "log": "archive-material-kernel.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "-p",
+      "kaspa-consensus-core",
+      "--test",
+      "palw_court_service_state_v2",
+      "--test",
+      "palw_court_policy_v1",
+      "--test",
+      "g14_close_gates",
+      "--test",
+      "palw_activation_pool_is_t12_only",
+      "--test",
+      "palw_the_release_did_not_move",
+      "--test",
+      "palw_tir_dissect_fold"
+    ],
+    "log": "archive-material-regressions.log",
+    "exit_code": 0,
+    "elapsed_seconds": 307.294
+  },
+  {
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "-p",
+      "kaspa-consensus"
+    ],
+    "log": "archive-material-consensus-check.log",
+    "exit_code": 0,
+    "elapsed_seconds": 52.984
+  }
+]

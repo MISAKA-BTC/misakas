@@ -1,0 +1,25 @@
+# Role consent: decision necessity reassessment
+
+2026-10-22. Read-only repository review; /tmp drafts only. This supersedes the initial draft recommendation to ask the user to choose A/B. No new permission question is recommended for the existing scope.
+
+## Initial A/B are not distinct
+
+A required all mandatory roles be covered by actual pre-acceptance consent. B required the same complete mandatory coverage but called those actors fallback. A already permitted one actor to cover several roles and other parties to contribute authenticated material. B did not release fallback duties, pay voluntary parties or assign them financial/state roles automatically. Both therefore admit the same manifests and execute the same material use and duty accounting. Naming one set fallback creates no independent design decision. The initial RFC-0036/ADR-0203 draft question should not be presented as a required new approval.
+
+RFC-0035 §3 (A detailed specification/isolated implementation explicitly approved in its user-selection section) already requires: actual native whole-branch requirements; new consent/current authority and acceptance/response/retention/capital/reward conditions for additional roles; no successful admission relying on unconsenting future actors; future external filer consent at use; an arbitrary eligible one-person common frontier. RFC-0032 A also permits authenticated material to construct terminal evidence without an incomplete first-body monopoly. Closing known mandatory responsibilities with actual consenting actors, while allowing authenticated third-party data and use-time filer/relay consent, implements these approved boundaries. It does not require a new A/B choice.
+
+## Real effect difference would require a separate proposal
+
+A genuinely different A would freeze ALL potential paid or state-advancing provider slots to named pre-consented actors at original acceptance. An unnamed contributor could supply usable data or file/relay but could never become a provider-role holder, payee or responsible custodian. A genuinely different B would allow later voluntary actors to acquire those paid/state-advancing roles through use-time consent while retaining mandatory fallback coverage.
+
+This difference affects native actor assignment, authorized recipients, liability/retention start and end, payment once-only state and potentially replacement/recovery. Neither authenticated data receipt nor current authority alone grants those effects. RFC-0035 permits explicit role contracts but does not choose an automatic dynamic paid-provider acquisition or release algorithm. Current source potential role indices are not actual actor assignments, and role 0 is not presumed producer. No adopted native complete role catalog/profile body currently supplies either algorithm.
+
+Accordingly do not manufacture this broader A/B choice now just to unblock implementation. Neither is needed to validate known required responsibilities under already approved explicit contracts. If later implementation actually needs freezing all provider slots or dynamic role/payee acquisition, propose that concrete state transition, its F03 effect and financial/retention terms in a new RFC/ADR; then obtain the distinct decision. This is not a rejection or silent adoption of either broader policy.
+
+## Implementation scope available now and remaining hard dependency
+
+Routine work under existing approval can derive actual requirements from the opaque native preparation, normalize a proposed assignment, verify each responsible actor's own new-domain consent/current authority/acceptance interval/required horizon/signed expenditure maxima against that actual requirement, and keep optional data contribution and filer/relay authentication separate. Same actor may cover compatible multiple duties only when the native catalog says so; no count-only coverage or caller requirements/hash authority. No fallback duty is discharged by voluntary supply unless an adopted actual rule says so.
+
+However the actual whole-branch role/financial/retention producer is not implemented: anonymous SourceMaterialOnly role slots, geometric joins and profile IDs do not supply it. Thus no standalone self-auth validator or always-Missing adapter should be added as apparent progress. First derive a substantive catalog/read-set or implement a real existing contract check at the native preparation seam. Keep unresolved body/fees/capital/horizon/assignment effects typed; refuse new funded admission rather than zero-fill. Existing mandatory responsibility clauses alone do not invent rates, unlock duties or a complete role body.
+
+F03 remains open to any eligible outside filer even when every owner colludes; mandatory actor consent is not a veto over third-party data or prosecution. Additional signatures, model bytes, a priori unknown filer keys, model review or new holding obligations are not implied. Old TFP1/pledges/domain meanings remain unchanged. This reassessment changes /tmp draft status only; no repository rule, production activation or user approval has changed.

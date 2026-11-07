@@ -1,0 +1,20 @@
+
+running 15 tests
+test palw_tokenizer_json_stream_v1::tests::decimal_overflow_boundary_and_integer_ids_are_feature_independent ... ok
+test palw_tokenizer_json_stream_v1::tests::exact_eof_inside_vocab_number_seals_invalid_without_an_unreachable_new_proof ... ok
+test palw_tokenizer_json_stream_v1::tests::exact_json_grammar_and_renderer_agree_across_every_cursor_boundary_and_restart ... ok
+test palw_tokenizer_json_stream_v1::tests::normative_container_depth_and_malformed_delimiters_are_exact ... ok
+test palw_tokenizer_json_stream_v1::tests::observer_digest_events_are_tentative_and_do_not_change_serialized_parser_state ... ok
+test palw_tokenizer_json_stream_v1::tests::required_schema_and_merge_types_match_the_whole_file_rule ... ok
+test palw_tokenizer_json_stream_v1::tests::understated_work_bound_only_convicts_after_the_original_exact_raw_hash ... ok
+test palw_tokenizer_json_stream_v1::tests::unknown_large_strings_keep_the_serialized_parser_bounded_and_false_raw_hash_never_verdicts ... ok
+test palw_tokenizer_owned_court_v1::tests::actual_operand_eof_convicts_false_signed_length_without_trusting_the_operand_length ... ok
+test palw_tokenizer_owned_court_v1::tests::compact_registered_profile_preserves_signed_tokenizer_seed_to_authenticated_eof ... ok
+test palw_tokenizer_owned_court_v1::tests::owned_public_tokenizer_contract_refuses_false_identity_and_completes_only_after_both_original_hashes ... ok
+test palw_tokenizer_rendering_v1::tests::alphabet_added_holes_and_duplicates_are_unambiguous ... ok
+test palw_tokenizer_table_stream_v1::tests::incomplete_corrupt_or_foreign_table_leaf_never_exposes_digest ... ok
+test palw_tokenizer_table_stream_v1::tests::original_table_leaf_and_rendering_digest_match_at_restart_boundaries ... ok
+test palw_tokenizer_table_stream_v1::tests::raw_json_and_original_table_authenticate_before_honest_mismatch_duplicate_or_overrun ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 3827 filtered out; finished in 6.40s
+

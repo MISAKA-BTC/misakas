@@ -1,0 +1,88 @@
+#!/bin/bash
+# deploy-t12/install-5104.sh — 5.104.81.23 (hostname vmi3272359): bonds 2, 3, 4, 5, 7. Not public
+# (ufw drops inbound; every node listens on 127.0.0.1 and dials the public nodes out).
+#
+#   b2  misaka-t12-seat2 (drop-in)  127.0.0.1:26311  borsh 26313  json 26314   8k seat (no longer an 8k producer — below)
+#   b3  misaka-t12-seat3 (drop-in)  127.0.0.1:26321  borsh 26323  json 26324   8k seat
+#   b4  misaka-t12-seat4 (drop-in)  127.0.0.1:26331  borsh 26333  json 26334   8k seat
+#   b5  misaka-t12-seat5 (drop-in)  127.0.0.1:26341  borsh 26343  json 26344   8k seat
+#   (b7 moved to .113 on 2026-10-02 — install-113.sh)  was: misaka-t12-seat7 (NEW unit) 127.0.0.1:26351  borsh 26353  json 26354   8k seat (card 7, re-keyed here 09-23)
+# borsh 26313 is what misaka-dnsseeder-t12 here already asks for peers.
+# Shares (R-core+, PLAN.md §2): five nodes on 24,033 MiB leave no room for the ideal, so every node here
+# is a SEAT ONLY with the minimum that runs one duty at a time: 3,584 MiB = one 8k seat duty 3,500 (+ 84);
+# the second replay slot and a covering signer's DA answer queue behind it. b2 was the fleet's second 8k
+# producer; at 7,168 MiB its own DA answers could only wait for a window between its attempts and its seat
+# work, and an honest producer that cannot answer defaults to S1 (PLAN.md §2 R-2, option (b), the
+# release-prep review's default). The 8k producer is ibm b0 alone.
+# MemoryMax 9G each is a crash guard, not a division of the host (5 × 9G > MemTotal): the ledger reads
+# memory.max − memory.current (page cache included — the 8k artifact's 1.7 GB is charged to whichever
+# seat faults it in first), so MemoryMax must clear share + base + artifact + 1 GiB + a cache allowance
+# (PLAN.md §2; kaspad/tests/t12_role_memory_figures.rs). The host is guarded by the MemAvailable term.
+#
+# The route-matrix session (5bd46c14) runs the OLD live chain's floor seats (misaka-t12f-b2..b5,
+# /root/t12-live) and a PRIVATE t12 (misaka-t12p-0..7, -scan, -scan-tunnel, /root/t12-private,
+# plus a daa-obs node) here. `switch` refuses while any of it runs: it is ~25 GB of RSS on a 23 GiB
+# host, and the private chain shares this chain's keys.
+#
+# Run as root on 5.104 from $REL_ROOT/kit:  ./install-5104.sh preflight | stage | switch | check | rollback
+# The chain is LIVE (09-25): a new binary under it is  ./install-5104.sh stage && ./install-5104.sh upgrade  (PLAN.md §15),
+# undone by  ./install-5104.sh upgrade-rollback  — never by `rollback` (that retires the chain).
+. "$(dirname "$0")/lib.sh"
+
+HOST_NAME_EXPECTED=vmi3272359
+RESERVE_MIB=4096             # non-kaspad RSS incl. the other session's t11 fixture node (preflight prints its RSS; PLAN.md §2: 17,920 + 4,096 of 24,033 MiB)
+FIXTURE_PATTERN=misakas-stale-consensus-diagnosis   # that node's command line (not ours; left running, counted in RESERVE_MIB)
+START_GAP=30                 # each node re-derives the 8k manifest root (--palw-verify-class-manifest) and maps 1.7 GB
+BINARIES=(kaspad misaka palw-class)
+# int-10.2 D1 (docs/design/palw/consensus/t12-replay-memory-1001.md §5): a multi-seat host runs the host pinner — its own unit and
+# memory cgroup, started before the seats (pinner-lib.sh), so the class artifacts' page cache is charged there and to no
+# seat — and the host ledger, so every seat's grant also needs the host's free memory less EVERY seat's reservations.
+# The seats keep their MemoryMax and share. Either line off: empty HOST_LEDGER_DIR / HOST_PINNER=0 (then re-stage).
+HOST_PINNER=1
+HOST_LEDGER_DIR=/run/misaka-palw
+# One replay per seat here (restored 2026-10-02 ~09:00, release tag phaseh1s1): with two slots the second replay is granted
+# only what the first leaves of the seat's share, so A2 narrows it as far as W=1 (2.5x slower stepped path), and the host's
+# 8 vCPUs run 20-25 runnable threads (97 % busy). One slot gives every replay its whole share (W=64) and halves the CPU fight.
+HOST_EXTRA_ARGS=(--palw-seat-replay-slots=1)
+PUB="169.58.232.113:26311,169.58.39.220:26311,169.58.39.220:26321"
+# upgrade: before each seat here stops, the three public nodes (b6, b0, b1) must take a TCP connection — five
+# seats here plus a public node down at once would leave the 8k class under its 7 ready seats (PLAN.md §15)
+UPGRADE_REQUIRE_UP=(169.58.232.113:26311 169.58.39.220:26311 169.58.39.220:26321)
+NODES=(
+  "2|misaka-t12-seat2|dropin|127.0.0.1:26311|26313|26314|-|-|3584|9|none|0|1|127.0.0.1:26331,127.0.0.1:26341,$PUB"
+  "4|misaka-t12-seat4|dropin|127.0.0.1:26331|26333|26334|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26341,$PUB"
+  "5|misaka-t12-seat5|dropin|127.0.0.1:26341|26343|26344|-|-|3584|9|none|0|1|127.0.0.1:26311,127.0.0.1:26331,$PUB"
+)
+# the first regenesis deploy's seat appdirs (a few MB each). NOT the route-matrix session's
+# /root/.t12f-b* or /root/t12-private/run/* — those are its to clear.
+OLD_APPDIRS=(/root/.t12 /root/.t12b /root/.t12c /root/.t12e)
+
+other_session_running() { # prints what is still up
+    systemctl list-units --no-legend --state=active 'misaka-t12f-*' 'misaka-t12p-*' 2>/dev/null | awk '{print "  unit " $1}'
+    pgrep -af '/root/t12-private/|/root/t12-live/|/root/perm-drill/' 2>/dev/null | grep -v pgrep | cut -c1-140 | sed 's/^/  proc /' || true
+}
+
+host_preflight() {
+    local o; o=$(other_session_running)
+    if [ -n "$o" ]; then warn "the route-matrix session's nodes are still running here (switch will refuse):"; echo "$o" >&2; fi
+    say "  old seat units: $(for n in 2 3 4 5; do printf 'seat%s=%s/%s ' $n "$(systemctl show -p ActiveState --value misaka-t12-seat$n)" "$(systemctl is-enabled misaka-t12-seat$n 2>/dev/null)"; done)"
+    # pgrep exits 1 when the fixture node is not running: under `set -euo pipefail` that alone would end the
+    # script with no message (preflight, stage and upgrade all run this hook)
+    local fx_kb; fx_kb=$({ pgrep -f "$FIXTURE_PATTERN" 2>/dev/null || true; } | while read -r p; do awk '/VmRSS/{print $2}' "/proc/$p/status" 2>/dev/null || true; done | awk '{s+=$1} END{print s+0}')
+    say "  t11 fixture node (/root/$FIXTURE_PATTERN, not ours, left running): RSS $((fx_kb / 1024)) MiB — counted in RESERVE_MIB ($RESERVE_MIB)"
+    [ $((fx_kb / 1024)) -le $((RESERVE_MIB - 1536)) ] || warn "the fixture node's RSS leaves under 1.5 GiB of RESERVE_MIB for the rest of the host — ask its owner to stop it before switch, or raise RESERVE_MIB (PLAN.md §2)"
+    ls -l /root/palw-class/qwen25-1.5b-a16-8k.palwart* 2>/dev/null | sed 's/^/  /' || true
+}
+
+host_guard_switch() {
+    local o; o=$(other_session_running)
+    [ -z "$o" ] || { echo "$o" >&2; die "stop the route-matrix session's t12f/t12p nodes first (that session owns them) — PLAN.md §5 step 0"; }
+    local avail_mib spec want=1024; avail_mib=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
+    for spec in "${NODES[@]}"; do parse_node "$spec"; want=$((want + N_SHARE)); done
+    [ "$avail_mib" -ge "$want" ] || die "MemAvailable ${avail_mib} MiB < ${want} (the five shares + 1 GiB) — something else is holding memory"
+}
+
+host_usage() { :; }
+host_cmd() { usage_common; die "unknown command $1"; }
+
+main_dispatch "$@"

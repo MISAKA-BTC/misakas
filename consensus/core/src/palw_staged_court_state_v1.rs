@@ -1271,7 +1271,13 @@ pub fn palw_staged_owned_progress_v1(
                     history_head: row.history_cursor_v1().1,
                     demand: row.next_demand_v1(point.daa_score)?,
                     pending: row.pending_progress_v1(),
-                    completed: row.certificate().ok().map(|r| r.is_some()),
+                    // A live public acquisition returns no certificate yet; that
+                    // is an incomplete court, not an honest terminal verdict.
+                    completed: if row.pending_progress_v1().is_some() {
+                        None
+                    } else {
+                        row.certificate().ok().map(|r| r.is_some())
+                    },
                 }),
             )
         }

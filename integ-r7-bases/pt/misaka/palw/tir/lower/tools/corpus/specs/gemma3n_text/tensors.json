@@ -1,0 +1,985 @@
+{
+ "model.altup_projections.0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.altup_projections.1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.altup_projections.2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.altup_unembed_projections.0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.altup_unembed_projections.1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.altup_unembed_projections.2.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.embed_tokens_per_layer.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   48
+  ]
+ },
+ "model.layers.0.altup.correct_output_scale": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.altup.correction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   4
+  ]
+ },
+ "model.layers.0.altup.modality_router.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.0.altup.prediction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   4
+  ]
+ },
+ "model.layers.0.altup.router_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.laurel.linear_left.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.0.laurel.linear_right.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4
+  ]
+ },
+ "model.layers.0.laurel.post_laurel_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.0.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.per_layer_input_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.0.per_layer_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   8
+  ]
+ },
+ "model.layers.0.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.post_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.post_per_layer_input_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.pre_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.self_attn.k_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.0.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.self_attn.q_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.0.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.altup.correct_output_scale": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.altup.correction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   4
+  ]
+ },
+ "model.layers.1.altup.modality_router.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.1.altup.prediction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   4
+  ]
+ },
+ "model.layers.1.altup.router_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.laurel.linear_left.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.1.laurel.linear_right.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4
+  ]
+ },
+ "model.layers.1.laurel.post_laurel_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.1.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.per_layer_input_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.1.per_layer_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   8
+  ]
+ },
+ "model.layers.1.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.post_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.post_per_layer_input_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.pre_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.self_attn.k_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.1.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.self_attn.q_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.1.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.altup.correct_output_scale": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.altup.correction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   4
+  ]
+ },
+ "model.layers.2.altup.modality_router.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.2.altup.prediction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   4
+  ]
+ },
+ "model.layers.2.altup.router_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.laurel.linear_left.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.2.laurel.linear_right.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4
+  ]
+ },
+ "model.layers.2.laurel.post_laurel_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.2.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.2.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.2.per_layer_input_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.2.per_layer_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   8
+  ]
+ },
+ "model.layers.2.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.post_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.post_per_layer_input_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.pre_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.self_attn.k_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.2.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.self_attn.q_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.2.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.altup.correct_output_scale": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.altup.correction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   4
+  ]
+ },
+ "model.layers.3.altup.modality_router.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.3.altup.prediction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   4
+  ]
+ },
+ "model.layers.3.altup.router_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.laurel.linear_left.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.3.laurel.linear_right.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4
+  ]
+ },
+ "model.layers.3.laurel.post_laurel_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.3.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.3.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.3.per_layer_input_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.3.per_layer_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   8
+  ]
+ },
+ "model.layers.3.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.post_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.post_per_layer_input_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.pre_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.self_attn.k_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.3.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.3.self_attn.q_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.3.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.3.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.4.altup.correct_output_scale": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.altup.correction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   4
+  ]
+ },
+ "model.layers.4.altup.modality_router.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.4.altup.prediction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   4
+  ]
+ },
+ "model.layers.4.altup.router_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.laurel.linear_left.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.4.laurel.linear_right.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4
+  ]
+ },
+ "model.layers.4.laurel.post_laurel_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.4.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.4.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.4.per_layer_input_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.4.per_layer_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   8
+  ]
+ },
+ "model.layers.4.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.post_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.post_per_layer_input_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.pre_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.4.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.4.self_attn.q_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.4.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.5.altup.correct_output_scale": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.altup.correction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   4
+  ]
+ },
+ "model.layers.5.altup.modality_router.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.5.altup.prediction_coefs.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   4
+  ]
+ },
+ "model.layers.5.altup.router_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.laurel.linear_left.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.5.laurel.linear_right.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   4
+  ]
+ },
+ "model.layers.5.laurel.post_laurel_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.mlp.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "model.layers.5.mlp.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.5.mlp.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.5.per_layer_input_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   32
+  ]
+ },
+ "model.layers.5.per_layer_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   8
+  ]
+ },
+ "model.layers.5.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.post_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.post_per_layer_input_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.pre_feedforward_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.5.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.5.self_attn.q_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.5.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.per_layer_model_projection.weight": {
+  "dtype": "BF16",
+  "shape": [
+   48,
+   32
+  ]
+ },
+ "model.per_layer_projection_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ }
+}

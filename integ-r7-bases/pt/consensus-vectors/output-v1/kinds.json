@@ -1,0 +1,6 @@
+{
+  "format": "palw-output-v1/kinds-vectors/1",
+  "spec": "docs/rfc/0003-palw-generative-model-classes.md §I.1, §I.3; docs/spec/palw/04b-tensor-ir.md §15",
+  "output_set_descriptor": "palw-output/v1/kinds=0:Tokens:u32le:[n]:-,1:ImageRgb8:u8:[H,W,3]:-,2:PcmI16:i16le:[frames,channels]:le32(sample_rate>=1),3:EmbeddingI32:i32le:[n,d]:[q<=31,normalised<=1],4:VideoRgb8:u8:[T,H,W,3]:le32(fps_num>=1)le32(fps_den>=1),5:TensorLe:i8|i16|i32le:rank1-4:[dtype<=2,q<=62]/tile_len=[4,65536]/leaf=misaka-palw/output/tile/v1(le32(t)|bytes)/node=misaka-palw/output/node/v1(left|right)/odd=promoted/root=misaka-palw/output/root/v1(borsh(spec)|le32(tile_len)|merkle)",
+  "output_set_id_hex": "fe6ef94f486315977628d382bbb0c437c115a9ebeff998e105313c54db3dc19747f7b52a20dc73b7ee4efeb6b717ace60df1b76f373dbc81eae9b13345315423"
+}

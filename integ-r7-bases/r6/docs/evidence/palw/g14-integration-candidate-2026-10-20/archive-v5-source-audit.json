@@ -1,0 +1,12 @@
+{
+  "source": "consensus/core/src/palw_court_archive_verify_v1.rs",
+  "sha256": "303a39833513a4b5411bf528e4623b840f0d19bae76e29517c59e2c1197609d4",
+  "findings": [
+    "Private nonserialized non-Clone result has no public/from-bool constructor and binds original state root/session/side/raw group/decoded object/native verdict.",
+    "Only the retained receipt supplies v5 inputs; no current-extras policy fallback or v2 call.",
+    "Original accepted prefix/contract is immutable; raw whole digest checked before decoding and native proof-family gates.",
+    "The inspection view is checkpoint-owned scratch; self.state/journal/credit/debits/holds are not written.",
+    "Wire CPU/arithmetic/OOM construction refusal remains NativeResource; malformed/truncated syntax is a semantic refusal."
+  ],
+  "limits": "Source audit, not full maximum-phase/family/physical-budget/node paid-ingress coverage. Public late rule selection, funding and financial settlement are not adopted."
+}

@@ -1,0 +1,2923 @@
+use futures_util::future::BoxFuture;
+use kaspa_muhash::MuHash;
+use std::sync::Arc;
+
+use crate::{
+    BlockHashSet, BlueWorkType, ChainPath, Hash64,
+    acceptance_data::{AcceptanceData, MergesetBlockAcceptanceData},
+    api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
+    block::{
+        Block, BlockTemplate, TemplateBuildMode, TemplateTransactionSelector, TemplateTransactionSelectorFactory, VirtualStateApproxId,
+    },
+    blockstatus::BlockStatus,
+    coinbase::MinerData,
+    daa_score_timestamp::DaaScoreTimestamp,
+    dns_finality::{
+        ActiveValidatorSet, AttestationQualityDeficit, DnsConfirmation, PrecommitDuty, StakeBondPage, StakeBondQuery, StakeBondRecord,
+        ValidatorAttestationTarget,
+    },
+    errors::{
+        block::{BlockProcessResult, RuleError},
+        coinbase::CoinbaseResult,
+        consensus::{ConsensusError, ConsensusResult},
+        pruning::PruningImportResult,
+        tx::TxResult,
+    },
+    header::Header,
+    mass::{ContextualMasses, NonContextualMasses},
+    pruning::{
+        PruningImportSessionStateV1, PruningImportSessionV1, PruningPointProof, PruningPointTrustedData, PruningPointsList,
+        PruningProofMetadata,
+    },
+    trusted::{ExternalGhostdagData, TrustedBlock},
+    tx::{
+        MutableTransaction, Transaction, TransactionId, TransactionIndexType, TransactionOutpoint, TransactionQueryResult,
+        TransactionType, UtxoEntry,
+    },
+};
+
+// PR-9.5e: ConsensusApi block-identifier methods use the 64-byte BlockHash.
+use crate::BlockHash;
+
+pub use self::stats::{BlockCount, ConsensusStats};
+
+/// Bounded RFC12 observations from one locked virtual state. Missing historical
+/// balances and spent/unknown outpoints are explicit; storage failures are errors.
+#[derive(Clone, Debug)]
+pub struct PalwAcceptanceReadsV1 {
+    pub sink: BlockHash,
+    pub virtual_daa: u64,
+    pub reserve_balances: Vec<(BlockHash, Option<u64>)>,
+    pub outpoints: Vec<(TransactionOutpoint, Option<UtxoEntry>)>,
+}
+
+/// **LIVE-R1 N2: the consensus half of the partition watchdog.** This node's recent resolves settled on
+/// `sink` after refusing the heavier `refused` on the PALW deep-reorg rule — a candidate it had
+/// UTXO-validated and weighed, and that did not strictly out-weigh its sink on `(safe frontier, safe
+/// weight, live)`. A run, not an event: `resolves` counts the consecutive resolves that ended this way and
+/// `first_refused_daa ..= refused_daa` is how far the refused branch advanced meanwhile. Node-local; no
+/// verdict reads it. On its own it is NOT a reason to stop: an attacker's released heavy branch produces
+/// the same record on every honest node — the flows add which chain the node's outbound peers are on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPartitionRefusalV1 {
+    pub sink: BlockHash,
+    pub refused: BlockHash,
+    pub own_daa: u64,
+    pub refused_daa: u64,
+    pub first_refused_daa: u64,
+    pub resolves: u64,
+}
+
+impl PalwPartitionRefusalV1 {
+    /// How many DAA ticks the refused branch has advanced while this node kept refusing it.
+    pub fn refused_span_daa(&self) -> u64 {
+        self.refused_daa.saturating_sub(self.first_refused_daa)
+    }
+}
+
+/// ADR-0088 Decision 12: one line's row as a reader sees it, with what the row alone does not say
+/// — whether it is a written row or the founding line synthesised from its class, and the payout
+/// payloads of the bonds its roles name (looked up from the bond registry at the same tip).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelLineRowReadV1 {
+    pub line_id: kaspa_hashes::Hash64,
+    pub line: crate::palw_model_lines_v1::PalwModelLineV1,
+    /// False for a founding line nothing has touched (Decision 1: no row until something changes).
+    pub has_row: bool,
+    pub owner_payout_payload: Option<kaspa_hashes::Hash64>,
+    pub developer_payout_payload: Option<kaspa_hashes::Hash64>,
+    pub maintainer_payout_payload: Option<kaspa_hashes::Hash64>,
+}
+
+/// ADR-0095: a line's membership, resolved at a height so a caller need not re-derive §4.6.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelBenefitsReadV1 {
+    pub row: crate::palw_model_benefits_v1::PalwModelBenefitsV1,
+    pub in_effect: Vec<crate::palw_model_benefits_v1::PalwModelBenefitTierV1>,
+    pub lapse: Option<crate::palw_model_benefits_v1::PalwModelBenefitLapseV1>,
+    pub enforced_lead_daa: u64,
+}
+
+/// **`getPalwModelPositions`' answer: one holder id's positions, each with the tenure and the tier
+/// that id holds, all read at one tip** (ADR-0095 §4.3/§4.5; the 2026-09-23 Position route
+/// matrix, P-B2).
+///
+/// The read used to be `(line, units)` and nothing else. A provider serving a line's holders
+/// (ADR-0101) then had to fetch the line's tiers in a second call, taken at whatever tip that call
+/// saw, and rebuild §4.3 itself — and §4.5's clock was on no wire at all. Here every number comes
+/// from the chain's own readers at `tip_daa`, the height a membership challenge names (§4.8, A8).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwModelPositionsReadV1 {
+    /// The DAA score of the tip the rows were read at; 0 off ConsensusV2 or before the first state.
+    pub tip_daa: u64,
+    /// The tip block itself: a DAA score does not name a state across a reorg, the block does.
+    /// `None` off ConsensusV2 or before the first state.
+    pub tip_hash: Option<crate::BlockHash>,
+    pub rows: Vec<PalwModelPositionReadV1>,
+}
+
+/// One `(line, holder)` row of [`PalwModelPositionsReadV1`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelPositionReadV1 {
+    pub line_id: kaspa_hashes::Hash64,
+    pub units: u64,
+    /// §4.5: when this id's tenure clock last started — `None` where the chain keeps no clock (a
+    /// holding from before the membership fence, or a network that never armed it).
+    pub holding_since_daa: Option<u64>,
+    /// §4.5: how long this id has held without selling, at `tip_daa`.
+    pub tenure_daa: u64,
+    /// §4.3: the tier THIS id alone buys at `tip_daa` — the index into the line's tiers in effect,
+    /// and the tier. `None` below the first rung or where nothing is in effect. A person who holds
+    /// under several ids is one holding (N3); summing them is the caller's, over ids it proved.
+    pub tier: Option<(usize, crate::palw_model_benefits_v1::PalwModelBenefitTierV1)>,
+}
+
+impl PalwModelPositionsReadV1 {
+    /// The read over a folded state, so a test puts the node's question to a state without a store
+    /// — and the node, the test and any later reader take the same one.
+    pub fn at_tip(state: &crate::palw_state_v2::PalwChainStateV2, holder: &kaspa_hashes::Hash64) -> Self {
+        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let tip_hash = state.last_point().map(|p| p.block);
+        let rows = state
+            .model_positions_of(holder)
+            .into_iter()
+            .map(|(line_id, units)| PalwModelPositionReadV1 {
+                line_id,
+                units,
+                holding_since_daa: state.model_position_since(&line_id, holder),
+                tenure_daa: state.model_position_tenure(&line_id, holder, tip_daa),
+                tier: state.model_benefit_tier(&line_id, holder, tip_daa),
+            })
+            .collect();
+        Self { tip_daa, tip_hash, rows }
+    }
+}
+
+/// ADR-0088 Decision 12: `getPalwModelLine`'s answer — the row, the current root, the roots in
+/// force for the class at the tip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelLineReadV1 {
+    pub row: PalwModelLineRowReadV1,
+    /// The current version's root, when the node holds that version.
+    pub current_root: Option<kaspa_hashes::Hash64>,
+    /// Decision 3's set for the line's CLASS at `tip_daa`.
+    pub roots_in_force: Vec<kaspa_hashes::Hash64>,
+    pub tip_daa: u64,
+    /// **ADR-0101: what a client checks a provider's service descriptor against.** Assembled at
+    /// `tip_daa` from this line alone — the grants its declaration has IN EFFECT, the roots it
+    /// OWNS (ADR-0143 past its fence, so a copy line cannot offer the class's own artifact), and
+    /// the registered keys of its own owner, developer and maintainer bonds.
+    ///
+    /// The check itself is `palw_service_descriptor_check_v1` and runs in the client, not here: a
+    /// descriptor is a statement to a client, no consensus rule reads one, and the chain holds no
+    /// URL. What was missing was a node that could answer the FACTS, without which "any provider
+    /// may serve and a client can check" was true of the design and not of the software.
+    pub service_facts: crate::palw_service_descriptor_v1::PalwLineServiceFactsV1,
+    /// ADR-0095: the declaration as stored, plus what it means at `tip_daa` — the tiers actually
+    /// governing, any pending weakening, the lapse, and the lead the fold is enforcing.
+    pub benefits: Option<PalwModelBenefitsReadV1>,
+}
+
+/// **`getPalwModelMarket`'s lifecycle half** (the 2026-09-23 Position route matrix, P-B3): what the
+/// registry says of a line's class, and whether the fold at the next block takes a seed or a buy of
+/// the line — asked through `palw_model_market_admits_v1`, the function the fold itself calls.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwModelMarketGateReadV1 {
+    /// The registry lifecycle of the line's class as the tip holds it, `Debug`-printed; empty where
+    /// the registry holds no row for it.
+    pub lifecycle: String,
+    /// The fold's refusal of a seed or a buy of this line, as text; `None` where it would take them.
+    /// A sell is never refused for this.
+    pub refusal: Option<String>,
+}
+
+/// ADR-0088 Decision 12: `getPalwModelVersion`'s answer — the row and its evaluations, each
+/// with the bond that posted it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelVersionReadV1 {
+    pub version: crate::palw_model_lines_v1::PalwModelVersionV1,
+    pub evaluations: Vec<(crate::palw_state_v2::PalwBondKeyV2, crate::palw_model_lines_v1::PalwModelEvaluationV1)>,
+    pub tip_daa: u64,
+}
+
+pub mod args;
+pub mod counters;
+pub mod stats;
+
+pub type BlockValidationFuture = BoxFuture<'static, BlockProcessResult<BlockStatus>>;
+
+/// A struct returned by consensus for block validation processing calls
+pub struct BlockValidationFutures {
+    /// A future triggered when block processing is completed (header and body processing)
+    pub block_task: BlockValidationFuture,
+
+    /// A future triggered when DAG state which included this block has been processed by the virtual processor
+    /// (exceptions are header-only blocks and trusted blocks which have the future completed before virtual
+    /// processing along with the `block_task`)
+    pub virtual_state_task: BlockValidationFuture,
+}
+
+/// Abstracts the consensus external API
+#[allow(unused_variables)]
+pub trait ConsensusApi: Send + Sync {
+    fn build_block_template(
+        &self,
+        miner_data: MinerData,
+        tx_selector: Box<dyn TemplateTransactionSelector>,
+        build_mode: TemplateBuildMode,
+    ) -> Result<BlockTemplate, RuleError> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§15 step 6): [`Self::build_block_template`] with
+    /// the node's own EVM payload candidates (raw EIP-2718 bytes from the EVM
+    /// mempool, pre-admitted + fee-ordered + nonce-ascending). The default
+    /// ignores the candidates — correct for every mock and for pre-activation
+    /// templates, where the own payload is empty anyway.
+    fn build_block_template_with_evm(
+        &self,
+        miner_data: MinerData,
+        tx_selector: Box<dyn TemplateTransactionSelector>,
+        build_mode: TemplateBuildMode,
+        evm_template_data: crate::evm::EvmTemplateData,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = evm_template_data;
+        self.build_block_template(miner_data, tx_selector, build_mode)
+    }
+
+    /// Builds a block template by letting consensus first fix the selected-parent /
+    /// virtual-state snapshot and then asking `tx_selector_factory` for a selector using
+    /// the mandatory-attestation deficits derived from that exact snapshot. The default
+    /// implementation preserves compatibility for mocks/non-overlay callers.
+    fn build_block_template_with_selector_factory(
+        &self,
+        miner_data: MinerData,
+        tx_selector_factory: &dyn TemplateTransactionSelectorFactory,
+        build_mode: TemplateBuildMode,
+    ) -> Result<BlockTemplate, RuleError> {
+        let tx_selector = tx_selector_factory.build_selector(None);
+        self.build_block_template(miner_data, tx_selector, build_mode)
+    }
+
+    /// [`Self::build_block_template_with_selector_factory`] with the node's own EVM payload
+    /// candidates.
+    fn build_block_template_with_evm_selector_factory(
+        &self,
+        miner_data: MinerData,
+        tx_selector_factory: &dyn TemplateTransactionSelectorFactory,
+        build_mode: TemplateBuildMode,
+        evm_template_data: crate::evm::EvmTemplateData,
+    ) -> Result<BlockTemplate, RuleError> {
+        let tx_selector = tx_selector_factory.build_selector(None);
+        self.build_block_template_with_evm(miner_data, tx_selector, build_mode, evm_template_data)
+    }
+
+    /// ADR-0060 Decision 1: re-shape a standard template into the bondless HEARTBEAT lane —
+    /// algo-3, the lane's own bits and slot, an empty `palw_commitment`, a zero-subsidy
+    /// coinbase. Returns the adapted template and the EARLIEST timestamp (ms) the slot rule
+    /// admits; a caller that grinds before that moment produces a block every node refuses.
+    fn heartbeat_adapt_block_template(&self, template: BlockTemplate) -> Result<(BlockTemplate, u64), RuleError> {
+        unimplemented!()
+    }
+
+    /// ADR-0105 Decision 2: whether a heartbeat miner should stand aside for a bonded block that
+    /// is waiting to be merged. Node policy, not a rule — see
+    /// [`crate::palw_heartbeat_v1::heartbeat_yield_hint_v1`].
+    fn heartbeat_yield_hint(&self) -> crate::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        unimplemented!()
+    }
+
+    /// ADR-0125: the permits of `round`, as the sink's state grants them to a round block built now.
+    /// `None` where the lane is not open or the state cannot be read.
+    fn palw_round_view_v1(&self, round: u64) -> Option<crate::palw_execution_lane_v1::PalwExecRoundViewV1> {
+        let _ = round;
+        unimplemented!()
+    }
+
+    /// ADR-0125 §7.4: the view of `round` with the span's schedule, its accepted permits and the
+    /// finals recorded toward the schedule two spans on — `getPalwRoundLane`'s read. `None` where
+    /// the view is.
+    fn palw_round_lane_status_v1(&self, round: u64) -> Option<crate::palw_execution_lane_v1::PalwExecLaneStatusV1> {
+        let _ = round;
+        unimplemented!()
+    }
+
+    /// Lane SCAN: the executions the sink's state holds, newest first, and how many it holds
+    /// (`getPalwRoundLane`'s `recentExecutions`). `None` where the node keeps no V2 state.
+    fn palw_recent_executions_v1(&self, limit: usize) -> Option<(Vec<crate::palw_exec_view_v1::PalwExecutionRowV1>, usize)> {
+        let _ = limit;
+        None
+    }
+
+    /// Lane SCAN: a block's lane class (`BLUE`/`EXEC`/`RED`) and, for a round block, its envelope and
+    /// the node's verdict — `getBlock`'s verbose `laneClass`. `None` for an unknown block.
+    fn palw_block_lane_v1(&self, hash: crate::BlockHash) -> Option<crate::palw_exec_view_v1::PalwBlockLaneV1> {
+        let _ = hash;
+        None
+    }
+
+    /// ADR-0127 Decision 3: whether the transactions the selected chain accepted at `daa_score` are
+    /// settled, and their settlement depth in `Final` anchors, from the sink's PALW V2 state —
+    /// `getPalwSettlement`'s read. `None` where the node keeps no V2 state or cannot date its frontier.
+    fn palw_settlement_v1(&self, daa_score: u64) -> Option<crate::palw_settlement_v1::PalwSettlementV1> {
+        let _ = daa_score;
+        None
+    }
+
+    /// ADR-0125: re-shape a standard template into a round block of `round` whose fees pay `payout`
+    /// — the round lane's parents, algo 10, a zero-subsidy coinbase with no outputs, an empty EVM
+    /// payload and an empty `palw_commitment` for the caller to fill with its signed envelope once
+    /// it has solved the header.
+    fn round_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        round: u64,
+        payout: crate::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = (template, round, payout);
+        unimplemented!()
+    }
+
+    /// **RFC-0008 v2: re-shape a standard template into an `EXEC_SLICE` lane block** — the lane's parents, algo 10, the coinbase alone
+    /// (a slice carries no user transaction batch) and an empty `palw_commitment` for the executor to fill with its signed `PXE2`
+    /// envelope once it has solved the header. Refused below `palw_exec_payload_v2`.
+    fn exec_v2_slice_adapt_block_template(
+        &self,
+        template: BlockTemplate,
+        payout: crate::tx::ScriptPublicKey,
+    ) -> Result<BlockTemplate, RuleError> {
+        let _ = (template, payout);
+        unimplemented!()
+    }
+
+    fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
+        unimplemented!()
+    }
+
+    fn validate_and_insert_trusted_block(&self, tb: TrustedBlock) -> BlockValidationFutures {
+        unimplemented!()
+    }
+
+    /// Populates the mempool transaction with maximally found UTXO entry data and proceeds to full transaction
+    /// validation if all are found. If validation is successful, also `transaction.calculated_fee` is expected to be populated.
+    fn validate_mempool_transaction(&self, transaction: &mut MutableTransaction, args: &TransactionValidationArgs) -> TxResult<()> {
+        unimplemented!()
+    }
+
+    /// Populates the mempool transactions with maximally found UTXO entry data and proceeds to full transactions
+    /// validation if all are found. If validation is successful, also `transaction.calculated_fee` is expected to be populated.
+    fn validate_mempool_transactions_in_parallel(
+        &self,
+        transactions: &mut [MutableTransaction],
+        args: &TransactionValidationBatchArgs,
+    ) -> Vec<TxResult<()>> {
+        unimplemented!()
+    }
+
+    /// Populates the mempool transaction with maximally found UTXO entry data.
+    fn populate_mempool_transaction(&self, transaction: &mut MutableTransaction) -> TxResult<()> {
+        unimplemented!()
+    }
+
+    /// Populates the mempool transactions with maximally found UTXO entry data.
+    fn populate_mempool_transactions_in_parallel(&self, transactions: &mut [MutableTransaction]) -> Vec<TxResult<()>> {
+        unimplemented!()
+    }
+
+    fn calculate_transaction_non_contextual_masses(&self, transaction: &Transaction) -> NonContextualMasses {
+        unimplemented!()
+    }
+
+    fn calculate_transaction_contextual_masses(&self, transaction: &MutableTransaction) -> Option<ContextualMasses> {
+        unimplemented!()
+    }
+
+    /// Returns an aggregation of consensus stats. Designed to be a fast call.
+    fn get_stats(&self) -> ConsensusStats {
+        unimplemented!()
+    }
+
+    fn get_virtual_daa_score(&self) -> u64 {
+        unimplemented!()
+    }
+
+    /// **What a `ConsensusV2` block producer must read from chain state** — see
+    /// [`crate::palw_producer_v2`] for why it is one derived answer rather than the ingredients.
+    ///
+    /// `None` on every network that is not `ConsensusV2`, and on one that is but does not know the
+    /// class — which is the honest answer in both cases and not an error: a producer asking a
+    /// hash-only chain for a class target is a producer on the wrong network, and it should be
+    /// able to find that out by asking.
+    fn palw_producer_facts_v2(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+        _bond: Option<crate::tx::TransactionOutpoint>,
+    ) -> Option<crate::palw_producer_v2::PalwProducerFactsV2> {
+        None
+    }
+
+    /// **What the free-prompt lane would charge one commitment, before anyone pays to carry it**
+    /// (ADR-0148; `GetPalwFreePromptPrice`): the fold's own price at the virtual's DAA, and the
+    /// bond's room for it. `None` off `ConsensusV2` and where the node holds no PALW state.
+    fn palw_fp_commitment_price_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+        _prompt_token_ids: Vec<u32>,
+        _prompt_tokens: u32,
+        _decode_tokens_executed: u32,
+        _work_leaves: u64,
+        _bond: Option<crate::tx::TransactionOutpoint>,
+    ) -> Option<crate::palw_state_v2::PalwFpPriceAnswerV1> {
+        None
+    }
+
+    /// **The certified free-prompt quanta this bond may spend into receipt blocks (FP-R5).**
+    ///
+    /// Empty on every network that is not `ConsensusV2`, on one with no free-prompt bundle, and
+    /// for a bond with no `Final` free-prompt claims — the honest answers, not errors. Each row
+    /// carries the beacon fact and the ticket-vs-target verdict as read at virtual, so a producer
+    /// acts on what the admission will actually check rather than on its own re-derivation.
+    fn palw_fp_spendable_v3(&self, _bond: crate::tx::TransactionOutpoint) -> Vec<crate::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
+        Vec::new()
+    }
+
+    /// **Every PALW V2 bond outpoint whose collateral may not be spent right now.**
+    ///
+    /// The wallet has to know this and had no way to ask (audit3 H3): `get_stake_bonds` reads the
+    /// DNS overlay store only, so a PALW producer's collateral was invisible to the input selector
+    /// that exists to skip it — and the collateral sits at the producer's own pay address by
+    /// construction, usually as the largest output there, so largest-first selection put it at
+    /// input 0 of the next `wallet send`. Empty on every network that is not `ConsensusV2`.
+    fn palw_locked_bond_outpoints_v2(&self) -> Vec<crate::tx::TransactionOutpoint> {
+        Vec::new()
+    }
+
+    /// LIVE-R1 N2: the run of resolves that refused a heavier, fully validated candidate on the PALW
+    /// deep-reorg rule ([`PalwPartitionRefusalV1`]). `None` when the last resolve did not, and off V2.
+    fn palw_partition_refusal_v1(&self) -> Option<PalwPartitionRefusalV1> {
+        None
+    }
+
+    /// **ADR-0078 Decision 5: the chain's half of "verification belongs to the consumer".**
+    ///
+    /// A derivation is a statement the chain stores and never checks the content of — so the only
+    /// thing that makes it checkable is that a stranger can READ it. Until this call existed the
+    /// `derived_artifacts` table had no reader outside the transition that wrote it: the object
+    /// was in the state root and nowhere a person could reach, which makes Decision 5's promise
+    /// ("every step is a pure function of bytes the consumer has and ids the chain has") a promise
+    /// about ids nobody could fetch.
+    ///
+    /// Returns, for `claim_id`: the claim as the chain holds it (its `output_root` — the value X6
+    /// recomputes against — its phase, so a derivation of a claim that later voided says so when
+    /// read, and its accepting block), the claim's executor bond key (the key the object's
+    /// `executor_pubkey` had to equal to be accepted), and every `(key, row)` of the derived
+    /// table under that claim. `None` on a network that is not `ConsensusV2`, on one whose state
+    /// store holds no tip, and on a claim this chain does not have — three honest answers, none of
+    /// them an error.
+    ///
+    /// A tuple rather than a named view because the pieces are three existing state types and a
+    /// fourth name for them would be a fourth thing to keep in agreement.
+    #[allow(clippy::type_complexity)]
+    fn palw_derived_artifacts_v1(
+        &self,
+        _claim_id: kaspa_hashes::Hash64,
+    ) -> Option<(
+        crate::palw_state_v2::PalwClaimStateV2,
+        Vec<u8>,
+        Vec<(crate::palw_derived_v1::PalwDerivedKeyV1, crate::palw_derived_v1::PalwDerivedRowV1)>,
+    )> {
+        None
+    }
+
+    /// Material retention through an authenticated root/dependency's actual monetary
+    /// payment + W. MAX is a funded queue whose payment has not occurred yet.
+    /// None means this dormant path owes no additional material hold.
+    fn palw_material_income_hold_until_v1(&self, _claim: kaspa_hashes::Hash64) -> Option<u64> {
+        None
+    }
+
+    /// Coherent signed service terms, recovery state and native payment/tail
+    /// authority. An unavailable view cannot discharge a provider obligation.
+    fn palw_native_material_provider_authority_v3(
+        &self,
+        _checkpoint: BlockHash,
+        _header: &Header,
+        _ready: &crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3,
+    ) -> Result<crate::palw_attempt_material_v3::PalwNativeMaterialProviderAuthorityV3, String> {
+        Err("native material provider authority unavailable".into())
+    }
+    fn palw_monetary_material_covenants_v1(&self) -> Result<Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1>, String> {
+        Err("monetary material covenant reads are unavailable".into())
+    }
+    /// Read-only current/finalized native metadata, retaining allocation ownership
+    /// through private-process observation serialization. No public RPC tag.
+    fn palw_material_recovery_observation_v4(
+        &self,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_recovery_observation_v4::NativeRecoveryObservationV4>,
+        String,
+    > {
+        Err("native material recovery observations unavailable".into())
+    }
+
+    /// RFC-0008 PAV3 producer read: the canonical prior native session for `attempt` at `daa`
+    /// (`palw_attempt_material_v3::select_native_session_v3`, the one rule `verify_prior` re-runs) over the coherent tip
+    /// state, with each uncharged roster provider's registered operator, and the selected-parent point it was read at.
+    /// `Ok((point, None))`: no eligible session there. An unavailable or moving view is an error, never an empty roster.
+    #[allow(clippy::type_complexity)]
+    fn palw_native_session_v3(
+        &self,
+        _attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+        _daa: u64,
+    ) -> Result<
+        (
+            BlockHash,
+            Option<(
+                crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1,
+                Vec<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>,
+            )>,
+        ),
+        String,
+    > {
+        Err("native session reads are unavailable".into())
+    }
+
+    /// Physical GC authority requires the accepted release itself (as well as
+    /// its payment tail) to survive every admitted selected-chain reorg.
+    fn palw_monetary_material_release_finalized_v1(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _tail: Hash64,
+        _release_block: BlockHash,
+    ) -> Result<bool, String> {
+        Err("monetary material finality witnesses are unavailable".into())
+    }
+
+    /// A terminal receipt present in a coherent native-finalized state. Historical
+    /// Release headers and deltas are deliberately not authority prerequisites.
+    fn palw_material_terminal_receipt_finalized_v2(
+        &self,
+        _root: Hash64,
+        _stored_consent: Hash64,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2)>, String> {
+        Err("native finalized terminal receipt reads are unavailable".into())
+    }
+
+    /// Bounded positive terminal rows in the CURRENT native-finalized state.
+    fn palw_material_provider_terminal_receipts_finalized_v4(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<crate::palw_material_release_recovery_v2::PalwMaterialTerminalReceiptV2>>,
+        String,
+    > {
+        Err("native finalized provider terminal reads unavailable".into())
+    }
+    fn palw_material_recovery_finalized_daa_v4(&self) -> Result<Option<u64>, String> {
+        Err("native finalized recovery clock unavailable".into())
+    }
+    fn palw_kernel_producer_candidate_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _producer: crate::palw_state_v2::PalwBondKeyV2,
+        _commit: &misaka_palw_kernel::route::SaltedCommitV1,
+        _salt: &[u8; 64],
+        _commit_daa: u64,
+        _expires_daa: u64,
+    ) -> Result<crate::palw_kernel_producer_candidate_v4::PalwKernelProducerCandidateOwnedV4, String> {
+        Err("own-node kernel producer candidate unavailable".into())
+    }
+    fn palw_kernel_material_consent_accepted_v4(&self, _root: Hash64, _consent: Hash64) -> Result<bool, String> {
+        Err("own-node current accepted kernel consent unavailable".into())
+    }
+    fn palw_kernel_material_admission_accepted_v4(
+        &self,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+        _draft: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own-node exact accepted kernel material admission unavailable".into())
+    }
+    fn palw_kernel_material_ingress_v4(
+        &self,
+        _checkpoint: BlockHash,
+        _request: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4,
+    ) -> Result<crate::palw_kernel_material_enrollment_v4::PalwKernelMaterialIngressOwnedV4, String> {
+        Err("own-node prospective kernel material authority unavailable".into())
+    }
+    fn palw_kernel_material_context_authority_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<(), String> {
+        Err("current native kernel material authority unavailable".into())
+    }
+    /// RFC-0006 read-only census of the eligible historical headers the EXEC origin migration needs, from this node's own
+    /// store at its tip (`listed` caps the returned claim lists). Authorizes nothing.
+    fn palw_exec_origin_coverage_v1(&self, _listed: usize) -> Result<crate::palw_work_slice_v2::PalwExecOriginCoverageV1, String> {
+        Err("historical header coverage census unavailable".into())
+    }
+    fn palw_material_generation_authority_v4(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+        _scope: &crate::palw_material_capacity_v1::PalwMaterialScopeV1,
+    ) -> Result<(), String> {
+        Err("current native material generation authority unavailable".into())
+    }
+    fn palw_kernel_material_replacement_v4(
+        &self,
+        _context: &crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4,
+        _bundle: &crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4,
+        _intent: &crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementIntentV4,
+    ) -> Result<crate::palw_kernel_material_replacement_v4::PalwKernelMaterialReplacementOwnedV4, String> {
+        Err("own native bounded replacement preparation unavailable".into())
+    }
+    fn palw_kernel_material_capsule_unused_finalized_v4(
+        &self,
+        _capsule: &crate::palw_material_release_recovery_v2::PalwMaterialRecoveryActionV2,
+    ) -> Result<bool, String> {
+        Err("own native exact generation expiry unavailable".into())
+    }
+    fn palw_kernel_material_query_authority_v4(
+        &self,
+        _query: &crate::palw_kernel_material_query_v4::PalwKernelMaterialUnitQueryV4,
+        _requester: crate::palw_state_v2::PalwBondKeyV2,
+        _pubkey: &[u8],
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_kernel_material_query_v4::PalwKernelMaterialQueryAuthorityV4>,
+        String,
+    > {
+        Err("own native material query authority unavailable".into())
+    }
+    fn palw_native_recovery_session_quote_v4(
+        &self,
+        _checkpoint: Option<BlockHash>,
+        _daa: u64,
+        _class: Hash64,
+        _executor: crate::palw_state_v2::PalwBondKeyV2,
+        _providers: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4>,
+        String,
+    > {
+        Err("native recovery enrollment quotes unavailable".into())
+    }
+    fn palw_material_recovery_enrollment_finalized_v4(
+        &self,
+        _root: Hash64,
+        _consent: Hash64,
+        _recovery: Hash64,
+    ) -> Result<bool, String> {
+        Err("native finalized recovery enrollment reads unavailable".into())
+    }
+
+    fn palw_material_provider_ack_checkpoint_finalized_v2(
+        &self,
+        _provider: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<(BlockHash, crate::palw_material_release_recovery_v2::PalwMaterialProviderAckCheckpointV2)>, String> {
+        Err("native finalized provider ACK checkpoints unavailable".into())
+    }
+
+    fn palw_monetary_material_unused_offer_finalized_v1(&self, _root: Hash64, _enrollment_until: u64) -> Result<bool, String> {
+        Err("monetary material unused-offer witnesses are unavailable".into())
+    }
+
+    fn palw_monetary_aux_page_v1(
+        &self,
+        _block: BlockHash,
+        _row: u64,
+        _offset: u64,
+        _limit: usize,
+    ) -> Result<crate::palw_monetary_material_rpc_v1::PalwMonetaryAuxPageV1, String> {
+        Err("authenticated monetary pages are unavailable".into())
+    }
+
+    /// Op 243: one bounded page of the canonical carriage of the PALW state `block`'s header commits.
+    fn palw_state_carriage_page_v1(
+        &self,
+        _block: BlockHash,
+        _offset: u64,
+        _limit: usize,
+    ) -> Result<crate::palw_state_carriage_rpc_v1::PalwStateCarriagePageV1, String> {
+        Err("PALW state carriage pages are unavailable".into())
+    }
+
+    /// **ADR-0080 design A: one side's declared court close, mid-assembly.**
+    ///
+    /// The row `(session_id, side)` holds — count, `present` bitmap, deadlines, digest, deposit —
+    /// or `None` on a network that is not `ConsensusV2`, on one whose state store holds no tip, and
+    /// for a side that has declared no close. Three honest answers, none of them an error, and the
+    /// same shape [`Self::palw_derived_artifacts_v1`] uses.
+    ///
+    /// The bytes themselves are deliberately NOT returned. They are in rooted state because the
+    /// completing transition must be a function of the chain rather than of which blocks a node
+    /// happens to hold, and a reader that wanted them holds them already — it is the mover that
+    /// cut them. What a reader cannot know without asking is which of them the chain received.
+    fn palw_court_close_group_v1(
+        &self,
+        _session_id: kaspa_hashes::Hash64,
+        _side: crate::palw_state_v2::PalwCourtSideV1,
+    ) -> Option<crate::palw_state_v2::PalwCourtCloseGroupV2> {
+        None
+    }
+
+    /// **ADR-0087 Decision 8: a line's market as the tip holds it.** Keyed by LINE (ADR-0088
+    /// Decision 9): a class's founding line has the class id as its line id, so a class-keyed
+    /// reader still reads what ADR-0087 wrote. `None` when the line (or its class) does not exist;
+    /// a line with no market row yet reads as an unopened market (the whole supply in the curve,
+    /// no MSK) beside its class's status, so a reader can quote before the first move. The `bool`
+    /// says whether a row exists — which is not whether the line is a market: since ADR-0094 a
+    /// seed's first instalment writes a row, and the RPC's `opened` is `PalwModelMarketV1::is_open`
+    /// (the 2026-09-23 Position route matrix, P10).
+    fn palw_model_market_v1(
+        &self,
+        _line_id: kaspa_hashes::Hash64,
+    ) -> Option<(crate::palw_model_market_v1::PalwModelMarketV1, bool, crate::palw_state_v2::PalwClassStatusV2)> {
+        None
+    }
+
+    /// **The fold's market gate, asked at the tip for the virtual's next block** (the 2026-09-23
+    /// Position route matrix, P-B3) — the line's class's registry lifecycle and the refusal a seed
+    /// or a buy of the line would meet. `None` off ConsensusV2 and for a line the chain does not hold.
+    fn palw_model_market_gate_v1(&self, _line_id: kaspa_hashes::Hash64) -> Option<PalwModelMarketGateReadV1> {
+        None
+    }
+
+    /// ADR-0087 Decision 8: every position a holder has at the tip, by line.
+    fn palw_model_positions_v1(&self, _holder: kaspa_hashes::Hash64) -> Vec<(kaspa_hashes::Hash64, u64)> {
+        Vec::new()
+    }
+
+    /// **ADR-0088 Decision 12: a line as the tip holds it** — the row (synthesised for a founding
+    /// line nothing touched), the current version's root, and the roots in force for its class at
+    /// the tip DAA. `None` when neither a row nor a class of that id exists.
+    fn palw_model_line_v1(&self, _line_id: kaspa_hashes::Hash64) -> Option<PalwModelLineReadV1> {
+        None
+    }
+
+    /// **ADR-0087 Decision 8's read with ADR-0095's membership on each row** — every position a
+    /// holder id has at the tip, its tenure and the tier it buys, all at one height (the
+    /// 2026-09-23 Position route matrix, P-B2). `getPalwModelPositions` answers from this one;
+    /// [`Self::palw_model_positions_v1`] is the units-only read it replaces.
+    fn palw_model_positions_read_v1(&self, _holder: kaspa_hashes::Hash64) -> PalwModelPositionsReadV1 {
+        PalwModelPositionsReadV1::default()
+    }
+
+    /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations. `None`
+    /// when the node holds no such row (never published, or evicted past the history window).
+    fn palw_model_version_v1(&self, _line_id: kaspa_hashes::Hash64, _version: u32) -> Option<PalwModelVersionReadV1> {
+        None
+    }
+
+    /// ADR-0088 Decision 12: every line of a class, the founding line included (synthesised when
+    /// it has no row). `None` when the class is not registered.
+    fn palw_model_lines_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<Vec<PalwModelLineRowReadV1>> {
+        None
+    }
+
+    /// **ADR-0089 Decision 2 / Decision 9 — the window at the tip.** The fold's rows at the
+    /// tip flattened for the EVM's read precompiles (`PalwChainStateV2::evm_view_v1`) together
+    /// with the three market fences resolved at the tip's DAA score, so `eth_call` /
+    /// `eth_estimateGas` register the SAME handler set the executor registers for the block
+    /// built on this tip (parity). `None` off `ConsensusV2` or before the first fold was
+    /// written — the simulator then leaves the market's doors unregistered.
+    fn palw_evm_view_v1(
+        &self,
+    ) -> Option<(Arc<crate::evm::model_market::PalwEvmViewV1>, crate::evm::model_market::PalwEvmMarketFencesV1)> {
+        None
+    }
+
+    /// ADR-0088 Decision 12: the proposals attached to a line, keyed by proposal id. `None` when
+    /// the line does not exist.
+    fn palw_model_proposals_v1(
+        &self,
+        _line_id: kaspa_hashes::Hash64,
+    ) -> Option<Vec<(kaspa_hashes::Hash64, crate::palw_model_lines_v1::PalwModelProposalV1)>> {
+        None
+    }
+
+    fn get_virtual_bits(&self) -> u32 {
+        unimplemented!()
+    }
+
+    fn get_virtual_past_median_time(&self) -> u64 {
+        unimplemented!()
+    }
+
+    fn get_virtual_merge_depth_root(&self) -> Option<BlockHash> {
+        unimplemented!()
+    }
+
+    /// Returns the `BlueWork` threshold at which blocks with lower or equal blue work are considered
+    /// to be un-mergeable by current virtual state.
+    /// (Note: in some rare cases when the node is unsynced the function might return zero as the threshold)
+    fn get_virtual_merge_depth_blue_work_threshold(&self) -> BlueWorkType {
+        unimplemented!()
+    }
+
+    fn get_sink(&self) -> BlockHash {
+        unimplemented!()
+    }
+
+    fn get_sink_timestamp(&self) -> u64 {
+        unimplemented!()
+    }
+
+    fn get_sink_blue_score(&self) -> u64 {
+        unimplemented!()
+    }
+
+    /// kaspa-pq Phase 10 (ADR-0009): the current DNS finality confirmation view,
+    /// or `None` when the DNS overlay is not configured for this network or no
+    /// DnsState has been written yet. Default `None` keeps non-overlay
+    /// ConsensusApi impls (mocks/tests) trivially correct.
+    fn get_dns_confirmation(&self) -> Option<DnsConfirmation> {
+        None
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010): the stake-bond record registered at
+    /// `bond_outpoint`, or `None` when the DNS overlay is not configured for this
+    /// network or no such bond exists. Used by the in-process validator service to
+    /// evaluate its own bond status (active / unbonding / slashed). Default `None`
+    /// keeps non-overlay ConsensusApi impls (mocks/tests) trivially correct.
+    fn get_stake_bond(&self, _bond_outpoint: TransactionOutpoint) -> Option<StakeBondRecord> {
+        None
+    }
+
+    /// kaspa-pq: a paged, filtered enumeration of the `StakeBonds` overlay store,
+    /// backing the `GetStakeBonds` RPC. Lets a bond owner recover the outpoint(s)
+    /// of bonds they funded — the key a `StakeUnbondRequest` binds to — since the
+    /// store is outpoint-keyed with no owner index (the owner filter is a full
+    /// scan). Returns an empty page when the DNS overlay is not configured.
+    /// Default keeps non-overlay ConsensusApi impls (mocks/tests) trivially correct.
+    fn get_stake_bonds(&self, _query: StakeBondQuery) -> StakeBondPage {
+        StakeBondPage::default()
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010/0017): the active validator set for the current epoch
+    /// (at the sink), or `None` when the DNS overlay is not configured. Under ADR-0017
+    /// every active-bond validator attests (no committee, no sortition); the in-process
+    /// validator service checks its own `validator_id` against `members` to decide
+    /// attestation eligibility. Default `None`.
+    fn get_active_validator_set(&self) -> Option<ActiveValidatorSet> {
+        None
+    }
+
+    /// kaspa-pq liveness-first attestation diagnostic: ready canonical epochs whose included
+    /// attestation stake is below the network quality floor. Missing attestations are never a
+    /// base-chain validity failure (hard inclusion is removed), so this is a monitoring view only.
+    fn get_attestation_quality_deficits(&self) -> Vec<AttestationQualityDeficit> {
+        Vec::new()
+    }
+
+    /// kaspa-pq Phase 11 (ADR-0010/0017): the ready-to-sign stake-attestation target for
+    /// `bond_outpoint` at the current sink (epoch, target, active-validator-set commitment, and
+    /// the bound message digest), or `None` when the overlay is not configured. The validator
+    /// service signs `message` under `ATTESTATION_MLDSA87_CONTEXT`. Default `None`.
+    fn get_validator_attestation_target(&self, _bond_outpoint: TransactionOutpoint) -> Option<ValidatorAttestationTarget> {
+        None
+    }
+
+    /// kaspa-pq DNS v3 (batch): all READY, creditable (non-duplicate) canonical-anchor
+    /// attestation targets for `bond_outpoint` in `[from_epoch, latest_ready]`, ascending, capped
+    /// at `limit`, filtering out epochs whose anchor DAA does not see this bond as Active. Lets a
+    /// validator that fell behind sign every epoch it missed. Default empty.
+    fn get_validator_attestation_targets(
+        &self,
+        _bond_outpoint: TransactionOutpoint,
+        _from_epoch: u64,
+        _limit: usize,
+    ) -> Vec<ValidatorAttestationTarget> {
+        Vec::new()
+    }
+
+    /// MISAKA §5 round 2: the lock this validator is carrying on the selected chain and the epochs
+    /// it still owes a precommit for.
+    ///
+    /// `None` when the DNS overlay is not configured; `round_active: false` below
+    /// `Params::dns_bft_gate` (ADR-0128), which is where every shipped preset sits.
+    fn get_precommit_duty(&self, _validator_id: Hash64, _bond_outpoint: TransactionOutpoint) -> Option<PrecommitDuty> {
+        None
+    }
+
+    fn get_sink_daa_score_timestamp(&self) -> DaaScoreTimestamp {
+        unimplemented!()
+    }
+
+    fn get_current_block_color(&self, hash: BlockHash) -> Option<bool> {
+        unimplemented!()
+    }
+
+    fn get_virtual_state_approx_id(&self) -> VirtualStateApproxId {
+        unimplemented!()
+    }
+
+    /// retention period root refers to the earliest block from which the current node has full header & block data
+    fn get_retention_period_root(&self) -> BlockHash {
+        unimplemented!()
+    }
+
+    fn estimate_block_count(&self) -> BlockCount {
+        unimplemented!()
+    }
+
+    /// Gets the virtual chain paths from `low` to the `sink` hash, or until `chain_path_added_limit` is reached
+    ///
+    /// Note:
+    ///     1) `chain_path_added_limit` will populate removed fully, and then the added chain path, up to `chain_path_added_limit` amount of hashes.
+    ///     1.1) use `None to impose no limit with optimized backward chain iteration, for better performance in cases where batching is not required.
+    fn get_virtual_chain_from_block(&self, low: BlockHash, chain_path_added_limit: Option<usize>) -> ConsensusResult<ChainPath> {
+        unimplemented!()
+    }
+
+    fn get_chain_block_samples(&self) -> Vec<DaaScoreTimestamp> {
+        unimplemented!()
+    }
+
+    /// Returns the fully populated transaction with the given txid which was accepted at the provided accepting_block_daa_score.
+    /// The argument `accepting_block_daa_score` is expected to be the DAA score of the accepting chain block of `txid`.
+    /// Note: If the transaction vec is None, the function returns all accepted transactions.
+    fn get_transactions_by_accepting_daa_score(
+        &self,
+        accepting_daa_score: u64,
+        tx_ids: Option<Vec<TransactionId>>,
+        tx_type: TransactionType,
+    ) -> ConsensusResult<TransactionQueryResult> {
+        unimplemented!()
+    }
+
+    fn get_transactions_by_block_acceptance_data(
+        &self,
+        accepting_block: BlockHash,
+        block_acceptance_data: MergesetBlockAcceptanceData,
+        tx_ids: Option<Vec<TransactionId>>,
+        tx_type: TransactionType,
+    ) -> ConsensusResult<TransactionQueryResult> {
+        unimplemented!()
+    }
+
+    fn get_transactions_by_accepting_block(
+        &self,
+        accepting_block: BlockHash,
+        tx_ids: Option<Vec<TransactionId>>,
+        tx_type: TransactionType,
+    ) -> ConsensusResult<TransactionQueryResult> {
+        unimplemented!()
+    }
+
+    fn get_virtual_parents(&self) -> BlockHashSet {
+        unimplemented!()
+    }
+
+    fn get_virtual_parents_len(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn get_virtual_utxos(
+        &self,
+        from_outpoint: Option<TransactionOutpoint>,
+        chunk_size: usize,
+        skip_first: bool,
+    ) -> Vec<(TransactionOutpoint, UtxoEntry)> {
+        unimplemented!()
+    }
+
+    /// Point lookup of a single outpoint in the virtual UTXO set (kaspa-pq EVM
+    /// Lane §9.2: a depositor submits a lock outpoint; the node resolves the
+    /// `EVM_DEPOSIT_LOCK` entry to build + validate a `DepositClaim`). `None` if
+    /// the outpoint is unspent-absent (never existed or already spent).
+    fn get_virtual_utxo_entry(&self, outpoint: TransactionOutpoint) -> Option<UtxoEntry> {
+        unimplemented!()
+    }
+
+    /// **RFC-0012 acceptance (op 246)**: the DNS security reserve balance `block`'s post-state holds (`reserve_balance_store`);
+    /// `None` where this node holds no reserve row for the block. Read-only.
+    fn get_dns_reserve_balance(&self, block: BlockHash) -> Option<u64> {
+        let _ = block;
+        None
+    }
+
+    /// At most 64 blocks and 64 outpoints, with one virtual state/UTXO lock and
+    /// pruning protection. Implementations must not assemble separate snapshots.
+    fn get_palw_acceptance_reads_v1(
+        &self,
+        _blocks: Vec<BlockHash>,
+        _outpoints: Vec<TransactionOutpoint>,
+    ) -> ConsensusResult<PalwAcceptanceReadsV1> {
+        Err(ConsensusError::General("atomic PALW acceptance reads are unsupported"))
+    }
+
+    fn get_tips(&self) -> Vec<BlockHash> {
+        unimplemented!()
+    }
+
+    fn get_tips_len(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn modify_coinbase_payload(&self, payload: Vec<u8>, miner_data: &MinerData) -> CoinbaseResult<Vec<u8>> {
+        unimplemented!()
+    }
+
+    // PR-9.5c: return type widened to `crate::MerkleRoot`
+    // (= `Hash64`) for the ADR-0008 consensus-identity cascade.
+    fn calc_transaction_hash_merkle_root(&self, txs: &[Transaction]) -> crate::MerkleRoot {
+        unimplemented!()
+    }
+
+    /// Validate a proof's own soundness without comparing it to this node's chain.
+    ///
+    /// For weighing a chain the node has not committed to; see
+    /// `PruningProofManager::validate_pruning_point_proof_standalone`.
+    fn validate_pruning_proof_standalone(&self, _proof: &PruningPointProof) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn validate_pruning_proof(&self, proof: &PruningPointProof, proof_metadata: &PruningProofMetadata) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn apply_pruning_proof(&self, proof: PruningPointProof, trusted_set: &[TrustedBlock]) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_points(&self, pruning_points: PruningPointsList) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn append_imported_pruning_point_utxos(
+        &self,
+        utxoset_chunk: &[(TransactionOutpoint, UtxoEntry)],
+        current_multiset: &mut MuHash,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn begin_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<PruningImportSessionV1> {
+        unimplemented!()
+    }
+
+    fn pruning_import_session(&self) -> PruningImportResult<PruningImportSessionStateV1> {
+        unimplemented!()
+    }
+
+    /// Session and marker read under one metadata guard, for RPC diagnostics.
+    fn pruning_import_status(&self) -> PruningImportResult<(PruningImportSessionStateV1, bool)> {
+        unimplemented!()
+    }
+
+    fn clear_pruning_utxo_set_for_session(&self, session: PruningImportSessionV1) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn append_imported_pruning_point_utxos_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        chunk: &[(TransactionOutpoint, UtxoEntry)],
+        multiset: &mut MuHash,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_utxo_set_for_session(&self, session: PruningImportSessionV1, multiset: MuHash) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_evm_state_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        header: crate::evm::EvmExecutionHeader,
+        snapshot: crate::evm::EvmStateSnapshot,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_palw_state_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        carriage: crate::palw_state_v2::PalwStateCarriageV2,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    /// Atomically install a root-verified PALW snapshot and its validated
+    /// execution declarations under the current durable import authority.
+    fn import_pruning_point_palw_snapshot_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        carriage: crate::palw_state_v2::PalwStateCarriageV2,
+        declarations: Vec<(kaspa_hashes::Hash64, Vec<u8>)>,
+        complete: bool,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_overlay_snapshot_for_session(
+        &self,
+        session: PruningImportSessionV1,
+        snapshot: crate::dns_finality::OverlaySnapshot,
+    ) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn complete_pruning_point_import_for_session(&self, session: PruningImportSessionV1) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn import_pruning_point_utxo_set(&self, new_pruning_point: BlockHash, imported_utxo_multiset: MuHash) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    // kaspa-pq ADR-0022: pruned-IBD EVM + DNS/PoS-v2 overlay snapshot transfer.
+    /// Serve: the pruning point's EVM execution header + state snapshot, or `None` if absent.
+    fn pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+    ) -> Option<(crate::evm::EvmExecutionHeader, crate::evm::EvmStateSnapshot)> {
+        let _ = pruning_point;
+        unimplemented!()
+    }
+
+    /// Import: verify + persist the pruning point's EVM execution state.
+    fn import_pruning_point_evm_state(
+        &self,
+        pruning_point: BlockHash,
+        evm_header: crate::evm::EvmExecutionHeader,
+        snapshot: crate::evm::EvmStateSnapshot,
+    ) -> PruningImportResult<()> {
+        let _ = (pruning_point, evm_header, snapshot);
+        unimplemented!()
+    }
+
+    /// Serve: the persisted overlay snapshot as-of the current pruning point, or `None`.
+    fn pruning_point_overlay_snapshot(&self) -> Option<crate::dns_finality::PruningPointOverlaySnapshot> {
+        unimplemented!()
+    }
+
+    /// **Assemble a lifecycle object from a receipt pool** — the largest set of gossip-delivered
+    /// receipts the acceptance validator itself accepts for `claim`, as the object a block would
+    /// take (`ReceiptLicensed` on a Licensed quorum, `ProducerDefaulted` on an Unavailable one), or
+    /// `None` while no quorum is assemblable. Garbage candidates are dropped, never fatal: the
+    /// submitter's whole job is to keep working next to a poisoned pool.
+    fn palw_v2_receipt_quorum_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        unimplemented!()
+    }
+
+    /// ADR-0133 S1: assemble a coverage licence from V3 receipts, or `None` while the fence is
+    /// dormant or the set does not yet cover every segment twice.
+    fn palw_v2_receipt_coverage_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
+    /// **RFC-0006: assemble one licensing part of a claim drawn per layer shard** — the next shard (lowest index first) whose
+    /// cell-masked receipts in `candidates` the acceptance validator itself accepts as a licence of that shard, as the
+    /// `TirShardReceiptLicensed` object a block would take, or `None` while the fence is dormant, the claim was not drawn per
+    /// shard, or no shard's receipts license it yet. Garbage candidates are dropped, never fatal.
+    fn palw_v2_tir_shard_part_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_tir_shard_v1::PalwSeatReceiptV4>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
+    /// **ADR-0160 F-B: assemble a batch licence** of the `due` claims (oldest bind first) over the
+    /// pooled seats' signed `windows`, within `max_bytes`, or `None` while the fence is dormant or
+    /// nothing licenses (node policy: which licences a collector carries, never what a block accepts).
+    fn palw_v2_batch_licence_assemble(
+        &self,
+        _windows: Vec<crate::palw_batch_licence_v1::PalwSeatWindowV1>,
+        _due: Vec<crate::Hash64>,
+        _max_bytes: usize,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
+    /// ADR-0133 S2: assemble an optimistic licence from V3 receipts, or `None` while the fence is
+    /// dormant or the full-replay seat has not filed `Valid`.
+    fn palw_v2_optimistic_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
+    /// **ADR-0124 Decision 2: assemble a seat's own supplementary receipt set** — the `Valid`
+    /// receipts in `mine` for `claim` that the chain has licensed without crediting, as the
+    /// `ReceiptLicensed` object the supplementary door accepts, or `None` while the door is shut
+    /// (fence dormant, claim not licensed, every receipt credited, window closed). Checked by the
+    /// acceptance validator itself at virtual's point, so what this returns is what a block takes.
+    fn palw_v2_supplementary_receipt_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _mine: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
+    /// **ADR-0152 SR-10 / Q-7 / V3S-01: the supplementary set a collector offers for a licensed
+    /// claim** (`palw_select_supplementary_offer_v1`) — the `ReceiptLicensedV2` of the gossip-delivered
+    /// V3 receipts SR-10's door credits, or, on a licence awaiting its replay, the `ReceiptLicensed` of
+    /// a full-replay V2 `Valid` that upgrades it before any pay set — checked by the acceptance
+    /// validators and folded by the fold at virtual's point, with what the fold says it does. `None`
+    /// while `palw_rcore_plus` is dormant, the claim is not `ReceiptLicensed`, or nothing would move.
+    fn palw_v2_supplementary_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _v3_candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+        _v2_candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>,
+    ) -> Option<crate::palw_state_v2::PalwSupplementaryOfferV1> {
+        None
+    }
+
+    /// **The seat duties this node holds** (launch blockers §2) — the claims whose panels name a
+    /// bond in `mine`, with the roots each seat must decide against.
+    fn palw_seat_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {
+        Vec::new()
+    }
+
+    /// **RFC-0006 × G14: the shards a non-seat bond may watch** (agent SHARD) — every shard of a live claim drawn per shard that
+    /// `watcher` neither seats nor produced, as watch duties ([`crate::palw_tir_shard_watch_v1::palw_tir_shard_watch_duties_v1`]).
+    fn palw_tir_shard_watch_duties_v1(
+        &self,
+        _watcher: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {
+        Vec::new()
+    }
+
+    /// **A bond's claims, as its operator reads them** (ADR-0122 §6.5, `getPalwClaims`): the ones
+    /// it made (`Executor`) or the ones whose panels seat it (`Seat`), newest first, with the tip
+    /// DAA they were read at, whether `limit` left rows out, and the bond's own registry record.
+    /// `None` off `ConsensusV2`. **The rows alone** — the vesting half is empty; this is the entry
+    /// node policy reads (the panel loop's per-bond phase/deadline reads).
+    fn palw_claim_rows_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+        _role: crate::palw_producer_v2::PalwClaimRoleV1,
+        _include_terminal: bool,
+        _limit: usize,
+    ) -> Option<crate::palw_producer_v2::PalwBondClaimsV1> {
+        None
+    }
+
+    /// [`Self::palw_claim_rows_v1`] with **claim row v3's vesting half** (ADR-0152, phase2-plan
+    /// §1.6): each vested Final's stage and row read at the next block, and the rows of the claims
+    /// that retired while they vest. The RPC's entry; it costs a next-block plan and a walk of the
+    /// vesting table's positions, which only a reader that prints them should pay (review of P2-10,
+    /// finding 4).
+    fn palw_claim_rows_with_vesting_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+        _role: crate::palw_producer_v2::PalwClaimRoleV1,
+        _include_terminal: bool,
+        _limit: usize,
+    ) -> Option<crate::palw_producer_v2::PalwBondClaimsV1> {
+        None
+    }
+
+    /// **ADR-0152 V-1…V-8, read side: the vesting table at the tip** (`getPalwVesting`, op 199;
+    /// phase2-plan §1.6): the query's rows with their V-4 maturity, V-7 position and the next
+    /// block's plan, a payee's reporter rewards and B-3 hold, and the chain-wide counters, halt and
+    /// door histogram — all asked at the next block's DAA. `limit` bounds the page (0 = the cap) and
+    /// `after` resumes past a `(expiry_daa, claim_id)` cursor. `None` off `ConsensusV2`.
+    fn palw_vesting_v1(
+        &self,
+        _query: crate::palw_vesting_read_v1::PalwVestingQueryV1,
+        _limit: usize,
+        _after: Option<(u64, crate::Hash64)>,
+    ) -> Option<crate::palw_vesting_read_v1::PalwVestingReadV1> {
+        None
+    }
+
+    fn palw_reward_vesting_v2(
+        &self,
+        query: crate::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, crate::Hash64)>,
+        exec_after: Option<crate::palw_reward_vesting_read_v2::PalwExecRewardCursorV2>,
+    ) -> Option<crate::palw_reward_vesting_read_v2::PalwRewardVestingReadV2> {
+        let _ = (query, limit, after, exec_after);
+        None
+    }
+
+    /// **ADR-0160 §7.5: the capacity shadow at the tip** (`getPalwCapacityShadow`; kaspad's
+    /// interval log): what the capacity formulas would reserve, weigh and allow for every live
+    /// claim and bond, per ramp step, next to today's values — asked at the next block's DAA with
+    /// the RAW second-clock depth. A read: no rule calls it. `None` off `ConsensusV2`.
+    fn palw_capacity_shadow_v1(
+        &self,
+        _options: crate::palw_capacity_shadow_v1::PalwCapacityShadowOptionsV1,
+    ) -> Option<crate::palw_capacity_shadow_v1::PalwCapacityShadowV1> {
+        None
+    }
+
+    /// **RFC-0010: the permissionless Panel's observation at the tip** (`getPalwPanelV3Status`, op 220): the engine's overview and
+    /// the status of the named claims (or the first tracked ones). A read: no rule calls it. `None` off `ConsensusV2`.
+    fn palw_panel_v3_observation_v1(
+        &self,
+        _ids: Vec<crate::Hash64>,
+        _limit: usize,
+    ) -> Option<crate::palw_permissionless_panel_v1::PanelV3ObservationV1> {
+        None
+    }
+
+    /// **RFC-0008 v2: the EXEC v2 lane's observation at the tip** (`getPalwExecV2Status`, op 240): counts, the named (or first) roots
+    /// with each slice and its verification claim's state, `block`'s refusal record, the lane's health. A read: no rule calls it.
+    /// `None` where the payload is not armed.
+    fn palw_exec_v2_observation_v1(
+        &self,
+        _roots: Vec<crate::Hash64>,
+        _block: Option<crate::BlockHash>,
+    ) -> Option<crate::palw_exec_v2_verify::PalwExecV2ObservationV1> {
+        None
+    }
+
+    /// **RFC-0008 v2 amendment 1: the slice statement `bond` signs for `(root, index)` backed by the kernel claim `claim`**, derived from
+    /// the tip (`palw_exec_v2_slice_statement_v1`) — the EXEC_SLICE producer's input. A read.
+    fn palw_exec_v2_slice_statement_v1(
+        &self,
+        _root: crate::Hash64,
+        _index: u32,
+        _claim: crate::Hash64,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<crate::palw_exec_v2::PalwWorkSliceV1, String> {
+        Err("this consensus does not carry the EXEC v2 lane".into())
+    }
+
+    /// **RFC-0008 v2 amendment 1, §10.3: may a validated `EXEC_SLICE` block be announced onward?** Against the tip: its root is open,
+    /// its executor authorised, its index inside `[next, next + depth)`, its verification claim held by the kernel route. Node-local
+    /// relay policy: validity never reads it. `true` where the payload is not armed.
+    fn palw_exec_v2_slice_relayable_v1(&self, _slice: &crate::palw_exec_v2::PalwWorkSliceV1) -> bool {
+        true
+    }
+
+    /// **RFC-0008 v2: has an anchor on this node's selected chain covered `block`?** The EXEC_SLICE producer republishes a carrier that
+    /// left the window uncovered (amendment 1, §10.7). A read.
+    fn palw_exec_v2_anchored_v1(&self, _block: crate::BlockHash) -> bool {
+        false
+    }
+
+    /// The court's half: open sessions this node holds a bond in.
+    fn palw_court_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwCourtDutyV2> {
+        Vec::new()
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6: the held forfeits `mine` holds and `mine`'s open data-availability
+    /// sessions**, at the tip — what a challenger's node rebuilds its step-6 pursuits from at start
+    /// ([`crate::palw_producer_v2::palw_held_pursuit_seeds_v1`]).
+    fn palw_held_pursuit_seeds_v1(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> crate::palw_producer_v2::PalwHeldPursuitSeedsV1 {
+        Default::default()
+    }
+
+    /// The data-availability court's half (ADR-0062 D3): claims this node produced that are under
+    /// an open accusation, with the event each must open.
+    fn palw_da_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwDaDutyV2> {
+        Vec::new()
+    }
+
+    /// **ADR-0152 X7 / DA-4 (Phase 2, P2-7): the R-core court's half** — every unanswered unit of an
+    /// open data-availability session this node must answer, as the claim's producer or as a
+    /// covering signer, and the claims a live lock obliges it to keep the material of. Empty below
+    /// `palw_rcore_plus`, where [`Self::palw_da_duties_v2`] is the court's duty list.
+    fn palw_disclosure_duties_v1(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> crate::palw_producer_v2::PalwDisclosureDutiesV1 {
+        Default::default()
+    }
+
+    /// Bounded read-only progress from one accepted staged court/reservation snapshot.
+    fn palw_staged_paid_authority_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedPaidAuthorityV1>, String> {
+        Err("staged paid authority reader unavailable".into())
+    }
+
+    fn palw_staged_owned_context_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3)>, String> {
+        Err("staged owned context reader unavailable".into())
+    }
+
+    fn palw_staged_owned_seed_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_constraint_stream_carriage_v1::PalwConstraintStreamSeedV1>, String> {
+        Err("staged original seed reader unavailable".into())
+    }
+
+    fn palw_tokenizer_artifact_inventory_v1(
+        &self,
+        _class: crate::Hash64,
+        _opener: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwTokenizerArtifactInventoryProgressV1>, String> {
+        Err("tokenizer artifact inventory reader unavailable".into())
+    }
+
+    fn palw_staged_flat_source_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedFlatProgressV1>, String> {
+        Err("staged Flat authenticated reader unavailable".into())
+    }
+
+    fn palw_staged_flat_pin_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _source: crate::Hash64,
+        _answerer: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintPinV1>, String> {
+        Err("staged Flat authenticated reader unavailable".into())
+    }
+
+    fn palw_staged_float_source_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedFloatProgressV1>, String> {
+        Err("staged Float32 authenticated reader unavailable".into())
+    }
+
+    fn palw_staged_float_pin_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _source: crate::Hash64,
+        _answerer: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Result<Option<crate::palw_float_constraint_source_v1::PalwFloatConstraintPinV1>, String> {
+        Err("staged Float32 authenticated reader unavailable".into())
+    }
+
+    fn palw_staged_tir_view_v1(
+        &self,
+        _claim: crate::Hash64,
+        _maximum_leaves: u64,
+    ) -> Result<
+        Option<(crate::palw_decode_view_v1::PalwDecodeViewV1, Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>)>,
+        String,
+    > {
+        Err("staged TIR decode view reader unavailable".into())
+    }
+
+    fn palw_staged_owned_native_seed_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_bundle_v1::PalwStagedNativeSeedContextV1>, String> {
+        Err("staged native seed reader unavailable".into())
+    }
+
+    fn palw_staged_tir_prefix_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedTirPrefixProgressV1>, String> {
+        Err("staged TIR prefix reader unavailable".into())
+    }
+
+    /// G14 R4: an ORIGINAL TIR frame as one public verifier reads it to file a conviction (accepted snapshot; `None` below
+    /// `palw_tir_public_conviction_v1` or for a claim with no frame).
+    fn palw_tir_public_frame_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_tir_public_claim_v1::PalwTirPublicFrameViewV1>, String> {
+        Err("TIR public frame reader unavailable".into())
+    }
+
+    /// **G14 R3/R4: the node workers' read of the accepted native snapshot of ORIGINAL TIR frames.** Runs `read` once against
+    /// the same accepted state every PALW reader uses, iff `palw_tir_public_conviction_v1` is active there; `Ok(false)` below it
+    /// (the closure is not run). Read-only. The seat preparation worker and the filer scheduler need it because the frame's
+    /// preparation/acquisition snapshots and the work book's debit preparation and permit confirmation
+    /// (`palw_tir_public_state_v1`) all take the accepted state — a work permit is minted only by confirming against it.
+    fn palw_tir_public_read_v1(
+        &self,
+        _read: &mut dyn FnMut(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        Err("TIR public accepted-state reader unavailable".into())
+    }
+
+    /// **G14 R4: the filer scheduler's preflight** — whether the fold would accept `filer`'s public conviction of `claim` with
+    /// `evidence` at the next DAA on the accepted snapshot (a discarded dry run of the native path). `Ok(None)` below
+    /// `palw_tir_public_conviction_v1`; `Ok(Some(Err(reason)))` for a filing the fold would refuse. Never a verdict.
+    fn palw_tir_public_conviction_preflight_v1(
+        &self,
+        _filer: crate::palw_state_v2::PalwBondKeyV2,
+        _claim: crate::Hash64,
+        _evidence: crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+    ) -> Result<Option<Result<(), String>>, String> {
+        Err("TIR public conviction preflight unavailable".into())
+    }
+
+    /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame on the accepted snapshot — `(snapshot DAA, plan)`;
+    /// `None` below `palw_tir_public_conviction_v1` or for an original the frame route does not admit.
+    fn palw_tir_public_original_quote_v1(
+        &self,
+        _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        _header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    ) -> Result<Option<(u64, crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        Err("TIR public original quote unavailable".into())
+    }
+
+    fn palw_staged_tir_prefix_leaf_index_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _ordinal: u64,
+        _maximum_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        Err("staged TIR prefix reader unavailable".into())
+    }
+
+    fn palw_staged_tir_layout_v1(&self, _class_id: crate::Hash64) -> Option<crate::palw_tir_class_v1::PalwTirLayoutV1> {
+        None
+    }
+
+    fn palw_staged_resolved_public_context_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_freeprompt_v3::PalwFreePromptJobV3)>, String> {
+        Err("staged resolved original public context reader unavailable".into())
+    }
+
+    fn palw_staged_original_commitment_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>, String> {
+        Err("staged original commitment reader unavailable".into())
+    }
+
+    fn palw_staged_history_recovery_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _seed: crate::Hash64,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedHistoryRecoveryProgressV1>, String> {
+        Err("staged public history reader unavailable".into())
+    }
+
+    /// The accepted PALW V2 snapshot's own clock (its last applied point's DAA), the clock
+    /// every native reader above judges against. `None` when no accepted snapshot exists.
+    /// Not the virtual DAA: a node's local scheduling must not run ahead of native state.
+    fn palw_v2_accepted_daa_v1(&self) -> Option<u64> {
+        None
+    }
+
+    fn palw_staged_custody_delegations_to_v1(
+        &self,
+        _custodian: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<crate::Hash64>,
+    ) -> Result<(Vec<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, Option<crate::Hash64>), String> {
+        Err("staged custody delegation reader unavailable".into())
+    }
+
+    fn palw_staged_history_grant_duty_v1(
+        &self,
+        _claim: crate::Hash64,
+        _seat: crate::palw_state_v2::PalwBondKeyV2,
+        _receipt: crate::palw_panel_v2::PalwSeatReceiptV2,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwHistoryGrantDutyV1>, String> {
+        Err("staged history grant reader unavailable".into())
+    }
+
+    fn palw_history_response_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>,
+    ) -> Result<crate::palw_staged_court_state_v1::PalwStagedHistoryDutyPageV1, String> {
+        Err("staged public history reader unavailable".into())
+    }
+
+    fn palw_staged_public_context_v1(
+        &self,
+        _claim: crate::Hash64,
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedPublicContextV1>, String> {
+        Err("staged original public context reader unavailable".into())
+    }
+
+    fn palw_staged_flat_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (Vec<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>),
+        String,
+    > {
+        Err("staged Flat indexed duty reader unavailable".into())
+    }
+
+    fn palw_staged_selected_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<
+        (Vec<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>),
+        String,
+    > {
+        Err("staged selected indexed duties reader unavailable".into())
+    }
+
+    fn palw_staged_selected_events_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedSelectedProgressV1>, String> {
+        Err("staged selected source reader unavailable".into())
+    }
+
+    fn palw_staged_bundle_plan_v1(
+        &self,
+        _claim: crate::Hash64,
+        _actual_raw_cap: Option<u64>,
+    ) -> Result<Option<crate::palw_staged_bundle_v1::PalwStagedBundlePlanV1>, String> {
+        Err("staged immutable bundle quote reader unavailable".into())
+    }
+
+    fn palw_staged_owned_progress_v1(
+        &self,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+    ) -> Result<Option<crate::palw_staged_court_state_v1::PalwStagedOwnedProgressV1>, String> {
+        Err("staged owned progress reader unavailable".into())
+    }
+
+    fn palw_prefix_response_duties_v1(
+        &self,
+        _signer: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>,
+    ) -> Result<crate::palw_staged_court_state_v1::PalwPrefixResponsePageV1, String> {
+        Err("public prefix response reader unavailable".into())
+    }
+
+    fn palw_prefix_history_record_v1(
+        &self,
+        _snapshot: crate::BlockHash,
+        _request: crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<crate::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        Err("public prefix accepted history archive reader unavailable".into())
+    }
+
+    fn palw_prefix_history_record_current_v1(
+        &self,
+        _request: crate::palw_prefix_history_v1::PalwPrefixHistoryRequestV1,
+    ) -> Result<Option<crate::palw_prefix_history_v1::PalwPrefixHistoryRecordV1>, String> {
+        Err("public prefix accepted history current archive reader unavailable".into())
+    }
+
+    fn palw_staged_cache_gc_page_v1(
+        &self,
+        _after: Option<(u64, crate::Hash64)>,
+        _limit: usize,
+    ) -> Result<crate::palw_prefix_history_v1::PalwStagedCacheGcPageV1, String> {
+        Err("native accepted cache lease reader unavailable".into())
+    }
+
+    fn palw_staged_cache_gc_ack_v1(&self, _lease: crate::palw_prefix_history_v1::PalwStagedCacheLeaseV1) -> Result<bool, String> {
+        Err("native accepted cache lease acknowledgement unavailable".into())
+    }
+
+    fn palw_shared_claim_cache_gc_page_v1(
+        &self,
+        _after: Option<(u64, crate::Hash64)>,
+        _limit: usize,
+    ) -> Result<crate::palw_prefix_history_v1::PalwSharedClaimCacheGcPageV1, String> {
+        Err("native shared claim cache lease reader unavailable".into())
+    }
+
+    fn palw_shared_claim_cache_gc_ack_v1(
+        &self,
+        _lease: crate::palw_prefix_history_v1::PalwSharedClaimCacheLeaseV1,
+    ) -> Result<bool, String> {
+        Err("native shared claim cache lease acknowledgement unavailable".into())
+    }
+
+    /// Producer preflight from native authenticated class/inventory state. The
+    /// caller cannot choose custody, ladder, admission time or resource ceilings.
+    /// **RFC-0016 (op 255): the per-model report** at the virtual tip, as JSON (targets apart from outcomes, node-local observations
+    /// labelled), with the pre-lottery quote for `class` where asked. `None` off ConsensusV2 or with no PALW tip.
+    fn palw_rfc0016_report_v1(&self, _class: Option<crate::Hash64>) -> Result<Option<(u64, bool, String)>, String> {
+        Err("RFC-0016 report unavailable".into())
+    }
+
+    /// **RFC-0006 consumer v2 (op 245): a class's immutable per-reader router binding** (kernel-route aux 139) at the virtual tip:
+    /// `(now_daa, armed, Some((bound_from_daa, the row's borsh bytes)))`, `None` for the row where the class declared none. `Ok(None)`
+    /// off ConsensusV2 or with no PALW tip.
+    #[allow(clippy::type_complexity)]
+    fn palw_router_binding_v2(&self, _class: crate::Hash64) -> Result<Option<(u64, bool, Option<(u64, Vec<u8>)>)>, String> {
+        Err("router binding read unavailable".into())
+    }
+
+    fn palw_staged_preclaim_quote_v1(
+        &self,
+        _original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        _header: crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    ) -> Result<Option<(crate::BlockHash, crate::palw_staged_preclaim_v1::PalwStagedPreclaimQuoteV1)>, String> {
+        Err("native authenticated staged preclaim quote unavailable".into())
+    }
+
+    fn palw_prefix_page_write_v1(
+        &self,
+        _snapshot: crate::BlockHash,
+        _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
+        _seed_id: crate::Hash64,
+        _opening: crate::palw_prefix_gdn_paged_v1::PalwGdnOwnedPageOpeningV1,
+    ) -> Result<Vec<i32>, String> {
+        Err("public prefix page continuation reader unavailable".into())
+    }
+
+    /// Terminal evidence progress of this verifier's own live reservation at the accepted tip.
+    /// Unavailable readers are errors; absent/closed reservations are distinct successful reads.
+    fn palw_terminal_progress_v1(
+        &self,
+        _key: crate::palw_terminal_carriage_v1::PalwTerminalKeyV1,
+    ) -> Result<Option<crate::palw_terminal_carriage_v1::PalwTerminalProgressV1>, String> {
+        Err("terminal evidence progress reader unavailable".into())
+    }
+
+    /// Accepted session-owned answer progress at the local tip. An unavailable reader is an
+    /// error, distinct from a successfully read tip with no assembly. No retained part bytes are copied.
+    fn palw_legacy_answer_progress_v2(
+        &self,
+        _key: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
+    ) -> Result<Option<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerProgressV2>, String> {
+        Err("session-owned answer progress reader unavailable".into())
+    }
+
+    /// Reconstruct public material from a selected-chain fold block's bounded removal index
+    /// and a last accepted carrier. This is a local full-node reader, not a remote proof or a
+    /// statement that the supplied carrier was accepted by the DA court. Callers authenticate
+    /// the reconstructed binding/answer against the pursued claim's recorded root.
+    fn palw_legacy_answer_history_v2(
+        &self,
+        _block: crate::BlockHash,
+        _chunk: Box<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkV2>,
+        _maximum: u64,
+    ) -> Result<Option<crate::palw_legacy_held_da_v2::PalwLegacyHeldAnswerCarriageV2>, String> {
+        Err("session-owned answer history reader unavailable".into())
+    }
+
+    /// **Lane LG14-A (RFC-0014 §6.3, RPC 204): one claim's dispute view at the tip** — its roots, retention, DL-1's deadline, the hard
+    /// deadline, the dispute record, the open DA sessions, the answered units, the open courts and its recorded convictions. What any
+    /// node serves to any verifier. `None` off `ConsensusV2` or for a claim the tip does not hold.
+    fn palw_legacy_dispute_v1(&self, _claim: crate::Hash64) -> Option<crate::palw_state_v2::PalwLegacyDisputeViewV1> {
+        None
+    }
+
+    /// The public filer's objective-proof target, resolved from the tip's claim/liability/vesting rows.
+    /// These are public chain facts; a caller never reconstructs the recorded job identity from served material.
+    fn palw_fraud_filer_target_v1(&self, _claim: crate::Hash64) -> Option<crate::palw_offence_attribution_v1::PalwOffenceTargetV1> {
+        None
+    }
+
+    /// **G14 ③ (lane gdn-filer): a page of the claims `me` may still accuse with tag 243 at the tip** — every claim inside the fold's
+    /// accusation window (`palw_gdn_step_candidate_v1`), in `(accepted_daa, claim_id)` order after `after`, at most `limit`. Empty off
+    /// `ConsensusV2`. Node policy only.
+    fn palw_gdn_step_candidates_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+        _after: Option<(u64, crate::Hash64)>,
+        _limit: usize,
+    ) -> Vec<crate::palw_state_v2::PalwGdnStepCandidateV1> {
+        Vec::new()
+    }
+
+    /// **G14 ③: one claim's tag-243 window facts for `me` at the tip** (`None`: outside the window, or not held).
+    fn palw_gdn_step_candidate_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+        _claim: crate::Hash64,
+    ) -> Option<crate::palw_state_v2::PalwGdnStepCandidateV1> {
+        None
+    }
+
+    /// **G14 ③: the limits the fold judges a `GdnStepAccusedV2` of `class_id` by at the tip** — exactly the fold's sources: the ladder
+    /// `class_step_ladder_v1(class_id, palw_court_step_ladder_at(daa))` and the court's `max_close_bytes`. `None` while
+    /// `palw_memory_routing_court_v2` is not in force (the fold refuses tag 243 then).
+    fn palw_gdn_court_limits_v2(&self, _class_id: crate::Hash64) -> Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2> {
+        None
+    }
+
+    /// **Lane LG14-A (RPC 205): the claims a live dispute reservation holds at the tip** (those of `reserver` when given), at most
+    /// `limit`, in claim order.
+    fn palw_legacy_disputes_v1(&self, _reserver: Option<crate::palw_state_v2::PalwBondKeyV2>, _limit: usize) -> Vec<crate::Hash64> {
+        Vec::new()
+    }
+
+    /// **Lane LG14-A: would the next block take this reservation?** The fold's own tag-154 arm on the tip, at the DAA the virtual's
+    /// next block folds at — `Some(Ok(deposit))` or the fold's refusal; `None` off `ConsensusV2`.
+    fn palw_legacy_dispute_reservation_check_v1(
+        &self,
+        _reservation: crate::palw_legacy_public_filer_v1::PalwDisputeReservationV1,
+    ) -> Option<Result<u128, String>> {
+        None
+    }
+
+    /// **Lane LG14-A (RFC-0014 §6.1): the claims `me`'s common fraud filer may pursue at the tip**, oldest acceptance first. Empty below
+    /// `palw_legacy_public_filer_v1` and off `ConsensusV2`.
+    fn palw_fraud_filer_candidates_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_state_v2::PalwFraudFilerCandidateV1> {
+        Vec::new()
+    }
+
+    /// Local explicit claim discovery. Production performs direct state-key lookup; the
+    /// fallback keeps test consensus implementations compatible and retains admitted records.
+    fn palw_fraud_filer_candidates_for_claims_v1(
+        &self,
+        me: crate::palw_state_v2::PalwBondKeyV2,
+        claims: Vec<Hash64>,
+    ) -> Vec<crate::palw_state_v2::PalwFraudFilerCandidateV1> {
+        if claims.len() > crate::palw_state_v2::PALW_FILER_EXPLICIT_TARGETS_V1 {
+            return Vec::new();
+        }
+        let wanted: std::collections::BTreeSet<_> = claims.into_iter().collect();
+        self.palw_fraud_filer_candidates_v1(me)
+            .into_iter()
+            .filter(|candidate| {
+                self.palw_legacy_dispute_v1(candidate.claim_id).is_some_and(|view| {
+                    view.record.as_ref().is_some_and(|record| record.knows(&me))
+                        || (wanted.contains(&candidate.claim_id) && self.get_virtual_daa_score() <= view.hard_deadline_daa)
+                })
+            })
+            .collect()
+    }
+
+    /// **Lane LG14-A (RPC 206): one bond's standing as a public filer at the tip** — `None` for a bond the state does not hold.
+    fn palw_fraud_filer_status_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_state_v2::PalwFraudFilerStatusV1> {
+        None
+    }
+
+    /// **ADR-0152 §3.8 (Phase 2, P2-6): what an automatic accusation of `claim` by `accuser` comes
+    /// to** at the tip, for the DAA the virtual's next block folds at — the fold's own gate (C-8, A-6
+    /// included), the named unit's bound, and whether the accuser accused before or the unit is
+    /// answered. `None` when there is no tip state to read (off `ConsensusV2`).
+    fn palw_da_accusation_check_v1(
+        &self,
+        _claim: crate::Hash64,
+        _accuser: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_producer_v2::PalwDaAccusationCheckV1> {
+        None
+    }
+
+    /// **Lane B of the panel-seed stopgap (2026-09-26): the claims an operator's non-seat filer may
+    /// accuse** at the tip, for the DAA the virtual's next block folds at
+    /// ([`crate::palw_operator_da_v1::palw_operator_da_candidates_v1`]: licensed or `Final`-with-row
+    /// claims produced outside `operators` that relied on a `Valid` signer outside them). A read for
+    /// node policy, never a block rule; empty off `ConsensusV2`, with no tip state, and below
+    /// `palw_rcore_plus`.
+    fn palw_operator_da_candidates_v1(
+        &self,
+        _operators: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<crate::palw_operator_da_v1::PalwOperatorDaCandidateV1> {
+        Vec::new()
+    }
+
+    /// **ADR-0160 F-Q (stage 2): the credited claims `me`'s audit duty may receipt** at the tip
+    /// ([`crate::palw_audit_door_v1::palw_capacity_audit_candidates_v1`]). A read for node policy, never
+    /// a block rule; empty off `ConsensusV2`, with no tip state, and below `palw_capacity_audit_door`.
+    fn palw_capacity_audit_candidates_v1(
+        &self,
+        _me: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_audit_door_v1::PalwAuditCandidateV1> {
+        Vec::new()
+    }
+
+    /// **Lane B: one operator bond's standing** at the tip, for the DAA the virtual's next block folds
+    /// at ([`crate::palw_operator_da_v1::palw_operator_da_standing_v1`]: its collateral net of slashes,
+    /// A-6's room on its free half, the DA exposure it holds) — what the node's seat reserve and its
+    /// blind-accusation budget read. A read for node policy; `None` off `ConsensusV2`, with no tip
+    /// state, or for a bond the state does not hold.
+    fn palw_operator_da_standing_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_operator_da_v1::PalwOperatorDaStandingV1> {
+        None
+    }
+
+    /// **ADR-0152 R-3/R-4 (Phase 2, P2-8): what the reporter's filer reads of one filing** at the
+    /// tip, for the DAA the virtual's next block folds at — its commitment's row, the conviction and
+    /// the reward under `offence_key` ([`crate::palw_state_v2::palw_reporter_filing_read_v1`]) — and,
+    /// when `gated` is given (the evidence, the signed commitment, or the court accusation the filer
+    /// falls back to), the processor's own object gate on it at that DAA (the adjudicator the fold
+    /// runs), so the node never pays a carrier for an object the chain refuses. A read: it decides
+    /// nothing a block accepts. `None` when there is no tip state (off `ConsensusV2`).
+    fn palw_reporter_filing_read_v1(
+        &self,
+        _offence_key: crate::Hash64,
+        _commitment: crate::Hash64,
+        _reporter: crate::palw_state_v2::PalwBondKeyV2,
+        _gated: Option<crate::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Option<crate::palw_state_v2::PalwReporterFilingReadV1> {
+        None
+    }
+
+    /// **ADR-0152 DA-3 / J-6 (Phase 2, P2-8d): what a `StepLeaf` demand of `claim` by `accuser`
+    /// comes to** at the tip, for the DAA the virtual's next block folds at — the fold's own gates for
+    /// the named leaf (`palw_producer_v2::palw_da_step_leaf_demand_check_v1`). `None` off `ConsensusV2`.
+    fn palw_da_step_leaf_demand_check_v1(
+        &self,
+        _claim: crate::Hash64,
+        _accuser: crate::palw_state_v2::PalwBondKeyV2,
+        _leaf: u64,
+    ) -> Option<crate::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        None
+    }
+
+    /// **ADR-0152 Phase 2, P2-8e: what the fold makes of `object` in the virtual's next block** — the
+    /// acceptance layer, then the object's own arm, on the tip at the virtual's DAA
+    /// (`palw_producer_v2::PalwObjectRehearsalV1`). A read for node policy, never a block rule. `None`
+    /// off `ConsensusV2` or with no tip state.
+    fn palw_object_rehearsal_v1(
+        &self,
+        _object: &crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<crate::palw_producer_v2::PalwObjectRehearsalV1> {
+        None
+    }
+
+    /// **ADR-0152 Phase 2, P2-8e review (MED): each asked claim's one deadline in the sweep queue at
+    /// the tip** (`PalwChainStateV2::deadline_of`, DL-1's row: the receipt deadline of a bound panel,
+    /// `Final` of a licence at `window_challenge_at` and every floor the fold adds, a DA session's
+    /// disclose deadline; `None` while a court or a seat's DA session pauses it, or for a claim the
+    /// tip does not hold). What node policy dates a seat's court filing by, so the date is the fold's
+    /// own and never a second spelling of it. A read, never a block rule; empty off `ConsensusV2` or
+    /// with no tip state.
+    fn palw_claim_deadlines_v1(&self, _claims: Vec<crate::Hash64>) -> Vec<(crate::Hash64, Option<u64>)> {
+        Vec::new()
+    }
+
+    /// **The 2026-09-25 model-registry review, M1: how urgently do these possession proofs' rows need
+    /// them at the tip?** One answer per carrier, in order: `Some` when its row there exists and is
+    /// lapsing or lapsed and the proof renews it (`palw_readiness_escalation_v1::
+    /// palw_readiness_proof_urgency_v1`), at the virtual's DAA — the tip read the mempool's carrier
+    /// index asks when a proof enters and, for every proof it holds at once, at every new block (one
+    /// tip load, one registry fold), so the reserve and the template's head hold a proof exactly while
+    /// it escalates, in urgency order. All `None` below `palw_rcore_plus` (every network but
+    /// testnet-12), off `ConsensusV2`, and without a registry.
+    fn palw_readiness_urgency_v1(
+        &self,
+        carriers: &[crate::palw_readiness_escalation_v1::PalwReadinessCarrierV1],
+    ) -> Vec<Option<crate::palw_readiness_escalation_v1::PalwReadinessUrgencyV1>> {
+        vec![None; carriers.len()]
+    }
+
+    /// Original paid native carrier metadata at one coherent virtual / selected
+    /// parent snapshot. No priority is granted by a transaction's route tag.
+    fn native_carriage_snapshot_v22(&self) -> Option<crate::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
+        None
+    }
+
+    /// **The 2026-09-25 sweep, V01: the H-1 carrier gate's answer on each of `txs` at the tip** — one
+    /// per transaction, in order: `Some(reason)` for a carrier the tip's fold would refuse, by the
+    /// one predicate the mempool asks at admission and the template asks at every build
+    /// (`palw_mempool_h1_carrier_refusal`), at the virtual's DAA; `None` for every other transaction.
+    /// Every node's mempool asks it at each new block over the carriers it holds, so a carrier the
+    /// fold stopped taking leaves the pool of a node that never builds a template (a seat-only node,
+    /// a relay) exactly as it leaves a miner's. All `None` below `palw_rcore_plus` (every network but
+    /// testnet-12), off `ConsensusV2` and with no tip state. Node-local: never a block rule.
+    ///
+    /// In the template's order (the V01 review): `None` for a transaction with an input the virtual
+    /// UTXO set does not hold — mined (the tip would refuse it as a duplicate), double-spent, or
+    /// chained on a pooled parent — and all `None` while the PALW tip row does not stand at the
+    /// virtual's sink (mid-resolve); every judged transaction is judged on that one tip.
+    fn palw_h1_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        vec![None; txs.len()]
+    }
+
+    /// **The market gate's answers on pooled market carriers, for the mempool's per-block sweep**
+    /// (the V01 review's LOW 3; the user's request of 2026-09-25): per transaction, in order,
+    /// `Some(reason)` for a seed, a buy, a carrier sell or an Activation Pool top-up the P-B3 / P-B1
+    /// gate refuses at the tip (`palw_mempool_market_refusal`, the predicate admission and every
+    /// template ask) — its class's lifecycle moved (Probation → Held), or the payout queue has no room
+    /// for its move or refund — and `None` for every other transaction. Judged exactly as
+    /// [`Self::palw_h1_carrier_refusals_v1`] judges: the UTXO context first (`None` for an input the
+    /// virtual does not hold) and one tip, the virtual's own. All `None` below
+    /// `palw_audit_2026_09_23` (the gate's fence), off `ConsensusV2` and with no tip state.
+    /// Node-local: never a block rule.
+    fn palw_market_carrier_refusals_v1(&self, txs: &[Arc<Transaction>]) -> Vec<Option<String>> {
+        vec![None; txs.len()]
+    }
+
+    /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
+    /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
+    fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {
+        Vec::new()
+    }
+
+    /// **ADR-0152 v3.1 N10 (Phase 2, P2-8c): what filing this `PanelFalseValidV2` object comes to**
+    /// at the tip, for the block the virtual's next block folds at — the ONE adjudicator
+    /// (`palw_check_panel_false_valid_v2`), then the processor's gate with the signature, then the
+    /// fold itself on the tip (as the licence assembler asks `palw_v2_object_licenses_claim_v1`), so
+    /// a filer never pays a carrier for an object the fold refuses. `None` when there is no tip state
+    /// to read (off `ConsensusV2`). Node policy's read; never what a block accepts.
+    fn palw_false_valid_filing_check_v1(
+        &self,
+        _object: crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<crate::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        None
+    }
+
+    /// **ADR-0152 v3.1 N10 (P2-8c): which of `receipts` the chain relied on**, at the tip — one
+    /// answer a receipt, in order (`palw_false_valid_receipt_relied_v1`: a `Valid` whose lock over
+    /// this receipt's mask, liability row or conviction is in state, signed under this chain's
+    /// domain and the seat's registered key). A filer admits a receipt it read off the chain only
+    /// on `true`, so a licence object the gate dropped cannot fill its slots. `None` with no tip
+    /// state or below `Params::palw_rcore_plus`. Node policy's read; never what a block accepts.
+    fn palw_false_valid_relied_receipts_v1(
+        &self,
+        _receipts: Vec<crate::palw_offence_attribution_v1::PalwFalseValidReceiptV1>,
+    ) -> Option<Vec<bool>> {
+        None
+    }
+
+    /// **What a node's receipt pool reads off the tip** (node policy, the 2026-09-24 launch review's
+    /// receipt-pool flush): the bound panel of each asked claim the tip holds `PanelBound`, and the
+    /// registered key of each asked bond — see [`crate::palw_panel_v2::PalwReceiptPoolFactsV1`].
+    /// `None` when there is no tip state to read (off `ConsensusV2`, or before the first one), which
+    /// the caller must not mistake for "no such panel, no such bond". Decides what a node keeps,
+    /// never what a block accepts.
+    fn palw_receipt_pool_facts_v1(
+        &self,
+        _claims: Vec<crate::Hash64>,
+        _bonds: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Option<crate::palw_panel_v2::PalwReceiptPoolFactsV1> {
+        None
+    }
+
+    /// **A claim's committed roots and price, at the tip** — `(execution_root, trace_root,
+    /// work_leaves)` — what an executor serving a leaf's evidence off chain binds its answer to
+    /// (ADR-0111 Decision 2). `None` for a claim this chain does not hold.
+    fn palw_claim_roots_v2(&self, _claim: crate::Hash64) -> Option<(crate::Hash64, crate::Hash64, u64)> {
+        None
+    }
+
+    /// **RFC-0006: the layer-shard plans the chain holds** — `(class, plan)` for every IR class that declared one; empty on every
+    /// chain that never armed `palw_tir_shard_v1`. A node asks it before declaring a plan of its own and when it chooses
+    /// which shards to hold.
+    fn palw_tir_shard_plans_v1(&self) -> Vec<(crate::Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1)> {
+        Vec::new()
+    }
+
+    /// **Where a bond's rewards are paid — the payload, not a script.**
+    ///
+    /// A panel needs it to recognise its own money: every lifecycle carrier it builds pays change
+    /// back to the script derived from this, so this is what "an output I can spend" looks like
+    /// when both remembered outpoints have died. Reading it from the CHAIN rather than deriving it
+    /// from a local key is the point — the payout address is a registration fact, not a function
+    /// of the signing key, and a node that guessed would scan for a script nothing pays to.
+    fn palw_bond_payout_payload_v2(&self, _bond: crate::palw_state_v2::PalwBondKeyV2) -> Option<crate::Hash64> {
+        None
+    }
+
+    /// **Does this chain already hold a bond registered by this key?**
+    ///
+    /// Asked before minting a new one. A bond LOCKS COLLATERAL, and its key is the carrier's own
+    /// transaction id — so registering twice is not idempotent, it is paying twice, and the most
+    /// likely way to do it is leaving `--palw-register-bond` in a unit file that restarts. A local
+    /// marker would not survive the datadir wipe this network's own relaunch instructions ask for,
+    /// so the question is put to the chain, which is where the answer actually lives.
+    ///
+    /// `None` means "no bond under this key", which is also the answer on a network with no V2
+    /// state at all — both mean the same thing to the caller: nothing has been registered here.
+    ///
+    /// `Some` carries the bond's STATUS as well as its key, because "this key is taken" and "the
+    /// bond it is taken by can still work" are different answers and the caller has to tell an
+    /// operator which one it got. The lookup does not filter on that status —
+    /// [`crate::palw_state_v2::PalwChainStateV2::bond_of_pubkey_v2`] records why it must not.
+    fn palw_bond_of_pubkey_v2(
+        &self,
+        _pubkey: &[u8],
+    ) -> Option<(crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondStatusV2)> {
+        None
+    }
+
+    /// **Every class the chain holds, with the two numbers that decide whether it can produce.**
+    ///
+    /// `share_permille` and this epoch's `budget_blocks` are the pair a producer is gated on, and
+    /// until now neither was readable from outside a debugger: `GetPalwProducerFacts` returns the
+    /// budget but not the share, so "budget 0" could mean the class was never granted share or
+    /// that the table simply has no row for it, and those are different faults. A node that holds
+    /// forever should be able to say which.
+    /// ADR-0131 Decision 1: what the chain holds for each PALW class — registration numbers, target,
+    /// and a census of the claims in the state — for the shadow economics. `None` off `ConsensusV2`.
+    fn palw_class_census_v1(&self) -> Option<crate::palw_economic_compute_v1::PalwClassCensusReadV1> {
+        None
+    }
+
+    /// ADR-0132: every attempt-lane claim in the tip state, as the end-to-end ledger observes it
+    /// (phase marks, escrow, the duty row's seats). `None` off `ConsensusV2`.
+    fn palw_claim_ledger_observations_v1(&self) -> Option<Vec<crate::palw_economics_ledger_v1::PalwClaimLedgerObservationV1>> {
+        None
+    }
+
+    /// ADR-0135: the model registry as the tip state holds it (lifecycle rows, ready seats, claims in
+    /// flight, possession proofs). `None` off `ConsensusV2`.
+    fn palw_model_registry_v1(&self) -> Option<crate::palw_model_registry_v1::PalwModelRegistryReadV1> {
+        None
+    }
+
+    /// Panel observability: class status, bonded seats, and per-claim assignments as the tip holds
+    /// them. `None` off `ConsensusV2`. Seat counts stay distinct — bonded / ready / selected / valid.
+    /// **ADR-0152-adjacent (Activation Pool): one class's pool at the tip** (`getPalwActivationPool`,
+    /// op 200). `None` off ConsensusV2 or before the first state.
+    fn palw_activation_pool_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_activation_pool_v1::PalwActivationPoolReadV1> {
+        None
+    }
+
+    fn palw_panel_network_view_v1(&self) -> Option<crate::palw_panel_view_v1::PalwPanelNetworkViewV1> {
+        None
+    }
+
+    fn palw_v2_class_table(&self) -> Vec<crate::palw_state_v2::PalwClassRowV2> {
+        Vec::new()
+    }
+
+    /// **What a post-genesis class registration must take from the chain** (ADR-0049 Decision H).
+    ///
+    /// `None` on every network without a V2 bundle, and on one whose base class this chain does not
+    /// hold yet — both honest answers rather than errors, and both mean the same thing to a caller:
+    /// this is not a chain you can register a class on right now.
+    /// **The families the chain certified, both lanes** (ADR-0075 Decision 3, served by ADR-0122's
+    /// `getPalwRegistrationTerms`): lane, digest and record. Empty off `ConsensusV2`.
+    fn palw_certified_families_v1(
+        &self,
+    ) -> Vec<(crate::palw_state_v2::PalwCertifiedLaneV1, crate::Hash64, crate::palw_state_v2::PalwCertifiedFamilyStateV2)> {
+        Vec::new()
+    }
+
+    fn palw_v2_registration_terms(&self) -> Option<crate::palw_state_v2::PalwRegistrationTermsV2> {
+        None
+    }
+
+    /// ADR-0067: the declaration (profile + canonical job) the chain registered under
+    /// `class_id`, from the node's accepted-registration index. `None` when the class is not in
+    /// current state, the node never indexed it, or the row fails its own hash — every absence
+    /// fails closed into "cannot serve".
+    fn palw_registered_class_carriage_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<(crate::palw_step::PalwShapeProfileV3, crate::palw_v2::PalwJobContextV2)> {
+        None
+    }
+
+    /// RFC-0002 Phase F: the IR class record the chain holds for `class_id` (its `tir_classes`
+    /// row) at the tip. `None` for a legacy class, an unknown one, or off ConsensusV2.
+    fn palw_tir_class_record_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_tir_admission_v1::PalwTirClassRecordV1> {
+        None
+    }
+
+    /// **G14 lane D: the kernel route's state at the tip** — the ledger's public rows (classes with their programs, plans and artifact
+    /// commitments, jobs, committed claims with their evidence and trace commitments, demands, served positions, the bonds' kernel
+    /// view), the interim seat assignments and the receipts counted so far, and the configuration they were folded under. Everything a
+    /// fresh verifier needs and nothing private: it rebuilds the ledger from the rows and checks them against the committed root
+    /// ([`crate::palw_kernel_route_v1::PalwKernelRouteStateV1::ledger_root`]). `None` before the fence's first kernel move and off
+    /// ConsensusV2.
+    fn palw_kernel_route_v1(&self) -> Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1> {
+        None
+    }
+
+    /// **G14 phase 3: where a V2 class stands on the onboarding path** (artifact bindings, kernel binding, conformance commitment, the
+    /// activation gate's verdict and reason) at the virtual's DAA. `None` for an unknown class and off ConsensusV2.
+    fn palw_onboarding_v1(&self, _class_id: kaspa_hashes::Hash64) -> Option<crate::palw_onboarding_v1::OnboardingReadV1> {
+        None
+    }
+
+    /// **Onboarding P0: a V2 class's conformance record and posted evidence** (tables 39 and 40, raw and decoded), the network's
+    /// challenge policy and the beacon state this node derives at the virtual's DAA — RPC op 231's source; with op 212's Finals it is
+    /// everything a fresh verifier needs. `None` for an unknown class and off ConsensusV2.
+    fn palw_conformance_evidence_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<crate::palw_onboarding_v1::ConformanceEvidenceReadV1> {
+        None
+    }
+
+    /// RFC-0004 (spec 17): every open improvement epoch at the tip, as a node reads it — the line,
+    /// its policy, the epoch's header, candidates and items. Empty off ConsensusV2 and below the fence.
+    fn palw_improvement_open_epochs_v1(&self) -> Vec<crate::palw_improve_state_v1::PalwImprovementEpochViewV1> {
+        Vec::new()
+    }
+
+    /// RFC-0004 (A10, the node lane): every open epoch's evaluation view at the tip — the drawn items'
+    /// disclosed prompts and references, and every evaluation job that holds a claim with the roots it
+    /// committed. Empty off ConsensusV2 and below the fence.
+    fn palw_improvement_eval_views_v1(&self) -> Vec<crate::palw_improve_node_v1::PalwImprovementEvalViewV1> {
+        Vec::new()
+    }
+
+    /// RFC-0004 (A10, the node lane): the improvement protocol's status at the tip — every line, its
+    /// head history and pool, and every epoch row the chain still keeps with its candidates and grants.
+    fn palw_improvement_status_v1(&self) -> crate::palw_improve_node_v1::PalwImprovementStatusV1 {
+        Default::default()
+    }
+
+    /// ADR-0067 Decision 6: adopt a class declaration this node did not watch arrive (the
+    /// pruned-sync path). Self-authenticating against chain state — see the processor's impl.
+    fn palw_adopt_class_carriage_v1(&self, _class_id: kaspa_hashes::Hash64, _carriage: &[u8]) -> Result<(), String> {
+        Err("this consensus does not index class declarations".to_string())
+    }
+
+    /// ADR-0067 Decision 6: the class declarations this node can serve a pruned-syncing peer.
+    fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
+        Vec::new()
+    }
+
+    /// Acquire the global local-capacity ticket only when the operator selected
+    /// a native admission capability. Disabled mode performs no inventory I/O.
+    fn palw_reserve_native_snapshot_v1(
+        &self,
+        point: crate::BlockHash,
+    ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::*;
+        if !native_resource_admission_enabled_v1() && !native_logical_admission_enabled_v1() {
+            return Ok(None);
+        }
+        reserve_native_snapshot_v1(point, self.palw_native_snapshot_inventory_v1(point))
+    }
+
+    /// Public accepted-point typed allocation/allocator/DB coverage diagnostics.
+    /// A cold or unsupported point returns a concrete reason without decoding a
+    /// large native carriage or accepting a peer's resource advertisement.
+    fn palw_native_snapshot_inventory_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Result<crate::palw_native_resource_v1::NativeSnapshotInventoryV1, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Err(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+            "accepted-point inventory",
+            "this consensus has no persisted trusted typed native snapshot inventory",
+        ))
+    }
+
+    /// A trusted implementation may supply a whole native restore/DB bound.
+    /// Unknown remains unknown; encoded byte caps and measured fixtures do not
+    /// qualify a bound. The explicit local capability refuses `None`.
+    fn palw_native_snapshot_resource_bound_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Option<crate::palw_native_resource_v1::NativeSnapshotResourceBoundV1> {
+        None
+    }
+
+    /// Shared immutable captured snapshot: serving peers do not each clone a
+    /// native 100k carriage. The legacy owned getter remains available.
+    fn pruning_point_palw_state_shared_v1(
+        &self,
+        point: crate::BlockHash,
+    ) -> Option<std::sync::Arc<crate::palw_native_resource_v1::NativeStateCarriageV1>> {
+        if crate::palw_native_resource_v1::native_logical_admission_enabled_v1()
+            || crate::palw_native_resource_v1::native_resource_admission_enabled_v1()
+        {
+            return None;
+        }
+        self.pruning_point_palw_state(point)
+            .and_then(|v| crate::palw_native_resource_v1::NativeRetainedV1::retain_existing_v1(v).ok())
+            .map(std::sync::Arc::new)
+    }
+
+    /// Snapshot-bound material, with explicit negotiated complete coverage.
+    fn palw_class_carriages_for_snapshot_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _complete: bool,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        Err("this consensus does not index snapshot declarations".into())
+    }
+
+    /// Read-only validation, performed before pruning-state installation.
+    fn palw_validate_snapshot_declarations_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _declarations: &[(kaspa_hashes::Hash64, Vec<u8>)],
+        _complete: bool,
+    ) -> Result<(), String> {
+        Err("this consensus cannot validate snapshot declarations".into())
+    }
+
+    /// **RFC-0007: the vertex tables at the tip** — the counts, and `seat`'s own `(round, leaves_root, convicted)` rows from
+    /// `from_round` (a seat reads whether its vertex landed, and the kit reads the counts). Empty by `Default` on a consensus with no
+    /// V2 state.
+    fn palw_v2_vertex_status_v1(
+        &self,
+        _seat: crate::palw_state_v2::PalwBondKeyV2,
+        _from_round: u64,
+    ) -> crate::palw_vertex_v1::PalwVertexStatusV1 {
+        Default::default()
+    }
+
+    /// **RFC-0007 §I.6: the vertex equivocations this node has seen that the tip has not yet convicted** — evidence any funded node may
+    /// carry as `VertexEquivocationV1`. Empty by `Default`.
+    fn palw_v2_pending_vertex_equivocations_v1(&self) -> Vec<crate::palw_vertex_v1::PalwVertexEquivocationV1> {
+        Vec::new()
+    }
+
+    /// **RFC-0007 Parts II and IV: the mesh at the tip** — table sizes, the fences, and `seat`'s open audits. Default when there is no
+    /// V2 state.
+    fn palw_v2_mesh_status_v1(&self, _seat: crate::palw_state_v2::PalwBondKeyV2) -> crate::palw_mesh_v1::PalwMeshStatusV1 {
+        Default::default()
+    }
+
+    /// **RFC-0007 Part IV.1: the audits `seat` still owes** at the tip. Empty by `Default`.
+    fn palw_v2_mesh_audit_duties_v1(
+        &self,
+        _seat: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Vec<crate::palw_mesh_v1::PalwMeshAuditDutyV1> {
+        Vec::new()
+    }
+
+    /// **RFC-0007 Part IV.1: a claim's `(audit_end, row_end)` window** at the tip, while its audit row stands.
+    fn palw_v2_mesh_audit_window_v1(&self, _claim: kaspa_hashes::Hash64) -> Option<(u64, u64)> {
+        None
+    }
+
+    /// Claims this node could still dispute.
+    fn palw_disputable_claims_v2(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Vec<crate::palw_producer_v2::PalwDisputableClaimV2> {
+        Vec::new()
+    }
+
+    /// The verdict a close proof would produce at this node's tip, or `None` when it produces none.
+    fn palw_court_close_verdict_v2(
+        &self,
+        _session_id: &crate::Hash64,
+        _proof: &crate::palw_court_v2::PalwCourtVerdictProofV2,
+    ) -> Option<crate::palw_state_v2::PalwCourtVerdictV2> {
+        None
+    }
+
+    /// Import: install the pruning point's PALW V2 chain state (launch blockers §1).
+    ///
+    /// The carriage is REBUILT and its `state_root` demanded back against the pruning point's own
+    /// header before anything is written — a peer that forges one byte of bonds, shares or claims
+    /// produces a different root and is refused here, not detected after a durable write.
+    fn import_pruning_point_palw_state(
+        &self,
+        pruning_point: BlockHash,
+        carriage: crate::palw_state_v2::PalwStateCarriageV2,
+    ) -> PruningImportResult<()> {
+        let _ = (pruning_point, carriage);
+        unimplemented!()
+    }
+
+    /// Export: the pruning point's PALW V2 chain state, for a peer syncing from it. `None` on a
+    /// network with no V2 ruleset, or when this node holds no state at that point.
+    fn pruning_point_palw_state(&self, pruning_point: BlockHash) -> Option<crate::palw_state_v2::PalwStateCarriageV2> {
+        let _ = pruning_point;
+        None
+    }
+
+    /// **RFC-0009 stage D: the PALW state a block's header commits, as a proof one collection wide.**
+    ///
+    /// `block`'s header commits the root of the state as-of its SELECTED PARENT (`Header::palw_state_root`), so the proof is built from that
+    /// state and the header is returned with it: a client that pinned `block`'s hash recomputes the header's hash, takes its
+    /// `palw_state_root`, and checks the proof against it (`palw_state_proof_v1`). `collection` is `bonds`, `classes` or `claims`.
+    /// `Err` names why a node could not (a network with no V2 ruleset, a header that commits no state, a block too far behind the sink for
+    /// this node to rebuild the state, a state this node holds that does not hash to what the header commits, a table too large for a flat
+    /// proof). The proof is O(rows): the state commitment is flat.
+    fn palw_state_proof_v1(
+        &self,
+        block: BlockHash,
+        collection: &[u8],
+    ) -> Result<(crate::header::Header, crate::palw_state_proof_v1::PalwFactProofV1), String> {
+        let _ = (block, collection);
+        Err("this consensus serves no PALW state proof".to_string())
+    }
+
+    /// Readonly original Final view from an immutable, fully validated block
+    /// and its exact selected-parent state. The returned private Core view
+    /// proves row agreement, not a client-trusted chain or a redeemed UTXO.
+    fn palw_native_execution_audit_v32(
+        &self,
+        block: BlockHash,
+        job: [u8; 64],
+    ) -> Result<(crate::header::Header, crate::palw_native_audit_v27::CheckedNativeExecutionAuditViewV27), String> {
+        let _ = (block, job);
+        Err("this consensus serves no native Final audit anchor".into())
+    }
+
+    /// Actual coinbase inclusion proof from an immutable UTXO-validated block.
+    /// Clients still authenticate their own chain/selected-parent and queue openings.
+    fn palw_native_coinbase_proof_v33(
+        &self,
+        block: BlockHash,
+    ) -> Result<(crate::header::Header, crate::palw_native_redemption_v33::NativeCoinbaseProofV33), String> {
+        let _ = block;
+        Err("this consensus serves no native coinbase inclusion proof".into())
+    }
+
+    /// **RFC-0009 L2: the fork-choice openings of `blocks`' post-states** (op 203), with this node's sink and DAG tips. Empty `blocks`: the
+    /// sink and every tip. At most [`crate::palw_fork_choice_commitment_v1::PALW_FORK_CHOICE_MAX_BLOCKS_PER_REQUEST_V1`] blocks; each
+    /// entry is the opening or the reason this node cannot weigh that block (no V2 ruleset, a block it never held as a chain block, a
+    /// block too far behind the sink). The client checks every opening against a root it trusts; nothing here is believed as served.
+    fn palw_fork_choice_openings_v1(
+        &self,
+        blocks: &[BlockHash],
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = blocks;
+        Err("this consensus serves no fork-choice opening".to_string())
+    }
+
+    /// **RFC09: op 203 v2** — [`Self::palw_fork_choice_openings_v1`] with each entry's committed leaf in its own form, and (as asked)
+    /// its v3 rule-E window above a blue score and its v3 registry openings of some bonds: the inputs the full node's rule-E comparator
+    /// reads, for a remote client to evaluate with the node's own functions. Untrusted as served.
+    fn palw_fork_choice_openings_v2(
+        &self,
+        blocks: &[BlockHash],
+        extras: &crate::palw_fork_choice_commitment_v1::PalwForkChoiceExtrasRequestV2,
+    ) -> Result<crate::palw_fork_choice_commitment_v1::PalwForkChoiceServedV1, String> {
+        let _ = (blocks, extras);
+        Err("this consensus serves no fork-choice opening".to_string())
+    }
+
+    /// Import: persist the pruning point's DNS/PoS-v2 overlay snapshot.
+    fn import_pruning_point_overlay_snapshot(
+        &self,
+        pruning_point: BlockHash,
+        snapshot: crate::dns_finality::OverlaySnapshot,
+    ) -> PruningImportResult<()> {
+        let _ = (pruning_point, snapshot);
+        unimplemented!()
+    }
+
+    fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
+        unimplemented!()
+    }
+
+    fn get_hashes_between(&self, low: BlockHash, high: BlockHash, max_blocks: usize) -> ConsensusResult<(Vec<BlockHash>, BlockHash)> {
+        unimplemented!()
+    }
+
+    fn get_header(&self, hash: BlockHash) -> ConsensusResult<Arc<Header>> {
+        unimplemented!()
+    }
+
+    /// The heaviest header chain by BLUE WORK — a **download-ordering hint, never chain authority**
+    /// (ADR-0042 Decision 9, external audit P0-5).
+    ///
+    /// Renamed from `get_headers_selected_tip`, and the rename is the point. PALW weight is a
+    /// function of ACCEPTED TRANSACTIONS, and the header processor is upstream of bodies by
+    /// construction — header-first sync exists to order headers whose bodies have not arrived. So
+    /// this value cannot be PALW-ordered, and a header-only approximation would be a SECOND
+    /// fork-choice rule disagreeing with the first, which is the defect rather than a fix for it.
+    ///
+    /// A node may therefore sync toward a header chain PALW would not select, and then decline to
+    /// accept it: the cost is wasted download, never a divergent chain. What must never happen is a
+    /// consensus decision reading this — pruning, finality and acceptance take the virtual sink,
+    /// which is ordered by `palw_fork_choice::compare_palw_candidates_v1`.
+    ///
+    /// The old name read like an authority and was used like a hint. Anything that starts reading
+    /// this to decide chain state reopens P0-5, and now has to type "download hint" to do it.
+    fn get_header_download_hint(&self) -> BlockHash {
+        unimplemented!()
+    }
+
+    /// **Unit D, site 2's input: this consensus's own PALW order for its virtual sink.**
+    ///
+    /// `None` on a network with no `ConsensusV2` bundle (every shipped preset) and on a sink this
+    /// node could not weigh. The IBD staging gate compares two of these through
+    /// `palw_fork_authority_v2::decide_ibd_commit_v2`, which is the SAME comparator the virtual
+    /// tip and the deep-reorg gate use — the unit's whole point is that a node cannot hold two
+    /// answers to "which chain is canonical" (P0-5).
+    ///
+    /// Deliberately the sink's and not the header download hint's: the hint is a download
+    /// heuristic that says so in its own name, and a consensus decision reading it reopens P0-5.
+    fn get_palw_candidate_order_v2(&self) -> Option<crate::palw_fork_choice::PalwCandidateOrderV1> {
+        None
+    }
+
+    /// Native IBD selection keeps local capacity separate from absent standing.
+    fn get_palw_candidate_order_v2_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice::PalwCandidateOrderV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_candidate_order_v2())
+    }
+
+    /// **ADR-0178 rule E: this consensus's standing for the IBD commit** — the PALW state at the block it is weighed at (its sink; a
+    /// staging consensus's imported pruning point, exactly as [`Self::get_palw_candidate_order_v2`] chooses) and that block's DAA
+    /// score. `None` off a ConsensusV2 network or where the state cannot be read; the IBD flow fails closed on it.
+    fn get_palw_rule_e_weighing_v1(&self) -> Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1> {
+        None
+    }
+
+    fn get_palw_rule_e_weighing_v1_checked(
+        &self,
+    ) -> Result<Option<crate::palw_fork_choice_rule_e_v1::PalwRuleEWeighingV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+        Ok(self.get_palw_rule_e_weighing_v1())
+    }
+
+    /// Returns the antipast of block `hash` from the POV of `context`, i.e. `antipast(hash) ∩ past(context)`.
+    /// Since this might be an expensive operation for deep blocks, we allow the caller to specify a limit
+    /// `max_traversal_allowed` on the maximum amount of blocks to traverse for obtaining the answer
+    fn get_antipast_from_pov(
+        &self,
+        hash: BlockHash,
+        context: BlockHash,
+        max_traversal_allowed: Option<u64>,
+    ) -> ConsensusResult<Vec<BlockHash>> {
+        unimplemented!()
+    }
+
+    /// Returns the anticone of block `hash` from the POV of `virtual`
+    fn get_anticone(&self, hash: BlockHash) -> ConsensusResult<Vec<BlockHash>> {
+        unimplemented!()
+    }
+
+    fn get_pruning_point_proof(&self) -> Arc<PruningPointProof> {
+        unimplemented!()
+    }
+
+    fn create_virtual_selected_chain_block_locator(
+        &self,
+        low: Option<BlockHash>,
+        high: Option<BlockHash>,
+    ) -> ConsensusResult<Vec<BlockHash>> {
+        unimplemented!()
+    }
+
+    fn create_block_locator_from_pruning_point(&self, high: BlockHash, limit: usize) -> ConsensusResult<Vec<BlockHash>> {
+        unimplemented!()
+    }
+
+    fn pruning_point_headers(&self) -> Vec<Arc<Header>> {
+        unimplemented!()
+    }
+
+    fn get_pruning_point_anticone_and_trusted_data(&self) -> ConsensusResult<Arc<PruningPointTrustedData>> {
+        unimplemented!()
+    }
+
+    fn get_block(&self, hash: BlockHash) -> ConsensusResult<Block> {
+        unimplemented!()
+    }
+
+    fn get_block_transactions(
+        &self,
+        hash: BlockHash,
+        indices: Option<Vec<TransactionIndexType>>,
+    ) -> ConsensusResult<Vec<Transaction>> {
+        unimplemented!()
+    }
+
+    fn get_block_body(&self, hash: BlockHash) -> ConsensusResult<Arc<Vec<Transaction>>> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the raw tx-lookup row for an EVM tx hash
+    /// (absent = never seen). `accepted_in` entries may include orphaned
+    /// branches; pair with [`Self::get_evm_tx_receipt`] for canonical state.
+    fn get_evm_tx_locations(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<crate::evm::EvmTxLocations> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the canonical-resolved receipt of an EVM
+    /// tx — `Some` iff some ACCEPTING block on the CURRENT selected chain
+    /// executed it (`eth_getTransactionReceipt` semantics: pending / skipped /
+    /// orphaned ⇒ `None`).
+    fn get_evm_tx_receipt(&self, tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<crate::evm::EvmTxReceiptView>> {
+        unimplemented!()
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the canonical EVM head execution header —
+    /// the EVM header committed by the current sink (drives `eth_blockNumber`
+    /// and the "latest" block tag). `None` on a non-EVM node / before activation.
+    fn get_evm_head_header(&self) -> ConsensusResult<Option<crate::evm::EvmExecutionHeader>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the EVM execution header committed by the
+    /// L1 chain block `block`, if any.
+    fn get_evm_header_of(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmExecutionHeader>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16, audit H-04): the canonical EVM heads —
+    /// `latest` / `safe` / `finalized` L1 block hashes — used to resolve the
+    /// `safe`/`finalized` block tags and to read account state at a non-reorgable
+    /// height (holder-gated access). `None` on a non-EVM node / before activation.
+    fn get_native_settlement_snapshot(&self) -> ConsensusResult<Option<crate::palw_native_settlement_v1::NativeSettlementSnapshotV1>> {
+        Ok(None)
+    }
+
+    /// RFC-0012 D1: why `safe` stands where it does, at the node's sink (`None` before the retirement fence, or when this
+    /// consensus keeps no native-settlement evaluation). Advisory: it decides nothing and is never persisted.
+    fn get_native_safe_readiness(&self) -> ConsensusResult<Option<crate::palw_native_readiness_v1::NativeSafeReadinessV1>> {
+        Ok(None)
+    }
+
+    fn get_evm_canonical_heads(&self) -> ConsensusResult<Option<crate::evm::CanonicalEvmHeads>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the full EVM state snapshot committed after
+    /// the L1 chain block `block`, for read-only `eth_*` state queries and
+    /// `eth_call` simulation.
+    fn get_evm_state_snapshot_of(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmStateSnapshot>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane (§11): the per-accepting-block `debug_traceTransaction`
+    /// replay plan (store prefix 219). `None` on a non-EVM node, before activation,
+    /// after pruning, or for an accepting block with no traceable candidate txs.
+    fn get_evm_trace_replay_body(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmTraceReplayBodyV1>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane (§12): reconstruct + verify the full EVM state AT a
+    /// historical block by seeding from the nearest checkpoint (or genesis) and
+    /// replaying the forward diffs along the block's selected-parent chain
+    /// (design §12.4). The reconstructed state's keccak-MPT root is checked
+    /// against the block's committed `state_root` — a mismatch is a hard error
+    /// (data corruption; never an empty-state fallback). `Ok(None)` ⇒ `block` is
+    /// not an EVM block (no header). An `Err` ⇒ the block IS an EVM block but its
+    /// state history is unavailable on this node (GC'd past `--evm-history-mode`
+    /// retention) or corrupt — the RPC layer maps it to a JSON-RPC error, never a
+    /// silent empty state. Requires an `evm`-feature node (revm for the root).
+    fn reconstruct_evm_state_at(&self, _block: BlockHash) -> ConsensusResult<Option<crate::evm::EvmStateSnapshot>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq C-01 Stage 1 (S7, audit H-03): an O(1) flat point-lookup of one
+    /// account at the CURRENT canonical head. A point query (`eth_getBalance` etc.)
+    /// must not materialize the entire EVM state (H-03 = unbounded RPC full-state
+    /// reads); when the flat state backend is at the head this answers from a single
+    /// keyed row. Returns [`crate::evm::FlatHeadAccount::Stale`] when the flat store
+    /// is not at the head (shadow backend disabled / mid-rebase / read error), so the
+    /// caller transparently falls back to the authoritative full-snapshot path. Pure
+    /// store reads — no revm — so it is available (and simply `Stale`) on a non-evm
+    /// node. RPC read-only ⇒ consensus-neutral. Default = always `Stale`.
+    fn get_evm_flat_account_at_head(&self, _address: crate::evm::EvmAddress) -> ConsensusResult<crate::evm::FlatHeadAccount> {
+        Ok(crate::evm::FlatHeadAccount::Stale)
+    }
+
+    /// kaspa-pq EVM Lane (§11): the network's four EVM-execution activation fences
+    /// — `(evm_gas_pool_v2, evm_f002_withdraw_cap, evm_bridge_ledger, evm_f003_mldsa_verify)`
+    /// activation DAA scores. The trace replay MUST run the same gas-pool / withdraw-cap /
+    /// bridge-ledger / F003 regime the accepting block executed under (the first three decide
+    /// which txs of the prefix were skipped), so it reads these instead of assuming inert.
+    /// Default = all inert (`u64::MAX`).
+    fn evm_activation_fences(&self) -> (u64, u64, u64, u64) {
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX)
+    }
+
+    /// kaspa-pq EVM Lane: the canonical account nonces at the EVM head (the sink's
+    /// committed EVM state) for `addresses`. An account that does not exist yet is
+    /// omitted; the caller treats absence as nonce 0. Used by the mining template
+    /// path to prune already-accepted txs (nonce < state nonce) and to select
+    /// contiguous per-sender nonce runs. Pure local template policy — never part of
+    /// consensus. Default impl reuses the head state snapshot.
+    ///
+    /// When the sink has NO committed EVM state snapshot (pre-first-EVM-commit, or a
+    /// transient sink view) this returns `Err` — distinct from `Ok(empty)`. The two
+    /// must not be conflated: `Ok(`absent account`)` legitimately means nonce 0, but
+    /// "no snapshot at all" means there is no canonical nonce view, and resolving
+    /// every sender to 0 in that case would start each sender's run at nonce 0, find
+    /// nothing for a higher-nonce sender, and strand it at
+    /// `included_in=[] / last_skip_class=0` (payload starvation). The mining template
+    /// path treats the `Err` as "skip the EVM payload this template" (empty payload +
+    /// WARN). On an EVM-active chain past the first commit the sink always has a
+    /// snapshot, so the `Err` only fires in the early / no-EVM-state window.
+    fn get_evm_account_nonces(
+        &self,
+        addresses: &[crate::evm::EvmAddress],
+    ) -> ConsensusResult<std::collections::HashMap<crate::evm::EvmAddress, u64>> {
+        if addresses.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let wanted: std::collections::HashSet<crate::evm::EvmAddress> = addresses.iter().copied().collect();
+        let Some(s) = self.get_evm_state_snapshot_of(self.get_sink())? else {
+            return Err(ConsensusError::General("no committed EVM state snapshot at the sink"));
+        };
+        let mut out = std::collections::HashMap::with_capacity(addresses.len());
+        for acct in s.accounts {
+            if wanted.contains(&acct.address) {
+                out.insert(acct.address, acct.nonce);
+            }
+        }
+        Ok(out)
+    }
+
+    /// kaspa-pq EVM Lane (audit H-10): the canonical `(nonce, balance)` at the EVM head
+    /// for `addresses`. Same source + same `Err` (no snapshot) semantics as
+    /// [`Self::get_evm_account_nonces`]; an account absent from the snapshot is omitted
+    /// (caller treats it as nonce 0 / balance 0). `balance` is the
+    /// [`crate::evm::EvmU256`] wei balance saturated into a `u128` (a balance above
+    /// `u128::MAX` saturates UP, so it is never mistaken for "cannot pay"). Used by the
+    /// mining template path to skip selecting a sender's transaction when its committed
+    /// balance cannot cover the EIP-1559 up-front gas reservation — a guaranteed
+    /// class-2 skip at execution that would otherwise waste a payload slot. Pure local
+    /// template policy; never part of consensus, and a tx is never evicted by it (only
+    /// passed over for THIS template, so a later credit lets a future template pick it).
+    fn get_evm_account_states(
+        &self,
+        addresses: &[crate::evm::EvmAddress],
+    ) -> ConsensusResult<std::collections::HashMap<crate::evm::EvmAddress, (u64, u128)>> {
+        if addresses.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let wanted: std::collections::HashSet<crate::evm::EvmAddress> = addresses.iter().copied().collect();
+        let Some(s) = self.get_evm_state_snapshot_of(self.get_sink())? else {
+            return Err(ConsensusError::General("no committed EVM state snapshot at the sink"));
+        };
+        let mut out = std::collections::HashMap::with_capacity(addresses.len());
+        for acct in s.accounts {
+            if wanted.contains(&acct.address) {
+                out.insert(acct.address, (acct.nonce, acct.balance.try_to_u128().unwrap_or(u128::MAX)));
+            }
+        }
+        Ok(out)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16): the EVM "block" (header + L1 hash + tx
+    /// hashes) of the L1 chain block `l1_hash`, for `eth_getBlockBy*`. `None`
+    /// if that block has no EVM header.
+    fn get_evm_block_by_l1_hash(&self, _l1_hash: BlockHash) -> ConsensusResult<Option<crate::evm::EvmBlockResponse>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§9, `eth_subscribe("logs")`): ALL logs of the block
+    /// at `l1_hash`, in block-global `logIndex` order, read straight from the
+    /// immutable receipts store by hash WITHOUT canonical filtering — the WebSocket
+    /// reorg pump must emit DETACHED blocks too (which the number map no longer
+    /// points to). Empty for a non-EVM / unknown block.
+    fn get_evm_block_logs(&self, _l1_hash: BlockHash) -> ConsensusResult<Vec<crate::evm::EvmLogEntry>> {
+        Ok(Vec::new())
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16, audit R-2): the raw EIP-2718 bytes of an EVM
+    /// tx by hash (absent = never seen in a stored payload). Resolves
+    /// `eth_getTransactionByHash`/receipt without the bounded included_in scan.
+    fn get_evm_raw_tx(&self, _tx_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16, `eth_getBlockByNumber`): the canonical EVM
+    /// block at `evm_number` (reorg-validated — `None` if no canonical chain
+    /// block currently holds that number).
+    fn get_evm_block_by_number(&self, _evm_number: u64) -> ConsensusResult<Option<crate::evm::EvmBlockResponse>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16, `eth_getBlockByHash`): the EVM block whose
+    /// eth-rpc 32-byte id (first 32 bytes of the 64-byte L1 hash) is `rpc_hash`.
+    fn get_evm_block_by_rpc_hash(&self, _rpc_hash: kaspa_hashes::EvmH256) -> ConsensusResult<Option<crate::evm::EvmBlockResponse>> {
+        Ok(None)
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§16, `eth_getLogs`): logs over the canonical
+    /// `evm_number` range `[from_number, to_number]`, filtered by `addresses`
+    /// (empty = any) and per-position `topics` (an empty inner vec = wildcard at
+    /// that position). Bounded; only canonical chain blocks contribute.
+    fn get_evm_logs(
+        &self,
+        _from_number: u64,
+        _to_number: u64,
+        _addresses: Vec<crate::evm::EvmAddress>,
+        _topics: Vec<Vec<kaspa_hashes::EvmH256>>,
+    ) -> ConsensusResult<Vec<crate::evm::EvmLogEntry>> {
+        Ok(Vec::new())
+    }
+
+    /// kaspa-pq EVM Lane v0.4 (§3.1): the block's own `EvmExecutionPayload`
+    /// (the bytes `evm_payload_hash` commits to). The payload store only holds
+    /// rows for non-empty payloads, so absence maps to the empty payload —
+    /// total for any block with a body. Used by the body-only IBD server so a
+    /// served body can reassemble into a valid v2 block on the requester.
+    fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<crate::evm::EvmExecutionPayload> {
+        unimplemented!()
+    }
+
+    fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {
+        unimplemented!()
+    }
+
+    fn get_ghostdag_data(&self, hash: BlockHash) -> ConsensusResult<ExternalGhostdagData> {
+        unimplemented!()
+    }
+
+    fn get_block_children(&self, hash: BlockHash) -> Option<Vec<BlockHash>> {
+        unimplemented!()
+    }
+
+    fn get_block_parents(&self, hash: BlockHash) -> Option<Arc<Vec<BlockHash>>> {
+        unimplemented!()
+    }
+
+    fn get_block_status(&self, hash: BlockHash) -> Option<BlockStatus> {
+        unimplemented!()
+    }
+
+    fn get_block_acceptance_data(&self, hash: BlockHash) -> ConsensusResult<Arc<AcceptanceData>> {
+        unimplemented!()
+    }
+
+    /// Returns acceptance data for a set of blocks belonging to the selected parent chain.
+    ///
+    /// See `self::get_virtual_chain`
+    fn get_blocks_acceptance_data(
+        &self,
+        hashes: &[BlockHash],
+        merged_blocks_limit: Option<usize>,
+    ) -> ConsensusResult<Vec<Arc<AcceptanceData>>> {
+        unimplemented!()
+    }
+
+    fn is_chain_block(&self, hash: BlockHash) -> ConsensusResult<bool> {
+        unimplemented!()
+    }
+
+    fn get_pruning_point_utxos(
+        &self,
+        expected_pruning_point: BlockHash,
+        from_outpoint: Option<TransactionOutpoint>,
+        chunk_size: usize,
+        skip_first: bool,
+    ) -> ConsensusResult<Vec<(TransactionOutpoint, UtxoEntry)>> {
+        unimplemented!()
+    }
+
+    fn get_missing_block_body_hashes(&self, high: BlockHash) -> ConsensusResult<Vec<BlockHash>> {
+        unimplemented!()
+    }
+    fn get_body_missing_anticone(&self) -> Vec<BlockHash> {
+        unimplemented!()
+    }
+    fn clear_body_missing_anticone_set(&self) {
+        unimplemented!()
+    }
+
+    fn pruning_point(&self) -> BlockHash {
+        unimplemented!()
+    }
+
+    fn estimate_network_hashes_per_second(&self, start_hash: Option<BlockHash>, window_size: usize) -> ConsensusResult<u64> {
+        unimplemented!()
+    }
+
+    fn validate_pruning_points(&self, syncer_virtual_selected_parent: BlockHash) -> ConsensusResult<()> {
+        unimplemented!()
+    }
+
+    fn are_pruning_points_violating_finality(&self, pp_list: PruningPointsList) -> bool {
+        unimplemented!()
+    }
+
+    fn creation_timestamp(&self) -> u64 {
+        unimplemented!()
+    }
+
+    fn finality_point(&self) -> BlockHash {
+        unimplemented!()
+    }
+
+    fn clear_pruning_utxo_set(&self) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    /// Atomically finish an imported target only after checking its ledger generations.
+    fn complete_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn set_pruning_utxoset_stable_flag(&self, val: bool) -> PruningImportResult<()> {
+        unimplemented!()
+    }
+
+    fn is_pruning_utxoset_stable(&self) -> bool {
+        unimplemented!()
+    }
+
+    fn is_pruning_point_anticone_fully_synced(&self) -> bool {
+        unimplemented!()
+    }
+
+    fn is_consensus_in_transitional_ibd_state(&self) -> bool {
+        unimplemented!()
+    }
+
+    fn intrusive_pruning_point_update(&self, new_pruning_point: BlockHash, syncer_sink: BlockHash) -> ConsensusResult<()> {
+        unimplemented!()
+    }
+
+    /// Returns the n most recent pruning points (including the current pruning point)
+    fn get_n_last_pruning_points(&self, n: usize) -> Vec<BlockHash> {
+        unimplemented!()
+    }
+}
+
+pub type DynConsensus = Arc<dyn ConsensusApi>;

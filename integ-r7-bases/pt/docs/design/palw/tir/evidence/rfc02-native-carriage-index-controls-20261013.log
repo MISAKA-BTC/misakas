@@ -1,0 +1,29 @@
+   Compiling tokio v1.42.1
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+   Compiling secp256k1-sys v0.10.1
+   Compiling kaspa-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/core)
+   Compiling workflow-core v0.18.0
+   Compiling secp256k1 v0.29.1
+   Compiling workflow-wasm v0.18.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/math)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/wasm/core)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/mining/errors)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/mining)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 52s
+     Running unittests src/lib.rs (/tmp/rfc02-native-check/debug/deps/kaspa_mining-1b66599a6ccd3758)
+
+running 2 tests
+test mempool::model::native_carriers_v22::tests::original_unit_aliases_are_bounded_and_removal_releases_exactly_one ... ok
+test mempool::model::transactions_pool::palw_carrier_lane_tests::native_carrier_reserve_survives_a_higher_fee_market_and_takes_ordinary_room ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 124 filtered out; finished in 0.01s

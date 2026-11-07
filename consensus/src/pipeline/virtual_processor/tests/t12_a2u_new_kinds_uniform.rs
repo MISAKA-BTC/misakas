@@ -437,7 +437,8 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             | "palw_model_verification_gate_v1"
             | "palw_horizon_extension_v1"
             | "palw_minimum_price_v1"
-            | "palw_beacon_bootstrap_v1" => {} // armed above, through their enums
+            | "palw_beacon_bootstrap_v1"
+            | "palw_elastic_final_capacity_v1" => {} // armed above, through their enums
             // Armed at or below `at` with the monetary material kinds above; never moved later.
             "palw_reporter_income_v2" | "palw_material_income_v3" => {
                 params.palw_reporter_income_v2.get_or_insert(at);
@@ -1345,6 +1346,23 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
     for (inner, object) in kernel_inner_kinds(bond) {
         payloads.push((format!("kernel-route inner kind {inner} inside tag 110"), payload_of(&object)));
     }
+    // A near-zero outer route decodes only action 0. Carry the appended native
+    // actions explicitly: their bodies must remain unjudged below the owning fence,
+    // including malformed semantic bodies that the newer native fold would reject.
+    for action in [19, 20, 21, 80] {
+        use misaka_palw_kernel::route::KernelRouteObjectV1 as Route;
+        let mut routes = vec![Route::StageExecutionV14 { action, body: vec![0; 64] }];
+        if action != 80 {
+            routes.push(Route::FundedExecutionV11 { action, body: vec![0; 64] });
+        }
+        for route in routes {
+            let bytes = route.encode();
+            assert_eq!(Route::decode(&bytes).unwrap(), route, "the appended action's bounded outer frame decodes");
+            let inner = bytes[1];
+            let object = Obj::KernelRouteV1 { bytes, signer: bond, signature: vec![1; 64] };
+            payloads.push((format!("native inner {inner} action {action} below its fence"), payload_of(&object)));
+        }
+    }
     let route = Obj::KernelRouteV1 { bytes: vec![5; 512], signer: bond, signature: vec![1; 64] };
     let one_chunk: Vec<Obj> = [route.clone(), well_formed(bond)[1].clone(), well_formed(bond)[5].clone(), provider_answer()]
         .iter()
@@ -1506,6 +1524,9 @@ async fn the_mixed_verdict_chain(ruleset: Ruleset) -> Dump {
         "the pruning-proof path refuses a PAV3 header with the live build's gate's refusal: {a_proof}"
     );
     assert_ne!(proof_refusal(&now), a_proof, "past the fence the form is the PAV3 carriage, judged by its own decode");
+    // The post-fence refusal node has finished its work. Release it before each
+    // independent history replay so this matrix needs only two resident nodes.
+    drop(now);
     // Both refused headers, each with its own refusal (validation 2026-10-17: the PAV3 section shadowed the PFS4 refusal, so the
     // replay compared the PFS4 block against the PAV3 message).
     let refused = vec![(pfs4.to_immutable(), pfs4_refusal), (pav3.to_immutable(), pav3_refusal)];

@@ -1,0 +1,26 @@
+
+running 21 tests
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_carried_evaluation_claim_is_extracted_and_folded_into_its_job ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_claim_that_is_not_its_job_s_is_refused_by_name ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_convicted_final_claim_takes_its_score_back_while_the_epoch_still_takes_scores ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_dissected_leaf_of_an_evaluation_claim_is_argued_by_f7_and_the_fold_convicts_where_the_totals_lie ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_judged_part_that_read_a_generation_later_reversed_records_no_score ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_judged_score_is_the_judges_teacher_forced_pass_part_by_part ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_likelihood_item_takes_no_generation_job ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_planted_lie_in_the_tree_is_convicted_voided_and_slashed_and_an_honest_claim_survives ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_suite_item_discloses_its_entry_in_its_claim_and_scores_from_it ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_wrong_generated_id_is_a_wrong_decode_and_is_convicted ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::a_wrong_score_at_an_item_is_convicted_and_its_score_never_reaches_the_sign_test ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::an_evaluation_accusation_is_refused_below_the_fence_on_another_kind_of_claim_and_on_another_claim ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::an_evaluation_claim_finalizes_through_the_lanes_own_funnel_and_pays_its_fee_once ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::an_evaluation_claim_holds_to_its_jobs_share_of_the_epoch_budget ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::an_evaluation_claim_locks_what_it_could_swing ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::an_evaluation_claim_needs_a_class_the_chain_serves_and_a_bounded_share_of_its_executors_room ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::an_evaluation_claim_takes_its_job_off_the_reward_path ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::d_m3_a_lying_claim_forfeits_the_whole_bond_voids_its_other_claims_and_frees_every_job ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::evaluation_claims_are_counted_in_their_classs_replay_room ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::final_generations_score_at_the_key_s_reveal_and_the_epoch_completes ... ok
+test palw_state_v2::palw_improve_eval_fold_v1::tests::the_credited_seats_are_paid_from_the_escrow_and_what_no_seat_earned_stays_in_it ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 3601 filtered out; finished in 27.49s
+

@@ -1,0 +1,828 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "zamba2",
+  "doc": "Zamba2 (Zamba2ForCausalLM; Zyphra/Zamba2-*): a Mamba-2 backbone (every layer: input_layernorm, then a Mamba-2 mixer with convolution bias, a gated RMS norm of eps 1e-5 in n_groups groups, and the residual) whose HYBRID layers (layers_block_type `hybrid`) first run a SHARED transformer. The shared transformer reads u = RMSNorm_2D(concat[hidden state, original embedding]) (ATTN_SHARED_BLOCK_V1's input is 2 * hidden wide: EMBED_CARRY_V1 carries the embedding, LAYER_PRE_BRANCH_V1 places the branch), attention (q, k, v: 2D to heads * (2D / heads), scale (head_dim / 2)^-1/2, optional rotary embedding when use_mem_rope, its own KV history in every hybrid layer), pre_ff_layernorm, a gated MLP (gate_up_proj [gate | up] rows, hidden_act on the gate) with NO residual inside, a per-layer D x D `linear`, and the layer adds only that to the Mamba input: h = h + mamba(input_layernorm(h + linear(branch))). num_mem_blocks shared blocks alternate over the hybrid layers (hybrid ordinal i uses block i mod num_mem_blocks); each block's weights are one set of tensors stored under the first hybrid layers, read by all (one global param set per group in the artifact); every hybrid layer has its own low-rank adapter on the MLP's fused gate_up projection (LINEAR_LOWRANK_ADAPTER_V1: gate_up_proj_adapter_list[ordinal], rank adapter_rank) and, with use_shared_attention_adapter, on q, k and v. The Mamba layers of a hybrid layer sit under `mamba_decoder` (TENSOR_NAME_ALTERNATIVES_V1: `layers.N.mamba` or `layers.N.mamba_decoder.mamba`). transformers 5.17 hard-codes the convolution's bias (use_conv_bias is dead) and clamps the Mamba step size at time_step_min in its chunked prefill only (its recurrent decode, like this program, does not): dt_min = 0, as Nemotron-H. Features: ATTN_SHARED_BLOCK_V1, EMBED_CARRY_V1, LAYER_PRE_BRANCH_V1, LINEAR_LOWRANK_ADAPTER_V1, TENSOR_NAME_ALTERNATIVES_V1, MIXER_MAMBA2_V1, CONV_DEPTHWISE_CAUSAL_V1, ATTN_GQA_V1, NORM_RMS_V1, MLP_DENSE_GATED_V1.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "Zamba2ForCausalLM"
+    ],
+    "model_types": [
+      "zamba2"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 32000,
+      "hidden_size": 2560,
+      "num_hidden_layers": 54,
+      "max_position_embeddings": 4096,
+      "mamba_d_state": 64,
+      "mamba_d_conv": 4,
+      "mamba_expand": 2,
+      "mamba_ngroups": 1,
+      "n_mamba_heads": 8,
+      "add_bias_linear": false,
+      "hidden_act": "gelu",
+      "num_attention_heads": 32,
+      "num_key_value_heads": 32,
+      "num_mem_blocks": 1,
+      "use_shared_attention_adapter": false,
+      "adapter_rank": 128,
+      "use_mem_rope": false,
+      "rms_norm_eps": 1e-05,
+      "tie_word_embeddings": true
+    },
+    "inert": [
+      "attention_head_dim",
+      "attention_hidden_size",
+      "kv_channels",
+      "num_query_groups",
+      "hybrid_layer_ids",
+      "mamba_headdim",
+      "chunk_size",
+      "time_step_min",
+      "time_step_max",
+      "time_step_floor",
+      "use_conv_bias",
+      "use_mamba_kernels",
+      "use_mem_eff_path",
+      "use_long_context",
+      "num_logits_to_keep",
+      "initializer_range",
+      "use_cache",
+      "attention_dropout",
+      "rope_parameters"
+    ]
+  },
+  "vars": [
+    {
+      "name": "heads",
+      "value": {
+        "$cfg": "num_attention_heads"
+      }
+    },
+    {
+      "name": "hd",
+      "value": {
+        "$idiv": [
+          {
+            "$mul": [
+              2,
+              {
+                "$var": "hidden"
+              }
+            ]
+          },
+          {
+            "$var": "heads"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dims_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "heads"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$mul": [
+                          2,
+                          {
+                            "$var": "hidden"
+                          }
+                        ]
+                      },
+                      {
+                        "$var": "heads"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              },
+              {
+                "$gt": [
+                  {
+                    "$var": "kv"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "heads"
+                      },
+                      {
+                        "$var": "kv"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              }
+            ]
+          },
+          "attention heads: 2 * hidden_size must divide by num_attention_heads, which must divide by num_key_value_heads"
+        ]
+      }
+    },
+    {
+      "name": "inter",
+      "value": {
+        "$let": [
+          "v",
+          {
+            "$cfg?": "intermediate_size"
+          },
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "v"
+                  },
+                  null
+                ]
+              },
+              {
+                "$var": "v"
+              },
+              {
+                "$mul": [
+                  4,
+                  {
+                    "$var": "hidden"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "abias",
+      "value": {
+        "$cfg": "add_bias_linear"
+      }
+    },
+    {
+      "name": "mbias",
+      "value": {
+        "$cfg": "add_bias_linear"
+      }
+    },
+    {
+      "name": "act",
+      "value": {
+        "$act": {
+          "$cfg": "hidden_act"
+        }
+      }
+    },
+    {
+      "name": "use_rope",
+      "value": {
+        "$cfg": "use_mem_rope"
+      }
+    },
+    {
+      "name": "rope_dim",
+      "value": {
+        "$var": "hd"
+      }
+    },
+    {
+      "name": "attn_scale",
+      "value": {
+        "$pow": [
+          {
+            "$div": [
+              {
+                "$var": "hd"
+              },
+              2
+            ]
+          },
+          -0.5
+        ]
+      }
+    },
+    {
+      "name": "nb",
+      "value": {
+        "$cfg": "num_mem_blocks"
+      }
+    },
+    {
+      "name": "types",
+      "value": {
+        "$layer_types": {
+          "n": {
+            "$var": "n"
+          },
+          "allowed": [
+            "linear_attention",
+            "hybrid"
+          ],
+          "key": "layers_block_type",
+          "each": {
+            "$let": [
+              "_",
+              {
+                "$check": [
+                  {
+                    "$eq": [
+                      {
+                        "$var": "n"
+                      },
+                      54
+                    ]
+                  },
+                  "layers_block_type is absent and num_hidden_layers is not the 54 of Zamba2's default pattern"
+                ]
+              },
+              {
+                "$if": [
+                  {
+                    "$contains": [
+                      [
+                        6,
+                        12,
+                        18,
+                        24,
+                        30,
+                        36,
+                        42,
+                        47,
+                        51
+                      ],
+                      {
+                        "$var": "i"
+                      }
+                    ]
+                  },
+                  "hybrid",
+                  "linear_attention"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "hybrid_ids",
+      "value": {
+        "$flatten": {
+          "$map": [
+            {
+              "$range": {
+                "$var": "n"
+              }
+            },
+            "j",
+            {
+              "$if": [
+                {
+                  "$eq": [
+                    {
+                      "$index": [
+                        {
+                          "$var": "types"
+                        },
+                        {
+                          "$var": "j"
+                        }
+                      ]
+                    },
+                    "hybrid"
+                  ]
+                },
+                [
+                  {
+                    "$var": "j"
+                  }
+                ],
+                []
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "has_hybrid",
+      "value": {
+        "$gt": [
+          {
+            "$len": {
+              "$var": "hybrid_ids"
+            }
+          },
+          0
+        ]
+      }
+    },
+    {
+      "name": "nb_ok",
+      "value": {
+        "$bad": [
+          {
+            "$gt": [
+              {
+                "$var": "nb"
+              },
+              0
+            ]
+          },
+          "num_mem_blocks must be positive"
+        ]
+      }
+    },
+    {
+      "name": "hy_ok",
+      "value": {
+        "$bad": [
+          {
+            "$or": [
+              {
+                "$not": {
+                  "$var": "has_hybrid"
+                }
+              },
+              {
+                "$ge": [
+                  {
+                    "$len": {
+                      "$var": "hybrid_ids"
+                    }
+                  },
+                  {
+                    "$var": "nb"
+                  }
+                ]
+              }
+            ]
+          },
+          "fewer hybrid layers than shared blocks"
+        ]
+      }
+    },
+    {
+      "name": "attn_adapter",
+      "value": {
+        "$cfg": "use_shared_attention_adapter"
+      }
+    },
+    {
+      "name": "adapter_rank",
+      "value": {
+        "$cfg": "adapter_rank"
+      }
+    },
+    {
+      "name": "m_heads",
+      "value": {
+        "$cfg": "n_mamba_heads"
+      }
+    },
+    {
+      "name": "m_inner",
+      "value": {
+        "$floor": {
+          "$mul": [
+            {
+              "$cfg": "mamba_expand"
+            },
+            {
+              "$var": "hidden"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "m_head_dim",
+      "value": {
+        "$idiv": [
+          {
+            "$var": "m_inner"
+          },
+          {
+            "$var": "m_heads"
+          }
+        ]
+      }
+    },
+    {
+      "name": "m_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "m_heads"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "m_inner"
+                      },
+                      {
+                        "$var": "m_heads"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              },
+              {
+                "$gt": [
+                  {
+                    "$cfg": "mamba_ngroups"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "m_inner"
+                      },
+                      {
+                        "$cfg": "mamba_ngroups"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              }
+            ]
+          },
+          "mamba heads and groups do not divide the inner width"
+        ]
+      }
+    },
+    {
+      "name": "mamba2",
+      "value": {
+        "Mamba2": {
+          "heads": {
+            "$var": "m_heads"
+          },
+          "head_dim": {
+            "$var": "m_head_dim"
+          },
+          "groups": {
+            "$cfg": "mamba_ngroups"
+          },
+          "state": {
+            "$cfg": "mamba_d_state"
+          },
+          "conv_kernel": {
+            "$cfg": "mamba_d_conv"
+          },
+          "conv_bias": true,
+          "proj_bias": {
+            "$var": "abias"
+          },
+          "norm_eps": 1e-05,
+          "norm_groups": {
+            "$cfg": "mamba_ngroups"
+          },
+          "dt_min": 0.0,
+          "dt_max": null,
+          "d_mlp": 0
+        }
+      }
+    },
+    {
+      "name": "l_mixer",
+      "value": {
+        "$var": "mamba2"
+      },
+      "layer": true
+    },
+    {
+      "name": "l_ffn",
+      "value": "None",
+      "layer": true
+    },
+    {
+      "name": "l_residual",
+      "value": {
+        "Sequential": {
+          "pre_mixer": {
+            "$var": "norm"
+          },
+          "multiplier": 1.0
+        }
+      },
+      "layer": true
+    },
+    {
+      "name": "ord",
+      "value": {
+        "$sum": {
+          "$map": [
+            {
+              "$range": {
+                "$var": "i"
+              }
+            },
+            "j",
+            {
+              "$if": [
+                {
+                  "$eq": [
+                    {
+                      "$index": [
+                        {
+                          "$var": "types"
+                        },
+                        {
+                          "$var": "j"
+                        }
+                      ]
+                    },
+                    "hybrid"
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          ]
+        }
+      },
+      "layer": true
+    },
+    {
+      "name": "group",
+      "value": {
+        "$if": [
+          {
+            "$var": "tied"
+          },
+          {
+            "$mod": [
+              {
+                "$var": "ord"
+              },
+              {
+                "$var": "nb"
+              }
+            ]
+          },
+          {
+            "$var": "ord"
+          }
+        ]
+      },
+      "layer": true
+    },
+    {
+      "name": "weights_layer",
+      "value": {
+        "$if": [
+          {
+            "$var": "tied"
+          },
+          {
+            "$index": [
+              {
+                "$var": "hybrid_ids"
+              },
+              {
+                "$mod": [
+                  {
+                    "$var": "ord"
+                  },
+                  {
+                    "$var": "nb"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "$var": "i"
+          }
+        ]
+      },
+      "layer": true
+    },
+    {
+      "name": "attn",
+      "value": {
+        "heads": {
+          "$var": "heads"
+        },
+        "kv_heads": {
+          "$var": "kv"
+        },
+        "head_dim": {
+          "$var": "hd"
+        },
+        "v_head_dim": {
+          "$var": "hd"
+        },
+        "q_bias": false,
+        "k_bias": false,
+        "v_bias": false,
+        "o_bias": false,
+        "qk_norm": null,
+        "position": {
+          "$if": [
+            {
+              "$var": "use_rope"
+            },
+            {
+              "Rope": {
+                "$var": "rope"
+              }
+            },
+            "None"
+          ]
+        },
+        "scale": {
+          "$var": "attn_scale"
+        },
+        "window": null,
+        "q_temperature": null,
+        "in_dim": {
+          "$mul": [
+            2,
+            {
+              "$var": "hidden"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "l_pre_branch",
+      "value": {
+        "$if": [
+          {
+            "$eq": [
+              {
+                "$index": [
+                  {
+                    "$var": "types"
+                  },
+                  {
+                    "$var": "i"
+                  }
+                ]
+              },
+              "hybrid"
+            ]
+          },
+          {
+            "in_norm": {
+              "$var": "norm"
+            },
+            "attn": {
+              "$var": "attn"
+            },
+            "mid_norm": {
+              "$var": "norm"
+            },
+            "mlp": {
+              "intermediate": {
+                "$var": "inter"
+              },
+              "act": {
+                "$var": "act"
+              },
+              "gated": true,
+              "up_bias": {
+                "$var": "mbias"
+              },
+              "down_bias": {
+                "$var": "mbias"
+              }
+            },
+            "lowrank": {
+              "rank": {
+                "$var": "adapter_rank"
+              },
+              "attn": {
+                "$var": "attn_adapter"
+              }
+            },
+            "group": {
+              "$var": "group"
+            },
+            "weights_layer": {
+              "$var": "weights_layer"
+            },
+            "ordinal": {
+              "$var": "ord"
+            }
+          },
+          null
+        ]
+      },
+      "layer": true
+    },
+    {
+      "name": "mlp_layout",
+      "value": "FusedGateFirst"
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "embed": "{p}embed_tokens",
+            "final_norm": "{p}final_layernorm",
+            "norm.mix": "{p}layers.{L}.input_layernorm|{p}layers.{L}.mamba_decoder.input_layernorm",
+            "mamba2.in": "{p}layers.{L}.mamba.in_proj|{p}layers.{L}.mamba_decoder.mamba.in_proj",
+            "mamba2.conv": "{p}layers.{L}.mamba.conv1d|{p}layers.{L}.mamba_decoder.mamba.conv1d",
+            "mamba2.dt_bias": "{p}layers.{L}.mamba.dt_bias|{p}layers.{L}.mamba_decoder.mamba.dt_bias",
+            "mamba2.A_log": "{p}layers.{L}.mamba.A_log|{p}layers.{L}.mamba_decoder.mamba.A_log",
+            "mamba2.D": "{p}layers.{L}.mamba.D|{p}layers.{L}.mamba_decoder.mamba.D",
+            "mamba2.norm": "{p}layers.{L}.mamba.norm|{p}layers.{L}.mamba_decoder.mamba.norm",
+            "mamba2.out": "{p}layers.{L}.mamba.out_proj|{p}layers.{L}.mamba_decoder.mamba.out_proj",
+            "pb.in_norm": "{p}layers.{B}.shared_transformer.input_layernorm",
+            "pb.mid_norm": "{p}layers.{B}.shared_transformer.pre_ff_layernorm",
+            "pb.attn.q": "{p}layers.{B}.shared_transformer.self_attn.q_proj",
+            "pb.attn.k": "{p}layers.{B}.shared_transformer.self_attn.k_proj",
+            "pb.attn.v": "{p}layers.{B}.shared_transformer.self_attn.v_proj",
+            "pb.attn.o": "{p}layers.{B}.shared_transformer.self_attn.o_proj",
+            "pb.attn.q_adapter.a": "{p}layers.{B}.shared_transformer.self_attn.linear_q_adapter_list.{O}.0",
+            "pb.attn.q_adapter.b": "{p}layers.{B}.shared_transformer.self_attn.linear_q_adapter_list.{O}.1",
+            "pb.attn.k_adapter.a": "{p}layers.{B}.shared_transformer.self_attn.linear_k_adapter_list.{O}.0",
+            "pb.attn.k_adapter.b": "{p}layers.{B}.shared_transformer.self_attn.linear_k_adapter_list.{O}.1",
+            "pb.attn.v_adapter.a": "{p}layers.{B}.shared_transformer.self_attn.linear_v_adapter_list.{O}.0",
+            "pb.attn.v_adapter.b": "{p}layers.{B}.shared_transformer.self_attn.linear_v_adapter_list.{O}.1",
+            "pb.mlp.gate_up": "{p}layers.{B}.shared_transformer.feed_forward.gate_up_proj",
+            "pb.mlp.down": "{p}layers.{B}.shared_transformer.feed_forward.down_proj",
+            "pb.mlp.gate_up_adapter.a": "{p}layers.{B}.shared_transformer.feed_forward.gate_up_proj_adapter_list.{O}.0",
+            "pb.mlp.gate_up_adapter.b": "{p}layers.{B}.shared_transformer.feed_forward.gate_up_proj_adapter_list.{O}.1",
+            "pb.out": "{p}layers.{L}.linear"
+          }
+        ]
+      }
+    },
+    {
+      "name": "families",
+      "value": [
+        "C3",
+        "C4"
+      ]
+    },
+    {
+      "name": "model_type",
+      "value": "zamba2"
+    }
+  ],
+  "spec": {
+    "embed_carry": {
+      "$var": "has_hybrid"
+    },
+    "layers": {
+      "$layers": {
+        "each": {
+          "pre_branch": {
+            "$var": "l_pre_branch"
+          }
+        }
+      }
+    }
+  }
+}

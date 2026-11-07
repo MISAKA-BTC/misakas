@@ -1,0 +1,20 @@
+{
+  "schema": "misaka.rfc02.borrowed128-complete-task-source-preimage.v1",
+  "captured_utc": "2026-10-11T10:58:15.159681+00:00",
+  "exact_command": "HF_HUB_OFFLINE=1 /usr/bin/time -l /tmp/rfc02-source-reference-venv/bin/python misaka-palw-tir-lower/tools/hf_borrowed_context_generation.py source /Users/wata/Downloads/Qwen2.5-1.5B-Instruct docs/design/palw/tir/evidence/qwen25-real-pilot-protocol.json docs/design/palw/tir/evidence/qwen25-borrowed-context128-task-protocol.json /tmp/rfc02-qwen25-borrowed128-complete-task-source.json",
+  "source_program_sha256": "4e52eaff33afd765a72406ce4ad036b69999aec51ce09762c69ff3b4e4ddb23a",
+  "protocol_sha256": "7cfe136887fecfe1a5272194e2d5cbaabf6b0cd8c379c2e3175454158b7f6d66",
+  "result_sha256": "5891e8ac56466b0060b01991d0d4bd2d618977752fd71436ad4c922f0744a5f7",
+  "result_path": "/tmp/rfc02-qwen25-borrowed128-complete-task-source.json",
+  "source_wall_seconds": 14.44,
+  "source_max_rss_bytes": 6528712704,
+  "source_task_answers_passed": [
+    true,
+    true,
+    true
+  ],
+  "limits": [
+    "exact predeclared complete tasks, no native or population benchmark credit",
+    "owned Python source stayed unchanged during source run and after-run SHA recorded; no complete Python dependency preimage freeze; source model bytes verified before and after by producer"
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "H_cycles": 2,
+  "L_bp_cycles": [
+    2
+  ],
+  "L_cycles": 3,
+  "architectures": [
+    "HrmTextForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": null,
+  "dtype": "bfloat16",
+  "embedding_scale": 50.0,
+  "eos_token_id": null,
+  "head_dim": 8,
+  "hidden_act": "silu",
+  "hidden_size": 32,
+  "initializer_range": 0.02,
+  "intermediate_size": 64,
+  "max_position_embeddings": 128,
+  "mlp_bias": false,
+  "model_type": "hrm_text",
+  "num_attention_heads": 4,
+  "num_hidden_layers": 16,
+  "num_layers_per_stack": 2,
+  "pad_token_id": null,
+  "prefix_lm": true,
+  "rms_norm_eps": 1e-06,
+  "rope_parameters": {
+    "rope_theta": 10000.0,
+    "rope_type": "default"
+  },
+  "tie_word_embeddings": false,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

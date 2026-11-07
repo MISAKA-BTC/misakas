@@ -1,0 +1,10 @@
+
+running 5 tests
+test palw_panel::palw_carrier_fees::tests::inactive_rent_and_fp_fences_keep_ordinary_pricing ... ok
+test palw_panel::palw_carrier_fees::tests::heavy_filing_skips_relay_residue_young_locked_and_busy_money ... ok
+test palw_panel::palw_carrier_fees::tests::priced_signer_checks_rent_replacement_and_locked_outputs_before_signing ... ok
+test palw_panel::palw_carrier_fees::tests::signed_whole_carriers_pay_burned_rent_and_leave_relay_carriage ... ok
+test palw_panel::palw_carrier_fees::tests::panel_whole_pricing_reads_the_batch_receipt_fence_as_the_processor_does ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 600 filtered out; finished in 0.13s
+

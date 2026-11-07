@@ -79,6 +79,7 @@ pub(super) struct Monitor {
     signed_keys: u64,
     actual_length: u64,
     seed: Option<(Hash64, u64)>,
+    bundle_seed: Option<(Hash64, u64)>,
     maximum_offset: u64,
     sealed: bool,
     completed: bool,
@@ -92,6 +93,7 @@ impl Monitor {
             signed_keys,
             actual_length: std::fs::metadata(fixture.path.parent().unwrap().join("tokenizer.json")).unwrap().len(),
             seed: None,
+            bundle_seed: None,
             maximum_offset: 0,
             sealed: false,
             completed: false,
@@ -220,30 +222,41 @@ impl Monitor {
         let seeds: Vec<_> = carriers
             .iter()
             .filter_map(|o| match o {
-                PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed } if seed.claim == claim && seed.reserver == owner => {
+                PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { seed }
+                    if seed.claim == claim
+                        && seed.reserver == owner
+                        && matches!(seed.auxiliary, Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer { .. })) =>
+                {
                     Some(seed)
                 }
                 _ => None,
             })
             .collect();
-        assert_eq!(seeds.len(), 1, "restart does not reopen or duplicate the accepted owned court");
-        let seed = seeds[0];
-        assert_eq!(Hash64::from_bytes(seed.signing_message().try_into().unwrap()), reference.seed_id);
-        let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
-            raw_tokenizer_bytes, tokenizer_key_events, operand_tokenizer_bytes, ..
-        }) = &seed.auxiliary
-        else {
-            panic!("native seed is specifically tokenizer-owned")
-        };
-        assert_eq!(
-            (*raw_tokenizer_bytes, *tokenizer_key_events, *operand_tokenizer_bytes),
-            (self.signed_length, self.signed_keys, self.actual_length)
-        );
-        let view = chain.view(claim);
-        assert_eq!(seed.binding.committed_execution_root, view.execution_root);
-        let job = view.public_fp_job.as_ref().expect("the actual retained accepted original job survives restart");
-        let job = borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(job).unwrap();
-        assert_eq!((job.execution_root, job.trace_root), (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root));
+        if length_fault {
+            assert_eq!((reference.seed_id, reference.reserved_daa), bundle_seed);
+            assert!(seeds.is_empty(), "inventory EOF must convict before tokenizer family activation");
+        } else {
+            assert_eq!(seeds.len(), 1, "restart does not duplicate the accepted tokenizer court");
+            let seed = seeds[0];
+            assert_eq!(Hash64::from_bytes(seed.signing_message().try_into().unwrap()), reference.seed_id);
+            let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
+                raw_tokenizer_bytes,
+                tokenizer_key_events,
+                operand_tokenizer_bytes,
+                ..
+            }) = &seed.auxiliary
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                (*raw_tokenizer_bytes, *tokenizer_key_events, *operand_tokenizer_bytes),
+                (self.signed_length, self.signed_keys, self.actual_length)
+            );
+            assert_eq!(
+                (job.execution_root, job.trace_root),
+                (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root)
+            );
+        }
         let immutable = view.registered_semantics.as_ref().unwrap();
         assert_eq!(
             (immutable.raw_tokenizer_bytes, immutable.tokenizer_key_events),
@@ -258,6 +271,8 @@ impl Monitor {
             if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = carrier
                 && movement.claim == claim
                 && movement.reserver == owner
+                && movement.seed_id == reference.seed_id
+                && !length_fault
             {
                 movement.check().unwrap();
                 if matches!(

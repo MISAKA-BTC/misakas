@@ -80,6 +80,8 @@ fn every_lowerable_real_configuration_is_admitted() {
     // meets the same ceiling instead of stopping at "no descriptor").
     // DeepSeek-V3.2-Exp (DSA) is the same model plus the indexer (+5.7 % of the position's MACs): past the ceiling at 2^18 too,
     // admitted at a window of 2^16 (`tests/dsa.rs::deepseek_v32_is_admitted`).
+    // GLM-5's per-layer DSA graph is lowerable too, but at the default window its
+    // 1,549,071,488,000 MACs exceed the SAME 2^40 ceiling; do not raise that bound.
     assert_eq!(
         refused,
         vec![

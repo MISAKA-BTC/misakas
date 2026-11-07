@@ -1,0 +1,58 @@
+
+FILTER model_artifact_binding
+
+running 4 tests
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_artifact::model_artifact_binding_catalog_is_bounded_and_cannot_reuse_reserved_capital ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_artifact::model_artifact_binding_false_encoder_weight_convicts_once_and_never_matures ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_artifact::model_artifact_binding_invalid_flood_spends_the_shared_budget_before_decode ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_artifact::model_artifact_binding_matures_only_for_matching_encoder_candidate_without_global_attestation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 809 filtered out; finished in 11.22s
+
+
+FILTER g14_opv_bootstrap
+
+running 8 tests
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_block_of_hostile_complete_checks_spends_budget_and_never_stops_the_chain ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_class_that_cannot_be_checked_whole_is_refused_the_complete_check ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_the_class_passes ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refuted ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_and_a_sampled_class_becomes_eligible ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_the_deny_list_takes_eligibility_away_and_never_grants_it ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_without_a_complete_check_class_the_beacon_never_comes_and_the_chain_lives ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 805 filtered out; finished in 44.44s
+
+
+FILTER g14_canonical_a_fresh_node_reverifies_complete_checks
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 812 filtered out; finished in 1.43s
+
+
+FILTER g14_conformance_candidate_grants_no_rights
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_conformance_candidate_grants_no_rights_then_promotes_only_after_a_real_complete_check ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 812 filtered out; finished in 3.11s
+
+
+FILTER ::da16::
+
+running 9 tests
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::c4r4::g14_c4r4_adr0177_refusing_to_serve_a_models_bytes_triggers_no_precondition_slash_or_hold ... [F-C4R4-19] ADR-0177 violations on the integration tree's provider court: []
+ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slash ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_false_binding_is_refuted_from_the_verifiers_own_bytes_and_the_binders_published_tree ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_false_computation_on_a_transferred_claim_still_convicts_the_miner ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_reorg_takes_the_transfer_back_and_the_producer_is_liable_again ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_transfer_needs_two_operators_through_the_bound_reserving_at_least_the_claim ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_transferred_claims_unanswered_demand_charges_every_provider_never_the_producer ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_below_the_fence_court_objects_are_dropped_and_an_older_claim_stays_its_producers ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_model_availability_never_gates_a_binding_and_the_artifact_subject_is_refused ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 804 filtered out; finished in 16.09s

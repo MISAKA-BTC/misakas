@@ -1,0 +1,47 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "pixtral-mistral3-vision38",
+  "kind": "vision",
+  "doc": "Explicit PixtralV38 tower and complete Mistral3 projector. Bias-free QKV/O and gated MLP; RMS pre/layer norms eps1e-5; row-major axial H/W frequencies use distinct even/odd inverse-frequency lanes. Projector RMS uses the text epsilon, then channel-major unfold, learned patch merger, linear/GELU/linear. No decoder tensors are excluded by the whole-pipeline producer; this component adapter is not full-model support or fidelity evidence.",
+  "match": {"architectures": [], "model_types": [], "tower_of": ["Mistral3ForConditionalGeneration"]},
+  "config": {"scope": "vision_config", "inert": ["model_type", "initializer_range", "attention_dropout", "dtype", "torch_dtype"]},
+  "vars": [
+    {"name": "d", "value": {"$cfg": "hidden_size"}},
+    {"name": "heads", "value": {"$cfg": "num_attention_heads"}},
+    {"name": "depth", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "rgb", "value": {"$check": [{"$eq": [{"$cfg": "num_channels"}, 3]}, "PixtralV38 requires RGB channels"]}},
+    {"name": "head_dim", "value": {"$check": [{"$eq": [{"$cfg": ["head_dim", {"$idiv": [{"$var": "d"}, {"$var": "heads"}]}]}, {"$idiv": [{"$var": "d"}, {"$var": "heads"}]}]}, "PixtralV38 head_dim differs from hidden/heads"]}},
+    {"name": "feature_layer", "value": {"$check": [{"$eq": [{"$root": "vision_feature_layer"}, -1]}, "PixtralV38 requires the complete last vision feature layer; multi-layer concatenation needs a new explicit stage"]}},
+    {"name": "no_projector_bias", "value": {"$check": [{"$eq": [{"$root": "multimodal_projector_bias"}, false]}, "PixtralV38 projector bias must match the declared bias-free contract"]}},
+    {"name": "rp", "value": {"$cfgn": ["rope_parameters", {}]}},
+    {"name": "axial", "value": {"$check": [{"$eq": [{"$get": [{"$var": "rp"}, "rope_type", "axial"]}, "axial"]}, "PixtralV38 only supports axial RoPE"]}},
+    {"name": "theta_outer", "value": {"$cfgn": ["rope_theta", null]}},
+    {"name": "theta_nested", "value": {"$get": [{"$var": "rp"}, "rope_theta", null]}},
+    {"name": "theta_agreement", "value": {"$check": [{"$or": [{"$eq": [{"$var": "theta_outer"}, null]}, {"$eq": [{"$var": "theta_nested"}, null]}, {"$eq": [{"$var": "theta_outer"}, {"$var": "theta_nested"}]}]}, "PixtralV38 conflicting original rotary bases"]}},
+    {"name": "theta", "value": {"$if": [{"$ne": [{"$var": "theta_outer"}, null]}, {"$var": "theta_outer"}, {"$if": [{"$ne": [{"$var": "theta_nested"}, null]}, {"$var": "theta_nested"}, 10000.0]}]}},
+    {"name": "text_hidden", "value": {"$get": [{"$root": "text_config"}, "hidden_size"]}},
+    {"name": "text_eps", "value": {"$get": [{"$root": "text_config"}, "rms_norm_eps"]}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"}, "math_profile": "PixtralV38",
+    "h": {"$cfg": "image_size"}, "w": {"$cfg": "image_size"}, "downscale": 1,
+    "patch": {"$cfg": "patch_size"}, "temporal": 1, "merge": 1,
+    "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5],
+    "d": {"$var": "d"}, "heads": {"$var": "heads"}, "inter": {"$cfg": "intermediate_size"},
+    "layers": {"$var": "depth"}, "run": {"$var": "depth"},
+    "act": {"$act": {"$cfg": "hidden_act"}}, "swiglu": true, "rms": true, "eps": 1e-05,
+    "pre_norm": true, "cls": false, "patch_bias": false, "learned_pos": false,
+    "rope_theta": {"$var": "theta"}, "window": null,
+    "out": {"PixtralProjectorV38": {"out": {"$var": "text_hidden"}, "act": {"$act": {"$root": "projector_hidden_act"}}, "merge": {"$root": "spatial_merge_size"}, "norm_eps": {"$var": "text_eps"}}},
+    "names": {
+      "patch.w": "vision_tower.patch_conv.weight", "pre_norm": "vision_tower.ln_pre",
+      "norm1": "vision_tower.transformer.layers.{L}.attention_norm", "norm2": "vision_tower.transformer.layers.{L}.ffn_norm",
+      "attn.q": "vision_tower.transformer.layers.{L}.attention.q_proj", "attn.k": "vision_tower.transformer.layers.{L}.attention.k_proj",
+      "attn.v": "vision_tower.transformer.layers.{L}.attention.v_proj", "attn.o": "vision_tower.transformer.layers.{L}.attention.o_proj",
+      "mlp.gate": "vision_tower.transformer.layers.{L}.feed_forward.gate_proj", "mlp.up": "vision_tower.transformer.layers.{L}.feed_forward.up_proj",
+      "mlp.down": "vision_tower.transformer.layers.{L}.feed_forward.down_proj",
+      "projector.norm": "multi_modal_projector.norm", "patch_merger": "multi_modal_projector.patch_merger.merging_layer",
+      "proj.up": "multi_modal_projector.linear_1", "proj.down": "multi_modal_projector.linear_2"
+    }, "ignored": []
+  }
+}

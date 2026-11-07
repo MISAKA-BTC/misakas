@@ -1,0 +1,32 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/consensus/core)
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-tir-exec)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 22s
+     Running tests/node_conformance.rs (target/debug/deps/node_conformance-8023f1555735d7b4)
+
+running 4 tests
+test the_prompt_is_the_same_for_every_seat ... ok
+test invalid_position_requests_refuse_before_reference_reads_or_execution ... ok
+test every_program_of_the_node_suites_conforms_streamed_and_sampled ... ok
+test a_reference_that_differs_by_one_weight_is_refused_by_position ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s

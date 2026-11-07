@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v4_foreign_job' (3112011) panicked at kaspad/src/palw_service_public_e2e.rs:209:14:
+called `Result::unwrap()` on an `Err` value: InvalidTransactionsInNewBlock({7d2c4aea209a302865a1c36b8800a9bc6e9a5fad25f69cdd26f83641d0dfcb39328193af977561327acec1e96a1f90ce521c313cf5f6ef885254bba193a63990: WrongMass(1, 0)})
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v4_foreign_job ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v4_foreign_job
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 607 filtered out; finished in 7.35s
+

@@ -1,0 +1,29 @@
+{
+  "runtime_build": "s1-cover-final-build.json",
+  "sources": {
+    "consensus/core/tests/palw_tir_parameter_cover.rs": "030ac9dab27277dd21a6d81bf2b3b8c561523bb27cb720725a5434707b63efce",
+    "consensus/core/tests/palw_tir_original_parameter_cover.rs": "a461a467f5461b8be6969f294799ef3d48180c1c5278d9f898ba91a07890626d",
+    "consensus/core/tests/common/palw_tir_parameter_cover_fixture.rs": "733508aeae5eb6cae278dce7a32427455cfd671a82e408bda2fd62b63b78c146",
+    "consensus/core/tests/palw_tir_fixture_common.rs": "bb756bad4d221de2451017efe0f8ee258f56d76e64825a6e7315913a79d5b3bc",
+    "consensus/core/tests/palw_the_release_did_not_move.rs": "9323fa209816dc2a4083bf77dd5308111035689b508a1533cf0e8698a8eb6e8a",
+    "consensus/core/tests/palw_activation_pool_is_t12_only.rs": "50de9edb2df4825fc82fae223bdae6a5e01d5867e39c0f03e623ec0238096f45"
+  },
+  "executables": {
+    "parameter-tests": {
+      "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-s1-cover-final-ql3peab2/current-layout/parameter-tests",
+      "sha256": "5c19665d327a1ee1915c3584c5f187dbb1692e39f251ddea0055535d7e9f3bcf"
+    },
+    "original-parameter-tests": {
+      "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-s1-cover-final-ql3peab2/current-layout/original-parameter-tests",
+      "sha256": "14b9733172fd849bda83aa70091e561208064f083265d2f43ca1bf5b585327e4"
+    },
+    "t12-tests": {
+      "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-s1-cover-final-ql3peab2/current-layout/t12-tests",
+      "sha256": "a3026aa8b49ac6631a02fa57a68af77a7277e651d7fc201cb72ed0b6b0563f77"
+    },
+    "activation-tests": {
+      "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-s1-cover-final-ql3peab2/current-layout/activation-tests",
+      "sha256": "2989d9f69c72e93b2431b28948ff84d6534cab3560b2808605c4a8cda635cbda"
+    }
+  }
+}

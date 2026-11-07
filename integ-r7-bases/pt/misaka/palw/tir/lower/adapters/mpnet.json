@@ -1,0 +1,26 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mpnet",
+  "doc": "MPNet (MPNetModel, and the base of a …ForMaskedLM checkpoint): RoBERTa's positions (padding_idx hard-coded 1), no token types, and a bias over bucketed relative positions (T5's bidirectional buckets: 32 of them up to 128) shared by every layer.",
+  "extends": ["mixin-bert-encoder"],
+  "match": {"architectures": ["MPNetModel", "MPNetForMaskedLM"], "model_types": ["mpnet"]},
+  "config": {"defaults": {"vocab_size": 30527, "hidden_size": 768, "intermediate_size": 3072, "num_hidden_layers": 12, "num_attention_heads": 12, "max_position_embeddings": 514, "hidden_act": "gelu", "layer_norm_eps": 1e-05, "relative_attention_num_buckets": 32}},
+  "vars": [
+    {"name": "vocab", "value": {"$cfg": "vocab_size"}},
+    {"name": "hidden", "value": {"$cfg": "hidden_size"}},
+    {"name": "inter", "value": {"$cfg": "intermediate_size"}},
+    {"name": "n", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "heads", "value": {"$cfg": "num_attention_heads"}},
+    {"name": "max_pos0", "value": {"$cfg": "max_position_embeddings"}},
+    {"name": "act", "value": {"$act": {"$cfg": "hidden_act"}}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "pad", "value": 1},
+    {"name": "offset", "value": 2},
+    {"name": "buckets", "value": {"$cfg": "relative_attention_num_buckets"}},
+    {"name": "buckets_ok", "value": {"$check": [{"$eq": [{"$var": "buckets"}, 32]}, {"$cat": ["relative_attention_num_buckets ", {"$var": "buckets"}, " (MPNet buckets into 32 whatever the table's size)"]}]}},
+    {"name": "rel_bias", "value": {"buckets": 32, "max_distance": 128, "heads": {"$var": "heads"}}},
+    {"name": "names", "value": {"embed": "embeddings.word_embeddings", "pos_embed": "embeddings.position_embeddings", "embed_norm": "embeddings.LayerNorm", "rel_bias": "encoder.relative_attention_bias", "attn.q": "encoder.layer.{L}.attention.attn.q", "attn.k": "encoder.layer.{L}.attention.attn.k", "attn.v": "encoder.layer.{L}.attention.attn.v", "attn.o": "encoder.layer.{L}.attention.attn.o", "norm.mix": "encoder.layer.{L}.attention.LayerNorm", "mlp.up": "encoder.layer.{L}.intermediate.dense", "mlp.down": "encoder.layer.{L}.output.dense", "norm.ffn": "encoder.layer.{L}.output.LayerNorm"}},
+    {"name": "prefix_aliases", "value": [["", "mpnet."]]},
+    {"name": "model_type", "value": "mpnet"}
+  ]
+}

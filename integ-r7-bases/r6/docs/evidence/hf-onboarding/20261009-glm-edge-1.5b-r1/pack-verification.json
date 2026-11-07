@@ -1,0 +1,100 @@
+{
+ "schema": "misaka.h1.pack-verification.v1",
+ "command": "palw-class pack verify <pack> --model <checkpoint> --artifact <declared class file> --rebuild --strict --json",
+ "exit": 0,
+ "verified": true,
+ "ok": true,
+ "pack": "98e9cd7b62be189921c7117ca5d5ed7bb01d9c0ec9b505481118709e5bfa51e7",
+ "checks": [
+  {
+   "check": "manifest",
+   "detail": "glm-edge-1.5b (98e9cd7b62be1899), schema misaka.palw.runtime-pack.v1",
+   "status": "PASS"
+  },
+  {
+   "check": "sidecars",
+   "detail": "4 file(s) match their hashes",
+   "status": "PASS"
+  },
+  {
+   "check": "adapter",
+   "detail": "built-in `glm` bb7f5a3fcf4bc0bc",
+   "status": "PASS"
+  },
+  {
+   "check": "descriptors",
+   "detail": "none (a float checkpoint)",
+   "status": "PASS"
+  },
+  {
+   "check": "converter",
+   "detail": "built by palw-tir-convert 1.1.0 (misaka.palw.lowering.v1); this build 1.1.0 (misaka.palw.lowering.v1) \u2014 the same converter; math libm-v1: the same bytes on every platform",
+   "status": "PASS"
+  },
+  {
+   "check": "source",
+   "detail": "3 file(s) match their SHA-256",
+   "status": "PASS"
+  },
+  {
+   "check": "frontend",
+   "detail": "level B, spec 1382ebc8908ebdf8, 9 feature uses, scope: text-generation: token ids \u2192 next-token logits; nothing left out",
+   "status": "PASS"
+  },
+  {
+   "check": "artifact",
+   "detail": "file db13f569fcaaaec6 \u00b7 inventory root 5455de9eb9421dda \u00b7 graph root c17db28d3d6e34c5",
+   "status": "PASS"
+  },
+  {
+   "check": "declared",
+   "detail": "testnet-12: exact class f908d955255900ba (context 512, interval 65536); identity verification, not live admission",
+   "status": "PASS"
+  },
+  {
+   "check": "conformance",
+   "detail": "1 vector(s), 2 positions, equal on reference, typed-backend, independent",
+   "status": "PASS"
+  },
+  {
+   "check": "hf-reference",
+   "detail": "legacy greedy-only: tool scale: slope 0.9982, corr 0.99971, top-1 1.000, KL 0.00157 over 32 positions (pack recorded top-1 1.000, KL 0.00157)",
+   "status": "PASS"
+  }
+ ],
+ "skipped": [],
+ "failed": [],
+ "max_rss_bytes": [
+  10080600064
+ ],
+ "beacon_conformance": {
+  "facts": "SYNTHETIC (no canonical beacon-facts RPC exists)",
+  "policy": "reference_policy_v1 with caller numbers \u2014 UNAPPROVED",
+  "policy_args": "--k 3 --delay 2 --window 40 --depth 5 --repetitions 3 --security-bits 4",
+  "scope_args": "--vectors 1 --prompt-len 2 --decode 1 --leaves 256 --vector-fault-ppm 1000000 --leaf-fault-ppm 62500",
+  "statement_root_prefix": "6e2a822efe8444fdee3e5904b96e1ec21b46f49bc5d3efdb704306242d0fd3ade419745d5e8bd88876be08ce8b57d9af67a85279d94734a9738339128506b3ec",
+  "waiting_exit": 3,
+  "run_exit": 0,
+  "verify_exit": 0,
+  "verify_no_rerun_exit": 3,
+  "label": "SYNTHETIC_BEACON_CONFORMANCE_PASS",
+  "evidence": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261009-glm-edge-1.5b-r1/conformance/state/6e2a822efe8444fdee3e5904b96e1ec2/seed-0600b0363508fbdc4d3c9d19dc4a262f/evidence.borsh",
+  "commit": "6e2a822efe8444fdee3e5904b96e1ec21b46f49bc5d3efdb704306242d0fd3ade419745d5e8bd88876be08ce8b57d9af67a85279d94734a9738339128506b3ec\n",
+  "run": "evidence      /Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261009-glm-edge-1.5b-r1/conformance/state/6e2a822efe8444fdee3e5904b96e1ec2/seed-0600b0363508fbdc4d3c9d19dc4a262f/evidence.borsh\nevidence id   cf47df63a4112866167475553e8f19d975669c9700107b62dfc9c40e2e4debc0db94466b09c020da8ebfc7333baf7ded27bf1ec97757c6d44adc22d81e2a1900\nchallenge seed 0600b0363508fbdc4d3c9d19dc4a262fe92e510320c5dc4ec2bc83e7f851eec2859860fb25bb619a2f1ed491b50c795fca1e91a0619e566720b6aaa8f7fee4b7\nfacts         synthetic:h1-20261009-glm-edge-1.5b-r1\nstatus        PASSED \u2014 771 of 771 required checks run, 0 failed, 0 missing; derived -log2(eps) >= 4\nmeasured      {\"checks_executed\":771,\"checks_reused\":0,\"leaf_bytes_compared\":1147072,\"leaf_checks_ms\":24,\"note\":\"peak RSS is the process's lifetime maximum (getrusage), mapped file pages included; hashed bytes are the authentication read of the whole artifact, compared bytes are the sampled leaves\",\"open_pass_hashed_bytes\":1642013380,\"open_pass_ms\":7829,\"peak_rss_bytes\":4270227456,\"vector_checks_ms\":1448942,\"vector_positions\":7,\"wall_ms\":1460907}\nlocal judgement: the contract accepts this evidence for the beacon this process derived (a fresh `verify-conformance` is what counts)\n",
+  "run_stderr_tail": "[    0.0s] deriving the artifact's roots (streamed: one pass for the inventory root, one for the file digest)\n[   13.7s] static semantic admission (reference kernels, hypothetically armed)\n[   13.8s] opening 768 leaf(s) against the artifact root (one streamed pass over the artifact)\n[   25.7s] vec/r0/i0: prompt [29039] + 1 decoded token(s) on every required implementation\n[  508.7s] vec/r1/i0: prompt [58006] + 1 decoded token(s) on every required implementation\n[ 1001.4s] vec/r2/i0: prompt [12697, 32550] + 1 decoded token(s) on every required implementation\n     1474.74 real       489.49 user        16.28 sys\n          4270227456  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n             3402320  page reclaims\n                   8  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                3014  voluntary context switches\n              450249  involuntary context switches\n       5832694429551  instructions retired\n       1466828843181  cycles elapsed\n          2615315912  peak memory footprint\n",
+  "verify": "PASS: every derivable field recomputed from public inputs, every selected check re-executed, the evidence reproduced exactly\nevidence id   cf47df63a4112866167475553e8f19d975669c9700107b62dfc9c40e2e4debc0db94466b09c020da8ebfc7333baf7ded27bf1ec97757c6d44adc22d81e2a1900\nfacts         synthetic:h1-20261009-glm-edge-1.5b-r1  (SYNTHETIC: this exercises the pipeline; it says nothing about any chain's history)\nscope         a SAMPLED conditional check \u2014 not full-scope fidelity, not semantic admission, not a statement that the beacon is unbiased\nmeasured      {\"checks_executed\":771,\"checks_reused\":0,\"leaf_bytes_compared\":1147072,\"leaf_checks_ms\":43,\"note\":\"peak RSS is the process's lifetime maximum (getrusage), mapped file pages included; hashed bytes are the authentication read of the whole artifact, compared bytes are the sampled leaves\",\"open_pass_hashed_bytes\":1642013380,\"open_pass_ms\":5222,\"peak_rss_bytes\":4268261376,\"vector_checks_ms\":1188549,\"vector_positions\":7,\"wall_ms\":1193990}\n",
+  "verify_no_rerun": "NOT A PASS (results not re-executed): the challenge, selection and evidence are consistent with the canonical facts (synthetic:h1-20261009-glm-edge-1.5b-r1), but --no-rerun leaves the result roots unverified\n",
+  "max_rss_bytes": {
+   "commit": [
+    35651584
+   ],
+   "run": [
+    4270227456
+   ],
+   "verify": [
+    4268261376
+   ]
+  },
+  "status": "ca5d5ed7bb01d9c0ec9b505481118709e5bfa51e7\",\n        \"policy_label\": \"UNAPPROVED TEST POLICY (reference_policy_v1 numbers; not an approved checker-suite/policy/soundness tuple)\",\n        \"retries_before\": 0\n      },\n      \"event\": \"COMMITTED\",\n      \"seq\": 1,\n      \"statement_root\": \"6e2a822efe8444fdee3e5904b96e1ec21b46f49bc5d3efdb704306242d0fd3ade419745d5e8bd88876be08ce8b57d9af67a85279d94734a9738339128506b3ec\",\n      \"unix\": 1791475447\n    },\n    {\n      \"candidate_id\": \"f908d955255900ba27943ae2d1ab9399f99d7fa909b7b77ab96410edb5a1093c14b9583cb6f20f758b48df21b81e4c6bf2aa82decdf2ea595f3cd87fdecab26f\",\n      \"detail\": {\n        \"beacon\": {\n          \"have\": 2,\n          \"need\": 3,\n          \"state\": \"COLLECTING\"\n        },\n        \"tip\": 1011\n      },\n      \"event\": \"WAITING_RANDOMNESS\",\n      \"seq\": 2,\n      \"statement_root\": \"6e2a822efe8444fdee3e5904b96e1ec21b46f49bc5d3efdb704306242d0fd3ade419745d5e8bd88876be08ce8b57d9af67a85279d94734a9738339128506b3ec\",\n      \"unix\": 1791475456\n    },\n    {\n      \"candidate_id\": \"f908d955255900ba27943ae2d1ab9399f99d7fa909b7b77ab96410edb5a1093c14b9583cb6f20f758b48df21b81e4c6bf2aa82decdf2ea595f3cd87fdecab26f\",\n      \"detail\": {\n        \"lock_position\": 1011,\n        \"provenance\": \"synthetic:h1-20261009-glm-edge-1.5b-r1\",\n        \"seed\": \"0600b0363508fbdc4d3c9d19dc4a262fe92e510320c5dc4ec2bc83e7f851eec2859860fb25bb619a2f1ed491b50c795fca1e91a0619e566720b6aaa8f7fee4b7\",\n        \"sources\": 3\n      },\n      \"event\": \"CHALLENGE_RESOLVED\",\n      \"seq\": 3,\n      \"statement_root\": \"6e2a822efe8444fdee3e5904b96e1ec21b46f49bc5d3efdb704306242d0fd3ade419745d5e8bd88876be08ce8b57d9af67a85279d94734a9738339128506b3ec\",\n      \"unix\": 1791475470\n    },\n    {\n      \"candidate_id\": \"f908d955255900ba27943ae2d1ab9399f99d7fa909b7b77ab96410edb5a1093c14b9583cb6f20f758b48df21b81e4c6bf2aa82decdf2ea595f3cd87fdecab26f\",\n      \"detail\": {\n        \"evidence_id\": \"cf47df63a4112866167475553e8f19d975669c9700107b62dfc9c40e2e4debc0db94466b09c020da8ebfc7333baf7ded27bf1ec97757c6d44adc22d81e2a1900\",\n        \"seed\": \"0600b0363508fbdc4d3c9d19dc4a262fe92e510320c5dc4ec2bc83e7f851eec2859860fb25bb619a2f1ed491b50c795fca1e91a0619e566720b6aaa8f7fee4b7\",\n        \"status\": \"PASSED\"\n      },\n      \"event\": \"EVIDENCE\",\n      \"seq\": 4,\n      \"statement_root\": \"6e2a822efe8444fdee3e5904b96e1ec21b46f49bc5d3efdb704306242d0fd3ade419745d5e8bd88876be08ce8b57d9af67a85279d94734a9738339128506b3ec\",\n      \"unix\": 1791476931\n    }\n  ],\n  \"schema\": \"misaka.palw.beacon-conformance-ledger.v1\"\n}"
+ }
+}

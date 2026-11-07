@@ -1,0 +1,9 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.97s
+  Executable unittests src/lib.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227)
+  Executable tests/flat_candidate7.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate7-0efcccad22c33f84)
+  Executable tests/flat_graph7.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_graph7-e82208e92101cef3)
+  Executable tests/flat_history8.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_history8-1c7bafa6c5b92396)
+  Executable tests/flat_lengths7.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_lengths7-f2e98b15e52f3abc)
+  Executable tests/flat_topk7.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_topk7-ffbef0f56b32057d)
+  Executable tests/trace_typed_parameters.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/trace_typed_parameters-7b259fd61ab8b73c)

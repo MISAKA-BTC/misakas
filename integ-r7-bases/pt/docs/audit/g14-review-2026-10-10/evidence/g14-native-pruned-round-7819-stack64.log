@@ -1,0 +1,10 @@
+
+running 1 test
+test palw_panel::palw_service_public_e2e::recovery::fresh_verifier_reacquires_one_pruned_parallel_input_lane_from_the_automatic_producer ... [service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+
+thread 'block-pool-0' (4413245) panicked at consensus/src/pipeline/header_processor/processor.rs:583:30:
+called `Result::unwrap()` on an `Err` value: Error { message: "IO error: No space left on device: While appending to file: /var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/rusty-kaspa/.tmpbOnEO0/000010.sst: No space left on device" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Rayon: detected unexpected panic; aborting

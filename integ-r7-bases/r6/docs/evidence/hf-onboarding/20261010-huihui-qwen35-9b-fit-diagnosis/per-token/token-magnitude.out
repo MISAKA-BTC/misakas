@@ -1,0 +1,6 @@
+L0.gdn.core    w  4096 tokrms med 0.0602 p10 0.0348 p90 0.0714 max 0.0754@62 | abserr med 0.000188 | rel med 0.003 p90 0.004 | log-log corr -0.39 slope -0.25 | step~0.000121 absmax 2.28
+L0.gdn.normed  w  4096 tokrms med 0.0659 p10 0.0615 p90 0.0682 max 0.107@0 | abserr med 0.00464 | rel med 0.068 p90 0.115 | log-log corr 0.50 slope 4.00 | step~2.79e-09 absmax 4.2
+L0.mlp.hidden  w 12288 tokrms med 0.0109 p10 0.0047 p90 0.0186 max 0.0621@0 | abserr med 0.00338 | rel med 0.300 p90 0.755 | log-log corr -0.42 slope -0.43 | step~1e-09 absmax 5.01
+L0.norm.ffn    w  4096 tokrms med 0.148 p10 0.0965 p90 0.189 max 0.25@0 | abserr med 0.0402 | rel med 0.264 p90 0.531 | log-log corr -0.36 slope -0.60 | step~1.49e-08 absmax 2.78
+L0.norm.mix    w  4096 tokrms med 1.07 p10 1.03 p90 1.13 max 1.18@86 | abserr med 0.000292 | rel med 0.000 p90 0.000 | log-log corr 0.90 slope 3.48 | step~3.58e-07 absmax 56
+L0.resid.mix   w  4096 tokrms med 0.0959 p10 0.0812 p90 0.113 max 0.168@0 | abserr med 0.00441 | rel med 0.047 p90 0.077 | log-log corr 0.17 slope 0.53 | step~7.45e-08 absmax 10.3

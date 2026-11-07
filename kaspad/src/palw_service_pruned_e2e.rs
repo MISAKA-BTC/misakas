@@ -51,6 +51,7 @@ pub(in crate::palw_panel::palw_service_public_e2e) async fn import_public_carria
         nonce: chain.nonce,
         history: chain.history.clone(),
         wall_deadline: chain.wall_deadline,
+        natural_heartbeat_stamps: chain.natural_heartbeat_stamps,
         _pruned_db: Some(lifetime),
     };
     // Independent prefix validation establishes the same header/UTXO history. The PALW tip and

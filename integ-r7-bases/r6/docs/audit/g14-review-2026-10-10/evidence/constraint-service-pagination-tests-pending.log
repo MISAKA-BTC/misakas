@@ -1,0 +1,41 @@
+
+running 3 tests
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_beaten_token_without_job_metadata has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_forbidden_token_without_job_metadata has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_a_constraint_premature_stop_without_job_metadata has been running for over 60 seconds
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] ordinary FP Job V6 admission: claim 94558a9fc0b95f24dcaafa13ad74bd007a03550807bfba6983597576378fb5b5925fc410de63cc59f417cfe75f5e19efc849eb5c4c922d898f68fdda542b634e, 3 quanta, 9110079 pwu, fee 331387
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] ordinary FP Job V6 admission: claim 9b400e517b227a9806a69145d47f27d52fb7b003491b8906766ec97d8de2140d24cf4dca3e21008a81cda3c2225ab27f686477329ed8da94bf709d53d8642757, 3 quanta, 9110079 pwu, fee 331387
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] ordinary FP Job V6 admission: claim 3ead680ff01ed30be859baddbfb1254ef4a4bbc380b427a20fc2dcb732fc086f42244961a62ac957ab0f75cc5dbeb4bd1b7528170dff733ba331507df8ec7e87, 3 quanta, 9110079 pwu, fee 331387

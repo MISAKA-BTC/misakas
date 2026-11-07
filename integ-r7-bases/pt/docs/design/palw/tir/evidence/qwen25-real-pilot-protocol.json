@@ -1,0 +1,69 @@
+{
+  "schema": "misaka.rfc02.real-checkpoint-pilot.v1",
+  "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+  "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "source_files": [
+    {
+      "path": "config.json",
+      "bytes": 660,
+      "sha256": "98d2ff8cc47488d08a2b0b3acf4eb99ef210779b42bd48605f6b8e36acdbf670",
+      "git_blob_sha1": "f81ead14ab072d65a07817f83a3ee0e5a1890d10",
+      "expected_kind": "git-blob-sha1",
+      "expected": "f81ead14ab072d65a07817f83a3ee0e5a1890d10",
+      "matches": true
+    },
+    {
+      "path": "model.safetensors",
+      "bytes": 3087467144,
+      "sha256": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "git_blob_sha1": "321d7203066aa4496686c6122bbd2101ce0e2b8c",
+      "expected_kind": "sha256",
+      "expected": "dd924a11b4c220f385b51ffa522daea7c9f3d850e31b162bb5661df483c6d3ee",
+      "matches": true
+    },
+    {
+      "path": "tokenizer.json",
+      "bytes": 7031645,
+      "sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+      "git_blob_sha1": "443909a61d429dff23010e5bddd28ff530edda00",
+      "expected_kind": "git-blob-sha1",
+      "expected": "443909a61d429dff23010e5bddd28ff530edda00",
+      "matches": true
+    }
+  ],
+  "task": "causal-next-token logit fidelity diagnostic",
+  "max_history": 32,
+  "calibration_sequences": 4,
+  "evaluation_sequences": 4,
+  "maximum_positions_per_sequence": 32,
+  "reference": "local native f32 HL evaluator; not independent Hugging Face reference",
+  "integer_implementation": "typed PALW-TIR backend",
+  "quantization": {
+    "math": "libm-v1",
+    "headroom16": 2.0
+  },
+  "predeclared_thresholds": {
+    "top1_agreement_min": 0.95,
+    "kl_mean_max": 0.01,
+    "ppl_delta_abs_max": 0.02
+  },
+  "scope": "First real-weight lowering/calibration/fidelity cost measurement. Does not prove instruction/task quality, long context, source-independent reference equivalence, public node conviction or Final/redemption. Full RFC02 requirements remain unchanged.",
+  "command": [
+    "target/release/palw-tir-fidelity",
+    "target/rfc02-real/qwen25-pilot/source",
+    "--calib",
+    "target/rfc02-real/qwen25-pilot/calib.json",
+    "--eval",
+    "target/rfc02-real/qwen25-pilot/eval.json",
+    "--positions",
+    "32",
+    "--max-window",
+    "32",
+    "--stats-out",
+    "target/rfc02-real/qwen25-pilot/calibration.json",
+    "--tir-out",
+    "target/rfc02-real/qwen25-pilot/program.tir",
+    "--exec",
+    "--json"
+  ]
+}

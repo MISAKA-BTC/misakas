@@ -1,0 +1,239 @@
+     Running misaka_palw_kernel-3e75f80c67bc7227 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227)
+
+running 154 tests
+test assurance::tests::a_union_bound_over_probabilistic_results_and_no_number_for_a_legacy_or_judged_one ... ok
+test beacon::tests::a_reorg_of_the_window_is_a_counted_rebind_and_too_many_time_out ... ok
+test beacon::tests::grinding_is_counted_into_the_network_bound ... ok
+test beacon::tests::late_inclusion_and_malformed_policies_are_refused ... ok
+test beacon::tests::no_seed_exists_until_the_window_is_on_chain_and_final ... ok
+test challenge::tests::the_seed_moves_with_every_commitment_and_labels_separate_streams ... ok
+test descriptor::tests::any_change_to_a_descriptor_or_binding_is_a_new_identity ... ok
+test descriptor::tests::locked_in_activates_at_its_daa_and_deprecation_stops_new_work ... ok
+test descriptor::tests::segmented_pricing_revision_has_new_descriptor_identities_and_arms_no_schedule ... ok
+test descriptor::tests::the_builtin_kernel_is_implemented_not_active ... ok
+test element::tests::a_lie_in_any_value_is_found_and_convicted_and_no_honest_element_is ... ok
+test element::tests::a_malformed_value_a_forged_decode_and_tampered_openings_are_judged_objectively ... ok
+test element::tests::allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes ... ok
+test element::tests::allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root ... ok
+test element::tests::element_courts_are_priced_by_the_tile_not_the_tensor ... ok
+test element::tests::every_filing_is_within_its_priced_bound ... 2310 filings within their prices, the largest at 0.770 of its price
+ok
+test element::tests::flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks ... ok
+test element::tests::flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands ... ok
+test element::tests::leaf_openings_file_their_values_at_the_dtype_width ... ok
+test element::tests::nonflat_gather_axes_and_batches_still_match_the_independent_reference ... ok
+test element::tests::the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value ... ok
+test element::tests::the_streamed_trace_is_the_trace ... ok
+test element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator ... 151936-output lookup + both commitment trees: frozen median 123694459 ns, flat median 30339250 ns; six alternating trials, all roots equal
+ok
+test element::tests::vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs ... 151936-output whole court: 608815 proof bytes, 356634368 abstract work, 99.815833ms honest verification
+ok
+test family::tests::every_tir_v1_primitive_has_one_family_and_none_is_media ... ok
+test field::tests::an_integer_error_below_the_moduli_product_survives_in_some_modulus ... ok
+test field::tests::integers_map_with_sign_and_round_trip_small_values ... ok
+test field::tests::multiplication_agrees_with_double_and_add_for_every_modulus ... ok
+test flat_court4::tests::flat_court_all_hostile_nested_counts_and_tags_are_bounded_before_bodies ... ok
+test flat_court4::tests::flat_court_all_nonstate_primitives_match_reference_and_convict_tail_falsification ... ok
+test flat_court4::tests::flat_court_authenticates_registered_weights_and_rejects_borrowed_source_or_profile ... ok
+test flat_court4::tests::flat_court_binds_segment_boundary_and_authenticates_public_token_tiles ... ok
+test flat_court4::tests::flat_court_convicts_every_leaf_and_merged_tail_without_producer_output_values ... ok
+test flat_court4::tests::flat_court_encoder_ids_count_and_padding_are_job_bound ... ok
+test flat_court4::tests::flat_court_prices_large_declarations_without_allocating_tensors_and_refuses_large_lines ... ok
+test flat_court4::tests::flat_court_recomputes_batched_nonzero_axis_gather_and_ignores_duplicate_data_reads ... ok
+test flat_court4::tests::flat_court_semantic_refusal_requires_authenticated_operands_and_wide_sources_remain_v3 ... ok
+test flat_court4::tests::flat_court_state_and_history_bind_previous_position_and_initialization ... ok
+test flat_court4::tests::flat_court_wire_checks_every_count_truncation_and_surplus_before_allocation ... ok
+test flat_court5::tests::flat_v5_all_25_primitive_samples_and_all_tail_leaves_preserve_reference_courts ... ok
+test flat_court5::tests::flat_v5_all_fault_codecs_refuse_truncations_surplus_versions_and_nested_counts ... ok
+test flat_court5::tests::flat_v5_decode_binds_delivered_index_position_ties_and_logits_without_producer_values ... ok
+test flat_court5::tests::flat_v5_first_wide_lie_and_small_whole_relation_need_no_producer_values ... ok
+test flat_court5::tests::flat_v5_history_crosses_small_whole_to_large_leaf_and_sliding_window_with_bound_sources ... ok
+test flat_court5::tests::flat_v5_malformed_headers_convict_type_shape_overflow_and_wrong_grammar_only_when_bound ... ok
+test flat_court5::tests::flat_v5_small_whole_courts_cover_all_dtypes_and_scalar_rank ... ok
+test flat_court5::tests::flat_v6_own_mature_seal_blocks_equivalent_convicting_decode_encodings ... ok
+test flat_court5::tests::flat_v6_sealed_invalid_or_honest_proof_retains_slot_without_conviction ... ok
+test flat_detect5::tests::flat_stream_verifier_all_25_primitives_localizes_without_output_values ... ok
+test flat_detect5::tests::flat_stream_verifier_encoder_uses_job_ids_padding_and_count ... ok
+test flat_detect5::tests::flat_stream_verifier_generated_ids_feed_later_state_and_history ... ok
+test flat_detect5::tests::flat_stream_verifier_requires_public_material_and_authenticates_coordinates ... ok
+test flat_detect5::tests::flat_stream_verifier_small_nodes_decode_ties_and_wrong_registered_model ... ok
+test flat_detect5::tests::flat_stream_verifier_wide_internal_and_small_downstream_relations ... ok
+test flat_replay6::tests::replay_v6_acquired_tensor_metadata_must_match_even_with_its_registered_root ... ok
+test flat_replay6::tests::replay_v6_budget_rejects_before_acquired_model_or_public_access ... ok
+test flat_replay6::tests::replay_v6_hash_and_history_limits_are_explicit_and_stop_before_delegation ... ok
+test flat_replay6::tests::replay_v6_huge_acquired_parameters_are_priced_without_images ... ok
+test flat_replay6::tests::replay_v6_lifetime_counts_cached_reads_and_withheld_retries ... ok
+test flat_replay6::tests::replay_v6_tensor_payload_envelope_covers_frozen_primitive_and_history_traces ... ok
+test flat_replay6::tests::replay_v6_tensor_prices_use_i128_and_bind_unchanged_v5_scope ... ok
+test flat_scope5::tests::scope_v5_bounds_every_position_leaf_primitive_and_mixed_history_grammar ... ok
+test flat_scope5::tests::scope_v5_charges_constant_sort_reference_work_and_refuses_oversized_lines ... ok
+test flat_scope5::tests::scope_v5_deduplicates_layer_templates_but_prices_every_state_instance ... ok
+test flat_scope5::tests::scope_v5_encoder_scope_binds_job_mode_axis_and_single_position ... ok
+test flat_scope5::tests::scope_v5_includes_earlier_small_row_paths_and_earlier_127_element_tails ... ok
+test flat_scope5::tests::scope_v5_prices_huge_job_extents_and_public_parameter_shapes_without_images_or_position_arrays ... ok
+test flat_scope5::tests::scope_v5_rederives_all_declarations_and_binds_program_profile_extent_and_occurrences ... ok
+test flat_seal6::tests::flat_seal_v6_binds_every_coordinate_salt_and_exact_carrier ... ok
+test flat_seal6::tests::flat_seal_v6_copies_alternate_bytes_and_immature_seals_never_enter_court ... ok
+test flat_seal6::tests::flat_seal_v6_fixed_slots_explicit_expiry_and_aggregate_actor_bounds ... ok
+test flat_seal6::tests::flat_seal_v6_persisted_rows_refuse_version_vector_and_actor_substitution ... ok
+test flat_seal6::tests::flat_seal_v6_policy_horizon_and_overflow_refuse_without_insertion ... ok
+test flat_seal6::tests::flat_seal_v6_reveal_is_one_use_and_invalid_court_retains_the_slot ... ok
+test improve::tests::a_candidate_is_a_new_admitted_class_of_the_parents_family_under_a_pinned_kernel ... ok
+test improve::tests::promotion_keeps_statistics_and_computational_error_apart_and_refuses_unpinned_suites ... ok
+test improve::tests::the_sign_test_table_is_exact_in_integers ... ok
+test job::tests::a_job_is_refused_at_posting_outside_the_class ... ok
+test job::tests::greedy_takes_the_lowest_index_on_a_tie ... ok
+test ledger::tests::a_class_must_fit_its_filing_response_and_commitments_in_the_route_objects ... ok
+test ledger::tests::a_filing_past_the_class_envelope_is_dismissed_before_any_court_runs ... ok
+test lifecycle::tests::a_challengeable_claim_has_no_tally_and_a_tally_event_is_an_error_never_a_no_op ... ok
+test lifecycle::tests::a_covered_claim_finalizes_only_after_its_window_and_retention ... ok
+test lifecycle::tests::a_dispute_blocks_an_optimistic_final_a_dismissal_resumes_and_a_conviction_voids ... ok
+test lifecycle::tests::a_dispute_blocks_final_a_dismissal_resumes_and_a_conviction_voids ... ok
+test lifecycle::tests::a_service_holds_an_optimistic_final_until_its_proof_grace_has_elapsed ... ok
+test lifecycle::tests::a_service_holds_final_until_its_proof_grace_has_elapsed ... ok
+test lifecycle::tests::an_optimistic_claim_finalizes_by_the_explicit_window_rule_alone_with_no_tally ... ok
+test lifecycle::tests::coverage_during_a_dispute_starts_the_window_and_final_waits_for_the_verdict ... ok
+test lifecycle::tests::disputes_are_open_to_any_bond_and_bounded_by_count_and_court_work ... ok
+test lifecycle::tests::missing_material_is_the_da_path_not_a_conviction ... ok
+test lifecycle::tests::silence_and_partial_coverage_never_pass ... ok
+test lifecycle::tests::the_network_bound_charges_attempts_and_the_environment ... ok
+test merkle3::tests::a_wire_shape_that_overflows_is_malformed_never_a_panic ... ok
+test merkle3::tests::buffered_leaf_hashes_preserve_every_dtype_and_update_boundary ... ok
+test merkle3::tests::direct_row_and_column_hashing_preserves_original_roots_and_openings ... ok
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements ... ok
+test merkle3::tests::every_row_range_proves_against_the_commitment ... ok
+test merkle3::tests::leaf_element_counts_match_enumeration_at_both_axis_boundaries_without_allocation ... ok
+test merkle3::tests::producer_hash_cost_against_original_scalar_updates ... ignored, manual producer hash benchmark; hardware timing, not a consensus gate
+test merkle3_stream::tests::bounds_overflow_and_reader_failure_are_refusals_before_large_allocation_or_partial_success ... ok
+test merkle3_stream::tests::simultaneous_row_and_column_tile_boundaries_keep_the_canonical_leaf_order ... ok
+test merkle3_stream::tests::streamed_raw_commitments_match_decoded_roots_and_authenticate_existing_openings ... ok
+test merkle4::tests::flat_layout_merges_every_short_tail_and_covers_ranks_without_small_leaves ... ok
+test merkle4::tests::flat_material_prices_exact_retention_leaf_carriers_and_streaming_scratch ... ok
+test merkle4::tests::flat_openings_refuse_borrowed_metadata_values_coordinates_and_extra_paths ... ok
+test merkle4::tests::flat_public_descent_finds_every_divergent_leaf_within_the_derived_reply_bound ... ok
+test merkle4::tests::flat_streaming_tree_and_independent_oracle_match_all_dtypes_tails_and_odd_trees ... ok
+test merkle4::tests::flat_wire_bounds_counts_before_allocation_and_preserves_exact_borsh ... ok
+test merkle5::tests::flat_v5_internal_all_dtypes_and_extreme_wide_values_match_independent_oracle ... ok
+test merkle5::tests::flat_v5_wide_descent_and_strict_carriers_preserve_tail_and_unknown_version_refusals ... ok
+test merkle::tests::an_opening_whose_shape_overflows_is_malformed_never_a_panic ... ok
+test merkle::tests::every_row_and_column_opens_against_the_commitment_and_nothing_else_does ... ok
+test merkle::tests::row_node_runs_authenticate_at_every_level_and_localize_a_changed_row ... ok
+test merkle::tests::the_commitment_binds_dtype_shape_and_every_element ... ok
+test mode::tests::the_legacy_mode_keeps_its_historical_id_and_another_mode_is_another_class ... ok
+test mode::tests::the_mode_wire_discriminants_are_declared_and_an_unknown_one_is_never_success ... ok
+test opv::tests::saturating_the_court_for_the_whole_exposure_must_cost_more_than_the_claims_maximum_gain ... ok
+test opv::tests::the_assurance_statement_never_claims_correctness ... ok
+test opv::tests::the_clock_facts_a_fresh_verifier_plans_by ... ok
+test opv::tests::the_example_policy_satisfies_every_relation_and_each_relation_is_load_bearing ... ok
+test opv::tests::the_receipt_path_follows_the_mode_and_a_licence_is_never_fabricated_or_hidden ... ok
+test opv::tests::the_reservation_rule_reads_gain_penalty_and_the_assumed_detection ... ok
+test public::wire_overflow_tests::a_wire_tensor_whose_shape_overflows_is_refused_never_a_panic ... ok
+test route::model_vector_da_wire_tests::vector_da_units_have_fixed_wire_and_bounded_response_ceiling ... ok
+test route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling ... ok
+test route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind ... ok
+test route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal ... ok
+test route::tests::the_wire_form_is_version_discriminant_then_the_fields ... ok
+test scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position ... ok
+test scope::tests::the_budget_stays_below_every_relation_and_never_refuses ... ok
+test scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations ... ok
+test scope::tests::the_node_materials_separate_weights_copies_and_activations ... ok
+test scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another ... ok
+test seg::tests::every_node_opens_against_the_segment_roots_and_nothing_else_does ... ok
+test seg::tests::prompt_tiles_open_against_the_prompt_root ... ok
+test seg::tests::segment_roots_from_position_roots_alone_are_the_commitments_own ... ok
+test seg::tests::streamed_position_paths_match_retained_commitments_at_segment_and_odd_boundaries ... ok
+test seg_da::tests::the_fast_layout_is_the_reference_layout ... ok
+test seg_detect::tests::the_descent_finds_the_first_divergent_position_in_at_most_log2_s_probes ... ok
+test seg_encoder::tests::a_program_without_the_two_trailing_inputs_has_no_encoder_binding ... ok
+test seg_scope::tests::candidate_gather_price_bounds_actual_dependency_leaves_at_all_ranks ... ok
+test seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure ... ok
+test spec::composite::tests::a_prompt_concatenates_its_sources_in_order ... ok
+test spec::memory::tests::a_line_advances_at_final_is_superseded_by_a_stale_claim_and_rolls_back_on_a_late_conviction ... ok
+test spec::memory::tests::the_memory_root_binds_slots_and_commitments ... ok
+test spec::retrieval::tests::a_malformed_snapshot_leaf_is_judged_and_an_entry_demand_serves_the_claims_own_item ... ok
+test spec::retrieval::tests::a_slice_is_served_whole_and_a_forged_one_is_a_fake_opening ... ok
+test spec::retrieval::tests::a_wrong_item_and_a_missed_better_item_are_convicted_and_honest_entries_are_not ... ok
+test spec::retrieval::tests::every_path_verifies_and_nothing_else_does ... ok
+test spec::retrieval::tests::inclusion_refuses_a_misordered_duplicate_or_out_of_range_result ... ok
+test spec::retrieval::tests::the_rule_is_the_sort_with_ties_to_the_lowest_id ... ok
+test spec::tests::a_combination_outside_the_four_is_refused_by_name_and_a_version_too ... ok
+test spec::tests::the_extension_is_its_own_descriptor_and_well_formed ... ok
+
+test result: ok. 153 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 227.00s
+
+     Running flat_candidate7-0efcccad22c33f84 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate7-0efcccad22c33f84)
+
+running 5 tests
+test flat_candidate7_codec_counts_exact_ranges_and_complete_parameter_instances ... ok
+test flat_candidate7_declared_and_stored_scope_mutations_are_refused ... ok
+test flat_candidate7_identity_rows_rollback_and_no_execution_rights ... ok
+test flat_candidate7_long_topk_metadata_admission_is_separate_from_legacy_plan ... FLAT_CANDIDATE7_METADATA N=10485760 max_positions=2097152 program_bytes=307 registration_work=162124457 court_bytes=37875 court_work=4964969 auxiliary_bytes=128 no_weights_or_job_executed=true
+ok
+test flat_candidate7_shared_old_new_catalog_and_block_budget_cannot_be_bypassed ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 63.28s
+
+     Running flat_graph7-e82208e92101cef3 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_graph7-e82208e92101cef3)
+
+running 10 tests
+test complete_scope_prices_ten_million_axis_sparse_gather_and_1024_state_layers_without_images ... flat-v7 synthetic metadata-only N=10485760 K=2 layers=1024 max_positions=2097152 relations=10 instances=15038676992 court_bytes=39283 court_work=15073040 court_scratch=8438451 scan_work=540432058363674624 aux=128; no allocated model/job, native or Final acceptance
+ok
+test delivered_decode_fault_is_included_in_the_same_scope_and_mixed_codec ... ok
+test every_history_threshold_and_tail_uses_the_admitted_point_court_and_prior_state ... ok
+test honest_sparse_graph_replays_and_late_topk_or_state_faults_reach_their_own_courts ... ok
+test independent_full_scope_refuses_every_underpriced_or_rebound_field_and_other_oversized_relations ... ok
+test initial_zero_and_per_layer_state_writers_select_courts_from_exact_wiring ... ok
+test missing_borrowed_wrong_version_and_oversized_material_never_produces_a_conviction ... ok
+test ordinary_encoder_graph_keeps_job_bound_inputs_and_exact_single_position_scope ... ok
+test range_duplicate_and_dominance_faults_use_bounded_selected_value_replies ... ok
+test session_limits_precede_callbacks_and_missing_material_spends_the_retry_budget ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+     Running flat_history8-1c7bafa6c5b92396 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_history8-1c7bafa6c5b92396)
+
+running 8 tests
+test changed_history_or_row_coordinates_do_not_turn_source_continuity_faults_into_selection_convictions ... ok
+test every_small_dynamic_selection_tuple_is_clean_exactly_when_its_set_is_canonical ... ok
+test exact_selection_handles_i128_extremes_and_refuses_work_memory_before_output_allocation ... ok
+test long_context_metadata_is_bounded_without_allocating_positions_or_history_images ... ok
+test min_k_h_is_exact_at_warmup_flat_thresholds_and_window_rollovers_for_all_dtypes ... ok
+test prepaid_missing_oversized_and_wrong_version_replies_consume_attempts_and_never_pass ... ok
+test range_duplicate_and_wrong_tie_selection_produce_bounded_independently_verified_v8_faults ... ok
+test strict_v8_plan_and_fault_codecs_reject_truncation_unknown_versions_counts_and_trailing_bytes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running flat_lengths7-f2e98b15e52f3abc (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_lengths7-f2e98b15e52f3abc)
+
+running 5 tests
+test canonical_counts_are_bounded_before_variable_allocation ... ok
+test exact_admission_refuses_every_rebound_or_enlarged_field ... ok
+test map_order_duplicate_absent_axis_and_type_mismatch_are_refused ... ok
+test text_job_binding_freezes_all_fed_back_tokens_and_refuses_unbound_modalities ... ok
+test three_declared_lengths_specialize_one_exact_frozen_program_and_point_scope ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running flat_topk7-ffbef0f56b32057d (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_topk7-ffbef0f56b32057d)
+
+running 6 tests
+test actual_ten_million_axis_has_a_small_terminal_proof_and_independently_priced_scan ... flat-v7 synthetic actual full-graph replay axis=10485760 K=2 mixed_filing_bytes=17488 reference_operand_bytes=167772160 selected_reads=3 charged_scan_work=251658288; one position, not a ten-million-token job, checkpoint, native or Final acceptance
+TopK-v7 synthetic actual axis=10485760 K=2 source_bytes=41943040 filing_bytes=17485 court_bound=37744 court_work=4934017 scratch_bound=617312 scan_work=251658288 selection_aux=128; no checkpoint, dynamic-H, native or Final acceptance
+ok
+test all_axes_rank_and_flat_or_legacy_output_grammars_keep_rows_and_gap_members_bound ... ok
+test all_legal_parameter_and_internal_score_widths_bind_without_relaxing_the_frozen_type_rules ... ok
+test borrowed_roots_members_scores_contexts_and_unbounded_codecs_never_convict ... ok
+test every_small_wrong_set_has_a_bounded_authentic_counterexample_and_honest_sets_do_not ... ok
+test scan_limits_precede_callbacks_and_failed_acquisition_spends_the_same_session ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.80s
+
+     Running trace_typed_parameters-7b259fd61ab8b73c (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/trace_typed_parameters-7b259fd61ab8b73c)
+
+running 3 tests
+test buffered_and_streamed_trace_refuse_wrong_parameter_metadata_and_payload ... ok
+test each_layer_parameter_has_its_own_typed_instance ... ok
+test stage_inputs_use_the_same_declared_parameter_type ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

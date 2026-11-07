@@ -1,0 +1,19 @@
+    Checking kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/kaspad)
+warning: unused import: `Path`
+  --> kaspad/src/palw_artifact_inventory.rs:19:12
+   |
+19 |     path::{Path, PathBuf},
+   |            ^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `palw_state_v2::PalwBondKeyV2`
+ --> kaspad/src/palw_selected_event_scheduler.rs:8:5
+  |
+8 |     palw_state_v2::PalwBondKeyV2,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `kaspad` (lib) generated 2 warnings (run `cargo fix --lib -p kaspad` to apply 2 suggestions)
+warning: `kaspad` (lib test) generated 1 warning (1 duplicate)
+    Finished `dev` profile [unoptimized] target(s) in 25.90s
+exit 0

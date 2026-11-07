@@ -43,6 +43,13 @@ fn card_pubkey(i: usize) -> Vec<u8> {
 fn parts(sibling_fence: bool) -> Parts {
     let (config, _bundle, premine, floats) = t12_with_harness_cards();
     let mut params = config.params.clone();
+    // An explicit, isolated investigation mode. The common harness now restores
+    // the launch schedule, where this post-launch rule is dormant; its default
+    // PASS cannot reproduce the reported strict-economic merge-candidate loss.
+    if std::env::var("RFC18_STRICT_ECONOMIC_PROBE").as_deref() == Ok("1") {
+        params.palw_reorg_strict_economic_win = Some(ForkActivation::always());
+        eprintln!("[rfc18 probe] strict economic reorg rule armed only in the private fixture");
+    }
     // testnet-12's second model row is the 2M row, which takes no claim without a measured verification row (ADR-0152 §4-quater
     // V2, U-D1: `ClassDeadlineUnmeasured`, derived 13,995 DAA > 600). Validation 2026-10-17 found this source's card-2 sibling
     // refused for exactly that (its claim unrecorded, and as a chain candidate its block disqualified). Open it as on its flag day

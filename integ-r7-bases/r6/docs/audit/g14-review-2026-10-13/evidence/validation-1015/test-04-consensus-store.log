@@ -1,0 +1,32 @@
+warning: methods `len` and `clear` are never used
+   --> consensus/src/pipeline/virtual_processor/native_settlement.rs:126:19
+    |
+124 | impl NativeRowCache {
+    | ------------------- methods in this implementation
+125 |     #[cfg(test)]
+126 |     pub(super) fn len(&self) -> usize {
+    |                   ^^^
+...
+130 |     pub(super) fn clear(&mut self) {
+    |                   ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized] target(s) in 0.84s
+     Running unittests src/lib.rs (target/debug/deps/kaspa_consensus-fc27ac47b7168399)
+
+running 9 tests
+test model::stores::palw_state_v2::prefix_history_v1::tests::recovered_history_never_accepts_wrong_branch_unchanged_buffer_or_new_clock ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::native_cache_lease_gc_pages_include_skipped_entries_in_the_scan_budget ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::delayed_stale_fork_union_cannot_extend_or_recreate_an_irreversibly_expired_lease ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::paid_public_archive_survives_body_delta_pruning_and_reorg_selects_only_requested_head ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::native_cache_lease_union_invalidates_stale_gc_grant_without_extending_court_clock ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::verified_state_row_restoration_creates_preseed_hold_without_shortening_an_accepted_fork ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::recovered_native_record_keeps_original_acceptance_signature_head_and_retention ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::shared_cache_gc_bounds_all_scanned_rows_including_missing_metadata ... ok
+test model::stores::palw_state_v2::prefix_history_v1::tests::shared_cache_retention_unions_all_owners_and_forks_independently_of_seed_gc ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 921 filtered out; finished in 0.02s
+
+exit 0

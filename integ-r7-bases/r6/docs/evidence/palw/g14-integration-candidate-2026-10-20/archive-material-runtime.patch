@@ -1,0 +1,140 @@
+diff --git a/consensus/core/src/palw_court_archive_verify_v1.rs b/consensus/core/src/palw_court_archive_verify_v1.rs
+index a9c88ce5e..f06d68928 100644
+--- a/consensus/core/src/palw_court_archive_verify_v1.rs
++++ b/consensus/core/src/palw_court_archive_verify_v1.rs
+@@ -42,6 +42,38 @@ pub(super) fn inspection_io_error(stage:&str,error:std::io::Error)->PalwStateV2E
+     }else{refusal(format!("{stage}: {error}"))}
+ }
+ impl TransitionBuilder<'_> {
++    /// Retain only a missing precommitted chunk after active court termination.
++    /// This private material path admits no new declaration, clock, fulfilment,
++    /// penalty or financial release. A completed malformed object is evidence to
++    /// retain, not permission to punish its signer or to discard its last bytes.
++    #[allow(dead_code)]
++    pub(super) fn append_archived_close_chunk_v1(&mut self,id:Hash64,side:PalwCourtSideV1,index:u8,bytes:&[u8])
++        ->Result<(),PalwStateV2Error>{
++        let archive=self.state.court_end_archive_v1(id).ok_or_else(||refusal("court archive missing"))?;
++        archive.check_context(&self.state).map_err(refusal)?;
++        let group=archive.groups.get(&side).ok_or_else(||refusal("archived declaration missing"))?;
++        if archive.fulfilled_groups.contains(&side) || archive.applied_deposit_debits.contains_key(&side)
++            || index>=group.count || group.has(index) || bytes.is_empty() || bytes.len()>PALW_COURT_CLOSE_CHUNK_MAX_BYTES
++            || palw_court_close_chunk_digest_v1(bytes)!=group.chunk_digests[usize::from(index)]
++        {return Err(refusal("archive chunk is not missing declared material"));}
++        if self.native_writers_tracking_v1(){
++            let mut q=native_writers::NativeWriteQuoteV1::new("archive material append before copy and signature message");
++            q.copy(archive)?.exact::<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>(2)?
++                .exact::<u8>((2*std::mem::size_of::<usize>()+std::mem::align_of::<crate::palw_court_end_archive_v1::PendingCourtArchiveV1>()) as u64)?
++                .exact::<u8>(bytes.len() as u64)?.member::<u8,Vec<u8>>(1)?
++                .exact::<Hash64>(2*u64::from(group.count))?.exact::<u8>(256)?;
++            self.admit_native_write_v1(q)?;
++        }
++        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {
++            Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>return Err(refusal("original signed close receipt missing")),
++        };
++        receipt.check_context(&self.state).map_err(refusal)?;
++        let mut next=self.state.court_end_archive_v1(id).expect("validated archive").clone();
++        let group=next.groups.get_mut(&side).expect("validated side");
++        group.chunks.insert(index,bytes.to_vec());group.present|=1u64<<index;
++        self.write_staged_row_v1(Key::CourtEndArchive(id),Some(Row::CourtEndArchive(Box::new(next).into())))
++    }
++
+     /// A private verifier, not a public ingestion or paid-admission endpoint.
+     /// The candidate can add only the precommitted missing bytes. No clock,
+     /// policy, signature, verdict, contract or previously accepted byte changes.
+diff --git a/consensus/core/src/palw_court_end_archive_v1.rs b/consensus/core/src/palw_court_end_archive_v1.rs
+index cc06a56a9..4ae0fb187 100644
+--- a/consensus/core/src/palw_court_end_archive_v1.rs
++++ b/consensus/core/src/palw_court_end_archive_v1.rs
+@@ -41,6 +41,29 @@ pub enum CourtEndDispositionV1 {
+     CompletedAssemblyFault(PalwCourtSideV1), RelatedNativeTransition,
+ }
+ impl PendingCourtArchiveV1 {
++    /// Forward material append only. Neither completion nor elapsed time is a
++    /// settlement capability: every contract, disposition and nominal hold stays.
++    pub(crate) fn check_material_extension(&self, old:&Self)->Result<(),String>{
++        if self.version!=old.version || self.session_id!=old.session_id
++            || self.service_profile_id!=old.service_profile_id || self.archive_profile_id!=old.archive_profile_id
++            || self.allocation_id!=old.allocation_id || self.source_id!=old.source_id || self.producer!=old.producer
++            || self.material_until_daa!=old.material_until_daa || self.session!=old.session
++            || self.court_stake_nominal!=old.court_stake_nominal || self.tir_phase!=old.tir_phase
++            || self.applied_deposit_debits!=old.applied_deposit_debits || self.fulfilled_groups!=old.fulfilled_groups
++            || self.evidence!=old.evidence || self.groups.len()!=old.groups.len()
++        {return Err("archive material append changes original contract or responsibility".into());}
++        for (side,previous) in &old.groups {
++            let next=self.groups.get(side).ok_or("archive material append removes a side")?;
++            if next.declarer!=previous.declarer || next.count!=previous.count || next.chunk_digests!=previous.chunk_digests
++                || next.close_digest!=previous.close_digest || next.verdict!=previous.verdict
++                || next.declared_daa!=previous.declared_daa || next.assembly_deadline_daa!=previous.assembly_deadline_daa
++                || next.deposit_outpoint!=previous.deposit_outpoint || next.deposit!=previous.deposit
++                || previous.present & !next.present!=0
++                || previous.chunks.iter().any(|(i,bytes)|next.chunks.get(i)!=Some(bytes))
++            {return Err("archive material append changes accepted contract or prefix".into());}
++        }
++        self.check(&Key::CourtEndArchive(self.session_id))
++    }
+     pub fn adjudication(&self)->CourtEndDispositionV1 {
+         if let Some(side)=self.applied_deposit_debits.keys().next(){return CourtEndDispositionV1::CompletedAssemblyFault(*side);}
+         match self.evidence.as_ref(){
+diff --git a/consensus/core/src/palw_staged_court_fold_v1.rs b/consensus/core/src/palw_staged_court_fold_v1.rs
+index 65fdc1a29..5da8f9983 100644
+--- a/consensus/core/src/palw_staged_court_fold_v1.rs
++++ b/consensus/core/src/palw_staged_court_fold_v1.rs
+@@ -992,12 +992,15 @@ impl TransitionBuilder<'_> {
+             r.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+         }
+         if let PalwStagedCourtKeyV1::CourtEndArchive(_) = key {
+-            if let Some(old) = self.state.staged_court_row_v1(&key) {
+-                if Some(old) != new.as_ref() { return Err(PalwStateV2Error::CarriageInconsistent("unresolved court archive is immutable".into())); }
+-            }
+             let Some(PalwStagedCourtRowV1::CourtEndArchive(a)) = &new else {
+                 return Err(PalwStateV2Error::CarriageInconsistent("court archive cannot be removed or retyped".into()));
+             };
++            if let Some(old) = self.state.staged_court_row_v1(&key) {
++                let PalwStagedCourtRowV1::CourtEndArchive(old)=old else {
++                    return Err(PalwStateV2Error::CarriageInconsistent("court archive foreign row".into()));
++                };
++                a.check_material_extension(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
++            }
+             a.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+         }
+         match &new {
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index d1e54a439..8d38a8d2c 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -3490,6 +3490,35 @@ mod conviction_e2e_tests {
+             let root=b.state.state_root();let journal=b.entries.len();
+             assert_eq!(b.verify_archived_close_v1(id,side,&candidate).is_ok(),!wrong_verdict);
+             assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
++            // After TTL, relay the signed missing material without changing any
++            // original deadline, adjudication, balance or nominal responsibility.
++            let before=b.state.court_end_archive_v1(id).unwrap().clone();
++            let exposure=b.state.court_archive_pending_exposure_v1(&outsider());
++            let bond=b.state.bond(&outsider()).unwrap().clone();
++            let claim=b.state.claim(&frame.plan_v1().original_claim).unwrap().clone();
++            for (index,bytes) in [(0,raw[..split].to_vec()),(2,raw[split..].to_vec()),(1,vec![]),(1,vec![0xAB])]{
++                assert!(b.append_archived_close_chunk_v1(id,side,index,&bytes).is_err());
++                assert_eq!(b.state.state_root(),root);assert_eq!(b.entries.len(),journal);
++            }
++            b.append_archived_close_chunk_v1(id,side,1,&raw[split..]).unwrap();
++            let after=b.state.court_end_archive_v1(id).unwrap();
++            assert_eq!(after.groups[&side],candidate);after.check_material_extension(&before).unwrap();
++            assert!(!after.fulfilled_groups.contains(&side));assert!(!after.applied_deposit_debits.contains_key(&side));
++            assert_eq!(b.state.court_archive_pending_exposure_v1(&outsider()),exposure);
++            assert_eq!(b.state.bond(&outsider()),Some(&bond));assert_eq!(b.state.claim(&frame.plan_v1().original_claim),Some(&claim));
++            let appended=b.state.state_root();let entries=b.entries.len();
++            assert!(b.append_archived_close_chunk_v1(id,side,1,&raw[split..]).is_err());
++            for mutate in 0..5 {
++                let mut changed=b.state.court_end_archive_v1(id).unwrap().clone();
++                match mutate {0=>changed.material_until_daa+=1,1=>{changed.fulfilled_groups.insert(side);},
++                    2=>{changed.groups.get_mut(&side).unwrap().chunks.remove(&1);changed.groups.get_mut(&side).unwrap().present^=2;},
++                    3=>changed.groups.get_mut(&side).unwrap().deposit+=1,_=>changed.court_stake_nominal+=1}
++                assert!(b.write_staged_row_v1(Key::CourtEndArchive(id),Some(Row::CourtEndArchive(Box::new(changed).into()))).is_err());
++                assert_eq!(b.state.state_root(),appended);assert_eq!(b.entries.len(),entries);
++            }
++            assert_eq!(b.verify_archived_close_v1(id,side,&candidate).is_ok(),!wrong_verdict);
++            let tip=*b.state.last_point().unwrap();
++            archive_roundtrip(&mut b,&params,&frame,id,tip,state.state_root());
+         }}}
+     }
+ 

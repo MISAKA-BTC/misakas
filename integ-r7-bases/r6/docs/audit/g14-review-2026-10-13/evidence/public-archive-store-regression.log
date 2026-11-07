@@ -1,0 +1,6 @@
+
+running 1 test
+test model::stores::palw_state_v2::prefix_history_v1::tests::paid_public_archive_survives_body_delta_pruning_and_reorg_selects_only_requested_head ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 985 filtered out; finished in 0.07s
+

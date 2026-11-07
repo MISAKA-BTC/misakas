@@ -1,0 +1,9 @@
+[package]
+name = "redteam"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+kaspa-consensus-core = { path = "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet/460defeb-125d-4763-9250-04db46ec225a/scratchpad/wt-adr0124/consensus/core" }
+
+[workspace]

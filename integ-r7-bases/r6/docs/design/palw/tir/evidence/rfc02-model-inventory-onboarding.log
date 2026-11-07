@@ -1,0 +1,13 @@
+
+running 9 tests
+test palw_onboarding_v1::tests::the_tables_are_the_allocated_ones_and_a_binding_reads_its_state_from_the_clock ... ok
+test palw_onboarding_v1::tests::the_onboarding_object_tags_are_the_allocated_ones ... ok
+test palw_onboarding_tile_v3::tests::attacker_lengths_are_refused_before_any_field_body_is_read ... ok
+test palw_onboarding_tile_v3::tests::bounded_tile_wire_matches_kernel_leaf_at_all_dtype_widths ... ok
+test palw_onboarding_v1::tests::the_envelope_names_the_fork_id_fired_digest_which_a_future_fence_does_not_move ... ok
+test palw_onboarding_tile_v3::tests::authenticated_wrong_metadata_is_a_binding_fault_and_legacy_wire_is_unchanged ... ok
+test palw_onboarding_tile_v3::tests::tile_court_authenticates_both_roots_and_refuses_copied_or_disjoint_coordinates ... ok
+test palw_onboarding_tile_v3::tests::tile_court_compares_exact_byte_coordinates_across_ranks_widths_and_piece_boundaries ... ok
+test palw_onboarding_tile_v3::tests::strided_column_tiles_use_exact_indices_and_convict_a_forged_column_root ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 3611 filtered out; finished in 2.18s

@@ -1,0 +1,157 @@
+{
+  "status": "FAIL",
+  "artifactDirectory": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-rfc12-bootstrap-dy4ju2rr",
+  "resourceLimits": {
+    "schemaVersion": 1,
+    "kind": "rfc12-construction-resource-bounds",
+    "maximumOwnedProcessRssKiB": 2097152,
+    "maximumOwnedDatabaseLogicalBytes": 2147483648,
+    "maximumProbeMs": 2000,
+    "maximumFactorySeconds": 180,
+    "samplePeriodMs": 250
+  },
+  "resourceLimitsMet": false,
+  "maximumCarrierFeeSompi": 100000000,
+  "nativeRegistrationBindingMeasured": false,
+  "completeCheckRequested": false,
+  "maximumBindingReservationSompi": null,
+  "maximumCompleteCheckFeeSompi": null,
+  "totalWorkflowTimeoutSeconds": 300,
+  "completeCheckMeasured": false,
+  "matureUsefulWorkMeasured": false,
+  "prunedIbdMeasured": false,
+  "marketFillsMeasured": false,
+  "release100kMeasured": false,
+  "fullRfc12SecurityApproval": false,
+  "factorySeconds": 7.9101795,
+  "bootstrap": {
+    "artifact": "wide128-code-fixture.palwtir",
+    "artifactBinding": "artifact-binding.borsh",
+    "artifactBindingIncluded": false,
+    "artifactFileDigest": "d92570d188a2c48f456c7410e23862ab479c20c3192d63a567dad6df416a3fd8df013c346b9e434db9482150c0c66381f5d000a51c39995975892154bd5477e9",
+    "artifactRoot": "1fc3fca3cb5afaf3d35aaec4da855e6b3b3ebd7e9177f70411ffcac433fc025dc3b53bd0302044af33dd7fdf02b23e5ba93d434011cd87f901d33c4cda7d7c3e",
+    "bindingReservationSompi": "10000000000",
+    "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:0",
+    "bondKeyFile": "bond.seed",
+    "class": "1e0b6758a1de11ba5fd7c05f0ff7d30d4ff1100bc830606f6705a931c06166162427fb6330ebd5e24ea92c05594d497d1cff2823512e2d57b4dafa45cacfb970",
+    "commitment": "code-fixture-commitment.borsh",
+    "commitmentScope": "code-fixture-provenance.json",
+    "completeCheckFeeSompi": "100000000",
+    "completeCheckPassed": false,
+    "consensusParamsId": "0cd00b70e9c867075732992efabf27b499cbd65cd6c9930045b8574e2c6503a6",
+    "envelopeValidFromDaa": 1,
+    "envelopeValidUntilDaa": 32,
+    "floorClass": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+    "fundingAddress": "misakatest:q2v88u2pjzr7jsut6p8p5rx6w8nuenm4tj02ljrpuq5hfkzkk2shtxfl5az4uzc5dvmt3zmenjy9u8x7rsds6yvgenkx83yj0z79g78grweavgzu",
+    "fundingKeyFile": "funding.seed",
+    "genesis": "415a7d75eeed9875de48547361d1cb707c9ae90d6aea74f5906ef7d30e6ee19a36f2c1dad3f878855b8d9d3b37b36c4f14a9824f38a5b83536ac11a87b76a2a2",
+    "initialTarget": "1218938590613259230285389391303016447",
+    "kernelClass": "fea5c2ea91b817886b421b7e3be39008512ab71fe68dfad5411d06225db30bcfc13acdb346bec69d7d536852f6e38a7a12f81988eafd3811a3fa3e630b7084e0",
+    "kernelParamRoot": "3bedeb2ef217f0998457a7dfe09ab6929366fc474ff9af9b800116779dead6165f63e41ed5013a93c05988ed2e5e9734049d2f464eea81b26203e7a96776f77f",
+    "kind": "rfc12-private-complete-bootstrap-file-fixture",
+    "matureUsefulWorkMeasured": false,
+    "maxPositions": 64,
+    "nativeRegistration": "native-registration.borsh",
+    "nativeRegistrationIncluded": false,
+    "networkDomain": "c8883195d7a41bef46c29cfda0a8bb6fa00441fc9bc5de5c5debbb193b489ecbd2390df6fe1637dc5021593d200a28bb8cec0de275fd428fa6c997c051410e50",
+    "pricingScope": "exact factory genesis; no live retarget claim",
+    "producerFeeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:41",
+    "producerPayAddress": "misakatest:qgmawsn5hf59dnvw9c686fxlhgsvf43e9qsfhhw492s6k9kfmgu060wkfns8jkt7cq28zzlwprh6hp9jkdy70a2vsj86wkz0kn0k807dpzetck5u",
+    "release100kMeasured": false,
+    "releaseApproval": false,
+    "saltId": "0764e0611e6146f0",
+    "seats": [
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:0",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:41",
+        "keyFile": "bond.seed",
+        "payAddress": "misakatest:qgmawsn5hf59dnvw9c686fxlhgsvf43e9qsfhhw492s6k9kfmgu060wkfns8jkt7cq28zzlwprh6hp9jkdy70a2vsj86wkz0kn0k807dpzetck5u"
+      },
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:1",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:42",
+        "keyFile": "bond-1.seed",
+        "payAddress": "misakatest:qfzn82kxwth3chweskpu58fdrx69crt6s65l2vc622gnmyw0kkhvge9fvwsn55v72mmgcx0ywzygkeplt47d5hqlfpf284686ff6mzdqpyen3a5t"
+      },
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:2",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:43",
+        "keyFile": "bond-2.seed",
+        "payAddress": "misakatest:qg3nkx5ktla0ykfw9enl3le8addhv209e4ww05eaxhy65y6tzaeydhfue6eac3s7qgsca665g5n3kzetr0hd5zst8ny5gtxftrt8226jl2x7r39l"
+      },
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:3",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:44",
+        "keyFile": "bond-3.seed",
+        "payAddress": "misakatest:qtl28y9khje3d03ll359f5ummgusr4ycrvxldhjdgtj533mef94p8j5wf3fvz9lvr5vnnd3n4serkpenltskythcz43m9rs7lrvt2sk2ftgmg6vt"
+      },
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:4",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:45",
+        "keyFile": "bond-4.seed",
+        "payAddress": "misakatest:qgcfkpmnzkhxhejl5me3rq3dtv9u7wy0km3ysv5xg2deaac2enz2yz7uh45vt7daeazcdnu80gdwx89ahw2j2lvyyjyrfrfmnq54gax79vx7h648"
+      },
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:5",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:46",
+        "keyFile": "bond-5.seed",
+        "payAddress": "misakatest:qg2x72pmwmnhyk27gyfrla7vdg8p0eggh8ekacxgdhll5q9zpkffsx5jay0tx8gu8ve8lnnmc2sut7x8gq5l22nc7pqwl4a56yjrrm88aatdajcw"
+      },
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:6",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:47",
+        "keyFile": "bond-6.seed",
+        "payAddress": "misakatest:qtu2e82zu6fy2tmcwp9kkffjy42gcctwu7hsalpeyvcz4eekzw4wmvzncqekwetpwgvrgsk0xz8scrjkmgfr0gnh0alqlw7u4yxw89h686l4cyfy"
+      },
+      {
+        "bond": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:7",
+        "feeOutpoint": "cc3be57fb1fa3f75af8bfb1dacfaea03c43ebb954de3b1bc4d896ed32956909b96284c63badcf1cd28fec9f7257074555821549d9c1f8f57390fbd7a34d78d8a:48",
+        "keyFile": "bond-7.seed",
+        "payAddress": "misakatest:q2qc6h2sx8chs3n7lm046tyr5kk6xpnzvz6fxyw5etadj6y4ph4w2uleszwlyyujp9wp7zh97cj3tp6wnt6cgjsxgqexlaq4crzj6egwelagvmy8"
+      }
+    ],
+    "securitySoundnessMeasured": false,
+    "signedRegistration": "signed-registration.borsh",
+    "skipProofOfWork": false,
+    "slashValuePerPwu": "5",
+    "statementRoot": "dd015ca153989471d31c471a710fcb9beb183d212f4d2efd782504b582708a15cb212caa706614d0aaf309e307beaa1479c9736bf5686623b75c0f7ec8d19907",
+    "trainedModelVerified": false,
+    "verificationPlanRoot": "5b5ebe83d34d59a79b971d774af77f522733a2be93cac85ce7fc6e8c610739aa0775d72a2e3e91882ee65f7a731080a194ad6d3d6eddb226bee567a4f177b067",
+    "version": 1
+  },
+  "reason": "A process exited 101; inspect its preserved log",
+  "lastNodeStatuses": {
+    "A": {
+      "error": "[Errno 61] Connection refused"
+    }
+  },
+  "sampledOwnedResources": {
+    "samplePeriodMs": 250,
+    "ownedChildren": {
+      "MANIFEST": {
+        "sampledPeakRssKiB": 39792,
+        "lastRssKiB": 39792,
+        "samples": 29,
+        "launches": 1,
+        "lastPid": 57790
+      },
+      "A": {
+        "sampledPeakRssKiB": 99584,
+        "lastRssKiB": 99584,
+        "samples": 1043,
+        "launches": 1,
+        "lastPid": 57836
+      }
+    },
+    "observationFailures": 0,
+    "violation": null,
+    "osHardQuotaApplied": false,
+    "completePeakRssMeasured": false
+  },
+  "ownedDatabaseLogicalBytes": {
+    "A": 212462,
+    "B": 0,
+    "JOIN": 0
+  },
+  "probeLatenciesMs": []
+}

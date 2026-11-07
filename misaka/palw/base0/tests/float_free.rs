@@ -143,6 +143,11 @@ const CONSENSUS_PATH: &[&str] = &[
     // what they hand the engine decides the K/V state a commitment's rows are computed from, so they are scanned, not exempt.
     "src/prefix_cache.rs",
     "src/decode_scheduler.rs",
+    // Worker cancellation, retained integer evidence and STEP hashing affect committed runs.
+    "src/cancel.rs",
+    "src/flat_public_source.rs",
+    "src/gdn_evidence_v2.rs",
+    "src/step_tile_hasher.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
@@ -404,6 +409,7 @@ fn scan(path: &Path, label: &str) -> (Vec<Finding>, usize, usize) {
             }
             continue;
         }
+        let was_in_string = in_string;
         let code = code_only(raw, &mut in_string);
         assert!(
             !has_raw_string(&code),
@@ -469,6 +475,19 @@ fn the_execution_path_contains_no_float() {
 /// The scan is only as good as its file list. A module added to `src/` that appears in neither
 /// list is unclassified, and unclassified means unscanned — so it fails here rather than passing
 /// quietly in the test above.
+#[test]
+fn raw_strings_in_test_modules_do_not_hide_later_execution_code() {
+    let path = std::env::temp_dir().join(format!("misaka-float-scan-{}.rs", std::process::id()));
+    std::fs::write(&path, "#[cfg(test)]\nmod tests {\n    let fixture = r#\"1.25\"#;\n}\nfn shipped() { let x = 1.0f32; }\n").unwrap();
+    let (findings, _, _) = scan(&path, "fixture");
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].line, 5, "code after a test module must still be scanned");
+    std::fs::write(&path, "fn shipped() { let raw = r#\"1.25\"#; }\n").unwrap();
+    let rejected = std::panic::catch_unwind(|| scan(&path, "fixture")).is_err();
+    std::fs::remove_file(path).unwrap();
+    assert!(rejected, "unsupported raw strings in shipped code must still fail closed");
+}
+
 #[test]
 fn every_source_file_is_classified() {
     let root = crate_root();

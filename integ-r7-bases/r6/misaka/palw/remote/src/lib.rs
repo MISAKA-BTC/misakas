@@ -1,0 +1,92 @@
+//! **RFC-0009 — the client half of a PALW miner that runs no `kaspad`.**
+//!
+//! A miner that has computed a claim and holds the bond key needs four things from the network and nothing else: a *view* of the
+//! chain it can trust enough to start an expensive inference, a way to put its **already signed** bytes on the chain through any
+//! node, a way to see what became of them across reorgs, and (stage B) a way to leave its evidence with someone else. This crate is
+//! those four, as pure functions and traits. It owns no socket and no runtime: the binaries (`misaka-palw-fp-rail --relay`, a
+//! future remote attempt miner) adapt their wRPC clients to [`view::ChainView`], [`relay::RelayNode`] and
+//! [`template::BlockNode`].
+//!
+//! # What this does and does not give a miner
+//!
+//! * A *quorum* of independent nodes agreeing with a pinned checkpoint is an **operational** defence (RFC §6). It is not a light
+//!   client: colluding or co-hosted nodes defeat it, and a header alone cannot prove a bond, a class or a fence (stage D).
+//! * [`attempt`] mounts an attempt on a quorum-checked template with the miner's OWN executor and signer: the node supplies a template and
+//!   relays the finished block, and never sees the inference, the key, or a signature made before the draw is won.
+//! * An accepted relay is **not** inclusion: [`track::ClaimTracker`] follows tx id, claim id, block, licence, challenge window and
+//!   `Final`/void separately and walks backwards on a reorg. [`resubmit`] remembers an ACK between two polls and, when no
+//!   independent observer confirms it within the bound, sends the SAME bytes through another relay (idempotent: one tx id, one fee, one
+//!   claim).
+//! * Stage A0's [`register`] adds a model without a node: a quote that names every cost by its payer, a gate that stops
+//!   signing when anything moved, and a tracker that keeps relay ACK, inclusion and the registry's accepted row apart.
+//! * Stage B's [`evidence`] gives the Panel somewhere other than the miner's PC to read from; a storage receipt is a promise, not a
+//!   proof of future availability, and nothing here moves a slash.
+//!
+//! Domain strings are `misaka-palw/remote/...`; none of them is a consensus rule.
+
+pub mod attempt;
+pub mod bondreg;
+pub mod bundle;
+pub mod checkpoint;
+pub mod evidence;
+pub mod l2;
+/// RFC09: the fork choice under rule E + Gate C from op 203 v2 committed leaves (the full node's own readers).
+pub mod l2_rule_e;
+pub mod miner;
+pub mod proof;
+/// Lane DA16: the public material transport — artifacts (both roots of a binding) and claim material (kernel positions, V2 held units).
+pub mod public_material;
+/// Lane G14-R: the kernel route's public prosecution planner — what to send next, rebuilt from public reads (restart, reorg, IBD, RPC).
+pub mod pursuit;
+pub mod register;
+pub mod relay;
+pub mod resubmit;
+pub mod template;
+pub mod track;
+pub mod transport;
+pub mod trust;
+pub mod verify;
+pub mod view;
+
+use kaspa_hashes::Hash64;
+
+pub(crate) fn keyed(domain: &[u8]) -> blake2b_simd::State {
+    blake2b_simd::Params::new().hash_length(64).key(domain).to_state()
+}
+
+pub(crate) fn finish(state: blake2b_simd::State) -> Hash64 {
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+pub(crate) fn put_len(state: &mut blake2b_simd::State, bytes: &[u8]) {
+    state.update(&(bytes.len() as u64).to_le_bytes());
+    state.update(bytes);
+}
+
+pub mod monetary_material;
+
+/// RFC-0008 covenant (2026-10-15 round 3): the provider-side GC janitor over the native finality witness.
+pub mod monetary_material_gc;
+
+pub mod material_recovery_ack_v2;
+pub mod monetary_material_rpc;
+
+pub mod native_ready_v3;
+
+/// RFC-0008 PAV3 (2026-10-15 round 3): the integrity-authenticated producer↔provider envelope between hosts.
+pub mod provider_transport_v1;
+
+/// RFC-0009 × RFC-0008 PAV3: the producer's provider exchange (session open, manifest fetch+verify, signature exchange).
+pub mod native_custody_exchange_v3;
+
+// Real typed kernel execution fixtures reused by the provider GC consumer tests.
+// They do not establish a native finality witness or independent remote hosts.
+#[cfg(test)]
+#[path = "../../kernel/tests/common/mod.rs"]
+mod monetary_gc_kernel_fixture;
+
+pub mod native_carrier_queue_v4;
+
+pub mod kernel_material_context_v4;

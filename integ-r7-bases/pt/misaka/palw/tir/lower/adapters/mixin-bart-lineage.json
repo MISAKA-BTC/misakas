@@ -1,0 +1,331 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-bart-lineage",
+  "kind": "encdec",
+  "extends": [
+    "encdec-frame"
+  ],
+  "doc": "A mixin: the BART lineage (BART, mBART, Marian, Pegasus, and the families derived from them): LayerNorm with a bias, ungated FFNs (fc1/fc2), biased projections, softmax scores scaled by head_dim^-1/2, a tied head plus final_logits_bias, positions either learned at pos + 2 (BART, mBART) or sinusoidal (Marian: computed; Pegasus: the checkpoint's table), `scale_embedding` as sqrt(d_model). A family sets `learned_positions` and `pre_norm_stack` (post-norm with layernorm_embedding, or pre-norm with final layer norms) and may list more `ignored` prefixes.",
+  "config": {
+    "defaults": {
+      "scale_embedding": false,
+      "activation_function": "gelu"
+    },
+    "inert": [
+      "decoder_layerdrop",
+      "encoder_layerdrop",
+      "tie_word_embeddings",
+      "num_hidden_layers",
+      "classif_dropout",
+      "normalize_before",
+      "normalize_embedding",
+      "add_final_layer_norm",
+      "add_bias_logits",
+      "static_position_embeddings",
+      "extra_pos_embeddings",
+      "force_bos_token_to_be_generated",
+      "output_past",
+      "gradient_checkpointing",
+      "encoder_layerdrop",
+      "decoder_layerdrop",
+      "is_encoder_decoder"
+    ]
+  },
+  "vars": [
+    {
+      "name": "learned_positions",
+      "value": false
+    },
+    {
+      "name": "pre_norm_stack",
+      "value": false
+    },
+    {
+      "name": "ignored",
+      "value": [
+        "model.encoder.embed_tokens.",
+        "model.decoder.embed_tokens."
+      ]
+    },
+    {
+      "name": "vocab",
+      "value": {
+        "$cfg": "vocab_size"
+      }
+    },
+    {
+      "name": "d",
+      "value": {
+        "$cfg": "d_model"
+      }
+    },
+    {
+      "name": "enc_heads",
+      "value": {
+        "$cfg": "encoder_attention_heads"
+      }
+    },
+    {
+      "name": "dec_heads",
+      "value": {
+        "$cfg": "decoder_attention_heads"
+      }
+    },
+    {
+      "name": "heads_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "enc_heads"
+                  },
+                  0
+                ]
+              },
+              {
+                "$gt": [
+                  {
+                    "$var": "dec_heads"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "d"
+                      },
+                      {
+                        "$var": "enc_heads"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "d"
+                      },
+                      {
+                        "$var": "dec_heads"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              }
+            ]
+          },
+          "d_model does not split into the attention heads"
+        ]
+      }
+    },
+    {
+      "name": "enc_head_dim",
+      "value": {
+        "$idiv": [
+          {
+            "$var": "d"
+          },
+          {
+            "$var": "enc_heads"
+          }
+        ]
+      }
+    },
+    {
+      "name": "dec_head_dim",
+      "value": {
+        "$idiv": [
+          {
+            "$var": "d"
+          },
+          {
+            "$var": "dec_heads"
+          }
+        ]
+      }
+    },
+    {
+      "name": "enc_layers",
+      "value": {
+        "$cfg": "encoder_layers"
+      }
+    },
+    {
+      "name": "dec_layers",
+      "value": {
+        "$cfg": "decoder_layers"
+      }
+    },
+    {
+      "name": "enc_ffn",
+      "value": {
+        "$cfg": "encoder_ffn_dim"
+      }
+    },
+    {
+      "name": "dec_ffn",
+      "value": {
+        "$cfg": "decoder_ffn_dim"
+      }
+    },
+    {
+      "name": "act",
+      "value": {
+        "$act": {
+          "$cfg": "activation_function"
+        }
+      }
+    },
+    {
+      "name": "max_pos",
+      "value": {
+        "$cfg": "max_position_embeddings"
+      }
+    },
+    {
+      "name": "rms",
+      "value": false
+    },
+    {
+      "name": "eps",
+      "value": 1e-05
+    },
+    {
+      "name": "bias",
+      "value": true
+    },
+    {
+      "name": "pre_norm",
+      "value": {
+        "$var": "pre_norm_stack"
+      }
+    },
+    {
+      "name": "embed_scale",
+      "value": {
+        "$if": [
+          {
+            "$cfg": "scale_embedding"
+          },
+          {
+            "$sqrt": {
+              "$var": "d"
+            }
+          },
+          1.0
+        ]
+      }
+    },
+    {
+      "name": "embed_norm",
+      "value": {
+        "$var": "learned_positions"
+      }
+    },
+    {
+      "name": "final_norm",
+      "value": {
+        "$var": "pre_norm_stack"
+      }
+    },
+    {
+      "name": "positions",
+      "value": {
+        "$if": [
+          {
+            "$var": "learned_positions"
+          },
+          {
+            "Learned": {
+              "rows": {
+                "$add": [
+                  {
+                    "$var": "max_pos"
+                  },
+                  2
+                ]
+              },
+              "offset": 2
+            }
+          },
+          {
+            "Sinusoidal": {
+              "rows": {
+                "$var": "max_pos"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "attn_scale",
+      "value": {
+        "$pow": [
+          {
+            "$var": "dec_head_dim"
+          },
+          -0.5
+        ]
+      }
+    },
+    {
+      "name": "logits_bias",
+      "value": true
+    },
+    {
+      "name": "names",
+      "value": {
+        "shared": "model.shared.weight",
+        "qkvo": [
+          "q_proj",
+          "k_proj",
+          "v_proj",
+          "out_proj"
+        ],
+        "enc": {
+          "prefix": "model.encoder.",
+          "layer": "model.encoder.layers.{L}.",
+          "self_attn": "self_attn",
+          "self_norm": "self_attn_layer_norm",
+          "ffn_norm": "final_layer_norm",
+          "ffn_up": "fc1",
+          "ffn_down": "fc2",
+          "embed_norm": "layernorm_embedding",
+          "final_norm": "layer_norm",
+          "positions": "embed_positions"
+        },
+        "dec": {
+          "prefix": "model.decoder.",
+          "layer": "model.decoder.layers.{L}.",
+          "self_attn": "self_attn",
+          "self_norm": "self_attn_layer_norm",
+          "ffn_norm": "final_layer_norm",
+          "ffn_up": "fc1",
+          "ffn_down": "fc2",
+          "embed_norm": "layernorm_embedding",
+          "final_norm": "layer_norm",
+          "positions": "embed_positions",
+          "cross_attn": "encoder_attn",
+          "cross_norm": "encoder_attn_layer_norm"
+        },
+        "lm_head": "lm_head.weight",
+        "logits_bias": "final_logits_bias",
+        "ignored": {
+          "$var": "ignored"
+        }
+      }
+    }
+  ]
+}

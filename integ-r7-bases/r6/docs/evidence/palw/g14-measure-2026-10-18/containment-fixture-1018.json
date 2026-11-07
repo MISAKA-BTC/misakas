@@ -1,0 +1,75 @@
+{
+  "classes": [
+    {
+      "class": "dense-gqa-2layer",
+      "disputed_trials": 218,
+      "operands_checked": 1099,
+      "step_leaves": 218
+    },
+    {
+      "class": "gdn-k2-v4-grouped",
+      "disputed_trials": 430,
+      "operands_checked": 3324,
+      "step_leaves": 430
+    },
+    {
+      "class": "mamba2",
+      "disputed_trials": 183,
+      "operands_checked": 1140,
+      "step_leaves": 183
+    },
+    {
+      "class": "moe-top2-shared",
+      "disputed_trials": 96,
+      "operands_checked": 210,
+      "step_leaves": 96
+    },
+    {
+      "class": "sliding-global",
+      "disputed_trials": 306,
+      "operands_checked": 1316,
+      "step_leaves": 306
+    },
+    {
+      "class": "corpus dense",
+      "disputed_trials": 218,
+      "operands_checked": 1099,
+      "step_leaves": 218
+    },
+    {
+      "class": "corpus sliding",
+      "disputed_trials": 306,
+      "operands_checked": 1316,
+      "step_leaves": 306
+    },
+    {
+      "class": "corpus gdn",
+      "disputed_trials": 430,
+      "operands_checked": 3324,
+      "step_leaves": 430
+    },
+    {
+      "class": "corpus mamba2",
+      "disputed_trials": 183,
+      "operands_checked": 1140,
+      "step_leaves": 183
+    },
+    {
+      "class": "corpus moe",
+      "disputed_trials": 96,
+      "operands_checked": 210,
+      "step_leaves": 96
+    },
+    {
+      "class": "h-window-sum",
+      "disputed_trials": 117,
+      "operands_checked": 204,
+      "step_leaves": 117
+    }
+  ],
+  "contiguous_history_tiles": 20,
+  "hist_operands": 1411,
+  "operands": 14382,
+  "state_operands": 4132,
+  "trials": 2583
+}

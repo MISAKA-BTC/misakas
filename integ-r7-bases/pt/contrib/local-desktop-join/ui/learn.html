@@ -1,0 +1,1255 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MISAKA learning guide</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --surface: #ffffff;
+      --soft: #fbfcfe;
+      --line: #d9e0ea;
+      --text: #172033;
+      --muted: #637083;
+      --ink: #0f172a;
+      --blue: #2563eb;
+      --green: #148a5b;
+      --amber: #b7791f;
+      --red: #c2412d;
+      --shadow: 0 12px 30px rgba(17, 24, 39, 0.08);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { overflow-x: hidden; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+    button, input, a { font: inherit; }
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.94em;
+      background: #eef3fb;
+      border: 1px solid #dce5f1;
+      border-radius: 6px;
+      padding: 1px 5px;
+      overflow-wrap: anywhere;
+    }
+
+    .shell {
+      width: min(1440px, 100%);
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 0 18px;
+    }
+    .title { min-width: 0; }
+    h1 {
+      margin: 0;
+      color: var(--ink);
+      font-size: clamp(24px, 3vw, 34px);
+      line-height: 1.15;
+    }
+    .subtitle {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+      max-width: 880px;
+    }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 12px;
+      cursor: pointer;
+      white-space: nowrap;
+      line-height: 1.2;
+      text-align: center;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+    }
+    .button.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #ffffff;
+    }
+    .button.active {
+      border-color: var(--blue);
+      background: #e9f0ff;
+      color: var(--blue);
+      font-weight: 750;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.75fr);
+      gap: 18px;
+      align-items: start;
+    }
+    .layout > *, aside, .panel, .term {
+      min-width: 0;
+    }
+    .band {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .band + .band { margin-top: 18px; }
+    .band-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 16px 18px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .band-header > div { min-width: 0; }
+    .band-header h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: 17px;
+      line-height: 1.25;
+    }
+    .band-header p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 86px;
+      min-height: 30px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+    .ok { background: #e6f6ef; color: var(--green); }
+    .wait { background: #fff4d9; color: var(--amber); }
+    .bad { background: #fde9e5; color: var(--red); }
+    .info { background: #e9f0ff; color: var(--blue); }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px;
+    }
+    .state-card {
+      min-height: 112px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+    }
+    .state-card label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .state-card strong {
+      display: block;
+      margin-top: 8px;
+      color: var(--ink);
+      font-size: 21px;
+      line-height: 1.15;
+      overflow-wrap: anywhere;
+    }
+    .state-card p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .flow {
+      padding: 14px;
+    }
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .flow-step {
+      min-height: 132px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      position: relative;
+    }
+    .flow-step::after {
+      content: "";
+      position: absolute;
+      top: 28px;
+      right: -9px;
+      width: 8px;
+      height: 2px;
+      background: var(--line);
+    }
+    .flow-step:last-child::after { display: none; }
+    .flow-icon {
+      display: inline-grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: #e9f0ff;
+      color: var(--blue);
+      font-size: 13px;
+      font-weight: 850;
+      line-height: 1;
+    }
+    .flow-step h3 {
+      margin: 10px 0 5px;
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.25;
+    }
+    .flow-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .controls {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fbfe;
+    }
+    .search-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+    }
+    input[type="search"] {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 12px;
+      outline: none;
+    }
+    input[type="search"]:focus {
+      border-color: var(--blue);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .chip {
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 6px 11px;
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1.2;
+    }
+    .chip.active {
+      border-color: var(--blue);
+      background: #e9f0ff;
+      color: var(--blue);
+      font-weight: 750;
+    }
+    .term-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 14px;
+    }
+    .term {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      padding: 14px;
+    }
+    .term h3 {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 0;
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.3;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      background: #eef3fb;
+      color: #475569;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+    .term p {
+      margin: 10px 0 0;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .term .plain {
+      color: var(--ink);
+      font-weight: 650;
+    }
+    .term .check {
+      color: var(--muted);
+    }
+
+    .panel-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      padding: 14px;
+    }
+    .panel {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+    }
+    .panel h3 {
+      margin: 0 0 8px;
+      color: var(--ink);
+      font-size: 15px;
+      line-height: 1.3;
+    }
+    .panel p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      overflow-wrap: anywhere;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+    .item {
+      display: grid;
+      grid-template-columns: 30px minmax(0, 1fr);
+      gap: 12px;
+      align-items: flex-start;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      padding: 12px;
+    }
+    .item-number {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      background: #e9f0ff;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 850;
+      line-height: 1;
+      justify-self: center;
+      align-self: start;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      flex: 0 0 auto;
+    }
+    .item > div {
+      min-width: 0;
+      padding-top: 1px;
+    }
+    .item strong {
+      display: block;
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    .item > div span {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+    .log-list {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+    .log-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      overflow: hidden;
+    }
+    .log-card pre {
+      margin: 0;
+      padding: 12px;
+      background: #0f172a;
+      color: #dbe7ff;
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .log-card p {
+      margin: 0;
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .footer-note {
+      padding: 16px 2px 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .empty {
+      padding: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 1120px) {
+      .layout { grid-template-columns: 1fr; }
+      .flow-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .flow-step::after { display: none; }
+    }
+    @media (max-width: 780px) {
+      .shell { padding: 14px; }
+      .topbar { flex-direction: column; }
+      .actions { justify-content: flex-start; width: 100%; }
+      .topbar .actions .button { flex: 1 1 calc(50% - 8px); }
+      .band-header > .button { align-self: flex-start; flex: 0 0 auto; }
+      .state-grid, .term-grid, .panel-grid, .flow-grid { grid-template-columns: 1fr; }
+      .search-row { grid-template-columns: 1fr; }
+      .band-header { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="title">
+        <h1 id="pageTitle">MISAKA参加ガイド</h1>
+        <p id="pageSubtitle" class="subtitle">setupで見える言葉と、実際に何が起きているかを初心者向けに整理します。</p>
+      </div>
+      <div class="actions">
+        <button class="button active" id="jaBtn" type="button">日本語</button>
+        <button class="button" id="enBtn" type="button">English</button>
+        <a class="button primary" id="setupLink" href="#">Setup</a>
+        <a class="button" id="dashboardLink" href="#">Dashboard</a>
+      </div>
+    </header>
+
+    <section class="band">
+      <div class="band-header">
+        <div>
+          <h2 id="stateTitle">今の自分の状態</h2>
+          <p id="stateBody">実際のnode / miner / validator状態と、学ぶべきポイントをつなげます。</p>
+        </div>
+        <button class="button" id="refreshBtn" type="button">更新</button>
+      </div>
+      <div class="state-grid">
+        <article class="state-card"><label>Node</label><strong id="stateNode">-</strong><p id="stateNodeNote">-</p></article>
+        <article class="state-card"><label>Sync</label><strong id="stateSync">-</strong><p id="stateSyncNote">-</p></article>
+        <article class="state-card"><label>Miner</label><strong id="stateMiner">-</strong><p id="stateMinerNote">-</p></article>
+        <article class="state-card"><label>Validator</label><strong id="stateValidator">-</strong><p id="stateValidatorNote">-</p></article>
+      </div>
+    </section>
+
+    <div class="layout">
+      <div>
+        <section class="band">
+          <div class="band-header">
+            <div>
+              <h2 id="flowTitle">参加の全体像</h2>
+              <p id="flowBody">ボタンを押す裏側で起きている流れです。</p>
+            </div>
+            <span class="pill info" id="flowPill">map</span>
+          </div>
+          <div class="flow"><div class="flow-grid" id="flowGrid"></div></div>
+        </section>
+
+        <section class="band">
+          <div class="band-header">
+            <div>
+              <h2 id="termsTitle">用語辞典</h2>
+              <p id="termsBody">わからない単語を検索できます。まずは太字の一文だけ読めば大丈夫です。</p>
+            </div>
+            <span class="pill info" id="termsCount">0</span>
+          </div>
+          <div class="controls">
+            <div class="search-row">
+              <input id="search" type="search" placeholder="Search terms">
+              <button class="button" id="clearBtn" type="button">Clear</button>
+            </div>
+            <div class="chips" id="chips"></div>
+          </div>
+          <div class="term-grid" id="termGrid"></div>
+        </section>
+
+        <section class="band">
+          <div class="band-header">
+            <div>
+              <h2 id="logTitle">ログの読み方</h2>
+              <p id="logBody">怖く見えるログでも、見る場所を絞れば判断できます。</p>
+            </div>
+          </div>
+          <div class="log-list" id="logList"></div>
+        </section>
+
+      </div>
+
+      <aside>
+        <section class="band">
+          <div class="band-header">
+            <div>
+              <h2 id="firstTitle">最初に覚える5つ</h2>
+              <p id="firstBody">迷ったらこの順番だけ見てください。</p>
+            </div>
+          </div>
+          <div class="list" id="firstList"></div>
+        </section>
+
+        <section class="band">
+          <div class="band-header">
+            <div>
+              <h2 id="troubleTitle">困った時の判断</h2>
+              <p id="troubleBody">失敗に見えやすい状態を、初心者向けに分けます。</p>
+            </div>
+          </div>
+          <div class="list" id="troubleList"></div>
+        </section>
+
+        <section class="band">
+          <div class="band-header">
+            <div>
+              <h2 id="checkTitle">参加できたか確認</h2>
+              <p id="checkBody">最後はこのチェックで見ます。</p>
+            </div>
+          </div>
+          <div class="panel-grid" id="checkGrid"></div>
+        </section>
+      </aside>
+    </div>
+
+    <p id="footerNote" class="footer-note">このページは読み取り専用です。秘密鍵やvalidator seedは表示しません。</p>
+  </main>
+
+  <script>
+    const token = "__SETUP_TOKEN__";
+    const isTemplateToken = token.includes("SETUP_TOKEN");
+    const isStaticPreview = window.location.protocol === 'file:' || isTemplateToken;
+    const initialLang = localStorage.getItem('misakaLearnLang')
+      || ((navigator.language || '').toLowerCase().startsWith('ja') ? 'ja' : 'en');
+    const state = {
+      lang: initialLang,
+      filter: 'all',
+      query: '',
+    };
+
+    const content = {
+      ja: {
+        pageTitle: 'MISAKA参加ガイド',
+        pageSubtitle: 'setupで見える言葉と、実際に何が起きているかを初心者向けに整理します。わからない単語は検索できます。',
+        setup: 'Setupへ戻る',
+        dashboard: 'Dashboard',
+        refresh: '更新',
+        stateTitle: '今の自分の状態',
+        stateBody: '実際のnode / miner / validator状態と、学ぶべきポイントをつなげます。',
+        flowTitle: '参加の全体像',
+        flowBody: 'ボタンを押す裏側で起きている流れです。',
+        termsTitle: '用語辞典',
+        termsBody: 'わからない単語を検索できます。まずは太字の一文だけ読めば大丈夫です。',
+        search: '例: sync, bond, DAA, mining, port',
+        clear: 'クリア',
+        logTitle: 'ログの読み方',
+        logBody: '怖く見えるログでも、見る場所を絞れば判断できます。',
+        firstTitle: '最初に覚える5つ',
+        firstBody: '迷ったらこの順番だけ見てください。',
+        troubleTitle: '困った時の判断',
+        troubleBody: '失敗に見えやすい状態を、初心者向けに分けます。',
+        checkTitle: '参加できたか確認',
+        checkBody: '最後はこのチェックで見ます。',
+        footerNote: 'このページは読み取り専用です。秘密鍵やvalidator seedは表示しません。',
+        categories: [
+          ['all', 'すべて'],
+          ['basic', '基本'],
+          ['node', 'Node'],
+          ['mining', 'Mining'],
+          ['validator', 'Validator'],
+          ['dns', 'DNS'],
+          ['trouble', '困った時'],
+          ['security', '安全'],
+        ],
+        stateLabels: {
+          loading: '確認中',
+          unavailable: '未確認',
+          running: 'RUNNING',
+          synced: 'SYNCED',
+          syncing: 'SYNCING',
+          wait: 'WAIT',
+          fund: 'FUND',
+          bond: 'BOND',
+          error: 'ERROR',
+          nodeRunning: 'nodeが起動しています。ネットワークに参加する土台はできています。',
+          nodeWait: 'nodeはまだ起動していません。Setupからnode開始へ進みます。',
+          syncDone: '同期済みです。validatorやminerの判断に進めます。',
+          syncMoving: '同期中です。DAAが増えていれば待つだけで大丈夫です。',
+          minerRunning: 'minerが動いています。報酬はfunding addressに入ります。',
+          minerWait: 'minerは止まっています。Bond用資金が必要な時だけ開始します。',
+          validatorRunning: 'validator serviceが動いています。attestationを送れる状態です。',
+          validatorBond: 'Bondは作成済みです。validator service開始を確認します。',
+          validatorFund: 'validator keyはあります。Bond用の成熟済みUTXOを用意します。',
+          validatorWait: 'validatorは未設定です。node同期後に進めます。',
+          preview: 'PREVIEW',
+          guide: 'GUIDE',
+          staticNode: '静的プレビューです。実際のnode状態はWeb UI経由で確認します。',
+          staticSync: 'APIには接続せず、用語と流れだけ確認できます。',
+          staticMiner: 'miner状態は実行中のWeb UIで確認します。',
+          staticValidator: 'validator状態は実行中のWeb UIで確認します。',
+        },
+        flow: [
+          ['PC', 'Web UI', 'ブラウザで操作します。秘密鍵は表示しません。'],
+          ['ND', 'Node', 'MISAKAネットワークにつながる本体です。'],
+          ['P2P', 'Peers', '他のnodeと接続し、blockや情報を受け取ります。'],
+          ['DAA', 'Sync', 'testnetの最新状態に追いつきます。DAAが増えれば進行中です。'],
+          ['VAL', 'Validator', 'Bond後にattestationを送り、validatorとして参加します。'],
+        ],
+        first: [
+          ['Node', 'ネットワークに参加する本体です。まずnodeが起動しないと何も始まりません。'],
+          ['Sync', 'nodeがtestnetの最新状態に追いつく作業です。時間がかかることがあります。'],
+          ['Miner', 'testnet上でMSKを掘り、validatorのBond資金を用意する役割です。'],
+          ['Maturity', '掘った直後の報酬はすぐBondに使えません。testnet-10では現在1000 blocksが目安です。'],
+          ['Validator', 'Bondを作った後、attestationを送って参加する役割です。'],
+        ],
+        trouble: [
+          ['Synced false', '同期中という意味です。DAAが増えていれば、多くの場合は待つだけです。'],
+          ['Virtual DAA score 0', '起動直後や同期開始前ならあり得ます。ログでpeer接続とIBD開始を確認します。'],
+          ['残高はあるのにBondできない', '表示残高と成熟済みUTXOは別です。coinbase maturity前の報酬はBondに使えません。'],
+          ['minerが動いてもすぐ増えない', '採掘は確率です。スレッド数、ネットワーク状態、難易度で変わります。'],
+          ['再起動後に同期が進まない', 'HDDや強制停止後は、DB確認や再起動処理に時間がかかることがあります。ログ保存、停止完了待ち、DB削除前の相談が基本です。'],
+        ],
+        checks: [
+          ['Node', 'SetupまたはDashboardで Node が RUNNING、P2P が LISTENING なら土台はOKです。'],
+          ['Sync', 'Sync が SYNCED なら最新状態に追いついています。'],
+          ['Validator', 'Validator が RUNNING で、ログに submitted attestation shard があれば参加できています。'],
+          ['Miner', 'minerがRUNNINGで mined block が出れば採掘できています。報酬は成熟待ちになります。'],
+        ],
+        logs: [
+          ['良いログ: P2P接続', 'P2P Connected to incoming peer ...\nConnection manager: has 8/8 outgoing P2P connections', '他のnodeと接続できています。ネットワーク参加の土台は正常です。'],
+          ['良いログ: 同期進行', 'IBD: Processed 1024 block headers ...\nVirtual DAA score 15123456', 'IBDは初回同期です。DAAが増えていれば進んでいます。'],
+          ['良いログ: 採掘成功', '[validator-funding] mined block #123 (nonce=..., daa_score=...)', 'minerがblockを見つけています。ただしBondに使えるまで成熟待ちがあります。'],
+          ['良いログ: validator参加', 'submitted attestation shard for epoch ... (txid=...)', 'validatorがattestationを送信できています。参加確認としてかなり強い根拠です。'],
+          ['注意ログ: 成熟不足', 'not enough MATURE funding ... wait for coinbase maturity (1000 blocks)', '残高が0という意味ではありません。Bondに使える成熟済みUTXOがまだ足りないという意味です。'],
+        ],
+        terms: [
+          ['basic', 'MISAKA', 'ポスト量子署名前提のKaspa系ネットワーク実装です。', 'rusty-kaspaを元にしつつ、genesis、address prefix、署名方式、validator overlayなどをMISAKA用に持つ別ネットワークです。このガイドではtestnet-10を扱います。', 'Kaspa mainnetではなく、networkが testnet-10 か確認します。'],
+          ['basic', 'Testnet', '本番ではない練習用ネットワークです。', 'testnet上のMSKは検証用です。本番資産とは別物として扱います。', 'setup対象networkが testnet-10 になっているか見ます。'],
+          ['basic', 'Mainnet', '本番用ネットワークを指す一般的な言葉です。', 'testnetとmainnetは別ネットワークです。testnetの残高やvalidator参加はmainnet資産とは直接つながりません。', 'このガイドではmainnetではなくtestnet-10を扱います。'],
+          ['basic', 'MSK', 'MISAKAネットワーク上のコイン単位です。', 'testnetでは採掘報酬やBond金額としてMSK表記が出ます。testnet MSKは検証用です。', 'Bond amountや残高表示の単位を見ます。'],
+          ['basic', 'Sompi', 'MSKの最小単位です。', 'この実装では 1 MSK = 100,000,000 sompi です。ログでは 10 MSK が 1,000,000,000 sompi のように表示されます。', 'validator bondログの amount + fee 表示で見かけます。'],
+          ['basic', 'Genesis', 'ネットワークの最初のblockです。', 'genesisが違うネットワーク同士は同じchainとして同期しません。MISAKAはMISAKA用のgenesisで動きます。', 'network mismatchが出る場合は、network idとgenesis系の不一致を疑います。'],
+          ['basic', 'Address prefix', 'addressの先頭でネットワークを見分ける印です。', 'testnetでは misakatest: のようなprefixになります。違うprefixへ送ると想定外のネットワーク向けになります。', 'funding addressの先頭が misakatest: か見ます。'],
+          ['basic', 'PQ-only', 'ポスト量子署名だけを前提にする設計です。', 'MISAKAでは従来のsecp256k1/Schnorr系ではなく、ML-DSA-87を使う方向に寄せています。', 'addressが misakatest: で、node networkが testnet-10 か確認します。'],
+          ['basic', 'ML-DSA-87', 'MISAKAの署名で使われるポスト量子署名方式です。', 'FIPS 204系のデジタル署名方式で、MISAKAでは取引やvalidator関連の署名に関係します。', 'validator IDやfunding addressはこの鍵系から作られます。'],
+          ['basic', 'BLAKE2b-512', '64-byteのidentityやcommitmentで使われるhash方式です。', 'MISAKAではdomain-separated/keyed BLAKE2b-512からHash64を作る場面があります。minerにもBLAKE2b-512系のPoW処理があります。', '長いhex文字列が出ても、それだけで異常ではありません。'],
+          ['basic', 'GHOSTDAG', 'BlockDAG上のblock関係を整理するための考え方です。', 'Kaspa系ネットワークで、複数のblockが並行して出る状況を扱うための中核的な仕組みです。', '通常ユーザーはDAAとSyncの進み具合を見れば十分です。'],
+          ['basic', 'BlockDAG', '1本の鎖だけでなく、複数のblockをDAGとして扱う構造です。', 'Kaspa系の考え方を引き継ぎ、複数blockの関係をGHOSTDAG系のルールで整理します。', 'DAAやP2P同期はこの構造の進行を追います。'],
+          ['basic', 'Hash64', 'MISAKAのconsensus identityで使われる64-byte hash型です。', 'block hash、transaction id、merkle root、UTXO commitment、pruning pointなどが64-byte幅へ広げられています。', 'txidやvalidator IDが長く見えるのは自然です。'],
+          ['basic', 'Node', 'MISAKAネットワークに参加する本体です。', 'blockやtransactionを検証し、peerと情報交換します。validatorもminerもnodeに接続して動きます。', 'NodeがRUNNING、P2PがLISTENINGなら土台は動いています。'],
+          ['node', 'kaspad', 'MISAKA node本体の実行ファイルです。', 'systemdやローカル起動スクリプトからkaspadを起動し、P2P、同期、RPC、UTXO indexなどを担当します。', 'kaspad --version や misaka-kaspad.service を確認します。'],
+          ['node', 'misaka CLI', 'MISAKAを操作するためのコマンドです。', 'node doctor、setup web、validator補助などをまとめて扱う入口です。Web UIもこのCLIから起動します。', 'misaka --version と misaka setup web を確認します。'],
+          ['node', 'RPC', '別のプログラムがnodeへ問い合わせる通信口です。', 'Web UI、miner、validator、CLIはRPC経由でnode状態やUTXOを確認します。P2Pとは役割が違います。', 'wRPC Borsh、gRPC、EVM RPCの違いを見分けます。'],
+          ['node', 'Peer', '接続相手のnodeです。', 'P2P networkでは複数peerからblockやheaderを受け取ります。peerが少ないと同期が遅くなる場合があります。', 'ログに Connected to peer が出ます。'],
+          ['node', 'P2P', 'node同士が直接つながる通信です。', 'MISAKAでは通常 26211/tcp がP2Pの入口です。外部から接続されるには待受とfirewallが重要です。', 'DashboardのP2P LISTENINGを見ます。'],
+          ['node', 'Port 26211', 'MISAKA nodeのP2P用portです。', '他のnodeがあなたのnodeへ接続する入口です。VPS参加ではfirewallで26211/tcpを許可します。', 'P2P LISTENING と ufw allow 26211/tcp を確認します。'],
+          ['node', 'Port 26210', 'nodeのgRPC用portです。', 'minerなどがローカルnodeから採掘用データを受け取る時に使います。通常は外部公開しません。', 'gRPC 26210 listening と表示されればローカル連携はOKです。'],
+          ['node', 'Port 27210', 'nodeのwRPC Borsh用portです。', 'misaka CLIやvalidatorがローカルnodeへ問い合わせる時に使います。通常は127.0.0.1で使います。', 'wRPC Borsh 127.0.0.1:27210 listening を見ます。'],
+          ['node', 'Sync', 'nodeが最新状態に追いつく作業です。', '初回はIBDとして大量のblock/headerを処理します。SSDのほうが安定しやすいです。', 'SyncがSYNCEDなら完了です。'],
+          ['node', 'IBD', 'Initial Block Downloadの略で、初回同期です。', '過去のchain状態を順番に取り込みます。時間がかかりますが、DAAが増えていれば進行中です。', 'ログに IBD started / Processed が出ます。'],
+          ['node', 'DAA', '同期の進み具合を見る数字です。', 'Virtual DAA scoreはネットワーク上の進行位置のようなものです。増えていればnodeが前に進んでいます。', 'Setupの同期の動きで直近増加を見ます。'],
+          ['node', 'Virtual DAA score', 'nodeが見ている現在位置を表す数字です。', '同期中はこの数字が増えていくかが重要です。0のまま長時間ならpeer接続やIBDログを確認します。', 'SetupのDAA、doctorのVirtual DAA scoreを見ます。'],
+          ['node', 'Header', 'blockの要約情報です。', 'IBD中はまず大量のheaderを処理するログが出ます。block本体やUTXO処理とは別の段階です。', 'Processed ... headers が増えていれば進行中です。'],
+          ['node', 'Block', '取引や状態更新を含むネットワークの単位です。', 'minerが見つける対象であり、nodeが検証してBlockDAGへ取り込みます。', 'mined block や Processed blocks のログを見ます。'],
+          ['node', 'Transaction / tx', 'MSKの移動やBond、attestationなどの処理です。', 'ログではtransactionをtxと略します。txidはそのtransactionの識別子です。', 'submitted ... txid=... が出れば送信されています。'],
+          ['node', 'txid', 'transactionを指す長いIDです。', 'Bondやattestation shardが送信されるとtxidが出ます。Hash64系なので長く見えます。', 'scanやログで同じtxidを追跡できます。'],
+          ['node', 'Outpoint', '特定のtransaction出力を指す形式です。', 'txid:index の形で、UTXOやBond outpointを正確に指します。', 'Bond outpoint が txid:0 のように表示されます。'],
+          ['node', 'Mempool', 'まだblockに入っていないtransactionの待機場所です。', 'attestationやBondが送信直後にmempoolへ入り、採掘されると確定側へ進みます。', 'already spent in the mempool などのログで見かけます。'],
+          ['node', 'Pruning', '古いデータの一部を整理して保存量を抑える仕組みです。', 'nodeは全履歴を永久に同じ形で持つとは限らず、pruning pointを基準に整理することがあります。', '通常参加では自動処理として見れば大丈夫です。'],
+          ['node', 'Pruning point', 'pruningの基準になるchain上の地点です。', '同期やDB処理のログで出ることがあります。初心者は「古いデータ整理の基準」と理解すれば十分です。', 'pruning関連ログが続く時は、DB処理中かを確認します。'],
+          ['node', 'Disk I/O', 'SSD/HDDへの読み書き速度です。', '同期や再起動時のDB確認はディスク性能に強く影響されます。HDDだと進みが遅く見えることがあります。', 'DAAが止まる時はCPUだけでなくディスク使用率も見ます。'],
+          ['node', 'SSD / HDD', 'nodeデータを置く保存装置の種類です。', 'SSDはランダム読み書きが速く、node同期に向きます。HDDは再起動後の確認やIBDで詰まりやすい場合があります。', '可能ならnode用データはSSDに置きます。'],
+          ['node', 'UTXO', '使えるコインのかたまりです。', 'Bondは残高の合計だけではなく、成熟済みUTXOを選んで作られます。', 'validator bond時の mature scanned を見ます。'],
+          ['node', 'UTXO index', 'UTXOを探しやすくする索引です。', 'wallet、miner、validatorの資金確認に必要です。node doctorでenabledならOKです。', 'node doctorの UTXO index enabled を見ます。'],
+          ['node', 'wRPC Borsh', 'local nodeとCLI/validatorが話すためのRPCです。', '通常は127.0.0.1:27210です。Web UIやvalidatorはここを通じてnode状態を確認します。', 'node doctorで wRPC Borsh listening を見ます。'],
+          ['node', 'gRPC', 'minerなどがnodeへ接続するためのRPCです。', '通常は127.0.0.1:26210です。minerがblock templateを受け取る時に使います。', 'miner設定のgRPCを見ます。'],
+          ['node', 'EVM RPC', 'EVM laneを外部ツールから触るためのHTTP JSON-RPCです。', 'testnet-10のnode binaryはEVM対応ビルドが必要ですが、EVM RPCポートを公開すること自体は通常のnode参加やvalidator参加の必須条件ではありません。doctorでnot reachableがINFOなら、HTTP RPCを開いていないだけです。', 'EVM laneのビルド要件と、8545のEVM RPC公開を分けて見ます。'],
+          ['dns', 'DNS seeder', 'nodeが最初のpeer候補を見つけるためのDNSです。', 'seed domainへ問い合わせると、参加可能なpeer IPを返します。DNS seederはnode参加とは別の特別な運用です。', '通常参加者はDNS seederを動かす必要はありません。'],
+          ['dns', 'Seed domain', 'nodeがpeer探索に使うドメインです。', 'kaspadは起動時やpeer不足時にseed domainへ問い合わせ、返ってきたIPへP2P接続を試します。', 'ログに Querying DNS seeder ... が出ます。'],
+          ['dns', 'NS delegation', '特定の名前のDNS回答を別DNSサーバーへ任せる設定です。', '複数peer IPを動的に返すDNS seederでは、AレコードだけでなくNS委任が必要になることがあります。', 'seeder名に対してNSと、そのNS名のAが設定されているか確認します。'],
+          ['dns', 'A record', '名前を1つのIPv4 addressへ向けるDNS設定です。', 'Aレコードだけだと通常はそのIPが返るだけです。DNS seederとして複数peerを返すには権威DNSとして応答させる構成が必要です。', 'dig domain A +short の結果を見ます。'],
+          ['dns', 'TTL', 'DNS回答をどれくらいcacheしてよいかの時間です。', 'DNS seederではpeer集合が変わるため、短めのTTLにして新しい回答へ切り替わりやすくします。', 'digのTTLやseeder設定のttlを見ます。'],
+          ['mining', 'Miner', 'testnet MSKを掘る役割です。', 'validatorのBond用資金を用意するためにfunding addressへ採掘します。CPUを使います。', 'miner serviceがRUNNINGか、mined blockログを見ます。'],
+          ['mining', 'Coinbase', '採掘で新しく発生する報酬です。', 'minerがblockを見つけるとcoinbase報酬がfunding addressへ入りますが、すぐには使えません。', 'mined block後の残高とmaturityを見ます。'],
+          ['mining', 'Mature UTXO', 'Bondなどに使える条件を満たしたUTXOです。', '特に採掘報酬のcoinbase UTXOは、coinbase maturityを過ぎるまで使えません。残高があってもmature 0ならBondできません。', 'bondエラーの mature scanned と have ... sompi を見ます。'],
+          ['mining', 'Mining thread', 'minerがCPUを何本使うかの設定です。', 'thread数を増やすと採掘速度は上がりやすい一方、PCやVPSの負荷も上がります。', 'CPU診断のおすすめthread数を見て選びます。'],
+          ['mining', 'Difficulty', 'blockを見つける難しさです。', 'ネットワーク状況により採掘の当たりやすさが変わります。hashrateが同じでも報酬ペースは揺れます。', '掘れない時間があっても即失敗ではありません。'],
+          ['mining', 'Block reward', 'blockを掘った時にもらう報酬です。', 'testnetではvalidatorのBond資金を用意するために使います。報酬は成熟後に使えるようになります。', 'mined blockログとfunding balanceを見ます。'],
+          ['mining', 'Hashrate', 'どれくらい計算しているかの目安です。', '高いほどblockを見つけやすいですが、必ず報酬が出る保証ではありません。', 'Dashboardやscan側のkH/s表示を参考にします。'],
+          ['mining', 'Funding address', 'Bond用資金を受け取るvalidator専用のaddressです。', 'validator keyから作られます。miner報酬やfaucet資金をここへ集めます。', 'SetupのGenerate key後に表示されます。'],
+          ['mining', 'Coinbase maturity', '採掘報酬が使えるようになるまでの待ち時間です。', '実装ではnetwork parameterのcoinbase_maturityで判定します。testnet-10では現在1000 blocksが目安で、Bond作成時にUTXO単位で最終確認されます。', 'Bond時に not enough MATURE funding が出たら成熟待ちです。'],
+          ['mining', 'Bond用成熟目安', 'Bondに使えるまであと何blockかを見る概算です。', 'Web UIが記録したminer開始DAAと現在DAAの差から、成熟までの残りblockを目安表示します。実際のBond可否は作成時にUTXO単位で確認されます。', 'Dashboardの必要block、経過block、残りblockを見ます。'],
+          ['validator', 'Bond', 'validatorとして参加するための担保です。', 'funding addressの成熟済みUTXOを使ってStakeBond transactionを作ります。', 'Bond outpointが表示されれば作成済みです。'],
+          ['validator', 'StakeBond', 'Bondを作るためのtransactionです。', 'validator参加に必要な担保をchain上に作ります。作成には成熟済みUTXOと手数料が必要です。', 'bondコマンド成功後にbond outpointが出ます。'],
+          ['validator', 'StakeUnbond', 'Bondを解除し始めるためのtransactionです。', 'validator参加をやめる時に使う概念です。解除後すぐ自由に使えるとは限らず、unbonding windowなどの条件があります。', '通常の初回参加ではまずStakeBondだけ理解すれば十分です。'],
+          ['validator', 'Bond outpoint', '作成されたBondを指すIDです。', 'transaction idと出力番号の組み合わせです。validator serviceがどのBondで参加するかを示します。', 'Dashboardのbond欄に txid:0 の形で出ます。'],
+          ['validator', 'Validator', 'Bondを持ってattestationを送る参加者です。', 'nodeに接続し、対象がある時にattestation shardを送信します。', 'Validator RUNNINGと submitted attestation shard を見ます。'],
+          ['validator', 'Validator ID', 'validator keyから作られる公開識別子です。', '秘密鍵そのものではなく、参加者を識別するための長いIDです。', 'Dashboardに表示されます。'],
+          ['validator', 'Epoch', 'validatorのattestation対象を区切る期間です。', 'validatorはepochごとの対象に対してattestationを作ります。ログに epoch ... と表示されます。', 'submitted attestation shard for epoch ... を見ます。'],
+          ['validator', 'Attestation', 'validatorが参加を証明する送信です。', 'ログの submitted attestation shard は、validatorが仕事をした強い証拠です。', 'validator logsを見ます。'],
+          ['validator', 'Attestation shard', 'attestationをchainへ載せるためのtransactionです。', 'validator serviceは対象がある時にattestation shardを作って送信します。', 'submitted attestation shard が出れば送信済みです。'],
+          ['validator', 'Attestation target', 'validatorが署名すべき対象です。', '対象がない時はvalidatorが起動していても送信せず待機します。これは正常な待ち状態です。', 'ActiveIdleやno attestation target availableを見ます。'],
+          ['validator', 'ActiveIdle', 'validatorは有効だが、今送る対象がない状態です。', 'serviceが動いていてBondも有効でも、毎秒attestationを送るわけではありません。対象が出るまで待機します。', 'ログに status=ActiveIdle が出ても通常は失敗ではありません。'],
+          ['validator', 'Equivocation', '同じepochで矛盾するattestationへ署名してしまう危険な状態です。', '実装にはvalidator_idとbond_outpointに紐づくsigned-epoch logがあり、再起動をまたいで同じepochの二重署名を避けるために使われます。同じvalidator seedの二重起動は避けます。', '同じvalidator keyを別PC/VPSで同時起動しないようにします。'],
+          ['validator', 'Remote signer', '署名鍵を別プロセスに分離して扱う高度な構成です。', 'このrepoにはnode-localなremote signerの設計があります。初心者向けの自動参加では通常使わず、まずはWeb UIが作るvalidator seedを安全に扱えば十分です。', '通常参加ではremote signerを設定しなくても進められます。'],
+          ['validator', 'Validator attestation overlay', 'validatorのattestationを使う追加の検証レイヤーです。', 'Bondしたvalidatorがepochごとにattestation shardを送り、testnetではこの仕組みの運用や安全性も検証します。', 'submitted attestation shard が出れば、このレイヤーにも参加しています。'],
+          ['security', 'Setup token', 'Web UIに入るための一時的な合言葉です。', 'URLに付くtokenがないとAPIは動きません。VPS公開時はHTTP平文に注意し、IP制限やSSH tunnelが安全です。', 'URLの token=... を人に見せないようにします。'],
+          ['security', 'HTTP', '暗号化されないWeb通信です。', 'VPSで http://IP:8787 を公開すると、token付きURLが平文で流れる可能性があります。安全寄りにはSSH tunnelやIP制限を使います。', '公開URLを人に共有しないようにします。'],
+          ['security', 'SSH tunnel', 'VPSのWeb UIを安全に手元へ通す方法です。', 'VPS側は127.0.0.1でWeb UIを開き、SSH経由で自分のPCのlocalhostへ転送します。HTTP公開より安全です。', 'ssh -L 8787:127.0.0.1:8787 ... の形で使います。'],
+          ['security', 'Firewall', '外から入れる通信を制限する壁です。', 'VPSではP2P用26211/tcpは開け、Web UI 8787は自分のIPだけ許可するのが安全寄りです。', 'ufw status やクラウド側firewallを確認します。'],
+          ['security', 'UFW', 'Ubuntuでよく使うfirewall設定ツールです。', 'allow 26211/tcp のようにport許可を設定できます。VPS会社側firewallとは別にOS内で動きます。', 'ufw status numbered で許可状況を見ます。'],
+          ['security', '127.0.0.1', '自分のPCだけから見えるlocal addressです。', 'ローカルWeb UIでは基本的に127.0.0.1で開くため、外部公開されにくいです。', 'URLが http://127.0.0.1:8787 ならローカルです。'],
+          ['security', 'Local-only Web UI', '外部に公開せず自分の端末だけで開くWeb UIです。', 'ローカル参加やSSH tunnel構成では、Web UIを127.0.0.1にだけbindして安全性を上げます。', 'listen先が127.0.0.1か0.0.0.0かを確認します。'],
+          ['security', 'Static preview', 'APIへ接続せず見た目だけ確認する状態です。', 'file://でlearn.htmlを開く場合、node状態は取得せず、用語や流れだけを表示します。', 'PREVIEW/GUIDE表示なら静的確認です。'],
+          ['security', 'Seed phrase / mnemonic', 'walletや鍵を復元できる秘密情報です。', '人に見せたり、DiscordやWebフォームへ貼ったりしてはいけません。validator seedも同様に慎重に扱います。', '画面共有やログ共有前に秘密情報がないか確認します。'],
+          ['security', 'Private key / validator seed', 'validator署名に使う秘密の元データです。', 'これを持つ人は同じvalidatorとして署名できてしまいます。バックアップとアクセス権限に注意します。', '通常のDashboardでは中身を表示しません。'],
+          ['security', 'Public IP', 'インターネットから見える自分のIPです。', 'VPS参加ではP2Pのexternal ipとして使い、他peerが接続する宛先になります。ローカルPCではNATの影響があります。', 'VPSでは検出IPを確認してから進めます。'],
+          ['trouble', 'not enough MATURE funding', 'Bondに使える成熟済みUTXOが足りないという意味です。', '残高があるように見えても、採掘報酬がcoinbase_maturityを過ぎていないとBondに使えません。testnet-10では現在1000 blocksが目安です。', '残りblockを待ってからBond作成を再実行します。'],
+          ['trouble', 'node is not synced', 'nodeがまだ最新状態に追いついていないという意味です。', '同期中はvalidatorのBond確認や一部操作ができないことがあります。DAAが増えていれば待つのが基本です。', 'SyncがSYNCEDになるまで待ちます。'],
+          ['trouble', 'connection reset from peer', '接続相手が通信を切ったという意味です。', 'P2Pでは相手側再起動、version差、network状態などで単発発生することがあります。連続する場合だけ原因調査します。', 'peer数が保てているか、同じIPだけで多発するかを見ます。'],
+          ['trouble', 'Address already in use', '同じportを別プロセスが使っています。', 'Web UIやnodeを二重起動した時に出やすいです。既存プロセスを止めるか、別portで起動します。', 'lsofやpgrep、tmux sessionを確認します。'],
+          ['trouble', 'bad or missing setup token', 'Web UIのtokenが違うか期限切れです。', '古いURL、別プロセスのtoken、起動し直し後のtoken違いで起きます。最新のURLを開き直します。', 'tmuxログやreopenコマンドで最新URLを確認します。'],
+          ['trouble', '再起動後の同期停滞', 'nodeを止めて再開した後、同期がすぐ進まない状態です。', 'HDD、強制停止、DB確認、ディスクI/O待ちなどで起きることがあります。まずログを保存し、停止が完了しているかを見てから判断します。', 'DB削除の前に、nodeログの直近エラー、DAAの増加、ディスク空き容量を確認します。'],
+        ],
+      },
+      en: {
+        pageTitle: 'MISAKA Learning Guide',
+        pageSubtitle: 'A beginner-friendly map of the words you see in setup, what they mean, and how to judge whether participation is working.',
+        setup: 'Back to Setup',
+        dashboard: 'Dashboard',
+        refresh: 'Refresh',
+        stateTitle: 'Your Current State',
+        stateBody: 'This connects the live node, miner, and validator state to the concepts below.',
+        flowTitle: 'Participation Map',
+        flowBody: 'What happens behind the buttons.',
+        termsTitle: 'Glossary',
+        termsBody: 'Search unfamiliar words. Reading the bold first sentence is enough to start.',
+        search: 'Try: sync, bond, DAA, mining, port',
+        clear: 'Clear',
+        logTitle: 'How To Read Logs',
+        logBody: 'Logs can look scary. These examples show what matters.',
+        firstTitle: 'First 5 Concepts',
+        firstBody: 'If you feel lost, read these in order.',
+        troubleTitle: 'Troubleshooting Guide',
+        troubleBody: 'Common states that look like failures, explained simply.',
+        checkTitle: 'How To Know It Works',
+        checkBody: 'Use these checks at the end.',
+        footerNote: 'This page is read-only. It does not display private keys or validator seed contents.',
+        categories: [
+          ['all', 'All'],
+          ['basic', 'Basics'],
+          ['node', 'Node'],
+          ['mining', 'Mining'],
+          ['validator', 'Validator'],
+          ['dns', 'DNS'],
+          ['trouble', 'Trouble'],
+          ['security', 'Safety'],
+        ],
+        stateLabels: {
+          loading: 'CHECKING',
+          unavailable: 'UNKNOWN',
+          running: 'RUNNING',
+          synced: 'SYNCED',
+          syncing: 'SYNCING',
+          wait: 'WAIT',
+          fund: 'FUND',
+          bond: 'BOND',
+          error: 'ERROR',
+          nodeRunning: 'The node is running. The base layer for network participation is ready.',
+          nodeWait: 'The node is not running yet. Start it from Setup.',
+          syncDone: 'The node is synced. You can continue to miner or validator checks.',
+          syncMoving: 'The node is syncing. If DAA increases, it is making progress.',
+          minerRunning: 'The miner is running. Rewards go to the funding address.',
+          minerWait: 'The miner is stopped. Start it only when you need bond funding.',
+          validatorRunning: 'The validator service is running and can send attestations.',
+          validatorBond: 'A bond exists. Check that the validator service is running.',
+          validatorFund: 'A validator key exists. Prepare mature UTXOs for bond creation.',
+          validatorWait: 'Validator is not configured. Continue after node sync.',
+          preview: 'PREVIEW',
+          guide: 'GUIDE',
+          staticNode: 'Static preview mode. Live node state is available from the running Web UI.',
+          staticSync: 'No API calls are made. You can review terms and the flow.',
+          staticMiner: 'Miner state is available from the running Web UI.',
+          staticValidator: 'Validator state is available from the running Web UI.',
+        },
+        flow: [
+          ['UI', 'Web UI', 'You operate from the browser. Secrets are not shown.'],
+          ['ND', 'Node', 'The core process that joins the MISAKA network.'],
+          ['P2P', 'Peers', 'The node exchanges blocks and data with other nodes.'],
+          ['DAA', 'Sync', 'The node catches up to testnet. Increasing DAA means progress.'],
+          ['VAL', 'Validator', 'After bond creation, the validator sends attestations.'],
+        ],
+        first: [
+          ['Node', 'The core participant in the network. Nothing else matters until it starts.'],
+          ['Sync', 'The node catches up to the current testnet state. This can take time.'],
+          ['Miner', 'Mines testnet MSK, mainly to fund validator bond creation.'],
+          ['Maturity', 'Fresh mining rewards cannot be bonded immediately. On testnet-10, the current estimate is 1000 blocks.'],
+          ['Validator', 'After bond creation, it sends attestations and participates as a validator.'],
+        ],
+        trouble: [
+          ['Synced false', 'This usually means syncing. If DAA increases, waiting is normal.'],
+          ['Virtual DAA score 0', 'Normal right after startup or before sync begins. Check peer and IBD logs.'],
+          ['Balance exists but bond fails', 'Visible balance and mature UTXOs are different. Coinbase rewards need maturity.'],
+          ['Miner runs but finds nothing', 'Mining is probabilistic. Threads, network state, and difficulty matter.'],
+          ['Sync stalls after restart', 'HDD stalls or forced stops can make restart and DB checks slow. Save logs and confirm shutdown before deleting data.'],
+        ],
+        checks: [
+          ['Node', 'Node RUNNING and P2P LISTENING means the base node is working.'],
+          ['Sync', 'SYNCED means the node caught up to the current testnet state.'],
+          ['Validator', 'RUNNING plus submitted attestation shard in logs is strong evidence.'],
+          ['Miner', 'RUNNING plus mined block logs means mining is working. Rewards still need maturity.'],
+        ],
+        logs: [
+          ['Good: P2P connected', 'P2P Connected to incoming peer ...\nConnection manager: has 8/8 outgoing P2P connections', 'The node is connected to peers. Network participation is working.'],
+          ['Good: Sync progress', 'IBD: Processed 1024 block headers ...\nVirtual DAA score 15123456', 'IBD is initial sync. Increasing DAA means progress.'],
+          ['Good: Mining found a block', '[validator-funding] mined block #123 (nonce=..., daa_score=...)', 'The miner found a block. The reward still needs maturity before bonding.'],
+          ['Good: Validator attestation', 'submitted attestation shard for epoch ... (txid=...)', 'The validator sent an attestation. This is strong participation evidence.'],
+          ['Warning: Immature funding', 'not enough MATURE funding ... wait for coinbase maturity (1000 blocks)', 'This does not mean zero balance. It means no bondable mature UTXO yet.'],
+        ],
+        terms: [
+          ['basic', 'MISAKA', 'A Kaspa-style network implementation built around post-quantum signatures.', 'It is based on rusty-kaspa ideas but has its own genesis, address prefixes, signature path, and validator overlay. This guide focuses on testnet-10.', 'Confirm the network is testnet-10, not Kaspa mainnet.'],
+          ['basic', 'Testnet', 'A practice network, not mainnet.', 'Testnet MSK is for testing and should be treated separately from real assets.', 'Check that the network is testnet-10.'],
+          ['basic', 'Mainnet', 'A general term for the production network.', 'Testnet and mainnet are separate networks. Testnet balance and validator status do not directly carry over to mainnet.', 'This guide uses testnet-10, not mainnet.'],
+          ['basic', 'MSK', 'The coin unit used on the MISAKA network.', 'On testnet, MSK appears as mining reward balance and bond amount. Testnet MSK is for testing.', 'Check balance and bond amount units.'],
+          ['basic', 'Sompi', 'The smallest unit of MSK.', 'In this implementation, 1 MSK = 100,000,000 sompi. Logs may show 10 MSK as 1,000,000,000 sompi, plus fee amounts in sompi.', 'Look at validator bond logs for amount + fee.'],
+          ['basic', 'Genesis', 'The first block of a network.', 'Networks with different genesis blocks do not sync as one chain. MISAKA uses its own genesis.', 'If the node reports a network mismatch, check network id and genesis-related settings.'],
+          ['basic', 'Address prefix', 'The front part of an address that identifies the network.', 'On testnet you see prefixes such as misakatest:. Sending to the wrong prefix means you are targeting the wrong network class.', 'Check that funding addresses start with misakatest:.'],
+          ['basic', 'PQ-only', 'A design that assumes post-quantum signatures only.', 'MISAKA moves away from traditional secp256k1/Schnorr-style authorization and toward ML-DSA-87.', 'Check the misakatest: address and testnet-10 network.'],
+          ['basic', 'ML-DSA-87', 'The post-quantum signature scheme used by MISAKA.', 'It is a FIPS 204-family digital signature scheme and is used for transaction and validator-related signatures.', 'Validator IDs and funding addresses are derived from this key family.'],
+          ['basic', 'BLAKE2b-512', 'A hash function used for 64-byte identities and commitments.', 'MISAKA uses domain-separated/keyed BLAKE2b-512 to produce Hash64 values in several consensus-facing places. The miner also uses BLAKE2b-512-family PoW work.', 'Long hexadecimal IDs are normal.'],
+          ['basic', 'GHOSTDAG', 'The idea used to order and reason about blocks in a BlockDAG.', 'Kaspa-style networks can have multiple blocks in parallel, so GHOSTDAG-like rules organize their relationships.', 'Most users only need to watch DAA and sync progress.'],
+          ['basic', 'BlockDAG', 'A graph of blocks rather than a single simple chain.', 'MISAKA inherits Kaspa-style ideas where block relationships are organized by GHOSTDAG-like rules.', 'DAA and P2P sync track progress through this structure.'],
+          ['basic', 'Hash64', 'A 64-byte hash type used for MISAKA consensus identities.', 'Block hashes, transaction ids, merkle roots, UTXO commitments, and pruning points are widened to 64-byte identities.', 'Long txids and validator IDs are normal.'],
+          ['basic', 'Node', 'The core process that joins the MISAKA network.', 'It validates blocks and transactions and talks to peers. Miner and validator connect to the node.', 'Look for Node RUNNING and P2P LISTENING.'],
+          ['node', 'kaspad', 'The MISAKA node executable.', 'It is started by systemd or local scripts and handles P2P, sync, RPC, and the UTXO index.', 'Check kaspad --version or the misaka-kaspad service.'],
+          ['node', 'misaka CLI', 'The command-line entry point for operating MISAKA.', 'It wraps node doctor, setup web, and validator-related workflows. The Web UI is launched from this CLI.', 'Check misaka --version and misaka setup web.'],
+          ['node', 'RPC', 'A communication interface for programs to query the node.', 'The Web UI, miner, validator, and CLI use RPC to ask the node for state and UTXO data. RPC is different from P2P.', 'Distinguish wRPC Borsh, gRPC, and EVM RPC.'],
+          ['node', 'Peer', 'Another node your node connects to.', 'Peers provide headers, blocks, and network data. Too few peers can slow sync.', 'Look for Connected to peer logs.'],
+          ['node', 'P2P', 'Direct node-to-node communication.', 'Port 26211/tcp is the usual P2P entry. Listening and firewall rules matter for inbound peers.', 'Dashboard shows P2P LISTENING.'],
+          ['node', 'Port 26211', 'The MISAKA P2P port.', 'Other nodes connect to this port. VPS participation should allow 26211/tcp through the firewall.', 'Check P2P LISTENING and ufw allow 26211/tcp.'],
+          ['node', 'Port 26210', 'The node gRPC port.', 'Miner processes use this local endpoint to request mining work from the node. It usually should not be exposed publicly.', 'Check gRPC 26210 listening.'],
+          ['node', 'Port 27210', 'The node wRPC Borsh port.', 'The misaka CLI and validator use this local endpoint to query the node. It is usually bound to 127.0.0.1.', 'Check wRPC Borsh 127.0.0.1:27210 listening.'],
+          ['node', 'Sync', 'The node catching up to the latest network state.', 'Initial sync processes many blocks and headers. SSDs are usually more stable than HDDs.', 'SYNCED means complete.'],
+          ['node', 'IBD', 'Initial Block Download.', 'The first sync pass that imports chain history. It can take time, but increasing DAA means progress.', 'Look for IBD started and Processed logs.'],
+          ['node', 'DAA', 'A progress-like chain position number.', 'Virtual DAA score is a good signal that the node is moving forward.', 'Check the DAA change in Setup.'],
+          ['node', 'Virtual DAA score', 'The chain position your node currently sees.', 'During sync, the key question is whether this number increases. If it stays at 0 for a long time, check peers and IBD logs.', 'Watch DAA in Setup or node doctor.'],
+          ['node', 'Header', 'A compact summary of a block.', 'During IBD the node may first process large numbers of headers. This is separate from full block or UTXO processing.', 'Processed ... headers means progress.'],
+          ['node', 'Block', 'A unit of network data containing transactions and state updates.', 'Miners find blocks, and nodes validate and add them to the BlockDAG.', 'Look for mined block or Processed blocks logs.'],
+          ['node', 'Transaction / tx', 'An operation such as MSK transfer, bond creation, or attestation submission.', 'Logs often shorten transaction to tx. A txid identifies a transaction.', 'submitted ... txid=... means it was sent.'],
+          ['node', 'txid', 'The long ID of a transaction.', 'Bond and attestation submissions produce txids. They look long because MISAKA uses Hash64-style identifiers.', 'Use logs or scan tools to track the same txid.'],
+          ['node', 'Outpoint', 'A pointer to one specific transaction output.', 'It has the form txid:index and identifies UTXOs or bond outputs precisely.', 'Bond outpoint appears as something like txid:0.'],
+          ['node', 'Mempool', 'The waiting area for transactions not yet included in a block.', 'Bond or attestation transactions enter the mempool first, then become confirmed after being mined.', 'Logs may mention already spent in the mempool.'],
+          ['node', 'Pruning', 'A mechanism that reduces stored old data.', 'A node may not keep all historical data in the same form forever. Pruning point marks what can be compacted.', 'Most participants can treat it as automatic node maintenance.'],
+          ['node', 'Pruning point', 'The reference point used for pruning.', 'It may appear in sync or database logs. For beginners, think of it as the old-data cleanup boundary.', 'If pruning logs continue, check whether the node is still doing database work.'],
+          ['node', 'Disk I/O', 'Read and write speed to SSD or HDD.', 'Sync and restart database checks depend heavily on disk speed. HDDs can look stalled even when the node is working.', 'If DAA stops, check disk as well as CPU.'],
+          ['node', 'SSD / HDD', 'Types of storage used for node data.', 'SSDs are much better for random reads and writes. HDDs can struggle during IBD and restart checks.', 'Prefer SSD storage for node data when possible.'],
+          ['node', 'UTXO', 'A spendable coin chunk.', 'Bond creation selects mature UTXOs, not just the visible total balance.', 'Check mature scanned in bond errors.'],
+          ['node', 'UTXO index', 'An index for finding UTXOs.', 'Wallet, miner, and validator funding checks need it. node doctor should say enabled.', 'node doctor shows UTXO index enabled.'],
+          ['node', 'wRPC Borsh', 'RPC used by CLI and validator to talk to the local node.', 'Usually 127.0.0.1:27210. The UI uses it indirectly for node state.', 'node doctor should show listening.'],
+          ['node', 'gRPC', 'RPC used by miner to connect to the node.', 'Usually 127.0.0.1:26210. Miner uses it to get work.', 'Miner config shows the gRPC endpoint.'],
+          ['node', 'EVM RPC', 'HTTP JSON-RPC for external tooling to access the EVM lane.', 'The testnet-10 node binary must be EVM-capable, but exposing the 8545 EVM RPC port is not required for normal node or validator participation. If doctor shows not reachable as INFO, it usually only means the HTTP RPC is not open.', 'Separate the EVM lane build requirement from exposing the EVM RPC port.'],
+          ['dns', 'DNS seeder', 'DNS used by nodes to discover initial peer candidates.', 'A seed domain returns peer IPs that a node can try for P2P connections. Running a DNS seeder is a special role, not required for normal participants.', 'Most participants do not need to run a DNS seeder.'],
+          ['dns', 'Seed domain', 'A domain name used for peer discovery.', 'kaspad queries seed domains at startup or when it needs more peers, then tries P2P connections to returned IPs.', 'Logs show Querying DNS seeder ...'],
+          ['dns', 'NS delegation', 'A DNS setting that delegates answers for a name to another DNS server.', 'A dynamic DNS seeder often needs NS delegation, not just a simple A record, so the seeder can return multiple live peer IPs.', 'Check the NS record and the A record for the nameserver name.'],
+          ['dns', 'A record', 'A DNS record that maps a name to one IPv4 address.', 'An A record alone usually returns that one IP. A multi-peer DNS seeder needs authoritative DNS behavior to answer with multiple peer IPs.', 'Check dig domain A +short output.'],
+          ['dns', 'TTL', 'How long DNS answers may be cached.', 'DNS seeders often use short TTLs because peer sets change over time.', 'Check dig TTL output or the seeder ttl setting.'],
+          ['mining', 'Miner', 'A process that mines testnet MSK.', 'It can fund the validator funding address but uses CPU.', 'Look for RUNNING and mined block logs.'],
+          ['mining', 'Coinbase', 'The newly created mining reward.', 'When the miner finds a block, the coinbase reward goes to the funding address, but it is not immediately spendable.', 'After mined block logs, watch balance and maturity.'],
+          ['mining', 'Mature UTXO', 'A UTXO that satisfies the conditions needed to be spent or bonded.', 'In particular, coinbase UTXOs from mining cannot be used until coinbase maturity passes. Visible balance can exist while mature balance is still zero.', 'Check mature scanned and have ... sompi in bond errors.'],
+          ['mining', 'Mining thread', 'How many CPU worker threads the miner uses.', 'More threads can improve mining speed but also increase load on the PC or VPS.', 'Use the CPU diagnosis recommendation before choosing threads.'],
+          ['mining', 'Difficulty', 'How hard it is to find a block.', 'Network conditions can change the chance of finding blocks. The same hash rate does not guarantee a steady reward pace.', 'Not finding blocks immediately is not automatically a failure.'],
+          ['mining', 'Block reward', 'The reward for mining a block.', 'On testnet it is mainly used to fund validator bond creation. It becomes spendable after maturity.', 'Compare mined block logs with funding balance.'],
+          ['mining', 'Hashrate', 'Approximate mining speed.', 'Higher hash rate improves odds but does not guarantee immediate rewards.', 'Use dashboard or scan kH/s as a hint.'],
+          ['mining', 'Funding address', 'The validator funding address.', 'It is derived from the validator key. Mining rewards or faucet funds go here.', 'Shown after key generation.'],
+          ['mining', 'Coinbase maturity', 'Waiting time before mined rewards are spendable.', 'The implementation checks the network parameter coinbase_maturity. On testnet-10 the current estimate is 1000 blocks, and bond creation still verifies each UTXO.', 'Bond error says not enough MATURE funding.'],
+          ['mining', 'Bond maturity estimate', 'An approximate estimate of how many blocks remain before bonding is possible.', 'The Web UI compares the miner-start DAA it recorded with the current DAA. Actual bond creation still verifies maturity per UTXO.', 'Check required blocks, elapsed blocks, and remaining blocks on the dashboard.'],
+          ['validator', 'Bond', 'Stake collateral for validator participation.', 'A StakeBond transaction uses mature UTXOs from the funding address.', 'A bond outpoint means it was created.'],
+          ['validator', 'StakeBond', 'The transaction that creates a validator bond.', 'It locks stake collateral on-chain and requires mature UTXOs plus fees.', 'A successful bond command returns a bond outpoint.'],
+          ['validator', 'StakeUnbond', 'The transaction that begins releasing a validator bond.', 'It is used when leaving validator participation. Funds may still need to wait for an unbonding window.', 'For first-time joining, understand StakeBond first.'],
+          ['validator', 'Bond outpoint', 'The ID pointing to the created bond.', 'It combines transaction id and output number, like txid:0.', 'Dashboard shows the bond field.'],
+          ['validator', 'Validator', 'The participant that sends attestations after bonding.', 'It connects to the local node and sends attestation shards when there is a target.', 'Look for RUNNING and attestation logs.'],
+          ['validator', 'Validator ID', 'Public identifier derived from the validator key.', 'It is not the secret key. It identifies the validator participant.', 'Shown on the dashboard.'],
+          ['validator', 'Epoch', 'A time/position window used for validator attestation targets.', 'Validators create attestations for epoch-based targets. Logs include epoch numbers.', 'Look for submitted attestation shard for epoch ...'],
+          ['validator', 'Attestation', 'A validator message proving participation.', 'submitted attestation shard is strong evidence that the validator is working.', 'Check validator logs.'],
+          ['validator', 'Attestation shard', 'A transaction carrying a validator attestation.', 'The validator service builds and submits attestation shards when targets are available.', 'submitted attestation shard means it was sent.'],
+          ['validator', 'Attestation target', 'The object the validator should sign for an epoch.', 'If there is no target, a running validator can legitimately wait without submitting anything.', 'ActiveIdle or no attestation target available is usually not a failure.'],
+          ['validator', 'ActiveIdle', 'The validator is active but has no target to submit right now.', 'A valid bonded validator does not necessarily send an attestation every second. It waits for eligible targets.', 'status=ActiveIdle in logs can be normal.'],
+          ['validator', 'Equivocation', 'A dangerous state where a validator signs conflicting attestations for the same epoch.', 'The implementation keeps a signed-epoch log bound to validator_id and bond_outpoint to avoid double-signing across restarts. Avoid running the same validator seed in two places at once.', 'Do not run the same validator key on multiple PCs or VPSs at the same time.'],
+          ['validator', 'Remote signer', 'An advanced setup that separates signing into another process.', 'This repo has a node-local remote signer design. Beginners usually do not need it; for this UI, protect the generated validator seed carefully.', 'Normal participation does not require configuring a remote signer.'],
+          ['validator', 'Validator attestation overlay', 'An additional validation layer using validator attestations.', 'Bonded validators submit attestation shards, and the testnet checks this mechanism in real operation.', 'submitted attestation shard means you are participating in this layer.'],
+          ['security', 'Setup token', 'A temporary secret in the Web UI URL.', 'Without the token, APIs are rejected. For public VPS access, HTTP token URLs should be protected with IP allowlists or SSH tunnels.', 'Do not share the token URL.'],
+          ['security', 'HTTP', 'Unencrypted web traffic.', 'If http://IP:8787 is exposed on a VPS, the token URL can travel in plaintext. SSH tunnels or IP allowlists are safer.', 'Do not share public setup URLs.'],
+          ['security', 'SSH tunnel', 'A safer way to access the VPS Web UI from your own computer.', 'The VPS can listen on 127.0.0.1 while SSH forwards it to your local browser.', 'Use a command shaped like ssh -L 8787:127.0.0.1:8787 ...'],
+          ['security', 'Firewall', 'A rule layer that controls inbound traffic.', 'For VPS operation, allow 26211/tcp for P2P and restrict 8787 to your own IP if exposing the Web UI.', 'Check ufw status and the provider firewall.'],
+          ['security', 'UFW', 'A common Ubuntu firewall tool.', 'It can allow ports like 26211/tcp. It is separate from the hosting provider firewall.', 'Use ufw status numbered to inspect rules.'],
+          ['security', '127.0.0.1', 'A local-only address.', 'Local Web UI on 127.0.0.1 is normally visible only from the same computer.', 'URL starts with http://127.0.0.1:8787.'],
+          ['security', 'Local-only Web UI', 'A Web UI that is not exposed to the outside network.', 'Local participation and SSH tunnel setups bind the UI to 127.0.0.1 for better safety.', 'Check whether it listens on 127.0.0.1 or 0.0.0.0.'],
+          ['security', 'Static preview', 'A mode that shows the page without API calls.', 'When learn.html is opened with file://, it only shows concepts and flow, not live node state.', 'PREVIEW/GUIDE means static mode.'],
+          ['security', 'Seed phrase / mnemonic', 'Secret words that can recover a wallet or key.', 'Never paste them into Discord, screenshots, or random web forms. Treat validator seed with the same care.', 'Before sharing logs or screens, check that secrets are not visible.'],
+          ['security', 'Private key / validator seed', 'Secret material used for validator signing.', 'Anyone with it can act as the same validator. Protect backups and file permissions.', 'The dashboard should not display the seed contents.'],
+          ['security', 'Public IP', 'The internet-facing IP address of your machine or VPS.', 'For VPS participation it is used as the node external IP so peers can connect. Local PCs may be behind NAT.', 'Confirm the detected IP before starting VPS node setup.'],
+          ['trouble', 'not enough MATURE funding', 'There is not enough mature UTXO for bonding.', 'Visible balance may exist, but mined rewards cannot be bonded until coinbase_maturity passes. On testnet-10, the current estimate is 1000 blocks.', 'Wait for remaining blocks, then retry bond creation.'],
+          ['trouble', 'node is not synced', 'The node has not caught up to the current network state yet.', 'Some validator and funding checks may fail until sync completes. If DAA is increasing, waiting is normal.', 'Wait until Sync becomes SYNCED.'],
+          ['trouble', 'connection reset from peer', 'A connected peer closed the connection.', 'Single events can happen during restarts, version changes, or normal P2P churn. Repeated events from the same IP deserve investigation.', 'Check whether peer count remains healthy.'],
+          ['trouble', 'Address already in use', 'Another process is already using the same port.', 'This often happens when the Web UI or node is started twice. Stop the existing process or use another port.', 'Check lsof, pgrep, or tmux sessions.'],
+          ['trouble', 'bad or missing setup token', 'The Web UI token is wrong, missing, or expired.', 'Old URLs, a restarted setup process, or a different running process can cause this. Open the newest token URL.', 'Use tmux logs or the reopen command to find the latest URL.'],
+          ['trouble', 'Sync stall after restart', 'The node does not immediately continue syncing after being stopped and started again.', 'This can happen because of HDD speed, forced stops, DB checks, or disk I/O wait. Save logs first and confirm the previous shutdown finished.', 'Before deleting the DB, check recent node logs, DAA movement, and free disk space.'],
+        ],
+      },
+    };
+
+    function byId(id) {
+      return document.getElementById(id);
+    }
+
+    function apiUrl(path) {
+      if (isStaticPreview) {
+        if (path === '/setup') return 'setup.html';
+        if (path === '/dashboard') return 'dashboard.html';
+        if (path === '/learn') return 'learn.html';
+        return '#';
+      }
+      const sep = path.includes('?') ? '&' : '?';
+      return `${path}${sep}token=${encodeURIComponent(token)}`;
+    }
+
+    async function fetchJson(path) {
+      const res = await fetch(apiUrl(path), { method: 'GET', cache: 'no-store' });
+      const text = await res.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (_) {
+        data = { ok: false, error: text || `HTTP ${res.status}` };
+      }
+      if (!res.ok && !data.error) data.error = `HTTP ${res.status}`;
+      return data;
+    }
+
+    function setText(id, value) {
+      byId(id).textContent = value === null || value === undefined || value === '' ? '-' : String(value);
+    }
+
+    function esc(value) {
+      return String(value ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;',
+      }[c]));
+    }
+
+    function langData() {
+      return content[state.lang];
+    }
+
+    function categoryLabel(id) {
+      const found = langData().categories.find(([key]) => key === id);
+      return found ? found[1] : id;
+    }
+
+    function setLang(lang) {
+      state.lang = lang;
+      localStorage.setItem('misakaLearnLang', lang);
+      renderAll();
+      refreshState();
+    }
+
+    function renderStaticText() {
+      const d = langData();
+      document.documentElement.lang = state.lang;
+      setText('pageTitle', d.pageTitle);
+      setText('pageSubtitle', d.pageSubtitle);
+      setText('stateTitle', d.stateTitle);
+      setText('stateBody', d.stateBody);
+      setText('flowTitle', d.flowTitle);
+      setText('flowBody', d.flowBody);
+      setText('termsTitle', d.termsTitle);
+      setText('termsBody', d.termsBody);
+      setText('logTitle', d.logTitle);
+      setText('logBody', d.logBody);
+      setText('firstTitle', d.firstTitle);
+      setText('firstBody', d.firstBody);
+      setText('troubleTitle', d.troubleTitle);
+      setText('troubleBody', d.troubleBody);
+      setText('checkTitle', d.checkTitle);
+      setText('checkBody', d.checkBody);
+      setText('footerNote', d.footerNote);
+      setText('refreshBtn', d.refresh);
+      setText('clearBtn', d.clear);
+      setText('setupLink', d.setup);
+      setText('dashboardLink', d.dashboard);
+      byId('search').placeholder = d.search;
+      byId('jaBtn').classList.toggle('active', state.lang === 'ja');
+      byId('enBtn').classList.toggle('active', state.lang === 'en');
+    }
+
+    function renderFlow() {
+      byId('flowGrid').innerHTML = langData().flow.map(([icon, title, body]) => `
+        <article class="flow-step">
+          <span class="flow-icon">${esc(icon)}</span>
+          <h3>${esc(title)}</h3>
+          <p>${esc(body)}</p>
+        </article>
+      `).join('');
+    }
+
+    function renderFirst() {
+      byId('firstList').innerHTML = langData().first.map(([title, body], index) => `
+        <article class="item">
+          <span class="item-number">${index + 1}</span>
+          <div><strong>${esc(title)}</strong><span>${esc(body)}</span></div>
+        </article>
+      `).join('');
+    }
+
+    function renderTrouble() {
+      byId('troubleList').innerHTML = langData().trouble.map(([title, body], index) => `
+        <article class="item">
+          <span class="item-number">${index + 1}</span>
+          <div><strong>${esc(title)}</strong><span>${esc(body)}</span></div>
+        </article>
+      `).join('');
+    }
+
+    function renderChecks() {
+      byId('checkGrid').innerHTML = langData().checks.map(([title, body]) => `
+        <article class="panel"><h3>${esc(title)}</h3><p>${esc(body)}</p></article>
+      `).join('');
+    }
+
+    function renderLogs() {
+      byId('logList').innerHTML = langData().logs.map(([title, code, body]) => `
+        <article class="log-card">
+          <pre>${esc(code)}</pre>
+          <p><strong>${esc(title)}</strong><br>${esc(body)}</p>
+        </article>
+      `).join('');
+    }
+
+    function renderChips() {
+      byId('chips').innerHTML = langData().categories.map(([id, label]) => `
+        <button class="chip ${state.filter === id ? 'active' : ''}" type="button" data-filter="${esc(id)}">${esc(label)}</button>
+      `).join('');
+      document.querySelectorAll('[data-filter]').forEach(button => {
+        button.addEventListener('click', () => {
+          state.filter = button.dataset.filter || 'all';
+          renderTerms();
+          renderChips();
+        });
+      });
+    }
+
+    function renderTerms() {
+      const q = state.query.trim().toLowerCase();
+      const terms = langData().terms.filter(([category, title, plain, tech, check]) => {
+        const inCategory = state.filter === 'all' || state.filter === category;
+        const haystack = `${category} ${title} ${plain} ${tech} ${check}`.toLowerCase();
+        return inCategory && (!q || haystack.includes(q));
+      });
+      byId('termsCount').textContent = `${terms.length}`;
+      if (!terms.length) {
+        byId('termGrid').innerHTML = `<div class="empty">${state.lang === 'ja' ? '該当する用語がありません。' : 'No matching terms.'}</div>`;
+        return;
+      }
+      byId('termGrid').innerHTML = terms.map(([category, title, plain, tech, check]) => `
+        <article class="term">
+          <h3><span>${esc(title)}</span><span class="tag">${esc(categoryLabel(category))}</span></h3>
+          <p class="plain">${esc(plain)}</p>
+          <p>${esc(tech)}</p>
+          <p class="check">${esc(check)}</p>
+        </article>
+      `).join('');
+    }
+
+    function renderAll() {
+      renderStaticText();
+      renderFlow();
+      renderFirst();
+      renderTrouble();
+      renderChecks();
+      renderLogs();
+      renderChips();
+      renderTerms();
+    }
+
+    function showUnknownState(message) {
+      const d = langData().stateLabels;
+      setText('stateNode', d.unavailable);
+      setText('stateSync', d.unavailable);
+      setText('stateMiner', d.unavailable);
+      setText('stateValidator', d.unavailable);
+      setText('stateNodeNote', message || d.nodeWait);
+      setText('stateSyncNote', d.syncMoving);
+      setText('stateMinerNote', d.minerWait);
+      setText('stateValidatorNote', d.validatorWait);
+    }
+
+    function showStaticPreviewState() {
+      const d = langData().stateLabels;
+      setText('stateNode', d.preview);
+      setText('stateSync', d.guide);
+      setText('stateMiner', d.guide);
+      setText('stateValidator', d.guide);
+      setText('stateNodeNote', d.staticNode);
+      setText('stateSyncNote', d.staticSync);
+      setText('stateMinerNote', d.staticMiner);
+      setText('stateValidatorNote', d.staticValidator);
+    }
+
+    async function refreshState() {
+      if (isStaticPreview) {
+        showStaticPreviewState();
+        return;
+      }
+      const d = langData().stateLabels;
+      setText('stateNode', d.loading);
+      setText('stateSync', d.loading);
+      setText('stateMiner', d.loading);
+      setText('stateValidator', d.loading);
+      try {
+        const [status, validatorStatus, minerStatus] = await Promise.all([
+          fetchJson('/api/status'),
+          fetchJson('/api/validator/status'),
+          fetchJson('/api/miner/status'),
+        ]);
+        const node = status.node || {};
+        const p2p = status.p2p || {};
+        const validator = validatorStatus.validator || status.validator || {};
+        const miner = minerStatus.miner || status.miner || {};
+
+        const nodeRunning = node.serviceState === 'active' || node.reachable;
+        setText('stateNode', nodeRunning ? d.running : d.wait);
+        setText('stateNodeNote', nodeRunning ? d.nodeRunning : d.nodeWait);
+
+        if (node.synced) {
+          setText('stateSync', d.synced);
+          setText('stateSyncNote', d.syncDone);
+        } else if (nodeRunning || p2p.listening) {
+          setText('stateSync', d.syncing);
+          setText('stateSyncNote', `${d.syncMoving} DAA: ${node.virtualDaaScore ?? '-'}`);
+        } else {
+          setText('stateSync', d.wait);
+          setText('stateSyncNote', d.syncMoving);
+        }
+
+        const minerRunning = miner.serviceState === 'active';
+        setText('stateMiner', minerRunning ? d.running : d.wait);
+        setText('stateMinerNote', minerRunning ? d.minerRunning : d.minerWait);
+
+        if (validator.serviceState === 'active') {
+          setText('stateValidator', d.running);
+          setText('stateValidatorNote', d.validatorRunning);
+        } else if (validator.bondOutpoint) {
+          setText('stateValidator', d.bond);
+          setText('stateValidatorNote', d.validatorBond);
+        } else if (validator.keyExists || validator.fundingAddress) {
+          setText('stateValidator', d.fund);
+          setText('stateValidatorNote', d.validatorFund);
+        } else {
+          setText('stateValidator', d.wait);
+          setText('stateValidatorNote', d.validatorWait);
+        }
+      } catch (err) {
+        showUnknownState(String(err && err.message ? err.message : err));
+      }
+    }
+
+    byId('setupLink').href = apiUrl('/setup');
+    byId('dashboardLink').href = apiUrl('/dashboard');
+    byId('jaBtn').addEventListener('click', () => setLang('ja'));
+    byId('enBtn').addEventListener('click', () => setLang('en'));
+    byId('refreshBtn').addEventListener('click', refreshState);
+    byId('clearBtn').addEventListener('click', () => {
+      state.query = '';
+      byId('search').value = '';
+      renderTerms();
+    });
+    byId('search').addEventListener('input', event => {
+      state.query = event.target.value || '';
+      renderTerms();
+    });
+
+    renderAll();
+    refreshState();
+    setInterval(refreshState, 30 * 1000);
+  </script>
+</body>
+</html>

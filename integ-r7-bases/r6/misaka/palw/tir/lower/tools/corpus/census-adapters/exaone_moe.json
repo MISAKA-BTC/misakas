@@ -1,0 +1,36 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "exaone_moe",
+  "doc": "K-EXAONE / EXAONE-MoE (LG AI Research): EXAONE-4's attention (per-head shared q/k RMS norm before the rotation, sliding/global layers, rotary on the sliding layers only when sliding_window is set) in a PRE-norm block, with the dense/sparse pattern per layer (mlp_layer_types) and DeepSeek-V3's sigmoid routing (selection bias, renormalise, routed_scaling_factor, n_group = 1) with a shared expert. Third-party adapter (lane H): data only.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["ExaoneMoeForCausalLM"], "model_types": ["exaone_moe"]},
+  "config": {
+    "defaults": {"num_experts": 64, "num_experts_per_tok": 8, "num_shared_experts": 1, "moe_intermediate_size": 1024, "norm_topk_prob": true, "routed_scaling_factor": 2.5, "n_group": 1, "topk_group": 1, "tie_word_embeddings": false, "sliding_window": 4096, "sliding_window_pattern": 4},
+    "inert": ["first_k_dense_replace"]
+  },
+  "vars": [
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 4096]}},
+    {"name": "pattern", "value": {"$cfg": ["sliding_window_pattern", 4]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": {"$if": [{"$and": [{"$ne": [{"$var": "sw"}, null]}, {"$ne": [{"$mod": [{"$add": [{"$var": "i"}, 1]}, {"$var": "pattern"}]}, 0]}]}, "sliding_attention", "full_attention"]}}}},
+    {"name": "qk_norm", "value": {"norm": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "W", "bias": false}, "scope": "PerHeadShared"}},
+    {"name": "l_position", "layer": true, "value": {"$if": [{"$or": [{"$eq": [{"$var": "sw"}, null]}, {"$eq": [{"$index": [{"$var": "types"}, {"$var": "i"}]}, "sliding_attention"]}]}, {"Rope": {"$var": "rope"}}, "None"]}},
+    {"name": "e", "value": {"$alias": [["num_experts", "num_local_experts"], 64]}},
+    {"name": "k", "value": {"$cfg": "num_experts_per_tok"}},
+    {"name": "topk_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "k"}, 0]}, {"$le": [{"$var": "k"}, {"$var": "e"}]}]}, "top-k out of range"]}},
+    {"name": "moe_inter", "value": {"$cfg": "moe_intermediate_size"}},
+    {"name": "n_shared", "value": {"$cfg": "num_shared_experts"}},
+    {"name": "rsf", "value": {"$cfg": "routed_scaling_factor"}},
+    {"name": "ng", "value": {"$cfg": "n_group"}},
+    {"name": "tg", "value": {"$cfg": "topk_group"}},
+    {"name": "normalize", "value": {"$cfg": "norm_topk_prob"}},
+    {"name": "mlt", "value": {"$cfg?": "mlp_layer_types"}},
+    {"name": "fkd", "value": {"$cfg": "first_k_dense_replace"}},
+    {"name": "router", "value": {"scoring": "Sigmoid", "linear_bias": false, "selection_bias": true, "groups": {"n_group": {"$var": "ng"}, "topk_group": {"$var": "tg"}, "score": "Top2Sum"}, "normalize": {"$var": "normalize"}, "norm_eps": {"$if": [{"$var": "normalize"}, 1e-20, 0.0]}, "scale": {"$var": "rsf"}, "jitter_eps": 0.0, "per_expert_scale": false}},
+    {"name": "shared", "value": {"$if": [{"$gt": [{"$var": "n_shared"}, 0]}, {"intermediate": {"$mul": [{"$var": "moe_inter"}, {"$var": "n_shared"}]}, "sigmoid_gate": false}, null]}},
+    {"name": "sparse_here", "layer": true, "value": {"$if": [{"$ne": [{"$var": "mlt"}, null]}, {"$eq": [{"$index": [{"$var": "mlt"}, {"$var": "i"}]}, "sparse"]}, {"$ge": [{"$var": "i"}, {"$var": "fkd"}]}]}},
+    {"name": "l_ffn", "layer": true, "value": {"$if": [{"$var": "sparse_here"}, {"Moe": {"experts": {"$var": "e"}, "top_k": {"$var": "k"}, "intermediate": {"$var": "moe_inter"}, "act": {"$var": "act"}, "router": {"$var": "router"}, "shared": {"$var": "shared"}}}, {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": true, "up_bias": {"$var": "mbias"}, "down_bias": {"$var": "mbias"}}}]}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"moe.router": "{p}layers.{L}.mlp.gate", "moe.sel_bias": "{p}layers.{L}.mlp.e_score_correction_bias", "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj", "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj", "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj", "moe.shared.gate": "{p}layers.{L}.mlp.shared_experts.gate_proj", "moe.shared.up": "{p}layers.{L}.mlp.shared_experts.up_proj", "moe.shared.down": "{p}layers.{L}.mlp.shared_experts.down_proj"}]}},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "exaone_moe"}
+  ]
+}

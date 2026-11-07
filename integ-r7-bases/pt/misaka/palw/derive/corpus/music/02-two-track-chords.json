@@ -1,0 +1,42 @@
+{
+  "v": 1,
+  "ppq": 96,
+  "tempo_us_per_quarter": 600000,
+  "time_signature": [4, 4],
+  "tracks": [
+    {
+      "name": "piano",
+      "channel": 0,
+      "program": 0,
+      "notes": [
+        { "pitch": 67, "velocity": 96, "onset": 0, "duration": 384 },
+        { "pitch": 60, "velocity": 96, "onset": 0, "duration": 384 },
+        { "pitch": 64, "velocity": 96, "onset": 0, "duration": 384 },
+        { "pitch": 64, "velocity": 92, "onset": 384, "duration": 384 },
+        { "pitch": 57, "velocity": 92, "onset": 384, "duration": 384 },
+        { "pitch": 60, "velocity": 92, "onset": 384, "duration": 384 },
+        { "pitch": 60, "velocity": 90, "onset": 768, "duration": 384 },
+        { "pitch": 53, "velocity": 90, "onset": 768, "duration": 384 },
+        { "pitch": 57, "velocity": 90, "onset": 768, "duration": 384 },
+        { "pitch": 62, "velocity": 100, "onset": 1152, "duration": 384 },
+        { "pitch": 55, "velocity": 100, "onset": 1152, "duration": 384 },
+        { "pitch": 59, "velocity": 100, "onset": 1152, "duration": 384 }
+      ]
+    },
+    {
+      "name": "bass",
+      "channel": 1,
+      "program": 33,
+      "notes": [
+        { "pitch": 36, "velocity": 80, "onset": 0, "duration": 192 },
+        { "pitch": 36, "velocity": 72, "onset": 192, "duration": 192 },
+        { "pitch": 33, "velocity": 80, "onset": 384, "duration": 192 },
+        { "pitch": 33, "velocity": 72, "onset": 576, "duration": 192 },
+        { "pitch": 29, "velocity": 80, "onset": 768, "duration": 192 },
+        { "pitch": 29, "velocity": 72, "onset": 960, "duration": 192 },
+        { "pitch": 31, "velocity": 80, "onset": 1152, "duration": 192 },
+        { "pitch": 31, "velocity": 72, "onset": 1344, "duration": 192 }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::t12_permissionless_panel_e2e::complete_population::rfc06_complete_population_native_100k_four_retained_seals_and_fifth_refusal ... [rfc06-resource] generated_funded_workers_progress=10000 setup_ms=1510
+[rfc06-resource] generated_funded_workers_progress=20000 setup_ms=3034
+[rfc06-resource] generated_funded_workers_progress=30000 setup_ms=4410
+[rfc06-resource] generated_funded_workers_progress=40000 setup_ms=6021
+[rfc06-resource] generated_funded_workers_progress=50000 setup_ms=7584
+[rfc06-resource] generated_funded_workers_progress=60000 setup_ms=9244
+[rfc06-resource] generated_funded_workers_progress=70000 setup_ms=10689
+[rfc06-resource] generated_funded_workers_progress=80000 setup_ms=12092
+[rfc06-resource] generated_funded_workers_progress=90000 setup_ms=13528
+[rfc06-resource] generated_funded_workers=99993 setup_ms=20795
+[rfc06-resource] native_bonds=100001 retained_populations=4 retained_candidates=400000 encoded_engine_bytes=136406790 full_carriage_bytes=437719699 legacy_384mib_fits=false elapsed_ms=397055
+[rfc06-resource] canonical_carriage_saved=/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-canonical.borsh
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1014 filtered out; finished in 423.68s
+
+      426.37 real       370.10 user        25.72 sys
+         12262309888  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             4617231  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                7600  voluntary context switches
+              405026  involuntary context switches
+       2900567321290  instructions retired
+       1141191179268  cycles elapsed
+         17090606352  peak memory footprint

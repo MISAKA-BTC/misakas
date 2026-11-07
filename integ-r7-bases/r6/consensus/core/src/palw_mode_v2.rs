@@ -1,0 +1,2724 @@
+//! `PalwConsensusMode` — one switch, or none (ADR-0042 Decision 1, PR-10), and the ruleset
+//! fingerprint that makes RC == mainnet a hash a node checks (Decision 11).
+//!
+//! The five `Option` fences were a machine that invited half-activation: individually
+//! flippable, discovered mid-audit to interlock in ways their docs had to warn about. On the V2
+//! lineage a network is in exactly ONE mode, and `ConsensusV2` carries **all** of the ruleset or
+//! none of it:
+//!
+//! * every sub-parameter block is constructor-validated (no `Default`s anywhere in the bundle);
+//! * [`PalwConsensusParamsV2::validate`] holds the Decision 1 startup invariants — the checks a
+//!   node runs before it dials a peer, failing which it does not boot;
+//! * [`Params::validate_palw_v2`][crate::config::params::Params] (the config gate) additionally
+//!   refuses a MIXED params set: a `ConsensusV2` network may not set any V1 fence and may not
+//!   activate any V1 PALW PoW — there is no path that switches on half of two lineages.
+//!
+//! The fingerprint ([`palw_ruleset_id_v2`]) is the canonical hash of the whole bundle. Network
+//! identity is deliberately NOT inside it — the challenge's `network_domain` carries that
+//! (Decision 3a), so RC and mainnet can share one ruleset id while a testnet block still cannot
+//! replay on mainnet. The P2P handshake exchanges it and drops a mismatched peer early; the
+//! mainnet binary reads the RC's canonical ruleset bytes rather than a human re-typing numbers.
+//!
+//! What this module does NOT do: mint the RC genesis. The class/court catalog ROOTS are
+//! committed here; the genesis that registers BASE-0 must hash to them, and the boot path that
+//! loads it verifies the preimages and runs `verify_catalog_coverage_v1` against this build's
+//! own catalog — those land with the RC genesis itself, which is a network artifact, not a
+//! library one.
+
+use crate::Hash64;
+use crate::palw_admission_v2::{PalwAdmissionParamsV2, PalwAdmissionV2Error};
+use crate::palw_freeprompt_v3::{PalwFpV3Error, PalwFreePromptParamsV3};
+use crate::palw_panel_v2::PalwPanelParamsV2;
+use crate::palw_reward_v2::PalwRewardParamsV2;
+use crate::palw_state_v2::{PalwStateParamsV2, PalwStateV2Error};
+use blake2b_simd::Params as Blake2bParams;
+use std::collections::BTreeSet;
+
+pub const PALW_RULESET_ID_V2_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/v1";
+
+/// ADR-0038 Decision H: **the block cadence a V2 network runs at is frozen at 120 s**, and
+/// Decision H says it is "refused at `Params` construction rather than at sync time".
+///
+/// It lives here, in the bundle's own module, because of audit H2: `palw_ruleset_id_v2` hashes
+/// `PalwConsensusParamsV2` and nothing else, and the cadence was in neither. Every window in the
+/// bundle — bind, receipt, challenge, court, the withdrawal delay, the epoch length — is
+/// denominated in DAA score, so the cadence is what gives all of them their wall-clock meaning.
+/// Two networks could therefore share a `palw_ruleset_id` and run measurably different rules,
+/// which is exactly the "RC == mainnet, checkable by machine" promise Decision 11 exists to make.
+/// [`crate::config::params::Params::validate_palw_v2`] refuses a V2 network that is not at this
+/// cadence, so the id's silence about it is no longer a hole an operator can walk through.
+pub const PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS: u64 = 120_000;
+
+/// Version of the fork-choice ORDER a V2 network runs (`compare_palw_candidates_v1`'s key list
+/// and their precedence). Decision 11 names it in the ruleset-id preimage; it was not in the
+/// bundle, so two networks could share an id while ordering candidates differently — the one
+/// disagreement that partitions a chain without either side being wrong about anything else.
+pub const PALW_V2_FORK_CHOICE_VERSION: u16 = 1;
+
+/// Version of the trace/step object format the court adjudicates against
+/// (`PalwStepBindingV2` and the leaf encodings under it). Also named by Decision 11 and also
+/// absent: a network that changed the trace format would still fingerprint identically.
+///
+/// **2** since `PalwExecutionStepRefutationV1` gained `kv_checkpoint`: a refutation may supply an
+/// attention step's KV history as one committed checkpoint instead of one opening per cached
+/// position. That changes the object's encoding AND what is adjudicable — a v1 court handed a v2
+/// refutation would read the anchor as trailing bytes, and a v2 court accepts material a v1 court
+/// would have called `InputSetNotCanonical`. Either way the two disagree about a verdict, which is
+/// a fork, so the version is what makes them refuse each other at startup instead.
+///
+/// **3** when the model tiers' step spaces became adjudicable end to end, for the same two-courts
+/// reason twice over:
+/// * `PalwDecodeTokenPinV1` gained `TiledV1` — a tiled-scheme class pins its generated ids
+///   through the rows-tree root instead of whole logits rows (one selecting row of a model class
+///   is hundreds of kilobytes against the close carrier). A v2 court cannot decode the new
+///   variant, so it refuses evidence a v3 court convicts on.
+/// * `verify_kv_anchor` reads an anchor's state chunks under the GEOMETRY the class's registered
+///   `state_chunk_map_id` names (the v2 four-byte map included) instead of the v1 one-byte map
+///   unconditionally. A v2 court reads a v2-map class's chunks at a quarter width and answers
+///   `Unadjudicable` where a v3 court reaches a verdict.
+pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 3;
+
+/// **The trace format of a network whose prompt commitment is a Merkle root** (ADR-0081 Decision
+/// 3, the "3 → 4 bump" `check_execution_step_refutation_opened_v1` names as belonging to the
+/// genesis that arms `Params::palw_prompt_ids_merkle`). What moved is what a job's
+/// `prompt_token_ids_hash` IS and which close carries the prompt to the court
+/// (`PalwCourtVerdictProofV2::ArithmeticOpened`); every trace, leg and opening object is byte for
+/// byte the version-3 one. It is inside `palw_ruleset_id_v2`, so two networks cannot share a
+/// ruleset id and hash their prompts differently, and `Params::validate_palw_v2` refuses the
+/// fence without it and it without the fence.
+pub const PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS: u16 = 4;
+
+/// The ML-DSA-87 signing contexts the V2 ruleset uses, in a fixed order.
+///
+/// Decision 11 lists "signature_contexts" in the preimage, and this is the honest way to put
+/// them there: not a version NUMBER a human bumps, but the bytes themselves. The bundle commits
+/// to [`palw_v2_signature_contexts_root`] and the startup gate recomputes it from THIS BINARY'S
+/// constants, so a build whose contexts differ from what the network committed to refuses to
+/// run — the same shape as the algorithm-finalizer gate. Editing a context string here without
+/// re-minting the ruleset id is a startup failure rather than a silent cross-family replay.
+/// **Every ML-DSA context the ConsensusV2 acceptance layer verifies under.**
+///
+/// It listed two of them (audit M2-23) — the attempt and the receipt — while the acceptance layer
+/// also verifies bond registration, bond retirement, class registration, the carriage commitment
+/// and both court moves. A context is what separates one signature's meaning from another's, so a
+/// list that omits six of them commits to a ruleset identity that two builds can share while
+/// disagreeing about what a signature authorises. A refused object is SKIPPED and the block stands,
+/// so such a disagreement splits the class registry with no block ever rejected and nothing in
+/// either log saying so.
+///
+/// **FROZEN. This is the set testnet-11 and devnet committed to, and it may never grow**
+/// (mainnet audit M-8, 2026-09-06).
+///
+/// It is still INCOMPLETE — see [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2`] — and it is left
+/// incomplete on purpose. `signature_contexts_root` is inside `palw_ruleset_id_v2`, which is
+/// inside `Params::consensus_params_id`, which is what two nodes compare at the handshake;
+/// testnet-11 runs `palw_rc_shipped_params()` and its bundle takes this root. Appending an entry
+/// here re-mints a LIVE network's identity, and nothing in the suite would say so —
+/// `shipped_presets_have_pinned_fingerprints` pins mainnet, testnet-10, simnet and devnet, and has
+/// no testnet-11 row. `the_committed_context_set_of_a_live_network_is_frozen` pins this array and
+/// its root so the mistake is loud instead of silent.
+///
+/// A network that wants the complete set states it at GENESIS, through
+/// `Params::palw_signature_contexts_v2`.
+pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] = &[
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    // ADR-0078 Decision 4: the acceptance layer verifies a derivation under this context
+    // (`palw_v2_validate_objects`), so the ruleset id must commit to it (audit M2-23, once more).
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+];
+
+/// **Every ML-DSA-87 signing context the ConsensusV2 acceptance layer verifies under — the set
+/// [`PALW_V2_SIGNATURE_CONTEXTS`] was supposed to be** (mainnet audit M-8, 2026-09-06).
+///
+/// Ten contexts were missing from the frozen set, each with a live production verify site: bond
+/// capability, DA accusation and DA disclosure (`palw_v2_validate_objects` in the virtual
+/// processor), the court's close declaration and both attention-dissection moves
+/// (`palw_court_v2`), the free-prompt commitment and spend (`palw_freeprompt_v3`), and the
+/// carriage commitment and execution attestation (again the processor). The frozen list's own doc
+/// named the carriage commitment while the array did not contain it.
+///
+/// **The order is: the frozen nine, in their frozen order, then the ten additions.** The root is
+/// length-prefixed per entry so order matters; keeping V1 as a prefix means a reader can see at a
+/// glance that this is a superset and not a re-shuffle.
+///
+/// The MARKET contexts (`palw_model_market_v1`, `palw_model_lines_v1`) are deliberately absent.
+/// Their objects are refused wholesale unless `Params::palw_model_market` / `palw_model_lines` are
+/// armed, and those are top-level fences already written Some-only into `consensus_params_id` — so
+/// two builds that disagree about a market context already have different identities, by a
+/// different mechanism. `the_committed_context_set_is_derived_not_retyped` states that exclusion
+/// as a rule rather than leaving it as a silence.
+pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2: &[&[u8]] = &[
+    // — the frozen nine, in order —
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+    // — the ten the acceptance layer verifies and the frozen set never named —
+    crate::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    crate::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+];
+
+/// **The complete set, plus the one-move court's accusation** (ADR-0099 Decision 5 as built by
+/// ADR-0100). The acceptance layer verifies `ShardCourtAccused` under
+/// `PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT`, so a ruleset whose id does not name that context
+/// cannot arm `Params::palw_shard_court` — `validate_palw_v2` refuses the fence over any other
+/// root. **The order is V2, in V2's order, then the one addition**, for the reason V2 gives: a
+/// prefix is visibly a superset. No shipped preset states this set; a network that wants the court
+/// states it at genesis through `Params::palw_signature_contexts_v2`, and that is the "ruleset
+/// move" ADR-0099 §3 Decision 5 named.
+pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3: &[&[u8]] = &[
+    // — V2, in order —
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    crate::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+    // — the one-move court —
+    crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+    // — per-shard licensing (ADR-0100 Decision 4): the registrant's plan, a bond's shards —
+    crate::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+    crate::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+];
+
+/// **The complete set, plus the held regime's three contexts** (ADR-0103). The acceptance layer
+/// verifies `CheckpointAccused` under the checkpoint court's context and the held DA court's
+/// accusation and answer under its two, so `Params::palw_held_context` arms only over a bundle that
+/// commits to this set. V3 in V3's order, then the three: a prefix is visibly a superset. A V4
+/// network also runs everything V3 names — the one-move court and per-shard licensing — because the
+/// held regime needs the one-move court at or below its own height.
+pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4: &[&[u8]] = &[
+    // — V2, in order —
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    crate::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+    // — the one-move court —
+    crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+    // — per-shard licensing (ADR-0100 Decision 4): the registrant's plan, a bond's shards —
+    crate::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+    crate::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+    // — the held regime (ADR-0103): the checkpoint court and the held DA court's two moves —
+    crate::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_MLDSA87_ACCUSE_CONTEXT,
+    crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
+    crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
+];
+
+/// **The complete set, plus R-core+'s contexts** (ADR-0152 v3.1 §6, IMPL-7). The reporter-commit
+/// context (R-3) and the DA-disclosure-v4 context (DA-4) are new ML-DSA-87 contexts, and V4 cannot
+/// grow (`the_committed_context_set_is_derived_not_retyped` pins it as V3 plus exactly three), so
+/// `Params::palw_rcore_plus` arms only over a bundle that commits to this set: V4 in V4's order,
+/// then the additions — a prefix is visibly a superset. A V5 network runs everything V4 names.
+///
+/// **Two additions**: the v22 skeleton's reporter-commit context, then M3's DA-disclosure-v4 context
+/// (`MaterialDisclosedV2`, DA-4). Testnet-12's genesis bundle states this root, so M3's append
+/// re-minted testnet-12's ruleset id once more before M5 freezes the set — no other network commits
+/// to V5.
+pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5: &[&[u8]] = &[
+    // — V2, in order —
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    crate::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+    // — the one-move court —
+    crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+    // — per-shard licensing (ADR-0100 Decision 4): the registrant's plan, a bond's shards —
+    crate::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+    crate::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+    // — the held regime (ADR-0103): the checkpoint court and the held DA court's two moves —
+    crate::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_MLDSA87_ACCUSE_CONTEXT,
+    crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
+    crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
+    // — R-core+ (ADR-0152 IMPL-7): the reporter's commitment (R-3), then any locked signer's
+    //   answer to a data-availability session (DA-4, M3) —
+    crate::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
+    crate::palw_da_rcore_v1::PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
+];
+
+/// The families whose ML-DSA-87 contexts the ConsensusV2 acceptance layer verifies signatures
+/// from — the SOURCE the committed set is checked against, so the set is derived from the
+/// per-family registries every family already maintains rather than re-typed a second time.
+///
+/// A family is on this list iff `palw_v2_validate_objects`, the header/attempt door, the court or
+/// the free-prompt lane verifies a signature it owns. `palw_receipt` (the V1 receipt) and
+/// `palw_block_commitment` (a V1 fence `validate_palw_v2` refuses on a V2 network) are absent for
+/// that reason and no other.
+#[cfg(test)]
+pub(crate) const PALW_V2_ACCEPTANCE_FAMILIES: &[&[&[u8]]] = &[
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_ALL_DOMAINS,
+    crate::palw_panel_v2::PALW_PANEL_V2_ALL_DOMAINS,
+    crate::palw_state_v2::PALW_STATE_V2_ALL_DOMAINS,
+    crate::palw_court_v2::PALW_COURT_V2_ALL_DOMAINS,
+    crate::palw_freeprompt_v3::PALW_FP_V3_ALL_DOMAINS,
+    crate::palw_derived_v1::PALW_DERIVED_V1_ALL_DOMAINS,
+    crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS,
+    crate::palw_slash::PALW_S_ALL_DOMAINS,
+    crate::palw_shard_court_v1::PALW_SHARD_COURT_ALL_DOMAINS,
+    crate::palw_shard_licensing_v1::PALW_SHARD_LICENSING_ALL_DOMAINS,
+    crate::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_ALL_DOMAINS,
+    crate::palw_held_da_v1::PALW_HELD_DA_ALL_DOMAINS,
+];
+
+/// The naming convention that separates a signing CONTEXT from a hashing domain inside those
+/// registries. Every ML-DSA-87 context in this tree ends `mldsa87/v1`; no hashing domain does.
+/// Pinned by `the_committed_context_set_is_derived_not_retyped`, which asserts it in both
+/// directions, so the convention is load-bearing and checkable rather than a habit.
+#[cfg(test)]
+pub(crate) fn is_mldsa87_signing_context(domain: &[u8]) -> bool {
+    domain.ends_with(b"mldsa87/v1")
+}
+
+pub const PALW_V2_SIGNATURE_CONTEXTS_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/signature-contexts/v1";
+
+/// `H(count ‖ (len ‖ context)*)` over a context list. Length-prefixed per entry so no two
+/// different context lists can concatenate to the same preimage.
+///
+/// ONE spelling of the hash for both sets: a second copy of these eight lines is a second place
+/// the encoding could drift, and the two roots must be comparable.
+fn palw_v2_signature_contexts_root_of(contexts: &[&[u8]]) -> Hash64 {
+    let mut state = Blake2bParams::new().hash_length(64).key(PALW_V2_SIGNATURE_CONTEXTS_DOMAIN).to_state();
+    state.update(&(contexts.len() as u64).to_le_bytes());
+    for context in contexts {
+        state.update(&(context.len() as u64).to_le_bytes());
+        state.update(context);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **The literal value of the frozen root, as testnet-11 and devnet committed to it.**
+///
+/// ONE spelling of the golden, read by `the_committed_context_set_of_a_live_network_is_frozen`
+/// here and by `the_complete_context_set_is_carded_and_leaves_every_live_network_where_it_was` in
+/// `config::params`. Both need a value that does NOT move when [`PALW_V2_SIGNATURE_CONTEXTS`]
+/// moves — an assertion against `palw_v2_signature_contexts_root()` agrees with the array in every
+/// possible world and is exactly the shape of test this audit item was raised about.
+///
+/// Derived from this module's own hash of the frozen nine and cross-checked against an independent
+/// BLAKE2b of the same length-prefixed preimage; never transcribed from elsewhere in the tree.
+#[cfg(test)]
+pub(crate) const PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX: &str = "ce2f210968205e2319c073b0532f9d09682509222bbffb26460377b2fe5c3da1\
+     8df84a438f0ef862201161e8b95798f57b6a7709d040869dcaaf02a47719d2cb";
+
+/// The root of the FROZEN set — testnet-11's and devnet's committed value. Byte-identical to what
+/// this function returned before the complete set existed; do not change what it hashes.
+pub fn palw_v2_signature_contexts_root() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS)
+}
+
+/// The root of [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2`] — what a network that arms
+/// `Params::palw_signature_contexts_v2` at genesis commits to.
+pub fn palw_v2_signature_contexts_root_v2() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2)
+}
+
+/// The root of [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3`] — what a network that arms the
+/// one-move court commits to at genesis.
+pub fn palw_v2_signature_contexts_root_v3() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3)
+}
+
+/// The root of [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4`] — what a network that arms the held
+/// regime (ADR-0103) commits to at genesis.
+pub fn palw_v2_signature_contexts_root_v4() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4)
+}
+
+/// The root of [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5`] — what a network that arms
+/// `Params::palw_rcore_plus` (ADR-0152) commits to at genesis. Testnet-12 alone.
+pub fn palw_v2_signature_contexts_root_v5() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5)
+}
+
+/// **Does this committed root include every context the one-move court needs?** V3 does, V4 is
+/// V3 plus the held regime's three, and V5 is V4 plus R-core+'s — so a fence that needs V3 is
+/// satisfied by any of the three.
+pub fn palw_v2_signature_contexts_root_covers_v3(root: &Hash64) -> bool {
+    *root == palw_v2_signature_contexts_root_v3() || palw_v2_signature_contexts_root_covers_v4(root)
+}
+
+/// **Does this committed root include every context the held regime needs?** V4 does, and V5 is V4
+/// plus R-core+'s (ADR-0152 IMPL-7: "the held-context gate accepts V5 as a superset").
+pub fn palw_v2_signature_contexts_root_covers_v4(root: &Hash64) -> bool {
+    *root == palw_v2_signature_contexts_root_v4() || *root == palw_v2_signature_contexts_root_v5()
+}
+
+pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
+
+/// `H(network_id_bytes)` — the value every V2-lineage object binds as its `network_domain`
+/// (ADR-0042 Decision 3a, ADR-0044).
+///
+/// **One derivation, re-exported, not a second one.** The integration found this concept defined
+/// TWICE under two different domain keys — here and in `palw_attempt_v2` — with the live header
+/// path reading this one and the envelope's own validation binding the other. Two derivations of
+/// a consensus identity are two identities: a correctly-formed attempt would have been refused by
+/// the validator that computed the domain the other way. `palw_attempt_v2` owns the derivation
+/// (its domain key is the one the frozen challenge preimage already binds), and this path is that
+/// function under the name the pipeline calls it by.
+pub use crate::palw_attempt_v2::palw_network_domain_v2;
+
+/// The court's shape, from which the worst-case honest prosecution is DERIVED (ADR-0042
+/// Decision 8: `rounds = ceil(log2(max_step_leaf_count)) + terminal/opening rounds`).
+///
+/// This replaces a bare `worst_case_court_duration_daa` field. The audit's objection to that
+/// field was not that it was wrong but that it was **self-certifying**: the one startup
+/// invariant standing between the ruleset and an un-prosecutable fraud window compared
+/// `window_court` against a number the same operator typed, with nothing deriving it. Splitting
+/// it into the three quantities the ADR's formula actually takes does not make them
+/// unfalsifiable — an operator can still understate `max_step_leaf_count` — but each is now a
+/// NAMED fact with a place to be checked: the leaf count is a property of the registered class
+/// catalog, which the RC genesis loader verifies against the catalog preimage, and the turn
+/// deadline is a protocol constant a reader can compare against the ladder's own measurement.
+/// **Sized from what a court close can be CARRIED in, not from a number that sounded generous** —
+/// see below.
+///
+/// # What one court close may cost to carry, in bytes
+///
+/// ADR-0049 Decision C, restated to the quantity the ADR's own table names ("per refutation and
+/// per court close ... plus Merkle paths") rather than to the weight bytes alone — and, since
+/// **ADR-0080 design A**, derived from a CHUNK GROUP rather than from one transaction.
+///
+/// ## Why this is a carriage number and not a taste number
+///
+/// A close is evidence on `SUBNETWORK_ID_PALW_LIFECYCLE`, and what carries it is the chunk group
+/// ADR-0075 Decision 14 already built: an object too large for one carrier is cut into
+/// `ObjectChunk`s of at most [`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES`], each an
+/// ordinary lifecycle transaction, and the chain reassembles them IN STATE keyed by the digest of
+/// the whole object. So the binding question is no longer "what fits one transaction" but "how
+/// many transactions may one close span", and the ceiling is derived from the group:
+///
+/// ```text
+/// ceiling x 1.20 <= chunks x PALW_OBJECT_CHUNK_MAX_BYTES
+///   =>  ceiling = floor(27 x 100,000 / 1.20) = 2,250,000
+/// ```
+///
+/// **Only the count moves.** `PALW_OBJECT_CHUNK_MAX_BYTES` is 100,000 and does not: it is already
+/// the largest round number that relays, sitting under the 120,000 bytes a standard transaction
+/// carries (`transient_mass = size x TRANSIENT_BYTE_TO_MASS_FACTOR`, and the mempool refuses a
+/// transaction whose transient mass exceeds `MAXIMUM_STANDARD_TRANSACTION_MASS` = 480,000). The
+/// COUNT is [`DEFAULT_MAX_CLOSE_CHUNKS`], and it is the one quantity a network chooses here.
+///
+/// The `1.20` is the same measured framing factor the one-transaction derivation used: the encoded
+/// object runs about 1.2x the bytes this ceiling counts, because every opening carries its own
+/// coordinate and length prefixes (measured 90,888 borsh against 77,568 counted). The 18,000-byte
+/// carrier allowance the old derivation subtracted once is gone from the arithmetic, because it is
+/// now paid PER CHUNK out of the 20,000 bytes each chunk leaves under the relay bound rather than
+/// once out of the whole close.
+///
+/// ## The derivation this replaces — right, and no longer binding
+///
+/// Until ADR-0080 a close weighed in ONE payload, so the largest close that could exist was the
+/// largest relayable transaction:
+///
+/// ```text
+/// ceiling x 1.20 + 18,000 <= 120,000   =>   ceiling <= 85,000
+/// ```
+///
+/// and the shipped value was 80 KiB, the round number under it. That reasoning is still correct
+/// about a transaction — [`PALW_STANDARD_TX_BYTES`] still spells the 120,000, and
+/// `the_close_ceiling_fits_a_carrier_transaction` still runs it — it simply stopped being the
+/// bound on a close, because a close is no longer one transaction. What survives it verbatim is
+/// the per-chunk half: 100,000 bytes is chosen against that same 120,000.
+///
+/// ## What is NOT yet derived from this, and is a wall rather than a rounding
+///
+/// [`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT`] is **8**. The transport this ceiling is
+/// derived from therefore reassembles at most 800,000 bytes today, and 27 chunks is 2,700,000. A
+/// class admitted at this ceiling whose close exceeds 800,000 bytes has a price and no carrier
+/// until that count moves with it — the split-court close is ADR-0080's other half, and it is not
+/// this constant's to land. The number here is the ceiling the COURT prices; the number there is
+/// what the chunk transport will carry, and a reader comparing them should expect the second to
+/// rise to meet the first rather than reading the gap as an argument for lowering this one.
+///
+/// ## What a close is made of, measured on the shipped floor
+///
+/// Three arms, and the two that grow with the job are the ones a weight-bytes ceiling never saw:
+///
+/// | arm | grows with | floor at the old `n_ctx` 512 / vocab 4,096 |
+/// |---|---|---|
+/// | the artifact opening | tile x row | 32,768 |
+/// | the disputed step's KV history | `n_ctx` — one step opening per position per ref, each with its own path; ADR-0030's checkpoint anchor makes this cheap, but no anchor exists at a prefill position or the first decode call | ~3 MB |
+/// | the generated-token pin (Decision E) | `decode_tokens x vocabulary` — `base0_logits_trace_root_v1` is a flat hash, so no single row can be opened | 65,536 at the canonical job, 8 MB at the longest |
+///
+/// Measured whole closes, assembled from real executions before the anchor landed: 90,893 bytes at
+/// `n_ctx` 16, 139,437 at 24, and **750,716 at the floor's own declared 64/64 job** — against a
+/// derived 32,768. That gap is what this ceiling exists to make visible at admission instead of at
+/// dispute time.
+///
+/// ## What it admits
+///
+/// `PALW_RC_BASE0_GEOMETRY` is `vocab_size` 1,024 and `n_ctx` 12, and it was chosen against the
+/// 80 KiB ceiling: its worst close is 52,704, which was 64% of that number and is 2.3% of this
+/// one. Nothing about the floor moves — a ceiling admits, it does not require — and what the
+/// wider ceiling buys is the row above it: the dense A16 tier at a context wide enough to emit a
+/// real artifact, which at 80 KiB stopped at `n_ctx` 30 and at 2,250,000 does not.
+///
+/// The ladder is the other gate and it is FIRST: `verify_class_admission_v4` refuses on
+/// `max_step_leaf_count` before it prices anything, so raising this alone widens no family. See
+/// `the_widest_context_each_family_admits`, which measures both gates together rather than
+/// leaving the pair to be reasoned about.
+///
+/// ## It is frozen with the network
+///
+/// This is a `PalwConsensusParamsV2` field and therefore inside `palw_ruleset_id_v2`. A class that
+/// exceeds it cannot join a running chain, so it is chosen once, at genesis, for every class the
+/// network will ever admit — which is why `assemble_palw_rc_identity_v2` refuses an RC identity
+/// carrying any other value.
+///
+/// ## The other line derived 400 KiB from the wrong mass arm
+///
+/// `fix/audit-batch-1` lowered this same field from 1 MiB for the right reason — a close no node
+/// would relay makes a court that "looks configured and is unreachable" — but sized it against
+/// `compute_mass` alone (`mass_per_tx_byte` is 1, so 480,000 mass reads as 480,000 bytes). The
+/// mempool checks BOTH arms: `check_transaction_standard.rs` rejects on `transient_mass` too, and
+/// that arm is `size x 4`. So a TRANSACTION holds 120,000 bytes, not 480,000. That is why the
+/// per-chunk number is 100,000 and not 400,000; the count above is what makes the ceiling large,
+/// and it is large by carrying more transactions rather than by mis-reading one.
+pub const DEFAULT_MAX_CLOSE_BYTES: u64 = palw_close_bytes_for_chunks_v1(DEFAULT_MAX_CLOSE_CHUNKS);
+
+/// **How many chunk-group parts one court close may span** (ADR-0080 design A).
+///
+/// The one number a network chooses in this derivation; [`DEFAULT_MAX_CLOSE_BYTES`] is its
+/// consequence. 27 is what admits the dense A16 row at a context wide enough for ADR-0078's
+/// artifact demonstration to come out of a real inference: that row's binding node closes at
+/// 1,154,673 bytes at `n_ctx` 512, which is 14 chunks framed, and the hybrid tier's is 2,240,241,
+/// which is 27. Rounding the count DOWN to the dense row alone would have priced a court that
+/// cannot prosecute the class the same ladder admits.
+pub const DEFAULT_MAX_CLOSE_CHUNKS: u64 = 27;
+
+/// **The framing factor, as a fraction.** The encoded object runs about 1.20x the bytes the
+/// ceiling counts (measured 90,888 borsh against 77,568 counted), so a close of `n` counted bytes
+/// occupies `n * 12 / 10` carried bytes. Spelled as a numerator and denominator rather than as a
+/// float because this is consensus arithmetic and a float would make the ceiling platform-shaped.
+pub const PALW_CLOSE_FRAMING_NUMERATOR: u64 = 12;
+/// See [`PALW_CLOSE_FRAMING_NUMERATOR`].
+pub const PALW_CLOSE_FRAMING_DENOMINATOR: u64 = 10;
+
+/// The counted bytes `chunks` chunk-group parts carry, after framing — the derivation
+/// [`DEFAULT_MAX_CLOSE_BYTES`] is.
+pub const fn palw_close_bytes_for_chunks_v1(chunks: u64) -> u64 {
+    let carried = chunks.saturating_mul(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+    carried.saturating_mul(PALW_CLOSE_FRAMING_DENOMINATOR) / PALW_CLOSE_FRAMING_NUMERATOR
+}
+
+/// The chunk-group parts a close of `bytes` counted bytes needs, framed and rounded up — the
+/// inverse of [`palw_close_bytes_for_chunks_v1`] and the unit the admission gate compares in.
+///
+/// Rounding UP is the honest direction: half a chunk is a whole transaction, and a close is
+/// refused for needing a part the ruleset will not pay for, not for a byte.
+pub const fn palw_close_chunks_for_bytes_v1(bytes: u64) -> u64 {
+    let carried = bytes.saturating_mul(PALW_CLOSE_FRAMING_NUMERATOR) / PALW_CLOSE_FRAMING_DENOMINATOR;
+    carried.div_ceil(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64)
+}
+
+/// **Can this ruleset carry AND verify a close of `bytes`?** — the ONE reading of the two bounds a
+/// court holds over a close: the verification-cost ceiling ADR-0049 Decision C put in the ruleset
+/// (`max_close_bytes`, what a validating node will hash) and ADR-0080 design A's carriage count
+/// (`max_close_chunks`, what the network pays to relay).
+///
+/// They are the same refusal only on a ruleset whose byte ceiling sits on the chunk grid. The RC's
+/// does (2,250,000 = `palw_close_bytes_for_chunks_v1(27)`); the devnet's does not (81,920 against
+/// a carrier of 83,333), and until this predicate the admission gate and the boot gate compared
+/// CHUNKS only while `check_close_cost_v2` compared BYTES only — so on devnet a permissionless
+/// class whose worst close fell in [81,921 .. 83,334] was admitted, and every honest close of its
+/// widest dispute was refused `CloseTooLarge`: a class admitted and unprosecutable at its own
+/// widest dispute, 1,414 bytes wide (measured 2026-09-03; no shipped row is in the gap — the
+/// graph-v5@512 row closes at 81,312 B on both presets). Every reader asks this predicate now, so
+/// the two units can no longer disagree; which unit IS the ruleset — whether devnet's 81,920 should
+/// be restated on the grid as 83,333 — is an ADR question that moves a ruleset id, not this one.
+pub const fn palw_close_fits_court_v1(bytes: u64, court: &PalwCourtParamsV2) -> bool {
+    bytes <= court.max_close_bytes && palw_close_chunks_for_bytes_v1(bytes) <= court.max_close_chunks
+}
+
+/// **The mempool's standard-transaction mass, mirrored** — the number
+/// [`DEFAULT_MAX_CLOSE_BYTES`] is derived from.
+///
+/// The constant itself is `mining::mempool::check_transaction_standard`'s and private to that
+/// crate, which `kaspa-consensus-core` does not depend on. Mirroring it is a second source, so it
+/// is guarded from the side that owns it: `the_palw_close_ceiling_mirror_is_the_real_limit` in that
+/// module fails if the two ever differ. A mirror nobody compares is how a derived number quietly
+/// stops being derived from anything.
+pub const PALW_MIRRORED_STANDARD_TX_MASS: u64 = 480_000;
+
+/// The largest STANDARD transaction, in bytes: transient mass is `size x 4`, and a transaction
+/// whose transient mass exceeds the standard limit is refused before it is relayed.
+pub const PALW_STANDARD_TX_BYTES: u64 = PALW_MIRRORED_STANDARD_TX_MASS / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
+
+/// The floor's widest step is 32,768 multiply-accumulates. This is 512 times that: generous for a
+/// class of the floor's shape, and still milliseconds of scalar `int8` CPU, which is the budget the
+/// court was always sized for. A close is bounded to 80 KiB of payload, and a `MatMulQuant`'s
+/// multiply-accumulate count equals its opened weight bytes, so only a `KvScaled` node can
+/// approach this at all — the floor's own widest is 131,072.
+pub const DEFAULT_MAX_TERMINAL_MACS: u64 = 16 * 1024 * 1024;
+/// A step reads its `input_refs` and at most one weight operand. Eight is well past any node in the
+/// BASE-0 or Qwen graphs (the widest is the gated-delta-net recurrence's five rows; the floor's is
+/// two).
+pub const DEFAULT_MAX_OPERAND_COUNT: u32 = 8;
+
+/// **The shipped ladder's arity: binary, one pinned midpoint a round** (ADR-0082 Decision 3's
+/// baseline). Every shipped preset's court carries this value; a wider arity is a ruleset move.
+pub const PALW_COURT_BINARY_ARITY_V1: u8 = 2;
+
+/// One opaque number becomes three checkable ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwCourtParamsV2 {
+    /// Worst-case step-tree leaf count over every registered class — what the bisection ladder
+    /// must be able to walk. A property of the class catalog, not of the operator's opinion.
+    max_step_leaf_count: u64,
+    /// DAA budget one bisection turn gets before the silent party defaults.
+    turn_deadline_daa: u64,
+    /// Rounds beyond the bisection itself: the terminal one-step adjudication and its opening.
+    terminal_rounds: u32,
+    /// **ADR-0049 Decision C: what one round may COST.** `max_step_leaf_count` bounds how many
+    /// rounds a dispute takes and nothing bounded the size of a round, so the terminal
+    /// adjudication's price was the model's — ~223 MiB of opening for Qwen2.5-1.5B's unembed
+    /// against ADR-0046's 152 KB court-close budget. These three are compared against
+    /// `palw_class_admission_v2::derive_court_cost_v1`, which reads them off a class's graph, and
+    /// against the close that actually arrives (`palw_court_v2::check_close_cost_v2`).
+    ///
+    /// `max_close_bytes` counts **the whole close** — the artifact openings, the refutation's own
+    /// step leaves, and every Merkle path element on both — because that is what has to fit in one
+    /// transaction. It was named `max_opening_bytes` and counted the weight bytes alone, which
+    /// understated the shipped floor's most expensive close by 23x: 32,768 derived against 750,716
+    /// real, the difference being a KV history that the ceiling never looked at.
+    ///
+    /// They are here, inside `palw_ruleset_id_v2`, for the same reason the ladder is: a class that
+    /// exceeds them cannot join a running chain, so the ceiling is chosen once, at genesis, for
+    /// every class the network ever intends to admit.
+    max_close_bytes: u64,
+    /// **The same ceiling in the unit it is actually carried in** (ADR-0080 design A).
+    ///
+    /// `max_close_bytes` above is a derived restatement of THIS number — see
+    /// [`palw_close_bytes_for_chunks_v1`] — and the admission gate compares chunks, not bytes,
+    /// because a close rides an `ObjectChunk` group and half a chunk is a whole transaction. The
+    /// two are kept consistent by construction: every constructor derives one from the other, so
+    /// there is no way to build a court whose byte ceiling and chunk ceiling disagree, which is
+    /// the failure mode a mirrored number has.
+    max_close_chunks: u64,
+    max_terminal_macs: u64,
+    max_operand_count: u32,
+    /// **ADR-0082 Decision 3: the dissection arity.** `2` is the shipped binary ladder; `k`
+    /// discloses the `k` subtree roots below the current node — `log₂ k` binary levels at once,
+    /// authenticated by hashing them back up — so a search over `space` items takes
+    /// `⌈log₂ space / log₂ k⌉` rounds (`palw_attn_dissect::palw_kary_rounds_v1`). It is DERIVED
+    /// at genesis from the move budget the window affords over the widest row the ruleset
+    /// admits, never chosen; a power of two in `2..=64`; inside the ruleset id like every field
+    /// beside it. The binary ladder at `2^32` already spends `(2 × 32 + 2) × 45 = 2,970` of the
+    /// RC's 3,000-DAA window, which is why a history dissection cannot be added without it.
+    dissection_arity: u8,
+}
+
+impl PalwCourtParamsV2 {
+    /// The pre-Decision-C constructor, kept so existing callers state only what they meant to.
+    /// It installs the DEFAULT cost ceilings, which are deliberately generous rather than absent:
+    /// a zero ceiling would refuse every class, and no ceiling is what this ADR exists to end.
+    pub fn new(max_step_leaf_count: u64, turn_deadline_daa: u64, terminal_rounds: u32) -> Result<Self, PalwModeV2Error> {
+        Self::with_cost_ceilings(
+            max_step_leaf_count,
+            turn_deadline_daa,
+            terminal_rounds,
+            DEFAULT_MAX_CLOSE_BYTES,
+            DEFAULT_MAX_TERMINAL_MACS,
+            DEFAULT_MAX_OPERAND_COUNT,
+        )
+    }
+
+    /// Every court parameter, including ADR-0049 Decision C's three cost ceilings.
+    pub fn with_cost_ceilings(
+        max_step_leaf_count: u64,
+        turn_deadline_daa: u64,
+        terminal_rounds: u32,
+        max_close_bytes: u64,
+        max_terminal_macs: u64,
+        max_operand_count: u32,
+    ) -> Result<Self, PalwModeV2Error> {
+        if max_close_bytes == 0 || max_terminal_macs == 0 || max_operand_count == 0 {
+            return Err(PalwModeV2Error::Invalid("a zero court cost ceiling admits no class at all"));
+        }
+        let max_close_chunks = palw_close_chunks_for_bytes_v1(max_close_bytes);
+        if max_step_leaf_count < 2 {
+            return Err(PalwModeV2Error::Invalid("a trace with fewer than two step leaves cannot be bisected"));
+        }
+        if turn_deadline_daa == 0 {
+            return Err(PalwModeV2Error::Invalid("a zero turn deadline defaults whichever party the block order reaches first"));
+        }
+        if terminal_rounds == 0 {
+            return Err(PalwModeV2Error::Invalid("the terminal adjudication is a round; zero of them never reaches a verdict"));
+        }
+        Ok(Self {
+            max_step_leaf_count,
+            turn_deadline_daa,
+            terminal_rounds,
+            max_close_bytes,
+            max_close_chunks,
+            max_terminal_macs,
+            max_operand_count,
+            dissection_arity: PALW_COURT_BINARY_ARITY_V1,
+        })
+    }
+
+    /// The same court with a wider dissection (ADR-0082 Decision 3). Refuses an arity that is
+    /// not a power of two in `2..=64`, by name.
+    pub fn with_dissection_arity(mut self, arity: u8) -> Result<Self, PalwModeV2Error> {
+        if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
+            return Err(PalwModeV2Error::Invalid("a dissection arity is a power of two in 2..=64"));
+        }
+        self.dissection_arity = arity;
+        Ok(self)
+    }
+
+    pub fn dissection_arity(&self) -> u8 {
+        self.dissection_arity
+    }
+
+    /// **The rounds a dissection over `history_positions` positions takes**, at `tile` positions a
+    /// tile and this court's arity (ADR-0082 Decision 2). `None` for a zero tile.
+    pub fn history_dissection_rounds(&self, history_positions: u64, tile: u32) -> Option<u32> {
+        crate::palw_attn_dissect::palw_attn_dissection_rounds_v1(history_positions, tile, self.dissection_arity)
+    }
+
+    /// [`Self::worst_case_duration_daa`] with a history dissection of `history_positions`
+    /// positions appended to the ladder:
+    /// `(2 × (ladder_rounds + history_rounds) + terminal + root_claim) × deadline`.
+    /// The window gate a graph-v5 row is admitted against; a row with no fused site passes
+    /// `history_positions = 0` and gets the ladder's own number, unchanged.
+    ///
+    /// **The root claim is a move** (audit A M-2). ADR-0082 Z4's count omitted it, and it is the
+    /// one move with no clock of its own: the protocol drawn at the head of `palw_attn_court_v1`
+    /// shows `ladder Terminal ──▶ root claim ──▶ AwaitDisclosure`, so a dissection's clocked
+    /// sequence is one `turn_deadline` longer than the formula said. With `terminal_rounds = 1` a
+    /// row would be admitted whose honest exchange needs one more move than `window_court` holds,
+    /// and the party that legitimately moves last loses at the backstop. Counted only where there
+    /// IS a dissection.
+    pub fn worst_case_duration_with_history_daa(&self, history_positions: u64, tile: u32) -> Option<u64> {
+        let ladder = u64::from(self.bisection_rounds());
+        let history = u64::from(self.history_dissection_rounds(history_positions, tile)?);
+        let root_claim = u64::from(history_positions != 0);
+        let moves =
+            ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(self.terminal_rounds))?.checked_add(root_claim)?;
+        moves.checked_mul(self.turn_deadline_daa)
+    }
+
+    /// **ADR-0103 Decision 5: the same dispute with no leaf ladder in it.** Under the held regime
+    /// no bisection is played — every conviction is a one-move object, or a dissection the
+    /// accusation opens at its named leaf — so a session's moves are the root claim, the history
+    /// rounds (both parties), and the terminal: `(2 × history_rounds + terminal + root_claim) ×
+    /// deadline`. `max_step_leaf_count` stays in the ruleset id as the depth that prices a Merkle
+    /// path, and costs this clock nothing. At zero history (no fused site) it is the terminal
+    /// alone.
+    pub fn worst_case_duration_held_daa(&self, history_positions: u64, tile: u32) -> Option<u64> {
+        let history = u64::from(self.history_dissection_rounds(history_positions, tile)?);
+        let root_claim = u64::from(history_positions != 0);
+        let moves = history.checked_mul(2)?.checked_add(u64::from(self.terminal_rounds))?.checked_add(root_claim)?;
+        moves.checked_mul(self.turn_deadline_daa)
+    }
+
+    pub fn max_close_bytes(&self) -> u64 {
+        self.max_close_bytes
+    }
+
+    /// **What the admission gate actually compares** (ADR-0080 design A): the chunk-group parts
+    /// this ruleset will pay to carry for one close. [`Self::max_close_bytes`] is this number
+    /// framed back into counted bytes, for the readers that still speak in bytes.
+    pub fn max_close_chunks(&self) -> u64 {
+        self.max_close_chunks
+    }
+
+    pub fn max_terminal_macs(&self) -> u64 {
+        self.max_terminal_macs
+    }
+
+    pub fn max_operand_count(&self) -> u32 {
+        self.max_operand_count
+    }
+
+    pub fn max_step_leaf_count(&self) -> u64 {
+        self.max_step_leaf_count
+    }
+
+    pub fn turn_deadline_daa(&self) -> u64 {
+        self.turn_deadline_daa
+    }
+
+    pub fn terminal_rounds(&self) -> u32 {
+        self.terminal_rounds
+    }
+
+    /// `⌈log₂ max_step_leaf_count⌉` — the rounds the LEAF ladder takes to isolate one step.
+    ///
+    /// **At the ladder's own arity, which is two** (audit D H-2). This read
+    /// `self.dissection_arity` and so priced a k-ary LEAF ladder that no session plays: a
+    /// session's ladder is [`crate::palw_bisect::PalwBisectLadderV1`], binary at a pinned
+    /// midpoint, and `PalwKaryLadderV1` has no caller outside its own tests. At the RC's numbers
+    /// the difference is not cosmetic — the derivation reported 34 moves where the played dispute
+    /// takes 60, so `window_court` "held" a prosecution it does not hold and an honest challenger
+    /// playing correctly runs out of clock. ADR-0082 Decision 3's k buys rounds of the HISTORY
+    /// search, which is the only search that is k-ary today; the day the ladder itself becomes
+    /// k-ary, this constant moves with it and one place decides.
+    pub fn bisection_rounds(&self) -> u32 {
+        crate::palw_attn_dissect::palw_kary_rounds_v1(self.max_step_leaf_count, PALW_COURT_LEAF_LADDER_ARITY_V1).unwrap_or(u32::MAX)
+    }
+
+    /// ADR-0042 Decision 8's formula, in DAA units. `None` on overflow, which the startup gate
+    /// treats as a refusal rather than a saturation — a court window that cannot be represented
+    /// is not a long window.
+    pub fn worst_case_duration_daa(&self) -> Option<u64> {
+        // **A round is TWO clocked moves, and the clock runs per move** (audit M2-24). Each
+        // bisection round is a disclosure and a verdict, each with its own `turn_deadline_daa`, so
+        // counting rounds understated the ladder by a factor of two — a party moving at
+        // `deadline − 1` every time outlasts a `window_court` sized from this number, and the
+        // backstop then closes a dispute that was being played correctly. The terminal rounds are
+        // single moves and are counted as such.
+        let bisection_moves = u64::from(self.bisection_rounds()).checked_mul(2)?;
+        let moves = bisection_moves.checked_add(u64::from(self.terminal_rounds))?;
+        moves.checked_mul(self.turn_deadline_daa)
+    }
+}
+
+/// **ADR-0082 Decision 3: the arity a ruleset DERIVES, never writes.**
+///
+/// The smallest legal power of two for which the whole dispute — the leaf ladder, the history
+/// dissection, and the terminal moves — fits the court window at the deadline SA-4 derives:
+///
+/// ```text
+///   (2 · (ceil(log2 L) + ceil(log_k (history / tile))) + terminal + 1) · turn_deadline  <=  window_court
+/// ```
+///
+/// `log2 L` and not `log_k L`: the LEAF ladder a session plays is binary
+/// ([`PALW_COURT_LEAF_LADDER_ARITY_V1`]), and `k` buys rounds of the HISTORY search alone. The
+/// trailing `+ 1` is the root claim, the move that opens the dissection.
+///
+/// Smallest, not largest, because a wider round costs BYTES: `arity` children of
+/// `(4 + 8 + 8 · lanes)` ride every move, so the arity that just fits the clock is the arity that
+/// spends the least carrier. Every input is a ruleset quantity — the window, the SA-4 deadline,
+/// the ladder's `max_step_leaf_count`, the widest history the ruleset will admit, the class map's
+/// tile, the terminal move count and the widest output tile any registered row disputes — so no
+/// preset writes a `k` and no `k` can be chosen.
+///
+/// **And a round has to fit a carrier, which is a property of the (arity, lanes) PAIR.** At a
+/// 128-lane tile every legal arity fits one framed carrier; at the hybrid's 256-lane head, arity
+/// 64 is 132,102 bytes and does not. The bound is applied at the WIDEST output tile the ruleset
+/// registers, and a `k` whose round no carrier holds is REFUSED rather than priced: `None`. It can
+/// only ever refuse from above — a smaller arity discloses strictly fewer children — so the
+/// smallest window-fitting arity is also the cheapest one to check.
+///
+/// `history_positions_max = 0` is a ruleset with no fused attention site: the dissection has no
+/// rounds and the answer is whatever arity the leaf ladder alone needs.
+///
+/// `None` when no legal arity fits — which is the honest answer for a window that cannot hold the
+/// dispute it admits, and the refusal ADR-0082 Z4 turns into an admission error rather than a
+/// court that runs out of clock mid-prosecution.
+/// **The arity of the LEAF ladder a session actually plays.**
+///
+/// `PalwBisectLadderV1` is binary at a pinned midpoint (`palw_bisect`'s header), and it is what
+/// `PalwCourtSessionStateV2::ladder` holds. ADR-0082 Decision 3's `dissection_arity` is the
+/// HISTORY search's, not this one; naming the two apart is what keeps a derivation from pricing a
+/// ladder no chain runs (audit D H-2).
+pub const PALW_COURT_LEAF_LADDER_ARITY_V1: u8 = 2;
+
+#[allow(clippy::too_many_arguments)]
+pub fn palw_court_arity_v1(
+    window_court: u64,
+    turn_deadline: u64,
+    max_step_leaves: u64,
+    history_positions_max: u64,
+    tile: u32,
+    terminal_moves: u32,
+    widest_lane_count: usize,
+    max_close_chunks: u64,
+) -> Option<u8> {
+    use crate::palw_attn_dissect::{
+        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
+        palw_attn_dissection_rounds_v1, palw_kary_rounds_v1,
+    };
+    if window_court == 0 || turn_deadline == 0 {
+        return None;
+    }
+    let carrier = palw_close_bytes_for_chunks_v1(1);
+    let mut arity = PALW_ATTN_DISSECT_MIN_ARITY;
+    loop {
+        // The LEAF ladder is binary whatever `k` is (audit D H-2); `k` buys history rounds only.
+        let ladder = u64::from(palw_kary_rounds_v1(max_step_leaves, PALW_COURT_LEAF_LADDER_ARITY_V1)?);
+        let history = if history_positions_max == 0 {
+            0
+        } else {
+            u64::from(palw_attn_dissection_rounds_v1(history_positions_max, tile, arity)?)
+        };
+        // And the root claim is a move (audit A M-2), wherever there is a dissection to open.
+        let root_claim = u64::from(history_positions_max != 0);
+        let moves = ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(terminal_moves))?.checked_add(root_claim)?;
+        // **On the SAME inequality admission applies** (audit A H-2 / audit D H-2c). This selected
+        // on `moves · deadline <= window_court` while `palw_attn_court_admits_row_v1` admits on
+        // `moves · deadline + assembly_reserve < window_court` — so the derivation could return an
+        // arity the admission gate then refuses, and a wider arity that WOULD have fitted was never
+        // reached. The reserve is a property of the window (both sides' closes occupy blocks that
+        // carry no move), so it belongs in the search that chooses the shape the window has to hold.
+        let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(max_close_chunks);
+        if moves.checked_mul(turn_deadline)?.checked_add(reserve)? < window_court {
+            // The clock admits this arity. The carrier is the other half of the same question,
+            // and it answers for the PAIR: a wider arity would only weigh more, so a round that
+            // does not fit here is a refusal and never a reason to keep searching upward.
+            return palw_attn_dissect_arity_fits_carrier_v1(arity, widest_lane_count, carrier).then_some(arity);
+        }
+        if arity >= PALW_ATTN_DISSECT_MAX_ARITY {
+            return None;
+        }
+        arity *= 2;
+    }
+}
+
+/// **ADR-0103 Decision 5: [`palw_court_arity_v1`] with the leaf ladder's rounds at zero** — the
+/// arity a held network derives, because no session on it plays the ladder. The same search (the
+/// smallest legal power of two), the same clock inequality with the same assembly reserve, and the
+/// same carrier half for the `(arity, lanes)` pair; only the ladder term is gone. `None` when no
+/// arity fits, exactly as the ladder's form refuses.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_court_arity_held_v1(
+    window_court: u64,
+    turn_deadline: u64,
+    history_positions_max: u64,
+    tile: u32,
+    terminal_moves: u32,
+    widest_lane_count: usize,
+    max_close_chunks: u64,
+) -> Option<u8> {
+    use crate::palw_attn_dissect::{
+        PALW_ATTN_DISSECT_MAX_ARITY, PALW_ATTN_DISSECT_MIN_ARITY, palw_attn_dissect_arity_fits_carrier_v1,
+        palw_attn_dissection_rounds_v1,
+    };
+    if window_court == 0 || turn_deadline == 0 {
+        return None;
+    }
+    let carrier = palw_close_bytes_for_chunks_v1(1);
+    let reserve = crate::palw_context_ladder::palw_close_assembly_daa_v1(max_close_chunks);
+    let mut arity = PALW_ATTN_DISSECT_MIN_ARITY;
+    loop {
+        let history = if history_positions_max == 0 {
+            0
+        } else {
+            u64::from(palw_attn_dissection_rounds_v1(history_positions_max, tile, arity)?)
+        };
+        let root_claim = u64::from(history_positions_max != 0);
+        let moves = history.checked_mul(2)?.checked_add(u64::from(terminal_moves))?.checked_add(root_claim)?;
+        if moves.checked_mul(turn_deadline)?.checked_add(reserve)? < window_court {
+            return palw_attn_dissect_arity_fits_carrier_v1(arity, widest_lane_count, carrier).then_some(arity);
+        }
+        if arity >= PALW_ATTN_DISSECT_MAX_ARITY {
+            return None;
+        }
+        arity *= 2;
+    }
+}
+
+/// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwBondParamsV2 {
+    /// Minimum slashable collateral a bond registers with, in sompi.
+    min_collateral_sompi: u64,
+    /// DAA delay between a retirement request and withdrawal. The startup invariant demands it
+    /// exceed the whole liability period, so a bond cannot commit fraud and leave before it is
+    /// provable.
+    withdrawal_delay_daa: u64,
+}
+
+impl PalwBondParamsV2 {
+    pub fn new(min_collateral_sompi: u64, withdrawal_delay_daa: u64) -> Result<Self, PalwModeV2Error> {
+        if min_collateral_sompi == 0 {
+            return Err(PalwModeV2Error::Invalid("a zero minimum collateral bonds nothing"));
+        }
+        if withdrawal_delay_daa == 0 {
+            return Err(PalwModeV2Error::Invalid("a zero withdrawal delay lets a bond leave mid-liability"));
+        }
+        Ok(Self { min_collateral_sompi, withdrawal_delay_daa })
+    }
+
+    pub fn min_collateral_sompi(&self) -> u64 {
+        self.min_collateral_sompi
+    }
+
+    pub fn withdrawal_delay_daa(&self) -> u64 {
+        self.withdrawal_delay_daa
+    }
+}
+
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum PalwModeV2Error {
+    #[error("invalid V2 bundle: {0}")]
+    Invalid(&'static str),
+    /// The same refusal as [`Self::Invalid`] where the message has to name a class id.
+    #[error("invalid V2 bundle: {0}")]
+    InvalidOwned(String),
+    #[error("invalid V2 bundle: {0}")]
+    State(#[from] PalwStateV2Error),
+    #[error("invalid V2 bundle: {0}")]
+    Admission(#[from] PalwAdmissionV2Error),
+    #[error("invalid V2 bundle: {0}")]
+    FreePrompt(#[from] PalwFpV3Error),
+    #[error("invalid V2 bundle: {0}")]
+    Panel(#[from] crate::palw_panel_v2::PalwPanelV2Error),
+    /// The genesis ARTIFACT is the thing at fault, not the bundle: the catalog does not match the
+    /// root, a registration disagrees with the catalog, or a bond names collateral the genesis
+    /// UTXO set does not hold. Carried whole rather than flattened to a `&'static str`, because
+    /// every one of these failures is an operator holding two artifacts who needs to be told which
+    /// of them is wrong.
+    #[error("the genesis artifact does not load: {0}")]
+    Genesis(#[from] crate::palw_genesis_v2::PalwGenesisV2Error),
+    /// ADR-0089 Decision 9: the market's EVM face was armed before the market itself.
+    #[error("palw_model_evm is armed before palw_model_market: an EVM face of a market that does not exist")]
+    ModelEvmBeforeMarket,
+    /// ADR-0089 Decision 9: the market's EVM face was armed on a network whose EVM lane is inert.
+    #[error("palw_model_evm is armed on a network whose EVM lane is not active by then")]
+    ModelEvmOnInertLane,
+}
+
+/// The whole V2 ruleset, or none of it. Field order is part of the fingerprint preimage —
+/// reordering is a different ruleset.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwConsensusParamsV2 {
+    /// == [`crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION`]; a bundle claiming another
+    /// protocol is another ruleset.
+    pub protocol_version: u16,
+    /// == [`crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2`]; the only algorithm a V2 network
+    /// demands or accepts.
+    pub algorithm_id: u8,
+    /// The permanently-Active liveness floor (ADR-0039 W6′): PALW-BASE-0's class id.
+    pub base_class_id: Hash64,
+    /// Commitment to the genesis-registered class set. The genesis loader verifies preimages.
+    pub class_catalog_root: Hash64,
+    /// Commitment to the adjudicable primitive set. The boot path runs
+    /// `verify_catalog_coverage_v1` against this build's own catalog.
+    pub court_catalog_root: Hash64,
+    /// **Commitment to the END-TO-END certified family set** (ADR-0069 Decision 2).
+    ///
+    /// `court_catalog_root` commits to what this build's court can re-execute; this commits to what
+    /// it can actually PLAY — the families whose backends took a planted fault all the way to a
+    /// conviction under the shipped adjudicator
+    /// ([`crate::palw_e2e_adjudicability::palw_court_e2e_root_v1`]).
+    ///
+    /// It rides the bundle for the same reason its sibling does, and the reason is not
+    /// bookkeeping: the admission gate that reads it is a consensus rule whose input is a BUILD
+    /// fact, so two nodes whose courts can play different families must produce different ruleset
+    /// ids and refuse to peer — rather than stay peers and disagree about who gets paid.
+    pub court_e2e_root: Hash64,
+    pub state: PalwStateParamsV2,
+    pub admission: PalwAdmissionParamsV2,
+    pub panel: PalwPanelParamsV2,
+    pub reward: PalwRewardParamsV2,
+    pub bond: PalwBondParamsV2,
+    /// ADR-0044: the free-prompt receipt lane — a REQUIRED part of the bundle, not a fence. A
+    /// ruleset without it is a different ruleset (a different `palw_ruleset_id_v2`), never this
+    /// one with a switch off.
+    pub freeprompt: PalwFreePromptParamsV3,
+    /// Reorg safety margin added to the liability period in the withdrawal-delay invariant.
+    pub reorg_margin_daa: u64,
+    /// The court's shape. Its [`PalwCourtParamsV2::worst_case_duration_daa`] is what the court
+    /// backstop window must exceed, DERIVED rather than asserted.
+    pub court: PalwCourtParamsV2,
+    /// The cadence every DAA-denominated window in this bundle is measured against
+    /// (ADR-0038 Decision H's frozen 120 s). Inside the bundle — and therefore inside the
+    /// ruleset id — because without it two networks could share an id and run every window at a
+    /// different wall-clock length, which is the exact opposite of what Decision 11 promises.
+    /// [`crate::config::params::Params::validate_palw_v2`] additionally requires the network's
+    /// own `target_time_per_block` to equal it, so the commitment and the behaviour agree.
+    pub cadence_target_time_per_block_ms: u64,
+    /// == [`PALW_V2_FORK_CHOICE_VERSION`]. Named by Decision 11's preimage.
+    pub fork_choice_version: u16,
+    /// == [`PALW_V2_TRACE_FORMAT_VERSION`]. Named by Decision 11's preimage.
+    pub trace_format_version: u16,
+    /// == [`palw_v2_signature_contexts_root`] as THIS BINARY computes it. Named by Decision 11's
+    /// preimage, and committed as the context bytes' own digest rather than a version number, so
+    /// a build whose contexts differ from the network's refuses to start.
+    pub signature_contexts_root: Hash64,
+    /// **The genesis registration list — the RC genesis artifact's own objects.**
+    ///
+    /// A `ConsensusV2` network has no class and no bond until something registers them, and the
+    /// only block that can is genesis: an attempt is refused by admission for naming a bond the
+    /// chain does not have, so a network whose genesis registers nothing can never produce its
+    /// first block. Measured, not reasoned about — the harness wedged exactly there once
+    /// admission was wired.
+    ///
+    /// They live in the BUNDLE because the ruleset id must cover them: two networks that share a
+    /// ruleset id and register different classes are two rulesets, which is the property
+    /// Decision 11 exists to make checkable. `palw_genesis_v2::verify_palw_genesis_v2` checks
+    /// this list against the catalog preimage at load.
+    pub genesis_objects: Vec<crate::palw_state_v2::PalwConsensusObjectV2>,
+}
+
+impl PalwConsensusParamsV2 {
+    /// The Decision 1 startup invariants. A node holding a `ConsensusV2` mode whose bundle fails
+    /// any of these does not boot — there is no degraded mode, because a degraded mode is a
+    /// half-flip with a friendlier name.
+    pub fn validate(&self) -> Result<(), PalwModeV2Error> {
+        self.validate_ruleset_shape()?;
+        // **A network that never retires a claim has an unbounded state** (launch blockers §8,
+        // third bullet). The claim map grows by one entry per attempt-lane block, `state_root`
+        // re-hashes every collection on every block and the tip row re-serializes the registry on
+        // every walk — so with retirement off the per-block cost grows with the chain and never
+        // comes down (`measure_claim_growth_cost`: 8.2 ms/5.4 MB at 10k claims, 467 ms/538 MB at
+        // 1M). It is a runnable-network property, so it is checked where every other one is,
+        // rather than left to whoever writes the next bundle.
+        if self.state.claim_retirement_daa() == 0 {
+            return Err(PalwModeV2Error::Invalid(
+                "a ConsensusV2 ruleset must retire terminal claims — with no retirement span the PALW state grows by one claim per block forever",
+            ));
+        }
+        // **Audit C1 — last, because it is about this BINARY rather than the ruleset.**
+        //
+        // Four pipeline gates now demand `algorithm_id` on a `ConsensusV2` network. Nothing
+        // checked that the demanded algorithm has a finalizer arm, so a node booted (every
+        // invariant above held), accepted its parentless genesis, and then rejected every block
+        // after it — its own miner's included — as `InvalidPoW`, with no fallback id accepted and
+        // no pruning proof importable. A total, unrecoverable liveness failure at block 1,
+        // reachable purely by configuration.
+        //
+        // `check_algo_id_known` is the list of ids `kaspa_pow::StateLayer0::calculate_l1_tag`
+        // actually implements. Reading it here means the mode can only demand what the binary can
+        // compute: the day the V2 finalizer arm lands, this gate opens in the same commit, and
+        // until then a V2 ruleset refuses to boot instead of stalling silently. (That day came —
+        // the algo-6 arm and its carrier landed with `palw_v2_commitment_mutation_invalidates_pow`
+        // — so this clause now passes a well-formed V2 bundle; it stays as the same tripwire for
+        // any future id a ruleset names before its arm exists.)
+        crate::pow_layer0::check_algo_id_known(self.algorithm_id).map_err(|_| {
+            PalwModeV2Error::Invalid(
+                "this binary has no Layer-0 finalizer for the ruleset's algorithm_id — it would accept genesis and reject every block after it",
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Every Decision 1 invariant that is a property of the RULESET rather than of this binary.
+    ///
+    /// Split out from [`Self::validate`] so the ruleset invariants stay testable while the
+    /// runnability gate above is closed — a bundle can be well-formed and still be one this
+    /// build cannot execute, and those are different failures with different fixes.
+    /// **The liability period this bundle's own windows imply** — the longest path from a claim's
+    /// acceptance to an arithmetic-court judgement, through one redraw, plus the reorg margin.
+    /// `None` on overflow. One spelling: the bundle's withdrawal-delay interlock reads it, and
+    /// `Params::validate_palw_v2` extends it with the data-availability court's windows where
+    /// `palw_da_court` is armed (ADR-0062; mainnet audit 2026-09-05, "should fix").
+    pub fn liability_daa(&self) -> Option<u64> {
+        self.state
+            .window_bind()
+            .checked_add(self.state.window_receipt())
+            .and_then(|pair| pair.checked_mul(2))
+            .and_then(|x| x.checked_add(self.state.window_challenge()))
+            .and_then(|x| x.checked_add(self.state.window_court()))
+            .and_then(|x| x.checked_add(self.reorg_margin_daa))
+    }
+
+    pub fn validate_ruleset_shape(&self) -> Result<(), PalwModeV2Error> {
+        if self.protocol_version != crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION {
+            return Err(PalwModeV2Error::Invalid("protocol_version is not the V2 attempt version"));
+        }
+        if self.algorithm_id != crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+            return Err(PalwModeV2Error::Invalid("algorithm_id is not the committed-V2 id"));
+        }
+        if self.class_catalog_root == Hash64::default() || self.court_catalog_root == Hash64::default() {
+            return Err(PalwModeV2Error::Invalid("a zero catalog root commits to nothing adjudicable"));
+        }
+        // **A build that has certified no family still commits to that** (ADR-0069 Decision 2).
+        // The empty set has a real root — `palw_court_e2e_root_v1` hashes the count and no
+        // digests — so `Hash64::default()` here is not "nothing is certified", it is a field
+        // nobody filled, which is the failure this line refuses. A network whose E2E root is unset
+        // would grant weight by a rule whose input was never committed.
+        if self.court_e2e_root == Hash64::default() {
+            return Err(PalwModeV2Error::Invalid("the court's end-to-end root is unset — even an empty certified set has a root"));
+        }
+
+        // ADR-0045 Decision 3: the share table is chain state now, so the old boot-time checks
+        // (BASE-0 funded, exactly-1000 allocation, share↔budget coherence) have no params-side
+        // subject left to check. What replaced them is stronger, not absent: the transition
+        // refuses any first registration that is not the base class at the whole 1000‰, the
+        // donation arithmetic conserves the denominator at every mutation, and
+        // `assert_internal_consistency` re-derives both facts on every carriage load. What the
+        // BUNDLE must still guarantee is that the id the ruleset commits to and the id the
+        // machine enforces are the same id (the C5 pattern, applied to the liveness floor).
+        if self.state.base_class_id() != self.base_class_id {
+            return Err(PalwModeV2Error::Invalid(
+                "the liveness floor the bundle names is not the one the state machine enforces registrations against",
+            ));
+        }
+
+        // The bundle's minimum collateral and the state machine's must be the same number: the
+        // bundle is what the ruleset id commits to, the state params are what registrations are
+        // actually checked against, and a network where they disagree enforces the one nobody
+        // audited (audit C5).
+        if self.state.min_collateral_sompi() != self.bond.min_collateral_sompi() {
+            return Err(PalwModeV2Error::Invalid(
+                "the bond floor the bundle commits to is not the one registrations are checked against",
+            ));
+        }
+
+        // Same rule, same reason, for the producer carve: `reward` is what the ruleset id commits
+        // to and what a reader audits, `state.worker_carve_permille` is what actually lands in
+        // every claim's escrow. A network where they differ pays the number nobody read.
+        if self.state.worker_carve_permille() != self.reward.worker_carve_permille() {
+            return Err(PalwModeV2Error::Invalid("the producer carve the bundle commits to is not the one claims actually escrow"));
+        }
+
+        // And once more for the rung window (P0-9). `court` is what Decision 8's worst-case ladder
+        // duration is computed from — the check a few lines below — while `state` is what the
+        // sweep actually measures silence against. A bundle where they differ is audited against
+        // one ladder and run against another.
+        if self.state.turn_deadline_daa() != self.court.turn_deadline_daa() {
+            return Err(PalwModeV2Error::Invalid("the rung window the bundle commits to is not the one the sweep enforces"));
+        }
+
+        // The anchor slot sits strictly inside the bind window (PR-06's cross-check).
+        self.panel
+            .validate_against_state_params(&self.state)
+            .map_err(|_| PalwModeV2Error::Invalid("the anchor slot does not sit inside the bind window"))?;
+
+        // Decision 11's preimage, checked against what this binary implements. Each of these was
+        // named in the ADR's `palw_ruleset_id` formula and absent from the bundle (audit H2), so
+        // "RC and mainnet share a ruleset id" said less than it appeared to.
+        if self.fork_choice_version != PALW_V2_FORK_CHOICE_VERSION {
+            return Err(PalwModeV2Error::Invalid("fork_choice_version is not the order this binary implements"));
+        }
+        if self.trace_format_version != PALW_V2_TRACE_FORMAT_VERSION
+            && self.trace_format_version != PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS
+        {
+            return Err(PalwModeV2Error::Invalid("trace_format_version is not a format this binary adjudicates"));
+        }
+        // **Either of the two sets this binary can sign under**, the same shape
+        // `trace_format_version` already has three lines above (3 or 4, chosen at genesis by
+        // `Params::palw_prompt_ids_merkle`). A network states which one it committed to through
+        // `Params::palw_signature_contexts_v2`, and `Params::validate_palw_v2` refuses the fence
+        // without the complete root and the complete root without the fence — so this check asks
+        // "is it a set I implement" and that one asks "is it the set you declared". Neither alone
+        // is enough: this function does not hold a `Params`.
+        if self.signature_contexts_root != palw_v2_signature_contexts_root()
+            && self.signature_contexts_root != palw_v2_signature_contexts_root_v2()
+            && self.signature_contexts_root != palw_v2_signature_contexts_root_v3()
+            && self.signature_contexts_root != palw_v2_signature_contexts_root_v4()
+            && self.signature_contexts_root != palw_v2_signature_contexts_root_v5()
+        {
+            return Err(PalwModeV2Error::Invalid("signature_contexts_root is not a context set this binary signs under"));
+        }
+        if self.cadence_target_time_per_block_ms != PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS {
+            return Err(PalwModeV2Error::Invalid("the bundle's cadence is not the frozen 120 s (ADR-0038 Decision H)"));
+        }
+
+        // The court backstop exceeds the worst-case honest prosecution — DERIVED from the
+        // court's shape by ADR-0042 Decision 8's formula, not asserted as a lone number.
+        //
+        // **ADR-0103 Decision 1: a bundle that commits to the held regime's contexts may mint a
+        // ladder no bisection plays.** On such a network every conviction is a one-move object or a
+        // dissection opened at a named leaf, so what the window must hold is the terminal, never
+        // the ladder's rounds — and the ladder is minted at the CARRIER's budget, because a level
+        // of it costs 64 bytes of path and no clock. The bundle alone cannot know the regime is
+        // armed at every height (the fence is `Params::palw_held_context`); what it can check is
+        // that it committed to the regime's contexts (COMPLETE_V4) and that the held clock fits.
+        // `Params::validate_palw_v2` then refuses such a ladder unless the fence is armed from
+        // genesis — a bisection played at any height would be one this window cannot hold.
+        let worst_case = self
+            .court
+            .worst_case_duration_daa()
+            .ok_or(PalwModeV2Error::Invalid("the worst-case court duration overflows the DAA score"))?;
+        // **ADR-0103: the advertised prompt cap past the wire frame's** — a held mint's, and only
+        // over the set that commits to the regime's contexts (`Params::validate_palw_v2` then asks
+        // for the fence from genesis, as it does for the ladder).
+        if self.freeprompt.prompt_cap_is_past_the_frame_v1()
+            && !palw_v2_signature_contexts_root_covers_v4(&self.signature_contexts_root)
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "the free-prompt cap is past the wire frame's and the bundle does not commit to the held regime's contexts (ADR-0103)",
+            ));
+        }
+        if self.state.window_court() <= worst_case {
+            let held_contexts = palw_v2_signature_contexts_root_covers_v4(&self.signature_contexts_root);
+            let held_clock = self
+                .court
+                .worst_case_duration_held_daa(0, crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4)
+                .ok_or(PalwModeV2Error::Invalid("the held court's duration overflows the DAA score"))?;
+            if !held_contexts || self.state.window_court() <= held_clock {
+                return Err(PalwModeV2Error::Invalid("window_court does not fit the worst-case honest prosecution"));
+            }
+        }
+        // ADR-0042 Decision 1 also states "challenge window > worst-case court duration", and the
+        // audit (H2) flagged its absence. It is deliberately NOT added: the ADR's clause assumes a
+        // design where a court has to finish inside the window that decides maturity, and this
+        // implementation chose a stronger one — an OPEN court suspends `ReceiptLicensed → Final`
+        // entirely (`open_courts_by_claim` gates the edge, and `rearm_after_challenger_side_close`
+        // re-arms the deadline afterwards), so the court is bounded by `window_court` and never
+        // races the challenge window at all. Requiring `window_challenge > worst_case` on top
+        // would force every honest claim to wait a full worst-case prosecution before maturing,
+        // for no safety gained. ADR-0042 Decision 1 should be amended to say which mechanism
+        // carries the guarantee.
+        //
+        // `court.max_step_leaf_count` is a number the bundle ASSERTS and this gate cannot read off
+        // the catalog — only `class_catalog_root` is here, and the preimage travels with the
+        // genesis artifact. That is by construction, not a residual: the catalog is deliberately
+        // outside the bundle so RC and mainnet share one ruleset id. The assertion is checked
+        // against the fact one altitude up, at `verify_against_catalog`, which
+        // `palw_genesis_v2::verify_palw_genesis_v2` runs at genesis load — the same landing that
+        // now also checks each registration's declared `pwu_per_inference` against the catalog's
+        // counted one (ADR-0045 Decision 1). A node whose court is shallower than its catalog
+        // refuses to start; it does not start and stall.
+
+        // Withdrawal outlasts the whole liability period plus the reorg margin: a bond cannot
+        // commit fraud and leave before it is provable.
+        //
+        // **TWO bind+receipt pairs**, for the same reason `Params::validate_palw_v2`'s pruning
+        // check counts two: a claim whose first panel concludes nothing is REVIVED once and binds
+        // a second panel (`sweep_deadlines`' `PanelBound` arm), so the longest path from
+        // acceptance to a judgement runs through the redrawn lattice. The pruning-horizon check
+        // was updated when the redraw landed and this one was not — and this is the half that
+        // decides money: with the single-pair formula the shipped bundle computes 5,700 against a
+        // 6,000 delay and boots, while the real figure is 6,900. A producer could retire, wait out
+        // the delay, and take its collateral back 901 DAA before a redrawn claim's fraud stopped
+        // being provable. Nothing else blocked it: `BondRetired` refuses only an already-retiring
+        // bond, and `palw_bond_collateral_is_locked_v2` releases on `since_daa + delay` alone,
+        // without asking whether a claim is still open.
+        let liability = self.liability_daa().ok_or(PalwModeV2Error::Invalid("the liability period overflows the DAA score"))?;
+        if self.bond.withdrawal_delay_daa() <= liability {
+            return Err(PalwModeV2Error::Invalid("the withdrawal delay does not outlast the liability period"));
+        }
+
+        // ---- ADR-0044: the free-prompt lane's startup invariants ----
+
+        // **The split must match which lanes can actually produce** (launch blockers §6).
+        //
+        // This used to demand `1..=999` unconditionally — "both lanes must exist" — on the reading
+        // that a zero attempt share has no beacons (F16) and a full one has no receipts. That is
+        // right for a network where BOTH lanes are reachable, and this one is not: `algorithm_id`
+        // above pins it to algo-6, and the header gate rejects every algo-7 header before its
+        // admission path is reached. The receipt lane exists on paper and can never produce a block.
+        //
+        // Two rules therefore contradicted each other, and the one that had to give is this one:
+        // holding a lane open in the SPLIT does not make it producible, while giving it a permille
+        // does make the retarget expect blocks from it. The retarget measures each lane against the
+        // COMBINED census, so an unproducible lane's permille stays in the expectation while its
+        // blocks are missing from the total — the attempt lane then holds 100% of what happened
+        // while being expected to hold 15% of it, is judged a 6.67x over-producer at every epoch
+        // boundary, and has its target divided until it reaches the floor of 1, where the class
+        // lottery refuses every attempt. A chain that stops with no path back.
+        //
+        // So: the whole cadence to the attempt lane while algo-7 is unreachable, and the
+        // `1..=999` range the moment it is not. When the receipt lane becomes producible this
+        // becomes a two-sided check again — and it will be a ruleset change, which is where a
+        // change of this shape belongs.
+        //
+        // **That moment already came, and the exemption outlived it.** The premise above —
+        // "the header gate rejects every algo-7 header before its admission path is reached" — is
+        // contradicted by `accepts_algo_id`, ten lines further down this same file, which returns
+        // true for `freeprompt.receipt_algorithm_id()`. Receipt blocks are producible and reach the
+        // census.
+        //
+        // With the exemption in place the error runs the other way from the one it was written to
+        // prevent: the attempt lane is expected to hold 1000‰ of a census that also counts receipt
+        // blocks, so it is measured as an UNDER-producer at every epoch boundary and its target is
+        // eased — without bound, and on an axis anyone can push, because minting receipt blocks
+        // dilutes the denominator. Meanwhile the receipt lane holds no share, so its own target
+        // never retargets at all.
+        //
+        // Restored to the two-sided check the paragraph above says belongs here. A V2 bundle
+        // arrives with a network's genesis, so this is a genesis-time choice: name a real split.
+        let split = self.state.fp_attempt_share_permille();
+        if split == 0 || split >= crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR {
+            return Err(PalwModeV2Error::Invalid(
+                "both lanes are producible on a V2 network, so both must hold a cadence share: a lane with 0\u{2030} has no blocks to measure and a lane with 1000\u{2030} makes every other lane's production dilute its own expectation, easing its target without bound",
+            ));
+        }
+
+        // The per-class half of this clause retired with its subject. It used to walk a params
+        // share TABLE and refuse any class whose composed lane share rounds to zero; ADR-0045
+        // Decision 3 moved shares to chain state (granted at registration, conserved to 1000‰),
+        // so there is no table here to walk — and the retarget renormalizes each lane over the
+        // classes that actually competed in it, which makes a composed zero a SKIPPED span (the
+        // price holds still for the span) rather than a silently frozen price. The startup fact
+        // that remains is the one above: both lanes must exist.
+
+        // A late beacon must still bind inside the bind window: the panel's anchor is the FIRST
+        // attempt-class block at the slot, and the declared worst-case gap to one is part of the
+        // ruleset. Without this a thin floor quietly turns every FP claim into a BindTimeout.
+        let worst_anchor = self
+            .panel
+            .anchor_delay()
+            .checked_add(self.freeprompt.max_beacon_gap_daa())
+            .ok_or(PalwModeV2Error::Invalid("the anchor slot plus the beacon gap overflows the DAA score"))?;
+        if worst_anchor >= self.state.window_bind() {
+            return Err(PalwModeV2Error::Invalid("anchor_delay + max_beacon_gap must sit inside the bind window"));
+        }
+
+        // The draw beacon sits past the reorgable fringe of the certification it draws for.
+        if self.freeprompt.receipt_maturity_daa() < self.reorg_margin_daa {
+            return Err(PalwModeV2Error::Invalid("receipt maturity must cover the reorg margin"));
+        }
+        // ADR-0074 Decision 5: the transition prices free-prompt claims from the state params;
+        // builders and seats read the same two numbers off `freeprompt`. One price, two readers.
+        if self.state.fp_quanta_per_canonical_job() != self.freeprompt.quanta_per_canonical_job()
+            || self.state.fp_max_quanta_per_receipt() != self.freeprompt.max_quanta_per_receipt()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "the state's free-prompt price must be the freeprompt params' (quanta per job, cap)",
+            ));
+        }
+        // …and admission item 8's ratio is one number for both lanes: the attempt lane reads it
+        // off `admission` at block validation, the free-prompt lane off the state params at the
+        // transition.
+        // **At most unity, and checked before the equality** (ADR-0062 SA-7(c), re-check). Both
+        // constructors refuse a ratio above 1000 permille, but a bundle can arrive DESERIALIZED —
+        // the params are `BorshDeserialize` and a ruleset travels as bytes — so a constructor is
+        // not where a booting node learns this. A ceiling above the collateral is a ceiling
+        // `slash_bond` can never collect against: a bond holds more concurrent exposure than it can
+        // pay, the first refutations empty it, and every later one is free — the DA court's own
+        // griefing hole, re-opened by a genesis-time number rather than by a missing check. Bounded
+        // first and equal second, so this is the clause that names the fault when both are wrong.
+        if self.admission.max_exposure_ratio_permille() > 1000 {
+            return Err(PalwModeV2Error::Invalid(
+                "the exposure ratio must be at most 1000 permille — above unity a bond backs more than its collateral can pay",
+            ));
+        }
+        if self.state.fp_max_exposure_ratio_permille() != self.admission.max_exposure_ratio_permille() {
+            return Err(PalwModeV2Error::Invalid("the state's free-prompt exposure ceiling must be the admission params' ratio"));
+        }
+        Ok(())
+    }
+
+    /// Does this bundle accept the given header algorithm? A V2+FP network runs **three**
+    /// block kinds: the attempt id, the receipt id (ADR-0044 Decision 1) — and, since
+    /// ADR-0060 Decision 1, the bondless heartbeat lane
+    /// ([`crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID`]): the self-verifying hash lane
+    /// that supplies the network's clock, cadence-capped by the slot rule and priced by its
+    /// own retarget, worth a fixed ε in fork choice, fee-only in the coinbase. Declared by the
+    /// `PALW_STATE_V2_VERSION` bump that landed with it — a V2 build without the lane and one
+    /// with it are different networks and refuse each other at the handshake.
+    /// **The BUNDLE's two lanes, and only those.**
+    ///
+    /// The heartbeat lane is deliberately not here (ADR-0066). It is fenced at TOP LEVEL —
+    /// `Params::palw_heartbeat` — because the bundle's own fences live under `palw_ruleset_id_v2`
+    /// and a V2 network's doctrine is to re-mint rather than schedule, while the heartbeat has to
+    /// be armable on a network that is already running (it exists for the case where that network
+    /// has stopped). A bundle cannot see a top-level field, so the caller ORs it in:
+    /// `Params::palw_heartbeat_lane_open_at`.
+    ///
+    /// This used to read `PALW_HEARTBEAT_LANE_ENABLED`, a `const bool` — so two builds from the
+    /// same tree disagreed about block validity while sharing every fingerprint.
+    pub fn accepts_algo_id(&self, algo_id: u8) -> bool {
+        algo_id == self.algorithm_id || algo_id == self.freeprompt.receipt_algorithm_id()
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The class catalog: the preimage behind `class_catalog_root`
+// ---------------------------------------------------------------------------------------------
+
+/// One registered execution class, as the catalog describes it.
+///
+/// The bundle commits to a ROOT over these; the entries themselves are a network artifact that
+/// travels with the RC genesis. Keeping them out of `PalwConsensusParamsV2` is deliberate — the
+/// ruleset id must be the same value on the RC and on mainnet, and the catalog is exactly the
+/// kind of thing that would otherwise tempt someone to differ.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassCatalogEntryV2 {
+    pub class_id: Hash64,
+    /// What `palw_artifact` openings prove against, and what an attempt's `artifact_root` must
+    /// equal (admission item 5).
+    pub artifact_root: Hash64,
+    /// Worst-case step-tree leaf count for this class — the depth the bisection ladder has to
+    /// walk. This is the quantity `PalwCourtParamsV2::max_step_leaf_count` ASSERTS; the catalog
+    /// is where it is a fact.
+    pub max_step_leaf_count: u64,
+    /// The COUNTED step-leaf count of this class's canonical inference — the quantity ADR-0045
+    /// Decision 1 makes `pwu_per_inference` normatively equal to.
+    ///
+    /// A registration DECLARES `pwu_per_inference`; only this says what it should be. Without the
+    /// number living here the declaration was self-certifying, and since Decision 1 turned pwu
+    /// into `palw_pwu_v1(class_target, pwu_per_inference)` an overstated declaration is a direct
+    /// multiplier on the class's fork-choice weight. It is a catalog fact for the same reason
+    /// `max_step_leaf_count` is: the catalog root is committed to the genesis, so the number an
+    /// operator would have to lie about is one the chain already hashed.
+    ///
+    /// Bounded above by `max_step_leaf_count` — a canonical run cannot be deeper than the class's
+    /// own worst case — which is what keeps "work worth paying for" and "work the ladder can
+    /// walk" the same quantity.
+    pub canonical_step_leaf_count: u64,
+    /// Every `kernel_semantics_id` this class's shape profile can reach at adjudication time.
+    /// `verify_catalog_coverage_v1` compares it against THIS BUILD's adjudicable catalog.
+    pub reachable_kernels: BTreeSet<Hash64>,
+    /// **What prosecuting this class costs, DERIVED at mint** — the same
+    /// `derive_court_cost_v1(profile)` the post-genesis admission gate runs, carried here so the
+    /// genesis path can enforce the same ceilings. The catalog already holds the derived
+    /// `max_step_leaf_count` for exactly this reason: with `admission: None` a genesis
+    /// registration carries no profile, so nothing at boot can re-derive a number — the catalog
+    /// asserts it and the mint is the one place the derivation runs. A second, genesis-only cost
+    /// computation would be a second metric to drift from the admission one (the defect class the
+    /// mint/admission same-function rule exists for).
+    ///
+    /// Without this field a class minted into a genesis bypassed ADR-0049 Decision C entirely:
+    /// coverage-clean, ladder-deep enough, and unprosecutable — the ceilings gated only the
+    /// post-genesis door (found on the two-class genesis's first review).
+    pub court_cost: crate::palw_class_admission_v2::PalwCourtCostV1,
+}
+
+/// The registered class set, ordered and unique by class id.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassCatalogV2 {
+    entries: Vec<PalwClassCatalogEntryV2>,
+}
+
+pub const PALW_CLASS_CATALOG_V2_DOMAIN: &[u8] = b"misaka-palw/class-catalog-v2/root/v1";
+
+impl PalwClassCatalogV2 {
+    /// Ascending by class id, no duplicates, non-empty. The order is part of the root, so a
+    /// catalog that could be reordered would be a catalog with two roots.
+    pub fn new(entries: Vec<PalwClassCatalogEntryV2>) -> Result<Self, PalwModeV2Error> {
+        if entries.is_empty() {
+            return Err(PalwModeV2Error::Invalid("an empty class catalog registers nothing"));
+        }
+        if entries.windows(2).any(|w| w[0].class_id >= w[1].class_id) {
+            return Err(PalwModeV2Error::Invalid("the class catalog must be ascending and unique by class id"));
+        }
+        if entries.iter().any(|e| e.max_step_leaf_count < 2) {
+            return Err(PalwModeV2Error::Invalid("a class whose trace has fewer than two step leaves cannot be bisected"));
+        }
+        if entries.iter().any(|e| e.canonical_step_leaf_count == 0) {
+            return Err(PalwModeV2Error::Invalid("a canonical inference of zero steps is work worth nothing and priced as something"));
+        }
+        if entries.iter().any(|e| e.canonical_step_leaf_count > e.max_step_leaf_count) {
+            return Err(PalwModeV2Error::Invalid(
+                "a class's canonical inference is deeper than its own worst case — the ladder could not walk what the price claims",
+            ));
+        }
+        Ok(Self { entries })
+    }
+
+    pub fn entries(&self) -> &[PalwClassCatalogEntryV2] {
+        &self.entries
+    }
+
+    /// `H(count ‖ borsh(entries))` — what `PalwConsensusParamsV2::class_catalog_root` commits to.
+    pub fn root(&self) -> Hash64 {
+        let bytes = borsh::to_vec(&self.entries).expect("catalog entries are borsh-serializable");
+        let mut state = Blake2bParams::new().hash_length(64).key(PALW_CLASS_CATALOG_V2_DOMAIN).to_state();
+        state.update(&(self.entries.len() as u64).to_le_bytes());
+        state.update(&(bytes.len() as u64).to_le_bytes());
+        state.update(&bytes);
+        let mut out = [0u8; 64];
+        out.copy_from_slice(state.finalize().as_bytes());
+        Hash64::from_bytes(out)
+    }
+
+    /// The deepest trace any registered class can produce.
+    pub fn max_step_leaf_count(&self) -> u64 {
+        self.entries.iter().map(|e| e.max_step_leaf_count).max().expect("a catalog is non-empty by construction")
+    }
+
+    /// The entry for `class_id`, if the catalog registers it.
+    pub fn entry(&self, class_id: &Hash64) -> Option<&PalwClassCatalogEntryV2> {
+        self.entries.iter().find(|e| e.class_id == *class_id)
+    }
+}
+
+impl PalwConsensusParamsV2 {
+    /// **The half of Decision 1 that needs the catalog PREIMAGE**, which is why it is a separate
+    /// entry point: `validate` runs on the bundle alone and boots the node, while this runs where
+    /// the genesis artifact is loaded and the class set is actually in hand.
+    ///
+    /// Three invariants the ADR lists as boot conditions and the bundle alone cannot check
+    /// (audit H2/C1):
+    ///
+    /// * the catalog is the one the ruleset committed to — its root recomputes to
+    ///   `class_catalog_root`, so "we registered these classes" is a hash rather than a claim;
+    /// * **court coverage is 100%** for every registered class — every kernel a class can reach
+    ///   at adjudication time is one this build can actually adjudicate. Without it a class
+    ///   activates whose disputes end `Unadjudicable`, which is a class that cannot be policed;
+    /// * the court's asserted `max_step_leaf_count` covers the catalog's real worst case. This is
+    ///   what turns the last self-certified number in the bundle into a checked one: an operator
+    ///   who understates it to shrink `window_court` now contradicts the catalog its own genesis
+    ///   committed to.
+    pub fn verify_against_catalog(&self, catalog: &PalwClassCatalogV2) -> Result<(), PalwModeV2Error> {
+        if catalog.root() != self.class_catalog_root {
+            return Err(PalwModeV2Error::Invalid("the class catalog is not the one this ruleset's root commits to"));
+        }
+        if !catalog.entries().iter().any(|e| e.class_id == self.base_class_id) {
+            return Err(PalwModeV2Error::Invalid("PALW-BASE-0 is not in the class catalog — the liveness floor is unregistered"));
+        }
+        // ADR-0045 Decision 3: shares are granted by `ClassRegistered` and conserved by the
+        // transition, so "every share-bearing class exists" is a per-registration fact now —
+        // the genesis loader checks each registration object against this same catalog, and a
+        // class cannot hold a share without having been registered. No params-side table is
+        // left to sweep here.
+        // **The FENCED kernels leave the set the identity catalog judges** (ADR-0102), exactly as
+        // they do in the admission gate (`verify_class_admission_*`: "a fenced kernel is admitted by
+        // its fence, and only by it").
+        //
+        // A catalog entry's `reachable_kernels` is deliberately WHOLE — it records every kernel the
+        // class reaches, and weight asks a certified family to cover all of them — while
+        // `catalogued_kernel_ids_v1` is deliberately NOT: a fenced kernel is adjudicable (the
+        // resolver reads the fenced table) and is kept out of `court_catalog_root` so shipping it
+        // moves no network's identity. Comparing the whole set against the catalogued table
+        // therefore reported every fenced-kernel class as a coverage gap, including one whose fence
+        // its network arms from genesis — which is how a genesis registering the hybrid's graph-v7
+        // row was refused with "this build cannot adjudicate" for a kernel this build adjudicates.
+        //
+        // Whether the fence is ARMED is not this function's question and is not skipped: the bundle
+        // has no `Params`, and `Params::validate_palw_v2` refuses a genesis set reaching either
+        // fenced table unless the matching fence (`palw_token_lift`, `palw_kimi_k3`) is armed from
+        // genesis. One question each, asked where its answer lives.
+        for entry in catalog.entries() {
+            // One predicate with the SDK's conformance battery: `catalog_covered_kernels_v1`.
+            let kernel_ids = crate::palw_catalog_coverage::catalog_covered_kernels_v1(&entry.reachable_kernels);
+            let reachable = crate::palw_catalog_coverage::PalwReachableKernelSetV1 { execution_class_id: entry.class_id, kernel_ids };
+            crate::palw_catalog_coverage::verify_catalog_coverage_v1(&reachable)
+                .map_err(|_| PalwModeV2Error::Invalid("a registered class reaches kernels this build cannot adjudicate"))?;
+        }
+        if self.court.max_step_leaf_count() < catalog.max_step_leaf_count() {
+            return Err(PalwModeV2Error::Invalid(
+                "the court's worst-case trace depth is shallower than the catalog's — the ladder cannot reach the deepest class",
+            ));
+        }
+        // The three cost ceilings, beside the ladder and by the same discipline: the catalog
+        // asserts the derived cost, the ruleset asserts what it will pay for, and a class whose
+        // disputes cannot ride a carrier must fail the BOOT gate, not its first challenger.
+        for entry in catalog.entries() {
+            // BOTH units — bytes (what a validating node will hash) and chunks (what the network
+            // pays to relay) — through the one predicate the registration gate and the close gate
+            // ask, so a class cannot be admitted at one rule and refused at boot by another, nor
+            // admitted here and refused at its first close (`palw_close_fits_court_v1`).
+            if !palw_close_fits_court_v1(entry.court_cost.max_close_bytes, &self.court) {
+                return Err(PalwModeV2Error::Invalid(
+                    "a registered class's terminal opening exceeds the ceiling this ruleset pays for",
+                ));
+            }
+            if entry.court_cost.max_terminal_macs > self.court.max_terminal_macs() {
+                return Err(PalwModeV2Error::Invalid(
+                    "a registered class's terminal recomputation exceeds the ceiling this ruleset pays for",
+                ));
+            }
+            if entry.court_cost.max_operand_count > self.court.max_operand_count() {
+                return Err(PalwModeV2Error::Invalid("a registered class's operand count exceeds the ceiling this ruleset pays for"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A network is in exactly one PALW mode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwConsensusMode {
+    /// Hash networks: PALW machinery inert. Every shipped preset.
+    Disabled,
+    /// The ADR-0035 algo-4 soak, exactly as the existing legacy fields describe it — this
+    /// variant marks the mode; the legacy knobs stay where they live, because duplicating them
+    /// here would be a second source for the same facts.
+    LegacyTn11,
+    /// The RC / mainnet ruleset — all of it.
+    ConsensusV2(PalwConsensusParamsV2),
+}
+
+impl PalwConsensusMode {
+    /// The algorithm a network in this mode DEMANDS. `None` leaves the decision to the existing
+    /// (V1 / hash) rules; `Some` is exclusive — a V2 network accepts nothing else.
+    pub fn required_algo_id(&self) -> Option<u8> {
+        match self {
+            PalwConsensusMode::Disabled | PalwConsensusMode::LegacyTn11 => None,
+            PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.algorithm_id),
+        }
+    }
+
+    /// **Does this network accept a header declaring `algo_id`?**
+    ///
+    /// [`Self::required_algo_id`] answers a narrower question — which id a producer must DECLARE
+    /// when it builds an attempt — and a gate that used it to decide acceptance refused every
+    /// block on the second lane a V2 bundle admits. `accepts_algo_id` is the bundle's own answer
+    /// and it has always been two: the committed-attempt id and the free-prompt receipt id.
+    ///
+    /// `None` means "this network has no V2 opinion", and the caller falls back to the V1 fork
+    /// cascade exactly as before — every shipped non-V2 preset is unaffected.
+    pub fn accepts_algo_id(&self, algo_id: u8) -> Option<bool> {
+        match self {
+            PalwConsensusMode::Disabled | PalwConsensusMode::LegacyTn11 => None,
+            PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.accepts_algo_id(algo_id)),
+        }
+    }
+}
+
+/// Decision 11: `H(canonical(bundle))`. Everything that decides consensus is inside; network
+/// identity is not (the challenge's `network_domain` carries it), so the RC and mainnet share
+/// one id and a node can CHECK sameness instead of trusting a release note.
+impl PalwConsensusParamsV2 {}
+
+pub fn palw_ruleset_id_v2(bundle: &PalwConsensusParamsV2) -> Hash64 {
+    let bytes = borsh::to_vec(bundle).expect("the V2 bundle is borsh-serializable");
+    let mut state = Blake2bParams::new().hash_length(64).key(PALW_RULESET_ID_V2_DOMAIN).to_state();
+    state.update(&(bytes.len() as u64).to_le_bytes());
+    state.update(&bytes);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+
+    /// **The court's close ceiling is a chunk-group count, and the chunk is what a transaction
+    /// can carry.**
+    ///
+    /// Both halves are run rather than recited. The per-chunk half is the old derivation, intact:
+    /// `transient_mass = size x 4` against `MAXIMUM_STANDARD_TRANSACTION_MASS` gives a relayable
+    /// transaction of 120,000 bytes, and `PALW_OBJECT_CHUNK_MAX_BYTES` is 100,000 — under it, with
+    /// room for the carrier's own weight (an ML-DSA-87 signature script alone is a few thousand
+    /// bytes). The group half is the count: `DEFAULT_MAX_CLOSE_BYTES` is what 27 of those chunks
+    /// hold after framing, and nothing else.
+    ///
+    /// **What this test asserted before ADR-0080 design A**: that `DEFAULT_MAX_CLOSE_BYTES` itself
+    /// fit inside one 120,000-byte transaction with 32 KiB to spare. It does not any more and must
+    /// not — a close that fits one transaction is a court that cannot prosecute a class wide enough
+    /// to emit an artifact — so the property moved down one level, onto the chunk. The 400 KiB
+    /// clause is kept because the trap it records is unchanged: 400,000 is the `compute_mass`
+    /// reading of the standard limit, and it never described a transaction.
+    #[test]
+    fn the_close_ceiling_fits_a_carrier_transaction() {
+        let payload_budget = PALW_STANDARD_TX_BYTES;
+        assert_eq!(payload_budget, 120_000, "the transient arm is size x 4, not size x 1");
+
+        // The per-chunk half: one chunk is a transaction, and it fits one with room for the
+        // carrier beside it.
+        let chunk = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
+        assert!(chunk < payload_budget, "one chunk ({chunk} bytes) must fit a standard transaction ({payload_budget})");
+        let carrier_overhead = payload_budget - chunk;
+        assert!(carrier_overhead >= 18_000, "the carrier needs room of its own beside the chunk, got {carrier_overhead}");
+
+        // The group half: the ceiling is the count and nothing else.
+        assert_eq!(DEFAULT_MAX_CLOSE_CHUNKS, 27);
+        assert_eq!(DEFAULT_MAX_CLOSE_BYTES, 2_250_000, "floor(27 x 100,000 / 1.20)");
+        assert_eq!(DEFAULT_MAX_CLOSE_BYTES, palw_close_bytes_for_chunks_v1(DEFAULT_MAX_CLOSE_CHUNKS));
+
+        // And the two directions are one arithmetic: a close at the ceiling needs exactly the
+        // chunks the ceiling buys, and one byte more needs one more.
+        assert_eq!(palw_close_chunks_for_bytes_v1(DEFAULT_MAX_CLOSE_BYTES), DEFAULT_MAX_CLOSE_CHUNKS);
+        assert_eq!(palw_close_chunks_for_bytes_v1(DEFAULT_MAX_CLOSE_BYTES + 1), DEFAULT_MAX_CLOSE_CHUNKS + 1);
+        assert_eq!(palw_close_chunks_for_bytes_v1(1), 1, "a close is never free of its first chunk");
+
+        // The number the other line would have shipped, refused here so the reasoning cannot be
+        // re-derived by accident: 400,000 is the compute-mass reading, and no transaction holds it.
+        assert!(400 * 1024 > payload_budget, "400 KiB was never relayable");
+
+        // **The wall, asserted so it cannot be forgotten**: the transport this ceiling is derived
+        // from carries 8 parts, not 27. Written as the inequality it currently is, so the day the
+        // count moves this line is what says the gap closed.
+        assert!(
+            DEFAULT_MAX_CLOSE_CHUNKS > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64,
+            "PALW_OBJECT_CHUNK_MAX_COUNT reached the court's count — re-read the ceiling's `What is NOT yet derived` note"
+        );
+    }
+    use super::*;
+
+    fn h64(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    /// **The gate fires** (launch blockers §8, third bullet). A guard nothing has been shown to
+    /// refuse is a comment; the bundle every other test in this module uses is the one that must
+    /// still pass.
+    #[test]
+    fn a_ruleset_that_never_retires_a_claim_is_refused() {
+        let good = conforming_bundle();
+        good.validate().expect("the conforming bundle retires and boots");
+        let mut bad = conforming_bundle();
+        bad.state = bad.state.clone().with_claim_retirement_daa(0).unwrap();
+        let err = bad.validate().expect_err("a ruleset with no retirement span is not runnable");
+        assert!(format!("{err}").contains("retire terminal claims"), "and it says why: {err}");
+    }
+
+    fn state_params_with_min_collateral(min_collateral: u64) -> PalwStateParamsV2 {
+        // Carries the same carve `conforming_bundle`'s `reward` declares: this helper is used to
+        // REPLACE that bundle's state, and dropping the carve on the way would trip the coherence
+        // check instead of testing the thing the caller named.
+        // window_court 900 — the same corrected worst case `conforming_bundle` carries (M2-24).
+        PalwStateParamsV2::new(100, 10, 10, 20, 900, 1000, h64(1), 4, 1000, min_collateral, 900, 0)
+            .unwrap()
+            .with_worker_carve_permille(620)
+            .unwrap()
+            .with_turn_deadline_daa(20)
+            .unwrap()
+            // §8: a runnable ruleset retires terminal claims; a fixture is one a node starts on.
+            .with_claim_retirement_daa(200)
+            .unwrap()
+            // ADR-0074 Decision 5: the same price `conforming_freeprompt` declares.
+            .with_fp_quanta(8, 64)
+            .unwrap()
+            .with_fp_exposure_ceiling(500)
+            .unwrap()
+    }
+
+    pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
+        PalwFreePromptParamsV3::new(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3, 8, 64, 4_096, 512, 150, 200, 5).unwrap()
+    }
+
+    pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
+        let base = h64(1);
+        PalwConsensusParamsV2 {
+            protocol_version: crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
+            algorithm_id: crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
+            base_class_id: base,
+            class_catalog_root: h64(0xCA7),
+            court_catalog_root: h64(0xC0517),
+            // The real one, not a fixture hash: a bundle whose E2E root is invented would be a
+            // bundle the boot gate accepts and no drill stands behind. `palw_court_e2e_root_v1` is
+            // a pure function of this build, so it is the same value in a test and in production —
+            // the empty set's root when nothing has registered, which is exactly what a
+            // consensus-core test should be describing (the PIN, so it does not depend on whether
+            // a drill has run in this process — see `palw_rc_court_e2e_root_v1`).
+            court_e2e_root: crate::palw_e2e_adjudicability::palw_rc_court_e2e_root_v1(),
+            // Split 900‰/100‰: both lanes are producible (`accepts_algo_id` takes algo-7), so both
+            // must hold a real share or the retarget measures one against a census the other
+            // dilutes. The carve is set on BOTH, because `validate` requires them equal — the
+            // fixture has to be a bundle a node would actually start on, or the tests below prove
+            // nothing.
+            // window_court 900: the corrected worst case (audit M2-24) is (2 x 20 + 2) x 20 = 840
+            // for this fixture's 2^20 ladder, and the invariant demands the window hold it.
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 900, 1000, base, 4, 1000, 100, 900, 0)
+                .unwrap()
+                .with_worker_carve_permille(620)
+                .unwrap()
+                .with_turn_deadline_daa(20)
+                .unwrap()
+                .with_claim_retirement_daa(200)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_fp_exposure_ceiling(500)
+                .unwrap(),
+            admission: PalwAdmissionParamsV2::new(500).unwrap(),
+            panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
+            reward: PalwRewardParamsV2::new(620).unwrap(),
+            bond: PalwBondParamsV2::new(100, 2_000).unwrap(),
+            freeprompt: conforming_freeprompt(),
+            reorg_margin_daa: 100,
+            // 2^20 step leaves -> 20 bisection rounds = 40 clocked moves, +2 terminal, x20 DAA
+            // per move = 840, which must fit strictly inside the fixture's `window_court` of 900.
+            court: PalwCourtParamsV2::new(1_048_576, 20, 2).unwrap(),
+            cadence_target_time_per_block_ms: PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS,
+            fork_choice_version: PALW_V2_FORK_CHOICE_VERSION,
+            trace_format_version: PALW_V2_TRACE_FORMAT_VERSION,
+            signature_contexts_root: palw_v2_signature_contexts_root(),
+            genesis_objects: vec![
+                crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                    class_id: base,
+                    artifact_root: h64(11),
+                    slash_value_per_pwu: 5,
+                    pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                    initial_target: u128::MAX / 2,
+                    share_permille: 1000,
+                    activation_daa: 0,
+                    admission: None,
+                },
+                crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
+                    bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+                        transaction_id: crate::tx::TransactionId::from_u64_word(0xB0),
+                        index: 0,
+                    }),
+                    pubkey: vec![7; 4],
+                    operator_pubkey: vec![21; 8],
+                    collateral: 100_000,
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                    capable_classes: Default::default(),
+                    signature: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn a_conforming_bundle_validates_and_fingerprints_deterministically() {
+        let bundle = conforming_bundle();
+        bundle.validate_ruleset_shape().expect("the fixture bundle holds every startup invariant");
+        let id = palw_ruleset_id_v2(&bundle);
+        assert_eq!(id, palw_ruleset_id_v2(&bundle.clone()), "the fingerprint is a pure function of the bundle");
+        // The bundle accepts exactly its three block kinds — the two bonded lanes (ADR-0044
+        // Decision 1) and the bondless heartbeat (ADR-0060 Decision 1) — and nothing else.
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3));
+        assert!(
+            !bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID),
+            "the heartbeat lane is NOT a bundle lane — it is fenced at top level (ADR-0066), and a \
+             bundle that admitted it would be one no fence could close"
+        );
+        for other in [0u8, 1, 2, 4, 5, 8, 0xff] {
+            assert!(!bundle.accepts_algo_id(other), "algo {other} is no lane of this network");
+        }
+        assert_eq!(PalwConsensusMode::ConsensusV2(bundle).required_algo_id(), Some(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert_eq!(PalwConsensusMode::Disabled.required_algo_id(), None);
+        assert_eq!(PalwConsensusMode::LegacyTn11.required_algo_id(), None);
+    }
+
+    /// Every startup invariant refuses its own violation — the Decision 1 list, executable.
+    #[test]
+    fn every_startup_invariant_refuses_its_violation() {
+        let cases: Vec<(&str, Box<dyn Fn(&mut PalwConsensusParamsV2)>)> = vec![
+            ("protocol", Box::new(|b| b.protocol_version = 1)),
+            ("algorithm", Box::new(|b| b.algorithm_id = 4)),
+            ("class root", Box::new(|b| b.class_catalog_root = Hash64::default())),
+            ("court root", Box::new(|b| b.court_catalog_root = Hash64::default())),
+            ("bundle names a floor the machine does not enforce", Box::new(|b| b.base_class_id = h64(9))),
+            (
+                // ADR-0045 Decision 3: the bundle names one liveness floor and the state machine
+                // enforces another — the C5 disagreement shape, applied to the base id.
+                "base id disagreement",
+                Box::new(|b| {
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100, 800, 0)
+                        .unwrap()
+                        .with_claim_retirement_daa(200)
+                        .unwrap()
+                        .with_fp_quanta(8, 64)
+                        .unwrap()
+                        .with_fp_exposure_ceiling(500)
+                        .unwrap();
+                }),
+            ),
+            (
+                // ADR-0044 Decision 1: a bundle whose freeprompt lane is live must hold BOTH
+                // lanes open — split 1000 has no receipts (and the params gate already refuses
+                // 0). The share TABLE cases that once sat beside this one retired with their
+                // subject (shares are chain state now); the split is still a params fact.
+                "one-lane split (1000‰ has no receipts)",
+                Box::new(|b| {
+                    b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0)
+                        .unwrap()
+                        .with_claim_retirement_daa(200)
+                        .unwrap()
+                        .with_fp_quanta(8, 64)
+                        .unwrap()
+                        .with_fp_exposure_ceiling(500)
+                        .unwrap();
+                }),
+            ),
+            (
+                "beacon gap outside the bind window",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        8,
+                        64,
+                        4_096,
+                        512,
+                        100,
+                        200,
+                        6, // anchor_delay 4 + gap 6 = 10 ≥ window_bind 10
+                    )
+                    .unwrap()
+                }),
+            ),
+            (
+                "receipt maturity inside the reorg margin",
+                Box::new(|b| {
+                    b.freeprompt = PalwFreePromptParamsV3::new(
+                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
+                        8,
+                        64,
+                        4_096,
+                        512,
+                        99, // reorg_margin_daa is 100
+                        200,
+                        5,
+                    )
+                    .unwrap()
+                }),
+            ),
+            // The two table-coherence cases ("budgetless share", "shareless budget") retired
+            // with their subject: shares are chain state (ADR-0045 Decision 3) and the epoch
+            // budget is derived at each boundary from them (Decision 2), so there are no two
+            // params tables left to drift apart. The FP "composed share rounds to zero" startup
+            // case retired the same way — with shares granted at registration and the retarget
+            // renormalizing over the classes that competed, a lane whose composition rounds to
+            // zero is SKIPPED for the span (its price holds still), not silently frozen.
+            ("anchor outside bind window", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 2, 10).unwrap())),
+            // A deeper ladder needs more rounds than the backstop window can hold…
+            ("ladder deeper than the court window", Box::new(|b| b.court = PalwCourtParamsV2::new(1 << 40, 20, 2).unwrap())),
+            // …and so does a slower turn, at the same depth.
+            (
+                "turn slower than the court window",
+                Box::new(|b| {
+                    b.court = PalwCourtParamsV2::new(1_048_576, 30, 2).unwrap();
+                    b.state = b.state.clone().with_turn_deadline_daa(30).unwrap();
+                }),
+            ),
+            ("fork choice version", Box::new(|b| b.fork_choice_version += 1)),
+            ("trace format version", Box::new(|b| b.trace_format_version = 99)),
+            ("signature contexts", Box::new(|b| b.signature_contexts_root = h64(0xBAD))),
+            ("cadence", Box::new(|b| b.cadence_target_time_per_block_ms /= 2)),
+            ("withdrawal inside liability", Box::new(|b| b.bond = PalwBondParamsV2::new(20_000, 640).unwrap())),
+        ];
+        for (name, mutate) in cases {
+            let mut bundle = conforming_bundle();
+            mutate(&mut bundle);
+            assert!(bundle.validate().is_err(), "{name}: the mutated bundle must not validate");
+        }
+    }
+
+    /// Every shipped preset is `Disabled` — the V2 lineage's dormancy is one enum arm, checked
+    /// as a fact, and the config gate holds the atomicity rules the arm implies.
+    #[test]
+    fn every_shipped_preset_is_disabled_and_the_gate_refuses_mixed_lineages() {
+        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
+        for params in [&MAINNET_PARAMS, &TESTNET_PARAMS, &DEVNET_PARAMS, &SIMNET_PARAMS] {
+            assert_eq!(params.palw_consensus_mode, PalwConsensusMode::Disabled, "{} ships Disabled", params.net);
+            params.validate_palw_v2().expect("Disabled has nothing to validate");
+        }
+        // …except the PALW staging net, which says what it is since the Relaunch-2 re-genesis.
+        assert_eq!(TESTNET11_PARAMS.palw_consensus_mode, PalwConsensusMode::LegacyTn11, "t11 marks the legacy lineage");
+        TESTNET11_PARAMS.validate_palw_v2().expect("LegacyTn11 adds no new constraints");
+
+        // A ConsensusV2 params set with a conforming bundle and no V1 residue validates.
+        // SIMNET is the clean base: its `pow_palw_activation` is `never()`.
+        let mut v2 = SIMNET_PARAMS.clone();
+        v2.palw_consensus_mode = PalwConsensusMode::ConsensusV2(conforming_bundle());
+        // …and is refused ANYWAY, today, because this binary has no finalizer for algo 6 (audit
+        // C1). The mixed-lineage clauses below are what this test is about, so it asserts the
+        // ruleset half separately from the runnability half.
+        let PalwConsensusMode::ConsensusV2(ref bundle) = v2.palw_consensus_mode else { unreachable!() };
+        bundle.validate_ruleset_shape().expect("a pure V2 set is a well-formed ruleset");
+        assert!(v2.validate_palw_v2().is_err(), "and still refuses to boot: no V2 finalizer exists yet");
+
+        // …a broken bundle does not…
+        let mut broken = conforming_bundle();
+        broken.court = PalwCourtParamsV2::new(1_048_576, 30, 2).unwrap();
+        broken.state = broken.state.clone().with_turn_deadline_daa(30).unwrap();
+        let mut bad_bundle = SIMNET_PARAMS.clone();
+        bad_bundle.palw_consensus_mode = PalwConsensusMode::ConsensusV2(broken);
+        assert!(bad_bundle.validate_palw_v2().is_err(), "the startup invariants gate the config");
+
+        // …and mixing lineages does not — in BOTH shapes. DEVNET is a live V1 PALW network, so
+        // declaring a V2 mode on it is refused outright…
+        let mut mixed_pow = DEVNET_PARAMS.clone();
+        mixed_pow.palw_consensus_mode = PalwConsensusMode::ConsensusV2(conforming_bundle());
+        assert!(mixed_pow.validate_palw_v2().is_err(), "a V1 PALW PoW activation under a V2 mode is half of two lineages");
+        // …and so is a V1 fence smuggled under a V2 mode on a clean base.
+        let mut mixed_fence = SIMNET_PARAMS.clone();
+        mixed_fence.palw_consensus_mode = PalwConsensusMode::ConsensusV2(conforming_bundle());
+        mixed_fence.palw_ramp = Some(crate::palw_weight::PalwWeightParamsV1 { receipt_quorum: 2, rho_r_permille: 250 });
+        assert!(mixed_fence.validate_palw_v2().is_err(), "a V1 fence under a V2 mode is the five-fences defect reborn");
+    }
+
+    /// **The PR-08 seam is inert on every shipped network.** For every preset, at a sweep of DAA
+    /// scores, the mode-aware required-algo answer equals the V1 cascade's answer byte for byte —
+    /// so threading the mode through the header, virtual and pruning-proof gates changed nothing
+    /// any node accepts today. Only a `ConsensusV2` network answers differently, and no shipped
+    /// preset is one.
+    #[test]
+    fn the_mode_seam_changes_no_shipped_networks_required_algo() {
+        use crate::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS};
+        use crate::pow_layer0::{
+            POW_ALGO_ID_PALW_COMMITTED_V2, check_algo_id, check_algo_id_for_mode, required_algo_id, required_algo_id_for_mode,
+        };
+
+        for params in [&MAINNET_PARAMS, &TESTNET_PARAMS, &TESTNET11_PARAMS, &DEVNET_PARAMS, &SIMNET_PARAMS] {
+            let mode_required = params.palw_consensus_mode.required_algo_id();
+            assert_eq!(mode_required, None, "{} demands no V2 id", params.net);
+            for daa in [0u64, 1, 1_000, 1_000_000, u64::MAX - 1] {
+                let (o, l, s) = (
+                    params.pow_palw_ollama_activation.is_active(daa),
+                    params.pow_palw_activation.is_active(daa),
+                    params.pow_blake2b_sha3_activation.is_active(daa),
+                );
+                let v1 = required_algo_id(o, l, s);
+                assert_eq!(
+                    required_algo_id_for_mode(mode_required, o, l, s),
+                    v1,
+                    "{} @ {daa}: the seam moved a live network",
+                    params.net
+                );
+                assert_eq!(check_algo_id_for_mode(v1, mode_required, o, l, s), check_algo_id(v1, o, l, s));
+                assert!(
+                    check_algo_id_for_mode(POW_ALGO_ID_PALW_COMMITTED_V2, mode_required, o, l, s).is_err(),
+                    "{} @ {daa} must still refuse a V2 header",
+                    params.net
+                );
+            }
+        }
+    }
+
+    /// The mode is in the P2P consensus fingerprint — through the ruleset id, so the handshake
+    /// commitment and the ruleset commitment cannot drift — and `Disabled` leaves the
+    /// fingerprint exactly where it was before the field existed.
+    #[test]
+    fn the_mode_moves_the_consensus_fingerprint() {
+        use crate::config::params::DEVNET_PARAMS;
+        let disabled = DEVNET_PARAMS.consensus_params_id();
+        let mut legacy = DEVNET_PARAMS.clone();
+        legacy.palw_consensus_mode = PalwConsensusMode::LegacyTn11;
+        let mut v2 = DEVNET_PARAMS.clone();
+        v2.palw_consensus_mode = PalwConsensusMode::ConsensusV2(conforming_bundle());
+        let legacy_id = legacy.consensus_params_id();
+        let v2_id = v2.consensus_params_id();
+        assert_ne!(disabled, legacy_id, "the legacy mark separates at handshake");
+        assert_ne!(disabled, v2_id, "a V2 network separates at handshake");
+        assert_ne!(legacy_id, v2_id);
+
+        // And two V2 networks with different bundles separate too, through the ruleset id.
+        let mut other = conforming_bundle();
+        other.reward = crate::palw_reward_v2::PalwRewardParamsV2::new(621).unwrap();
+        other.state = other.state.clone().with_worker_carve_permille(621).unwrap();
+        let mut v2b = DEVNET_PARAMS.clone();
+        v2b.palw_consensus_mode = PalwConsensusMode::ConsensusV2(other);
+        assert_ne!(v2_id, v2b.consensus_params_id(), "a different ruleset is a different handshake");
+    }
+
+    /// **Audit C1: a ruleset this binary cannot compute must refuse to boot, not stall at block 1
+    /// — and the gate must OPEN in the commit that lands the arm.**
+    ///
+    /// `a460cdd7` wired `required_algo_id_for_mode` into the header processor, the virtual
+    /// processor's template stamp and the pruning-proof gate, so a `ConsensusV2` network demands
+    /// `pow_algo_id == 6` and refuses every other id. While
+    /// `kaspa_pow::StateLayer0::calculate_l1_tag` had no arm for 6, nothing connected those two
+    /// facts, so the node started, accepted its parentless genesis, and then rejected every block
+    /// after it — its own miner's included — as `InvalidPoW`. This test then asserted that
+    /// `validate()` REFUSES a well-formed V2 ruleset, and its doc promised the assertion would
+    /// flip in the same commit as the arm.
+    ///
+    /// That commit is this one. The algo-6 arm and its wire carrier landed
+    /// (`palw_v2_commitment_mutation_invalidates_pow` is the test that holds them together), the
+    /// finalizer's own list (`check_algo_id_known`) names 6 again, and the gate — still the last
+    /// clause of `validate`, still reading that list — now passes the same bundle it refused. It
+    /// stays in place as the tripwire for any FUTURE id a ruleset might name before its arm exists.
+    #[test]
+    fn the_runnability_gate_opened_with_the_finalizer_arm() {
+        let bundle = conforming_bundle();
+        // Well-formed as a ruleset…
+        bundle.validate_ruleset_shape().expect("the fixture is a well-formed ruleset");
+        // …and runnable by this binary: the arm exists, so the ruleset boots.
+        bundle.validate().expect("a well-formed V2 ruleset whose algorithm this binary finalizes must boot");
+        assert!(
+            crate::pow_layer0::check_algo_id_known(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2).is_ok(),
+            "the gate reads the finalizer's list, and that list now carries the V2 arm"
+        );
+        // The gate is not a hardcoded "V2 is on": shape still comes first, so a bundle naming an
+        // algorithm this binary implements for OTHER lanes fails the ruleset clause — a different
+        // failure with a different fix.
+        let mut legacy_algo = conforming_bundle();
+        legacy_algo.algorithm_id = crate::pow_layer0::POW_ALGO_ID_PALW_LLM;
+        assert!(crate::pow_layer0::check_algo_id_known(legacy_algo.algorithm_id).is_ok(), "algo 4 has a finalizer arm");
+        match legacy_algo.validate() {
+            Err(PalwModeV2Error::Invalid(msg)) => {
+                assert!(!msg.contains("finalizer"), "algo 4 must fail on the ruleset clause, not the runnability one: {msg}")
+            }
+            other => panic!("expected the algorithm-id ruleset refusal, got {other:?}"),
+        }
+    }
+
+    /// **Audit H2: Decision 11's preimage, item by item.**
+    ///
+    /// The id used to hash a bundle that named none of `cadence`, `fork_choice_version`,
+    /// `trace_format_version` or `signature_contexts` — so "the RC and mainnet ship the same
+    /// ruleset" was checkable only for the fields that happened to be in the struct. Two networks
+    /// could share an id and still order candidates differently, adjudicate a different trace
+    /// format, sign under different contexts, or run every DAA window at half the wall-clock
+    /// length. They are in the struct now, and the id is `H(borsh(bundle))`, so each one moves it.
+    ///
+    /// `every_bundle_byte_moves_the_ruleset_id` cannot cover them: it requires each mutation to
+    /// remain a VALID other ruleset, and these four are pinned to what this binary implements —
+    /// mutating one is an invalid bundle by construction. That is the stronger property, not a
+    /// gap: they are in the preimage AND they cannot vary. This test asserts both halves.
+    #[test]
+    fn the_ruleset_id_covers_every_component_decision_11_names() {
+        let base = conforming_bundle();
+        let base_id = palw_ruleset_id_v2(&base);
+
+        let pinned: Vec<(&str, Box<dyn Fn(&mut PalwConsensusParamsV2)>)> = vec![
+            ("cadence", Box::new(|b: &mut PalwConsensusParamsV2| b.cadence_target_time_per_block_ms /= 2)),
+            ("fork_choice_version", Box::new(|b: &mut PalwConsensusParamsV2| b.fork_choice_version += 1)),
+            ("trace_format_version", Box::new(|b: &mut PalwConsensusParamsV2| b.trace_format_version = 99)),
+            ("signature_contexts_root", Box::new(|b: &mut PalwConsensusParamsV2| b.signature_contexts_root = h64(0xBAD))),
+        ];
+        for (name, mutate) in pinned {
+            let mut bundle = base.clone();
+            mutate(&mut bundle);
+            assert_ne!(palw_ruleset_id_v2(&bundle), base_id, "{name} is not inside the ruleset id");
+            assert!(bundle.validate_ruleset_shape().is_err(), "{name} is pinned to this binary and must not validate when moved");
+        }
+
+        // The signature contexts are committed as their own BYTES, not as a version number, so
+        // editing a context string is a startup failure rather than a silent cross-family replay.
+        assert_eq!(base.signature_contexts_root, palw_v2_signature_contexts_root());
+        // The completeness of the committed set now has its own two tests below — this one had a
+        // hand-copied list of the same nine names and called it a check against MEANING (mainnet
+        // audit 2026-09-06, M-8). It was a copy of itself, so it agreed with the array in every
+        // possible world and could not have failed.
+        let unique: std::collections::BTreeSet<&&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.iter().collect();
+        assert_eq!(unique.len(), PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len(), "two objects must not share a context");
+    }
+
+    /// **The committed set is DERIVED from the families that sign, not typed a second time.**
+    ///
+    /// ADR-0042 Decision 11 exists so "a build whose contexts differ from what the network
+    /// committed to refuses to run". A hand-maintained list cannot deliver that — it delivered it
+    /// for nine of nineteen contexts, and the test that closed the gap was a copy of the same nine
+    /// (mainnet audit 2026-09-06, M-8). This derives the set from the per-family `*_ALL_DOMAINS`
+    /// registries every family already maintains for the cross-family uniqueness sweep, so adding
+    /// a context to a family fails this test until the ruleset commits to it.
+    #[test]
+    fn the_committed_context_set_is_derived_not_retyped() {
+        use std::collections::BTreeSet;
+
+        let derived: BTreeSet<&[u8]> = PALW_V2_ACCEPTANCE_FAMILIES
+            .iter()
+            .flat_map(|family| family.iter().copied())
+            .filter(|d| is_mldsa87_signing_context(d))
+            .collect();
+        // ADR-0152 IMPL-7: the widest set, V5, is what the acceptance families are derived against.
+        let committed: BTreeSet<&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5.iter().copied().collect();
+
+        let missing: Vec<String> = derived.difference(&committed).map(|d| String::from_utf8_lossy(d).into_owned()).collect();
+        assert!(missing.is_empty(), "the acceptance layer verifies under contexts the ruleset id does not commit to: {missing:?}");
+        let extra: Vec<String> = committed.difference(&derived).map(|d| String::from_utf8_lossy(d).into_owned()).collect();
+        assert!(extra.is_empty(), "the ruleset id commits to contexts no acceptance family owns: {extra:?}");
+
+        // The convention the filter rests on, asserted in BOTH directions so it is a rule and not
+        // a habit: every committed entry ends `mldsa87/v1`, and nothing in these registries that
+        // ends `mldsa87/v1` is anything but a signing context.
+        for c in PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5 {
+            assert!(is_mldsa87_signing_context(c), "a committed context breaks the naming convention: {}", String::from_utf8_lossy(c));
+        }
+
+        // Each set is a PREFIX of the next, so every later set is visibly a superset and not a
+        // reshuffle: the frozen nine open V2, and V2 opens V3 (ADR-0100: the one-move court's
+        // context is the one addition).
+        assert_eq!(&PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2[..PALW_V2_SIGNATURE_CONTEXTS.len()], PALW_V2_SIGNATURE_CONTEXTS);
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3[..PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len()],
+            PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2
+        );
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V2.len()..],
+            &[
+                crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+                crate::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+                crate::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+            ],
+            "V3 is V2 then the one-move court's context and per-shard licensing's two (ADR-0100)"
+        );
+        // And V3 opens V4 (ADR-0103: the checkpoint court and the held DA court's two moves).
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4[..PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3.len()],
+            PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3
+        );
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V3.len()..],
+            &[
+                crate::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_MLDSA87_ACCUSE_CONTEXT,
+                crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
+                crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
+            ],
+            "V4 is V3 then the held regime's three contexts (ADR-0103)"
+        );
+        // And V4 opens V5 (ADR-0152 IMPL-7): R-core+'s reporter-commit context, then M3's
+        // DA-disclosure-v4 context — exactly two additions.
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5[..PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4.len()],
+            PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4
+        );
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4.len()..],
+            &[
+                crate::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
+                crate::palw_da_rcore_v1::PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
+            ],
+            "V5 is V4 then R-core+'s reporter-commit and DA-disclosure-v4 contexts (ADR-0152 IMPL-7)"
+        );
+        let roots = [
+            palw_v2_signature_contexts_root(),
+            palw_v2_signature_contexts_root_v2(),
+            palw_v2_signature_contexts_root_v3(),
+            palw_v2_signature_contexts_root_v4(),
+            palw_v2_signature_contexts_root_v5(),
+        ];
+        let distinct: BTreeSet<Hash64> = roots.iter().copied().collect();
+        assert_eq!(distinct.len(), roots.len(), "five sets, five roots");
+        assert!(palw_v2_signature_contexts_root_covers_v4(&palw_v2_signature_contexts_root_v5()), "V5 covers the held regime");
+        assert!(palw_v2_signature_contexts_root_covers_v3(&palw_v2_signature_contexts_root_v5()), "and the one-move court");
+        assert!(!palw_v2_signature_contexts_root_covers_v4(&palw_v2_signature_contexts_root_v3()));
+
+        // The market families are excluded ON PURPOSE and the exclusion is stated, not silent:
+        // their objects are refused wholesale unless `Params::palw_model_market` / `palw_model_lines`
+        // are armed, and those are top-level fences already written Some-only into
+        // `consensus_params_id` — so two builds that disagree about a market context already carry
+        // different identities by a different mechanism. If a market context ever becomes
+        // acceptable WITHOUT its fence, it belongs in the set and this assertion must be deleted
+        // deliberately rather than drifted past.
+        assert!(!committed.contains(&crate::palw_model_market_v1::PALW_MODEL_SELL_MLDSA87_CONTEXT));
+        assert!(!committed.contains(&crate::palw_model_lines_v1::PALW_MODEL_LINE_MLDSA87_CONTEXT));
+    }
+
+    /// **The set a LIVE network committed to is frozen, and this is what says so.**
+    ///
+    /// `signature_contexts_root` is inside `palw_ruleset_id_v2`, inside `consensus_params_id`,
+    /// which is what two nodes compare at the handshake. Testnet-11 runs
+    /// `palw_rc_shipped_params()`; devnet runs `devnet_shipped_params()`; both take this root.
+    /// Appending an entry to [`PALW_V2_SIGNATURE_CONTEXTS`] re-mints those networks' identities,
+    /// and `shipped_presets_have_pinned_fingerprints` would NOT catch it — it pins mainnet,
+    /// testnet-10, simnet and devnet's bundle-free values and has no testnet-11 row.
+    ///
+    /// The golden below is this function's own output on the frozen nine, cross-checked against an
+    /// independent BLAKE2b of the same length-prefixed preimage; it is not transcribed from any
+    /// other place in the tree.
+    #[test]
+    fn the_committed_context_set_of_a_live_network_is_frozen() {
+        assert_eq!(PALW_V2_SIGNATURE_CONTEXTS.len(), 9, "testnet-11 and devnet committed to exactly these nine");
+        assert_eq!(
+            palw_v2_signature_contexts_root().to_string(),
+            PALW_V2_FROZEN_SIGNATURE_CONTEXTS_ROOT_HEX,
+            "the frozen context set moved: this re-mints testnet-11's and devnet's consensus_params_id, and no \
+             fingerprint pin covers testnet-11. If that is intended it is a coordinated flag day, not an edit."
+        );
+    }
+
+    /// **Audit H2: the worst-case court duration is DERIVED, not asserted.**
+    ///
+    /// It used to be one operator-typed number that the only invariant standing between the
+    /// ruleset and an un-prosecutable fraud window compared itself against — self-certifying.
+    /// It is now ADR-0042 Decision 8's formula over three named quantities.
+    #[test]
+    fn the_worst_case_court_duration_follows_the_adr_formula() {
+        // ceil(log2(n)) is exact on powers of two and rounds up in between.
+        assert_eq!(PalwCourtParamsV2::new(2, 1, 1).unwrap().bisection_rounds(), 1);
+        assert_eq!(PalwCourtParamsV2::new(1_024, 1, 1).unwrap().bisection_rounds(), 10);
+        assert_eq!(PalwCourtParamsV2::new(1_025, 1, 1).unwrap().bisection_rounds(), 11, "a non-power-of-two rounds UP");
+        assert_eq!(PalwCourtParamsV2::new(1 << 40, 1, 1).unwrap().bisection_rounds(), 40);
+
+        // **Moves, not rounds** (audit M2-24): each bisection round is a disclosure AND a
+        // verdict, each clocked separately, while a terminal round is a single move.
+        let court = PalwCourtParamsV2::new(1_048_576, 20, 2).unwrap();
+        assert_eq!(court.worst_case_duration_daa(), Some((2 * 20 + 2) * 20));
+
+        // Overflow is a refusal, not a saturation: a window that cannot be represented is not a
+        // long window.
+        let huge = PalwCourtParamsV2::new(1 << 40, u64::MAX, 1).unwrap();
+        assert_eq!(huge.worst_case_duration_daa(), None);
+        let mut bundle = conforming_bundle();
+        bundle.court = huge;
+        assert!(bundle.validate_ruleset_shape().is_err(), "an unrepresentable court duration must refuse the bundle");
+
+        // Shapes that cannot host a bisection at all are refused at construction.
+        assert!(PalwCourtParamsV2::new(1, 20, 2).is_err(), "one leaf cannot be bisected");
+        assert!(PalwCourtParamsV2::new(1_024, 0, 2).is_err(), "a zero turn deadline defaults by block order");
+        assert!(PalwCourtParamsV2::new(1_024, 20, 0).is_err(), "zero terminal rounds never reaches a verdict");
+    }
+
+    fn catalog_entry(class_id: Hash64, leaves: u64) -> PalwClassCatalogEntryV2 {
+        PalwClassCatalogEntryV2 {
+            class_id,
+            artifact_root: h64(11),
+            max_step_leaf_count: leaves,
+            // Half the worst case: distinct from it on purpose, so a fixture cannot pass by the
+            // two being interchangeable.
+            canonical_step_leaf_count: (leaves / 2).max(1),
+            // The BASE-0 kernels this build adjudicates — the honest reachable set for a class
+            // whose shape profile is BASE-0's.
+            reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
+            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 {
+                max_close_bytes: 1,
+                max_terminal_macs: 1,
+                max_operand_count: 1,
+            },
+        }
+    }
+
+    /// **A class the ruleset cannot pay to prosecute fails the BOOT gate, not its first
+    /// challenger.** The ceilings gated only the post-genesis door until the catalog carried the
+    /// derived cost; a genesis-minted class sailed past them — coverage-clean, ladder-deep
+    /// enough, unprosecutable (ADR-0049 Decision C's exact refusal condition, at the one entry
+    /// point that did not test it).
+    #[test]
+    fn a_class_whose_close_cannot_ride_a_carrier_fails_at_boot() {
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        // A close bigger than what the ruleset pays for — one byte past the ceiling.
+        entry.court_cost.max_close_bytes = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES + 1;
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        let mut bundle = conforming_bundle();
+        bundle.base_class_id = h64(1);
+        bundle.class_catalog_root = catalog.root();
+        let err = bundle.verify_against_catalog(&catalog).expect_err("an unprosecutable class must not boot");
+        assert!(format!("{err:?}").contains("terminal opening"), "refused by the cost gate, by name: {err:?}");
+
+        // And the same class inside the ceilings boots — the gate separates.
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_close_bytes = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        bundle.class_catalog_root = catalog.root();
+        bundle.verify_against_catalog(&catalog).expect("a class at the ceiling is a class the ruleset pays for");
+    }
+
+    /// **One ceiling, two units — and the reader that counted carriers admitted what the reader
+    /// that counts bytes refuses.** On the RC the byte ceiling sits on the chunk grid
+    /// (2,250,000 = 27 carriers exactly) so the two readings coincide; on devnet it does not
+    /// (81,920 against a carrier of 83,333), and a class whose worst close is 81,921 bytes was
+    /// admitted by the boot gate and by `verify_class_admission_v6` — one carrier, inside the
+    /// count — while `check_close_cost_v2` refuses every honest close of its widest dispute:
+    /// admitted and unprosecutable, 1,414 bytes wide. `palw_close_fits_court_v1` is the one
+    /// predicate now; this pins the devnet boundary from both sides and the RC's coincidence.
+    #[test]
+    fn a_close_the_carrier_count_admits_but_the_byte_ceiling_refuses_fails_at_boot() {
+        // **Both shipped presets sit on the chunk grid now** — the byte ceiling IS the carrier
+        // count restated, so the two units are one number (devnet's 81,920 literal was the one
+        // that did not, and the graph-v5@512 row's 83,175-byte close sat in its gap).
+        for (name, params) in [
+            ("devnet", crate::config::params::devnet_shipped_params()),
+            ("testnet-11", crate::config::params::palw_rc_shipped_params()),
+        ] {
+            let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("{name} ships a V2 bundle") };
+            assert_eq!(
+                bundle.court.max_close_bytes(),
+                palw_close_bytes_for_chunks_v1(bundle.court.max_close_chunks()),
+                "{name}: the byte ceiling must be the carrier count restated"
+            );
+        }
+        // The off-grid court, built on purpose: devnet's own court with the literal it used to
+        // carry, so the predicate's two halves can be seen to disagree and the gate to follow the
+        // stricter one.
+        let devnet = crate::config::params::devnet_shipped_params();
+        let PalwConsensusMode::ConsensusV2(shipped) = &devnet.palw_consensus_mode else { panic!("devnet ships a V2 bundle") };
+        let on_grid = shipped.court;
+        let court = PalwCourtParamsV2::with_cost_ceilings(
+            on_grid.max_step_leaf_count(),
+            on_grid.turn_deadline_daa(),
+            on_grid.terminal_rounds(),
+            81_920,
+            on_grid.max_terminal_macs(),
+            on_grid.max_operand_count(),
+        )
+        .expect("a court with an off-grid byte ceiling is legal to build");
+        assert_eq!(court.max_close_chunks(), 1, "one carrier — the count rounds UP from the literal");
+        assert!(court.max_close_bytes() < palw_close_bytes_for_chunks_v1(1), "and the byte ceiling is BELOW that carrier");
+        // The gap, both sides: the carrier count says yes to 81,921, the byte ceiling says no.
+        let just_over = court.max_close_bytes() + 1;
+        assert!(palw_close_chunks_for_bytes_v1(just_over) <= court.max_close_chunks(), "one carrier holds it");
+        assert!(!palw_close_fits_court_v1(just_over, &court), "and the ruleset still cannot verify it");
+        assert!(palw_close_fits_court_v1(court.max_close_bytes(), &court), "at the byte ceiling, both bounds hold");
+
+        // And the boot gate asks the predicate: a class priced one byte over devnet's byte ceiling
+        // does not boot there, though one carrier would have carried it.
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_close_bytes = just_over;
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        let mut bundle = shipped.clone();
+        bundle.court = court;
+        bundle.genesis_objects.clear();
+        bundle.base_class_id = h64(1);
+        bundle.class_catalog_root = catalog.root();
+        let err = bundle.verify_against_catalog(&catalog).expect_err("one byte over the byte ceiling must not boot");
+        assert!(format!("{err:?}").contains("terminal opening"), "refused by the cost gate, by name: {err:?}");
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_close_bytes = court.max_close_bytes();
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        bundle.class_catalog_root = catalog.root();
+        bundle.verify_against_catalog(&catalog).expect("at the byte ceiling the class boots");
+    }
+
+    /// **Audit C1/H2: the invariants that need the catalog PREIMAGE, not just its root.**
+    ///
+    /// Decision 1 lists "BASE-0 court coverage == 100%" and the catalog-root preimage check as
+    /// boot conditions, and `validate` implemented neither — it could not: the bundle carries the
+    /// ROOT, and only a genesis artifact carries the classes. `verify_against_catalog` is the
+    /// entry point for the place that does hold them, and it is also what finally checks the last
+    /// self-certified number in the bundle: an operator who understates
+    /// `court.max_step_leaf_count` to shrink `window_court` now contradicts the catalog its own
+    /// genesis committed to.
+    #[test]
+    fn the_catalog_gate_checks_what_the_bundle_alone_cannot() {
+        let base = h64(1);
+        let catalog = PalwClassCatalogV2::new(vec![catalog_entry(base, 1_048_576)]).unwrap();
+        let mut bundle = conforming_bundle();
+        bundle.class_catalog_root = catalog.root();
+        bundle.verify_against_catalog(&catalog).expect("the committed catalog verifies");
+
+        // A catalog that is not the one the ruleset committed to.
+        let other = PalwClassCatalogV2::new(vec![catalog_entry(base, 1_048_575)]).unwrap();
+        assert!(bundle.verify_against_catalog(&other).is_err(), "the root is a commitment, not a label");
+
+        // BASE-0 absent: the liveness floor is unregistered.
+        let without_base = PalwClassCatalogV2::new(vec![catalog_entry(h64(7), 1_024)]).unwrap();
+        let mut b2 = conforming_bundle();
+        b2.class_catalog_root = without_base.root();
+        assert!(b2.verify_against_catalog(&without_base).is_err(), "BASE-0 must be registered");
+
+        // A class that reaches a kernel this build cannot adjudicate: coverage is not 100%, so
+        // its disputes would end `Unadjudicable` — a class that cannot be policed.
+        let mut uncovered = catalog_entry(base, 1_024);
+        uncovered.reachable_kernels.insert(h64(0xDEAD));
+        let gapped = PalwClassCatalogV2::new(vec![uncovered]).unwrap();
+        let mut b3 = conforming_bundle();
+        b3.class_catalog_root = gapped.root();
+        assert!(b3.verify_against_catalog(&gapped).is_err(), "a coverage gap must refuse the class set");
+
+        // The court's asserted depth must cover the catalog's real one.
+        let deeper = PalwClassCatalogV2::new(vec![catalog_entry(base, 1 << 30)]).unwrap();
+        let mut b4 = conforming_bundle();
+        b4.class_catalog_root = deeper.root();
+        assert!(
+            b4.verify_against_catalog(&deeper).is_err(),
+            "asserting a shallower ladder than the catalog needs is the understatement this gate exists to catch"
+        );
+
+        // "A share-bearing class missing from the catalog" is no longer a params-side case:
+        // shares are granted by `ClassRegistered` (ADR-0045 Decision 3), so a class cannot hold
+        // a share without having been registered, and the genesis loader checks each
+        // registration object against this same catalog.
+
+        // Catalog shapes that cannot be a catalog.
+        assert!(PalwClassCatalogV2::new(Vec::new()).is_err(), "an empty catalog registers nothing");
+        assert!(
+            PalwClassCatalogV2::new(vec![catalog_entry(h64(2), 1_024), catalog_entry(base, 1_024)]).is_err(),
+            "unordered entries would give one catalog two roots"
+        );
+        assert!(PalwClassCatalogV2::new(vec![catalog_entry(base, 1)]).is_err(), "one leaf cannot be bisected");
+    }
+
+    /// **Audit H2: the frozen cadence is outside the ruleset id, so it is refused at the params.**
+    ///
+    /// `palw_ruleset_id_v2` hashes the bundle, and the bundle has no cadence field — yet every
+    /// window in it is denominated in DAA score, so the cadence is what gives bind/receipt/
+    /// challenge/court/withdrawal their wall-clock meaning. Two networks sharing a ruleset id
+    /// could run measurably different rules, which is the exact opposite of what Decision 11
+    /// promises. Until the cadence is inside the id, `validate_palw_v2` refuses the
+    /// configurations where the silence would matter.
+    #[test]
+    fn a_v2_network_must_run_the_frozen_cadence() {
+        use crate::config::params::SIMNET_PARAMS;
+        let mut v2 = SIMNET_PARAMS.clone();
+        v2.palw_consensus_mode = PalwConsensusMode::ConsensusV2(conforming_bundle());
+        v2.blockrate.target_time_per_block = PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS / 2;
+        // The finalizer gate (C1) fires first today, so aim the assertion at the clause under test
+        // by checking the cadence predicate the gate uses.
+        assert_ne!(v2.blockrate.target_time_per_block, PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS);
+        assert!(v2.validate_palw_v2().is_err(), "an off-cadence V2 network must not boot");
+
+        // And the constant is the decision's own number, not a stray default.
+        assert_eq!(PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS, 120_000, "ADR-0038 Decision H: one block per 120 seconds");
+
+        // Disabled and LegacyTn11 networks are unaffected — the clause is scoped to ConsensusV2,
+        // so t11's own cadence is none of its business.
+        let mut legacy = SIMNET_PARAMS.clone();
+        legacy.palw_consensus_mode = PalwConsensusMode::LegacyTn11;
+        legacy.blockrate.target_time_per_block = 1_000;
+        legacy.validate_palw_v2().expect("the cadence freeze does not reach the legacy lineage");
+    }
+
+    /// The network domain is a pure function of the network id bytes, and different networks get
+    /// different domains — which is what keeps a testnet object off mainnet even when the two
+    /// share a ruleset id (Decision 11's deliberate omission).
+    #[test]
+    fn the_network_domain_separates_networks() {
+        let mainnet = palw_network_domain_v2(b"mainnet");
+        assert_eq!(mainnet, palw_network_domain_v2(b"mainnet"), "a pure function of the bytes");
+        for other in [&b"testnet-11"[..], b"testnet-1", b"devnet", b"simnet", b""] {
+            assert_ne!(mainnet, palw_network_domain_v2(other), "{other:?} must not share mainnet's domain");
+        }
+        // Length-prefixed, so no two ids concatenate into one another's preimage.
+        assert_ne!(palw_network_domain_v2(b"testnet-1"), palw_network_domain_v2(b"testnet-11"));
+    }
+
+    /// Decision 11's property: any consensus-deciding byte moves the id, and network identity is
+    /// not in the preimage at all (there is no field for it — RC and mainnet share the id by
+    /// construction, and the challenge's network_domain keeps their blocks apart).
+    /// **A ruleset whose exposure ratio is above unity does not boot** (ADR-0062 SA-7(c),
+    /// re-check).
+    ///
+    /// The DA court's ceiling is `collateral × ratio / 1000` and `slash_bond` can never take more
+    /// than the collateral, so a ratio above 1000 permille lets one bond hold concurrent
+    /// accusations it cannot pay for: the first refutations empty it and every later one is free —
+    /// the exact behaviour SA-7(c)'s ceiling exists to remove, restored by a number in a genesis
+    /// bundle. Both constructors refuse it now, and this asks the question a booting node actually
+    /// asks: the params are `BorshDeserialize` and a ruleset travels as BYTES, so the check that
+    /// matters is the boot gate's, not the constructor's.
+    #[test]
+    fn an_exposure_ratio_above_unity_does_not_boot() {
+        use borsh::BorshDeserialize;
+        // The wire format bypasses `new` — one `u32` field, four little-endian bytes. That is the
+        // point of the test, not a trick: this is how a bundle reaches a node.
+        let smuggled = PalwAdmissionParamsV2::try_from_slice(&5_000u32.to_le_bytes()).expect("one u32 field");
+        assert_eq!(smuggled.max_exposure_ratio_permille(), 5_000, "the constructor is not in the deserialization path");
+        let mut bundle = conforming_bundle();
+        bundle.admission = smuggled;
+        let err = bundle.validate_ruleset_shape().expect_err("a ratio above unity is not a bootable ruleset");
+        assert!(
+            matches!(err, PalwModeV2Error::Invalid(msg) if msg.contains("at most 1000 permille")),
+            "and it is refused for being above unity, not merely for disagreeing with the state params: got {err:?}"
+        );
+        // Unity itself boots — the bound is `≤ 1000`, and both readers of the number move together.
+        let mut at_unity = conforming_bundle();
+        at_unity.admission = PalwAdmissionParamsV2::new(1_000).unwrap();
+        at_unity.state = at_unity.state.clone().with_fp_exposure_ceiling(1_000).unwrap();
+        at_unity.validate().expect("a bond may back exactly its own collateral");
+    }
+
+    #[test]
+    fn every_bundle_byte_moves_the_ruleset_id() {
+        let base_id = palw_ruleset_id_v2(&conforming_bundle());
+        let mutations: Vec<(&str, Box<dyn Fn(&mut PalwConsensusParamsV2)>)> = vec![
+            // Both halves move together: this row asks "does the carve reach the ruleset id",
+            // and moving only `reward` would be refused by the coherence check before the
+            // fingerprint is ever computed — a different question with the same name.
+            (
+                "reward carve",
+                Box::new(|b| {
+                    b.reward = PalwRewardParamsV2::new(621).unwrap();
+                    b.state = b.state.clone().with_worker_carve_permille(621).unwrap();
+                }),
+            ),
+            ("panel quorum", Box::new(|b| b.panel = PalwPanelParamsV2::new(3, 3, 4).unwrap())),
+            // A different floor is a different ruleset — and the state params must follow it, or
+            // the coherence clause refuses the bundle.
+            (
+                "bond floor",
+                Box::new(|b| {
+                    b.bond = PalwBondParamsV2::new(101, 2_000).unwrap();
+                    b.state = state_params_with_min_collateral(101);
+                }),
+            ),
+            ("reorg margin", Box::new(|b| b.reorg_margin_daa += 1)),
+            // Still a valid bundle (22 rounds x 19 = 418 < 500), and a different one.
+            (
+                "court shape",
+                Box::new(|b| {
+                    b.court = PalwCourtParamsV2::new(1_048_576, 19, 2).unwrap();
+                    b.state = b.state.clone().with_turn_deadline_daa(19).unwrap();
+                }),
+            ),
+            (
+                "exposure ratio",
+                Box::new(|b| {
+                    b.admission = PalwAdmissionParamsV2::new(501).unwrap();
+                    b.state = b.state.clone().with_fp_exposure_ceiling(501).unwrap();
+                }),
+            ),
+            (
+                // ADR-0074 Decision 5: the price is one number with two readers, so a mutation
+                // moves both or the bundle refuses itself for incoherence rather than as another
+                // ruleset.
+                "free-prompt quantum (quanta per canonical job)",
+                Box::new(|b| {
+                    b.freeprompt =
+                        PalwFreePromptParamsV3::new(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3, 9, 64, 4_096, 512, 100, 200, 5)
+                            .unwrap();
+                    b.state = b.state.clone().with_fp_quanta(9, 64).unwrap();
+                }),
+            ),
+            (
+                "free-prompt quanta cap",
+                Box::new(|b| {
+                    b.freeprompt =
+                        PalwFreePromptParamsV3::new(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3, 8, 65, 4_096, 512, 100, 200, 5)
+                            .unwrap();
+                    b.state = b.state.clone().with_fp_quanta(8, 65).unwrap();
+                }),
+            ),
+        ];
+        // **A producible lane holds a real cadence share** — the rule this test used to assert the
+        // negation of.
+        //
+        // It was written when the premise held that algo-7 headers were unreachable, so an
+        // unproducible receipt lane's permille would stay in the retarget's expectation while its
+        // blocks were missing from the census, and the attempt lane would be judged an
+        // over-producer at every boundary until its target hit the floor. `accepts_algo_id` takes
+        // algo-7, so the premise was false and the error ran the other way: at 1000‰ the attempt
+        // lane is expected to hold a census that receipt blocks dilute, so it is measured as an
+        // UNDER-producer and eased without bound — on an axis anyone can push by minting receipt
+        // blocks.
+        //
+        // The failing values are therefore the two ENDS, not the middle (see ADR-0055). Zero is
+        // refused a layer earlier — `PalwStateParamsV2::new` will not build it — so the bundle
+        // gate only ever sees the other end.
+        assert!(
+            PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 0, 0).is_err(),
+            "a zero attempt share is refused before a bundle can carry it"
+        );
+        {
+            let bad_split = crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR;
+            let mut bundle = conforming_bundle();
+            bundle.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, bundle.base_class_id, 4, 1000, 100, bad_split, 0)
+                .unwrap()
+                .with_worker_carve_permille(620)
+                .unwrap()
+                .with_turn_deadline_daa(20)
+                .unwrap()
+                .with_claim_retirement_daa(200)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_fp_exposure_ceiling(500)
+                .unwrap();
+            assert!(
+                bundle.validate().is_err(),
+                "a {bad_split}permille attempt share leaves one of the two producible lanes without a cadence"
+            );
+        }
+
+        for (name, mutate) in mutations {
+            let mut bundle = conforming_bundle();
+            mutate(&mut bundle);
+            assert!(bundle.validate_ruleset_shape().is_ok(), "{name}: this mutation is a VALID other ruleset");
+            assert_ne!(palw_ruleset_id_v2(&bundle), base_id, "{name}: a consensus byte moved and the id did not");
+        }
+    }
+}
+
+// Exhaustive read-only native input allocation inventory; no consensus encoding change.
+#[path = "palw_native_resource_v1/private/palw_mode_v2.rs"]
+mod native_resource_inventory_v1;

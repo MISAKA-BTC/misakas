@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "kind": "native-four-100k-carriage-identity",
+  "bytes": 437719699,
+  "sha256": "155cfcef615df61cdff2b57135117290716dc6ed271f88ffb7689083c4730e12",
+  "localPath": "/tmp/misaka-rfc67812-runtime/native-four-100k-cache-v2-canonical.borsh",
+  "rawBlobCommitted": false,
+  "genesisClassIndexPatchIncluded": false,
+  "nativeMaximumRssBytes": 12262309888,
+  "nativePeakPhysicalFootprintBytes": 17090606352,
+  "nativeRssApproved": false,
+  "realP2pAccepted": false,
+  "nativeFundingPremineConservationProved": false
+}

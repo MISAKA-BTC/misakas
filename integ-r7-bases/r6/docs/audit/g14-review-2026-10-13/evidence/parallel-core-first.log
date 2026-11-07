@@ -1,0 +1,21 @@
+
+running 7 tests
+test palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::independently_voided_public_claim_keeps_paid_material_without_a_second_collection ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel ... 
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel' (16838244) panicked at consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:114:81:
+called `Result::unwrap()` on an `Err` value: AccusationExposureCeiling { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000700000000000000, index: 0 }), edge: "staged prefix court", backed: 9223372036854775807, accusation: 4805, ceiling: 9223372036854775807 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once ... ok
+
+failures:
+
+failures:
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel
+
+test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 3918 filtered out; finished in 2.43s
+

@@ -1,0 +1,18 @@
+{
+  "g14-original-aggregate/INDEPENDENT-REVIEW.md": "4417efbdd2bf469b3e051e4944cb776a67de4826ae064a54ee34266dfd0ce8f7",
+  "g14-original-aggregate/NOTES.md": "e245e7b995b658e70975f44f1a9a1cd3c2acbc733983b8b1edc812104826078a",
+  "g14-preclaim-native-geometry/INDEPENDENT-REVIEW.md": "b5b34a93cb4d532b6841e8efae3779ab8b986561f4b32f79e79e70bc8d5f2228",
+  "g14-preclaim-native-geometry/NOTES.md": "ccd6ba1eaa1c3448ed161bfcd6ec33217e1edec9a2611d398e232e61d1541df7",
+  "g14-preclaim-original-requirements/INDEPENDENT-REVIEW.md": "ce981e39afcfd91f7e3a876d36691d1c88c147115abc3a6a30fb9a759d3e16c0",
+  "g14-preclaim-original-requirements/NOTES.md": "8a13eee7d52850755e4b3aff6f3fc3763e483b37160e2a4ac69009008e37306f",
+  "preclaim-combined/NOTES.md": "62ef57560fa82b81b1219675acb12da2be85044b081656fbca2d680482cb00e4",
+  "preclaim-combined/applycheck.json": "1e296fcefc240b95dfa2872d9f441c473e07e3035eb147a83ad1b10489c0f535",
+  "preclaim-combined/combined.patch": "c7671bb70e0bea3313c4f109728443125a8fb9068ab3b72b0fb98144d903b6d8",
+  "preclaim-role-catalog/INDEPENDENT-REVIEW.md": "ef9f6ddc8f8cdde69c56d098a998d5b254f5eb182ca2014ef9510c7bd74288e1",
+  "preclaim-role-catalog/NOTES.md": "2149e367ec1bae47070dd12f6a0762d255d6c79031e11ffb8ee1c25b3386f437",
+  "preclaim-role-catalog/preclaim-role-catalog.patch": "98ba09589e14abb421f69a2ad18fed4cfbef4ebadcf0a493e6d1c99f886440b2",
+  "role-consent-decision-review.md": "b5681d043aa09b339113a3a5f777b433b206d61b60c3f662e088793773725433",
+  "test-indices/INDEPENDENT-REVIEW.md": "19b7246ca14cc9212b35c9a03817ff5373ba5fbdcb97774c5e0758c9bff4714d",
+  "test-indices/NOTES.md": "e6702bef6ce60b5131bf8cc4e898f66777df4a99d08fa615802daa645b6b43f2",
+  "test-indices/family-test-indices.patch": "3ff194b1983f047387e39d4bfc323783e1a292a9c3c74a5f42cc7c735c115f74"
+}

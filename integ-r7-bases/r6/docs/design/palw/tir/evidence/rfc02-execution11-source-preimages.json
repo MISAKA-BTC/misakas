@@ -1,0 +1,13 @@
+{
+  "schema": "misaka.rfc02.execution11-owned-sources.v1",
+  "source_sha256": {
+    "misaka-palw-kernel/src/flat_execution11.rs": "9ed186cef496df25b827788d9f359d65981c3b2d6331b63f9110979178a102fa",
+    "misaka-palw-kernel/tests/flat_execution11.rs": "fb512a5dcb46e5435fd66019bb7d89406b132673005167f938439391662a94c9"
+  },
+  "archive": {
+    "path": "rfc02-execution11-restored-source-preimages.tar.gz",
+    "sha256": "98363abef50cd82a1052b5d18fd1913651104131af7a922f03512a4a3129aff4",
+    "scope": "Exact two owned files at latest twelve-test snapshot, no full dependency compiler preimage claim."
+  },
+  "full_dependency_preimages_proven": false
+}

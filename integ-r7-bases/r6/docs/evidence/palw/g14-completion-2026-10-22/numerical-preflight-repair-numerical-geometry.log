@@ -1,0 +1,17 @@
+
+running 3 tests
+
+thread 'palw_court_numerical_geometry_v3::tests::composition_derives_both_native_components_but_never_full_original' (4342451) panicked at consensus/core/src/palw_court_numerical_geometry_v3.rs:355:10:
+called `Result::unwrap()` on an `Err` value: "source graph query/role budget exhausted"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_court_numerical_geometry_v3::tests::composition_derives_both_native_components_but_never_full_original ... FAILED
+test palw_court_numerical_geometry_v3::tests::every_enumeration_budget_refuses_without_a_partial_graph ... ok
+test palw_court_numerical_geometry_v3::tests::all_native_paths_match_independent_aggregated_topology_for_every_arity ... ok
+
+failures:
+
+failures:
+    palw_court_numerical_geometry_v3::tests::composition_derives_both_native_components_but_never_full_original
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 4729 filtered out; finished in 0.11s
+

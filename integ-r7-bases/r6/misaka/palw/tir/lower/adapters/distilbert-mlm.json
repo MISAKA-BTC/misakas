@@ -1,0 +1,54 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "distilbert-mlm",
+  "doc": "DistilBertForMaskedLM (fill-mask): the DistilBERT encoder, then every row through `vocab_transform` (dense, the model's activation), `vocab_layer_norm` and `vocab_projector` \u2014 tied to the word embeddings, plus its bias (OutputSpec::MaskedLm). Reached by the task, never by architecture alone. HFX 2026-10-10.",
+  "extends": [
+    "distilbert",
+    "mixin-mlm-encoder"
+  ],
+  "match": {
+    "architectures": [],
+    "model_types": [],
+    "masked_lm_of": [
+      "DistilBertForMaskedLM"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "transformer.layer.{L}.attention.q_lin",
+        "attn.k": "transformer.layer.{L}.attention.k_lin",
+        "attn.v": "transformer.layer.{L}.attention.v_lin",
+        "attn.o": "transformer.layer.{L}.attention.out_lin",
+        "norm.mix": "transformer.layer.{L}.sa_layer_norm",
+        "mlp.up": "transformer.layer.{L}.ffn.lin1",
+        "mlp.down": "transformer.layer.{L}.ffn.lin2",
+        "norm.ffn": "transformer.layer.{L}.output_layer_norm",
+        "head.transform.dense": "vocab_transform",
+        "head.transform.norm": "vocab_layer_norm",
+        "lm_head": "embeddings.word_embeddings",
+        "lm_head_bias": "vocab_projector.bias"
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "pooler.",
+        "vocab_projector.weight"
+      ]
+    },
+    {
+      "name": "prefix_aliases",
+      "value": [
+        [
+          "",
+          "distilbert."
+        ]
+      ]
+    }
+  ]
+}

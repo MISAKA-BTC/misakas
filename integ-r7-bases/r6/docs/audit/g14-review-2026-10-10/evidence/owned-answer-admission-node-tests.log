@@ -1,0 +1,57 @@
+
+FILTER palw_panel::da_answer_chunks::tests::
+
+running 2 tests
+test palw_panel::da_answer_chunks::tests::a_large_answer_declares_once_then_resumes_only_missing_parts_from_accepted_progress ... ok
+test palw_panel::da_answer_chunks::tests::restart_never_substitutes_another_envelope_or_deadline_and_bounds_before_manifest_signing ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 624 filtered out; finished in 0.37s
+
+
+FILTER palw_filer_held::e2e::legacy_held::
+
+running 16 tests
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_garbage_gather_is_convicted_by_the_leaf_recompute_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_lie_in_one_fused_tile_is_localized_and_convicted_by_a_fresh_outsider ... LG14B resources: n 11612 leaves, height 14, retain level 12, 2 node rounds (bound 2), 3 blocks replayed, 11618 leaf hashes resident at most (whole capture 11612)
+ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_mid_layer_matmul_lie_is_convicted_from_openings_the_outsider_builds ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_public_binding_convicts_the_wrong_job_without_an_answered_session_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_a_restarted_outsider_reacquires_answered_units_without_replaying_old_accusations ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_an_honest_claim_survives_a_malicious_outsider ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_below_the_fence_every_legacy_object_is_refused_and_the_state_is_untouched ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_canonical_fp_bad_input_reaches_public_conviction_before_replay_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_large_prompt_relabel_convicts_after_colluding_valid_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_panel_da_input_bootstrap_replays_or_defaults_without_a_secret_state ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_binding_proves_large_prompt_relabel_and_refuses_honest_or_unbound_inputs ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_fp_bootstrap_own_replay_localizes_and_convicts_after_colluding_valid ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_public_tiled_tokens_prove_output_mismatch_and_refuse_an_honest_or_unbound_twin ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_session_owned_answer_chunks_survive_full_certification_slots_and_partial_restart_or_default ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_the_node_filer_convicts_model_copy_and_matmul_faults_before_and_after_final ... ok
+test palw_panel::palw_filer_replay::palw_filer_held::e2e::legacy_held::lg14b_withheld_descent_and_witness_units_default_never_convict ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 610 filtered out; finished in 18.52s
+
+
+FILTER palw_panel::p2_7_disclosure_policy::
+
+running 9 tests
+test palw_panel::p2_7_disclosure_policy::a_claims_units_are_answered_from_one_load_and_one_flat_answers_its_run ... ok
+test palw_panel::p2_7_disclosure_policy::a_da_answer_is_built_from_a_verified_or_re_made_capture_never_a_decodable_one ... ok
+test palw_panel::p2_7_disclosure_policy::a_free_prompt_answer_needs_the_claims_recorded_job_pin ... ok
+test palw_panel::p2_7_disclosure_policy::a_public_job_answer_serves_only_the_pinned_descriptor_from_retained_fp_material ... ok
+test palw_panel::p2_7_disclosure_policy::an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block ... ok
+test palw_panel::p2_7_disclosure_policy::legacy_held_due_units_use_tag158_from_verified_dense_material ... ok
+test palw_panel::p2_7_disclosure_policy::the_producer_answers_at_once_and_a_covering_signer_after_its_turn ... ok
+test palw_panel::p2_7_disclosure_policy::the_queue_key_is_the_claim_and_the_unit ... ok
+test palw_panel::p2_7_disclosure_policy::the_tick_answers_da_sessions_and_keeps_what_it_answers_from ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 617 filtered out; finished in 2.25s
+
+
+FILTER a_held_dissection_takes_the_held_route_only_past_the_fence
+
+running 1 test
+test palw_panel::held_court::tests::a_held_dissection_takes_the_held_route_only_past_the_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 625 filtered out; finished in 0.00s
+

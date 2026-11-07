@@ -1,0 +1,14 @@
+{
+  "schema": "misaka.rfc02.layout15-bitexact-job-protocol.v1",
+  "layout_pass_id": "misaka.palw.frontend/history-contraction-batch-layout/v15",
+  "native_job_protocol_sha256": "bea310713063b9c2da3d914b035e63eaa0b80632a2335a70d780634197b47044",
+  "derived_program_sha256": "879211ba0d5058a56fd75d0d231cf64cf3cf5798b801a8cb1f46f0b8445d6514",
+  "max_sum_position_tensor_bytes_old_plus_new": 536870912,
+  "mandatory_exact_positions": 21,
+  "source_fidelity_full_context_final_or_population_credit": false,
+  "score_token_ids": [
+    151645,
+    6313,
+    151643
+  ]
+}

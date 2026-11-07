@@ -1,0 +1,18 @@
+{
+  "source_sha256": {
+    "consensus/core/src/palw_court_archive_verify_v1.rs": "b997707af11154ce407a8322c51308b5f51dabaeebd9899f6ceefd52740fa308",
+    "consensus/core/src/palw_court_v2.rs": "c21e8da29b15301ee4289941bebb1d16c56e382029276bbb239b374b88790fab"
+  },
+  "command": [
+    "cargo",
+    "check",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--lib",
+    "--tests"
+  ],
+  "exit_code": 0,
+  "executed_tests": 0,
+  "scope": "Initial shared borrowed v5 kernel extraction, before extended entry differential checks."
+}

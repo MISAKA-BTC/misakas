@@ -1,0 +1,252 @@
+{
+  "schema": "rfc02-model-binding-verdict/v1",
+  "recorded_at_utc": "2026-10-10T17:19:35.884588+00:00",
+  "baseline_commit": "d5ed40277ba833150e91e6c7a0118e63027eb4b6",
+  "branch": "codex/rfc02-implementation",
+  "goal_complete": false,
+  "scope": "Authenticated descriptor/program/model-root/PC-root statements and matching conformance candidate metadata through actual-node signed routes; bounded fixture mechanics only.",
+  "allocations": {
+    "outer": 110,
+    "inner": [
+      22,
+      23,
+      24
+    ],
+    "aux": [
+      43,
+      44,
+      45
+    ],
+    "fences": [
+      "palw_probabilistic_constraints_v1",
+      "palw_panel_free_v1"
+    ],
+    "shipping_activation_changed": false
+  },
+  "verification": {
+    "distinct_tests_passed": 31,
+    "logs": [
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-core-verified.log",
+        "tests_passed": 3,
+        "raw_log_sha256": "19ffd8dd9fd6eb9756cde9c172e7b7c465c826478aff336d13070ca74f954a1f",
+        "saved_log_sha256": "d95f255efbf176fdec0971beb18668587b0ff26cf87f75f685999944636daba5"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-node-verified.log",
+        "tests_passed": 4,
+        "raw_log_sha256": "5ca7553c785ce625444823ccc38008727b80f7f4b753d79391690c22889fe16b",
+        "saved_log_sha256": "c6ffd4bb255cfe19db231fa023fa228d54423f62e8827e29c85b790df96ac12b"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-kernel-route.log",
+        "tests_passed": 4,
+        "raw_log_sha256": "c241a3dc79bf7ae427f6ee1389426430f870ee3a2592ce472c90e13a509b9958",
+        "saved_log_sha256": "e977025970fba11cfab99b4d72f6f99099584b7ee97206463cfcf69228a4cca4"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-onboarding.log",
+        "tests_passed": 9,
+        "raw_log_sha256": "269fb47c0113da5dc6362407b2ead100a68b24d1a435ff20d82bfa711d1e90cf",
+        "saved_log_sha256": "d490e7b75733450423e4fdbb3ac75c6ec0b3a96d2cd0b70eedd5cf5cdf113f4a"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-stream.log",
+        "tests_passed": 6,
+        "raw_log_sha256": "59209f5fec8d0e008adae565e0f95e69986f271475b7b729252dba92fccbd9d3",
+        "saved_log_sha256": "74f14c5dc913e6dd2f43f44301a6c22aad970449e4996221a29685da0de2b5dc"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-export.log",
+        "tests_passed": 1,
+        "raw_log_sha256": "9c2fb5cccba6cab352025cd3aecc8aec8717a2d7dcbdead6be92fbee10337552",
+        "saved_log_sha256": "5be1d33749b90575c8c74e9e91727f42a8c5083b02f05e4b86bc63bb12aabcb4"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-inner-allocation.log",
+        "tests_passed": 1,
+        "raw_log_sha256": "b548690e6d96d0d734fd7ceb3a70598856613f9d388568cd1a129cde96c5a413",
+        "saved_log_sha256": "c04505ce91bfe4854faf50b8ce12e2b69e4ca5b6ca7f5452eeac8804322c4f66"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-wire-compat.log",
+        "tests_passed": 1,
+        "raw_log_sha256": "fc25ee21e65db2dedb25f25111562c6d5aeebb8dd5cb2468965c78d5a8fd638a",
+        "saved_log_sha256": "4ed10bd9cf11af3aa3668623ccc3e469daca726177d722c9af515dcbd017aa35"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-dormancy.log",
+        "tests_passed": 1,
+        "raw_log_sha256": "0375514b070c152d466ee5f9ec5280bce4d1e224489aafeabbd7c5e7b6ea903e",
+        "saved_log_sha256": "9e0ee13b7c26c45c9c14f9257bd148d0f0a8255260401cce44bdf4e90fbe2d39"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-binding-wire-pins-fixed.log",
+        "tests_passed": 1,
+        "raw_log_sha256": "e624b6da2fd484fc91190263bd6206900793620839f1370dc9926a85687d46d8",
+        "saved_log_sha256": "94b1f4e1dae847954db7a2e5a658653a1697336a7b7646a14f116015adf0cc17"
+      }
+    ],
+    "node_independent_replay": true,
+    "format_and_diff_checks_passed": true
+  },
+  "source_sha256": [
+    {
+      "path": "consensus/core/src/lib.rs",
+      "bytes": 46441,
+      "sha256": "50541c4deef733242ba8693322876a928b267cda86751b10e9abe22cd881feef"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "bytes": 55328,
+      "sha256": "43538625cc3edd2921311573731aa5678ff70aaebf95d95a8286dc92a6833e83"
+    },
+    {
+      "path": "consensus/core/src/palw_lifecycle_objects_v2.rs",
+      "bytes": 253834,
+      "sha256": "be6fef5b463f8467e187bf53b262602294dec05066b877bed5d489a12dc848b8"
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "bytes": 4715266,
+      "sha256": "61864865674620eb07fdc6e5078d528c96b8340923442002b74d096e9e3bd554"
+    },
+    {
+      "path": "consensus/core/src/palw_model_artifact_v2.rs",
+      "bytes": 14957,
+      "sha256": "b14269cda1a981eb19f0b769a50c8b68ec70341e8ea3323339a8a5950ff7455c"
+    },
+    {
+      "path": "consensus/core/src/palw_model_artifact_fold_v2.rs",
+      "bytes": 10562,
+      "sha256": "fd863b1e98fb7f9f38629a289452f78135cef28a20f11d7362ddc203e8f4d88b"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs",
+      "bytes": 178640,
+      "sha256": "e5fcd017c9dd8093995631f47014145a57143df527ad0bd4d479f0f3138020ed"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_artifact.rs",
+      "bytes": 11522,
+      "sha256": "8f3424359dca713a47e359042afdaa6655afdecac1dbe35f14823dcbd326da0a"
+    },
+    {
+      "path": "misaka-palw-kernel/src/route.rs",
+      "bytes": 35347,
+      "sha256": "9cf8995035980f02ac37f2a9e620880f2671ede4c1c114833b8da36a2f5f8d01"
+    },
+    {
+      "path": "misaka-palw-kernel/src/ledger.rs",
+      "bytes": 183340,
+      "sha256": "9359d5c948c50c70f441c305acd85997aa385aeda7b68c7b8ad0534c57c5f9f6"
+    },
+    {
+      "path": "misaka-palw-sdk/src/tir_stream.rs",
+      "bytes": 25178,
+      "sha256": "d09d12bcfa22b0a0779ff51d456800dddac419f05d885c86f2e08148c02cc12c"
+    },
+    {
+      "path": "misaka-palw-sdk/tests/k2s_encoder_court.rs",
+      "bytes": 53936,
+      "sha256": "1728931be6e01188eed5cfc6b77044f0e1bc48685d1eadb306718145e378a548"
+    }
+  ],
+  "fixture_and_capture_sha256": [
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/model.safetensors",
+      "bytes": 44400,
+      "sha256": "10709576716a96b4f32324e58f07005692a719511648a6c10360f39c4076a82e"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/config.json",
+      "bytes": 662,
+      "sha256": "f93f3cbff995d18e56c3e273b5319de1a60dfcadcc128758a1da284c0d2bfd6a"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/outputs.json",
+      "bytes": 23155,
+      "sha256": "f27b784f87f686aa8a206f1e1f5a3a230181bb312b2f8a55e27d444afe6c0bc1"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/sentence_bert_config.json",
+      "bytes": 52,
+      "sha256": "4e56a1a7a462709f61119a9bfdf330431fd874fceeeddf64451dbd1c4b10439b"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-enc/bert/modules.json",
+      "bytes": 349,
+      "sha256": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-cls/xlmr_rerank/model.safetensors",
+      "bytes": 90068,
+      "sha256": "65d7cd5e4229db796a01f72251a536b0984f61b41c9e7ca78c3cb79702e0efcc"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-cls/xlmr_rerank/config.json",
+      "bytes": 766,
+      "sha256": "07410eb542401cbb2f074f9b385d964725c3a29f6a09ae64ea1aeb4dff63ce61"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/fixtures/hf-cls/xlmr_rerank/outputs.json",
+      "bytes": 2489,
+      "sha256": "0916d8787e0bfecdb317588996128643dddc5a7ba686d0439d6b996329c5f272"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-bert-model-artifact-court.borsh",
+      "bytes": 33424,
+      "sha256": "86e66422a825061204adfe5d730eb9e7946ae99a51ab28a0e20913ee92eaf2fe"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-xlmr-model-artifact-court.borsh",
+      "bytes": 36020,
+      "sha256": "3ec51e32c87163cebc9f47925f35d47da941940c39b3e41d80aa16455ea98534"
+    }
+  ],
+  "binaries": [
+    {
+      "path": "target/debug/deps/kaspa_consensus_core-38863d86af2a1f17",
+      "bytes": 99140232,
+      "sha256": "d582bf28a7052c6632208b8afbc44c253cfeceabc7f8880039f36273dec825ca"
+    },
+    {
+      "path": "target/debug/deps/kaspa_consensus-1764c0eeb2408d96",
+      "bytes": 140398896,
+      "sha256": "b3d3a3c96f900fd510cac8c40d2061e21195f5e893cf519d026751bf0336f1e2"
+    },
+    {
+      "path": "target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746",
+      "bytes": 8814752,
+      "sha256": "df1bc78dca276e1ac2fda93429700ea40fd7a16dc4074d72cad0b3d73a41f1ea"
+    },
+    {
+      "path": "target/debug/deps/misaka_palw_sdk-22610ee8cd5786fe",
+      "bytes": 112285216,
+      "sha256": "727d93a21382e34eef632c760741e45a185fd0105b9bbdaa32ddc24752533482"
+    }
+  ],
+  "observations": [
+    "BERT capture: 51 model parameter declarations, 92 expanded tensor instances; XLM-R capture: 60 model declarations. Tiny fixture checkpoints, not published full checkpoints.",
+    "Pending statements do not grant candidate admission; exact matured v5 scope admits ordinary candidate metadata signed by a different bond; wrong descriptor refused.",
+    "Temporary PC attestation does not enter global persisted ledger/onboarding roots. No execution classes, jobs, claims, Finals or rewards created.",
+    "Authenticated changed-weight tile slashes 100 BILI once and pays existing 49% challenger share; honest no-fault filing pays dismissal only.",
+    "Malformed proof flood consumes shared work/run budget before proof decoding; excess runs incur neither judge work nor dismissal.",
+    "Eight lifetime statements per bond, 100 BILI reserved each, bounded fixed-header liability reads and clocked release; committed collateral and withdrawal duty include reservations."
+  ],
+  "initial_failures_and_corrections": [
+    "Two node builds ran out of local disk capacity; only this checkout completed compilation objects and caches were reclaimed after owner termination.",
+    "Private sibling test helper was replaced with a local helper using ordinary object chunking.",
+    "Declaration count 51 was incorrectly asserted as tensor-instance count; actual expanded PC cardinality is 92.",
+    "Wire-pin check exposed stale tag-105 pre-tile fingerprint at baseline. Baseline/current source manifests show only two new statement types and new kernel inner variants; existing proof types are identical. Refreshed only tag 105, retaining 110/113 pins."
+  ],
+  "build_limits": "Core/node package debug symbols disabled and incremental off to fit local disk; existing profile optimization and debug assertions retained; no network, policy, gate or resource limits changed.",
+  "remaining_full_goal_work": [
+    "Generic scoped release conformance and actual execution promotion, including large/stateful GAP-70.",
+    "Complete real-computation G14 and verifiable source/PC relation for arbitrary opaque or withheld bound roots; authentic true weights alone cannot open an arbitrary false PC root.",
+    "Original-checkpoint full-task/context fidelity under predeclared criteria, preserved sparsity/state reuse and all required dense/MoE/GDN/KDA/Mamba/sparse/compressed/multimodal/encoder features.",
+    "Full shared registration/claim/proof/court resource vector, aggregate bond/network caps, capital/window neutrality and honest liveness; the eight-record cap alone does not prove all these.",
+    "Fresh outsider public-material acquisition, full-task node conviction and independent Final/redemption; source availability remains conditional.",
+    "A1-A8 including local real-checkpoint coverage, exact support-unit evidence and reviewed shipping activation under unchanged gates."
+  ]
+}

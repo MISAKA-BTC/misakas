@@ -1,0 +1,136 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling blake2b_simd v1.0.2
+   Compiling libcrux-ml-dsa v0.0.10
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/hashes)
+   Compiling misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/gen)
+   Compiling misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/challenge)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/kernel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/merkle)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/core)
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/database)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/protocol/p2p)
+   Compiling misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/artifact)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/sdk)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/mining/errors)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/core)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/components/connectionmanager)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/mining)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/protocol/flows)
+warning: function `chunk_hash` is never used
+  --> protocol/flows/src/palw_snapshot_chunks.rs:86:15
+   |
+86 | pub(crate) fn chunk_hash(point: Hash64, root: Hash64, total: u64, count: u32, index: u32, bytes: &[u8]) -> Hash64 {
+   |               ^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-p2p-flows` (lib) generated 1 warning
+   Compiling kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/grpc/core)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/indexes/utxoindex)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/service)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/grpc/client)
+   Compiling kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/grpc/server)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/remote)
+   Compiling kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/evm/core)
+   Compiling kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/wrpc/server)
+   Compiling kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/wrpc/client)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus)
+    Finished `test` profile [unoptimized] target(s) in 10m 22s
+     Running unittests src/lib.rs (/tmp/misaka-rfc67812-node-target/debug/deps/kaspa_consensus-bdd9082aecb2b1ea)
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w ... [x8-g14] REAL attempt on 301b7f57814510e5c1ff85e6f1d610a2448f66fcf0eefe2cf39d6e7886693c6cbc7cd11a5eee5163eaaff43c312fd59f0066b76ef0b0d7ff0a5175c1db4ac845: ready = Ok(()), class gate = None, pwu = 355649601472
+[x8-g14] the class lottery: Some(48043003) draws (target 14910631810345994312205309904797)
+[t12-e2e] the claim's anchor slot: reached after 19 heartbeats (DAA 215 -> 225)
+[x8-native-payment] first Final: daa=347, expiry=4260, liability=4259, funds=5
+[x8-g14] REAL attempt on 301b7f57814510e5c1ff85e6f1d610a2448f66fcf0eefe2cf39d6e7886693c6cbc7cd11a5eee5163eaaff43c312fd59f0066b76ef0b0d7ff0a5175c1db4ac845: ready = Ok(()), class gate = None, pwu = 355649601472
+[x8-g14] the class lottery: Some(1992968) draws (target 14910631810345994312205309904797)
+[t12-e2e] the claim's anchor slot: reached after 19 heartbeats (DAA 357 -> 367)
+[x8-native-payment] second Final: daa=489, expiry=4838
+[x8-native-payment] before first physical payment: begin daa=489, target=4259, maximum-heartbeats=61344
+[x8-native-payment] before first physical payment: blocks=64, daa=521/4259, elapsed=10.327232166s
+[x8-native-payment] before first physical payment: blocks=128, daa=553/4259, elapsed=25.2875225s
+[x8-native-payment] before first physical payment: blocks=192, daa=585/4259, elapsed=41.074403125s
+[x8-native-payment] before first physical payment: blocks=256, daa=617/4259, elapsed=58.712108833s
+[x8-native-payment] before first physical payment: blocks=320, daa=649/4259, elapsed=76.430579541s
+[x8-native-payment] before first physical payment: blocks=384, daa=681/4259, elapsed=89.751243708s
+[x8-native-payment] before first physical payment: blocks=448, daa=713/4259, elapsed=107.575548708s
+[x8-native-payment] before first physical payment: blocks=512, daa=745/4259, elapsed=122.543034833s
+[x8-native-payment] before first physical payment: blocks=576, daa=777/4259, elapsed=136.891374625s
+[x8-native-payment] before first physical payment: blocks=640, daa=809/4259, elapsed=157.674547833s
+[x8-native-payment] before first physical payment: blocks=704, daa=841/4259, elapsed=171.113364958s
+[x8-native-payment] before first physical payment: blocks=768, daa=873/4259, elapsed=186.384595083s
+[x8-native-payment] before first physical payment: blocks=832, daa=905/4259, elapsed=201.623905666s
+[x8-native-payment] before first physical payment: blocks=896, daa=937/4259, elapsed=216.821481375s
+2026-10-13 21:38:48.445+09:00 [WARN ] PALW: block 2f8cbbee5c62cceac4be73aa326349a80bca06245e7c8563730c46bab8fc93492a792a5f41bd8ce245db77e9723442ed5254c431a4759ca2ab0a93f226a93892 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[x8-native-payment] before first physical payment: blocks=960, daa=969/4259, elapsed=233.727913333s
+[x8-native-payment] before first physical payment: blocks=1024, daa=1001/4259, elapsed=248.110666291s
+[x8-native-payment] before first physical payment: blocks=1088, daa=1033/4259, elapsed=266.119884708s
+[x8-native-payment] before first physical payment: blocks=1152, daa=1065/4259, elapsed=291.07094075s
+[x8-native-payment] before first physical payment: blocks=1216, daa=1097/4259, elapsed=322.506206958s
+[x8-native-payment] before first physical payment: blocks=1280, daa=1129/4259, elapsed=363.89782s
+[x8-native-payment] before first physical payment: blocks=1344, daa=1161/4259, elapsed=397.482516291s
+
+thread 'virtual-processor' (16929693) panicked at consensus/src/pipeline/virtual_processor/processor.rs:2734:34:
+called `Result::unwrap()` on an `Err` value: Error { message: "IO error: No space left on device: While appending to file: /var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/rusty-kaspa/.tmpyjYocb/000058.log: No space left on device" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w' (16929644) panicked at consensus/src/consensus/mod.rs:826:58:
+called `Result::unwrap()` on an `Err` value: RecvError(())
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w' (16929644) panicked at consensus/src/consensus/mod.rs:858:27:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+stack backtrace:
+   0:        0x108c41ecc - <std::sys::backtrace::BacktraceLock::print::DisplayBacktrace as core::fmt::Display>::fmt::h8c5ab870ebd4c242
+   1:        0x108c52a3c - core::fmt::write::h64810b21425781ec
+   2:        0x108c192fc - std::io::Write::write_fmt::h947344a43c638468
+   3:        0x108c27648 - std::panicking::default_hook::{{closure}}::ha0993a93f6e4994d
+   4:        0x108c27548 - std::panicking::default_hook::h7aae5c8c53b8a669
+   5:        0x108c27a40 - std::panicking::panic_with_hook::hb885411bb59bebf4
+   6:        0x108c276f4 - std::panicking::panic_handler::{{closure}}::hb04320f9e43192c5
+   7:        0x108c232e0 - std::sys::backtrace::__rust_end_short_backtrace::ha3c55a1c4767eecf
+   8:        0x108c11550 - __rustc[d131491b17107b07]::rust_begin_unwind
+   9:        0x108d2a218 - core::panicking::panic_fmt::h6f8816b337451651
+  10:        0x108d29df4 - core::result::unwrap_failed::h1f9c817951eee5c5
+  11:        0x103d35d84 - kaspa_consensus::consensus::Consensus::shutdown::h5297e114037e7544
+  12:        0x103bd9068 - core::ptr::drop_in_place<kaspa_consensus::pipeline::virtual_processor::tests::TestContext>::h52f0be2610989e69
+  13:        0x103b9cde0 - core::ptr::drop_in_place<kaspa_consensus::pipeline::virtual_processor::tests::t12_round_lane_e2e::T12Chain>::h61c82af36ce946f9
+  14:        0x103bdd260 - core::ptr::drop_in_place<kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::Net>::hf48627454f36d315
+  15:        0x103a8b2c4 - kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w::{{closure}}::hc1eb5ea55775b7d9
+  16:        0x103edb324 - tokio::runtime::scheduler::current_thread::Context::enter::h865393772e9f8ed7
+  17:        0x102aa4718 - tokio::runtime::context::scoped::Scoped<T>::set::h840c36e1a56c6ac1
+  18:        0x103eda11c - tokio::runtime::scheduler::current_thread::CurrentThread::block_on::hcbdbe945981bf039
+  19:        0x103ffc54c - tokio::runtime::runtime::Runtime::block_on::he1b4f9244a62f167
+  20:        0x103a81ce0 - kaspa_consensus::pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w::h7b83a7c717a58217
+  21:        0x102ce73d8 - core::ops::function::FnOnce::call_once::h36b5984934746edf
+  22:        0x10403d604 - test::__rust_begin_short_backtrace::h6ca5fe182383a98d
+  23:        0x10404c7ec - test::run_test::{{closure}}::hca48f6c40383049d
+  24:        0x10402d95c - std::sys::backtrace::__rust_begin_short_backtrace::h4ccc732acb10c9b8
+  25:        0x10403095c - core::ops::function::FnOnce::call_once{{vtable.shim}}::h590ca23b87b969e2
+  26:        0x108c20a18 - std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587
+  27:        0x189523c58 - __pthread_cond_wait
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w' (16929644) panicked at library/core/src/panicking.rs:233:5:
+panic in a destructor during cleanup
+thread caused non-unwinding panic. aborting.
+error: test failed, to rerun pass `-p kaspa-consensus --lib`
+
+Caused by:
+  process didn't exit successfully: `/tmp/misaka-rfc67812-node-target/debug/deps/kaspa_consensus-bdd9082aecb2b1ea x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w --nocapture --test-threads=1` (signal: 6, SIGABRT: process abort signal)

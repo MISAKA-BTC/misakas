@@ -1,0 +1,72 @@
+{
+  "parent": "3bc8f1ff462b53f3747fddaee06478c71ec98c0f",
+  "scope": "test-only golden GQA public-original history frame, not funded admission or shared signature authorization",
+  "selected_unique_passes": 79,
+  "overlap_excluded": "initial public-fold two are included in full public-fold selection; historical counts excluded",
+  "commands": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "history-frame-first-check.log",
+      "exit": 0,
+      "executed_tests": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib palw_tir_public_claim_v1::tests::",
+      "log": "history-frame-native.log",
+      "exit": 0,
+      "passed": 4
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v2 --test palw_court_policy_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move",
+      "log": "history-frame-regressions.log",
+      "exit": 0,
+      "passed": 35
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1::tests::",
+      "log": "history-frame-public-fold.log",
+      "exit": 0,
+      "passed": 2,
+      "overlap": true
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1::",
+      "log": "history-frame-public-fold-full.log",
+      "exit": 0,
+      "passed": 40
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "history-frame-docs-check.log",
+      "exit": 1
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "history-frame-docs-post-readme.log",
+      "exit": 1,
+      "scope": "after README edit; same five imported missing links"
+    }
+  ],
+  "sha256": {
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-first-check.log": "c04a7f9c0425ef18aab12e52bed1134f8f30d0105a02d1f3d89c2ed8fef7256a",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-native.log": "6e89e38a21a8dcb0a72de49d8a1c464bcce1dac07a38a20bfe50335346719a80",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-regressions.log": "b287d0da7360bcab6093d488162a3bb30345aeda6fb92fd01a9a1171fb8e4d9d",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-public-fold.log": "d21a8b8110d4079eb5759ae0e8ae2dbd9aebf6de3fd5b3527a1be189e244e9cf",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-public-fold-full.log": "ffdfbe6ecc530ba7d27dc1873ba10420acdbf18a3a2413302c9ef76811f94f66",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-docs-check.log": "48de6e58cf410709fbae82fec8401cabf646a4c9a13e80f4df0d8f3109fc230b",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-runtime.patch": "08d5a36fc88efb6608d5ba0455e86ab280c2a6a049186a3275b1e5c2eca6ad95",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-source-audit.json": "c04d2363c10cdb88bb587bb3dbe85770b53bdd4cca0da8313cfd7019485fa7df",
+    "target/release/deps/kaspa_consensus_core-cd85ed321316b157": "d0feca136c3108b7e022879be0727ca0ae24b784571a26f0889e3f34f192c4d7",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-patch-reconstruction.log": "fd7581e501d720fda0e7378f30fa59c2a561081c8c52bf93b15031880fb14874",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-docs-final.log": "48de6e58cf410709fbae82fec8401cabf646a4c9a13e80f4df0d8f3109fc230b",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-docs-post-readme.log": "66fcd5d2df1bce287c08b829cf1162ec608f5ab5b1be25ecc7a0bafd3ae03f12",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-first-source.patch": "7ab7056c9cc1880a1168c5f8c06527fd0b881285544a2bea78fc7334a36f3dd2",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/history-frame-test-list.log": "5ecb1d3f26fd0897d09d45e80811f42e59ae5625eeeaf2f9cae80d526409f37d"
+  },
+  "limits": [
+    "Existing synthetic signature verifier and original allocation test-cost fixtures retained; no paid original, actual supply, node T05, real-model door or measured throughput.",
+    "New shared signer/source/profile/funding connection remains open.",
+    "No cap/deadline/preset/wire/tag change or pre merge/push/arming/deployment."
+  ],
+  "patch_reconstruction_verified": true
+}

@@ -1,0 +1,26 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/utils)
+    Checking kaspa-hashes v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/hashes)
+    Checking kaspa-math v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/math)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-database v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/database)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+warning: unused variable: `p`
+   --> consensus/core/src/palw_flat_stage_source_fold_v14.rs:136:5
+    |
+136 |     p:&NativeStagePoliciesV14,body:&[u8])->Result<(),PalwStateV2Error>{
+    |     ^ help: if this is intentional, prefix it with an underscore: `_p`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-pow v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/pow)
+    Checking kaspa-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/notify)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/pq/validator-core)
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/base0)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/notify)
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/components/consensusmanager)
+    Checking kaspa-consensus v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 49.78s

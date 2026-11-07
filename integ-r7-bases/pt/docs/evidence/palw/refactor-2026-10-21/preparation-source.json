@@ -1,0 +1,9 @@
+{
+  "base": "292a6d7db",
+  "files": {
+    "consensus/core/src/palw_state_v2.rs": "320db532fd621714f506966ee55f3f808cf50fe07a742e152aa668b5e06548ef",
+    "consensus/core/src/palw_state_v2/block_preparation.rs": "81786a8b371cb0e6cffdb0cc2ba1fe834deecb624547ad762d542cd86fd97236"
+  },
+  "exact_reconstruction": true,
+  "scope": "shared ordered preparation only; all other requested refactoring phases remain open"
+}

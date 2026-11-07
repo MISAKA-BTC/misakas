@@ -1,0 +1,43 @@
+
+running 11 tests
+test palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::prospective_public_job_retention_precedes_the_legacy_fence_and_survives_native_reload ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::independently_voided_public_claim_keeps_paid_material_without_a_second_collection ... ok
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once' (16901692) panicked at consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:263:5:
+assertion `left == right` failed
+  left: 6
+ right: 7
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once ... FAILED
+test palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry ... ok
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock' (16901690) panicked at consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:347:13:
+assertion `left == right` failed
+  left: 6
+ right: 7
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock ... FAILED
+test palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner ... ok
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel' (16901695) panicked at consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:117:81:
+called `Result::unwrap()` on an `Err` value: ObjectiveOffenceRefused(0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000190c000000000000, "public prefix requires exact qualified custody and an independent owner")
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel ... FAILED
+test palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once ... ok
+
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows' (16901697) panicked at consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:663:5:
+assertion `left == right` failed
+  left: 390
+ right: 455
+test palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel
+    palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows
+
+test result: FAILED. 7 passed; 4 failed; 0 ignored; 0 measured; 3919 filtered out; finished in 4.97s
+

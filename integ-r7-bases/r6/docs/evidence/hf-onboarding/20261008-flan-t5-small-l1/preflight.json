@@ -1,0 +1,114 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 0,
+  "file": "widest.json",
+  "readable": true,
+  "input": "https://huggingface.co/google/flan-t5-small/resolve/0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
+  "bytes_read": 23841,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": "t5",
+  "architectures": [
+   "T5ForConditionalGeneration"
+  ],
+  "frontend_level": "B",
+  "adapter": "t5",
+  "features_used": 8,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "F32"
+  ],
+  "weights_bytes": 307844608,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "ok",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [],
+  "notes": [
+   "a encdec class (adapter t5): lowered to 2 RFC-0003 program(s), each admitted (194 nodes, 353894400 MACs; 278 nodes, 38961152 MACs); it registers as a pipeline class, whose rules are the generative lane's (RFC-0003) and are not judged here"
+  ]
+ },
+ "declared": {
+  "exit": 0,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "https://huggingface.co/google/flan-t5-small/resolve/0fc9ddf78a1e988dac52e2dac162b0ede4fd74ab",
+  "bytes_read": 23841,
+  "depth": {
+   "requested": "shape",
+   "reached": "headers",
+   "stopped_at": "no program to judge: the convert stage is blocked"
+  },
+  "network_daa": null,
+  "model_type": "t5",
+  "architectures": [
+   "T5ForConditionalGeneration"
+  ],
+  "frontend_level": "B",
+  "adapter": "t5",
+  "features_used": 8,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "F32"
+  ],
+  "weights_bytes": 307844608,
+  "missing_shards": [],
+  "artifact_estimate_bytes": null,
+  "kernel": null,
+  "admission_verdict": null,
+  "admission_gate": null,
+  "admission_gate_detail": null,
+  "layout": null,
+  "seat_needed_bytes": null,
+  "verdict": {
+   "convert": "ok",
+   "register": "unknown",
+   "mine": "unknown"
+  },
+  "unknown_because": {
+   "register": "no program to judge: the convert stage is blocked",
+   "mine": "no program to judge: the convert stage is blocked"
+  },
+  "blockers": [],
+  "notes": [
+   "a encdec class (adapter t5): lowered to 2 RFC-0003 program(s), each admitted (194 nodes, 353894400 MACs; 278 nodes, 38961152 MACs); it registers as a pipeline class, whose rules are the generative lane's (RFC-0003) and are not judged here"
+  ]
+ }
+}

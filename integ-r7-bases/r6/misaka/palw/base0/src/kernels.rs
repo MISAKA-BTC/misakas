@@ -1,0 +1,1690 @@
+//! **Fast kernels for the A16 tier — the same numbers, two orders of magnitude of headroom.**
+//!
+//! # Why this is allowed to exist at all
+//!
+//! In a float runtime this module would be a fork of the specification. Vectorising a dot product
+//! changes which partial sums are formed; threading it changes them again; and in floating point
+//! each of those is a different answer, which is why llama.cpp cannot promise that two machines
+//! agree and why every float verification scheme has to pin a reduction order, a thread count and
+//! an FMA policy.
+//!
+//! ADR-0040 Decision E removes the whole category. Integer addition is exactly associative and
+//! commutative inside the no-overflow bound, so **lanes, tiles and threads cannot change the
+//! result** — and `optimized.rs` already tested that claim on the int8 tier by writing kernels
+//! specifically to break it. This module is what the claim was worth: the first kernel that goes
+//! fast *because* the arithmetic said it could.
+//!
+//! # The one thing that is not free
+//!
+//! The premise of Decision E is that nothing overflows. The reference accumulates in `i64`, where
+//! `A16_MAX_DOT_LEN` leaves room to spare; a SIMD kernel wants `i32` lanes, where it does not.
+//! With `|w| ≤ 128` and `|x| ≤ 32_767` a single product reaches 4.19e6, so an `i32` lane holds
+//! 512 terms and no more. The reduction is therefore **chunked at 512 elements** — each chunk
+//! summed in `i32` lanes, each chunk's total widened into `i64` — which is a different
+//! association than the reference's left fold and, for exactly the reason above, the same number.
+//!
+//! Get the chunk wrong and nothing tells you: the wrap is silent in release, and the differential
+//! below is what stands between that and a producer whose blocks are refutable.
+//!
+//! # The dot-product path, and why it needs no chunk at all
+//!
+//! `vmlal_s16` does four multiply-accumulates per instruction. ARM's `sdot` does sixteen, and
+//! `usdot` (FEAT_I8MM) does sixteen mixed-sign — but both are `int8 × int8`, and this tier's
+//! activation is `i16`. The split is algebraic and exact:
+//!
+//! ```text
+//! x = 256·hi + lo      hi = x >> 8  (arithmetic, so hi ∈ [-128, 127])
+//!                      lo = x & 255 (so lo ∈ [0, 255], unsigned — hence usdot)
+//! Σ w·x = 256·Σ(w·hi) + Σ(w·lo)
+//! ```
+//!
+//! `hi` is signed and pairs with `sdot`; `lo` is unsigned and pairs with `usdot`, whose operand
+//! order is (unsigned, signed). Two instructions replace four and the widening of `w` disappears.
+//!
+//! The lane bound is looser than the `vmlal` path's, not tighter: `sdot` accumulates `n/4`
+//! products per lane, so the worst case is `(n/4) · 128 · 255 = n · 8160`, which stays inside an
+//! `i32` for every `n` the tier admits — `A16_MAX_DOT_LEN` is 262,144 and the bound breaks at
+//! 263,192. So this path has **no chunking**, asserted at compile time below.
+//!
+//! The intrinsics (`vdotq_s32`, `vusdotq_s32`) are still unstable in Rust 1.94, so the two
+//! instructions are written as inline assembly, which is stable. Availability is detected at
+//! runtime — `dotprod` is ARMv8.2 and `i8mm` is ARMv8.6, and an Apple M1 has the first and not
+//! the second — with the `vmlal` path as the fallback that every machine has.
+
+use kaspa_consensus_core::palw_base0_a16::{
+    A16_CODE_MAX, A16_MAX_ATTN_HISTORY_HELD_V1, A16_MAX_ATTN_HISTORY_V1, A16_MAX_DOT_LEN, A16QuantParams, PalwA16OpError,
+    a16_scale_round,
+};
+use kaspa_consensus_core::palw_qwen36_ops::PalwQwen36OpError;
+use rayon::prelude::*;
+
+/// Terms per `i32` accumulation chunk. `512 · 128 · 32_767 = 2.15e9`… which is over `i32::MAX`,
+/// so the real bound is per LANE: four lanes carry 128 terms each, 128 · 4.19e6 = 5.4e8, a
+/// four-fold margin. The constant is the element count because that is what the loop counts.
+const CHUNK: usize = 512;
+
+const _: () = assert!(
+    (CHUNK as i64 / 4) * 128 * A16_CODE_MAX < i32::MAX as i64,
+    "an i32 lane must hold CHUNK/4 worst-case products — past that the sum wraps silently and \
+     Decision E's associativity, which is conditional on no overflow, stops holding"
+);
+
+/// `Σ w[i] · x[i]` in `i64`, with `w` int8 and `x` A16 codes.
+///
+/// Bit-identical to the reference's `.map(|(w, v)| *w as i64 * *v as i64).sum()` on every input
+/// the tier admits.
+#[cfg(target_arch = "aarch64")]
+#[inline]
+pub fn dot_i8_a16(w: &[i8], x: &[i16]) -> i64 {
+    debug_assert_eq!(w.len(), x.len());
+    // SAFETY: NEON is part of the aarch64 baseline, so these intrinsics are always available on
+    // this target. Every load inside is bounded by the chunk arithmetic.
+    unsafe { dot_i8_a16_neon(w, x) }
+}
+
+/// x86-64 — the fleet's own architecture, and until ADR-0055 the one still running the scalar
+/// fold. Dispatches to AVX2 when the machine has it (every EPYC in the fleet does; detection is
+/// per-process, below), scalar otherwise.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub fn dot_i8_a16(w: &[i8], x: &[i16]) -> i64 {
+    debug_assert_eq!(w.len(), x.len());
+    if has_avx2() {
+        // SAFETY: AVX2 was detected above, and the chunk arithmetic bounds every load.
+        return unsafe { dot_i8_a16_avx2(w, x) };
+    }
+    dot_i8_a16_scalar(w, x)
+}
+
+/// Every remaining target. A `vpdpwssd` (AVX-512 VNNI) path belongs beside the AVX2 one when a
+/// fleet host grows the flag, and a `__dp4a` path in a CUDA backend — each held to the same
+/// differential.
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+#[inline]
+pub fn dot_i8_a16(w: &[i8], x: &[i16]) -> i64 {
+    debug_assert_eq!(w.len(), x.len());
+    dot_i8_a16_scalar(w, x)
+}
+
+/// The portable path, and the shape every vector path must reproduce.
+#[inline]
+pub fn dot_i8_a16_scalar(w: &[i8], x: &[i16]) -> i64 {
+    w.iter().zip(x).map(|(a, b)| *a as i64 * *b as i64).sum()
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline]
+unsafe fn dot_i8_a16_neon(w: &[i8], x: &[i16]) -> i64 {
+    use std::arch::aarch64::*;
+    let n = w.len();
+    let mut total: i64 = 0;
+    let mut base = 0usize;
+    while base < n {
+        let end = (base + CHUNK).min(n);
+        // SAFETY: `base..end` is inside both slices, and every pointer read below stays within
+        // `i + 16 <= end`.
+        let mut acc0 = unsafe { vdupq_n_s32(0) };
+        let mut acc1 = unsafe { vdupq_n_s32(0) };
+        let mut i = base;
+        while i + 16 <= end {
+            // SAFETY: 16 elements remain in both slices from `i`.
+            unsafe {
+                let wv = vld1q_s8(w.as_ptr().add(i));
+                let w_lo = vmovl_s8(vget_low_s8(wv));
+                let w_hi = vmovl_high_s8(wv);
+                let x0 = vld1q_s16(x.as_ptr().add(i));
+                let x1 = vld1q_s16(x.as_ptr().add(i + 8));
+                acc0 = vmlal_s16(acc0, vget_low_s16(w_lo), vget_low_s16(x0));
+                acc1 = vmlal_high_s16(acc1, w_lo, x0);
+                acc0 = vmlal_s16(acc0, vget_low_s16(w_hi), vget_low_s16(x1));
+                acc1 = vmlal_high_s16(acc1, w_hi, x1);
+            }
+            i += 16;
+        }
+        // Widen the lanes into `i64` before combining chunks: the lanes are the only place an
+        // `i32` is allowed to hold a partial sum, and it stops being allowed at `CHUNK`.
+        // SAFETY: register-only operations.
+        let widened = unsafe { vaddq_s64(vpaddlq_s32(acc0), vpaddlq_s32(acc1)) };
+        // SAFETY: lane indices are in range for an int64x2_t.
+        total += unsafe { vgetq_lane_s64(widened, 0) + vgetq_lane_s64(widened, 1) };
+        // The chunk's tail, scalar. It is at most 15 elements and it is the same addition.
+        total += dot_i8_a16_scalar(&w[i..end], &x[i..end]);
+        base = end;
+    }
+    total
+}
+
+const _: () = assert!(
+    (A16_MAX_DOT_LEN as i64 / 4) * 128 * 255 < i32::MAX as i64,
+    "an sdot/usdot lane accumulates n/4 products of at most 128·255; past this the whole tier's \
+     longest reduction would wrap and the dot path would need a chunk like the vmlal path"
+);
+
+/// Whether this machine has AVX2. Read once, for the same reason as `has_dot_extensions`, and
+/// with the same kind of kill-switch: `MISAKA_PALW_NO_AVX2` turns the fast path off so a slowdown
+/// report can A/B the kernel on one machine without rebuilding. A diagnostic, never a consensus
+/// switch — the two paths are asserted bit-identical, so the variable changes speed and nothing
+/// else.
+#[cfg(target_arch = "x86_64")]
+fn has_avx2() -> bool {
+    use std::sync::OnceLock;
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        if std::env::var_os("MISAKA_PALW_NO_AVX2").is_some() {
+            return false;
+        }
+        std::arch::is_x86_feature_detected!("avx2")
+    })
+}
+
+/// The AVX2 ladder: sign-extend sixteen weights to `i16`, `vpmaddwd` them against sixteen codes
+/// — sixteen exact `i16 × i16` products, pair-summed into eight `i32` lanes — and accumulate.
+///
+/// **Why `vpmaddwd` and not the `vpmaddubsw` trick.** The classic int8 path abs-and-signs the
+/// operands to fit the unsigned×signed instruction, and it is NOT exact: negating an `i8` of
+/// −128 wraps back to −128, so any row holding that rail computes the wrong sign. This tier's
+/// activation is `i16` anyway, so the widening form is both the honest one and the natural one —
+/// a `vpmaddwd` pair sum reaches at most `2 · 128 · 32_767 = 8.4e6`, exact in `i32` with no
+/// saturation arm at all.
+///
+/// The lane bound is the module's usual arithmetic: eight lanes carry `CHUNK / 8` = 64 products
+/// each, `64 · 4.19e6 = 2.7e8`, an eight-fold margin — asserted below, beside the constant it
+/// depends on. Chunk totals are widened to `i64` before crossing chunks, exactly as the NEON
+/// path does, and the tail inside each chunk is the scalar fold, which is the same addition.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn dot_i8_a16_avx2(w: &[i8], x: &[i16]) -> i64 {
+    use std::arch::x86_64::*;
+    let n = w.len();
+    let mut total: i64 = 0;
+    let mut base = 0usize;
+    while base < n {
+        let end = (base + CHUNK).min(n);
+        let mut acc = _mm256_setzero_si256();
+        let mut i = base;
+        while i + 16 <= end {
+            // SAFETY: 16 elements remain in both slices from `i` — 16 bytes of `w`, 32 bytes
+            // of `x` — and unaligned loads are what the `loadu` forms are for.
+            unsafe {
+                let wv = _mm_loadu_si128(w.as_ptr().add(i) as *const __m128i);
+                let w16 = _mm256_cvtepi8_epi16(wv);
+                let xv = _mm256_loadu_si256(x.as_ptr().add(i) as *const __m256i);
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(w16, xv));
+            }
+            i += 16;
+        }
+        // Widen the lanes into `i64` before combining chunks — the lanes are the only place an
+        // `i32` may hold a partial sum, and it stops being allowed at `CHUNK`.
+        // SAFETY: register-only, then a store into a stack array of exactly four lanes.
+        unsafe {
+            let lo64 = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(acc));
+            let hi64 = _mm256_cvtepi32_epi64(_mm256_extracti128_si256::<1>(acc));
+            let sum = _mm256_add_epi64(lo64, hi64);
+            let mut lanes = [0i64; 4];
+            _mm256_storeu_si256(lanes.as_mut_ptr() as *mut __m256i, sum);
+            total += lanes[0] + lanes[1] + lanes[2] + lanes[3];
+        }
+        // The chunk's tail, scalar. It is at most 15 elements and it is the same addition.
+        total += dot_i8_a16_scalar(&w[i..end], &x[i..end]);
+        base = end;
+    }
+    total
+}
+
+#[cfg(target_arch = "x86_64")]
+const _: () = assert!(
+    (CHUNK as i64 / 8) * 2 * 128 * A16_CODE_MAX < i32::MAX as i64,
+    "a vpmaddwd lane accumulates CHUNK/8 pair sums of two worst-case products — past that the \
+     lane wraps silently and the AVX2 path stops being the same number as the reference"
+);
+
+/// The activation row, split once for the whole projection.
+///
+/// Splitting per channel would redo `n` shifts and masks `out_dim` times — 8,960 lanes against
+/// 1,536 channels on Qwen2.5's down-projection — which is most of what the fast path saves.
+pub struct A16Operand {
+    codes: Vec<i16>,
+    /// **Read from inline assembly, and only on aarch64.** `dot_i8_a16_dotprod` takes
+    /// `x.hi.as_ptr()` / `x.lo.as_ptr()` straight into `asm!` operands, which is a read the
+    /// compiler cannot see and which does not exist at all on another architecture — so on
+    /// x86_64 these are genuinely never read and `-D warnings` fails the build there.
+    ///
+    /// Allowed exactly where that is true, rather than deleted: deleting them to satisfy a lint
+    /// on the CI runner's architecture would remove the operands the ARM fast path loads, on
+    /// every ARM host, to fix a warning on x86. The split itself is the point — see the doc above.
+    #[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+    hi: Vec<i8>,
+    #[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
+    lo: Vec<u8>,
+}
+
+impl A16Operand {
+    pub fn new(codes: Vec<i16>) -> Self {
+        let hi = codes.iter().map(|v| (*v >> 8) as i8).collect();
+        let lo = codes.iter().map(|v| (*v as u16 & 0xFF) as u8).collect();
+        Self { codes, hi, lo }
+    }
+    pub fn len(&self) -> usize {
+        self.codes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+}
+
+/// Whether this machine has both dot-product extensions. Read once: `is_aarch64_feature_detected`
+/// is cheap but not free, and it is asked per channel otherwise.
+#[cfg(target_arch = "aarch64")]
+fn has_dot_extensions() -> bool {
+    use std::sync::OnceLock;
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        // A diagnostic, not a consensus switch: the two paths are asserted bit-identical, so
+        // turning one off changes speed and nothing else. It exists because "the fast path is
+        // faster" is a claim that needs an A/B on the same machine, and rebuilding to get one
+        // measures the build as well as the kernel.
+        if std::env::var_os("MISAKA_PALW_NO_DOTPROD").is_some() {
+            return false;
+        }
+        std::arch::is_aarch64_feature_detected!("dotprod") && std::arch::is_aarch64_feature_detected!("i8mm")
+    })
+}
+
+/// `Σ w·x` through the split operand, using whichever path this machine has.
+#[inline]
+pub fn dot_operand(w: &[i8], x: &A16Operand) -> i64 {
+    debug_assert_eq!(w.len(), x.codes.len());
+    #[cfg(target_arch = "aarch64")]
+    if has_dot_extensions() {
+        // SAFETY: the extensions were detected above, and the block count keeps every load
+        // inside all three slices.
+        return unsafe { dot_i8_a16_dotprod(w, x) };
+    }
+    dot_i8_a16(w, &x.codes)
+}
+
+/// `dot_operand` over a sub-range of the operand: `w` against `x.codes[from..from + w.len()]`.
+///
+/// The hi/lo split path needs the range's own hi/lo slices, so this stays on the plain NEON dot
+/// — a 32-element group is two ladder passes and the sdot setup would not amortize anyway.
+#[inline]
+fn dot_operand_range(w: &[i8], x: &A16Operand, from: usize) -> i64 {
+    dot_i8_a16(w, &x.codes[from..from + w.len()])
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "dotprod")]
+#[target_feature(enable = "i8mm")]
+unsafe fn dot_i8_a16_dotprod(w: &[i8], x: &A16Operand) -> i64 {
+    let blocks = w.len() / 16;
+    let mut sum_hi = [0i32; 4];
+    let mut sum_lo = [0i32; 4];
+    if blocks > 0 {
+        // SAFETY: `blocks · 16 <= len` for all three slices, and the loop advances each pointer
+        // by exactly 16 bytes per iteration.
+        unsafe {
+            std::arch::asm!(
+                "movi v0.4s, #0",
+                "movi v1.4s, #0",
+                "2:",
+                "ld1 {{v2.16b}}, [{w}], #16",
+                "ld1 {{v3.16b}}, [{hi}], #16",
+                "ld1 {{v4.16b}}, [{lo}], #16",
+                // `sdot Vd.4S, Vn.16B, Vm.16B` — four byte-products summed into each lane.
+                "sdot v0.4s, v2.16b, v3.16b",
+                // `usdot Vd.4S, Vn.16B, Vm.16B` — Vn is the UNSIGNED operand, so the low bytes
+                // come first and the weights second. The other order computes a different sum.
+                "usdot v1.4s, v4.16b, v2.16b",
+                "subs {n}, {n}, #1",
+                "b.ne 2b",
+                "st1 {{v0.4s}}, [{oh}]",
+                "st1 {{v1.4s}}, [{ol}]",
+                w = inout(reg) w.as_ptr() => _,
+                hi = inout(reg) x.hi.as_ptr() => _,
+                lo = inout(reg) x.lo.as_ptr() => _,
+                n = inout(reg) blocks => _,
+                oh = in(reg) sum_hi.as_mut_ptr(),
+                ol = in(reg) sum_lo.as_mut_ptr(),
+                out("v0") _,
+                out("v1") _,
+                out("v2") _,
+                out("v3") _,
+                out("v4") _,
+                options(nostack)
+            );
+        }
+    }
+    let head = blocks * 16;
+    let hi: i64 = sum_hi.iter().map(|v| *v as i64).sum();
+    let lo: i64 = sum_lo.iter().map(|v| *v as i64).sum();
+    // The tail is at most fifteen elements and is the same addition.
+    256 * hi + lo + dot_i8_a16_scalar(&w[head..], &x.codes[head..])
+}
+
+/// The A16 code check the reference applies through its private `as_a16`, reproduced here so the
+/// fast path refuses exactly what the reference refuses.
+fn as_a16_codes(row: &[i32]) -> Result<Vec<i16>, PalwA16OpError> {
+    if row.is_empty() {
+        return Err(PalwA16OpError::Empty);
+    }
+    if row.iter().any(|v| (*v as i64).abs() > A16_CODE_MAX) {
+        return Err(PalwA16OpError::LengthMismatch { a: row.len(), b: row.len() });
+    }
+    Ok(row.iter().map(|v| *v as i16).collect())
+}
+
+/// Below this many output channels the reduction is run on the calling thread: a projection with
+/// a handful of rows costs less than the pool costs to reach.
+const PARALLEL_MIN_CHANNELS: usize = 64;
+
+/// **And below this much work — channels times each channel's reduction length — likewise,
+/// whatever the channel count.** The channel floor alone sent the context vectors' thin row to the
+/// pool on every position: its unembedding is 64 channels of an 8-long dot, 512 multiply-
+/// accumulates, which is less than the pool costs to wake. The workers then spent the job
+/// yielding and waiting. Sampled on the 32,768-position vector, 46% of all thread time was
+/// `swtch_pri` and 34% `__psynch_cvwait`, and that was the vector's system time (ADR-0110 §9.5). A
+/// real projection is thousands of times past this floor, so it changes nothing there.
+const PARALLEL_MIN_WORK: usize = 1 << 16;
+
+/// Whether a call of `out_dim` channels, each a reduction of `work_per_channel`, goes to the pool.
+fn parallel_worth_it(out_dim: usize, work_per_channel: usize) -> bool {
+    out_dim >= PARALLEL_MIN_CHANNELS && out_dim.saturating_mul(work_per_channel) >= PARALLEL_MIN_WORK
+}
+
+/// **Channels are handed out in blocks, not one at a time.**
+///
+/// The first version mapped `into_par_iter()` over `0..out_dim`, which on the unembedding is
+/// 151,936 tasks each doing a 1,536-length dot — a few microseconds of work behind a work-stealing
+/// deque. Measured, the whole engine sat at 39 tok/s while the arithmetic said it should be
+/// bandwidth-bound, and switching the dot kernel from `vmlal` to `sdot`/`usdot` made it *slower*,
+/// which is the signature of an overhead-bound loop rather than an instruction-bound one.
+///
+/// Blocks are sized so that every thread gets a handful — enough to balance a ragged tail, few
+/// enough that the deque is not the workload.
+fn block_size(out_dim: usize) -> usize {
+    let target = rayon::current_num_threads().max(1) * 4;
+    out_dim.div_ceil(target).max(32)
+}
+
+/// Fill `out` with `channel(c)` for every `c`, in blocks, on the pool when it is worth it —
+/// `work_per_channel` is each channel's reduction length, for [`parallel_worth_it`].
+fn fill_channels<F>(out_dim: usize, work_per_channel: usize, channel: F) -> Vec<i32>
+where
+    F: Fn(usize) -> i32 + Sync + Send,
+{
+    let mut out = vec![0i32; out_dim];
+    if !parallel_worth_it(out_dim, work_per_channel) {
+        for (c, slot) in out.iter_mut().enumerate() {
+            *slot = channel(c);
+        }
+        return out;
+    }
+    let block = block_size(out_dim);
+    out.par_chunks_mut(block).enumerate().for_each(|(bi, slice)| {
+        let base = bi * block;
+        for (i, slot) in slice.iter_mut().enumerate() {
+            *slot = channel(base + i);
+        }
+    });
+    out
+}
+
+/// **Op W1 at speed** — bit-identical to `palw_base0_a16::a16_matmul_requant`.
+///
+/// The activation row is narrowed to `i16` ONCE for the whole projection rather than per channel:
+/// it is the same row for every output, and re-narrowing it `out_dim` times was most of what the
+/// scalar version spent on a wide FFN.
+///
+/// Channels are independent — each writes one output and reads a disjoint weight row — so they
+/// run in parallel. That the parallel result equals the serial one is not a hope about scheduling;
+/// it is that no channel's arithmetic can observe another's.
+pub fn a16_matmul_requant_fast(weights: &[i8], x: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwA16OpError> {
+    let codes = A16Operand::new(as_a16_codes(x)?);
+    let n = codes.len();
+    if n > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: n });
+    }
+    let out_dim = params.len();
+    if out_dim == 0 {
+        return Err(PalwA16OpError::Empty);
+    }
+    if weights.len() != out_dim * n {
+        return Err(PalwA16OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
+    }
+    let channel = |c: usize| -> i32 {
+        let acc = dot_operand(&weights[c * n..(c + 1) * n], &codes);
+        let p = params[c];
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+    };
+    Ok(fill_channels(out_dim, n, channel))
+}
+
+/// **Op W3 at speed** — bit-identical to `palw_base0_a16::a16_matmul_rescale`.
+///
+/// The same projection with the Q[`K`] tail: no `clamp16`, saturation at the `i32` rail instead,
+/// because `Silu` is defined on Q[`K`] values and narrowing here would change the function.
+pub fn a16_matmul_rescale_fast(weights: &[i8], x: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwA16OpError> {
+    let codes = A16Operand::new(as_a16_codes(x)?);
+    let n = codes.len();
+    if n > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: n });
+    }
+    let out_dim = params.len();
+    if out_dim == 0 {
+        return Err(PalwA16OpError::Empty);
+    }
+    if weights.len() != out_dim * n {
+        return Err(PalwA16OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
+    }
+    let channel = |c: usize| -> i32 {
+        let acc = dot_operand(&weights[c * n..(c + 1) * n], &codes);
+        let p = params[c];
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    };
+    Ok(fill_channels(out_dim, n, channel))
+}
+
+// -------------------------------------------------------------------------------------------
+// The batched projections — the same weight row against many tokens
+// -------------------------------------------------------------------------------------------
+
+/// **Op W1 over a batch** — `B` activation rows through one projection.
+///
+/// Decode reads 1.65 GiB of weights to produce one token, so it is bandwidth-bound and no kernel
+/// can fix that: the model has to be read. Prefill does not have to be. Every prompt token needs
+/// the same weight row, so reading it once and using it `B` times raises the arithmetic per byte
+/// by a factor of `B` and turns a bandwidth problem into an arithmetic one.
+///
+/// Output is `B` rows of `out_dim`, bit-identical to calling `a16_matmul_requant_fast` on each
+/// row — which it must be, because prefill and decode meet in the same KV cache and a prompt
+/// prefilled in a batch has to leave the state a token-at-a-time prefill would have left.
+///
+/// The channel loop writes channel-major and transposes at the end. Writing `out[b][c]` directly
+/// would need `B` disjoint mutable rows per channel block, which is a borrow the channel-parallel
+/// shape does not have; the transpose is `B · out_dim` `i32` copies and is not where this goes.
+pub fn a16_matmul_requant_batch(
+    weights: &[i8],
+    rows: &[Vec<i32>],
+    params: &[A16QuantParams],
+) -> Result<Vec<Vec<i32>>, PalwA16OpError> {
+    batch_projection(weights, rows, params, true)
+}
+
+/// **Op W3 over a batch** — the Q[`K`] tail rather than the `int8`-code one.
+pub fn a16_matmul_rescale_batch(
+    weights: &[i8],
+    rows: &[Vec<i32>],
+    params: &[A16QuantParams],
+) -> Result<Vec<Vec<i32>>, PalwA16OpError> {
+    batch_projection(weights, rows, params, false)
+}
+
+fn batch_projection(
+    weights: &[i8],
+    rows: &[Vec<i32>],
+    params: &[A16QuantParams],
+    narrow_to_codes: bool,
+) -> Result<Vec<Vec<i32>>, PalwA16OpError> {
+    if rows.is_empty() {
+        return Err(PalwA16OpError::Empty);
+    }
+    let operands: Vec<A16Operand> = rows.iter().map(|r| as_a16_codes(r).map(A16Operand::new)).collect::<Result<_, _>>()?;
+    let n = operands[0].len();
+    if operands.iter().any(|o| o.len() != n) {
+        return Err(PalwA16OpError::LengthMismatch { a: n, b: operands.iter().map(|o| o.len()).max().unwrap_or(0) });
+    }
+    if n > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: n });
+    }
+    let out_dim = params.len();
+    if out_dim == 0 {
+        return Err(PalwA16OpError::Empty);
+    }
+    if weights.len() != out_dim * n {
+        return Err(PalwA16OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
+    }
+    let batch = operands.len();
+
+    let mut channel_major = vec![0i32; out_dim * batch];
+    let block = block_size(out_dim);
+    let write = |slice: &mut [i32], base: usize| {
+        for (i, chunk) in slice.chunks_exact_mut(batch).enumerate() {
+            let c = base + i;
+            let w = &weights[c * n..(c + 1) * n];
+            let p = params[c];
+            for (b, slot) in chunk.iter_mut().enumerate() {
+                let acc = dot_operand(w, &operands[b]);
+                let scaled = a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero);
+                *slot = if narrow_to_codes {
+                    scaled.clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+                } else {
+                    scaled.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                };
+            }
+        }
+    };
+    if !parallel_worth_it(out_dim, n.saturating_mul(batch)) {
+        write(&mut channel_major, 0);
+    } else {
+        channel_major.par_chunks_mut(block * batch).enumerate().for_each(|(bi, slice)| write(slice, bi * block));
+    }
+
+    let mut out = vec![vec![0i32; out_dim]; batch];
+    for (c, chunk) in channel_major.chunks_exact(batch).enumerate() {
+        for (b, v) in chunk.iter().enumerate() {
+            out[b][c] = *v;
+        }
+    }
+    Ok(out)
+}
+
+// -------------------------------------------------------------------------------------------
+// The attention arms — the same ops, on the pool
+// -------------------------------------------------------------------------------------------
+
+/// `Σ a·b` over two rows of A16 codes carried in `i32` lanes.
+///
+/// Both operands are `i16` here, not `int8 × i16` like a projection, so `sdot` does not apply: a
+/// single product reaches `32767² = 1.07e9` and only the accumulator's width saves it. The sum is
+/// `i64` and the products are exact, so the reduction order is free here for the same reason it is
+/// everywhere else.
+#[inline]
+pub fn dot_codes(a: &[i32], b: &[i32]) -> i64 {
+    a.iter().zip(b).map(|(x, y)| *x as i64 * *y as i64).sum()
+}
+
+/// **The width a cached series arrives in.** The attention kernels are generic over it: `i32` is
+/// the lane the catalog reads, `i16` is the code's own width (`A16-KV-i16`,
+/// `engine_a16::KvStorageProfileV1`). The decode is [`Self::widen`] — a sign-extending cast at the
+/// multiply, exact for every A16 code — so a kernel instantiated at `i16` forms the same `i64`
+/// products in the same order as its `i32` instantiation and narrows them the same way. There is
+/// no arithmetic on the narrow type; there is only a wider load.
+///
+/// `is_a16_code` is the refusal the catalog's `as_a16` makes, at the width: `|v| ≤ 32,767`, which
+/// for an `i16` excludes exactly `i16::MIN`.
+pub trait A16SeriesCodeV1: Copy + Send + Sync {
+    fn widen(self) -> i64;
+    fn is_a16_code(self) -> bool;
+}
+
+impl A16SeriesCodeV1 for i32 {
+    #[inline(always)]
+    fn widen(self) -> i64 {
+        self as i64
+    }
+    #[inline(always)]
+    fn is_a16_code(self) -> bool {
+        (self as i64).abs() <= A16_CODE_MAX
+    }
+}
+
+impl A16SeriesCodeV1 for i16 {
+    #[inline(always)]
+    fn widen(self) -> i64 {
+        self as i64
+    }
+    #[inline(always)]
+    fn is_a16_code(self) -> bool {
+        self != i16::MIN
+    }
+}
+
+/// `Σ q[i] · k[i]` in `i64`, the key at whatever width the cache holds it — the same left fold as
+/// [`dot_codes`], widened per element.
+#[inline]
+pub fn dot_series<S: A16SeriesCodeV1>(q: &[i32], k: &[S]) -> i64 {
+    q.iter().zip(k).map(|(x, y)| *x as i64 * y.widen()).sum()
+}
+
+fn check_series_codes<S: A16SeriesCodeV1>(row: &[S]) -> Result<(), PalwA16OpError> {
+    if row.is_empty() {
+        return Err(PalwA16OpError::Empty);
+    }
+    if row.iter().any(|v| !v.is_a16_code()) {
+        return Err(PalwA16OpError::LengthMismatch { a: row.len(), b: row.len() });
+    }
+    Ok(())
+}
+
+/// **Op W9 on the pool** — `q · Kᵀ` per head, per key.
+///
+/// The reference walks `heads × kv_len` independent dots in one serial loop. At a 360-token
+/// history that is 4,320 dots of 128 elements per layer per token, and it was the whole reason a
+/// decode after a long prefill ran at 2.5 tok/s while the projections ran at 56 GMAC/s: attention
+/// is the part that grows with the context, and it was the part with no kernel.
+///
+/// Every output element depends on one query head and one key, so nothing here is shared and the
+/// only question was scheduling. Bit-identical to `a16_attn_scores` by construction — same
+/// products, same order within a dot, same narrowing — at either series width
+/// (`the_series_kernels_read_i16_as_they_read_i32`).
+pub fn a16_attn_scores_fast<S: A16SeriesCodeV1>(
+    q: &[i32],
+    k_series: &[S],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwA16OpError> {
+    check_codes(q)?;
+    check_series_codes(k_series)?;
+    if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
+        return Err(PalwA16OpError::Empty);
+    }
+    if d_head > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: d_head });
+    }
+    if q.len() != heads * d_head {
+        return Err(PalwA16OpError::LengthMismatch { a: q.len(), b: heads * d_head });
+    }
+    let kv_dim = kv_heads * d_head;
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
+    }
+    let kv_len = k_series.len() / kv_dim;
+    if params.len() != heads * kv_len {
+        return Err(PalwA16OpError::LengthMismatch { a: params.len(), b: heads * kv_len });
+    }
+    let group = heads / kv_heads;
+    Ok(fill_channels(heads * kv_len, d_head, |i| {
+        let (h, j) = (i / kv_len, i % kv_len);
+        let qh = &q[h * d_head..(h + 1) * d_head];
+        let kv_off = (h / group) * d_head;
+        let kh = &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head];
+        let p = params[i];
+        a16_scale_round(dot_series(qh, kh), p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+    }))
+}
+
+/// **Op W10 on the pool** — `p · V` per head, per output lane.
+///
+/// The reduction is over the history, so this one gets LONGER as the context grows while the
+/// scores arm gets WIDER. Both are `heads × …` independent outputs and both were serial.
+pub fn a16_attn_values_fast<S: A16SeriesCodeV1>(
+    probs: &[i32],
+    v_series: &[S],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwA16OpError> {
+    a16_attn_values_fast_within(probs, v_series, heads, kv_heads, d_head, params, A16_MAX_ATTN_HISTORY_V1)
+}
+
+/// [`a16_attn_values_fast`] under the class's history bound (ADR-0116) — the catalog's
+/// `a16_attn_values_within`, refusal for refusal. The accumulator is `i64` whatever the width.
+pub fn a16_attn_values_fast_within<S: A16SeriesCodeV1>(
+    probs: &[i32],
+    v_series: &[S],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: &[A16QuantParams],
+    max_history: usize,
+) -> Result<Vec<i32>, PalwA16OpError> {
+    check_codes(probs)?;
+    check_series_codes(v_series)?;
+    if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
+        return Err(PalwA16OpError::Empty);
+    }
+    let kv_dim = kv_heads * d_head;
+    if v_series.is_empty() || !v_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
+    }
+    let kv_len = v_series.len() / kv_dim;
+    if kv_len > max_history.min(A16_MAX_ATTN_HISTORY_HELD_V1) {
+        return Err(PalwA16OpError::DotTooLong { got: kv_len });
+    }
+    if probs.len() != heads * kv_len {
+        return Err(PalwA16OpError::LengthMismatch { a: probs.len(), b: heads * kv_len });
+    }
+    if params.len() != heads * d_head {
+        return Err(PalwA16OpError::LengthMismatch { a: params.len(), b: heads * d_head });
+    }
+    let group = heads / kv_heads;
+    Ok(fill_channels(heads * d_head, kv_len, |idx| {
+        let (h, i) = (idx / d_head, idx % d_head);
+        let ph = &probs[h * kv_len..(h + 1) * kv_len];
+        let kv_off = (h / group) * d_head;
+        // `V` is position-major, so this reduction strides by `kv_dim` — the one place in this
+        // module where the inner loop is not contiguous, and the reason it is written as an
+        // explicit sum rather than through `dot_codes`.
+        let acc: i64 = (0..kv_len).map(|j| ph[j] as i64 * v_series[j * kv_dim + kv_off + i].widen()).sum();
+        let p = params[idx];
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+    }))
+}
+
+// -------------------------------------------------------------------------------------------
+// The fused site at speed — one pass over the history per narrowing, nothing tiled
+// -------------------------------------------------------------------------------------------
+
+/// Below this much work in one call — every head's history, a row costing about `2·d_head`
+/// multiply-accumulates and one exponent — a fused call stays on the calling thread. The thin
+/// context vectors (two heads, `d_head` = 4) go parallel from about 22,000 rows of history, a real
+/// row (twelve heads, `d_head` = 128) from about 170.
+const FUSED_PARALLEL_MIN_WORK: usize = 1 << 19;
+
+/// The work one task gets once a call is parallel: long runs, so a wake-up of the pool buys a
+/// tenth of a millisecond of arithmetic rather than a few microseconds. The first version cut the
+/// history into 1,024-row runs per head, and the pool spent the 32,768-position vector yielding
+/// (`parallel_worth_it`'s note).
+const FUSED_CHUNK_WORK: usize = 1 << 18;
+
+/// The scratch a fused call reuses: the scores rows and the exponents rows of every head. Reused
+/// so a long history is not a fresh multi-megabyte allocation on every position of every layer.
+#[derive(Default)]
+struct FusedScratchV1 {
+    scores: Vec<i32>,
+    exps: Vec<i32>,
+}
+
+thread_local! {
+    static FUSED_SCRATCH: std::cell::RefCell<FusedScratchV1> = std::cell::RefCell::new(FusedScratchV1::default());
+}
+
+/// **The fused attention site on the pool** (ADR-0082 Decision 1): W9, W11, W5 and W10 composed,
+/// with each narrowing's parameters given ONCE.
+///
+/// Bit-identical to the composition the engine's fused arm runs on the catalog's side:
+///
+/// ```text
+/// a16_attn_values(a16_requant(a16_softmax_rows(a16_attn_scores(q, k, tile(logits)), history, up),
+///                             tile(probs)),
+///                 v, tile(values))
+/// ```
+///
+/// The composition tiled one registered triple over `heads × history` entries twice per call,
+/// and materialised four rows that long. At 32,768 positions that was megabytes a call, which the
+/// allocator page-faulted fresh on every position of every layer. Here the parameters are read
+/// once. Two rows per head are kept, in scratch reused across calls. Each step is the catalog's
+/// own expression, per element:
+///
+/// * the score is W9's narrowing of an exact dot;
+/// * the exponent is `int_exp` of `softmax_shifted_diff_v1`, the one shifted difference the fused
+///   site and the shipped softmax share;
+/// * the probability is `(e · recip) >> K` against `int_recip` of the row's sum, with the uniform
+///   row when the sum is not positive;
+/// * the code is W5's narrowing;
+/// * the output is W10's narrowing of an exact sum.
+///
+/// Every reduction (the row max, the sum of exponents, the value sums) is exact integer arithmetic
+/// inside `i64`, so splitting the history into chunks across threads changes nothing (ADR-0040
+/// Decision E). Every refusal the composition makes, this makes too.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_fused_uniform_fast<S: A16SeriesCodeV1>(
+    q: &[i32],
+    k_series: &[S],
+    v_series: &[S],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    logits: A16QuantParams,
+    up_bits: u8,
+    probs: A16QuantParams,
+    values: A16QuantParams,
+) -> Result<Vec<i32>, PalwA16OpError> {
+    a16_attn_fused_uniform_fast_within(
+        q,
+        k_series,
+        v_series,
+        heads,
+        kv_heads,
+        d_head,
+        logits,
+        up_bits,
+        probs,
+        values,
+        A16_MAX_ATTN_HISTORY_V1,
+    )
+}
+
+/// [`a16_attn_fused_uniform_fast`] under the class's history bound (ADR-0116): W10's refusal
+/// moves with the bound, and nothing else does — every accumulator here is `i64`, and the
+/// scratch rows are the history's own length.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_attn_fused_uniform_fast_within<S: A16SeriesCodeV1>(
+    q: &[i32],
+    k_series: &[S],
+    v_series: &[S],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    logits: A16QuantParams,
+    up_bits: u8,
+    probs: A16QuantParams,
+    values: A16QuantParams,
+    max_history: usize,
+) -> Result<Vec<i32>, PalwA16OpError> {
+    // W9's refusals.
+    check_codes(q)?;
+    check_series_codes(k_series)?;
+    if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
+        return Err(PalwA16OpError::Empty);
+    }
+    if d_head > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: d_head });
+    }
+    if q.len() != heads * d_head {
+        return Err(PalwA16OpError::LengthMismatch { a: q.len(), b: heads * d_head });
+    }
+    let kv_dim = kv_heads * d_head;
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
+    }
+    let kv_len = k_series.len() / kv_dim;
+    // W10's refusals. The probability row it would be handed is `heads × kv_len` codes, every one
+    // inside the code range by W5's clamp, so only the value row and the lengths can refuse.
+    check_series_codes(v_series)?;
+    if v_series.is_empty() || !v_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
+    }
+    let v_len = v_series.len() / kv_dim;
+    if v_len > max_history.min(A16_MAX_ATTN_HISTORY_HELD_V1) {
+        return Err(PalwA16OpError::DotTooLong { got: v_len });
+    }
+    if v_len != kv_len {
+        return Err(PalwA16OpError::LengthMismatch { a: heads * kv_len, b: heads * v_len });
+    }
+
+    let group = heads / kv_heads;
+    let up = i64::from(up_bits.min(62));
+    // One row of one head: a `d_head` dot for the score, an exponent, a `d_head` accumulation.
+    let row_work = 2 * d_head + 4;
+    let parallel = heads.saturating_mul(kv_len).saturating_mul(row_work) >= FUSED_PARALLEL_MIN_WORK;
+    let chunk = (FUSED_CHUNK_WORK / row_work).max(1_024);
+    let narrow = |acc: i64, p: A16QuantParams| {
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+    };
+    let head = |h: usize| (&q[h * d_head..(h + 1) * d_head], (h / group) * d_head);
+    // W9 over one run of head `h`'s keys, starting at history row `base`, and the run's max.
+    let score_run = |h: usize, base: usize, run: &mut [i32]| -> i64 {
+        let (qh, kv_off) = head(h);
+        let mut max = i64::MIN;
+        for (o, slot) in run.iter_mut().enumerate() {
+            let j = base + o;
+            *slot = narrow(dot_series(qh, &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head]), logits);
+            max = max.max(*slot as i64);
+        }
+        max
+    };
+    // W11's exponents over one run against its head's max, and the run's exact sum.
+    let exp_run = |max: i64, scores: &[i32], exps: &mut [i32]| -> i64 {
+        let mut sum = 0i64;
+        for (s, e) in scores.iter().zip(exps.iter_mut()) {
+            *e = kaspa_consensus_core::palw_base0::int_exp(kaspa_consensus_core::palw_base0_ops::softmax_shifted_diff_v1(*s, max, up));
+            sum += *e as i64;
+        }
+        sum
+    };
+    // W11's probabilities, W5's codes and W10's exact sums over one run of head `h`.
+    let value_run = |h: usize, (recip, uniform): (i64, Option<i32>), base: usize, exps: &[i32]| -> Vec<i64> {
+        let (_, kv_off) = head(h);
+        let mut acc = vec![0i64; d_head];
+        for (o, e) in exps.iter().enumerate() {
+            let j = base + o;
+            let prob = match uniform {
+                Some(u) => u,
+                None => ((*e as i64 * recip) >> kaspa_consensus_core::palw_base0::K) as i32,
+            };
+            let code = narrow(prob as i64, probs) as i64;
+            for (a, v) in acc.iter_mut().zip(&v_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head]) {
+                *a += code * v.widen();
+            }
+        }
+        acc
+    };
+    let add = |mut a: Vec<i64>, b: Vec<i64>| {
+        a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+        a
+    };
+
+    // Three passes, each one region on the pool over every head's runs: the max, then the sum,
+    // then the values — each pass needs the one before it whole.
+    let mut out = Vec::with_capacity(heads * d_head);
+    let mut run = |scratch: &mut FusedScratchV1| {
+        scratch.scores.resize(heads * kv_len, 0);
+        scratch.exps.resize(heads * kv_len, 0);
+        let FusedScratchV1 { scores, exps } = scratch;
+        let maxes: Vec<i64> = if parallel {
+            scores
+                .par_chunks_mut(kv_len)
+                .enumerate()
+                .map(|(h, row)| {
+                    row.par_chunks_mut(chunk).enumerate().map(|(c, r)| score_run(h, c * chunk, r)).max().unwrap_or(i64::MIN)
+                })
+                .collect()
+        } else {
+            scores.chunks_mut(kv_len).enumerate().map(|(h, row)| score_run(h, 0, row)).collect()
+        };
+        let sums: Vec<i64> = if parallel {
+            scores
+                .par_chunks(kv_len)
+                .zip(exps.par_chunks_mut(kv_len))
+                .enumerate()
+                .map(|(h, (s, e))| s.par_chunks(chunk).zip(e.par_chunks_mut(chunk)).map(|(sr, er)| exp_run(maxes[h], sr, er)).sum())
+                .collect()
+        } else {
+            scores.chunks(kv_len).zip(exps.chunks_mut(kv_len)).enumerate().map(|(h, (s, e))| exp_run(maxes[h], s, e)).collect()
+        };
+        // The row's reciprocal, or the uniform row `softmax_shifted` falls back to.
+        let rows: Vec<(i64, Option<i32>)> = sums
+            .iter()
+            .map(|&sum| {
+                if sum <= 0 {
+                    (0, Some((kaspa_consensus_core::palw_base0::ONE / kv_len as i64) as i32))
+                } else {
+                    (kaspa_consensus_core::palw_base0::int_recip(sum), None)
+                }
+            })
+            .collect();
+        let accs: Vec<Vec<i64>> = if parallel {
+            exps.par_chunks(kv_len)
+                .enumerate()
+                .map(|(h, e)| {
+                    e.par_chunks(chunk)
+                        .enumerate()
+                        .map(|(c, er)| value_run(h, rows[h], c * chunk, er))
+                        .reduce(|| vec![0i64; d_head], add)
+                })
+                .collect()
+        } else {
+            exps.chunks(kv_len).enumerate().map(|(h, e)| value_run(h, rows[h], 0, e)).collect()
+        };
+        for acc in accs {
+            out.extend(acc.into_iter().map(|a| narrow(a, values)));
+        }
+    };
+    FUSED_SCRATCH.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut scratch) => run(&mut scratch),
+        // A call nested inside another on this thread (work stealing) gets its own scratch.
+        Err(_) => run(&mut FusedScratchV1::default()),
+    });
+    Ok(out)
+}
+
+fn check_codes(row: &[i32]) -> Result<(), PalwA16OpError> {
+    if row.is_empty() {
+        return Err(PalwA16OpError::Empty);
+    }
+    if row.iter().any(|v| (*v as i64).abs() > A16_CODE_MAX) {
+        return Err(PalwA16OpError::LengthMismatch { a: row.len(), b: row.len() });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_base0_a16::{a16_matmul_requant, a16_matmul_rescale};
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            self.0.rotate_right(24)
+        }
+        fn i8(&mut self) -> i8 {
+            self.next_u64() as u8 as i8
+        }
+        /// The FULL A16 code range including both rails: the worst case for an `i32` lane is the
+        /// extreme, and a generator that samples small values would let a wrong `CHUNK` pass.
+        fn code(&mut self) -> i32 {
+            (self.next_u64() % (2 * A16_CODE_MAX as u64 + 1)) as i64 as i32 - A16_CODE_MAX as i32
+        }
+    }
+
+    /// The property the module exists for, at the lengths a real projection uses — including
+    /// `d_ff = 8960`, where a wrong chunk would wrap.
+    #[test]
+    fn the_fast_kernel_is_bit_identical_to_the_reference() {
+        let mut rng = Lcg(0xA16_0001);
+        for n in [1usize, 2, 15, 16, 17, 63, 64, 127, 511, 512, 513, 1536, 8960] {
+            for out_dim in [1usize, 3, 64, 65] {
+                let weights: Vec<i8> = (0..out_dim * n).map(|_| rng.i8()).collect();
+                let x: Vec<i32> = (0..n).map(|_| rng.code()).collect();
+                let params: Vec<A16QuantParams> = (0..out_dim)
+                    .map(|_| A16QuantParams {
+                        multiplier: (rng.next_u64() % (1 << 40)) as i64 - (1 << 39),
+                        shift: (rng.next_u64() % 63) as u8,
+                        zero: rng.code() as i64,
+                    })
+                    .collect();
+                assert_eq!(
+                    a16_matmul_requant_fast(&weights, &x, &params),
+                    a16_matmul_requant(&weights, &x, &params),
+                    "MatMulRequant n={n} out_dim={out_dim}"
+                );
+                assert_eq!(
+                    a16_matmul_rescale_fast(&weights, &x, &params),
+                    a16_matmul_rescale(&weights, &x, &params),
+                    "MatMulRescale n={n} out_dim={out_dim}"
+                );
+            }
+        }
+    }
+
+    /// The saturating case, constructed rather than sampled: every weight and every code at its
+    /// rail, over the longest row the geometry uses. If `CHUNK` were too large this is where the
+    /// `i32` lane wraps, and the sign of the answer flips.
+    #[test]
+    fn the_extremes_do_not_wrap_a_lane() {
+        for n in [512usize, 513, 8960, A16_MAX_DOT_LEN] {
+            for (w, code) in [(-128i8, -(A16_CODE_MAX as i32)), (-128, A16_CODE_MAX as i32), (127, A16_CODE_MAX as i32)] {
+                let weights = vec![w; n];
+                let x = vec![code; n];
+                let expected = n as i64 * w as i64 * code as i64;
+                assert_eq!(
+                    dot_i8_a16(&weights, &x.iter().map(|v| *v as i16).collect::<Vec<_>>()),
+                    expected,
+                    "n={n} w={w} code={code}"
+                );
+            }
+        }
+    }
+
+    /// The vector path against the scalar one, directly, at every alignment around the 16-element
+    /// block and the 512-element chunk. The matmul differential covers this too, but a failure
+    /// there names a channel; a failure here names a length.
+    #[test]
+    fn the_vector_path_equals_the_scalar_one() {
+        let mut rng = Lcg(0xA16_0003);
+        let w: Vec<i8> = (0..20_000).map(|_| rng.i8()).collect();
+        let x: Vec<i16> = (0..20_000).map(|_| rng.code() as i16).collect();
+        for n in [0usize, 1, 7, 15, 16, 17, 31, 511, 512, 513, 1023, 1024, 1536, 8960, 20_000] {
+            assert_eq!(dot_i8_a16(&w[..n], &x[..n]), dot_i8_a16_scalar(&w[..n], &x[..n]), "n={n}");
+        }
+        // And at an offset, so the vector loads are not always 16-byte aligned.
+        for offset in [1usize, 3, 8, 9] {
+            let n = 4096;
+            assert_eq!(
+                dot_i8_a16(&w[offset..offset + n], &x[offset..offset + n]),
+                dot_i8_a16_scalar(&w[offset..offset + n], &x[offset..offset + n]),
+                "offset={offset}"
+            );
+        }
+    }
+
+    /// The AVX2 path against the scalar fold, FORCED rather than dispatched — the x86 twin of
+    /// `the_dot_extension_path_equals_the_scalar_one`. The dispatcher tests cover whichever path
+    /// this machine picked; this one exists so a machine with the feature cannot pass the suite
+    /// without the vector path having run, kill-switch or no kill-switch.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_avx2_path_equals_the_scalar_one() {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            // The dispatcher test already covered the scalar path this machine will actually run.
+            return;
+        }
+        let mut rng = Lcg(0xA16_0005);
+        let w: Vec<i8> = (0..20_000).map(|_| rng.i8()).collect();
+        let x: Vec<i16> = (0..20_000).map(|_| rng.code() as i16).collect();
+        for n in [0usize, 1, 7, 15, 16, 17, 31, 32, 33, 511, 512, 513, 527, 1023, 1024, 1536, 8960, 20_000] {
+            // SAFETY: the feature was detected above.
+            let got = unsafe { dot_i8_a16_avx2(&w[..n], &x[..n]) };
+            assert_eq!(got, dot_i8_a16_scalar(&w[..n], &x[..n]), "n={n}");
+        }
+        for offset in [1usize, 3, 8, 9] {
+            let n = 4096;
+            // SAFETY: as above.
+            let got = unsafe { dot_i8_a16_avx2(&w[offset..offset + n], &x[offset..offset + n]) };
+            assert_eq!(got, dot_i8_a16_scalar(&w[offset..offset + n], &x[offset..offset + n]), "offset={offset}");
+        }
+        // The rails, constructed: the products every lane bound is sized against, across the
+        // chunk boundary and at the tier's longest row.
+        for n in [512usize, 513, 8960, A16_MAX_DOT_LEN] {
+            for (wv, xv) in [(-128i8, -(A16_CODE_MAX as i16)), (-128, A16_CODE_MAX as i16), (127, A16_CODE_MAX as i16)] {
+                let w = vec![wv; n];
+                let x = vec![xv; n];
+                // SAFETY: as above.
+                let got = unsafe { dot_i8_a16_avx2(&w, &x) };
+                assert_eq!(got, n as i64 * wv as i64 * xv as i64, "rails n={n} w={wv} x={xv}");
+            }
+        }
+    }
+
+    /// Not an assertion — a meter, for the A/B the kill-switches exist to serve.
+    /// `cargo test -p misaka-palw-base0 --release measure_dot_throughput -- --ignored --nocapture`
+    #[test]
+    #[ignore = "prints throughput; run explicitly on the machine being measured"]
+    fn measure_dot_throughput() {
+        let mut rng = Lcg(0xA16_BEEF);
+        let n = 8960usize;
+        let w: Vec<i8> = (0..n).map(|_| rng.i8()).collect();
+        let x: Vec<i16> = (0..n).map(|_| rng.code() as i16).collect();
+        let operand = A16Operand::new(x.clone());
+        let iters = 20_000u32;
+        let gmacs = |d: std::time::Duration| (n as f64 * iters as f64) / d.as_secs_f64() / 1e9;
+        let mut sink = 0i64;
+        let t = std::time::Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(dot_i8_a16_scalar(&w, &x));
+        }
+        let scalar = t.elapsed();
+        let t = std::time::Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(dot_i8_a16(&w, &x));
+        }
+        let vector = t.elapsed();
+        let t = std::time::Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(dot_operand(&w, &operand));
+        }
+        let operand_path = t.elapsed();
+        println!(
+            "dot n={n}: scalar {:.2} GMAC/s | dot_i8_a16 {:.2} GMAC/s ({:.1}x) | dot_operand {:.2} GMAC/s ({:.1}x) [sink {sink}]",
+            gmacs(scalar),
+            gmacs(vector),
+            scalar.as_secs_f64() / vector.as_secs_f64(),
+            gmacs(operand_path),
+            scalar.as_secs_f64() / operand_path.as_secs_f64()
+        );
+    }
+
+    /// The dot-product path against the scalar one, over the lengths and both code rails. The
+    /// matmul differential covers it too, but this names a length when it fails and it is also
+    /// the only test that runs when the machine HAS the extensions and the fallback does not.
+    #[test]
+    fn the_dot_extension_path_equals_the_scalar_one() {
+        let mut rng = Lcg(0xA16_0004);
+        let w: Vec<i8> = (0..20_000).map(|_| rng.i8()).collect();
+        let codes: Vec<i16> = (0..20_000).map(|_| rng.code() as i16).collect();
+        for n in [0usize, 1, 15, 16, 17, 31, 512, 1536, 8960, 20_000] {
+            let operand = A16Operand::new(codes[..n].to_vec());
+            assert_eq!(dot_operand(&w[..n], &operand), dot_i8_a16_scalar(&w[..n], &codes[..n]), "n={n}");
+        }
+        // Both rails at the longest projection width: the worst case for an sdot/usdot lane.
+        for (weight, code) in [(-128i8, -32_767i16), (-128, 32_767), (127, 32_767), (127, -32_767)] {
+            let n = 8960;
+            let operand = A16Operand::new(vec![code; n]);
+            assert_eq!(dot_operand(&vec![weight; n], &operand), n as i64 * weight as i64 * code as i64, "w={weight} code={code}");
+        }
+    }
+
+    /// The split itself: `256·hi + lo` must reconstruct every `i16`, negatives included. This is
+    /// the identity the whole path rests on, and it is the one a reader will doubt.
+    #[test]
+    fn the_high_low_split_is_exact() {
+        for v in [i16::MIN, -32_767, -256, -255, -1, 0, 1, 255, 256, 32_767, i16::MAX] {
+            let operand = A16Operand::new(vec![v]);
+            assert_eq!(256 * operand.hi[0] as i32 + operand.lo[0] as i32, v as i32, "v={v}");
+            assert!((-128..=127).contains(&(operand.hi[0] as i32)), "hi must fit an i8 for v={v}");
+        }
+    }
+
+    /// A batched projection must equal the same rows one at a time. Prefill and decode meet in
+    /// one KV cache, so a prompt prefilled in a batch has to leave the state a token-at-a-time
+    /// prefill would have left — not a close one.
+    #[test]
+    fn the_batched_projection_equals_the_rows_one_at_a_time() {
+        let mut rng = Lcg(0xA16_0005);
+        for (n, out_dim) in [(16usize, 8usize), (1536, 64), (1536, 1536), (8960, 1536), (1536, 8960)] {
+            let weights: Vec<i8> = (0..out_dim * n).map(|_| rng.i8()).collect();
+            let params: Vec<A16QuantParams> =
+                (0..out_dim).map(|_| A16QuantParams { multiplier: 1 << 20, shift: 34, zero: rng.code() as i64 % 8 }).collect();
+            for batch in [1usize, 2, 7, 16] {
+                let rows: Vec<Vec<i32>> = (0..batch).map(|_| (0..n).map(|_| rng.code()).collect()).collect();
+                let batched = a16_matmul_requant_batch(&weights, &rows, &params).expect("well-formed");
+                let batched_rescale = a16_matmul_rescale_batch(&weights, &rows, &params).expect("well-formed");
+                for (b, row) in rows.iter().enumerate() {
+                    assert_eq!(
+                        batched[b],
+                        a16_matmul_requant_fast(&weights, row, &params).expect("well-formed"),
+                        "n={n} out_dim={out_dim} batch={batch} row={b}"
+                    );
+                    assert_eq!(
+                        batched_rescale[b],
+                        a16_matmul_rescale_fast(&weights, row, &params).expect("well-formed"),
+                        "rescale n={n} batch={batch} row={b}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The attention arms against the catalog ops, at the head geometry Qwen2.5 uses (12 query
+    /// heads over 2 kv heads) and at histories on both sides of the parallel threshold.
+    #[test]
+    fn the_attention_arms_equal_the_catalog_ops() {
+        use kaspa_consensus_core::palw_base0_a16::{a16_attn_scores, a16_attn_values};
+        let mut rng = Lcg(0xA16_0006);
+        let (heads, kv_heads, d_head) = (12usize, 2usize, 128usize);
+        let kv_dim = kv_heads * d_head;
+        for kv_len in [1usize, 5, 63, 64, 65, 360] {
+            let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+            let k: Vec<i32> = (0..kv_len * kv_dim).map(|_| rng.code()).collect();
+            let v: Vec<i32> = (0..kv_len * kv_dim).map(|_| rng.code()).collect();
+            let probs: Vec<i32> = (0..heads * kv_len).map(|_| rng.code().abs() % 32_768).collect();
+            let score_params: Vec<A16QuantParams> =
+                (0..heads * kv_len).map(|_| A16QuantParams { multiplier: 1, shift: 26, zero: 0 }).collect();
+            let value_params: Vec<A16QuantParams> =
+                (0..heads * d_head).map(|_| A16QuantParams { multiplier: 3, shift: 27, zero: 1 }).collect();
+            assert_eq!(
+                a16_attn_scores_fast(&q, &k, heads, kv_heads, d_head, &score_params),
+                a16_attn_scores(&q, &k, heads, kv_heads, d_head, &score_params),
+                "scores kv_len={kv_len}"
+            );
+            assert_eq!(
+                a16_attn_values_fast(&probs, &v, heads, kv_heads, d_head, &value_params),
+                a16_attn_values(&probs, &v, heads, kv_heads, d_head, &value_params),
+                "values kv_len={kv_len}"
+            );
+        }
+    }
+
+    /// The catalog's composition of the fused site, with every triple tiled the way the engine's
+    /// catalog arm tiles it — the function [`a16_attn_fused_uniform_fast`] must equal.
+    #[allow(clippy::too_many_arguments)]
+    fn fused_by_the_catalog(
+        q: &[i32],
+        k: &[i32],
+        v: &[i32],
+        heads: usize,
+        kv_heads: usize,
+        d_head: usize,
+        logits: A16QuantParams,
+        up: u8,
+        probs: A16QuantParams,
+        values: A16QuantParams,
+    ) -> Result<Vec<i32>, PalwA16OpError> {
+        use kaspa_consensus_core::palw_base0_a16::{a16_attn_scores, a16_attn_values, a16_requant, a16_softmax_rows};
+        let history = k.len() / (kv_heads * d_head).max(1);
+        let scores = a16_attn_scores(q, k, heads, kv_heads, d_head, &vec![logits; heads * history])?;
+        let p = a16_softmax_rows(&scores, history, up)?;
+        let codes = a16_requant(&p, &vec![probs; p.len()])?;
+        a16_attn_values(&codes, v, heads, kv_heads, d_head, &vec![values; heads * d_head])
+    }
+
+    /// **The fused kernel IS the catalog's composition** (ADR-0040 Decision E). The check runs
+    /// across the thin vectors' shape, a GQA shape and a real head's width. Histories go from one
+    /// row, across the parallel threshold, to tens of thousands of rows. The widening covers
+    /// every range the tier uses, and the parameters are drawn over the whole triple domain.
+    #[test]
+    fn the_fused_kernel_is_the_catalog_composition() {
+        let mut rng = Lcg(0xA16_0F05);
+        let triple = |rng: &mut Lcg| A16QuantParams {
+            multiplier: (rng.next_u64() % (1 << 40)) as i64 - (1 << 39),
+            shift: 20 + (rng.next_u64() % 30) as u8,
+            zero: (rng.next_u64() % 64) as i64 - 32,
+        };
+        for (heads, kv_heads, d_head, lengths) in [
+            (2usize, 2usize, 4usize, &[1usize, 2, 3, 63, 1_023, 1_024, 1_025, 5_000, 20_000, 70_000][..]),
+            (4, 2, 8, &[1, 64, 3_000, 9_000][..]),
+            (12, 2, 128, &[1, 5, 65, 360, 700][..]),
+        ] {
+            let kv_dim = kv_heads * d_head;
+            for &n in lengths {
+                for up in [0u8, 14, 25, 47, 62] {
+                    let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+                    let k: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                    let v: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                    // A real-looking score scale half the time, so the softmax is not all rails.
+                    let logits = if rng.next_u64().is_multiple_of(2) {
+                        A16QuantParams { multiplier: 1, shift: 26, zero: 0 }
+                    } else {
+                        triple(&mut rng)
+                    };
+                    let (probs, values) = (triple(&mut rng), triple(&mut rng));
+                    assert_eq!(
+                        a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, logits, up, probs, values),
+                        fused_by_the_catalog(&q, &k, &v, heads, kv_heads, d_head, logits, up, probs, values),
+                        "heads {heads}/{kv_heads}, d_head {d_head}, history {n}, up {up}"
+                    );
+                }
+            }
+        }
+        // A row whose every key scores the same: every exponent is the row max's.
+        let (q, k, v) = (vec![0i32; 8], vec![0i32; 8 * 3_000], vec![7i32; 8 * 3_000]);
+        let p = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        assert_eq!(
+            a16_attn_fused_uniform_fast(&q, &k, &v, 2, 2, 4, p, 16, p, p),
+            fused_by_the_catalog(&q, &k, &v, 2, 2, 4, p, 16, p, p)
+        );
+    }
+
+    /// **The kernels read an `i16` series as they read an `i32` one** — the claim the `A16-KV-i16`
+    /// cache rests on, at the kernel: over the fused test's shapes and histories, random codes over
+    /// the whole range including both rails, the `i16` instantiation of W9, W10 and the fused site
+    /// equals the `i32` instantiation to the bit. And the refusal is the same at both widths: the
+    /// one `i16` value that is not a code (`i16::MIN`) is refused as an out-of-range `i32` is.
+    #[test]
+    fn the_series_kernels_read_i16_as_they_read_i32() {
+        let mut rng = Lcg(0xA16_1616);
+        let narrow = |codes: &[i32]| -> Vec<i16> { codes.iter().map(|c| i16::try_from(*c).expect("a code fits i16")).collect() };
+        let p = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        let values = A16QuantParams { multiplier: 3, shift: 27, zero: 1 };
+        for (heads, kv_heads, d_head, lengths) in [
+            (2usize, 2usize, 4usize, &[1usize, 2, 63, 1_024, 1_025, 5_000, 70_000][..]),
+            (4, 2, 8, &[1, 64, 3_000][..]),
+            (12, 2, 128, &[1, 5, 65, 360][..]),
+        ] {
+            let kv_dim = kv_heads * d_head;
+            for &n in lengths {
+                let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+                let k: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                let v: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                let probs: Vec<i32> = (0..heads * n).map(|_| rng.code().abs() % 32_768).collect();
+                let (k16, v16) = (narrow(&k), narrow(&v));
+                let score_params = vec![p; heads * n];
+                let value_params = vec![values; heads * d_head];
+                assert_eq!(
+                    a16_attn_scores_fast(&q, &k16, heads, kv_heads, d_head, &score_params),
+                    a16_attn_scores_fast(&q, &k, heads, kv_heads, d_head, &score_params),
+                    "scores heads {heads} history {n}"
+                );
+                assert_eq!(
+                    a16_attn_values_fast(&probs, &v16, heads, kv_heads, d_head, &value_params),
+                    a16_attn_values_fast(&probs, &v, heads, kv_heads, d_head, &value_params),
+                    "values heads {heads} history {n}"
+                );
+                for up in [0u8, 14, 25, 62] {
+                    assert_eq!(
+                        a16_attn_fused_uniform_fast(&q, &k16, &v16, heads, kv_heads, d_head, p, up, p, values),
+                        a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, p, up, p, values),
+                        "fused heads {heads} history {n} up {up}"
+                    );
+                }
+            }
+        }
+        // The refusal at the narrow width: `i16::MIN` is the one non-code an `i16` can hold.
+        let q = [1i32, 0];
+        assert!(a16_attn_scores_fast(&q, &[i16::MIN, 1], 1, 1, 2, &[p]).is_err(), "i16::MIN is not a code");
+        assert!(a16_attn_scores_fast(&q, &[A16_CODE_MAX as i32 + 1, 1], 1, 1, 2, &[p]).is_err(), "32,768 is not a code");
+        assert!(a16_attn_scores_fast(&q, &[-(A16_CODE_MAX as i16), 1i16], 1, 1, 2, &[p]).is_ok(), "-32,767 is");
+        assert!(
+            a16_attn_fused_uniform_fast(&q, &[1i16, 1], &[i16::MIN, 1], 1, 1, 2, p, 16, p, p).is_err(),
+            "and so on the value side"
+        );
+    }
+
+    /// The fused kernel refuses exactly where the composition does: a code out of range on any
+    /// operand, a ragged shape, a value row a different length from the keys, and a history one
+    /// row past `A16_MAX_DOT_LEN` (ADR-0103 §10.7).
+    #[test]
+    fn the_fused_kernel_refuses_exactly_what_the_composition_refuses() {
+        let p = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        let run = |q: &[i32], k: &[i32], v: &[i32], heads: usize, kv_heads: usize, d_head: usize| {
+            let fast = a16_attn_fused_uniform_fast(q, k, v, heads, kv_heads, d_head, p, 16, p, p);
+            let catalog = fused_by_the_catalog(q, k, v, heads, kv_heads, d_head, p, 16, p, p);
+            assert_eq!(fast.is_err(), catalog.is_err(), "fast {fast:?} against the catalog {catalog:?}");
+            fast.is_err()
+        };
+        let bad = A16_CODE_MAX as i32 + 1;
+        assert!(run(&[bad, 0], &[1, 1], &[1, 1], 1, 1, 2), "a query lane out of range");
+        assert!(run(&[1, 0], &[bad, 1], &[1, 1], 1, 1, 2), "a key lane out of range");
+        assert!(run(&[1, 0], &[1, 1], &[bad, 1], 1, 1, 2), "a value lane out of range");
+        assert!(run(&[1, 0, 1], &[1, 1], &[1, 1], 1, 1, 2), "a query that is not heads × d_head");
+        assert!(run(&[1, 0], &[1, 1, 1], &[1, 1, 1], 1, 1, 2), "a key row that is not whole");
+        assert!(run(&[1, 0], &[1, 1, 1, 1], &[1, 1], 1, 1, 2), "values for fewer rows than keys");
+        assert!(run(&[1, 0, 1, 0], &[1, 1], &[1, 1], 2, 3, 1), "heads not a multiple of kv_heads");
+        assert!(!run(&[1, 0], &[1, 1], &[1, 1], 1, 1, 2), "and a well-formed call is not refused");
+        let rows = A16_MAX_DOT_LEN + 1;
+        assert!(run(&[1], &vec![1; rows], &vec![1; rows], 1, 1, 1), "a history past 2^18");
+        assert!(!run(&[1], &vec![1; rows - 1], &vec![1; rows - 1], 1, 1, 1), "a history of exactly 2^18");
+    }
+
+    /// **ADR-0116: past the eighth wall, under a held class's bound, the fast kernels are still
+    /// the catalog.** A history one row past `2^18` — which the shipped bound refuses — and one a
+    /// thousand rows past it are reduced by the fused kernel and by the catalog composition under
+    /// the held bound, bit for bit, and by W10's fast kernel and the catalog's W10 likewise; the
+    /// shipped bound still refuses the same history; and both kernels refuse one row past the held
+    /// bound, whatever bound a caller passes.
+    #[test]
+    fn past_the_eighth_wall_the_held_kernels_are_the_catalog() {
+        use kaspa_consensus_core::palw_base0_a16::{A16AttnFusedParamsV1, a16_attn_fused_reference_within_v1, a16_attn_values_within};
+        let mut rng = Lcg(0x0116_2018);
+        let held = A16_MAX_ATTN_HISTORY_HELD_V1;
+        let scores = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        let probs = A16QuantParams { multiplier: 1 << 15, shift: 24, zero: 0 };
+        let values = A16QuantParams { multiplier: 1, shift: 22, zero: -5 };
+        let fused = A16AttnFusedParamsV1 { scores, probs, values, up_bits: 16 };
+        let (heads, kv_heads, d_head) = (2usize, 1usize, 2usize);
+        let kv_dim = kv_heads * d_head;
+        for rows in [A16_MAX_ATTN_HISTORY_V1 + 1, A16_MAX_ATTN_HISTORY_V1 + 1_000] {
+            let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+            let k: Vec<i32> = (0..rows * kv_dim).map(|_| rng.code()).collect();
+            let v: Vec<i32> = (0..rows * kv_dim).map(|_| rng.code()).collect();
+            let fast = a16_attn_fused_uniform_fast_within(&q, &k, &v, heads, kv_heads, d_head, scores, 16, probs, values, held)
+                .expect("a held history past the eighth wall reduces");
+            let catalog =
+                a16_attn_fused_reference_within_v1(&q, &k, &v, heads, kv_heads, d_head, fused, held).expect("so does the catalog");
+            assert_eq!(fast, catalog, "{rows} rows: the fused kernel is the composition");
+            assert!(
+                a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, scores, 16, probs, values).is_err(),
+                "{rows} rows: the shipped bound still refuses it"
+            );
+            let p_row: Vec<i32> = (0..heads * rows).map(|_| rng.code()).collect();
+            let narrow = vec![values; heads * d_head];
+            assert_eq!(
+                a16_attn_values_fast_within(&p_row, &v, heads, kv_heads, d_head, &narrow, held),
+                a16_attn_values_within(&p_row, &v, heads, kv_heads, d_head, &narrow, held),
+                "{rows} rows: W10's fast kernel is the catalog's"
+            );
+        }
+        let rows = held + 1;
+        let one = [A16QuantParams { multiplier: 1, shift: 0, zero: 0 }];
+        assert!(matches!(
+            a16_attn_values_fast_within(&vec![1; rows], &vec![1; rows], 1, 1, 1, &one, usize::MAX),
+            Err(PalwA16OpError::DotTooLong { .. })
+        ));
+        assert!(matches!(
+            a16_attn_fused_uniform_fast_within(&[1], &vec![1; rows], &vec![1; rows], 1, 1, 1, scores, 16, probs, values, usize::MAX),
+            Err(PalwA16OpError::DotTooLong { .. })
+        ));
+    }
+
+    /// The refusals must match too: a fast path that accepts a row the reference refuses is a
+    /// producer that mints a receipt the court cannot reproduce.
+    #[test]
+    fn the_fast_kernel_refuses_exactly_what_the_reference_refuses() {
+        let params = vec![A16QuantParams { multiplier: 1, shift: 0, zero: 0 }; 2];
+        // An empty row.
+        assert_eq!(a16_matmul_requant_fast(&[], &[], &params), a16_matmul_requant(&[], &[], &params));
+        // A lane outside the A16 code range.
+        let x = vec![A16_CODE_MAX as i32 + 1, 0];
+        let weights = vec![1i8; 4];
+        assert_eq!(a16_matmul_requant_fast(&weights, &x, &params), a16_matmul_requant(&weights, &x, &params));
+        // A weight block that is not `out_dim · n`.
+        let x = vec![1i32, 2];
+        assert_eq!(a16_matmul_requant_fast(&[1i8, 2, 3], &x, &params), a16_matmul_requant(&[1i8, 2, 3], &x, &params));
+        // No channels.
+        assert_eq!(a16_matmul_requant_fast(&weights, &x, &[]), a16_matmul_requant(&weights, &x, &[]));
+    }
+
+    /// Threading is not allowed to matter. Same inputs through the parallel and the serial paths,
+    /// with the channel count straddling the threshold.
+    #[test]
+    fn the_thread_count_cannot_change_the_result() {
+        let mut rng = Lcg(0xA16_0002);
+        let n = 1536;
+        for out_dim in [PARALLEL_MIN_CHANNELS - 1, PARALLEL_MIN_CHANNELS, PARALLEL_MIN_CHANNELS + 1, 8960] {
+            let weights: Vec<i8> = (0..out_dim * n).map(|_| rng.i8()).collect();
+            let x: Vec<i32> = (0..n).map(|_| rng.code()).collect();
+            let params: Vec<A16QuantParams> =
+                (0..out_dim).map(|_| A16QuantParams { multiplier: 1 << 20, shift: 30, zero: 0 }).collect();
+            let parallel = a16_matmul_requant_fast(&weights, &x, &params).expect("well-formed");
+            let serial: Vec<i32> = a16_matmul_requant(&weights, &x, &params).expect("well-formed");
+            assert_eq!(parallel, serial, "out_dim={out_dim}");
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------
+// The grouped projections — Qwen3.6's weight representation, at the same speed as the tier's
+// -------------------------------------------------------------------------------------------
+
+/// `Σ_g (Σ_{i∈g} w·x) << e_g` — the grouped dot, NEON per group and exact.
+///
+/// A group is 32 weights, which is two 16-lane passes of the same `vmlal_s16` ladder `dot_i8_a16`
+/// uses; the group's partial is shifted by its own exponent BEFORE joining the row sum, exactly as
+/// the reference does it, so the two are the same arithmetic and not merely close. The bound is
+/// the reference's: it validated `per_group · groups ≤ i64::MAX` at the call's entry, so nothing
+/// here can wrap.
+#[inline]
+fn dot_grouped(w: &[i8], x: &A16Operand, exps: &[i8]) -> i64 {
+    let n = w.len();
+    let mut acc: i64 = 0;
+    for (g, exp) in exps.iter().enumerate() {
+        let from = g * 32;
+        let to = (from + 32).min(n);
+        if from >= to {
+            break;
+        }
+        let partial = dot_operand_range(&w[from..to], x, from);
+        acc += partial << *exp;
+    }
+    acc
+}
+
+/// **`q36_matmul_grouped` at speed** — bit-identical to the reference on every admitted input.
+///
+/// The engine's every projection is this op (the checkpoint is Q4_K, whose per-32 scales the
+/// artifact keeps as per-32 exponents), and it was the one matmul still running the scalar
+/// reference: single-threaded, `i64` multiplies per element, re-reading the activation row per
+/// channel. Same three repairs as `a16_matmul_requant_fast`, same differential holding them
+/// honest.
+pub fn q36_matmul_grouped_fast(
+    weights: &[i8],
+    exps: &[i8],
+    x: &[i32],
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwQwen36OpError> {
+    grouped_fast(weights, exps, x, params, false)
+}
+
+/// **`q36_matmul_grouped_wide` at speed** — the Q[`K`] tail, saturating at the `i32` rail.
+pub fn q36_matmul_grouped_wide_fast(
+    weights: &[i8],
+    exps: &[i8],
+    x: &[i32],
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwQwen36OpError> {
+    grouped_fast(weights, exps, x, params, true)
+}
+
+fn grouped_fast(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16QuantParams], wide: bool) -> Result<Vec<i32>, PalwQwen36OpError> {
+    // The reference IS the validator: every shape rule and the accumulator bound run there, on a
+    // one-channel probe, so this path cannot admit anything the reference refuses.
+    let n = x.len();
+    let out_dim = params.len();
+    if out_dim == 0 || n == 0 {
+        return Err(PalwQwen36OpError::Empty);
+    }
+    if weights.len() != out_dim * n {
+        return Err(PalwQwen36OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
+    }
+    let groups = n.div_ceil(32);
+    if exps.len() != out_dim * groups {
+        return Err(PalwQwen36OpError::LengthMismatch { a: exps.len(), b: out_dim * groups });
+    }
+    // **Every channel's exponents, through the reference's own rule** (mainnet audit,
+    // 2026-09-05). The one-channel probe below runs the reference's A16 range check and its shape
+    // rules; it could not run the exponent domain or the accumulator bound for any channel but the
+    // FIRST, because those are properties of the `exps` slice it was handed — `&exps[..groups]`.
+    // The comment here used to say "the reference IS the validator … this path cannot admit
+    // anything the reference refuses", and for channels 1.. it was false: a negative exponent
+    // reached `partial << *exp` in `dot_grouped` and panicked the node under the release profile's
+    // overflow-checks, and an out-of-domain positive one made this path compute what the court
+    // would refuse to adjudicate. The rule is the reference's, called here over the whole slice.
+    kaspa_consensus_core::palw_qwen36_ops::q36_check_group_exponents_v1(exps, n)?;
+    // One-channel probe through the reference to run ITS validation (A16 range, the shape rules),
+    // then the fast path for the row.
+    if wide {
+        kaspa_consensus_core::palw_qwen36_ops::q36_matmul_grouped_wide(&weights[..n], &exps[..groups], x, &params[..1])?;
+    } else {
+        kaspa_consensus_core::palw_qwen36_ops::q36_matmul_grouped(&weights[..n], &exps[..groups], x, &params[..1])?;
+    }
+    let codes = A16Operand::new(x.iter().map(|v| *v as i16).collect());
+    let (lo, hi) = if wide { (i32::MIN as i64, i32::MAX as i64) } else { (-A16_CODE_MAX, A16_CODE_MAX) };
+    let channel = |c: usize| -> i32 {
+        let acc = dot_grouped(&weights[c * n..(c + 1) * n], &codes, &exps[c * groups..(c + 1) * groups]);
+        let p = params[c];
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(lo, hi) as i32
+    };
+    Ok(fill_channels(out_dim, n, channel))
+}
+
+#[cfg(test)]
+mod grouped_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_qwen36_ops::{q36_matmul_grouped, q36_matmul_grouped_wide};
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+    }
+
+    /// **A bad exponent in a channel the probe never saw is refused, not executed** (mainnet
+    /// audit, 2026-09-05).
+    ///
+    /// The fast path validated by probing the reference with channel 0 alone, so channels 1.. put
+    /// their exponents straight into `partial << exp`: negative panicked the node, out-of-domain
+    /// diverged from the court. Both arms here, and both forms, against the reference's own answer.
+    #[test]
+    fn a_bad_exponent_outside_channel_zero_is_refused_by_both_forms() {
+        use kaspa_consensus_core::palw_qwen36_ops::{QWEN36_MAX_GROUP_EXP, q36_matmul_grouped, q36_matmul_grouped_wide};
+
+        const N: usize = 32; // one group per channel
+        const CHANNELS: usize = 2;
+        let weights = vec![1i8; CHANNELS * N];
+        let x: Vec<i32> = (0..N as i32).map(|i| i % 7).collect();
+        let params = vec![A16QuantParams { multiplier: 1, shift: 0, zero: 0 }; CHANNELS];
+
+        // Channel 0 is impeccable; channel 1 carries the fault. This is exactly the shape the
+        // one-channel probe cannot see.
+        for bad in [-1i8, QWEN36_MAX_GROUP_EXP + 1] {
+            let exps = vec![0i8, bad];
+            let reference = q36_matmul_grouped(&weights, &exps, &x, &params);
+            assert!(reference.is_err(), "the reference refuses exponent {bad}");
+            assert_eq!(
+                q36_matmul_grouped_fast(&weights, &exps, &x, &params).map(|_| ()),
+                reference.map(|_| ()),
+                "the fast narrow form must refuse what the reference refuses (exponent {bad})"
+            );
+            let reference_wide = q36_matmul_grouped_wide(&weights, &exps, &x, &params);
+            assert!(reference_wide.is_err());
+            assert_eq!(
+                q36_matmul_grouped_wide_fast(&weights, &exps, &x, &params).map(|_| ()),
+                reference_wide.map(|_| ()),
+                "and so must the wide one (exponent {bad})"
+            );
+        }
+
+        // …and a table that is legal in every channel still computes, so the check is a gate and
+        // not a wall.
+        let good = vec![0i8, 1i8];
+        assert_eq!(
+            q36_matmul_grouped_fast(&weights, &good, &x, &params).unwrap(),
+            q36_matmul_grouped(&weights, &good, &x, &params).unwrap(),
+            "a legal table is still bit-identical to the reference"
+        );
+    }
+
+    /// The fast grouped pair against the reference, exact over shapes, exponents and signs —
+    /// including a ragged final group, which is where a range-based rewrite goes wrong first.
+    #[test]
+    fn the_fast_grouped_matmuls_are_bit_identical_to_the_reference() {
+        let mut rng = Lcg(0x36_57EED);
+        for (out_dim, n) in [(1usize, 32usize), (3, 40), (17, 96), (64, 2048), (5, 33)] {
+            let groups = n.div_ceil(32);
+            let weights: Vec<i8> = (0..out_dim * n).map(|_| (rng.next() % 255) as i8).collect();
+            let exps: Vec<i8> = (0..out_dim * groups).map(|_| (rng.next() % 21) as i8).collect();
+            let x: Vec<i32> = (0..n).map(|_| (rng.next() % 65535) as i32 - 32767).collect();
+            let params: Vec<A16QuantParams> = (0..out_dim)
+                .map(|_| A16QuantParams {
+                    multiplier: 1 + (rng.next() % (1 << 30)) as i64,
+                    shift: 30 + (rng.next() % 20) as u8,
+                    zero: 0,
+                })
+                .collect();
+            let want = q36_matmul_grouped(&weights, &exps, &x, &params).expect("the reference admits the shape");
+            let got = q36_matmul_grouped_fast(&weights, &exps, &x, &params).expect("the fast path admits it too");
+            assert_eq!(want, got, "grouped diverged at {out_dim}x{n}");
+            let want = q36_matmul_grouped_wide(&weights, &exps, &x, &params).expect("the reference admits the shape");
+            let got = q36_matmul_grouped_wide_fast(&weights, &exps, &x, &params).expect("the fast path admits it too");
+            assert_eq!(want, got, "grouped-wide diverged at {out_dim}x{n}");
+        }
+    }
+}

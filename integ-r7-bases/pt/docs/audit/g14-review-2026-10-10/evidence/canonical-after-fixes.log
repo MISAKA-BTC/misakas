@@ -1,0 +1,27 @@
+running 24 tests
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_a_routing_and_history_class_is_refused_by_the_node_carrier_fit_until_element_courts ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_quantization_lie_is_convicted_by_the_participant ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_self_consistent_garbage_trace_is_convicted_against_the_registered_weights ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_substituted_token_is_convicted_by_the_decode_court ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_withheld_material_is_a_demand_from_an_ibd_node_then_a_default ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_copied_claim_is_refused_and_the_job_paid_once ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_fabricated_segment_boundary_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_borrowed_trace_of_another_prompt_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_wrong_challenge_of_an_honest_claim_from_a_pruned_import_node_is_dismissed_and_it_finalizes ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_post_genesis_bond_on_a_pruned_import_node_convicts_a_lie_before_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_fabricated_segment_boundary_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_quantization_lie_every_seat_covered_is_convicted_by_the_participant ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_copied_claim_is_refused_and_the_job_paid_once ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_self_consistent_garbage_trace_every_seat_covered_is_convicted_against_the_registered_weights ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_substituted_token_every_seat_covered_is_convicted_by_the_decode_court ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_post_genesis_bond_on_an_ibd_node_convicts_a_lie_after_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_peer_refusing_the_model_changes_no_verdict_reward_weight_or_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_post_genesis_bond_on_an_ibd_node_convicts_a_covered_lie_before_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_withheld_material_is_a_demand_from_a_pruned_import_node_then_a_default ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_post_genesis_bond_on_a_pruned_import_node_convicts_a_covered_lie_after_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_peer_refusing_the_model_changes_no_verdict_reward_weight_or_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_wrong_challenge_of_an_honest_claim_from_an_ibd_node_is_dismissed_and_it_finalizes ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_canonical_ops_231_and_212_served_by_an_ibd_node_rebuild_the_conformance_verdict ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 729 filtered out; finished in 5.73s

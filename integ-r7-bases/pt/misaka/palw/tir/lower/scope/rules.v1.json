@@ -1,0 +1,56 @@
+{
+ "schema": "misaka.palw.scope-rules.v1",
+ "doc": "What a model has that a registered class does NOT compute. A class is one function: token ids in, next-token logits (or a pooled embedding) out. A model that also takes images or audio, or predicts several tokens at once, has parts this class leaves out; the scope says so, in the pack, in preflight and in `misaka model inspect`, and never presents a partial reading as the whole. A rule matches by configuration keys, tensor-name prefixes or substrings, or the names of files beside the checkpoint (a GGUF's mmproj). Any one match is evidence.",
+ "rules": [
+  {
+   "kind": "vision",
+   "what": "vision tower",
+   "why": "image input is not part of a class: the registered class is the text decoder, token ids in and logits out, so a prompt cannot carry an image",
+   "modal": true,
+   "config_keys": ["vision_config", "vision_tower_config", "vision_feature_layer", "vision_feature_select_strategy", "image_token_id", "image_token_index", "image_seq_length", "mm_tokens_per_image", "vision_start_token_id", "vision_end_token_id", "video_token_id", "video_token_index"],
+   "tensor_prefixes": ["vision_tower.", "vision_model.", "model.vision_model.", "model.vision_tower.", "model.visual.", "visual.", "vit.", "model.vit.", "image_encoder.", "model.image_encoder."],
+   "tensor_contains": [".vision_tower.", ".visual.blocks."],
+   "files": ["*mmproj*.gguf", "*mmproj*.safetensors", "preprocessor_config.json", "image_processor_config.json", "video_preprocessor_config.json"]
+  },
+  {
+   "kind": "projector",
+   "what": "multimodal projector",
+   "why": "the projector maps vision or audio features into the decoder's embedding space; with no tower to feed it, it is not computed",
+   "modal": true,
+   "config_keys": ["projector_hidden_act", "multimodal_projector_bias", "mm_projector_type"],
+   "tensor_prefixes": ["multi_modal_projector.", "model.multi_modal_projector.", "mm_projector.", "model.mm_projector.", "mm.", "model.embed_vision.", "embed_vision.", "model.embed_audio.", "embed_audio."],
+   "tensor_contains": [],
+   "files": []
+  },
+  {
+   "kind": "audio",
+   "what": "audio tower",
+   "why": "audio input is not part of a class: the registered class is the text decoder",
+   "modal": true,
+   "config_keys": ["audio_config", "audio_token_id", "audio_token_index", "audio_start_token_id", "audio_end_token_id"],
+   "tensor_prefixes": ["audio_tower.", "audio_model.", "model.audio_tower.", "audio_encoder.", "model.audio_encoder.", "audio."],
+   "tensor_contains": [],
+   "files": ["*mmproj*audio*.gguf", "feature_extractor_config.json", "preprocessor_config_audio.json"]
+  },
+  {
+   "kind": "mtp",
+   "what": "multi-token-prediction heads",
+   "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them",
+   "modal": false,
+   "config_keys": ["num_nextn_predict_layers", "mtp_num_hidden_layers", "num_mtp_layers", "n_predict"],
+   "tensor_prefixes": ["mtp.", "model.mtp."],
+   "tensor_contains": [],
+   "files": []
+  },
+  {
+   "kind": "draft",
+   "what": "a speculative-decoding draft model",
+   "why": "a draft model is a second network that proposes tokens for the main one; the class is the main network alone",
+   "modal": false,
+   "config_keys": [],
+   "tensor_prefixes": ["medusa_head.", "medusa_heads.", "eagle.", "draft_model."],
+   "tensor_contains": [],
+   "files": ["*eagle*.safetensors", "*draft*.gguf"]
+  }
+ ]
+}

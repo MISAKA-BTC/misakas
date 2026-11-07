@@ -1,0 +1,35 @@
+{
+  "parent": "c0137d340842323de073cd01dda0a6238cf34d5d",
+  "binary": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-pruning-paced-m81pt8b6/panel-tests",
+  "binary_sha256": "2da74dc56396b9b78a70ca8670e3e821ac4794ab695de47169495a5f1a5983aa",
+  "source_sha256": {
+    "kaspad/src/palw_service_public_e2e.rs": "0c701587e35b0160f754a0a8e97219bf9d0c2c16bd2699715782df23b884a4fb",
+    "kaspad/src/palw_service_recovery_e2e.rs": "230534a965424817dd89ef57d031b7f2e247e5a1bad0c710e656ef7610b73b35"
+  },
+  "targeted": {
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "seconds": 118.49
+  },
+  "baseline": {
+    "passed": 0,
+    "failed": 1,
+    "ignored": 0,
+    "seconds": 109.98
+  },
+  "zero_match_attempt": {
+    "matched": 0,
+    "not_a_pass": true
+  },
+  "recovery_selection": {
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "seconds": 275.94,
+    "log": "recovery-services.log",
+    "log_sha256": "60df947be26da352e332c815fb2d880ce8889ee149c3804d7b00c9e2357377c8",
+    "targeted_overlaps_selection": true,
+    "scope": "Actual ordinary native service cases: DA default, FP identity conviction, original-history pruning, partial transport restart, real selected-chain reorg, pruned input numbered reacquisition / independent Honest replay / signed release. Not full RFC-0026 T01-T15 or measured capacity."
+  }
+}

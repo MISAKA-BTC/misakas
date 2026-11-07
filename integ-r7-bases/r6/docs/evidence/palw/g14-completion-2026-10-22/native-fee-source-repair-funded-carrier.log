@@ -1,0 +1,15 @@
+
+running 1 test
+2026-10-22 00:39:25.594+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-22 00:39:25.595+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-10-22 00:39:25.613+09:00 [INFO ] Block 0cf0079175680f71bf7e702f39ce35ff904fe3356a5267c689a113be5154216f164a8adef21371e8232a318d4f15e4404a9ce220d9a855d9d31e55a3d72c1f78: PALW lifecycle carried 1× ObjectChunk
+2026-10-22 00:39:25.618+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-22 00:39:25.619+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-10-22 00:39:25.631+09:00 [INFO ] Block 14115b2706e87fe5205cbaae83b4d9deb83407dfa81feb4be255965e1173498bc1e2c06bfb3c95f6877d96c3fb2aa5f8b700d73302da21f46a2da1d59812e33d: an ObjectChunk opening group 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007500075100000000 was dropped, and the block stands: its carrier has available after bond burn 19999999 sompi and one of the 8 pending-chunk slots rents for 20000000 (ADR-0075 SA-1)
+2026-10-22 00:39:25.636+09:00 [INFO ] [evm-bridge] deposit-lock index built from the virtual UTXO set: 0 unclaimed lock(s)
+2026-10-22 00:39:25.637+09:00 [INFO ] Startup pruning recovery deferred (consensus transitional or catching up); the pruning worker will retry on its first message
+2026-10-22 00:39:25.649+09:00 [INFO ] Block d244522014f8e7247b6df9077c39af3b007f81fb7bf990416d3e103a12230ec7e0a391dbf09d311945e9229a6d2f116d3faf4a25e5094e5a49c869c97616052a: PALW lifecycle carried 1× ObjectChunk
+test pipeline::virtual_processor::tests::palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1064 filtered out; finished in 0.06s
+

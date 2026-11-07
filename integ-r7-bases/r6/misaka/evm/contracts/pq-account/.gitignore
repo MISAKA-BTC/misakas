@@ -1,0 +1,5 @@
+# Foundry build output + fetched deps (re-created by build.sh / `forge install`).
+out/
+cache/
+broadcast/
+lib/

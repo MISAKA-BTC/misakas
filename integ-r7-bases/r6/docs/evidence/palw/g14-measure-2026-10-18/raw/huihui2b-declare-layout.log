@@ -1,0 +1,23 @@
+wrote /private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-14-lane-restart-builds-c00813/7adc9332-ba5a-4def-b8fd-2d73c009e942/scratchpad/tir/huihui2b.class.palwtir (file digest 7b1e879106fb3b67db4250636ca5d03ae61dc3e400ab1a504351937ecbccc4fea6cb79b775d63706a18836eab7f8431c1d9ae0a149fb5f455770d0080900eb11)
+  layout          max_context 32768, checkpoint interval 164, h_tile 32, 43 commit tiles ({64, 256} distinct), 4 state tiles
+  class id        672e93aa71e08b457deb2f2c3d312ce62c87c232ca452494c12d8d1b2436904ec1523099c09dbca8bbda61b8edb1979eab60de2778f673fe7d23861659ada63c
+  inventory root  a644954878ae42dda2cbcc9de879ccabb6e52db99d96f74d8dda57cedc4b4db411d8d3978fdd211f3fb0c42ac1c1f7235a3d27e3299980b2051295ecf7a18c2e
+  ADMISSIBLE      admission v10 at DAA 5585 (every fence this network schedules in force, palw_tir_v1 among them)
+       14.74 real         7.75 user         2.04 sys
+          3509485568  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               64920  page reclaims
+              149526  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 648  voluntary context switches
+               30107  involuntary context switches
+         97917590851  instructions retired
+         29169360208  cycles elapsed
+          1047743368  peak memory footprint

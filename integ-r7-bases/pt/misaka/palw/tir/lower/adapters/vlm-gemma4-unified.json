@@ -1,0 +1,15 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vlm-gemma4-unified",
+  "doc": "Gemma-4 Unified (Gemma4UnifiedForConditionalGeneration, genesis 8 #4) read as its text decoder: model.language_model.* under the gemma4-unified-text block; the image embedder (model.vision_embedder.*: patch LayerNorm, patch_dense, 2-D position table, pos_norm; model.embed_vision.*) and the audio embedder (model.embed_audio.*) are not lowered on this text-only route; the wrapper's tie_word_embeddings decides tying (the 12B ties). The image path is a separate prefix stage (ATTN_PREFIX_LM_V1 over the image tokens), not built here.",
+  "extends": ["gemma4-unified-text", "mixin-vlm"],
+  "config": {
+    "root_inert": ["audio_config", "audio_token_id", "boa_token_id", "boi_token_id", "eoa_token_index", "eoi_token_id", "image_token_id", "video_token_id", "vision_config"]
+  },
+  "vars": [
+    {"name": "p", "value": "model.language_model."},
+    {"name": "lm_head_name", "value": "lm_head"},
+    {"name": "prefix_aliases", "value": [["model.language_model.", "language_model.model."], ["lm_head", "language_model.lm_head"]]},
+    {"name": "ignored_prefixes", "value": ["model.vision_embedder.", "model.embed_vision.", "model.embed_audio.", "model.audio_tower.", "model.vision_tower.", "vision_tower.", "multi_modal_projector.", "model.multi_modal_projector."]}
+  ]
+}

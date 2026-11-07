@@ -1,0 +1,14 @@
+test_arithmetic_only_never_authorizes (__main__.Tests.test_arithmetic_only_never_authorizes) ... ok
+test_delta (__main__.Tests.test_delta) ... ok
+test_frontier_value_payload (__main__.Tests.test_frontier_value_payload) ... ok
+test_geometry (__main__.Tests.test_geometry) ... ok
+test_invalid_inputs (__main__.Tests.test_invalid_inputs) ... ok
+test_observation_breaks_bound (__main__.Tests.test_observation_breaks_bound) ... ok
+test_over_budget (__main__.Tests.test_over_budget) ... ok
+test_recurrence_boundaries (__main__.Tests.test_recurrence_boundaries) ... ok
+test_unknown_is_not_zero (__main__.Tests.test_unknown_is_not_zero) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.001s
+
+OK

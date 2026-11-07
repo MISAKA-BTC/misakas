@@ -1,0 +1,5 @@
+wrote target/rfc02-real/qwen25-pilot/qwen25-32-declared.palwtir (file digest d5dad386c0043d0bff6703dbca87badf158d55665a0ad78be5867ebf55a25e8702245b1863377ca92d5dfdda7297cab2e8ed81a934234b21fd8e58588808019d)
+  layout          max_context 32, checkpoint interval 65536, h_tile 2, 17 commit tiles ({128} distinct), 2 state tiles
+  class id        b4894b1b7d7ead818701f4db60852230c8632bcac878554be4825c092208d37c42f7ba363a3d9ed81d64088b579d22690eae200f4b21c493df0aed53c580459e
+  inventory root  5c02fc51ad06f17066c64dca3b79c4bbf986fdd399b7e583a6384ff8d00580d13aeefb2f42c3cbec3a1499f639b6463e792ac40394ba590bc902e1b65fbeed9a
+  ADMISSIBLE      admission v10 at DAA 5585 (every fence this network schedules in force, palw_tir_v1 among them)

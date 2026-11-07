@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-release-synthetic-retention-measurement",
+  "revision": "d9e7f68470a9c8e98f3b8c5ac89ab6db1ca2a07d",
+  "platform": {
+    "system": "Darwin",
+    "release": "25.6.0",
+    "machine": "arm64"
+  },
+  "criteria": {
+    "maximumPeakRssBytes": 1073741824,
+    "maximumRunSeconds": 30,
+    "runs": 3
+  },
+  "runs": [
+    {
+      "run": 1,
+      "exitCode": 0,
+      "peakRssBytes": 2559787008,
+      "seconds": 7.0988045,
+      "limitsMet": false
+    },
+    {
+      "run": 2,
+      "exitCode": 0,
+      "peakRssBytes": 2559836160,
+      "seconds": 7.0809855,
+      "limitsMet": false
+    },
+    {
+      "run": 3,
+      "exitCode": 0,
+      "peakRssBytes": 2559803392,
+      "seconds": 7.047822,
+      "limitsMet": false
+    }
+  ],
+  "medianSeconds": 7.0809855,
+  "status": "FAIL",
+  "concurrentHostBuilds": true,
+  "nativeNodeMeasured": false,
+  "prunedP2PMeasured": false,
+  "releaseSecurityApproval": false
+}

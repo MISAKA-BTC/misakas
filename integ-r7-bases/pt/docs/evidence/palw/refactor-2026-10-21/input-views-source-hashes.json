@@ -1,0 +1,8 @@
+{
+  "consensus/core/src/palw_state_v2.rs": "7b88e656f29e28601b5a4bc08355f205bae7f84a6e31efb1e4fa2ee31cad44e3",
+  "consensus/core/src/palw_state_v2/block_preparation.rs": "bfbef9930f125ffbc8ba9ebcb8c56e064948ceb9fa8cd9d835e8d086e340ce85",
+  "consensus/core/src/palw_state_v2/fold_read.rs": "2fcfdf768fef02ff5f36085d0d88750e789c93ad3618c2190ebca97851f66361",
+  "consensus/core/src/palw_state_v2/tests.rs": "bcd69ccc972aa3e43f181a179da79f0794d512afc7466bf14b5387e69f2ca7f5",
+  "consensus/core/src/palw_state_v2/transition_builder.rs": "de330f61d1899448383b5639e7b9322f7dfd25d0f93d2e40fe85d26c35b55c4a",
+  "consensus/core/src/palw_state_v2/input_views.rs": "dbbfa3847437afd34e421b3fd308ee9e2d5d8462ab31e1582e73478f86e32c8c"
+}

@@ -1,0 +1,423 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "Gather",
+  "tag": 6,
+  "cases": [
+    {
+      "name": "embedding_row",
+      "prim": {
+        "name": "Gather",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "batch_dims",
+            "0"
+          ]
+        ],
+        "borsh_hex": "060000"
+      },
+      "inputs": [
+        {
+          "dtype": "i8",
+          "shape": [
+            4,
+            3
+          ],
+          "data": [
+            "-60",
+            "-50",
+            "-40",
+            "-30",
+            "-20",
+            "-10",
+            "0",
+            "10",
+            "20",
+            "30",
+            "40",
+            "50"
+          ]
+        },
+        {
+          "dtype": "idx",
+          "shape": [],
+          "data": [
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          3
+        ],
+        "data": [
+          "0",
+          "10",
+          "20"
+        ]
+      }
+    },
+    {
+      "name": "two_rows",
+      "prim": {
+        "name": "Gather",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "batch_dims",
+            "0"
+          ]
+        ],
+        "borsh_hex": "060000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3,
+            2
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            2
+          ],
+          "data": [
+            "2",
+            "0"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          2
+        ],
+        "data": [
+          "5",
+          "6",
+          "1",
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "inner_axis",
+      "prim": {
+        "name": "Gather",
+        "attrs": [
+          [
+            "axis",
+            "1"
+          ],
+          [
+            "batch_dims",
+            "0"
+          ]
+        ],
+        "borsh_hex": "060100"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ]
+        },
+        {
+          "dtype": "idx",
+          "shape": [
+            2
+          ],
+          "data": [
+            "2",
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          2
+        ],
+        "data": [
+          "3",
+          "3",
+          "6",
+          "6"
+        ]
+      }
+    },
+    {
+      "name": "batch_dims_1",
+      "prim": {
+        "name": "Gather",
+        "attrs": [
+          [
+            "axis",
+            "1"
+          ],
+          [
+            "batch_dims",
+            "1"
+          ]
+        ],
+        "borsh_hex": "060101"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            2,
+            2
+          ],
+          "data": [
+            "0",
+            "2",
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          2
+        ],
+        "data": [
+          "1",
+          "3",
+          "5",
+          "5"
+        ]
+      }
+    },
+    {
+      "name": "table_lookup",
+      "prim": {
+        "name": "Gather",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "batch_dims",
+            "0"
+          ]
+        ],
+        "borsh_hex": "060000"
+      },
+      "inputs": [
+        {
+          "dtype": "i64",
+          "shape": [
+            4
+          ],
+          "data": [
+            "1",
+            "2",
+            "4",
+            "8"
+          ]
+        },
+        {
+          "dtype": "i8",
+          "shape": [
+            2,
+            2
+          ],
+          "data": [
+            "3",
+            "0",
+            "1",
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i64",
+        "shape": [
+          2,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i64",
+        "shape": [
+          2,
+          2
+        ],
+        "data": [
+          "8",
+          "1",
+          "2",
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "error_index_past_the_end",
+      "prim": {
+        "name": "Gather",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "batch_dims",
+            "0"
+          ]
+        ],
+        "borsh_hex": "060000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "3"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ]
+      },
+      "expect_error": "Index"
+    },
+    {
+      "name": "error_negative_index",
+      "prim": {
+        "name": "Gather",
+        "attrs": [
+          [
+            "axis",
+            "0"
+          ],
+          [
+            "batch_dims",
+            "0"
+          ]
+        ],
+        "borsh_hex": "060000"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            1
+          ],
+          "data": [
+            "-1"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          1
+        ]
+      },
+      "expect_error": "Index"
+    }
+  ]
+}

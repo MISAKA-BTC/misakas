@@ -1,0 +1,7 @@
+{
+  "executable": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/palw-court-service-tested-1ge_g8pp/panel-tests",
+  "sha256": "8e186ed5d54d252d98476d2f9c1d471a76cb47f7a8b3678846f672841c5feb98",
+  "source_scope": "Court outbox production extraction and initial source guards; before the subsequent test-only walker and source-guard rebuild.",
+  "tests": "panel-after-service-tests.log",
+  "completed_service_cases": 3
+}

@@ -1,0 +1,13 @@
+
+running 5 tests
+test palw_constraint_stream_carriage_v1::tests::flat_prefix_batch_has_measured_signed_headroom_and_independent_body_action_bounds ... prefix batch signed envelope exact_bytes=4839 signature_bytes=4627
+ok
+test palw_constraint_stream_carriage_v1::tests::prefix_typed_carrier_binds_family_transition_and_bounds_hostile_body ... ok
+test palw_constraint_stream_carriage_v1::tests::public_prefix_answer_signer_is_typed_and_every_literal_identity_is_signed ... ok
+test palw_constraint_stream_carriage_v1::tests::registered_graph_variable_metadata_can_exceed_a_single_seed_carrier ... G14 full profile=102541 seed(job=None)=109424 carrier=90000
+G14 referenced profile seed=11016 original_profile=102541
+ok
+test palw_constraint_stream_carriage_v1::tests::signed_move_binds_literal_owner_claim_reservation_phase_offset_and_bytes ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3843 filtered out; finished in 0.08s
+

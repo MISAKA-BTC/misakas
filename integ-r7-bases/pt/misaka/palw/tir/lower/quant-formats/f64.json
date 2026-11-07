@@ -1,0 +1,53 @@
+{
+ "decode": {
+  "target": "floats",
+  "value": "v"
+ },
+ "doc": "IEEE binary64.",
+ "ids": [
+  {
+   "id": 28,
+   "scheme": "ggml"
+  }
+ ],
+ "layout": {
+  "bytes": 8,
+  "elems": 1,
+  "fields": [
+   {
+    "at": 0,
+    "name": "v",
+    "type": "f64"
+   }
+  ],
+  "kind": "blocks"
+ },
+ "name": "F64",
+ "schema": "misaka.palw.quant-format.v1",
+ "tests": [
+  {
+   "block_hex": "3dd5cf0aa902b746de13df3769b53a31ec4a70e61bdf9eb060782f6e595cbb27",
+   "values_f32_hex": "4815b875000000000000008000000000"
+  },
+  {
+   "block_hex": "29b3cf6267e9a424cabe9fbee92c3003add523e54c227a238439e1ac62fdd727",
+   "values_f32_hex": "00000000000000000000000000000000"
+  },
+  {
+   "block_hex": "2f54d627a69e3c2f0ed34c08fa26cc1614382238a0805d860cff6a14cb791a19",
+   "values_f32_hex": "00000000000000000000008000000000"
+  },
+  {
+   "block_hex": "89d8de767666659dc79f28560ffa99b708ac59b5c2b90a99f43e5e228b288e35",
+   "values_f32_hex": "00000080d0cf00800000008000000000"
+  },
+  {
+   "block_hex": "e9166307236a47a189a957ed23c2621003ac9abe062c36304c170fc0c176f243",
+   "values_f32_hex": "0000008000000000000000000eb6935f"
+  },
+  {
+   "block_hex": "dfd20e1168c094bb6f00fdd6f029fdc3aa7ff6c1d6191d883364b08544b03945",
+   "values_f32_hex": "4103a69c874fe9df000000802482cd69"
+  }
+ ]
+}

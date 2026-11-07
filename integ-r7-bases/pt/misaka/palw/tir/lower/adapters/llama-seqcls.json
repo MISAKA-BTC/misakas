@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "llama-seqcls",
+  "doc": "LlamaForSequenceClassification: the `llama` adapter's decoder with a sequence-classification head instead of the language-model head (mixin-seqcls): the last prompt token's final-norm row through `score` to `num_labels` logits.",
+  "extends": [
+    "llama",
+    "mixin-seqcls"
+  ],
+  "match": {
+    "architectures": [
+      "LlamaForSequenceClassification"
+    ],
+    "model_types": [
+      "llama"
+    ]
+  }
+}

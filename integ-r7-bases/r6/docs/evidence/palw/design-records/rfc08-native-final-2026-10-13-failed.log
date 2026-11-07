@@ -1,0 +1,155 @@
+   Compiling tokio v1.42.1
+   Compiling serde_json v1.0.151
+   Compiling wasm-bindgen v0.2.100
+   Compiling arrayvec v0.7.6
+   Compiling js-sys v0.3.77
+   Compiling workflow-log v0.18.0
+   Compiling web-sys v0.3.77
+   Compiling serde-wasm-bindgen v0.6.5
+   Compiling wasm-bindgen-futures v0.4.50
+   Compiling blake2b_simd v1.0.2
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/utils)
+   Compiling log4rs v1.4.0
+   Compiling workflow-core v0.18.0
+   Compiling workflow-panic-hook v0.18.0
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/core)
+   Compiling workflow-wasm v0.18.0
+   Compiling misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/gen)
+   Compiling misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/challenge)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/hashes)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/kernel)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/math)
+   Compiling kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/txscript/errors)
+   Compiling http v1.1.0
+   Compiling http-body v1.0.1
+   Compiling tokio-util v0.7.12
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/wasm/core)
+   Compiling h2 v0.4.19
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/core)
+   Compiling http-body-util v0.1.2
+   Compiling hyper v1.9.0
+   Compiling hyper-util v0.1.20
+   Compiling tokio-rustls v0.26.4
+   Compiling alloy-rlp v0.3.15
+   Compiling tower v0.5.3
+   Compiling const-hex v1.19.1
+   Compiling ruint v1.20.0
+   Compiling hashbrown v0.15.5
+   Compiling axum-core v0.5.6
+   Compiling axum v0.8.9
+   Compiling alloy-primitives v0.8.26
+   Compiling hyper-timeout v0.5.1
+   Compiling tokio-stream v0.1.16
+   Compiling tonic v0.14.5
+   Compiling prost v0.14.3
+   Compiling tonic-prost v0.14.5
+   Compiling tower-http v0.5.2
+   Compiling kaspa-utils-tower v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/utils/tower)
+   Compiling tungstenite v0.23.0
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/database)
+   Compiling attohttpc v0.30.1
+   Compiling alloy-eip2930 v0.1.0
+   Compiling workflow-task v0.18.0
+   Compiling igd-next v0.17.0
+   Compiling tokio-tungstenite v0.23.1
+   Compiling misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/artifact)
+   Compiling workflow-websocket v0.18.0
+   Compiling alloy-eip7702 v0.1.1
+   Compiling revm-primitives v10.0.0
+   Compiling clap_builder v4.5.51
+   Compiling workflow-rpc v0.18.0
+   Compiling clap v4.5.51
+   Compiling kaspa-perf-monitor v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/metrics/perf_monitor)
+   Compiling alloy-eip7702 v0.4.2
+   Compiling hyper-rustls v0.27.3
+   Compiling nybbles v0.3.4
+   Compiling reqwest v0.12.8
+   Compiling revm-precompile v11.0.3
+   Compiling alloy-trie v0.7.9
+   Compiling alloy-eips v0.8.3
+   Compiling revm-interpreter v10.0.3
+   Compiling revm v14.0.3
+   Compiling alloy-consensus v0.8.3
+   Compiling workflow-http v0.18.0
+   Compiling ciborium v0.2.2
+   Compiling workflow-dom v0.18.0
+   Compiling tinytemplate v1.2.1
+   Compiling criterion v0.5.1
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/mining/errors)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/core)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/protocol/p2p)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/components/connectionmanager)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/mining)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/grpc/core)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/indexes/utxoindex)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/service)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/grpc/client)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/sdk)
+   Compiling kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/grpc/server)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/palw/remote)
+   Compiling kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/misaka/evm/core)
+   Compiling kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/wrpc/server)
+   Compiling kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/rpc/wrpc/client)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus)
+    Finished `test` profile [unoptimized] target(s) in 16m 23s
+     Running unittests src/lib.rs (/tmp/misaka-rfc67812-node-target/debug/deps/kaspa_consensus-6d96fc21431cf706)
+
+running 3 tests
+[x8-g14] REAL attempt on 301b7f57814510e5c1ff85e6f1d610a2448f66fcf0eefe2cf39d6e7886693c6cbc7cd11a5eee5163eaaff43c312fd59f0066b76ef0b0d7ff0a5175c1db4ac845: ready = Ok(()), class gate = None, pwu = 355649601472
+[x8-g14] REAL attempt on 301b7f57814510e5c1ff85e6f1d610a2448f66fcf0eefe2cf39d6e7886693c6cbc7cd11a5eee5163eaaff43c312fd59f0066b76ef0b0d7ff0a5175c1db4ac845: ready = Ok(()), class gate = None, pwu = 355649601472
+[x8-g14] REAL attempt on 301b7f57814510e5c1ff85e6f1d610a2448f66fcf0eefe2cf39d6e7886693c6cbc7cd11a5eee5163eaaff43c312fd59f0066b76ef0b0d7ff0a5175c1db4ac845: ready = Ok(()), class gate = None, pwu = 355649601472
+[x8-g14] the class lottery: Some(1032488) draws (target 14910631810345994312205309904797)
+[t12-e2e] the claim's anchor slot: reached after 19 heartbeats (DAA 215 -> 225)
+[x8-g14] the class lottery: Some(1631385) draws (target 14910631810345994312205309904797)
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_reapplies_once has been running for over 60 seconds
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w has been running for over 60 seconds
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_cancels_all_unpaid_funds has been running for over 60 seconds
+[t12-e2e] the claim's anchor slot: reached after 19 heartbeats (DAA 215 -> 225)
+[x8-native-final] funded allocation=7047767, native producer=0, escrow=320084650080, receipt={(PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), KernelFee): PalwPayoutV2 { payload: 76fec60897cb84da74413956865ccccf48cc524edc0392f64142f3135b06cf575e13d363f11fc2ce8df2edf07fb03a71bb0418726810608393fec279c22cf4d2, amount: 3442591 }, (PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 5 }), KernelFee): PalwPayoutV2 { payload: 7ccc7f61d1b8f54af443ea9a00de693326bfd91e0ad31159b8b5fdd1a11cf3123dbf537ae256ac821d2fdbc9924a9378b5f62d80410ddc859e40e7b56a07f53a, amount: 2403451 }, (PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 6 }), KernelFee): PalwPayoutV2 { payload: a4af85a763e83cfcfa6d4bdc20024dd94eeaba5f54c55a30e477756bc15787d5b3e28726817e15c1c168305ca45ce7aaf12ea692cf94c05c6c7e260c6d6ae676, amount: 1201725 }}, root=Some(PalwWorkRootV2 { class_id: 301b7f57814510e5c1ff85e6f1d610a2448f66fcf0eefe2cf39d6e7886693c6cbc7cd11a5eee5163eaaff43c312fd59f0066b76ef0b0d7ff0a5175c1db4ac845, canonical_job_id: 42834a452ed15d058bf014f9693490d3bac69e7d871002475d4df2cb67a8f8411f1be20e3c482298f4bed9869410c0e72c7d2592de3dec742bd040bdef7d433a, job_work_id: 6b1cf0c40205b0778772bd853343db7951ad19b25baef97252e6cba0785ffc388e2bd906ab5c1a60d392a19558096dad7e456823ad951ad47c98fc8a39fd9a51, kernel_version: 1, plan_root: 7b7d46de428f9809dca3428d99be8f398dbacfde69e98be8c34fbecb11cc7bdcd88fddd64d65abe36c080cd514d45e867e231f81e00b08095fcf6ac4e6b15703, total_work: 31904, boundaries: [15584, 21024, 26464, 31904], initial_state_root: 9d3b40cdd9614f457120a70e2c5df3b1cd16bff6a2e9f9b20d996838a22bd0560af7e506a379abc408a49ac1fa692d6ec89ee31db9f72cea61d9c19af96f5475, evidence_policy_root: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003400000000000000, root_bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), extra_executors: [PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 5 }), PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 6 })], executor_exposure: 570536450, anchor: afaa9702b696209bd5dd4571af46eb2d21a5b132bd8c4954bb6ebd89895ff2df101b5c4943cbb50084bfdd3305be4883a44d1bd7d3009dcb605c909526247461, opened_daa: 212, expiry_daa: 1229, next_index: 3, last_state_root: 217a427c942fb4891c2f61b6404a352d94f183235031d883a1c48987a46fd7377c12c1d641861a04bc514fabdb17b0d153f4f281a5463cc0057542ae455bda45, accepted_work: 16320, verified_work: 16320, pending: 0, phase: Settled { settled_daa: 347 }, prefix_claim: 10ae44c04e8146e79ed006e55f8186ce433295a2360b59d6a6b5a760917d6d9be45099f36604b1b6c36cc777566a61a5b365bb8e7c6dc4b4360e080a2cf3db25, prefix: Verified { verified_daa: 260, route_reward: 3442591 } })
+[x8-native-reorg] first public proof on funded Final
+[x8-native-reorg] reapply public proof after actual financial recovery
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_final_funds_recover_after_actual_reorg_and_public_proof_reapplies_once ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_root_final_funds_each_leg_once_and_public_conviction_cancels_all_unpaid_funds ... ok
+[x8-g14] the class lottery: Some(28309518) draws (target 14910631810345994312205309904797)
+[t12-e2e] the claim's anchor slot: reached after 19 heartbeats (DAA 215 -> 225)
+[x8-g14] REAL attempt on 301b7f57814510e5c1ff85e6f1d610a2448f66fcf0eefe2cf39d6e7886693c6cbc7cd11a5eee5163eaaff43c312fd59f0066b76ef0b0d7ff0a5175c1db4ac845: ready = Ok(()), class gate = None, pwu = 355649601472
+[x8-g14] the class lottery: Some(23070230) draws (target 14910631810345994312205309904797)
+[t12-e2e] the claim's anchor slot: reached after 19 heartbeats (DAA 357 -> 367)
+2026-10-13 20:24:33.057+09:00 [WARN ] PALW: block b9fca05dbb7e007b7d871a4b532f49039c07c60bb505d4c11f566b797ecff369e11c3675c1aee7de9488c31ffac56db12dc7fe9855fd84f6f8b9f3b98569f634 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+2026-10-13 20:29:24.817+09:00 [WARN ] PALW: block b80840a6d5cc83c3137216c961324d6d6468898e7b62764207afe1abcd1deac8d5726f40266e58b560305e14ee7a0d7ac58608a1e8d78e75d21471b29f5b462a voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w' (16790518) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/conformance/exec_slices/native_final.rs:511:17:
+assertion `left == right` failed: each actual positive leg consumes R once
+  left: 12803386003
+ right: 55965885913
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::exec_slices::native_final::x8_g14_native_happy_final_pays_all_positive_funds_once_and_keeps_each_queue_r_through_actual_payment_plus_w
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 994 filtered out; finished in 2495.04s
+
+error: test failed, to rerun pass `-p kaspa-consensus --lib`

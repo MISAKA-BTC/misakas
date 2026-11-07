@@ -1,0 +1,14 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "max_completion_tokens": 64
+  },
+  "expect": {
+    "verdict": "accepted"
+  }
+}

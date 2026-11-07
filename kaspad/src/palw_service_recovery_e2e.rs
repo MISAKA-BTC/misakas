@@ -172,10 +172,9 @@ impl RecoveryRun {
                 chain
                     .view(kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(
                         &foreign.expect("FP network fixture").2.as_ref().unwrap().0
-                    ))
-                    .phase,
-                PalwClaimPhaseV2::ReceiptLicensed { .. }
-            ));
+                    )).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }
+                ));
+            }
         }
         let directory = tempfile::tempdir().unwrap();
         let mut producer_config = panel_config(chain, directory.path(), chain.bonds[0], funding);

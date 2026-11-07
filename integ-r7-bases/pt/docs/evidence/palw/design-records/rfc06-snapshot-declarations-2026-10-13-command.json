@@ -1,0 +1,20 @@
+[
+  "rustc",
+  "--edition=2024",
+  "--test",
+  "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/rfc06_snapshot_declarations_dump.rs",
+  "-C",
+  "opt-level=2",
+  "-C",
+  "debuginfo=0",
+  "-L",
+  "dependency=/tmp/misaka-rfc67812-node-target/debug/deps",
+  "-o",
+  "/tmp/misaka-rfc67812-runtime/snapshot-declarations-dump-control",
+  "--extern",
+  "kaspa_consensus_core=/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-6bbd04bb0b7b74a6.rlib",
+  "--extern",
+  "kaspa_hashes=/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-3fc5d0c1255d8f6c.rlib",
+  "--extern",
+  "borsh=/tmp/misaka-rfc67812-node-target/debug/deps/libborsh-c57124d88bb5020f.rlib"
+]

@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_panel::p2_7_disclosure_policy::constraint_job_only_recovery_restores_the_mask_and_never_answers_from_missing_tables_or_wrong_roots ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 711 filtered out; finished in 0.75s
+

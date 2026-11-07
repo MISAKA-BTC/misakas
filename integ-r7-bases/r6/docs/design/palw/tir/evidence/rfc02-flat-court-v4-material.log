@@ -1,0 +1,12 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 6 tests
+test merkle4::tests::flat_layout_merges_every_short_tail_and_covers_ranks_without_small_leaves ... ok
+test merkle4::tests::flat_material_prices_exact_retention_leaf_carriers_and_streaming_scratch ... ok
+test merkle4::tests::flat_openings_refuse_borrowed_metadata_values_coordinates_and_extra_paths ... ok
+test merkle4::tests::flat_public_descent_finds_every_divergent_leaf_within_the_derived_reply_bound ... ok
+test merkle4::tests::flat_streaming_tree_and_independent_oracle_match_all_dtypes_tails_and_odd_trees ... ok
+test merkle4::tests::flat_wire_bounds_counts_before_allocation_and_preserves_exact_borsh ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 111 filtered out; finished in 0.54s

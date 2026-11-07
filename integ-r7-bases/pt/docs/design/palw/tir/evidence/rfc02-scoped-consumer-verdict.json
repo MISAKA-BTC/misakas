@@ -1,0 +1,80 @@
+{
+  "baseline": "f7f93d0d398d53c2a23f8007f35c71537c05f59c",
+  "goal_complete": false,
+  "shipping_activation_changed": false,
+  "tests_passed": 62,
+  "logs": {
+    "core-final": {
+      "path": "docs/design/palw/tir/evidence/rfc02-scoped-consumer-core-final.log",
+      "sha256": "f3c7911b841c49c1e0a3e7f3ebcdc90d88075169b019c1fef100d9611fcb5f8b",
+      "passed": 9
+    },
+    "core-regressions": {
+      "path": "docs/design/palw/tir/evidence/rfc02-scoped-consumer-core-regressions.log",
+      "sha256": "685326a13179a2ec62462a25d693806824df52485e25f8d94591db05a7680a97",
+      "passed": 23
+    },
+    "node": {
+      "path": "docs/design/palw/tir/evidence/rfc02-scoped-consumer-node.log",
+      "sha256": "832cc532ea22ba5a1ac719b3aa00afde42b749cdbc4b34837aefd16e29669a3b",
+      "passed": 3
+    },
+    "node-regressions": {
+      "path": "docs/design/palw/tir/evidence/rfc02-scoped-consumer-node-regressions.log",
+      "sha256": "59000d9bec34340e8c3d183e9074ef5e61c60c577d44ef0757bd2d54125f9d7b",
+      "passed": 23
+    },
+    "route": {
+      "path": "docs/design/palw/tir/evidence/rfc02-scoped-consumer-route.log",
+      "sha256": "aff5f7ccbf4eb6a76634406c04c36e28ded9e1834eac46d372aff13f7e3a2bf2",
+      "passed": 4
+    }
+  },
+  "allocation": {
+    "provider": [
+      43,
+      44,
+      45
+    ],
+    "model_binding": [
+      46,
+      47,
+      48
+    ],
+    "model_conformance": [
+      49,
+      50
+    ]
+  },
+  "scope": "Authenticated complete finite-domain integer conformance and ordinary direct-TIR OPV registration, exact source/PC scope; synthetic mechanics only.",
+  "verification_timing": "Node regression suite (23) ran before the final wire ceiling correction from proof+130 to proof+134. The exact final boundary roundtrip (4 kernel tests), core checks (32) and scoped node tests (3) passed after that correction.",
+  "initial_failure": "Node compile accessed private classes field; corrected to public class() accessor. Only passing final runs count.",
+  "limitations": [
+    "No full checkpoint/task/context support PASS.",
+    "Three claimed role roots do not establish independent runtime implementation identity or floating checkpoint fidelity.",
+    "Large-domain/stateful GAP-70 remains required; no subset substitutes for full conformance.",
+    "The reference RAM envelope is not the complete network resource/liveness proof.",
+    "No new independent redemption assertion or simultaneous provider-row/model-row node fixture; provider regressions and disjoint-allocation unit check are recorded.",
+    "All unreduced RFC02 section II.14 requirements remain active; shipping fences dormant."
+  ],
+  "source_sha256": {
+    "consensus/core/src/palw_kernel_route_fold_v1.rs": "c59dd63e3217bb931602f1195ea983b75b1d2930b79deb8fda31938829112078",
+    "consensus/core/src/palw_lifecycle_objects_v2.rs": "6c4a96d2e990bfa7344fea74a9c8af6b18a3d01306f10c3185066f3c2b14c235",
+    "consensus/core/src/palw_model_artifact_v2.rs": "92751651c65943a30776ea66c4cbbd22b3c470e309d5c839e7c121bdb38159d3",
+    "consensus/core/src/palw_model_conformance_v2.rs": "fb17d3cbd52f5951e1bab5d78c7e75d1afb6471a12712b334dc8cf220d7f2cd8",
+    "consensus/core/src/palw_opv_bootstrap_v1.rs": "aaad4d58e4ef0b12fc8fd05a9cd4f7ea8fcb73679bfb4efe47b8ec7ccb42ab11",
+    "consensus/core/src/palw_state_v2.rs": "af8cd9c20f5a9850b870a27f39fb66bcd4bea9009b2221a0e09cc3ba971a337f",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs": "0cfcf937c3fc8a704f2017c46ef56dcd915d6ee01c6e1934a47f8a84ba8b9b00",
+    "docs/design/palw/tir/rfc0002-implementation.md": "2edb030ab2a253eb69a7ee20566ff777c008145fadfb7f11e288640a946169db",
+    "docs/rfc/0002-palw-tensor-ir.md": "e171bb691b3969fb8525147158e76534dc13ddc91e6c3e11681e71e16631abe5",
+    "misaka-palw-kernel/src/ledger.rs": "c7b35c0aabf1d42f178ecff4e39b58974d161e3dcb2cf0102476d7fdfe7821d0",
+    "misaka-palw-kernel/src/route.rs": "d3f24505a3cd77b8730145f0518227f3fc55180c7ef0533a4bd68a7b9a6f5a52",
+    "consensus/core/src/palw_model_conformance_fold_v2.rs": "d5be5e5a28ec078771a064aec4e8dc70f60fa98c8897c5c34b549d674db639de",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs": "73c03194fa2a88b165acc644fe192545a3eb3da52388c8e6a12fa0fb7e637809"
+  },
+  "final_binary_sha256": {
+    "target/debug/deps/kaspa_consensus_core-38863d86af2a1f17": "081f34ec4d30f82d316c3e4b74ee1272883b3cbde4ed3ac06a517e03d8d8e87a",
+    "target/debug/deps/kaspa_consensus-1764c0eeb2408d96": "fd7aebaa415e389360dedf2246e9063a4cc788ad7136337b011f4d761b794f28",
+    "target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746": "d63849516777e2b9b57777d0e8229082fd94df437edffc919482266875ca732f"
+  }
+}

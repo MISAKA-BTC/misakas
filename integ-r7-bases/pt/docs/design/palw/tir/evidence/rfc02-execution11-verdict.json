@@ -1,0 +1,142 @@
+{
+  "schema": "misaka.rfc02.execution11-pure-component.v1",
+  "observed_utc": "2026-10-11T11:36:34.631098+00:00",
+  "verdict": "FUNDED_EXECUTION_STATE_COMPONENT_PASS_NATIVE_ORIGINAL_COINS_AND_FINAL_UNPROVEN",
+  "full_rfc02_complete": false,
+  "goal_status": "active",
+  "source_sha256": {
+    "misaka-palw-kernel/src/flat_execution11.rs": "9ed186cef496df25b827788d9f359d65981c3b2d6331b63f9110979178a102fa",
+    "misaka-palw-kernel/tests/flat_execution11.rs": "fb512a5dcb46e5435fd66019bb7d89406b132673005167f938439391662a94c9"
+  },
+  "dependency_sha256_observed_after_build_only": {
+    "misaka-palw-kernel/src/flat_quota11.rs": "d07f9e794639529ea56ce52e794972cdb09cc712475413a0e9c3e967228450a2",
+    "misaka-palw-kernel/src/flat_candidate9.rs": "365724d1a518b79a30e3e74abdff85809ecc39e9f195c7ea20586d802cf63459",
+    "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+    "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+    "misaka-palw-kernel/src/lib.rs": "a05b8072d5d1b48c752d53bd4b8f9b85aa1934219421f792843d4e22dd3b93d3",
+    "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429"
+  },
+  "full_concurrent_dependency_compile_preimage_proven": false,
+  "test_binary": "/tmp/rfc02-execution11-quota20-final-test-binary",
+  "test_binary_sha256": "a3552b80b201ef1d15264c0b4ec142ad16306685d4f305938ea9c8c58d74c9a5",
+  "selected_command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_execution11",
+  "latest_selected_build_seconds": 392.0,
+  "test_seconds": 0.0,
+  "new_tests_passed": 12,
+  "retained_binary_replay_exit_code": null,
+  "retained_log": "rfc02-execution11-quota20-tests.log",
+  "retained_log_sha256": "6d0e28b531504630b9f4ea1dedd59f54239dcba79c49a99c22820053da6421fe",
+  "trusted_native_boundary": [
+    "Matured source header and active schedule from authenticated state, not raw hashes.",
+    "Actual original requester debit and original producer reservation, authorized actors and unique requester nonce.",
+    "Protected9 trace header independently checked and job-bound.",
+    "Verified bounded native court/ownseal or actual trace DA default; no source-R absence judgment.",
+    "Trusted current DAA/pending ownproof/DA/answer-grace/retention counts, never close carrier booleans.",
+    "Atomic quota receipts plus coin debits/job state and UTXO payouts, permanent once-only request index."
+  ],
+  "verified": [
+    "Exact class-max candidate/scope/replay/resources/policies and actual job input/scope/resource/quota roots.",
+    "Exact decoder fed-position/encoder prompt-count text contract; patch/audio jobs refused on this first execution11 route.",
+    "One claim and one immutable original escrow, reward<=fixed cap, reserve>=fixed bounded gain/default obligations.",
+    "Original escrow funds Final reward or requester refund; finder/burn use only actually collected original slash.",
+    "Checked totals overflow before state mutation; duplicate Final/refund/slash remains refused after authenticated state-root restore.",
+    "Pending own proofs/DA/latest-answer grace/required retained horizon block Final.",
+    "Late close/refund after a trusted DAA jump does not reopen source/computation proof windows or recredit quotas.",
+    "Late trace-DA default collection requires a verified immutable establishment time within original liability.",
+    "Original class restore independently rechecks all original roots/policy despite source revocation, fixes private can_admit=false, and preserves original escrow recovery without creating a verified fault.",
+    "Fresh funded policy refuses any missing metadata/DA request/DA answer/court/chunk/close future guarantee."
+  ],
+  "native_coin_utxo_network_eligibility_or_execution_final_proven": false,
+  "a6_a8_credit": false,
+  "limitations": [
+    "Pure synthetic trusted-boundary fixtures; no node or checkpoint Final result.",
+    "Native predebits/authentication/source court/retention/capacity/activation remain required.",
+    "Native permanent nonce/spent anchors and atomic use of bounded terminal quota-row collection remain needed for sustained network admission.",
+    "Complete actual tasks, original-context fidelity, performance, H/media continuity and A6/A8 remain open.",
+    "Rooted terminal/GC/class-maximum tariff quota20 component compiled in this snapshot; atomic native quota/coin/UTXO integration is still required."
+  ],
+  "previous_component_snapshots": [
+    {
+      "observed_utc": "2026-10-11T10:31:42.204107+00:00",
+      "dependency_sha256_observed_after_build_only": {
+        "misaka-palw-kernel/src/flat_quota11.rs": "79076e056324064cfbe06fd83f8e882a007e5fe5dee535da8b74a00d5e131c7e",
+        "misaka-palw-kernel/src/flat_candidate9.rs": "0a129b1abd6bec6cb302ade0f62c53328cacaaee93adfa1171e90a0e32aa5a48",
+        "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+        "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+        "misaka-palw-kernel/src/lib.rs": "a05b8072d5d1b48c752d53bd4b8f9b85aa1934219421f792843d4e22dd3b93d3",
+        "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429"
+      },
+      "test_binary": "/tmp/rfc02-execution11-final-test-binary",
+      "test_binary_sha256": "9a33464bb9f243347ddc39737563b8a0ffe24e96d449a1130bd8d22a4678ca19",
+      "retained_log": "rfc02-execution11-retained-tests.log",
+      "retained_log_sha256": "4f6b64fe5891da80c9d2e1c50f0d9b6272c4fa4ce5081095e9105052ad6a949d",
+      "latest_selected_build_seconds": 9.1
+    },
+    {
+      "observed_utc": "2026-10-11T10:57:51.386836+00:00",
+      "source_sha256": {
+        "misaka-palw-kernel/src/flat_execution11.rs": "2573a7a2c6b3cbbc2b08e84246099e9ae12a12faffce63dc70857fe806bc7b54",
+        "misaka-palw-kernel/tests/flat_execution11.rs": "982658d8bc8b817c1f1cf4fc9963db4f625501dd4f907e3df03bc6b7a8f576be"
+      },
+      "dependency_sha256_observed_after_build_only": {
+        "misaka-palw-kernel/src/flat_quota11.rs": "727d77e914071d8ee90dce86e151b70aaa658661ac243f9a6a93eefb3a716330",
+        "misaka-palw-kernel/src/flat_candidate9.rs": "365724d1a518b79a30e3e74abdff85809ecc39e9f195c7ea20586d802cf63459",
+        "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+        "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+        "misaka-palw-kernel/src/lib.rs": "a05b8072d5d1b48c752d53bd4b8f9b85aa1934219421f792843d4e22dd3b93d3",
+        "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429"
+      },
+      "test_binary": "/tmp/rfc02-execution11-final-quota14-test-binary",
+      "test_binary_sha256": "01a205820c36cc4271881bf3f2372f5585661b821ba0696c7e1c8b7f359479ee",
+      "retained_log": "rfc02-execution11-quota14-tests.log",
+      "retained_log_sha256": "152fc5a98c3c34ffeeec91004dc0ce28e3368c58dd66fef878ab725a55f0dcab",
+      "latest_selected_build_seconds": 5.95,
+      "new_tests_passed": 10
+    },
+    {
+      "observed_utc": "2026-10-11T11:05:29.713358+00:00",
+      "source_sha256": {
+        "misaka-palw-kernel/src/flat_execution11.rs": "9ed186cef496df25b827788d9f359d65981c3b2d6331b63f9110979178a102fa",
+        "misaka-palw-kernel/tests/flat_execution11.rs": "fb512a5dcb46e5435fd66019bb7d89406b132673005167f938439391662a94c9"
+      },
+      "dependency_sha256_observed_after_build_only": {
+        "misaka-palw-kernel/src/flat_quota11.rs": "727d77e914071d8ee90dce86e151b70aaa658661ac243f9a6a93eefb3a716330",
+        "misaka-palw-kernel/src/flat_candidate9.rs": "365724d1a518b79a30e3e74abdff85809ecc39e9f195c7ea20586d802cf63459",
+        "misaka-palw-kernel/src/flat_resources10.rs": "393cfa3b462a374932e138e8e397876006214d6cc61e4a8a0ec76c0459b9675e",
+        "misaka-palw-kernel/src/flat_scope9.rs": "760149fa196a133cafb7ea15948dff7c5e1eab148ee1ab70d1e440cc81a39367",
+        "misaka-palw-kernel/src/lib.rs": "a05b8072d5d1b48c752d53bd4b8f9b85aa1934219421f792843d4e22dd3b93d3",
+        "Cargo.lock": "b37cef757e460f652b1c4d885930f6e7ce846f5660c2e788d18b72c8b5ef6429"
+      },
+      "test_binary": "/tmp/rfc02-execution11-restore-final-test-binary",
+      "test_binary_sha256": "e37188c232e5cef341b20a1e1985989353d41e275502b88596a830bb2d1acf7b",
+      "retained_log": "rfc02-execution11-restored-guarantees-tests.log",
+      "retained_log_sha256": "2b0963eb98102c4f2b917a984104d51fbf3bc8bb01310bc056a7a26053fb039c",
+      "latest_selected_build_seconds": 7.43,
+      "test_seconds": 0.03,
+      "new_tests_passed": 12
+    }
+  ],
+  "latest_expired_close_quota14_dependency_included": false,
+  "retained_build_refusal": {
+    "log": "rfc02-execution11-quota14-build-disk-refusal.log",
+    "sha256": "4bf6ab6f816293931580ea142dc2ab6c9475dc2758dd348b1b9114dfef0260bf",
+    "exit": 101,
+    "cause": "ENOSPC creating kernel archive; tests not run",
+    "next_attempt_passed": true
+  },
+  "initial_owned_source_archive": {
+    "path": "rfc02-execution11-initial-source-preimages.tar.gz",
+    "sha256": "49ba00ed1282287fe6c734219f1b4b11f694c9590bcae402a84e2e0d35b92f79",
+    "scope": "The two exact owned source files at the ten-test snapshots, preserved before restore-only API extension; not full dependencies."
+  },
+  "selected_test_exit_code": 0,
+  "retained_binary_is_exact_copy_of_selected_run": true,
+  "current_owned_source_archive": {
+    "path": "rfc02-execution11-restored-source-preimages.tar.gz",
+    "sha256": "98363abef50cd82a1052b5d18fd1913651104131af7a922f03512a4a3129aff4",
+    "scope": "Exact two owned files at latest twelve-test snapshot, no full dependency compiler preimage claim."
+  },
+  "latest_selected_time_includes_cargo_lock_wait": true,
+  "current_quota_tests": 20,
+  "latest_quota20_dependency_included": true
+}

@@ -1,0 +1,26 @@
+{
+  "mode": "Reconstruct historical source from parent and patch in temporary directories; repository source unchanged",
+  "results": [
+    {
+      "source": "archive-v5-first-source.json",
+      "patch": "archive-v5-first-runtime.patch",
+      "files_verified": 3,
+      "all_hashes_match": true,
+      "patch_sha256": "510d2787937eb6a317d98b5c22f8a3dade2798bdb89fae17034658e39465a6fd"
+    },
+    {
+      "source": "archive-v5-before-io-fix-source.json",
+      "patch": "archive-v5-before-io-fix-runtime.patch",
+      "files_verified": 4,
+      "all_hashes_match": true,
+      "patch_sha256": "04ceb93a32d54910f8f7e3f012c149ed75c0ca12d9111f9563dff54984805ac4"
+    },
+    {
+      "source": "archive-v5-artifact.json source_sha256",
+      "patch": "archive-v5-runtime.patch",
+      "files_verified": 4,
+      "all_hashes_match": true,
+      "patch_sha256": "804f8f49ead1cf57ee601239b72473c80d86d152dfa2eb423fd09388fe1bec23"
+    }
+  ]
+}

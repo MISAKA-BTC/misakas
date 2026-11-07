@@ -1,0 +1,7 @@
+{
+  "unique_parent_successes": 87,
+  "isolated_quota_workers": 2,
+  "initial_core_compile_exit": 101,
+  "retry_all_steps_exit": 0,
+  "source_and_fixture_unchanged": true
+}

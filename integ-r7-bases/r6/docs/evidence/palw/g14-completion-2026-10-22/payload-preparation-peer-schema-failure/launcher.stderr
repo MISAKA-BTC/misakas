@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet/scripts/drills/payload_load/launch.py", line 159, in <module>
+    if __name__=='__main__':main()
+  File "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet/scripts/drills/payload_load/launch.py", line 109, in main
+    if not isinstance(peers.get('infos'),list):raise ValueError('peer inventory schema missing')
+ValueError: peer inventory schema missing

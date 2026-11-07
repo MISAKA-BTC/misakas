@@ -1,0 +1,158 @@
+{
+ "cpmant.encoder.layers.0.ffn.ffn.w_in.w_0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   10240,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.0.ffn.ffn.w_in.w_1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   10240,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.0.ffn.ffn.w_out.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   10240
+  ]
+ },
+ "cpmant.encoder.layers.0.ffn.layernorm_before_ffn.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cpmant.encoder.layers.0.self_att.layernorm_before_attention.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cpmant.encoder.layers.0.self_att.self_attention.attention_out.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   512
+  ]
+ },
+ "cpmant.encoder.layers.0.self_att.self_attention.project_k.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.0.self_att.self_attention.project_q.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.0.self_att.self_attention.project_v.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.1.ffn.ffn.w_in.w_0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   10240,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.1.ffn.ffn.w_in.w_1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   10240,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.1.ffn.ffn.w_out.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   10240
+  ]
+ },
+ "cpmant.encoder.layers.1.ffn.layernorm_before_ffn.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cpmant.encoder.layers.1.self_att.layernorm_before_attention.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cpmant.encoder.layers.1.self_att.self_attention.attention_out.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   512
+  ]
+ },
+ "cpmant.encoder.layers.1.self_att.self_attention.project_k.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.1.self_att.self_attention.project_q.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "cpmant.encoder.layers.1.self_att.self_attention.project_v.weight": {
+  "dtype": "BF16",
+  "shape": [
+   512,
+   32
+  ]
+ },
+ "cpmant.encoder.output_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "cpmant.input_embedding.weight": {
+  "dtype": "BF16",
+  "shape": [
+   1088,
+   32
+  ]
+ },
+ "cpmant.position_bias.relative_attention_bias": {
+  "dtype": "BF16",
+  "shape": [
+   1536,
+   4
+  ]
+ },
+ "cpmant.segment_embedding.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "lm_head.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ }
+}

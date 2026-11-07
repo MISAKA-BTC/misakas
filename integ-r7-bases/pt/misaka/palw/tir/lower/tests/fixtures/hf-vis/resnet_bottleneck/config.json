@@ -1,0 +1,33 @@
+{
+  "architectures": [
+    "ResNetModel"
+  ],
+  "depths": [
+    2,
+    1
+  ],
+  "downsample_in_bottleneck": false,
+  "downsample_in_first_stage": false,
+  "dtype": "bfloat16",
+  "embedding_size": 8,
+  "hidden_act": "relu",
+  "hidden_sizes": [
+    16,
+    32
+  ],
+  "layer_type": "bottleneck",
+  "model_type": "resnet",
+  "num_channels": 3,
+  "out_features": [
+    "stage2"
+  ],
+  "out_indices": [
+    2
+  ],
+  "stage_names": [
+    "stem",
+    "stage1",
+    "stage2"
+  ],
+  "transformers_version": "5.17.0"
+}

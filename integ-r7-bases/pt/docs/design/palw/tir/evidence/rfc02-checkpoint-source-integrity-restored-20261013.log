@@ -1,0 +1,7 @@
+source integrity qwen25-0.5b: PASS
+source integrity qwen35-0.8b: PASS
+source integrity llama32-1b: PASS
+source integrity glm-edge-1.5b: PASS
+source integrity smollm2-1.7b: PASS
+source integrity huihui-9b: PASS
+source integrity mitsuba-27b: FAIL

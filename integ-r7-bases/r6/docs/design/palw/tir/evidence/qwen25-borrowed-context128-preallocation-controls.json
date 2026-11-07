@@ -1,0 +1,33 @@
+{
+  "schema": "misaka.rfc02.context128-preallocation-controls.v1",
+  "captured_utc": "2026-10-11T10:18:58.769040+00:00",
+  "binary": "/tmp/rfc02-next9-immutable-897ae4d1443e/check-borrowed-checkpoint-context",
+  "cases": [
+    {
+      "case": "out-of-range token",
+      "exit_code": 1,
+      "stderr": "Error: \"preallocation policy bounds and pins\"",
+      "elapsed_seconds": 0.00747062498703599,
+      "passed": true
+    },
+    {
+      "case": "nonpositive slope",
+      "exit_code": 1,
+      "stderr": "Error: \"preallocation policy bounds and pins\"",
+      "elapsed_seconds": 0.007297250005649403,
+      "passed": true
+    },
+    {
+      "case": "declared positions mismatch",
+      "exit_code": 1,
+      "stderr": "Error: \"preallocation policy bounds and pins\"",
+      "elapsed_seconds": 0.009187624993501231,
+      "passed": true
+    }
+  ],
+  "passed": true,
+  "limits": [
+    "three diagnostic policy controls refuse before nonexistent model inputs; no full model or total resource claim",
+    "the earlier empty-object trial had an inaccurate harness expected message; serde rejected missing sequences even earlier, retained separately"
+  ]
+}

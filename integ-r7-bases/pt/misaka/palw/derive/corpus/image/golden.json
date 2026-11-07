@@ -1,0 +1,22 @@
+{
+  "01-flat-background.json": {
+    "dsl_hash": "b4fd39d695c547c7f1d2349dd3c2dc115eff775e951d86e9b661b0c378c6da5b9c187d66bcfc5092d02b25ebfc5b4cb61db1ab54c93af01cc4b54bd5d16a8d98",
+    "artifact_hash": "1fdd1424f628ac27472351eb940acef36d61a10eab4ad57208017ac1214e422f43d4ff402ff15de35c816a05f88a8789ce3e3fef4646f62095590fae2e6ca7a7",
+    "artifact_bytes": 588
+  },
+  "02-rect-and-circle.json": {
+    "dsl_hash": "b828c873b23b5b4bccd7b588bee43af51fb6138860b963a1ce0b2c0458862d8d62cd01cf541ad8de9fec4963fe845825faeef5d757e6df89fa2710faaeb0dc45",
+    "artifact_hash": "3a81b18dacb44b40699d0af082adb32a3afdadb1a3ded5928b589b6c6ab8ff9911be7401572844d9c477f8a98722d6719e20ee4302c554d83f1a750839b3d891",
+    "artifact_bytes": 16516
+  },
+  "03-polygon-chart.json": {
+    "dsl_hash": "26c167001ea3623e92345dece3bb25c09d9c1cdbe6cae550897d9b6e68c43938fa521bb3034eec069301af76d7c04017c6491dd3d29a5b98391422abd1fe05f2",
+    "artifact_hash": "79b2d2b5e044f79bd20c7e5dc8d0d455c1c0480fae2a4f0209c7ced03efb7d2eabeeba6ecae2e668eee63d62791149e7ed4b683634c74c1a8131c4d10ca5316c",
+    "artifact_bytes": 256283
+  },
+  "04-many-layers-512.json": {
+    "dsl_hash": "8a8291f1d7e364345aad3a5cc5d3e6d5229d95cf34cb74cf5d36b9cd948e9af4913ccc777244a836fdc80ec9c40e3aa135cd336990dd5f7b5876cd8031495390",
+    "artifact_hash": "0e300cba8a607f74d4c40ce1a18111bfdd54c02c04da6d435475671fdc491642dc721975a152f6d73c7bf80e489c6a69b60af155f4d68e34f289cfd6fb232b8f",
+    "artifact_bytes": 1049236
+  }
+}

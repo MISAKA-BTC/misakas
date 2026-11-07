@@ -1,0 +1,17 @@
+
+running 12 tests
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_rewound_site_is_not_the_lane_of_record ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_proof_replaces_only_a_lane_carrier_and_pays_above_it ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::the_readiness_duty_proves_a_composite_over_its_adapter_section_against_the_chains_record ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_stuck_carrier_of_any_lane_yields_its_slot_to_the_next_duty_due ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::the_tick_replaces_our_own_late_carrier_with_the_proof ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_court_move_is_replaced_only_once_its_lane_re_plans_it ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_proof_the_main_slot_cannot_take_rides_the_readiness_lane ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::the_tick_offers_the_readiness_lane_where_the_main_slot_cannot_take_a_proof ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::the_readiness_duty_asks_capacity_and_takes_its_bytes_from_the_proof_lane ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::a_carrier_stuck_in_our_own_mempool_yields_to_the_proof_within_the_escalation_margin ... ok
+test palw_panel::readiness_memory_and_stuck_carrier_tests::the_8k_proof_is_built_streamed_beside_a_replay_on_a_three_and_a_half_gib_seat ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 592 filtered out; finished in 0.07s
+

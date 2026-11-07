@@ -1,0 +1,607 @@
+{
+  "core_source": "19da752f6",
+  "kernel_source": "23965f086",
+  "results": [
+    {
+      "name": "typed-scope-tests",
+      "result": "16 PASS",
+      "sha256": "f13e24b2814ab6e07eb70483d35c502cf08133529d40a3a1b7ef1663ae2c6d0e"
+    },
+    {
+      "name": "kernel-scope-regressions",
+      "result": "4 + 3 + 6 PASS",
+      "sha256": "f41cdde2babeeaf5888811039c38063fb4bf4d6d9749170bc7e76edf1030d2fc"
+    },
+    {
+      "name": "core-focused-d886",
+      "result": "68 PASS / 1 FAIL",
+      "sha256": "e5adb760c91c77b4c21d5f22b9eb8058a78c16427508d5c18298347aba8c52bb"
+    },
+    {
+      "name": "core-terminal-d886",
+      "result": "19 PASS / 2 FAIL",
+      "sha256": "475bd4cb159d2f1c2e00c95fb405b1d2d0c51daad40986f15acfe278f3e416de"
+    },
+    {
+      "name": "core-focused-ed4",
+      "source": "1d32cfa5b",
+      "result": "89 PASS / 4 FAIL",
+      "sha256": "230d767dcdd7c58f0d05dd902823c26b6bd5f6aba85a9f9eecdb34c5d3e4d0fd"
+    },
+    {
+      "name": "core-build-prefix-ed4",
+      "source": "1d32cfa5b",
+      "result": "build PASS",
+      "sha256": "8042c7464da9c86355f371869ad6cfea0bf30af3784059cc56b97642b0508126"
+    },
+    {
+      "name": "node-build-9036",
+      "source": "9036fd6c3",
+      "result": "build FAIL: one staged shape error conversion",
+      "sha256": "c29da66a14070960d9eef1ab9031f6995e7663744bdf47df32e25c1ff17e1a9e"
+    },
+    {
+      "name": "node-build-00dda",
+      "source": "00dda3e80",
+      "result": "build FAIL: three missing processor fence accessor calls",
+      "sha256": "f060a2137d697d730dbdb455ef9b28089ca0037c6bae9d192f1475545f2e1ef7"
+    },
+    {
+      "name": "node-build-8d355",
+      "source": "8d3556295",
+      "result": "build FAIL: seven integration path/type/fixture errors",
+      "sha256": "472bb8e6c0871fdc5222f19138803686a6ec5c9a8095f027d6012bc3d21f820f"
+    },
+    {
+      "name": "node-build-eb6a",
+      "source": "eb6a99662",
+      "result": "build FAIL: one private explicit target constant module path",
+      "sha256": "4d6dc8567cd0212daa852071030784a846f3decaa27e418ab686100bdc8362d4"
+    },
+    {
+      "name": "node-build-rendering-wire",
+      "source": "39f79c807",
+      "result": "build FAIL: one unqualified Hash64 type",
+      "sha256": "57aa8f4ecd737521f8a5ad38bda2e5ce75f2ed77d412bc96239d28b1e4d9efee"
+    },
+    {
+      "name": "node-build-72ce",
+      "source": "72ce1c4aaf411110ee9f44e4f1d17acdedffb723",
+      "result": "build FAIL: two public module path errors in CLI/tokenizer tests",
+      "sha256": "a7d51a974650a3958014e1b6e5e367c56e8d03d2f6303ccd8bd024fc7b7bdf84"
+    },
+    {
+      "name": "node-build-501a",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "build PASS",
+      "sha256": "1da01343878e50e1d5085e7f8eeaec4dae4fc7b64b9cd64ecb35c0932a566316"
+    },
+    {
+      "name": "node-unit-501a",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "38 filer/tokenizer + 1 CLI + 2 normal registered-class/jury PASS",
+      "sha256": "0ce535cd8c3d497e73cbb1d4c20db8bf4750851371acacc009476e44e3b86e53"
+    },
+    {
+      "name": "core-build-staged-parser",
+      "source": "9cc8c87ac",
+      "result": "build FAIL: two exhaustive classifiers and one test array conversion",
+      "sha256": "03667695816f2668e3cf1b19026f4671d9debbdaaea589e8c014bcece0050992"
+    },
+    {
+      "name": "core-build-staged-parser-repair",
+      "source": "ae7ec4d02",
+      "result": "build PASS",
+      "sha256": "efe3b09a1c5c86a51a8a3e060ebc8ea0a1f9e223d03d095e5c5309d985d1629b"
+    },
+    {
+      "name": "core-staged-parser-tests",
+      "source": "ae7ec4d02",
+      "result": "26 PASS / 4 FAIL (registered attempt fixture, two terminal licence fixtures, missing new wire pins)",
+      "sha256": "bff7870f41faad2babf6700da1938411d6635b99688c8eec4ea4a1917f553c14"
+    },
+    {
+      "name": "registered-tiled-501a",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "ABORT exit134: ENOSPC in first of 4 service cases, no completion results",
+      "sha256": "557e7401f34b15096257738fdb489b4668396f49a9ec57673978c6fc795c2a22"
+    },
+    {
+      "name": "core-build-qualified-work",
+      "source": "226a8ddbe",
+      "result": "build FAIL: private tokenizer test method",
+      "sha256": "a91ffa40c5f10203efe566643e79bf0a69d03ce82484fa7e3960d2522a03f387"
+    },
+    {
+      "name": "core-build-qualified-work-repair",
+      "source": "0bbbfbee3",
+      "result": "build PASS",
+      "sha256": "a6b9a13e7a5216f38c2bd406b3ec396a8c6337ff6287bf570a32a018ad0a8f1e"
+    },
+    {
+      "name": "core-qualified-work-tests",
+      "source": "0bbbfbee3",
+      "result": "22 PASS / 3 FAIL: two panel funding fixtures and one old delta expectation",
+      "sha256": "816ccca14c44db37c0f7441f8cbf5f834faa61d6dc39cf7c3617778377658ec8"
+    },
+    {
+      "name": "core-build-fixture-floor",
+      "source": "32829dfa4",
+      "result": "build FAIL: ENOSPC",
+      "sha256": "2788bb7c4313ad74b1c0feb4511265fdbd779ed691fcd1ff3bdff7ed5adf929c"
+    },
+    {
+      "name": "core-build-fixture-floor-retry",
+      "source": "47008ccfde89c66af8aaf4a63fec03680baba941",
+      "result": "build PASS",
+      "sha256": "1f966b95bab904d5708cef9c7a6872f7f4977e83813283ebad2324854d51fc02"
+    },
+    {
+      "name": "core-fixture-floor-tests",
+      "source": "47008ccfde89c66af8aaf4a63fec03680baba941",
+      "result": "13 PASS / 0 FAIL: terminal2, staged3, pins2, tokenizer5, immutable semantics1",
+      "sha256": "eb0706682d293474cb31d18ce28a85b98970b2ac03c658373bf0ecf5cd3910f3"
+    },
+    {
+      "name": "recovery-501a-automatic-restart",
+      "source": "501a6a2cb89da4e1fe0ba5e397a3458b796adfeb",
+      "result": "0 PASS / 1 FAIL: two services competed for one gossip inbox; repair47008ccfd awaits node rerun",
+      "sha256": "407239f4946951740dda0508ab37710a2e53f7b544b262c143b4c20eafecea55"
+    },
+    {
+      "name": "core-build-public-family-tokenizer",
+      "source": "151e6050b",
+      "result": "build PASS",
+      "sha256": "695f2844dd6d16cfc6f03bfee4c5989ff4e3b453ba650b8ac028c2c585d9afbe"
+    },
+    {
+      "name": "core-public-family-tokenizer-tests",
+      "source": "151e6050b",
+      "result": "23 PASS / 1 FAIL: planned changed typed165/167 wire pins; prefix codec module has0 direct tests",
+      "sha256": "140f07474a549d97292edec55c971e66891503d77dd4a216a371b484e7c10d6c"
+    },
+    {
+      "name": "q36-public-prefix-build",
+      "source": "c3982b2c5",
+      "result": "build FAIL: private DecodeConfigV4 test import",
+      "sha256": "3f4ded544acffe8897f666142774c7127e2dcf83f84ab46c2687911f97260b82"
+    },
+    {
+      "name": "q36-public-prefix-build-repair",
+      "source": "d6a578b8e",
+      "result": "build PASS",
+      "sha256": "9248c05b9489e24193aa5a082968dd2ab125a4fd2e5b80c2e4375200bc881eea"
+    },
+    {
+      "name": "q36-public-prefix-tests",
+      "source": "d6a578b8e",
+      "result": "0 PASS / 1 FAIL: fixture expected dense tiles but production retained folded material; repaired780e2fce1, rerun pending",
+      "sha256": "2e9efd817d38fdf9c91a94f3086546cdeb353d3a16670600b283a11defffdd5e"
+    },
+    {
+      "name": "integrated-kernel-scope-build",
+      "source": "f01699022",
+      "result": "build PASS",
+      "sha256": "db2af57a6d569dd449dd057df776b65f373c1bd312966a42bab8ed312a274755"
+    },
+    {
+      "name": "integrated-kernel-scope-tests",
+      "source": "f01699022",
+      "result": "7 PASS / 0 FAIL: combined commitment-only/cumulative scope plus historical regressions",
+      "sha256": "b9975283bacf195524c5cb37038c668ef543c981750bd88354491507fe5fd0d4"
+    },
+    {
+      "name": "integrated-core-owned-courts-build",
+      "source": "14c3c6f9",
+      "result": "build PASS",
+      "sha256": "e45feb0027ffe643761f27bf1165757c28220c10e5da411654d146e5c35a0020"
+    },
+    {
+      "name": "integrated-core-owned-courts-tests",
+      "source": "14c3c6f9",
+      "result": "30 PASS / 0 FAIL: prefixes4, tokenizer11, class2, resources5, rooted courts4, terminal2, wire2",
+      "sha256": "40e01ab273eecae468618afd2256ab52f8fae372aa09b01acb3ca3fdb0519317"
+    },
+    {
+      "name": "integrated-node-public-courts-build",
+      "source": "ce6e64ce3",
+      "result": "build FAIL: six integration module/type/fixture errors, later repaired805 and152",
+      "sha256": "a79284f3f863dd7aedce8887bcb63a5f4827834e9bdd995f1e853edcd8f6ef23"
+    },
+    {
+      "name": "integrated-node-public-courts-build-repair",
+      "source": "15257fca9",
+      "result": "Rust compiled; node link FAIL ENOSPC, base0 executable completed",
+      "sha256": "5af075bca17d0796ed346d24017541c1003166dc8840c9d56bcfc16218ca8151"
+    },
+    {
+      "name": "public-family-native-goldens-152",
+      "source": "15257fca9",
+      "result": "0 PASS / 2 FAIL: honest public/native prefix checks passed before incorrect cross-job output commitment equality; fixture repair15b/320 pending execution",
+      "sha256": "526554022f04e6c9230838281989aa461486f1a3f786b02d4359b648437182bf"
+    },
+    {
+      "name": "native-owned-history-build-605",
+      "source": "605f83ed4",
+      "result": "build FAIL: helper payload module path and parent-test visibility; repair11255b427 pending execution",
+      "sha256": "05790f9e46c196148cdfe5c35147748b01cec6f4c0cd4c3b6d19dd2dcd8b27a9"
+    },
+    {
+      "name": "native-owned-history-build-helper-repair",
+      "source": "11255b427",
+      "result": "node build PASS; core opt0/debug0 and kaspad debug0",
+      "sha256": "cb86c3dd007f83a532dcfc401336577b126ff85867c6d055c7e866806130ee62"
+    },
+    {
+      "name": "native-owned-history-focused-112",
+      "source": "11255b427",
+      "result": "38 PASS / 0 FAIL: filer33, compressed/raw held witness2, prune-hole adapter1, ordinary registered class+jury services2; branch-name filter matched0 and separately rerun",
+      "sha256": "b9d1a135a39c0c05703301ce749b6307787a36b02389367e9475b76e79971974"
+    },
+    {
+      "name": "native-pruned-round-112",
+      "source": "11255b427",
+      "result": "2 PASS adapters (branch switch, same-length held-file mutation); real pruned service ABORT stack overflow before endpoint. Retry uses64MiB debug threads; not production RAM qualification",
+      "sha256": "51c0fdb46bd9d8618de310321ea69cb83f46c68a31607bff1bf36a14fa9ac351"
+    },
+    {
+      "name": "paid-prefix-native-build-aafa",
+      "source": "aafa9b234",
+      "result": "joint core/base0 build PASS",
+      "sha256": "7c750556b81e7d8d59329cba60e37720ad0df33fcbc4ab21ad86940350344321"
+    },
+    {
+      "name": "paid-prefix-core-tests-aafa",
+      "source": "aafa9b234",
+      "result": "30 PASS / 1 FAIL: prefix8, tokenizer12, rooted6, frozenEXEC3, fence1 PASS; planned165/167 wire pins FAIL",
+      "sha256": "b9bc949565c45e49458e35037edfc52227ab92bcd5daeeb55861129e188ae222"
+    },
+    {
+      "name": "public-family-native-goldens-aafa",
+      "source": "aafa9b234",
+      "result": "2 PASS / 0 FAIL: real BASE0/Q36 producer, initial/inherited and honest/false named prefix in each; exact public old leaves and own job-bound execution roots",
+      "sha256": "2de282d7943d4f7f83609ef98201ea4925f82d0d4549e9001cb039978f5e746a"
+    },
+    {
+      "name": "rooted-prefix-scheduler-build-7a",
+      "source": "7a124843d",
+      "result": "joint core/node build PASS; source7a contains unconnected tokenizer scheduler",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-rooted-prefix-scheduler-build-7a.log",
+      "sha256": "9ec1007dd62349c2a8a7c198ceddf7b2e57a1ee64dbb6d22e18684044b1527ed"
+    },
+    {
+      "name": "rooted-prefix-core-tests-7a",
+      "source": "7a124843d",
+      "result": "15 PASS / 2 FAIL: prefix8, rooted6, fence1 PASS; prefix test erroneously expected an exclusive exit hold at exit itself, and changed165/167 pins FAIL",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-rooted-prefix-core-tests-7a.log",
+      "sha256": "123dd1622dc2014b6cb41c9b4e621800ecbd5137f80bb8dee4f72c1e9ccdfbc6"
+    },
+    {
+      "name": "tokenizer-scheduler-node-tests-7a",
+      "source": "7a124843d",
+      "result": "2 PASS / 0 FAIL: real core scheduler restart/retry/wrong-input/resource refusals; source7a scheduler unconnected from service",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-tokenizer-scheduler-node-tests-7a.log",
+      "sha256": "ccea8d86990e3bdc3bbe47c86a1178ebdb6b1c6e30dd3c439c670a7e6da00dbc"
+    },
+    {
+      "name": "native-pruned-round-112-stack64",
+      "source": "11255b427",
+      "result": "0 PASS / 1 FAIL / 417.49s: actual automatic producer answers, but fixture missed partial accepted transport restart; 64MiB debug thread stack, no production RAM qualification",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-pruned-round-112-stack64.log",
+      "sha256": "cd278da90a15466387727128a96fefce352eb55480a99bf0d3a1bc1eccb4b513"
+    },
+    {
+      "name": "streamed-prefix-service-build-4260",
+      "source": "4260ce09b",
+      "result": "joint build FAIL: grpc-client/rpc-service archive ENOSPC; no runtime qualification",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-streamed-prefix-service-build-4260.log",
+      "sha256": "065d014f6561058bc9e3d4ba1abb717dfd6dbefda08141260e0a6eaa98703ea4"
+    },
+    {
+      "name": "public-source-streamed-nomination-build-ae656",
+      "source": "ae656354a",
+      "result": "joint build FAIL: isolated public-prefix test fixture addressed fields outside preimage.coord;4E0609 errors; corrected7fabac4e1",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-source-streamed-nomination-build-ae656.log",
+      "sha256": "f963afc086c0c08c137f668d26122eef68005629c1a7a7d616284ec9caf061a3"
+    },
+    {
+      "name": "public-source-streamed-nomination-build-7819",
+      "source": "7819b17ca",
+      "result": "joint core/node/base0 build PASS4m01s",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-source-streamed-nomination-build-7819.log",
+      "sha256": "8b9a06ad0b72084a24bb1419cf1c3fab26c1313c9df1634482cb0bedaa263b34"
+    },
+    {
+      "name": "public-prefix-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 3830 filtered out; finished in 0.56s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-prefix-core-tests-7819.log",
+      "sha256": "f4fef6181931d14d66fd4df8ad96a41760e3c0a96d063c4d35ea0e48e33a5bb3"
+    },
+    {
+      "name": "streamed-tokenizer-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 3827 filtered out; finished in 6.40s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-streamed-tokenizer-core-tests-7819.log",
+      "sha256": "8a8096637744f0b337c5a6920b58977a3baa728ae8d9496d80a1ecf345aa6e22"
+    },
+    {
+      "name": "rooted-paid-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3835 filtered out; finished in 0.93s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-rooted-paid-core-tests-7819.log",
+      "sha256": "4984c8fb3e75437f2702e90a9af6a3bd417dac9f8bc511ddf916043bead03c4e"
+    },
+    {
+      "name": "staged-carriage-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3838 filtered out; finished in 0.08s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-staged-carriage-core-tests-7819.log",
+      "sha256": "485a571df8f295f43dce3ab6d9499b527a39c805dcef5c1c32ff44414d736e72"
+    },
+    {
+      "name": "staged-pins-core-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: FAILED. 14 passed; 2 failed; 0 ignored; 0 measured; 3826 filtered out; finished in 2.07s; exit=101",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-staged-pins-core-tests-7819.log",
+      "sha256": "8133880e8769a79850359fe361faa8d7ea54f7bd421d2b65caddfe45563b03ba"
+    },
+    {
+      "name": "streamed-tokenizer-scheduler-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 691 filtered out; finished in 1.63s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-streamed-tokenizer-scheduler-tests-7819.log",
+      "sha256": "2e1f347307896a9d05f80ab64ba47f9886396db03e0251a1d06c257d561ab3b5"
+    },
+    {
+      "name": "held-tokenizer-witness-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 692 filtered out; finished in 1.01s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-held-tokenizer-witness-tests-7819.log",
+      "sha256": "f3b886ed3658d9074ee185788173f8c8ea5dddfa3c4fe48d370fa858306ae5a5"
+    },
+    {
+      "name": "public-filer-node-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 661 filtered out; finished in 7.02s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-public-filer-node-tests-7819.log",
+      "sha256": "6cac454e11ea5935062f703baaf62d40950919ce8481f2c68e8777a80616a10b"
+    },
+    {
+      "name": "native-base0-prefix-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 1.48s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-base0-prefix-tests-7819.log",
+      "sha256": "2ead2cf79b36fb414fa44cfdfd3e4787cc85680239698582321f1cd12778bd76"
+    },
+    {
+      "name": "native-q36-prefix-tests-7819",
+      "source": "7819b17ca",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 2.21s; exit=0",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-q36-prefix-tests-7819.log",
+      "sha256": "53f1ea048904249b571062ba17dd1d6ea126aee539b67c08a8baf0fc49e9de5e"
+    },
+    {
+      "name": "native-history-adapter-tests-7819",
+      "source": "7819b17ca",
+      "result": "11PASS0FAIL9.40s: native prune-hole/txid/branch-switch/strict-watermark history adapters",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-history-adapter-tests-7819.log",
+      "sha256": "0d6828c6f9164cee8ea5e02ed5d917dce7affab1f41355040658f50257a7f464"
+    },
+    {
+      "name": "held-tokenizer-mutation-tests-7819",
+      "source": "7819b17ca",
+      "result": "1PASS0FAIL0.01s: same-length own raw-file mutation after preauthentication refuses EOF verdict",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-held-tokenizer-mutation-tests-7819.log",
+      "sha256": "1bc285258f348be7c71dd1313c72a878070dfae90e55507059bdaabbd7c2f940"
+    },
+    {
+      "name": "native-pruned-round-7819-stack64",
+      "source": "7819b17ca",
+      "result": "actual one-pruned automatic producer service ABORT-6 during native header DB IO ENOSPC; no endpoint evidence;64MiB debug stack",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-pruned-round-7819-stack64.log",
+      "sha256": "673d8c2ddcf9111497b45ae334dbce92f32e119654261dbf6a453ce8b8772003"
+    },
+    {
+      "name": "native-pruned-round-7819-stack64-disk-retry",
+      "source": "7819b17ca",
+      "result": "0PASS1FAIL463.97s: actual accepted-partial producer restart, deleted input carrier, fresh public book, authenticated numbered input reacquisition, honest replay and Release reached DAA1379; final session-count assertion6!=4 remains unqualified;64MiB debug stack",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-pruned-round-7819-stack64-disk-retry.log",
+      "sha256": "728803632f7e464abcc58eef478a5d127ec90c68a7c116ab66bf46299b0d6010"
+    },
+    {
+      "name": "joint-packed-stream-build-25f",
+      "source": "25f6c9084",
+      "result": "partial build: core/base0 compiled; nodeFAIL E0432 tokenizer fixture imported Action from court instead of carriage;230.78s",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-joint-packed-stream-build-a2.log",
+      "sha256": "356e783c8eac610875387ad60bdd87366a78540f4ebe4ab46d80d10da83d3c81"
+    },
+    {
+      "name": "core-prefix-all-25f",
+      "source": "25f6c9084",
+      "result": "15PASS1FAIL0.68s; custody/attempt/source/resource pass; owned packet fixture incorrectly gathers >64 actions into one packet",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-prefix-all-25f.log",
+      "sha256": "27cdb5ed28045e62d202058c8db50df6cc5ee3d6a4332a3c6bf3a5698fac89e5"
+    },
+    {
+      "name": "core-a2-all-25f",
+      "source": "25f6c9084",
+      "result": "15PASS2FAIL1.54s; frozen int12 and new165/167 pins pass; duplicate retired TakeoverToken classification and new test misclassifies already F8-fenced staged19",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-all-25f.log",
+      "sha256": "8bbe921a76b970ebf76e1e1cd29eacae8b971d4d309898817a5d3cbceec17b05"
+    },
+    {
+      "name": "core-staged-carriage-25f",
+      "source": "25f6c9084",
+      "result": "5PASS0FAIL0.08s; bounded64 flat logical actions, measured whole signed90k envelope",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-carriage-25f.log",
+      "sha256": "4843df298204f38c37b7dc6773b1dfc1dc777e7ae47e777a766cfd02f6587653"
+    },
+    {
+      "name": "core-staged-state-25f",
+      "source": "25f6c9084",
+      "result": "7PASS0FAIL0.92s; rooted state/rollback/reference and exclusive paid participant holds",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-state-25f.log",
+      "sha256": "e1a047f7ce98e01e0cb3dce7416b56ed2342a231241a647d15722b007d08083f"
+    },
+    {
+      "name": "native-q36-streamed-prefix-25f",
+      "source": "25f6c9084",
+      "result": "1PASS0FAIL3.79s; actual registered Q36 backend, initial/inherited honest/false roots;131072-byte originalKVleaf bounded streams, per-move serialized restart, bad EOF refusal",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-q36-streamed-prefix-25f.log",
+      "sha256": "a0888d90e08a5aec9d87bbf49cdb4117481bb734f8acd32f4dadb1d1b4226afd"
+    },
+    {
+      "name": "native-base0-prefix-25f",
+      "source": "25f6c9084",
+      "result": "1PASS0FAIL1.35s; actual BASE0 initial/inherited honest/false native prefix",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-base0-prefix-25f.log",
+      "sha256": "4879aad2271d6815b92b7fed95d02724c866ccf46e5dd393bf4bbd48480dcec1"
+    },
+    {
+      "name": "joint-public-attempt-build-ed4",
+      "source": "ed4084414",
+      "result": "FAIL198.18s; core test E0599 called unwrap on Hash64 header.finish(); fixed in2c7b15d8b",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-joint-public-attempt-build-ed4.log",
+      "sha256": "e3bd3dcc7f674b29c7fee689f3501509ed1f4876b4b176712d215a063ecda007"
+    },
+    {
+      "name": "joint-public-attempt-build-a9f",
+      "source": "a9fdf216b",
+      "result": "PASS224.82s; jointly built core/node/base0 with EVM and debug-disabled package overrides; source-qualified binaries recorded separately",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-joint-public-attempt-build-a9f.log",
+      "sha256": "d94123d4ebe789241df63b30a944031ba054070d5073b3161e23b138886956d5"
+    },
+    {
+      "name": "core-prefix-all-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 3832 filtered out; finished in 1.10s",
+      "exit_code": 0,
+      "wall_seconds": 2.42,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-prefix-all-a9f.log",
+      "sha256": "51ee1eda348b58c9062ce358bf917982baa9ceaf5d473ac686b7e5f7bf8acb11"
+    },
+    {
+      "name": "core-a2-all-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: FAILED. 16 passed; 1 failed; 0 ignored; 0 measured; 3835 filtered out; finished in 1.98s",
+      "exit_code": 101,
+      "wall_seconds": 1.99,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-all-a9f.log",
+      "sha256": "8b0b7d40c65f334de0a3d5a1d638368b59de5fb3300e886d4ebac63528a1ed74"
+    },
+    {
+      "name": "core-staged-carriage-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3847 filtered out; finished in 0.08s",
+      "exit_code": 0,
+      "wall_seconds": 0.09,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-carriage-a9f.log",
+      "sha256": "ae3bde7e30977c52aa4577f35e3f652602d95cb73672c8ba38c66aa6c657ecec"
+    },
+    {
+      "name": "core-staged-state-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3845 filtered out; finished in 0.91s",
+      "exit_code": 0,
+      "wall_seconds": 0.92,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-staged-state-a9f.log",
+      "sha256": "517b7bcadfad1d22ad4a82cb8cbcb75a203e87b35bc07be17019da3613b16aa0"
+    },
+    {
+      "name": "node-filer-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 663 filtered out; finished in 6.84s",
+      "exit_code": 0,
+      "wall_seconds": 9.4,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-filer-a9f.log",
+      "sha256": "1d22e1efb23b60a830232267ca8e95fd321de7b8838dbced2c8986d50c269fcf"
+    },
+    {
+      "name": "node-tokenizer-scheduler-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 693 filtered out; finished in 1.59s",
+      "exit_code": 0,
+      "wall_seconds": 1.63,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-tokenizer-scheduler-a9f.log",
+      "sha256": "dd093dff409208e1142c6fc92d519be0cd87c5af87f0eb24bd81b243da0421b5"
+    },
+    {
+      "name": "node-held-tokenizer-witness-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 694 filtered out; finished in 0.98s",
+      "exit_code": 0,
+      "wall_seconds": 1.01,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-held-tokenizer-witness-a9f.log",
+      "sha256": "4bb8c08bb5f702c7bb60b2a00cd912036e08dc52888c6ba35b1cf43f722ea8ad"
+    },
+    {
+      "name": "node-held-tokenizer-mutation-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s",
+      "exit_code": 0,
+      "wall_seconds": 0.04,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-held-tokenizer-mutation-a9f.log",
+      "sha256": "164de6f8409dc318bad59d6099d6c3130aa9d212c44477b1b3b12480a72d73d4"
+    },
+    {
+      "name": "node-accepted-history-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 685 filtered out; finished in 3.11s",
+      "exit_code": 0,
+      "wall_seconds": 3.15,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-node-accepted-history-a9f.log",
+      "sha256": "83152bfe57ac84a0a3a121bc7f72e52634546f9bbf32a8b93eb25330b6c1d485"
+    },
+    {
+      "name": "native-q36-streamed-prefix-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 501 filtered out; finished in 3.76s",
+      "exit_code": 0,
+      "wall_seconds": 4.58,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-q36-streamed-prefix-a9f.log",
+      "sha256": "61846c37082b27da2b0db3f6010aea8cc6288c45ae14185a2c5798cc463504cd"
+    },
+    {
+      "name": "native-base0-prefix-a9f",
+      "source": "a9fdf216b",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 501 filtered out; finished in 1.35s",
+      "exit_code": 0,
+      "wall_seconds": 1.36,
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-native-base0-prefix-a9f.log",
+      "sha256": "4879aad2271d6815b92b7fed95d02724c866ccf46e5dd393bf4bbd48480dcec1"
+    },
+    {
+      "name": "core-a2-repair-build-19d",
+      "source": "19da752f6",
+      "result": "PASS56.77s wall/56.72s Cargo; core-only --features evm --locked; node binary remains a9f",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-repair-build-19d.log",
+      "sha256": "5c730760e75bad3e3782b38a3bf33be326e0d7656bba3b4a0200fa98d6fc4fb9"
+    },
+    {
+      "name": "core-a2-all-19d",
+      "source": "19da752f6",
+      "result": "17PASS0FAIL2.08s; frozen int12 and165/166/167 pins; existing F8 staged19 isolation retained; unarmed/below header context preserves its existing no-op gate",
+      "log": "docs/audit/g14-review-2026-10-10/evidence/g14-core-a2-all-19d.log",
+      "sha256": "30a374803f86683b02e2728a6c64637a521ba76f77556d0fcda6078a6fa9b59c"
+    }
+  ],
+  "qualification": "Sourcea9fdf216b jointbuild PASS and focused100PASS1FAIL (48core/50node/2actualnative); only A2 probe incorrectly expected unarmed header-context rejection. Source19da752f6 core-only EVM build and17A2 PASS repair that test expectation while preserving existing F8 isolation and frozen int12 declarations. These are separate source-qualified runs, not a latestHEAD/fullG14 PASS. Actual131072-byte native Q36 oldleaf streams pass for initial/inherited honest/false cases, per-move Borsh restore and mutated EOF refusal. The a9f ordinary registered A16 false-tokenizer-length service is currently running, with normal admission observed but no staged certificate/allPanel collection endpoint yet. Actual pruned-round single-input counter repair is compiled but has not been retried. Public Prefix wrapper/paid custody tests do not yet qualify the rooted joint DA/default collection pipeline. Maximum-profile transport, capital/residual liability, inclusion/resource guarantees, actual network/reorg and all active-family coverage remain incomplete; activation stays refused. Prior failed runs remain in evidence.",
+  "executed_7819_binaries": {
+    "core": "ee6767407d69a9215f590d5532f19b58575da2fc434d0e413388c842d9ea0738",
+    "node": "6e0781cef8a4b4519acb8fa1588602d0f28ccef3b29f4bd896a6907203503233",
+    "base0": "990cba5e2b5d93e9d41485dbf956a2e0d948a952942a035483fad3029fcc63a9"
+  },
+  "executed_25f_binaries": {
+    "core": "89bb1d0ecb8e5a2784c593a59a9701be85ff81bc01a967dd7fbb0a6787921115",
+    "base0": "c8ab961209cbc69de58c340fa2acf2e3a627a86b1d7ebc936f918983179a5a25"
+  },
+  "executed_a9f_binaries": {
+    "core": "08456e4e4103c3d396a8b93a379a00f63209b5ad8ddebc669f3124967c15e45c",
+    "node": "aa93ec4f831a227bbabcc18327b4e843e7c851746073533655055cd6d03a1349",
+    "base0": "796953534d58c941bb10a3f264d9453ab53a05028478a9830093d84dd9a8ebf4"
+  },
+  "executed_19d_binaries": {
+    "core_evm": "2d45582b32e83daf61105486e1db917b0425af79f54310030c15dc6f4bbfffed"
+  }
+}

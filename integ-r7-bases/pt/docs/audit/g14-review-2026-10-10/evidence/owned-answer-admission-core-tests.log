@@ -1,0 +1,106 @@
+
+FILTER palw_legacy_answer_chunks_v2::tests
+
+running 4 tests
+test palw_legacy_answer_chunks_v2::tests::a_large_answer_is_exposed_only_after_all_authenticated_parts_arrive ... ok
+test palw_legacy_answer_chunks_v2::tests::foreign_truncated_tampered_and_unbounded_parts_cannot_complete_an_answer ... ok
+test palw_legacy_answer_chunks_v2::tests::input_and_job_admission_count_the_signed_envelope_and_every_carrier_in_the_existing_window ... ok
+test palw_legacy_answer_chunks_v2::tests::the_full_32_part_transport_fits_each_carrier_and_refuses_one_byte_less_before_signing ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 3624 filtered out; finished in 0.02s
+
+
+FILTER palw_legacy_held_da_v2::tests
+
+running 11 tests
+test palw_legacy_held_da_v2::tests::a_valid_near_ceiling_constraint_job_is_publicly_retrievable_beyond_the_old_64k_limit ... ok
+test palw_legacy_held_da_v2::tests::an_honest_claim_agrees_and_a_faulty_replica_files_nothing ... ok
+test palw_legacy_held_da_v2::tests::below_the_fence_the_fold_refuses_every_legacy_held_object_and_the_predicate_names_the_carriers ... ok
+test palw_legacy_held_da_v2::tests::flat_input_is_one_whole_hash_checked_unit_and_network_merkle_is_explicit ... ok
+test palw_legacy_held_da_v2::tests::fp_job_preimage_authenticates_every_field_without_an_original_commitment ... ok
+test palw_legacy_held_da_v2::tests::no_unit_compels_model_bytes ... ok
+test palw_legacy_held_da_v2::tests::node_answers_are_checked_against_the_claims_step_and_checkpoint_roots ... ok
+test palw_legacy_held_da_v2::tests::prompt_chunks_authenticate_lengths_indices_and_ragged_subtrees ... ok
+test palw_legacy_held_da_v2::tests::the_descent_reaches_the_first_divergent_leaf_and_the_view_opens_every_earlier_leaf ... ok
+test palw_legacy_held_da_v2::tests::the_fence_is_dormant_everywhere_hashed_when_set_and_refused_when_armed ... ok
+test palw_legacy_held_da_v2::tests::the_tags_domains_and_messages_are_the_allocated_ones ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 3617 filtered out; finished in 1.60s
+
+
+FILTER palw_lifecycle_objects_v2::tests::a2u
+
+running 16 tests
+test palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words ... ok
+test palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared ... ok
+test palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes ... ok
+test palw_lifecycle_objects_v2::tests::a2u::canonical_fp_evidence_keeps_the_old_opaque_carrier_isolation_rule ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... [a2u] rows awaiting their lane's merge:
+  CoinbaseTrailer { magic: [80, 88, 65, 50] } → palw_exec_payload_v2 (X8R anchor trailer)
+  Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read))
+  Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended))
+  FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" } → palw_task_heads_v1 (HFX task heads)
+  HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" } → palw_fork_choice_commitment_v1 (L2FC)
+  StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" } → palw_bond_budget_v1 (BUDGET (ADR-0176))
+  StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" } → palw_model_bond_allocation_v1 (BUDGET (ADR-0177))
+  StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" } → palw_reporter_share_v2 (INTF (ADR-0032 amendment))
+ok
+test palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation ... ok
+test palw_lifecycle_objects_v2::tests::a2u::native_fp_metadata_equivalence_requires_the_exact_skipped_field ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 3612 filtered out; finished in 0.42s
+
+
+FILTER every_v22_delta_entry_round_trips_applies_and_reverts
+
+running 1 test
+test palw_state_v2::tests::rcore_v22_skeleton::every_v22_delta_entry_round_trips_applies_and_reverts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3627 filtered out; finished in 0.00s
+
+
+FILTER the_version_22_state_root_golden_vectors
+
+running 1 test
+test palw_state_v2::tests::the_version_22_state_root_golden_vectors ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3627 filtered out; finished in 0.00s
+
+
+FILTER the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool
+
+running 1 test
+test palw_state_v2::tests::held_forfeits_v1::the_held_forfeits_block_and_tail_come_after_r_core_plus_and_the_activation_pool ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3627 filtered out; finished in 0.00s
+
+
+FILTER the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused
+
+running 1 test
+test palw_state_v2::tests::held_forfeits_v1::the_held_forfeit_entry_applies_reverts_and_the_placeholders_are_refused ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3627 filtered out; finished in 0.00s
+
+
+FILTER palw_heartbeat_carriers_v1::tests
+
+running 6 tests
+test palw_heartbeat_carriers_v1::tests::da_and_reporter_objects_ride_and_licences_do_not ... ok
+test palw_heartbeat_carriers_v1::tests::only_what_the_extractor_yields_is_a_carrier ... ok
+test palw_heartbeat_carriers_v1::tests::the_filed_convictions_are_carriers_and_the_unfileable_kinds_are_not ... ok
+test palw_heartbeat_carriers_v1::tests::the_held_dissections_opening_and_step6s_conviction_ride ... ok
+test palw_heartbeat_carriers_v1::tests::the_lane_key_names_what_the_fold_takes_once_per_block ... ok
+test palw_heartbeat_carriers_v1::tests::the_relay_examines_a_bounded_head_of_a_beat ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 3622 filtered out; finished in 0.00s
+

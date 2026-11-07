@@ -1,0 +1,324 @@
+{
+  "archive": "misakas-pre (1).zip",
+  "archive_sha256": "0c356b39f40d57d8c4d4d69321f38d38b766865024255f38897bfe8206c3b8b0",
+  "sections": [
+    {
+      "id": "D01",
+      "title": "RFC18の目標・siblingの要件・認証待ち時の進行",
+      "excerpts": [
+        {
+          "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+          "first_line": 29,
+          "last_line": 41
+        },
+        {
+          "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+          "first_line": 98,
+          "last_line": 127
+        },
+        {
+          "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+          "first_line": 191,
+          "last_line": 219
+        }
+      ]
+    },
+    {
+      "id": "D02",
+      "title": "複数親・GHOSTDAG・実templateの接続",
+      "excerpts": [
+        {
+          "path": "consensus/src/processes/ghostdag/protocol.rs",
+          "first_line": 244,
+          "last_line": 271
+        },
+        {
+          "path": "consensus/src/processes/ghostdag/protocol.rs",
+          "first_line": 303,
+          "last_line": 387
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/processor.rs",
+          "first_line": 5185,
+          "last_line": 5291
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/processor/template.rs",
+          "first_line": 853,
+          "last_line": 866
+        }
+      ]
+    },
+    {
+      "id": "D03",
+      "title": "全体一名のproposer選出でなく各attemptの閾値判定",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_admission_v2.rs",
+          "first_line": 1152,
+          "last_line": 1173
+        },
+        {
+          "path": "consensus/core/src/palw_work_target_v1.rs",
+          "first_line": 94,
+          "last_line": 125
+        }
+      ]
+    },
+    {
+      "id": "D04",
+      "title": "BLUE/RED merged workの採用とstateへの反映",
+      "excerpts": [
+        {
+          "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+          "first_line": 9860,
+          "last_line": 9914
+        },
+        {
+          "path": "consensus/core/src/palw_state_v2.rs",
+          "first_line": 14795,
+          "last_line": 14935
+        }
+      ]
+    },
+    {
+      "id": "D05",
+      "title": "同一mergeset中のmodel round robinと、その範囲",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_rfc0018_v1.rs",
+          "first_line": 291,
+          "last_line": 345
+        },
+        {
+          "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+          "first_line": 100,
+          "last_line": 117
+        }
+      ]
+    },
+    {
+      "id": "D06",
+      "title": "claimごとのPanel derivation / model-specific readiness",
+      "excerpts": [
+        {
+          "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+          "first_line": 10460,
+          "last_line": 10567
+        }
+      ]
+    },
+    {
+      "id": "D07",
+      "title": "適格REDの報酬は本人へ・escrowの控除",
+      "excerpts": [
+        {
+          "path": "consensus/src/processes/coinbase.rs",
+          "first_line": 196,
+          "last_line": 219
+        },
+        {
+          "path": "consensus/src/processes/coinbase.rs",
+          "first_line": 313,
+          "last_line": 354
+        }
+      ]
+    },
+    {
+      "id": "D08",
+      "title": "Gate Cのglobal poolと複数claim sweep・抽選予算",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_security_certification_v1.rs",
+          "first_line": 373,
+          "last_line": 446
+        },
+        {
+          "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+          "first_line": 411,
+          "last_line": 505
+        }
+      ]
+    },
+    {
+      "id": "D09",
+      "title": "共有safe frontierとoldest unresolvedの影響",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_state_v2.rs",
+          "first_line": 15020,
+          "last_line": 15091
+        }
+      ]
+    },
+    {
+      "id": "D10",
+      "title": "共有capacity / per-DAA escrow budget / bond制約",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_capacity_s567_v1.rs",
+          "first_line": 61,
+          "last_line": 88
+        },
+        {
+          "path": "consensus/core/src/palw_state_v2.rs",
+          "first_line": 21682,
+          "last_line": 21745
+        },
+        {
+          "path": "consensus/core/src/palw_rfc0016_fold_v1.rs",
+          "first_line": 286,
+          "last_line": 335
+        }
+      ]
+    },
+    {
+      "id": "D11",
+      "title": "DAG幅scheduleはstub、既存の2分設定",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_rfc0018_v1.rs",
+          "first_line": 463,
+          "last_line": 538
+        },
+        {
+          "path": "consensus/core/src/config/params.rs",
+          "first_line": 228,
+          "last_line": 260
+        },
+        {
+          "path": "consensus/core/src/config/constants.rs",
+          "first_line": 75,
+          "last_line": 85
+        }
+      ]
+    },
+    {
+      "id": "D12",
+      "title": "genesis固定operatorだけでないpermissionless anchorの接続",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_rfc0018_v1.rs",
+          "first_line": 347,
+          "last_line": 456
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+          "first_line": 7022,
+          "last_line": 7054
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+          "first_line": 7124,
+          "last_line": 7137
+        }
+      ]
+    },
+    {
+      "id": "D13",
+      "title": "認証creditゼロ時のGHOSTDAG比較、旧DNS gate退役",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_fork_choice_rule_e_v1.rs",
+          "first_line": 826,
+          "last_line": 865
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/palw_rule_e.rs",
+          "first_line": 202,
+          "last_line": 230
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/processor/dns.rs",
+          "first_line": 148,
+          "last_line": 164
+        }
+      ]
+    },
+    {
+      "id": "D14",
+      "title": "3モデルsibling試験が実際にassertする範囲",
+      "excerpts": [
+        {
+          "path": "consensus/src/pipeline/virtual_processor/tests/rfc0018_dag_siblings.rs",
+          "first_line": 1,
+          "last_line": 58
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/tests/rfc0018_dag_siblings.rs",
+          "first_line": 92,
+          "last_line": 193
+        },
+        {
+          "path": "consensus/src/pipeline/virtual_processor/tests/rfc0018_dag_siblings.rs",
+          "first_line": 216,
+          "last_line": 303
+        }
+      ]
+    },
+    {
+      "id": "D15",
+      "title": "実プロセスdriverのPanelチェック不足",
+      "excerpts": [
+        {
+          "path": "scripts/drills/rfc0018_dag_drill.py",
+          "first_line": 45,
+          "last_line": 82
+        },
+        {
+          "path": "scripts/drills/rfc0018_dag_drill.py",
+          "first_line": 301,
+          "last_line": 371
+        }
+      ]
+    },
+    {
+      "id": "D16",
+      "title": "同梱の過去検証記録：今回再実行した結果ではない",
+      "excerpts": [
+        {
+          "path": "docs/audit/palw/design-reviews/consolidated-validation-2026-10-15.md",
+          "first_line": 51,
+          "last_line": 68
+        }
+      ]
+    },
+    {
+      "id": "D17",
+      "title": "一Panel serviceのreplay並列性とmain carrier局所制約",
+      "excerpts": [
+        {
+          "path": "kaspad/src/palw_panel.rs",
+          "first_line": 1504,
+          "last_line": 1544
+        },
+        {
+          "path": "kaspad/src/palw_panel.rs",
+          "first_line": 3006,
+          "last_line": 3022
+        },
+        {
+          "path": "kaspad/src/palw_panel.rs",
+          "first_line": 3073,
+          "last_line": 3089
+        }
+      ]
+    },
+    {
+      "id": "D18",
+      "title": "参考：並列とは別のFP receipt / Gate C未完了事項",
+      "excerpts": [
+        {
+          "path": "consensus/core/src/palw_fp_admission_v3.rs",
+          "first_line": 171,
+          "last_line": 198
+        },
+        {
+          "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+          "first_line": 350,
+          "last_line": 360
+        }
+      ]
+    }
+  ]
+}

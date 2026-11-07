@@ -1,0 +1,789 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "longcat-flash",
+ "doc": "LongCat-Flash (LongcatFlashForCausalLM): a logical layer is TWO decoder layers (HF's self_attn.{0,1}, mlps.{0,1}, input_layernorm.{0,1}), each MLA (DeepSeek's, interleaved rope, q low rank) then a dense MLP; the MoE reads the first sub-layer's FFN input (post_attention_layernorm.0) and is added to the SECOND sub-layer's output (FFN_SHORTCUT_MOE_V1). The router is a softmax over n_routed_experts + zero_expert_num outputs, selection by p + e_score_correction_bias, weights the unbiased p times routed_scaling_factor with no renormalisation; ids past the real experts are identity experts (MLP_MOE_ZERO_EXPERT_V1). The two LoRA scales sqrt(hidden/q_lora_rank) on the q projection's output and sqrt(hidden/kv_lora_rank) on the normed latent are folded into q_b_proj and kv_a_layernorm (weights as data: a Scale map). The identity experts' unused gate/up rows are not read. Tensor names carry the logical layer {L/2} and the sub-layer {L%2}.",
+ "extends": [
+  "decoder-core"
+ ],
+ "match": {
+  "architectures": [
+   "LongcatFlashForCausalLM"
+  ],
+  "model_types": [
+   "longcat_flash"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "vocab_size": 131072,
+   "hidden_size": 6144,
+   "intermediate_size": 12288,
+   "ffn_hidden_size": 12288,
+   "expert_ffn_hidden_size": 2048,
+   "num_hidden_layers": 56,
+   "num_layers": 28,
+   "num_attention_heads": 64,
+   "max_position_embeddings": 131072,
+   "rms_norm_eps": 1e-05,
+   "n_routed_experts": 512,
+   "zero_expert_num": 256,
+   "moe_topk": 12,
+   "routed_scaling_factor": 6.0,
+   "kv_lora_rank": 512,
+   "q_lora_rank": 1536,
+   "qk_rope_head_dim": 64,
+   "v_head_dim": 128,
+   "qk_nope_head_dim": 128,
+   "qk_head_dim": 192,
+   "router_bias": false
+  },
+  "inert": [
+   "head_dim",
+   "ep_size",
+   "pretraining_tp",
+   "attention_dropout"
+  ]
+ },
+ "vars": [
+  {
+   "name": "dims_ok",
+   "value": {
+    "$bad": [
+     {
+      "$gt": [
+       {
+        "$var": "heads"
+       },
+       0
+      ]
+     },
+     "num_attention_heads must be positive"
+    ]
+   }
+  },
+  {
+   "name": "kv_eq",
+   "value": {
+    "$let": [
+     "kvc",
+     {
+      "$cfg?": "num_key_value_heads"
+     },
+     {
+      "$check": [
+       {
+        "$or": [
+         {
+          "$eq": [
+           {
+            "$var": "kvc"
+           },
+           null
+          ]
+         },
+         {
+          "$eq": [
+           {
+            "$var": "kvc"
+           },
+           {
+            "$var": "heads"
+           }
+          ]
+         }
+        ]
+       },
+       "num_key_value_heads differs from num_attention_heads (the eager attention repeats the expanded K/V by heads / num_key_value_heads)"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "logical",
+   "value": {
+    "$cfg": "num_layers"
+   }
+  },
+  {
+   "name": "layers_ok",
+   "value": {
+    "$bad": [
+     {
+      "$eq": [
+       {
+        "$var": "n"
+       },
+       {
+        "$mul": [
+         2,
+         {
+          "$var": "logical"
+         }
+        ]
+       }
+      ]
+     },
+     "LongCat-Flash runs two sub-layers per logical layer: num_hidden_layers must be 2 * num_layers"
+    ]
+   }
+  },
+  {
+   "name": "inter",
+   "value": {
+    "$cfg": "ffn_hidden_size"
+   }
+  },
+  {
+   "name": "moe_inter",
+   "value": {
+    "$cfg": "expert_ffn_hidden_size"
+   }
+  },
+  {
+   "name": "e",
+   "value": {
+    "$cfg": "n_routed_experts"
+   }
+  },
+  {
+   "name": "z",
+   "value": {
+    "$cfgn": [
+     "zero_expert_num",
+     0
+    ]
+   }
+  },
+  {
+   "name": "k",
+   "value": {
+    "$cfg": "moe_topk"
+   }
+  },
+  {
+   "name": "topk_ok",
+   "value": {
+    "$bad": [
+     {
+      "$and": [
+       {
+        "$gt": [
+         {
+          "$var": "k"
+         },
+         0
+        ]
+       },
+       {
+        "$le": [
+         {
+          "$var": "k"
+         },
+         {
+          "$add": [
+           {
+            "$var": "e"
+           },
+           {
+            "$var": "z"
+           }
+          ]
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "$cat": [
+       "top-k ",
+       {
+        "$var": "k"
+       },
+       " of ",
+       {
+        "$add": [
+         {
+          "$var": "e"
+         },
+         {
+          "$var": "z"
+         }
+        ]
+       },
+       " router outputs"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "rsf",
+   "value": {
+    "$cfg": "routed_scaling_factor"
+   }
+  },
+  {
+   "name": "router_bias",
+   "value": {
+    "$cfg": "router_bias"
+   }
+  },
+  {
+   "name": "kv_lora",
+   "value": {
+    "$cfg": "kv_lora_rank"
+   }
+  },
+  {
+   "name": "q_lora",
+   "value": {
+    "$cfg": "q_lora_rank"
+   }
+  },
+  {
+   "name": "rope_d",
+   "value": {
+    "$cfg": "qk_rope_head_dim"
+   }
+  },
+  {
+   "name": "v_d",
+   "value": {
+    "$cfg": "v_head_dim"
+   }
+  },
+  {
+   "name": "nope_d",
+   "value": {
+    "$cfg": "qk_nope_head_dim"
+   }
+  },
+  {
+   "name": "mbias",
+   "value": {
+    "$let": [
+     "_",
+     {
+      "$forbid": [
+       "mlp_bias",
+       "LongCat-Flash MLPs have no biases"
+      ]
+     },
+     false
+    ]
+   }
+  },
+  {
+   "name": "qk_d",
+   "value": {
+    "$add": [
+     {
+      "$var": "nope_d"
+     },
+     {
+      "$var": "rope_d"
+     }
+    ]
+   }
+  },
+  {
+   "name": "qk_ok",
+   "value": {
+    "$require_eq": [
+     "qk_head_dim",
+     {
+      "$var": "qk_d"
+     },
+     "qk_head_dim is nope + rope"
+    ]
+   }
+  },
+  {
+   "name": "ignored_prefixes",
+   "value": {
+    "$map": [
+     {
+      "$range": {
+       "$mul": [
+        {
+         "$var": "logical"
+        },
+        {
+         "$var": "z"
+        }
+       ]
+      }
+     },
+     "j",
+     {
+      "$cat": [
+       {
+        "$var": "p"
+       },
+       "layers.",
+       {
+        "$idiv": [
+         {
+          "$var": "j"
+         },
+         {
+          "$var": "z"
+         }
+        ]
+       },
+       ".mlp.experts.",
+       {
+        "$add": [
+         {
+          "$var": "e"
+         },
+         {
+          "$mod": [
+           {
+            "$var": "j"
+           },
+           {
+            "$var": "z"
+           }
+          ]
+         }
+        ]
+       },
+       "."
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "rc",
+   "value": {
+    "$rope_config": {
+     "theta": 10000.0
+    }
+   }
+  },
+  {
+   "name": "rc_type",
+   "value": {
+    "$get": [
+     {
+      "$var": "rc"
+     },
+     "rope_type"
+    ]
+   }
+  },
+  {
+   "name": "rc_params",
+   "value": {
+    "$get": [
+     {
+      "$var": "rc"
+     },
+     "params"
+    ]
+   }
+  },
+  {
+   "name": "mad",
+   "value": {
+    "$get": [
+     {
+      "$var": "rc_params"
+     },
+     "mscale_all_dim",
+     null
+    ]
+   }
+  },
+  {
+   "name": "mad_on",
+   "value": {
+    "$and": [
+     {
+      "$ne": [
+       {
+        "$var": "rc_type"
+       },
+       "default"
+      ]
+     },
+     {
+      "$is_num": {
+       "$var": "mad"
+      }
+     },
+     {
+      "$ne": [
+       {
+        "$var": "mad"
+       },
+       0
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "rf_raw",
+   "value": {
+    "$get": [
+     {
+      "$var": "rc_params"
+     },
+     "factor",
+     null
+    ]
+   }
+  },
+  {
+   "name": "rf",
+   "value": {
+    "$if": [
+     {
+      "$is_num": {
+       "$var": "rf_raw"
+      }
+     },
+     {
+      "$var": "rf_raw"
+     },
+     1.0
+    ]
+   }
+  },
+  {
+   "name": "ms",
+   "lazy": true,
+   "value": {
+    "$if": [
+     {
+      "$le": [
+       {
+        "$var": "rf"
+       },
+       1.0
+      ]
+     },
+     1.0,
+     {
+      "$add": [
+       {
+        "$mul": [
+         {
+          "$mul": [
+           0.1,
+           {
+            "$var": "mad"
+           }
+          ]
+         },
+         {
+          "$ln": {
+           "$var": "rf"
+          }
+         }
+        ]
+       },
+       1.0
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "scale0",
+   "value": {
+    "$div": [
+     1.0,
+     {
+      "$sqrt": {
+       "$var": "qk_d"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "scale",
+   "value": {
+    "$if": [
+     {
+      "$var": "mad_on"
+     },
+     {
+      "$mul": [
+       {
+        "$var": "scale0"
+       },
+       {
+        "$mul": [
+         {
+          "$var": "ms"
+         },
+         {
+          "$var": "ms"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "$var": "scale0"
+     }
+    ]
+   }
+  },
+  {
+   "name": "rope",
+   "value": {
+    "$rope": {
+     "dim": {
+      "$var": "rope_d"
+     },
+     "style": "Interleaved",
+     "theta": 10000.0,
+     "max_pos": {
+      "$var": "max_pos"
+     },
+     "offset": {
+      "$var": "nope_d"
+     }
+    }
+   }
+  },
+  {
+   "name": "mla",
+   "value": {
+    "heads": {
+     "$var": "heads"
+    },
+    "q_lora_rank": {
+     "$var": "q_lora"
+    },
+    "kv_lora_rank": {
+     "$var": "kv_lora"
+    },
+    "qk_nope_head_dim": {
+     "$var": "nope_d"
+    },
+    "qk_rope_head_dim": {
+     "$var": "rope_d"
+    },
+    "v_head_dim": {
+     "$var": "v_d"
+    },
+    "q_a_norm": {
+     "$var": "norm"
+    },
+    "kv_a_norm": {
+     "$var": "norm"
+    },
+    "a_bias": {
+     "$var": "abias"
+    },
+    "rope": {
+     "$var": "rope"
+    },
+    "scale": {
+     "$var": "scale"
+    }
+   }
+  },
+  {
+   "name": "l_mixer",
+   "value": {
+    "Mla": {
+     "$var": "mla"
+    }
+   },
+   "layer": true
+  },
+  {
+   "name": "router",
+   "value": {
+    "scoring": "Softmax",
+    "linear_bias": {
+     "$var": "router_bias"
+    },
+    "selection_bias": true,
+    "groups": null,
+    "normalize": false,
+    "norm_eps": 0.0,
+    "scale": {
+     "$var": "rsf"
+    },
+    "jitter_eps": 0.0,
+    "per_expert_scale": false
+   }
+  },
+  {
+   "name": "moe",
+   "value": {
+    "experts": {
+     "$var": "e"
+    },
+    "top_k": {
+     "$var": "k"
+    },
+    "intermediate": {
+     "$var": "moe_inter"
+    },
+    "act": {
+     "$var": "act"
+    },
+    "router": {
+     "$var": "router"
+    },
+    "shared": null,
+    "zero_experts": {
+     "$var": "z"
+    }
+   }
+  },
+  {
+   "name": "l_ffn",
+   "layer": true,
+   "value": {
+    "MlpShortcut": {
+     "mlp": {
+      "intermediate": {
+       "$var": "inter"
+      },
+      "act": {
+       "$var": "act"
+      },
+      "gated": true,
+      "up_bias": {
+       "$var": "mbias"
+      },
+      "down_bias": {
+       "$var": "mbias"
+      }
+     },
+     "side": {
+      "$if": [
+       {
+        "$eq": [
+         {
+          "$mod": [
+           {
+            "$var": "i"
+           },
+           2
+          ]
+         },
+         0
+        ]
+       },
+       {
+        "Produce": {
+         "$var": "moe"
+        }
+       },
+       "Consume"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "names",
+   "value": {
+    "$merge": [
+     {
+      "$var": "names_base"
+     },
+     {
+      "norm.mix": "{p}layers.{L/2}.input_layernorm.{L%2}",
+      "norm.ffn": "{p}layers.{L/2}.post_attention_layernorm.{L%2}",
+      "mla.q_a": "{p}layers.{L/2}.self_attn.{L%2}.q_a_proj",
+      "mla.q_a_norm": "{p}layers.{L/2}.self_attn.{L%2}.q_a_layernorm",
+      "mla.q_b": "{p}layers.{L/2}.self_attn.{L%2}.q_b_proj",
+      "mla.kv_a": "{p}layers.{L/2}.self_attn.{L%2}.kv_a_proj_with_mqa",
+      "mla.kv_a_norm": "{p}layers.{L/2}.self_attn.{L%2}.kv_a_layernorm",
+      "mla.kv_b": "{p}layers.{L/2}.self_attn.{L%2}.kv_b_proj",
+      "mla.o": "{p}layers.{L/2}.self_attn.{L%2}.o_proj",
+      "mlp.gate": "{p}layers.{L/2}.mlps.{L%2}.gate_proj",
+      "mlp.up": "{p}layers.{L/2}.mlps.{L%2}.up_proj",
+      "mlp.down": "{p}layers.{L/2}.mlps.{L%2}.down_proj",
+      "moe.router": "{p}layers.{L/2}.mlp.router.classifier",
+      "moe.sel_bias": "{p}layers.{L/2}.mlp.router.e_score_correction_bias",
+      "moe.gate": "{p}layers.{L/2}.mlp.experts.{E}.gate_proj",
+      "moe.up": "{p}layers.{L/2}.mlp.experts.{E}.up_proj",
+      "moe.down": "{p}layers.{L/2}.mlp.experts.{E}.down_proj"
+     }
+    ]
+   }
+  },
+  {
+   "name": "cq",
+   "value": {
+    "$sqrt": {
+     "$div": [
+      {
+       "$var": "hidden"
+      },
+      {
+       "$var": "q_lora"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "ckv",
+   "value": {
+    "$sqrt": {
+     "$div": [
+      {
+       "$var": "hidden"
+      },
+      {
+       "$var": "kv_lora"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "families",
+   "value": [
+    "C3",
+    "C8"
+   ]
+  },
+  {
+   "name": "model_type",
+   "value": "longcat_flash"
+  }
+ ],
+ "spec": {
+  "hf": {
+   "weights": {
+    "mla.q_b.w": [
+     "{p}layers.{L/2}.self_attn.{L%2}.q_b_proj.weight",
+     {
+      "map": {
+       "scale": {
+        "$var": "cq"
+       }
+      }
+     }
+    ],
+    "mla.kv_a_norm.gain": [
+     "{p}layers.{L/2}.self_attn.{L%2}.kv_a_layernorm.weight",
+     {
+      "map": {
+       "scale": {
+        "$var": "ckv"
+       }
+      }
+     }
+    ]
+   }
+  }
+ }
+}

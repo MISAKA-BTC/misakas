@@ -1,0 +1,59 @@
+{
+  "sources": {
+    "palw_attempt_rules_v1": {
+      "path": "/tmp/g14-source-stream-attempt-fixture.rs",
+      "sha256": "6538786350fb8dc98855cc02649cb4974a9de905aa64f9752fcd82e3fad91556"
+    },
+    "palw_rendering_stream_v1": {
+      "path": "/tmp/g14-source-stream-rendering-production.rs",
+      "sha256": "78a30846d9a8b2fac484796055bf3b0141a0aaf14313ae6352eb0a13d8fd8e89"
+    },
+    "palw_prefix_state_court_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_state_court_v1.rs",
+      "sha256": "d4ce89aa32186c8e2fda77d3be76fd2752294b4b58c09a3165a71d671a916ec6"
+    },
+    "palw_prefix_source_stream_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_source_stream_v1.rs",
+      "sha256": "01b1e900ab6d4ca57a26003500c0c95421d9f82818f6670c6ec90276d5e4d488"
+    },
+    "palw_prefix_gdn_replay_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_gdn_replay_v1.rs",
+      "sha256": "dac9a20dd85daf115b6794e8b4ea84540f1d5793a46a2d2d5d37828e85f3bcf7"
+    },
+    "palw_prefix_resources_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_resources_v1.rs",
+      "sha256": "c566cc3061f6ba184d9e59ae6b40c99aa84101b8783d82cc75779b5e356ec467"
+    }
+  },
+  "command": [
+    "rustc",
+    "--test",
+    "--edition=2024",
+    "-C",
+    "opt-level=1",
+    "-C",
+    "debuginfo=0",
+    "/tmp/g14-prefix-resource-harness.rs",
+    "-L",
+    "dependency=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps",
+    "-o",
+    "/tmp/g14-prefix-resource-harness",
+    "--extern",
+    "kaspa_consensus_core=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libkaspa_consensus_core-f5cc033a7eb58bbd.rlib",
+    "--extern",
+    "borsh=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libborsh-7cfec46d29ea91a2.rlib",
+    "--extern",
+    "blake2b_simd=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libblake2b_simd-4b3164d19dbd178a.rlib"
+  ],
+  "dependency_sha256": {
+    "kaspa_consensus_core": "7cbcd97535d98fe0e1913f9f9f827b231a887c82e410a00a1cdd3e3f445e6335",
+    "borsh": "0f2c78f5da046a09f7fd657367abca6a6d764daee5f89fb1a8ce8c9b731e539e",
+    "blake2b_simd": "c03a4d0c82641e9ec3a8ab299128aa3470ed7a9dc85577eb1d1804cd624e5468"
+  },
+  "compile_status": 0,
+  "binary_sha256": "e01ec48368b3e97ea7741c66e564539b2483789afa33197090d63b6cd3b871a2",
+  "run_status": 0,
+  "run_stdout": "\nrunning 6 tests\ntest palw_prefix_resources_v1::tests::canonical_hybrid_quotes_only_required_public_sources_and_selects_efficient_whole_head ... ok\ntest palw_prefix_source_stream_v1::tests::slice_is_usable_only_after_whole_original_leaf_eof_and_survives_restart ... ok\ntest palw_prefix_resources_v1::tests::authenticated_i8_geometry_prices_every_old_i32_leaf_and_refuses_price_overflow ... ok\ntest palw_prefix_resources_v1::tests::hydrated_profile_quote_charges_original_bytes_on_every_move_and_refuses_understatement ... ok\ntest palw_prefix_gdn_replay_v1::tests::authenticated_slice_uses_only_exact_claim_tiles_and_refuses_reordered_or_forged_rows ... ok\ntest palw_prefix_state_court_v1::tests::every_committed_prefix_byte_is_required_in_both_receipt_contexts ... ok\n\ntest result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\n",
+  "run_stderr": "",
+  "source_commit": "95428bf46"
+}

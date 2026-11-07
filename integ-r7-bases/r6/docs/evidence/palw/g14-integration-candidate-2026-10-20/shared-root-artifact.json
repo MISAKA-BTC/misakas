@@ -1,0 +1,94 @@
+{
+  "parent": "f1bfc41ba8e21d989a461e03852609d45660b737",
+  "selected_unique_passes": 92,
+  "selection": {
+    "native-suite": 41,
+    "shared-suite": 9,
+    "source-suite": 6,
+    "regressions": 36
+  },
+  "commands": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "shared-root-first-check.log",
+      "exit": 101,
+      "executed_tests": 0,
+      "reason": "misspelled existing MerkleV1 enum variant"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspa-consensus-core --lib --tests",
+      "log": "shared-root-final-check.log",
+      "exit": 0,
+      "executed_tests": 0,
+      "scope": "before notice predicate addition; final predicate is compiled/executed in subsequent release runs"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib shared_history_root_binds_public_original_policy_and_literal_producer_signature",
+      "log": "shared-root-native-first.log",
+      "exit": 101,
+      "failed": 1,
+      "passed": 0,
+      "reason": "fixture carried program; native registered-program-only rule refused it"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib shared_history_root_binds_public_original_policy_and_literal_producer_signature",
+      "log": "shared-root-native-final.log",
+      "exit": 0,
+      "passed": 1,
+      "overlap": "included in native-suite41"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh python3 (sequential binary selections; full argv in shared-root-unit-commands.json)",
+      "log": "shared-root-unit-commands.json",
+      "exit": 0
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_court_service_state_v2 --test palw_court_policy_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move",
+      "log": "shared-root-regressions.log",
+      "exit": 0,
+      "passed": 36
+    },
+    {
+      "command": "python3 docs/maintenance/generate_indexes.py",
+      "log": "shared-root-indexes.log",
+      "exit": 0
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "shared-root-docs-first.log",
+      "exit": 1
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "log": "shared-root-docs-final.log",
+      "exit": 1,
+      "scope": "after README/ADR/RFC changes; same5 imported missing references and43 baseline-known; no new authored missing links or baseline update"
+    }
+  ],
+  "authority": "ADR0194 private integration and ADR0198 A inclusive endpoint detailed-spec/private implementation only",
+  "sha256": {
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-docs-first.log": "66fcd5d2df1bce287c08b829cf1162ec608f5ab5b1be25ecc7a0bafd3ae03f12",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-final-check.log": "d541314fbca0f82ab5d2e2129dabb1bae7f406a61e6ec623c89b6b5368208ce5",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-first-check.log": "4f3615f1727779035379c1986d8107828d96cac4253d0af1a124a1c899686bf7",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-first-native-source.patch": "b87af1d11dfcb5cb33e97ca2bedd3627f38285ed85d473296691ce258c966b9f",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-first-source.patch": "7a8b4c4476ac2cc638dde5c86c6c07197284a5ec480b0a4edc78bd01a1d2de80",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-indexes.log": "cc04f8b4ff6252d2f53be319f64091c5a22052e66f60f7c7536a40ea66157bcb",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-native-final.log": "a95a02ce5e60458f811ca0142ca58f6bb46ba6bfe9034fe984c1e6f65c2264c8",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-native-first.log": "badac6349a70a532e5a99b1e4e850797e703c7352f538f823c6a99f4d22f22eb",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-native-suite.log": "84f7b0b2086be497ff81a0ec3f1e95257cf5fdbaff65c3a6699bb1a5ee8ae5a1",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-regressions.log": "57d50b13e80a56a9b50b0e183ffa59e373be03642e343c7313d532a564ee2074",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-runtime.patch": "d65c3078f032b44a9832c9dbb567679ea8679c2076ba2a9b1da37ba1df02140c",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-shared-suite.log": "3a69f6cc549b9f0c24bd803396c04d59dc510808b23217ef27da05387be461e5",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-source-audit.json": "d773d3fcb079463e0a084e37fe076010a7204e76478be6f62948e0bb635b251d",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-source-suite.log": "6864d5843edf6724933d00e61481113ba8c486936878709003278354d7e1b8cf",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-unit-commands.json": "c655356d8b598dda7a0f268d178b3fbd6577626b91edde693bdacf5cadecec80",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/shared-root-docs-final.log": "ab07973219ef8bd26ab6ceb7ca1a32cb3d6dbd1867a2b44f189d61e7986db053"
+  },
+  "test_binary_sha256": "c1a6f8496bd9a8f0a6dc2834e9b70150a5de24a0198a1a7b733464309ca79582",
+  "limits": [
+    "Existing original registration/pledge signature/payment and synthetic unit-cost service book remain verified-half fixtures. New shared root controls use actual ML-DSA signatures.",
+    "No public wire decoder/dispatcher, canonical rooted root uniqueness, numerical round shared signatures, complete all-branch funded admission, notice coordinator, processing opportunity/default right, T05 or full T01-T15 acceptance.",
+    "Native rules/params and work budget must come from actual caller; policy digest excludes accepting point and does not adopt an original-versus-current financial policy.",
+    "Source/root clone/hash/signature/CPU/IO/retention costs are uncalibrated. No real-model door/capacity claim. No pre integration/push/arming/deployment."
+  ]
+}

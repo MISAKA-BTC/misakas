@@ -1,0 +1,255 @@
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/backend.rs:323:13
+    |
+323 |         let ctx_hash = job.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/backend.rs:1256:9
+     |
+1256 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2008:9
+     |
+2008 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2186:9
+     |
+2186 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2425:13
+     |
+2425 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2456:9
+     |
+2456 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2905:13
+     |
+2905 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3107:9
+     |
+3107 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3282:9
+     |
+3282 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3558:9
+     |
+3558 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4310:9
+     |
+4310 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4353:9
+     |
+4353 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4473:17
+     |
+4473 |             let ctx_hash = binding.job_context.context_hash();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4561:9
+     |
+4561 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4640:9
+     |
+4640 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:199:13
+    |
+199 |         let ctx_hash = ctx.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:437:9
+    |
+437 |     let ctx_hash = ctx.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/legs.rs:2056:9
+     |
+2056 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1043:9
+     |
+1043 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1351:9
+     |
+1351 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1734:9
+     |
+1734 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2078:14
+     |
+2078 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2215:14
+     |
+2215 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4336:13
+     |
+4336 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4386:9
+     |
+4386 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2885:13
+     |
+2885 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2935:9
+     |
+2935 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/segment_opening.rs:618:9
+    |
+618 |     let ctx_hash = job.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-base0` (lib) generated 28 warnings (run `cargo fix --lib -p misaka-palw-base0` to apply 28 suggestions)
+warning: value assigned to `out_node` is never read
+   --> misaka-palw-tir-lower/src/lower/cross.rs:194:24
+    |
+194 |     let mut out_node = None;
+    |                        ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-lower` (lib) generated 1 warning
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-sdk)
+warning: unused doc comment
+   --> misaka-palw-sdk/src/tir_layout.rs:147:1
+    |
+147 | / /// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+148 | | /// has dropped any whose close is estimated past the carriage); for each, the history tile from
+149 | | /// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+150 | | /// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+...   |
+153 | | /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+154 | | /// the one an operator acts on.
+    | |_-------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `routed_ok` is assigned to, but never used
+   --> misaka-palw-sdk/src/preflight/model.rs:284:9
+    |
+284 |     let mut routed_ok = false;
+    |         ^^^^^^^^^^^^^
+    |
+    = note: consider using `_routed_ok` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:345:13
+    |
+345 |             routed_ok = false;
+    |             ^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:293:13
+    |
+293 |             routed_ok = true;
+    |             ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `misaka-palw-sdk` (lib test) generated 4 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.53s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_sdk-97b005f9c2bf94c0)
+
+running 3 tests
+test kernel_params::tests::encoder_job_inputs_are_excluded_only_by_the_explicit_encoder_descriptor ... ok
+test kernel_params::tests::all_preparation_limits_and_wrong_kernel_are_checked_before_any_payload_is_read ... ok
+test kernel_params::tests::independent_range_source_produces_all_layer_bound_roots_and_refuses_missing_or_changed_weights ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 123 filtered out; finished in 0.10s

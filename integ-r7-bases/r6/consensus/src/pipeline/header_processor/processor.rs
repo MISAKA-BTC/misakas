@@ -1,0 +1,681 @@
+use crate::{
+    consensus::{
+        services::{
+            ConsensusServices, DbBlockDepthManager, DbDagTraversalManager, DbGhostdagManager, DbParentsManager, DbPruningPointManager,
+            DbWindowManager,
+        },
+        storage::ConsensusStorage,
+    },
+    errors::{BlockProcessResult, RuleError},
+    model::{
+        services::reachability::MTReachabilityService,
+        stores::{
+            DB,
+            block_window_cache::{BlockWindowCacheStore, BlockWindowCacheWriter, BlockWindowHeap},
+            daa::DbDaaStore,
+            depth::DbDepthStore,
+            ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
+            headers::DbHeadersStore,
+            headers_selected_tip::{DbHeadersSelectedTipStore, HeadersSelectedTipStoreReader},
+            pruning::{DbPruningStore, PruningStoreReader},
+            reachability::{DbReachabilityStore, StagingReachabilityStore},
+            relations::{DbRelationsStore, RelationsStoreReader},
+            statuses::{DbStatusesStore, StatusesStore, StatusesStoreBatchExtensions, StatusesStoreReader},
+        },
+    },
+    params::Params,
+    pipeline::deps_manager::{BlockProcessingMessage, BlockTask, BlockTaskDependencyManager, TaskId},
+    processes::{ghostdag::ordering::SortableBlock, reachability::inquirer as reachability, relations::RelationsStoreExtensions},
+};
+use crossbeam_channel::{Receiver, Sender};
+use itertools::Itertools;
+use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::{
+    BlockHashSet, BlockLevel,
+    blockhash::{BlockHashes, ORIGIN},
+    blockstatus::BlockStatus::{self, StatusHeaderOnly, StatusInvalid},
+    config::genesis::GenesisBlock,
+    header::Header,
+};
+use kaspa_consensusmanager::SessionLock;
+use kaspa_database::prelude::{StoreResultExt, StoreResultUnitExt};
+use kaspa_utils::vec::VecExtensions;
+use parking_lot::RwLock;
+use rayon::ThreadPool;
+use rocksdb::WriteBatch;
+use std::sync::{Arc, atomic::Ordering};
+
+use super::super::ProcessingCounters;
+
+pub struct HeaderProcessingContext {
+    pub hash: BlockHash,
+    pub header: Arc<Header>,
+    pub pruning_point: BlockHash,
+    pub block_level: BlockLevel,
+    pub known_direct_parents: BlockHashes,
+
+    // Staging data
+    pub ghostdag_data: Option<Arc<GhostdagData>>,
+    pub block_window_for_difficulty: Option<Arc<BlockWindowHeap>>,
+    pub block_window_for_past_median_time: Option<Arc<BlockWindowHeap>>,
+    pub mergeset_non_daa: Option<BlockHashSet>,
+    pub merge_depth_root: Option<BlockHash>,
+    pub finality_point: Option<BlockHash>,
+}
+
+impl HeaderProcessingContext {
+    pub fn new(
+        hash: BlockHash,
+        header: Arc<Header>,
+        block_level: BlockLevel,
+        pruning_point: BlockHash,
+        known_direct_parents: BlockHashes,
+    ) -> Self {
+        Self {
+            hash,
+            header,
+            block_level,
+            pruning_point,
+            known_direct_parents,
+            ghostdag_data: None,
+            block_window_for_difficulty: None,
+            mergeset_non_daa: None,
+            block_window_for_past_median_time: None,
+            merge_depth_root: None,
+            finality_point: None,
+        }
+    }
+
+    /// Returns the primary (level 0) GHOSTDAG data of this header.
+    /// NOTE: expected to be called only after GHOSTDAG computation was pushed into the context
+    pub fn ghostdag_data(&self) -> &Arc<GhostdagData> {
+        self.ghostdag_data.as_ref().unwrap()
+    }
+}
+
+pub struct HeaderProcessor {
+    /// Instance-local test wall clock; absent from production builds.
+    #[cfg(test)]
+    pub(crate) validation_clock: std::sync::atomic::AtomicU64,
+    // Channels
+    receiver: Receiver<BlockProcessingMessage>,
+    body_sender: Sender<BlockProcessingMessage>,
+
+    // Thread pool
+    pub(super) thread_pool: Arc<ThreadPool>,
+
+    // Config
+    pub(super) genesis: GenesisBlock,
+    pub(super) timestamp_deviation_tolerance: u64,
+    pub(super) max_block_parents: kaspa_consensus_core::config::params::ForkedParam<u16>,
+    pub(super) mergeset_size_limit: kaspa_consensus_core::config::params::ForkedParam<u64>,
+    pub(super) skip_proof_of_work: bool,
+    pub(super) max_block_level: BlockLevel,
+    /// PR-8.6: per-network domain-separation tag (`NetworkId::to_string`
+    /// bytes) fed to the kaspa-pq Layer 0 PoW finalizer (ADR-0007 §4.2)
+    /// during header PoW validation.
+    pub(super) network_id: Vec<u8>,
+    /// kaspa-pq Phase 3 PoW (ADR-0007): BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`) activation. Drives the
+    /// per-header `pow_algo_id` rule (see `check_pow_algo_id`).
+    pub(super) pow_blake2b_sha3_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// MISAKA Phase 4 PoW: PALW deterministic-LLM (`algo_id = 4`) activation. Supersedes the
+    /// BLAKE2b-SHA3 rule where active; drives the same per-header `pow_algo_id` check.
+    pub(super) pow_palw_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// ADR-0042 Decision 1 (PR-08 seam): the algo id a `ConsensusV2` network demands, `None`
+    /// otherwise (every network today). See the virtual processor's field of the same name.
+    pub(super) palw_required_algo_id: Option<u8>,
+    /// **What this network ACCEPTS, which is not the same as what it demands.** A V2 bundle
+    /// admits two lanes — the committed attempt and the free-prompt receipt spend — and the id
+    /// above names only the first. Held whole so the gate asks the bundle rather than a
+    /// pre-computed half of its answer.
+    pub(super) palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
+    /// ADR-0038 Decision A: the network's commitment fence, `None` on every shipped preset.
+    pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
+    /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
+    pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0138: `Params::palw_anchor_clock`. The heartbeat's slot rule reads it, because past the
+    /// fence the interval follows whether the parent advances the DAA rather than whether it is
+    /// bonded (`heartbeat_interval_ms_v2`).
+    pub(super) palw_anchor_clock: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0142: past this fence the heartbeat's slot rule retires and the clock cursor governs.
+    pub(super) palw_clock_cursor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-24 heartbeat audit's H3: past this fence a heartbeat chain over the flat width
+    /// bound must be paced by its own timestamps (`heartbeat_chain_capacity_v1`). The per-header
+    /// stamp rules read the same fence through `DaaWindow::clock`.
+    pub(super) palw_clock_floor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-25 mainnet-values review's HIGH (`Params::palw_clock_lead_cap`): past this fence
+    /// a header that moves the heartbeat clock is refused while stamped more than 132 s past this
+    /// node's clock — a local-clock rule, in `pre_pow_validation`, whose errors are never cached.
+    pub(super) palw_clock_lead_cap: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0083 Decision 1's fence, the third argument of `palw_lane_advances_daa_v1`.
+    pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
+    /// ADR-0125: the execution lane, mode folded in (`Params::palw_execution_lane_fence`) — its
+    /// activation admits round blocks; its shape bounds every mergeset that holds them.
+    pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
+    /// **RFC-0008 v2**: the unified EXEC payload's fence (`Params::palw_exec_payload_v2_fence`). Past it an algo-10 header carries a
+    /// `PXE2` envelope and no other, and a block that is not a lane block names no lane block as a parent. `None` on every shipped
+    /// preset.
+    pub(super) palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// RFC-0008 `palw_monetary_material_v1`: where the owned PAV3 attempt carriage is a lane form (second lock beside the shape gate).
+    pub(super) palw_native_material_v3: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset,
+    /// which resolves to `PalwAttemptLaneV1::Unfenced` and leaves this gate exactly as it was.
+    pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0132 S: the single lottery (`Params::palw_single_lottery`) — past it an attempt header's
+    /// digest is not compared to `bits` and derives no block level.
+    pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0072 Decision 8 at the header stage** (mainnet audit, 2026-09-06 — C-1): the fence and
+    /// the state params it needs, resolved TOGETHER at construction so neither can be present
+    /// without the other, and so the header path holds one value rather than re-deriving it per
+    /// header. `None` on every shipped preset and on every network that is not `ConsensusV2`, which
+    /// leaves `check_palw_carriage_stateless` byte-identical to what it was.
+    pub(super) palw_attempt_header_pins:
+        Option<(kaspa_consensus_core::config::params::ForkActivation, kaspa_consensus_core::palw_state_v2::PalwStateParamsV2)>,
+    /// **RFC-0009: `Params::palw_receipt_spend_v4`** resolved off a `ConsensusV2` ruleset. `None` on every shipped preset, which leaves a
+    /// `PFS4` header refused by name (`ReceiptV4BelowFence`) at every height — exactly the set of valid blocks there is today.
+    pub(super) palw_receipt_spend_v4: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **A-2 uniformity: the header carriage forms' owning fences** (`Params::palw_header_form_fences_v1`) — the shape gate reads a form
+    /// whose fence is not in force at the header's DAA exactly as the live testnet-12 build reads it.
+    pub(super) palw_header_forms: kaspa_consensus_core::pow_layer0::PalwHeaderFormFencesV1,
+    /// MISAKA Phase 4b PoW: PALW-Ollama (`algo_id = 5`) activation — supersedes everything.
+    pub(super) pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
+    /// kaspa-pq EVM Lane v0.4 (ADR-0020): drives the per-header version rule
+    /// (see `check_header_version`) — v2 (`EVM_HEADER_VERSION`) required at and
+    /// after activation, v1 (`BLOCK_VERSION`) before. `u64::MAX` (inert) on
+    /// every current network.
+    pub(super) evm_activation_daa_score: u64,
+
+    // DB
+    db: Arc<DB>,
+
+    // Stores
+    pub(super) relations_store: Arc<RwLock<DbRelationsStore>>,
+    pub(super) reachability_store: Arc<RwLock<DbReachabilityStore>>,
+    pub(super) reachability_relations_store: Arc<RwLock<DbRelationsStore>>,
+    pub(super) ghostdag_store: Arc<DbGhostdagStore>,
+    pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
+    pub(super) pruning_point_store: Arc<RwLock<DbPruningStore>>,
+    pub(super) block_window_cache_for_difficulty: Arc<BlockWindowCacheStore>,
+    pub(super) block_window_cache_for_past_median_time: Arc<BlockWindowCacheStore>,
+    pub(super) daa_excluded_store: Arc<DbDaaStore>,
+    pub(super) headers_store: Arc<DbHeadersStore>,
+    pub(super) headers_selected_tip_store: Arc<RwLock<DbHeadersSelectedTipStore>>,
+    pub(super) depth_store: Arc<DbDepthStore>,
+
+    // Managers and services
+    pub(super) ghostdag_manager: DbGhostdagManager,
+    pub(super) _dag_traversal_manager: DbDagTraversalManager,
+    pub(super) window_manager: DbWindowManager,
+    pub(super) depth_manager: DbBlockDepthManager,
+    pub(super) reachability_service: MTReachabilityService<DbReachabilityStore>,
+    pub(super) _pruning_point_manager: DbPruningPointManager,
+    pub(super) parents_manager: DbParentsManager,
+
+    // Pruning lock
+    pruning_lock: SessionLock,
+
+    // Dependency manager
+    task_manager: BlockTaskDependencyManager,
+
+    // Counters
+    counters: Arc<ProcessingCounters>,
+}
+
+impl HeaderProcessor {
+    pub(super) fn validation_now(&self) -> u64 {
+        #[cfg(test)]
+        {
+            let now = self.validation_clock.load(Ordering::Relaxed);
+            if now != 0 {
+                return now;
+            }
+        }
+        kaspa_core::time::unix_now()
+    }
+
+    pub fn new(
+        receiver: Receiver<BlockProcessingMessage>,
+        body_sender: Sender<BlockProcessingMessage>,
+        thread_pool: Arc<ThreadPool>,
+        params: &Params,
+        db: Arc<DB>,
+        storage: &Arc<ConsensusStorage>,
+        services: &Arc<ConsensusServices>,
+        pruning_lock: SessionLock,
+        counters: Arc<ProcessingCounters>,
+    ) -> Self {
+        Self {
+            #[cfg(test)]
+            validation_clock: Default::default(),
+            receiver,
+            body_sender,
+            thread_pool,
+            genesis: params.genesis.clone(),
+            db,
+
+            relations_store: storage.relations_store.clone(),
+            reachability_store: storage.reachability_store.clone(),
+            reachability_relations_store: storage.reachability_relations_store.clone(),
+            ghostdag_store: storage.ghostdag_store.clone(),
+            statuses_store: storage.statuses_store.clone(),
+            pruning_point_store: storage.pruning_point_store.clone(),
+            daa_excluded_store: storage.daa_excluded_store.clone(),
+            headers_store: storage.headers_store.clone(),
+            depth_store: storage.depth_store.clone(),
+            headers_selected_tip_store: storage.headers_selected_tip_store.clone(),
+            block_window_cache_for_difficulty: storage.block_window_cache_for_difficulty.clone(),
+            block_window_cache_for_past_median_time: storage.block_window_cache_for_past_median_time.clone(),
+
+            ghostdag_manager: services.ghostdag_manager.clone(),
+            _dag_traversal_manager: services.dag_traversal_manager.clone(),
+            window_manager: services.window_manager.clone(),
+            reachability_service: services.reachability_service.clone(),
+            depth_manager: services.depth_manager.clone(),
+            _pruning_point_manager: services.pruning_point_manager.clone(),
+            parents_manager: services.parents_manager.clone(),
+
+            task_manager: BlockTaskDependencyManager::new(params.palw_exec_payload_v2_fence()),
+            pruning_lock,
+            counters,
+
+            timestamp_deviation_tolerance: params.timestamp_deviation_tolerance,
+            max_block_parents: params.max_block_parents_history(),
+            mergeset_size_limit: params.mergeset_size_limit_history(),
+            skip_proof_of_work: params.skip_proof_of_work,
+            max_block_level: params.max_block_level,
+            // PR-8.6: Layer 0 PoW per-network domain separation tag.
+            network_id: params.net.to_string().into_bytes(),
+            pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
+            pow_palw_activation: params.pow_palw_activation,
+            palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
+            palw_consensus_mode: params.palw_consensus_mode.clone(),
+            palw_block_commitment: params.palw_block_commitment,
+            palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_anchor_clock: params.palw_anchor_clock,
+            palw_clock_cursor: params.palw_clock_cursor,
+            palw_clock_floor: params.palw_clock_floor,
+            palw_clock_lead_cap: params.palw_clock_lead_cap,
+            palw_receipt_rows_unpriced: params
+                .palw_receipt_rows_unpriced
+                .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
+            palw_execution_lane: params.palw_execution_lane_fence(),
+            palw_exec_v2: params.palw_exec_payload_v2_fence(),
+            palw_native_material_v3: params.palw_monetary_material_v1.as_ref().map(|fence| fence.activation),
+            palw_attempt_activation: params.palw_attempt_activation,
+            palw_single_lottery: params.palw_single_lottery,
+            palw_attempt_header_pins: params.palw_attempt_header_pins.and_then(|fence| match &params.palw_consensus_mode {
+                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some((fence, bundle.state.clone())),
+                _ => None,
+            }),
+            palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
+            palw_header_forms: params.palw_header_form_fences_v1(),
+            pow_palw_ollama_activation: params.pow_palw_ollama_activation,
+            evm_activation_daa_score: params.evm_activation_daa_score,
+        }
+    }
+
+    pub fn worker(self: &Arc<HeaderProcessor>) {
+        while let Ok(msg) = self.receiver.recv() {
+            match msg {
+                BlockProcessingMessage::Exit => {
+                    break;
+                }
+                BlockProcessingMessage::Process(task, block_result_transmitter, virtual_state_result_transmitter) => {
+                    if let Some(task_id) = self.task_manager.register(task, block_result_transmitter, virtual_state_result_transmitter)
+                    {
+                        let processor = self.clone();
+                        self.thread_pool.spawn(move || {
+                            processor.queue_block(task_id);
+                        });
+                    }
+                }
+            };
+        }
+
+        // Wait until all workers are idle before exiting
+        self.task_manager.wait_for_idle();
+
+        // Pass the exit signal on to the following processor
+        self.body_sender.send(BlockProcessingMessage::Exit).unwrap();
+    }
+
+    fn queue_block(self: &Arc<HeaderProcessor>, task_id: TaskId) {
+        if let Some(task) = self.task_manager.try_begin(task_id) {
+            let res = self.process_header(&task);
+
+            let dependent_tasks = self.task_manager.end(
+                task,
+                |task,
+                 block_result_transmitter: tokio::sync::oneshot::Sender<Result<BlockStatus, RuleError>>,
+                 virtual_state_result_transmitter| {
+                    if res.is_err() || task.block().is_header_only() {
+                        // We don't care if receivers were dropped
+                        let _ = block_result_transmitter.send(res.clone());
+                        let _ = virtual_state_result_transmitter.send(res.clone());
+                    } else {
+                        self.body_sender
+                            .send(BlockProcessingMessage::Process(task, block_result_transmitter, virtual_state_result_transmitter))
+                            .unwrap();
+                    }
+                },
+            );
+
+            for dep in dependent_tasks {
+                let processor = self.clone();
+                self.thread_pool.spawn(move || processor.queue_block(dep));
+            }
+        }
+    }
+
+    fn process_header(&self, task: &BlockTask) -> BlockProcessResult<BlockStatus> {
+        let _prune_guard = self.pruning_lock.blocking_read();
+        let header = &task.block().header;
+        let status_option = self.statuses_store.read().get(header.hash).optional().unwrap();
+
+        match status_option {
+            Some(StatusInvalid) => return Err(RuleError::KnownInvalid),
+            Some(status) => return Ok(status),
+            None => {}
+        }
+
+        // Validate the header depending on task type
+        match task {
+            BlockTask::Ordinary { .. } => {
+                // [ibd-perf §7-1] split-time Phase-A (parallelizable compute) vs the serial committer.
+                let hp_t0 = std::time::Instant::now();
+                let ctx = match self.validate_header(header) {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        self.palw_note_round_header_refusal(header, &e);
+                        return Err(e);
+                    }
+                };
+                let hp_t1 = std::time::Instant::now();
+                self.commit_header(ctx, header);
+                let hp_t2 = std::time::Instant::now();
+                self.counters.hdr_validate_ns.fetch_add((hp_t1 - hp_t0).as_nanos() as u64, Ordering::Relaxed);
+                self.counters.hdr_commit_ns.fetch_add((hp_t2 - hp_t1).as_nanos() as u64, Ordering::Relaxed);
+                self.counters.hdr_timed_counts.fetch_add(1, Ordering::Relaxed);
+            }
+            BlockTask::Trusted { .. } => {
+                let ctx = self.validate_trusted_header(header)?;
+                self.commit_trusted_header(ctx, header);
+            }
+        }
+
+        // Report counters
+        self.counters.header_counts.fetch_add(1, Ordering::Relaxed);
+        self.counters.dep_counts.fetch_add(header.direct_parents().len() as u64, Ordering::Relaxed);
+
+        Ok(StatusHeaderOnly)
+    }
+
+    /// **Lane SCAN: count a round block the header stage refused, by name.** Node-local telemetry
+    /// (`getPalwRoundLane`'s refusal counters); an orphan (missing parents) or an already-known-invalid
+    /// block is not a new refusal and is not counted.
+    fn palw_note_round_header_refusal(&self, header: &Header, error: &RuleError) {
+        use kaspa_consensus_core::palw_exec_view_v1::{PalwRoundRefusalV1 as Refusal, palw_round_lane_telemetry_v1};
+        if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1 || self.palw_execution_lane.is_none() {
+            return;
+        }
+        let reason = match error {
+            RuleError::MissingParents(_) | RuleError::KnownInvalid => return,
+            RuleError::BadRoundLaneMergeset(_) => Refusal::HeaderMergesetRule,
+            RuleError::BadRoundLaneParents(_) => Refusal::HeaderAnchorOffChain,
+            RuleError::BadPalwCarriageAdmission { reason, .. } if reason.to_ascii_lowercase().contains("signature") => {
+                Refusal::HeaderSignature
+            }
+            RuleError::BadPalwCarriageAdmission { .. } => Refusal::HeaderEnvelope,
+            _ => Refusal::HeaderOther,
+        };
+        palw_round_lane_telemetry_v1().record_header_refusal(header.hash, header.timestamp, header.daa_score, reason);
+    }
+
+    /// Runs full ordinary header validation
+    fn validate_header(&self, header: &Arc<Header>) -> BlockProcessResult<HeaderProcessingContext> {
+        // Cheap, parent-independent isolation checks first; then parent relations; then the PoW.
+        // The Layer-0 PoW on a PALW network is one LLM inference under a global spawn gate, so it
+        // MUST come after `validate_parent_relations` — a header with fabricated/absent parents is
+        // rejected before it can buy an inference and stall every other header (audit P0-3). The
+        // PoW and the parent checks are mutually independent (the PoW reads only the header, the
+        // parent checks read only the status store), so accept/reject is unchanged for every header.
+        //
+        // One deliberate change, for the class that fails BOTH: a header with missing parents and a
+        // bad PoW used to report `InvalidPoW` and now reports `MissingParents`. That is not cosmetic
+        // — the two errors route differently upstream (a bad PoW is peer misbehaviour; missing
+        // parents enter bounded orphan handling) — and this ordering is the correct one: we have not
+        // yet spent the work needed to know the PoW is bad, so claiming it is would be asserting
+        // something unverified. Any header that fails only the PoW still reports `InvalidPoW`.
+        self.validate_header_in_isolation_sans_pow(header)?;
+        self.validate_parent_relations(header)?;
+        let block_level = self.check_pow_and_calc_block_level(header)?;
+        let mut ctx = self.build_processing_context(header, block_level);
+        self.ghostdag(&mut ctx);
+        self.pre_pow_validation(&mut ctx, header)?;
+        if let Err(e) = self.post_pow_validation(&mut ctx, header) {
+            self.statuses_store.write().set(ctx.hash, StatusInvalid).unwrap();
+            return Err(e);
+        }
+        Ok(ctx)
+    }
+
+    // Runs partial header validation for trusted blocks (currently validates only header-in-isolation and computes GHOSTDAG).
+    fn validate_trusted_header(&self, header: &Arc<Header>) -> BlockProcessResult<HeaderProcessingContext> {
+        let block_level = self.validate_header_in_isolation(header)?;
+        let mut ctx = self.build_processing_context(header, block_level);
+        self.ghostdag(&mut ctx);
+        Ok(ctx)
+    }
+
+    fn build_processing_context(&self, header: &Arc<Header>, block_level: u8) -> HeaderProcessingContext {
+        HeaderProcessingContext::new(
+            header.hash,
+            header.clone(),
+            block_level,
+            self.pruning_point_store.read().pruning_point().unwrap(),
+            self.collect_known_direct_parents(header),
+        )
+    }
+
+    fn collect_known_direct_parents(&self, header: &Header) -> BlockHashes {
+        let relations_read = self.relations_store.read();
+        Arc::new(
+            header
+                .direct_parents()
+                .iter()
+                .copied()
+                // filter out parents not part of the kept contiguous Dag - which is representd by the stored relations 
+                .filter(|&parent| relations_read.has(parent).unwrap())
+                .collect_vec()
+                // This kicks-in only for trusted blocks. If an ordinary block is 
+                // missing direct parents it will fail validation.
+                .push_if_empty(ORIGIN),
+        )
+    }
+
+    /// Runs the GHOSTDAG algorithm and writes the data into the context (if hasn't run already)
+    fn ghostdag(&self, ctx: &mut HeaderProcessingContext) {
+        let ghostdag_data = self
+            .ghostdag_store
+            .get_data(ctx.hash)
+            .optional()
+            .unwrap()
+            .unwrap_or_else(|| Arc::new(self.ghostdag_manager.ghostdag(&ctx.known_direct_parents)));
+        self.counters.mergeset_counts.fetch_add(ghostdag_data.mergeset_size() as u64, Ordering::Relaxed);
+        ctx.ghostdag_data = Some(ghostdag_data);
+    }
+
+    fn commit_header(&self, ctx: HeaderProcessingContext, header: &Header) {
+        let ghostdag_data = ctx.ghostdag_data.as_ref().unwrap();
+
+        // Create a DB batch writer
+        let mut batch = WriteBatch::default();
+
+        //
+        // Append-only stores: these require no lock and hence done first in order to reduce locking time
+        //
+        self.ghostdag_store.insert_batch(&mut batch, ctx.hash, ghostdag_data).unwrap();
+
+        if let Some(window) = ctx.block_window_for_difficulty {
+            self.block_window_cache_for_difficulty.insert(ctx.hash, window);
+        }
+        if let Some(window) = ctx.block_window_for_past_median_time {
+            self.block_window_cache_for_past_median_time.insert(ctx.hash, window);
+        }
+
+        self.daa_excluded_store.insert_batch(&mut batch, ctx.hash, Arc::new(ctx.mergeset_non_daa.unwrap())).unwrap();
+        self.headers_store.insert_batch(&mut batch, ctx.hash, ctx.header, ctx.block_level).unwrap();
+        self.depth_store.insert_batch(&mut batch, ctx.hash, ctx.merge_depth_root.unwrap(), ctx.finality_point.unwrap()).unwrap();
+
+        //
+        // Reachability and header chain stores
+        //
+
+        // Create staging reachability store. We use an upgradable read here to avoid concurrent
+        // staging reachability operations. PERF: we assume that reachability processing time << header processing
+        // time, and thus serializing this part will do no harm. However this should be benchmarked. The
+        // alternative is to create a separate ReachabilityProcessor and to manage things more tightly.
+        // [ibd-perf §7-1] held-lock window starts at the upgradable_read acquisition.
+        let hp_lock_t0 = std::time::Instant::now();
+        let mut staging = StagingReachabilityStore::new(self.reachability_store.upgradable_read());
+        let selected_parent = ghostdag_data.selected_parent;
+        let mut reachability_mergeset = ghostdag_data.unordered_mergeset_without_selected_parent();
+        let hp_add_t0 = std::time::Instant::now();
+        reachability::add_block(&mut staging, ctx.hash, selected_parent, &mut reachability_mergeset).unwrap();
+        self.counters.hdr_addblock_ns.fetch_add(hp_add_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
+        // Non-append only stores need to use write locks.
+        // Note we need to keep the lock write guards until the batch is written.
+        let mut hst_write = self.headers_selected_tip_store.write();
+        let prev_hst = hst_write.get().unwrap();
+        // The headers-selected tip is ordered by `SortableBlock` (blue work, then hash).
+        //
+        // **PALW weight is never read here, and that is a design fact rather than unfinished
+        // wiring** (external audit P0-5). PALW weight is a function of ACCEPTED
+        // TRANSACTIONS — receipts, convictions, bonds — and the header processor is upstream of
+        // bodies by construction: header-first sync exists precisely so a node can order headers it
+        // has no bodies for. There is no header-only approximation to reach for either; one would
+        // be a second fork-choice rule that disagrees with the first, which is the defect P0-5
+        // names rather than a fix for it.
+        //
+        // What makes that safe is a boundary, not a value: **the headers-selected tip is a SYNC
+        // HINT and never a chain authority.** Its consumers were audited at this commit — the IBD
+        // flow (choosing what to request) and `estimate_block_count` (an RPC estimate). Pruning,
+        // finality and acceptance read the virtual sink, whose PALW authority is the deep-reorg
+        // gate. A node may therefore sync toward a header chain PALW would not select,
+        // and then decline to accept it: the cost is wasted download, never a divergent chain.
+        //
+        // Anything that later reads this tip to decide chain state reopens P0-5, and it will not
+        // look like a fork-choice change when it does — it will look like reading a tip.
+        let candidate_tip = SortableBlock::new(ctx.hash, header.blue_work);
+        // ADR-0125: a round block is never a selected parent, so it is never the headers' selected tip
+        // either — it would hint reachability toward a chain that does not exist.
+        let round_block =
+            self.palw_execution_lane.is_some() && header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        let heavier = !round_block && candidate_tip > prev_hst;
+        if heavier && reachability::is_chain_ancestor_of(&staging, ctx.pruning_point, ctx.hash).unwrap() {
+            // Hint reachability about the new tip.
+            reachability::hint_virtual_selected_parent(&mut staging, ctx.hash).unwrap();
+            hst_write.set_batch(&mut batch, SortableBlock::new(ctx.hash, header.blue_work)).unwrap();
+        }
+
+        //
+        // Relations and statuses
+        //
+
+        let mut relations_write = self.relations_store.write();
+        relations_write.insert_batch(&mut batch, ctx.hash, ctx.known_direct_parents.clone()).unwrap();
+
+        // Write reachability relations. These relations are only needed during header pruning
+        let mut reachability_relations_write = self.reachability_relations_store.write();
+        reachability_relations_write.insert_batch(&mut batch, ctx.hash, ctx.known_direct_parents).unwrap();
+
+        let statuses_write = self.statuses_store.set_batch(&mut batch, ctx.hash, StatusHeaderOnly).unwrap();
+
+        // Write reachability data. Only at this brief moment the reachability store is locked for reads.
+        // We take special care for this since reachability read queries are used throughout the system frequently.
+        // Note we hold the lock until the batch is written
+        let reachability_write = staging.commit(&mut batch).unwrap();
+
+        // Flush the batch to the DB
+        let hp_write_t0 = std::time::Instant::now();
+        self.db.write(batch).unwrap();
+        self.counters.hdr_dbwrite_ns.fetch_add(hp_write_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.counters.hdr_heldlock_ns.fetch_add(hp_lock_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+
+        // Calling the drops explicitly after the batch is written in order to avoid possible errors.
+        drop(reachability_write);
+        drop(statuses_write);
+        drop(reachability_relations_write);
+        drop(relations_write);
+        drop(hst_write);
+    }
+
+    fn commit_trusted_header(&self, ctx: HeaderProcessingContext, _header: &Header) {
+        let ghostdag_data = ctx.ghostdag_data.as_ref().unwrap();
+
+        // Create a DB batch writer
+        let mut batch = WriteBatch::default();
+
+        // This data might have been already written when applying the pruning proof.
+        self.ghostdag_store.insert_batch(&mut batch, ctx.hash, ghostdag_data).idempotent().unwrap();
+
+        let mut relations_write = self.relations_store.write();
+        relations_write.insert_batch(&mut batch, ctx.hash, ctx.known_direct_parents).idempotent().unwrap();
+
+        let statuses_write = self.statuses_store.set_batch(&mut batch, ctx.hash, StatusHeaderOnly).unwrap();
+
+        // Flush the batch to the DB
+        self.db.write(batch).unwrap();
+
+        // Calling the drops explicitly after the batch is written in order to avoid possible errors.
+        drop(statuses_write);
+        drop(relations_write);
+    }
+
+    pub fn process_genesis(&self) {
+        // Init headers selected tip and selected chain stores
+        let mut batch = WriteBatch::default();
+        let mut hst_write = self.headers_selected_tip_store.write();
+        hst_write.set_batch(&mut batch, SortableBlock::new(self.genesis.hash, 0.into())).unwrap();
+        self.db.write(batch).unwrap();
+        drop(hst_write);
+
+        // Write the genesis header
+        let mut genesis_header: Header = (&self.genesis).into();
+        // Force the provided genesis hash. Important for some tests which manually modify the genesis hash.
+        // Note that for official nets (mainnet, testnet etc) they are guaranteed to be equal as enforced by a test in genesis.rs
+        genesis_header.hash = self.genesis.hash;
+        let genesis_header = Arc::new(genesis_header);
+
+        let mut ctx = HeaderProcessingContext::new(
+            self.genesis.hash,
+            genesis_header.clone(),
+            self.max_block_level,
+            self.genesis.hash,
+            BlockHashes::new(vec![ORIGIN]),
+        );
+        ctx.ghostdag_data = Some(Arc::new(self.ghostdag_manager.genesis_ghostdag_data()));
+        ctx.mergeset_non_daa = Some(Default::default());
+        ctx.merge_depth_root = Some(ORIGIN);
+        ctx.finality_point = Some(ORIGIN);
+
+        self.commit_header(ctx, &genesis_header);
+    }
+
+    pub fn init(&self) {
+        if self.relations_store.read().has(ORIGIN).unwrap() {
+            return;
+        }
+
+        let mut batch = WriteBatch::default();
+        let mut relations_write = self.relations_store.write();
+        relations_write.insert_batch(&mut batch, ORIGIN, BlockHashes::new(vec![])).unwrap();
+        self.ghostdag_store.insert_batch(&mut batch, ORIGIN, &self.ghostdag_manager.origin_ghostdag_data()).unwrap();
+        let mut hst_write = self.headers_selected_tip_store.write();
+        hst_write.set_batch(&mut batch, SortableBlock::new(ORIGIN, 0.into())).unwrap();
+        self.db.write(batch).unwrap();
+        drop(hst_write);
+        drop(relations_write);
+    }
+}

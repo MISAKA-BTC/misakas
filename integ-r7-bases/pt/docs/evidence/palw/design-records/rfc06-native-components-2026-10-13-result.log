@@ -1,0 +1,1 @@
+{"schemaVersion":1,"kind":"rfc06-native-components","samples":64,"uniquePublicKeys":64,"publicKeyBytes":2592,"keygenMinUs":6375,"keygenMedianUs":7971,"keygenMaxUs":15351,"totalMs":543,"activeBondRecordOneCapabilityBytes":2817,"bondKeyBytes":68,"candidateBorshBytes":341,"100kBondsAnd400kCandidatesLowerBytes":424900000,"existingTransportCapBytes":402653184}

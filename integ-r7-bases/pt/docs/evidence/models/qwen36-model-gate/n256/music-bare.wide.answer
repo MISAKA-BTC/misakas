@@ -1,0 +1,8 @@
+{
+  "type": "music/v1",
+  "note": {
+    "midi": 60,
+    "duration": 1,
+    "velocity": 64
+  }
+}

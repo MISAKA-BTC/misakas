@@ -1,0 +1,199 @@
+{
+  "schema": "misaka.rfc02.borrowed-context128-complete-task-observation.v1",
+  "captured_utc": "2026-10-11T11:11:12.051833+00:00",
+  "status": "all predeclared complete-task diagnostic gates passed; no native Final or population credit",
+  "predeclared_utc": "2026-10-11T10:38:46.094496+00:00",
+  "pre_execution_owned_source_binary_receipt": {
+    "schema": "misaka.rfc02.complete-task128-program-preimage.v1",
+    "captured_utc": "2026-10-11T11:01:18.543268+00:00",
+    "binary": "/tmp/rfc02-next9-immutable-174c9b5a50c4/check-borrowed-checkpoint-generation",
+    "binary_sha256": "174c9b5a50c48c5741c0e4d86d177fb2cb2f62a9bb71d45158292963ca49006b",
+    "sources_sha256": {
+      "misaka-palw-sdk/examples/check-borrowed-checkpoint-generation.rs": "2255db54b5c98b8d598cf1c11c748bea5b32142ee4a2e88a27c1bba154e749e4",
+      "misaka-palw-tir-lower/tools/hf_borrowed_context_generation.py": "e69fb2add2654902b0b6421ff30a04393de98369d8726f94d6d0b3603492cfe3",
+      "misaka-palw-tir-lower/tools/test_hf_borrowed_context_generation.py": "83523aeb028ad6d6156684dbe83a20533f9b93def2ec4118178f6523e8d6d52d",
+      "docs/design/palw/tir/evidence/qwen25-borrowed-context128-task-protocol.json": "7cfe136887fecfe1a5272194e2d5cbaabf6b0cd8c379c2e3175454158b7f6d66"
+    },
+    "build_completed": true,
+    "build_log": "/tmp/rfc02-borrowed128-generation-build.log",
+    "limits": [
+      "owned source and immutable binary pins; no complete concurrently changing Rust dependency preimage claim"
+    ]
+  },
+  "post_execution_owned_sha256": {
+    "misaka-palw-sdk/examples/check-borrowed-checkpoint-generation.rs": "2255db54b5c98b8d598cf1c11c748bea5b32142ee4a2e88a27c1bba154e749e4",
+    "misaka-palw-tir-lower/tools/hf_borrowed_context_generation.py": "e69fb2add2654902b0b6421ff30a04393de98369d8726f94d6d0b3603492cfe3",
+    "misaka-palw-tir-lower/tools/test_hf_borrowed_context_generation.py": "83523aeb028ad6d6156684dbe83a20533f9b93def2ec4118178f6523e8d6d52d",
+    "docs/design/palw/tir/evidence/qwen25-borrowed-context128-task-protocol.json": "7cfe136887fecfe1a5272194e2d5cbaabf6b0cd8c379c2e3175454158b7f6d66"
+  },
+  "post_execution_binary_sha256": "174c9b5a50c48c5741c0e4d86d177fb2cb2f62a9bb71d45158292963ca49006b",
+  "owned_source_binary_unchanged_before_after": true,
+  "producer_commands": [
+    "HF_HUB_OFFLINE=1 /usr/bin/time -l /tmp/rfc02-source-reference-venv/bin/python misaka-palw-tir-lower/tools/hf_borrowed_context_generation.py source /Users/wata/Downloads/Qwen2.5-1.5B-Instruct docs/design/palw/tir/evidence/qwen25-real-pilot-protocol.json docs/design/palw/tir/evidence/qwen25-borrowed-context128-task-protocol.json /tmp/rfc02-qwen25-borrowed128-complete-task-source-v2.json",
+    "/usr/bin/time -l /tmp/rfc02-next9-immutable-174c9b5a50c4/check-borrowed-checkpoint-generation /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir docs/design/palw/tir/evidence/qwen25-real-params-v3-commitments.borsh /Users/wata/Downloads/Qwen2.5-1.5B-Instruct/config.json docs/design/palw/tir/evidence/qwen25-borrowed-context128-program.tir docs/design/palw/tir/evidence/qwen25-borrowed-context128-task-protocol.json /tmp/rfc02-qwen25-borrowed128-complete-task-source-v2.json",
+    "HF_HUB_OFFLINE=1 /tmp/rfc02-source-reference-venv/bin/python misaka-palw-tir-lower/tools/hf_borrowed_context_generation.py score /Users/wata/Downloads/Qwen2.5-1.5B-Instruct docs/design/palw/tir/evidence/qwen25-real-pilot-protocol.json docs/design/palw/tir/evidence/qwen25-borrowed-context128-task-protocol.json /tmp/rfc02-qwen25-borrowed128-complete-task-score.json --source /tmp/rfc02-qwen25-borrowed128-complete-task-source-v2.json --integer /tmp/rfc02-qwen25-borrowed128-complete-task-integer.json"
+  ],
+  "controls": {
+    "python_meaningful_tests": 6,
+    "python_passed": 6,
+    "rust_preallocation_zero_gate_before_missing_model": true
+  },
+  "fixed_rules": {
+    "context": 128,
+    "max_new_tokens": 32,
+    "stop": "first predicted EOS included; cap without EOS is incomplete failure",
+    "fidelity": "same-position output IDs including EOS; denominator sum max lengths; missing output unequal",
+    "token_agreement_min": 0.95,
+    "exact_job_fraction_min": 0.6666666666666666,
+    "source_and_integer_task_success_min": 1.0
+  },
+  "results": {
+    "complete_tasks": 3,
+    "source_task_success_fraction": 1.0,
+    "integer_task_success_fraction": 1.0,
+    "raw_id_equal": 17,
+    "raw_id_denominator": 17,
+    "raw_id_agreement": 1.0,
+    "exact_job_fraction": 1.0,
+    "all_predeclared_gates_passed": true,
+    "jobs": [
+      {
+        "id": "arithmetic-128-1",
+        "task": "arithmetic",
+        "source": {
+          "generated_tokens": [
+            19,
+            17,
+            151645
+          ],
+          "first_eos_index": 2,
+          "answer_text": "42",
+          "completed": true,
+          "task_answer_passed": true
+        },
+        "integer": {
+          "generated_tokens": [
+            19,
+            17,
+            151645
+          ],
+          "first_eos_index": 2,
+          "answer_text": "42",
+          "completed": true,
+          "task_answer_passed": true
+        },
+        "equal_ids": 3
+      },
+      {
+        "id": "translation-128-1",
+        "task": "translation",
+        "source": {
+          "generated_tokens": [
+            9707,
+            151645
+          ],
+          "first_eos_index": 1,
+          "answer_text": "Hello",
+          "completed": true,
+          "task_answer_passed": true
+        },
+        "integer": {
+          "generated_tokens": [
+            9707,
+            151645
+          ],
+          "first_eos_index": 1,
+          "answer_text": "Hello",
+          "completed": true,
+          "task_answer_passed": true
+        },
+        "equal_ids": 2
+      },
+      {
+        "id": "code-128-1",
+        "task": "code",
+        "source": {
+          "generated_tokens": [
+            750,
+            912,
+            2877,
+            11,
+            293,
+            982,
+            262,
+            470,
+            264,
+            488,
+            293,
+            151645
+          ],
+          "first_eos_index": 11,
+          "answer_text": "def add(a, b):\n    return a + b",
+          "completed": true,
+          "task_answer_passed": true
+        },
+        "integer": {
+          "generated_tokens": [
+            750,
+            912,
+            2877,
+            11,
+            293,
+            982,
+            262,
+            470,
+            264,
+            488,
+            293,
+            151645
+          ],
+          "first_eos_index": 11,
+          "answer_text": "def add(a, b):\n    return a + b",
+          "completed": true,
+          "task_answer_passed": true
+        },
+        "equal_ids": 12
+      }
+    ]
+  },
+  "performance": {
+    "source_wall_seconds": 12.28,
+    "source_max_rss_bytes": 6480707584,
+    "integer_wall_seconds": 261.35,
+    "integer_max_rss_bytes": 2009333760,
+    "controlled_comparative_benchmark": false,
+    "integer_timing_includes": "all1636 parameter commitment authentication, fresh lowering/audit, sequential dev-profile streaming integer executor; source uses float32 eager CPU full sequence each step"
+  },
+  "preserved_trials": {
+    "first_source_pass_repeated_reason": "first3/3 complete success retained; after scorer adds independent EOS/aggregate checks source repeated same frozen protocol for final owned tool preimage; outputs identical and no extra task/cohort credit",
+    "first_source_sha256": "5891e8ac56466b0060b01991d0d4bd2d618977752fd71436ad4c922f0744a5f7",
+    "old_greedy_v1_failed_trial_replaced": false,
+    "old_greedy_v1_measured_raw_agreement": 0.9166666666666666,
+    "old_greedy_v1_task_success_source_and_integer": "1/3",
+    "scorer_initial_offline_env_omission": "first scorer invocation refused before output because HF_HUB_OFFLINE missing; retried with required offline env, no protocol/source changes"
+  },
+  "limits": [
+    "three predeclared short complete tasks; arithmetic, greeting translation and single addition function; this is not the full A6/A8 task/population benchmark",
+    "context128 canonical graph and parameter roots authenticated, but these prompts use24/20/36input IDs and at most12 output IDs; separate context128 all-position logit evidence proves256 other positions",
+    "reuses frozen context32 calibration and all1636 streamed integer parameter commitments after distinct context128 lowering; no fresh context128 quantization or duplicate full artifact",
+    "source built-in Qwen2ForCausalLM float32 eager CPU independently loaded original local BF16 checkpoint and pins before/after; revision label not independently publisher-authenticated",
+    "diagnostic first-EOS stopping does not change native fixed-count generation contracts or grant native execution eligibility/Final/redemption",
+    "owned source and immutable binary before/after pins; no claim of complete concurrently changing Rust dependency compiler preimage or complete Python runtime closure",
+    "retains older fixedv1 failure and exact frozen gates; no retrospective threshold changes or narrower acceptance population",
+    "A6/A8 full original and user90percent acceptance, model-wide source continuity, fresh-node full outsider discovery, honest actual native Final, sparse/media models remain separate"
+  ],
+  "evidence_sha256": {
+    "qwen25-borrowed-context128-complete-task-build.log": "98214383a577bff214bc5cec7a2de24338d5bbe083be4dbc1eacbe88e358f0c3",
+    "qwen25-borrowed-context128-complete-task-controls-final.log": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371",
+    "qwen25-borrowed-context128-complete-task-controls.log": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371",
+    "qwen25-borrowed-context128-complete-task-integer-time.log": "bbc556dfac03926a9986a13eaddcdf544d1210245c06f59ff8ad22433e1417fb",
+    "qwen25-borrowed-context128-complete-task-integer.json": "792db4c3d7e0a0bd642ada94752e99c5555b45fa6d055b927d174c8a2ea9ced8",
+    "qwen25-borrowed-context128-complete-task-rust-policy-control.json": "1755bd2484a1d7904539e5cac4adeefe430f9cbc14c42ed5cdf16b8b840dcaa0",
+    "qwen25-borrowed-context128-complete-task-score.json": "c7f3d7039553f00119c06912b794a56a72177be4ffb7ca7371eac17872ec0b4d",
+    "qwen25-borrowed-context128-complete-task-source-final-time.log": "0ec759856baf7142b0e6cbdcbe288a4bc2a3e3b375a65d613dc60306bd3fa3f4",
+    "qwen25-borrowed-context128-complete-task-source-final.json": "80035641199738542e97583714cebe705734a1f9788c8d8ae53c3c54a5477d13",
+    "qwen25-borrowed-context128-complete-task-source-preimage.json": "d7269abb2ba3eebc9d367f06469ff578433f2c15293baf02b1943f917832ad9b",
+    "qwen25-borrowed-context128-complete-task-source-time.log": "edf839f0d8ae3b60cf340ce3b728c5aaba14e060bbad691528fe3a6c592aa91e",
+    "qwen25-borrowed-context128-complete-task-source.json": "5891e8ac56466b0060b01991d0d4bd2d618977752fd71436ad4c922f0744a5f7"
+  }
+}

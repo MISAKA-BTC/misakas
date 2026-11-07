@@ -294,7 +294,16 @@ impl KWorld {
     /// kernel commitments (bonded), the binding matures, and the kernel route registers the Panel-licensed class over the root it now
     /// attests — no test hook anywhere.
     async fn new() -> KWorld {
-        let (config, bundle, premine, mut floats) = kernel_service_config();
+        Self::new_on(false).await
+    }
+
+    async fn new_on(panel_free: bool) -> KWorld {
+        let (mut config, bundle, premine, mut floats) = kernel_service_config();
+        if panel_free {
+            config.params.palw_panel_free_v1 =
+                Some(kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1::at(ForkActivation::new(0)));
+            assert!(config.params.validate_palw_panel_free_v1().is_err(), "activation remains dormant on shipping networks");
+        }
         let mut chain = Chain::new(config, bundle, &premine);
         chain.advance(2).await;
         let fx = k_fixture();

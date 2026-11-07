@@ -1,0 +1,184 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "Select",
+  "tag": 21,
+  "cases": [
+    {
+      "name": "nonzero_is_true",
+      "prim": {
+        "name": "Select",
+        "attrs": [],
+        "borsh_hex": "15"
+      },
+      "inputs": [
+        {
+          "dtype": "i8",
+          "shape": [
+            4
+          ],
+          "data": [
+            "0",
+            "1",
+            "-1",
+            "2"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            4
+          ],
+          "data": [
+            "10",
+            "11",
+            "12",
+            "13"
+          ]
+        },
+        {
+          "dtype": "i64",
+          "shape": [
+            4
+          ],
+          "data": [
+            "20",
+            "21",
+            "22",
+            "23"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i64",
+        "shape": [
+          4
+        ]
+      },
+      "expect": {
+        "dtype": "i64",
+        "shape": [
+          4
+        ],
+        "data": [
+          "20",
+          "11",
+          "12",
+          "13"
+        ]
+      }
+    },
+    {
+      "name": "broadcast",
+      "prim": {
+        "name": "Select",
+        "attrs": [],
+        "borsh_hex": "15"
+      },
+      "inputs": [
+        {
+          "dtype": "i8",
+          "shape": [
+            2,
+            1
+          ],
+          "data": [
+            "1",
+            "0"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [],
+          "data": [
+            "7"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          3
+        ],
+        "data": [
+          "7",
+          "7",
+          "7",
+          "4",
+          "5",
+          "6"
+        ]
+      }
+    },
+    {
+      "name": "error_selected_value_does_not_fit",
+      "prim": {
+        "name": "Select",
+        "attrs": [],
+        "borsh_hex": "15"
+      },
+      "inputs": [
+        {
+          "dtype": "i8",
+          "shape": [
+            2
+          ],
+          "data": [
+            "1",
+            "0"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            2
+          ],
+          "data": [
+            "1000",
+            "1000"
+          ]
+        },
+        {
+          "dtype": "i32",
+          "shape": [
+            2
+          ],
+          "data": [
+            "1",
+            "1"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          2
+        ]
+      },
+      "expect_error": "Overflow"
+    }
+  ]
+}

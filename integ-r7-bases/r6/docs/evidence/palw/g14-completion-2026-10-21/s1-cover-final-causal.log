@@ -1,0 +1,11 @@
+
+running 6 tests
+test palw_court_service_v1::causal::tests::causal_schedule_keeps_all_siblings_and_is_independent_of_input_order ... ok
+test palw_court_service_v1::causal::tests::existing_slots_are_preserved_and_a_join_waits_for_every_predecessor ... ok
+test palw_court_service_v1::causal::tests::insufficient_aggregate_capacity_rolls_back_already_assigned_roots ... ok
+test palw_court_service_v1::causal::tests::malformed_graphs_and_partial_capacity_failure_leave_the_book_unchanged ... ok
+test palw_court_service_v1::causal::tests::ordinary_edf_can_schedule_a_response_before_its_parent_but_causal_admission_refuses ... ok
+test palw_court_service_v1::causal::tests::repair_cannot_move_a_missing_parent_after_a_retained_child ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 4706 filtered out; finished in 0.00s
+

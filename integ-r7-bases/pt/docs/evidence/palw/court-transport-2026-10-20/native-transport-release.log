@@ -1,0 +1,9 @@
+
+running 4 tests
+test palw_court_transport_v1::tests::transport_cost_and_accumulation_overflows_refuse ... ok
+test palw_court_transport_v1::tests::transport_codec_cost_is_exact_and_dormant_before_its_fence ... ok
+test palw_legacy_answer_chunks_v2::tests::the_full_32_part_transport_fits_each_carrier_and_refuses_one_byte_less_before_signing ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::transport_budget_counts_signed_native_parts_and_preserves_old_claims ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 4638 filtered out; finished in 0.09s
+

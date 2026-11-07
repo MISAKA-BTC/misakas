@@ -1,0 +1,29 @@
+[package]
+name = "kaspa-pq-send-example"
+description = "kaspa-pq Phase 7 (PR-7.5) — Rust SDK example: derive an ML-DSA-65 keypair, build a placeholder transaction sighash, sign with the kaspa-pq tx context, and (when a node is reachable on the kaspa-pq simnet wRPC port) submit it."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "kaspa-pq-send"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-bip32.workspace = true
+kaspa-rpc-core.workspace = true
+kaspa-txscript.workspace = true
+kaspa-wallet-keys.workspace = true
+kaspa-wrpc-client.workspace = true
+libcrux-ml-dsa.workspace = true
+tokio.workspace = true
+workflow-core.workspace = true
+
+[lints]
+workspace = true

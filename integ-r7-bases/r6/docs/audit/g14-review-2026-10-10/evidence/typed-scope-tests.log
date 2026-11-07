@@ -1,0 +1,24 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.36s
+     Running tests/typed_roots.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/typed_roots-1653d923c7ca1b6f)
+
+running 16 tests
+test an_unarmed_ledger_refuses_every_spec_object_and_an_untyped_ledger_roots_as_before ... ok
+test bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name ... ok
+test commitment_scope_memory_serves_no_model_values_and_convicts_from_public_inherited_state ... ok
+test composite_a_lie_in_the_model_stage_is_convicted_at_the_model_stage ... ok
+test composite_registration_refuses_memory_components_nesting_and_kind_mismatches_by_name ... ok
+test composite_a_lie_in_the_tool_stage_is_convicted_at_that_stage_and_a_filing_against_the_honest_model_is_dismissed ... ok
+test memory_a_lie_that_finalized_is_convicted_after_final_and_the_line_rolls_back ... ok
+test composite_the_logits_to_query_edge_court_convicts_a_carried_query_that_is_not_the_upstream_logits ... ok
+test memory_a_lied_token_is_convicted_by_the_decode_court_of_its_step ... ok
+test memory_a_withheld_pre_state_is_a_default_and_a_served_one_completes_the_check ... ok
+test memory_registration_and_inclusion_refusals_are_by_name ... ok
+test memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across_two_jobs ... ok
+test retrieval_a_wrong_item_and_a_missed_better_item_are_each_convicted_and_a_withheld_slice_defaults ... ok
+test retrieval_inclusion_refuses_a_misordered_or_short_result ... ok
+test weights_only_spec_is_byte_for_byte_the_legacy_registration_in_both_modes ... ok
+test memory_test_time_parameter_updates_are_a_parameter_subset_slot ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+

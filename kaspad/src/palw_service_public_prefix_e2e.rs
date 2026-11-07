@@ -92,8 +92,8 @@ impl Producer {
     }
 }
 
-#[derive(Default)]
 pub(super) struct Monitor {
+    literal_custodians: BTreeSet<PalwBondKeyV2>,
     seed: Option<(Hash64, u64)>,
     completed: bool,
     pending_sources: BTreeSet<Hash64>,
@@ -167,6 +167,7 @@ impl Monitor {
         for object in carriers {
             if let PalwConsensusObjectV2::PublicCourtStreamMoveV1 { movement } = object
                 && (movement.claim, movement.reserver) == (claim, owner)
+                && movement.seed_id == reference.seed_id
             {
                 movement.check().unwrap();
                 if matches!(

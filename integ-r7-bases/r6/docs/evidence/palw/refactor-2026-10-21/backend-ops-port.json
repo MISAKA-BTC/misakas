@@ -1,0 +1,295 @@
+[
+  {
+    "file": "kaspad/src/palw_backends.rs",
+    "function": "compose_need_v1",
+    "operation": "parameter",
+    "family": "Resource"
+  },
+  {
+    "file": "kaspad/src/palw_backends.rs",
+    "function": "compose_need_v1",
+    "operation": "argument",
+    "family": "Resource",
+    "old": "at_run(backend).as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_backends.rs",
+    "function": "compose_need_v1",
+    "operation": "argument",
+    "family": "Resource",
+    "old": "at_run(backend).as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_backends.rs",
+    "function": "compose_need_v1",
+    "operation": "argument",
+    "family": "Resource",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_backends.rs",
+    "function": "compose_need_v1",
+    "operation": "argument",
+    "family": "Resource",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_backends.rs",
+    "function": "compose_need_v1",
+    "operation": "argument",
+    "family": "Resource",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_filer_held.rs",
+    "function": "palw_held_challenger_evidence_v1",
+    "operation": "argument",
+    "family": "CourtEvidence",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel/gdn_filer_tick.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel/held_court.rs",
+    "function": "palw_held_challenger_evidence_v1",
+    "operation": "parameter",
+    "family": "CourtEvidence"
+  },
+  {
+    "file": "kaspad/src/palw_panel/held_court.rs",
+    "function": "palw_held_challenger_evidence_v1",
+    "operation": "argument",
+    "family": "CourtEvidence",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel/held_court.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel/held_court_e2e.rs",
+    "function": "palw_held_challenger_evidence_v1",
+    "operation": "argument",
+    "family": "CourtEvidence",
+    "old": "seat"
+  },
+  {
+    "file": "kaspad/src/palw_panel/seat_r_tests.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "&backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel/seat_r_tests.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "&backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel/seat_r_tests.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "&backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel/seat_r_tests.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "&backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel/seat_r_tests.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "&backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "parameter",
+    "family": "Replay"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_material_v1",
+    "operation": "parameter",
+    "family": "Replay"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_capture_under_job_v1",
+    "operation": "parameter",
+    "family": "Replay"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "parameter",
+    "family": "Execution"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "attempt_committed_output_ids_v1",
+    "operation": "parameter",
+    "family": "Material"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "served_binding_v1",
+    "operation": "parameter",
+    "family": "Material"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_capture_under_job_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_capture_under_job_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "served_binding_v1",
+    "operation": "argument",
+    "family": "Material",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_material_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_material_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_material_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "resolved.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "resolved.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_capture_under_job_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "palw_attempt_material_arm_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "attempt_committed_output_ids_v1",
+    "operation": "argument",
+    "family": "Material",
+    "old": "resolved.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_prompt_for_job",
+    "operation": "argument",
+    "family": "Execution",
+    "old": "backend.as_ref()"
+  },
+  {
+    "file": "kaspad/src/palw_panel.rs",
+    "function": "fp_verify_material_v1",
+    "operation": "argument",
+    "family": "Replay",
+    "old": "&backend"
+  }
+]

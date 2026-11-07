@@ -1,0 +1,22 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Summarize:"
+          },
+          {
+            "type": "text",
+            "text": "The quick brown fox jumps over the lazy dog."
+          }
+        ]
+      }
+    ]
+  },
+  "expect": {
+    "verdict": "accepted"
+  }
+}

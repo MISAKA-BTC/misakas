@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "toolchain": "evm/v1",
+  "sources": {
+    "README.md": "return-42: a contract whose runtime answers every call with the 32-byte word 42.\n\nreturn42.hex is the initcode (12 bytes: copy the 10-byte runtime from code offset 12 and return it)\nfollowed by the runtime (PUSH1 0x2a PUSH1 0 MSTORE PUSH1 0x20 PUSH1 0 RETURN).\n",
+    "return42.hex": "0x600a600c600039600a6000f3602a60005260206000f3\n"
+  },
+  "manifest": {
+    "targets": [
+      { "name": "return42", "source": "return42.hex", "constructor_args": "0x" }
+    ],
+    "tests": [
+      {
+        "name": "answers-42",
+        "calldata": "0x",
+        "value": 0,
+        "gas_limit": 100000,
+        "expect": { "success": true, "output": "0x000000000000000000000000000000000000000000000000000000000000002a" }
+      },
+      {
+        "name": "expects-43-and-is-wrong",
+        "calldata": "0xdeadbeef",
+        "value": 0,
+        "gas_limit": 100000,
+        "expect": { "success": true, "output": "0x000000000000000000000000000000000000000000000000000000000000002b" }
+      }
+    ]
+  }
+}

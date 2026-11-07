@@ -136,6 +136,8 @@ palw-tir-metal = ["misaka-palw-sdk/metal"]
 workspace = true
 
 [dev-dependencies]
+# Only the test dependency graph includes the explicit process-local wall clock.
+kaspa-core = { workspace = true, features = ["test-clock"] }
 kaspa-grpc-client.workspace = true
 kaspa-muhash.workspace = true
 # RFC-0002 Phase F (F6): the IR class e2e writes a PALWTIR1 container from a golden program vector.

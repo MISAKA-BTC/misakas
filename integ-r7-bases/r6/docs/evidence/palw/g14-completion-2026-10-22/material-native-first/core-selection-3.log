@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_constraint_material_builder_reconstructs_real_native_original_and_rechecks' (4443115) panicked at consensus/core/src/palw_tir_public_fold_v1.rs:3549:100:
+called `Result::unwrap()` on an `Err` value: CarriageInconsistent("service semantic dependency contract is missing")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_constraint_material_builder_reconstructs_real_native_original_and_rechecks ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_constraint_material_builder_reconstructs_real_native_original_and_rechecks
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4737 filtered out; finished in 0.04s
+

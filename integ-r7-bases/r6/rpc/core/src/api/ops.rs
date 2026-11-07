@@ -1,0 +1,394 @@
+//!
+//! RPC Operations used to identify RPC methods during transport and in various RPC-related macros.
+//!
+
+use borsh::{BorshDeserialize, BorshSerialize};
+use kaspa_notify::events::EventType;
+use serde::{Deserialize, Serialize};
+use workflow_core::enums::Describe;
+
+/// API version. Change in this value should result
+/// in the client refusing to connect.
+pub const RPC_API_VERSION: u16 = 1;
+/// API revision. Change in this value denotes
+/// backwards-compatible changes.
+pub const RPC_API_REVISION: u16 = 0;
+
+#[derive(Describe, Clone, Copy, Debug, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[borsh(use_discriminant = true)]
+pub enum RpcApiOps {
+    NoOp = 0,
+
+    // connection control (provisional)
+    Connect = 1,
+    Disconnect = 2,
+
+    // subscription management
+    Subscribe = 3,
+    Unsubscribe = 4,
+
+    // ~~~
+
+    // Subscription commands for starting/stopping notifications
+    NotifyBlockAdded = 10,
+    NotifyNewBlockTemplate = 11,
+    NotifyUtxosChanged = 12,
+    NotifyPruningPointUtxoSetOverride = 13,
+    NotifyFinalityConflict = 14,
+    NotifyFinalityConflictResolved = 15, // for uniformity purpose only since subscribing to NotifyFinalityConflict means receiving both FinalityConflict and FinalityConflictResolved
+    NotifyVirtualDaaScoreChanged = 16,
+    NotifyVirtualChainChanged = 17,
+    NotifySinkBlueScoreChanged = 18,
+    NotifyPalwClassReadinessChanged = 19,
+    NotifyPalwPanelAssignment = 20,
+    NotifyPalwPanelReceipt = 21,
+    NotifyPalwPanelEligibilityChanged = 22,
+
+    // Notification ops required by wRPC
+
+    // TODO: Remove these ops and use EventType as NotificationOps when workflow_rpc::server::interface::Interface
+    //       will be generic over a MethodOps and NotificationOps instead of a single Ops param.
+    BlockAddedNotification = 60,
+    VirtualChainChangedNotification = 61,
+    FinalityConflictNotification = 62,
+    FinalityConflictResolvedNotification = 63,
+    UtxosChangedNotification = 64,
+    SinkBlueScoreChangedNotification = 65,
+    VirtualDaaScoreChangedNotification = 66,
+    PruningPointUtxoSetOverrideNotification = 67,
+    NewBlockTemplateNotification = 68,
+    PalwClassReadinessChangedNotification = 69,
+    PalwPanelAssignmentNotification = 70,
+    PalwPanelReceiptNotification = 71,
+    PalwPanelEligibilityChangedNotification = 72,
+
+    // RPC methods
+    /// Ping the node to check if connection is alive
+    Ping = 110,
+    /// Get metrics for consensus information and node performance
+    GetMetrics = 111,
+    /// Get system information (RAM available, number of cores, available file descriptors)
+    GetSystemInfo = 112,
+    /// Get current number of active TCP connections
+    GetConnections = 113,
+    /// Get state information on the node
+    GetServerInfo = 114,
+    /// Get the current sync status of the node
+    GetSyncStatus = 115,
+    /// Returns the network this Kaspad is connected to (Mainnet, Testnet)
+    GetCurrentNetwork = 116,
+    /// Extracts a block out of the request message and attempts to add it to the DAG Returns an empty response or an error message
+    SubmitBlock = 117,
+    /// Returns a "template" by which a miner can mine a new block
+    GetBlockTemplate = 118,
+    /// Returns a list of all the addresses (IP, port) this Kaspad knows and a list of all addresses that are currently banned by this Kaspad
+    GetPeerAddresses = 119,
+    /// Returns the hash of the current selected tip block of the DAG
+    GetSink = 120,
+    /// Get information about an entry in the node's mempool
+    GetMempoolEntry = 121,
+    /// Get a snapshot of the node's mempool
+    GetMempoolEntries = 122,
+    /// Returns a list of the peers currently connected to this Kaspad, along with some statistics on them
+    GetConnectedPeerInfo = 123,
+    /// Instructs Kaspad to connect to a given IP address.
+    AddPeer = 124,
+    /// Extracts a transaction out of the request message and attempts to add it to the mempool Returns an empty response or an error message
+    SubmitTransaction = 125,
+    /// Requests info on a block corresponding to a given block hash Returns block info if the block is known.
+    GetBlock = 126,
+    //
+    GetSubnetwork = 127,
+    //
+    GetVirtualChainFromBlock = 128,
+    //
+    GetBlocks = 129,
+    /// Returns the amount of blocks in the DAG
+    GetBlockCount = 130,
+    /// Returns info on the current state of the DAG
+    GetBlockDagInfo = 131,
+    //
+    ResolveFinalityConflict = 132,
+    /// Instructs this node to shut down Returns an empty response or an error message
+    Shutdown = 133,
+    //
+    GetHeaders = 134,
+    /// Get a list of available UTXOs for a given address
+    GetUtxosByAddresses = 135,
+    /// Get a balance for a given address
+    GetBalanceByAddress = 136,
+    /// Get a balance for a number of addresses
+    GetBalancesByAddresses = 137,
+    // ?
+    GetSinkBlueScore = 138,
+    /// Ban a specific peer by it's IP address
+    Ban = 139,
+    /// Unban a specific peer by it's IP address
+    Unban = 140,
+    /// Get generic node information
+    GetInfo = 141,
+    //
+    EstimateNetworkHashesPerSecond = 142,
+    /// Get a list of mempool entries that belong to a specific address
+    GetMempoolEntriesByAddresses = 143,
+    /// Get current issuance supply
+    GetCoinSupply = 144,
+    /// Get DAA Score timestamp estimate
+    GetDaaScoreTimestampEstimate = 145,
+    /// Extracts a transaction out of the request message and attempts to replace a matching transaction in the mempool with it, applying a mandatory Replace by Fee policy
+    SubmitTransactionReplacement = 146,
+    /// Fee estimation
+    GetFeeEstimate = 147,
+    /// Fee estimation (experimental)
+    GetFeeEstimateExperimental = 148,
+    /// Block color determination by iterating DAG.
+    GetCurrentBlockColor = 149,
+    /// Get UTXO Return Addresses
+    GetUtxoReturnAddress = 150,
+    /// Get Virtual Chain from Block V2
+    GetVirtualChainFromBlockV2 = 151,
+    /// kaspa-pq Phase 10 (ADR-0009): current DNS finality confirmation view
+    GetDnsConfirmation = 152,
+    /// kaspa-pq Phase 11 (ADR-0010): in-process validator service status
+    GetValidatorStatus = 153,
+    /// kaspa-pq Phase 12 (ADR-0011): ready-to-sign attestation target for a stake bond
+    GetValidatorAttestationTarget = 154,
+    /// kaspa-pq Phase 12 (ADR-0011): a stake bond's status at the node's sink
+    GetStakeBond = 155,
+    /// kaspa-pq EVM Lane v0.4 (§16): submit a raw EIP-2718 EVM transaction to the EVM mempool
+    SubmitEvmTransaction = 156,
+    /// kaspa-pq EVM Lane v0.4 (§16): canonical-resolved EVM receipt (eth_getTransactionReceipt semantics)
+    GetEvmTransactionReceipt = 157,
+    /// kaspa-pq EVM Lane v0.4 (§16): DA-inclusion / acceptance / skip status of an EVM tx
+    GetEvmTxInclusionStatus = 158,
+    /// kaspa-pq EVM Lane v0.4 (§9.2): submit an EVM_DEPOSIT_LOCK outpoint to be claimed (bridge deposit)
+    SubmitEvmDepositClaim = 159,
+    /// Get a bounded page of UTXOs for a single address (cursor-paginated)
+    GetUtxosByAddressPage = 160,
+    /// kaspa-pq DNS v3: ready epochs below the StakeScore attestation quality floor
+    GetAttestationQualityDeficits = 161,
+    /// kaspa-pq: a paged, filtered enumeration of the stake-bond registry (owner recovery of bond outpoints)
+    GetStakeBonds = 162,
+    /// kaspa-pq DNS v3 (batch): every ready attestation target from an epoch so an external
+    /// validator that fell behind can catch up multiple epochs per poll
+    GetValidatorAttestationTargets = 163,
+    /// MISAKA Compute Token Program (design §9.3): one (asset, owner) TOK ledger row
+    GetTokenLedgerEntry = 164,
+    /// MISAKA Compute Token Program (design §9.3): an asset's minted/burned/circulating counters
+    GetTokenSupply = 165,
+    /// MISAKA Compute Token Program (design §9.3): an epoch's emission settlement + the live cursors
+    GetTokenEmissionInfo = 166,
+    /// PALW ConsensusV2: the six derived facts a block producer must read from chain state before
+    /// it may build an algo-6 attempt. What makes third-party mining possible at all.
+    GetPalwProducerFacts = 167,
+    /// ADR-0078 Decision 5: the derivations a claim carries, as the chain holds them — the read
+    /// that makes "verification belongs to the consumer" a thing a stranger can actually do.
+    GetPalwDerivedArtifacts = 168,
+    /// ADR-0078 Decision 5 / ADR-0077 R0: the free-prompt claim a derivation names, so a verifier
+    /// has the `output_root` and the executor key beside the row it is checking.
+    GetPalwFreePromptClaim = 169,
+    /// ADR-0080 design A: one side of one court session's declared close, mid-assembly — the
+    /// `present` bitmap, the count, the deadline and the digest. What lets `misaka palw
+    /// court-close` resume a partial filing from the CHAIN rather than from a journal on disk.
+    GetPalwPendingChunkGroup = 170,
+    /// ADR-0087 Decision 8: a class's model market — reserve, units, price, sold, burned, paid,
+    /// status — as the tip holds it.
+    GetPalwModelMarket = 171,
+    /// ADR-0087 Decision 8: every position a holder id has, by line (the id is not a payout
+    /// payload — see `GetPalwModelPositionsRequest::holder`).
+    GetPalwModelPositions = 172,
+    /// ADR-0088 Decision 12: a line — the row, the current root, the roots in force.
+    GetPalwModelLine = 173,
+    /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations.
+    GetPalwModelVersion = 174,
+    /// ADR-0088 Decision 12: every line of a class, the founding line included.
+    GetPalwModelLines = 175,
+    /// ADR-0088 Decision 12: the proposals attached to a line.
+    GetPalwModelProposals = 176,
+    /// ADR-0122 §6.5: a bond's claims, as executor or as a seat, with their phases and dates.
+    GetPalwClaims = 177,
+    /// ADR-0122 §6.5: the class table (share, budget, artifact root, certification, held).
+    GetPalwClasses = 178,
+    /// ADR-0122 §6.5: this node's runtime — its boot fingerprint and fences, the producer's state
+    /// and counts, the panel — which until now only its log said.
+    GetPalwNodeStatus = 179,
+    /// ADR-0122 §8.2 (ADR-0108 §8's `getPalwRegistrationTerms`): what a class registration must take
+    /// from the chain — the base target, the slash value, the registered ids and roots — and the
+    /// families the chain certified on both lanes, read from one state.
+    GetPalwRegistrationTerms = 180,
+    /// ADR-0125 §7.4: the execution lane — its stage table, the current round's permits, the span's
+    /// schedule and ledger, and the finals recorded toward the next span.
+    GetPalwRoundLane = 181,
+    /// ADR-0127 Decision 3: whether what the selected chain accepted at a DAA score is settled, and
+    /// its settlement depth in `Final` PALW anchors — never a count of blocks.
+    GetPalwSettlement = 182,
+    /// MISAKA §5 round 2: the lock a validator carries on the selected chain and the epochs whose
+    /// prevote quorum is met and which it has not precommitted yet.
+    GetPrecommitDuty = 183,
+    /// Each registered PALW class's context — `n_ctx` and its canonical job's token counts — with
+    /// where the numbers came from, and the free-prompt lane's token limits.
+    GetPalwClassContexts = 184,
+    /// ADR-0131 Decision 1: what the chain holds for each PALW class (its registration numbers,
+    /// its target, a census of its claims) and what its job costs in economic compute — the shadow
+    /// economics a client prices every class on, on every basis.
+    GetPalwClassEconomics = 185,
+    /// ADR-0135: the permissionless model registry as the tip state holds it — each class's
+    /// lifecycle row and derived profile, the seats ready for it, the claims in flight, and every
+    /// seat's last possession proof.
+    GetPalwModelRegistry = 186,
+    /// ADR-0148: what the free-prompt lane would charge ONE job — the fold's own price at the
+    /// virtual's DAA, and the executor bond's room for it — asked by a gateway after its inference
+    /// and before it writes the commitment, so the entrance and the ledger price one expression.
+    GetPalwFreePromptPrice = 187,
+    /// One class's panel as the chain holds it: bonded / ready / selected / valid receipt seats stay
+    /// distinct, with S1 geometry and the missing-reason census.
+    GetPalwClassPanelStatus = 188,
+    /// Bonded verifier seats the chain recognises, optionally filtered by class.
+    GetPalwPanelSeats = 189,
+    /// This node's local panel state: artifact, working-set, replay, sync, bond, proof, hold reason.
+    GetPalwPanelStatus = 190,
+    /// Per-claim panel assignment: full seat, partial segment, receipt status, coverage, deadline.
+    GetPalwPanelAssignments = 191,
+    /// Would the processor admit this ClassRegistered at the tip (same reason codes).
+    GetPalwModelPreflight = 192,
+    /// Track a constructed/submitted ClassRegistered: objectId, classId, pipeline, reject code.
+    SubmitPalwModelRegistration = 193,
+    /// constructed / submitted / accepted / included / folded for one registration.
+    GetPalwModelRegistrationStatus = 194,
+    /// One class: registry lifecycle, seats, share, certified family, fence.
+    GetPalwModel = 195,
+    /// Possession proofs for one class: expiry, collateral, ready/non-ready reason.
+    GetPalwModelReadiness = 196,
+    /// Processor admission checks for a class or a constructed object.
+    GetPalwModelAdmission = 197,
+    /// Which chain-certified families cover this class (not activation).
+    GetPalwModelCertification = 198,
+    /// ADR-0152 P2-10: the vesting table (R-core+, testnet-12) — a payee's or a claim's rows with
+    /// their maturity and queue position, the next block's moves, the counters and the halt.
+    /// Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwVesting = 199,
+    /// ADR-0152-adjacent (user decision 2026-09-25): one class's Activation Pool — its budgets,
+    /// who was paid, the operators credited toward the activation bonus, the terms and the sink a
+    /// top-up pays into. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwActivationPool = 200,
+    /// ADR-0160 §7.5 (lane shadow, node-only): the capacity shadow — what the capacity formulas
+    /// would reserve, weigh and allow for every live claim and bond, per ramp step, next to today's
+    /// values. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwCapacityShadow = 201,
+    /// RFC-0009 stage D: one PALW state collection proven against the header that commits it (a remote miner checks it against a block it
+    /// pinned). Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwStateProof = 202,
+    /// RFC-0009 L2: the fork-choice openings of blocks' post-states (the comparator's inputs as an O(1) opening of the committed root),
+    /// with the node's sink and DAG tips. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwForkChoiceOpening = 203,
+    /// Lane LG14-A (RFC-0014 §6.3; ops 204-206): one legacy V2 claim's dispute view — roots, retention, deadlines, reservations, open
+    /// DA sessions, answered units, open courts, recorded outcomes — as one versioned JSON document. Appended at the tail: a node built
+    /// before it drops the WebSocket on it.
+    GetPalwLegacyDispute = 204,
+    /// Lane LG14-A: the claims a live dispute reservation holds (every one, or one reserver's). Appended at the tail.
+    GetPalwLegacyDisputes = 205,
+    /// Lane LG14-A: one bond's standing as a public filer — its live reservations, the deposits held on it, its exposure. Appended.
+    GetPalwFraudFilerStatus = 206,
+    /// RFC-0010 (lane C2; op range 220–229): a permissionless-Panel claim's status — the rule that governs it, its seal, frozen
+    /// snapshot, certified-beacon state, assignment, retries and terminal reason — and the engine's overview, as one versioned
+    /// JSON observation. Read-only: no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwPanelV3Status = 220,
+    /// G14 lane D (kernel route; ops 210-219 are this lane's): one claim of the probabilistic-constraint route, everything public about
+    /// it — its lifecycle, the public record a fresh verifier is built from, the positions served on chain, the open demands, the
+    /// interim assignment — with the roots that anchor it. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwKernelClaim = 210,
+    /// G14 lane D: the kernel route's rows, a page at a time, with the committed ledger and aux roots (a reader that gathers every
+    /// page rebuilds the ledger and checks the root). Appended at the tail.
+    GetPalwKernelRows = 211,
+    /// G14 lane D / RFC-0015: every Final the kernel route holds, in canonical order, with the beacon's `WorkFinalEventV1` for it
+    /// (an OPV Final is `PanelIndependent`: the fact RFC-0010's Panel-assignment beacon needs). Appended at the tail.
+    GetPalwKernelFinals = 212,
+    /// RFC-0002 P0 (lane RFC02-T): one bond's candidate-refutation seal rows (kernel route aux table 64, inner 36) — slot, seal, clock,
+    /// deposit and whether it is live — and the fence's state. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwModelRefutationSeals = 213,
+    /// G14 lane D phase 3 (this lane's 230-239): where a V2 class stands on the onboarding path — its artifact bindings (and their
+    /// refutation horizon), its kernel binding, its conformance commitment and the activation gate's verdict with the reason it holds.
+    /// Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwOnboarding = 230,
+    /// Onboarding P0 (the lead's allocation): a V2 class's conformance record, current attempt and posted evidence (aux tables 39 and
+    /// 40, raw), the network's challenge policy and the beacon state the node derives. Appended at the tail.
+    GetPalwConformanceEvidence = 231,
+    /// RFC-0008 v2 (lane X8R; op range 240–249): the EXEC v2 lane's observation — counts, roots with each work slice and the state of
+    /// its kernel-route verification claim, one block's refusal record, the lane's health — as one versioned JSON document. Read-only:
+    /// no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwExecV2Status = 240,
+    /// Complete native / slice / kernel-fee vesting observation (RFC6/8/12).
+    GetPalwRewardVesting = 241,
+    /// Authenticated paginated monetary material auxiliary snapshot.
+    GetPalwMonetaryMaterial = 242,
+    /// Read-only: bounded byte pages of the canonical `PalwStateCarriageV2` of the PALW state a pinned header commits (its selected
+    /// parent's post-state), for offline `palw-class panel-lifetime-v2 --carriage`. Appended at the tail.
+    GetPalwStateCarriage = 243,
+    /// G14: the native required-family preclaim quote an external producer signs its pledge over.
+    /// Read-only; the same planner admission re-runs. Appended at the tail.
+    GetPalwStagedPreclaimQuote = 244,
+    /// RFC-0006 consumer v2: a class's immutable per-reader router binding (kernel-route aux 139). Read-only. Appended at the
+    /// tail (the RFC06 GDN/router lane's allocation).
+    GetPalwRouterBindingV2 = 245,
+    /// RFC-0012 acceptance: one paid claim (enrollment, round seats/quorum/receipts, Final) at the tip. Read-only, no authority.
+    /// Op 247 is the RFC-0012 harness's reservation (`scripts/drills/rfc12_acceptance_observe.py`).
+    GetPalwPaidClaim = 247,
+    /// RFC-0012 acceptance: the DNS security reserve balance per block and virtual UTXO point reads by outpoint. Read-only.
+    /// Op 246 (free per the 2026-10-15 number inventory; proto 1310/1311).
+    GetPalwAcceptanceReads = 246,
+    /// RFC-0016: the per-model report (targets apart from outcomes; node-local observations labelled) and the pre-lottery quote.
+    /// Read-only. Op 255 (245–254 are reserved by other lanes).
+    GetPalwRfc0016Report = 255,
+}
+
+impl RpcApiOps {
+    pub fn is_subscription(&self) -> bool {
+        matches!(
+            self,
+            RpcApiOps::NotifyBlockAdded
+                | RpcApiOps::NotifyNewBlockTemplate
+                | RpcApiOps::NotifyUtxosChanged
+                | RpcApiOps::NotifyVirtualChainChanged
+                | RpcApiOps::NotifyPruningPointUtxoSetOverride
+                | RpcApiOps::NotifyFinalityConflict
+                | RpcApiOps::NotifyFinalityConflictResolved
+                | RpcApiOps::NotifySinkBlueScoreChanged
+                | RpcApiOps::NotifyVirtualDaaScoreChanged
+                | RpcApiOps::NotifyPalwClassReadinessChanged
+                | RpcApiOps::NotifyPalwPanelAssignment
+                | RpcApiOps::NotifyPalwPanelReceipt
+                | RpcApiOps::NotifyPalwPanelEligibilityChanged
+                | RpcApiOps::Subscribe
+                | RpcApiOps::Unsubscribe
+        )
+    }
+}
+
+impl From<RpcApiOps> for u32 {
+    fn from(item: RpcApiOps) -> Self {
+        item as u32
+    }
+}
+
+// TODO: Remove this conversion when workflow_rpc::server::interface::Interface
+//       will be generic over a MethodOps and NotificationOps instead of a single Ops param.
+impl From<EventType> for RpcApiOps {
+    fn from(item: EventType) -> Self {
+        match item {
+            EventType::BlockAdded => RpcApiOps::BlockAddedNotification,
+            EventType::VirtualChainChanged => RpcApiOps::VirtualChainChangedNotification,
+            EventType::FinalityConflict => RpcApiOps::FinalityConflictNotification,
+            EventType::FinalityConflictResolved => RpcApiOps::FinalityConflictResolvedNotification,
+            EventType::UtxosChanged => RpcApiOps::UtxosChangedNotification,
+            EventType::SinkBlueScoreChanged => RpcApiOps::SinkBlueScoreChangedNotification,
+            EventType::VirtualDaaScoreChanged => RpcApiOps::VirtualDaaScoreChangedNotification,
+            EventType::PruningPointUtxoSetOverride => RpcApiOps::PruningPointUtxoSetOverrideNotification,
+            EventType::NewBlockTemplate => RpcApiOps::NewBlockTemplateNotification,
+            EventType::PalwClassReadinessChanged => RpcApiOps::PalwClassReadinessChangedNotification,
+            EventType::PalwPanelAssignment => RpcApiOps::PalwPanelAssignmentNotification,
+            EventType::PalwPanelReceipt => RpcApiOps::PalwPanelReceiptNotification,
+            EventType::PalwPanelEligibilityChanged => RpcApiOps::PalwPanelEligibilityChangedNotification,
+        }
+    }
+}

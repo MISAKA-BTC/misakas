@@ -1,0 +1,145 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "b318ea946",
+  "selected_unique_passes": 69,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "overlap": "31 native (includes targeted 1) + 11 query/frontier + 1 codec + 26 identity/gate = 69. Do not add intermediate 1 or historical 67/64/58/57/93.",
+  "cargo_and_release_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "commands": [
+    "cargo check --release -p kaspa-consensus-core",
+    "cargo test --release -p kaspa-consensus-core --lib rooted_shared_query (honest fixture then stronger final false-committed-data fixture)",
+    "cargo test --release -p kaspa-consensus-core --test palw_court_shared_tir_state_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move && cargo check --release -p kaspa-consensus && target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1 && target/release/deps/kaspa_consensus_core-cd85ed321316b157 court_tir_",
+    "python3 scripts/drills/check_rfc06_native_wire_idempotent.py"
+  ],
+  "non_test_consensus_check_exit": 0,
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "ef506fd3168689d6ccaaf1d0b8984139d425e81d56e531afd2b81aca9675c6cb",
+    "consensus/core/src/palw_court_service_state_v2.rs": "7736abb62f95acaeaaaf9e5c3cbf2fb846512437bcfe21020838d77aceeb84d5",
+    "consensus/core/src/palw_court_shared_tir_fold_v1.rs": "aba6d3c42694c51d38323f6f57f3eb8b6ebca2b93b7782c7e421ba50b7bec8d6",
+    "consensus/core/src/palw_court_shared_tir_state_v1.rs": "a17943ef905e9dcea54cbb068a0aecb698577afe4b25475a5c4ee553f4655730",
+    "consensus/core/src/palw_native_resource_v1/generated.rs": "1bbf74b32f3e83de1621207522779eb3d5dac6fc2fc89a57c8e3e0d64aa8090f",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "a106120b1b8ff89329c14f2cfc08677c6849eee39d7e4199c1812656b04e598c",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "41285a80b2a73bc0754c645f33a12d034f67dd2b615e181a02a117d155554971",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "156c4ce6aa5dfe132cce133aa305209436d6318fbeb5b8b0c629e3e995518791",
+    "consensus/core/src/palw_state_v2.rs": "46dbaac1a910eb9ca48caa6c42b84a3ffbbcd16bf84af987a5758c66d0a223a2",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "5660b2b3b4c1a70b374fcaa197d9b20eb514a5d1f561f323f8bc218973929183",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "050a6b593155ee53b8941fc34cdbcb376eac7e8b45461e6c5c5aa07592e8df34",
+    "consensus/core/src/palw_tir_public_source_v1.rs": "118e541b64c7edee00aa08578fdc84d7fc0b04472e1edd5973eb359604c2885f",
+    "consensus/core/tests/palw_court_shared_tir_state_v1.rs": "715164ce66814e4a1d5f217b37cf4b36f495876fc9aa5dd0937cebd06a2f9770"
+  },
+  "core_unit_executable_sha256": "7b6aca08b6f3afa3410074ed70656b367bde8913e1af5844fa37f77397cccbbc",
+  "source_patch": {
+    "path": "rooted-shared-runtime.patch",
+    "sha256": "e2d519fd828a7265059be67c4894f64bf0429f632bebdd78844b53bc7ee7f3ad"
+  },
+  "generator_check": {
+    "path": "rooted-shared-wire-idempotent.log",
+    "sha256": "f37ab49c54bf5b109caa581b2e6b1535ca0dc30de9442d0b7df178ef441dfb02"
+  },
+  "logs": [
+    {
+      "path": "rooted-shared-first-check.log",
+      "scope": "early non-test core check",
+      "sha256": "79348d8604168b07c3b6c51d8eedd637b6540a8b91e0f6247c6b65622c202d61",
+      "test_results": []
+    },
+    {
+      "path": "rooted-shared-native-release.log",
+      "scope": "intermediate honest-data fixture",
+      "sha256": "44c8cd91292fc496bc63964a18ee038c4dcbe8c863599a27f8df144dfdee9d60",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "rooted-shared-authenticity-release.log",
+      "scope": "final false-committed-data / valid-codec tamper fixture",
+      "sha256": "3480103e9f4a29383d2f09527b7253bb2ef53bb334fefb3eef6819ec9cfe3ccc",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "rooted-shared-final-regressions-check.log",
+      "scope": "final codec/identities, non-test consensus and native/query replay",
+      "sha256": "001794ab66679ac32f58152dd674b8d5ac794b26eff120127a11f4c129eb4bd2",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 31,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0
+        }
+      ]
+    },
+    {
+      "path": "rooted-shared-wire.log",
+      "scope": "initial schema generation",
+      "sha256": "cfe33da42547d4fd9d6e08c511bb94436527f6f3d92158b0b7ac6f78505b2b49",
+      "test_results": []
+    }
+  ],
+  "scope": "Internal native fold fixture with all 8 owner slots occupied, actual requester ML-DSA, raw-source original-root reauthentication, native journal/carriage; original/context/registration/payment are fixtures. Not real lifecycle/UTXO/carrier node T05, complete original reservation or service calibration.",
+  "new_candidate_keys": [
+    14,
+    15,
+    16
+  ],
+  "new_candidate_rows": [
+    20,
+    21,
+    22
+  ],
+  "public_schema_adopted": false,
+  "lifecycle_assigned": false,
+  "production_context_installer": false,
+  "complete_original_reservation": false,
+  "new_duty_completion_credit_or_default": false,
+  "full_g14_complete": false,
+  "docs_check": {
+    "status": "FAIL: same 5 imported missing refs, 43 baseline-known occurrences",
+    "path": "rooted-shared-docs-check.log",
+    "sha256": "ee90716bb7a1f4c7cb46b023605e66fc4adab17170032ecc7f9626227d642759"
+  }
+}

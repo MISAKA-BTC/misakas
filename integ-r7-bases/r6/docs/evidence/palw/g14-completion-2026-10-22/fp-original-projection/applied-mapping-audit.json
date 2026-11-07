@@ -1,0 +1,8 @@
+{
+  "base": "19d7d302d888c7a284d30f5ce509eabd1ebdf0e5",
+  "source_before_sha256": "9c2716fdb2d96076f744b7019ad8ef442b4e054342d2cbf39f18d6ea1d1c3c16",
+  "source_after_sha256": "faac3b16ce14d6743bb66325606dc8f9fba56480ec5ea03a4cef22c9e3205ad6",
+  "mapping_whitespace_normalized_equal": true,
+  "mapping_sha256": "750287ae16c8c9e7384dc8c0d0d5cdad9345652ce766524f336ddcd009519f65",
+  "candidate_mirror_test_removed": true
+}

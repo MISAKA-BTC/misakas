@@ -1,0 +1,18 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mellum",
+  "doc": "Mellum (JetBrains): Qwen3-MoE's block (per-head shared q/k RMS norm, softmax top-k experts with norm_topk_prob, no shared expert) with the layer pattern given per layer - attention type (layer_types: full or sliding, default all full) and MLP type (mlp_layer_types: dense or sparse, default all sparse) - and a rotary base keyed by layer type (rope_parameters.full_attention / sliding_attention). Third-party adapter (lane H): data only, extends the built-in qwen3-moe.",
+  "extends": ["qwen3-moe"],
+  "match": {"architectures": ["MellumForCausalLM"], "model_types": ["mellum"]},
+  "config": {"defaults": {"sliding_window": 1024, "tie_word_embeddings": false}, "inert": ["output_router_logits"]},
+  "vars": [
+    {"name": "sw", "value": {"$cfgn": ["sliding_window", 1024]}},
+    {"name": "types", "value": {"$layer_types": {"n": {"$var": "n"}, "allowed": ["full_attention", "sliding_attention"], "each": "full_attention"}}},
+    {"name": "mlt", "value": {"$cfg?": "mlp_layer_types"}},
+    {"name": "sparse", "layer": true, "value": {"$if": [{"$ne": [{"$var": "mlt"}, null]}, {"$eq": [{"$index": [{"$var": "mlt"}, {"$var": "i"}]}, "sparse"]}, true]}},
+    {"name": "rope", "value": {"$rope": {"dim": {"$var": "hd"}, "theta": 500000.0, "layer_type": "full_attention", "max_pos": {"$var": "max_pos"}}}},
+    {"name": "rope_local", "value": {"$rope": {"dim": {"$var": "hd"}, "theta": 10000.0, "layer_type": "sliding_attention", "max_pos": {"$var": "max_pos"}}}},
+    {"name": "l_position", "layer": true, "value": {"Rope": {"$if": [{"$eq": [{"$index": [{"$var": "types"}, {"$var": "i"}]}, "sliding_attention"]}, {"$var": "rope_local"}, {"$var": "rope"}]}}},
+    {"name": "model_type", "value": "mellum"}
+  ]
+}

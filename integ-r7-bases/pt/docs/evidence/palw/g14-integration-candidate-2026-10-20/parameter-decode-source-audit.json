@@ -1,0 +1,10 @@
+{
+  "parent": "14f12af50",
+  "sha256": {
+    "consensus/core/src/palw_tir_court_v1.rs": "e40d304fbb0f98c910b8571c5e10e0db2a6b9cc1091256130613850ce98f0ed1",
+    "consensus/core/src/palw_court_shared_tir_state_v1.rs": "13709a0523347d24665ee20532549fc3433e83eee4d9f88c7ac86c94301ae957",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "34b2a24d285879bf159e207cb2e45633d91ef780b88576cb0fa794ec06d302f5"
+  },
+  "exact_patch_reconstruction": true,
+  "scope": "complete opening decoder only; no storage, partial-stream ownership or paid ingress"
+}

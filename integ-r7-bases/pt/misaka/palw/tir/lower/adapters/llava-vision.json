@@ -1,0 +1,24 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "llava-vision",
+  "extends": ["clip-vision"],
+  "doc": "LLaVA's vision tower inside LlavaForConditionalGeneration: CLIP's tower (the wrapper's `vision_config`, its tensors under `vision_tower.`) run up to the layer `vision_feature_layer` names (a negative index counts from the last hidden state, -2 by default; `hidden_states[k]` is the output of layer k and index 0 the embeddings), the class row dropped, then the multimodal projector (linear_1, the projector_hidden_act, linear_2) to the text decoder's hidden_size (text_config, 4096 without). Only `vision_feature_select_strategy` `default` is modelled. The wrapper itself is read as its text decoder; this adapter is reached by `match.tower_of`. The data form of the LLaVA arm of parse_vision_rust (its oracle). Features: VISION_FROM_SPEC_V1.",
+  "match": {"architectures": [], "model_types": [], "tower_of": ["LlavaForConditionalGeneration"]},
+  "config": {"scope": "vision_config", "inert": ["vocab_size"]},
+  "vars": [
+    {"name": "fl", "value": {"$if": [{"$eq": [{"$root": "vision_feature_layer"}, null]}, -2, {"$root": "vision_feature_layer"}]}},
+    {"name": "strategy", "value": {"$if": [{"$eq": [{"$root": "vision_feature_select_strategy"}, null]}, "default", {"$root": "vision_feature_select_strategy"}]}},
+    {"name": "strategy_ok", "value": {"$check": [{"$eq": [{"$var": "strategy"}, "default"]}, "LLaVA vision_feature_select_strategy other than `default`"]}},
+    {"name": "hid", "value": {"$get": [{"$root": "text_config"}, "hidden_size", 4096]}},
+    {"name": "pact", "value": {"$if": [{"$eq": [{"$root": "projector_hidden_act"}, null]}, "gelu", {"$root": "projector_hidden_act"}]}},
+    {"name": "run_layers", "value": {"$if": [{"$lt": [{"$var": "fl"}, 0]}, {"$add": [{"$var": "layers"}, 1, {"$var": "fl"}]}, {"$var": "fl"}]}}
+  ],
+  "spec": {
+    "run": {"$var": "run_layers"},
+    "out": {"ClipPooled": {"$unset": true}, "Projector": {"out": {"$var": "hid"}, "act": {"$act": {"$var": "pact"}}}},
+    "names": {"$merge": [
+      {"patch.w": "vision_tower.embeddings.patch_embedding.weight", "cls": "vision_tower.embeddings.class_embedding", "pos": "vision_tower.embeddings.position_embedding.weight", "pre_norm": "vision_tower.pre_layrnorm", "post_norm": "vision_tower.post_layernorm", "norm1": "vision_tower.encoder.layers.{L}.layer_norm1", "norm2": "vision_tower.encoder.layers.{L}.layer_norm2", "attn.q": "vision_tower.encoder.layers.{L}.self_attn.q_proj", "attn.k": "vision_tower.encoder.layers.{L}.self_attn.k_proj", "attn.v": "vision_tower.encoder.layers.{L}.self_attn.v_proj", "attn.o": "vision_tower.encoder.layers.{L}.self_attn.out_proj", "mlp.up": "vision_tower.encoder.layers.{L}.mlp.fc1", "mlp.down": "vision_tower.encoder.layers.{L}.mlp.fc2"},
+      {"proj.up": "multi_modal_projector.linear_1", "proj.down": "multi_modal_projector.linear_2"}
+    ]}
+  }
+}

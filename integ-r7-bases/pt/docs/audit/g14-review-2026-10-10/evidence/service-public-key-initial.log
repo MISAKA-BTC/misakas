@@ -1,0 +1,17 @@
+
+running 1 test
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default has been running for over 60 seconds
+[service-public] ordinary bond registered before DAA 1, maturity 1000, now 1002
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default' (2939858) panicked at kaspad/src/palw_service_public_e2e.rs:529:9:
+service made no objective progress: PalwLegacyDisputeViewV1 { claim_id: 1baf868f85eb80a9cffcf2700d7b17b6ffcf28986e57634631c0ad0dd0745aade3f35ab2ee4a536d3f580a478bbfdebfe9e0878bf4da67d3efdac91efc317cd5, class_id: f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8, producer: PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }), phase: ReceiptLicensed { licensed_daa: 1023 }, execution_root: 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000d50700000000ece7, trace_root: 000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000038010000d507007a, accepted_daa: 1002, trace_retention_daa: 6402, job_identity: 499f7248c2ba99edb13d763674abcf4730f53d7b151ff6452dd30446d156cc9f2e79729b5f089fa08dae09f8faddb65935174662a4c15f45e439783d888dcec1, work_leaves: 0, deadline_daa: Some(1143), hard_deadline_daa: 5202, record: None, sessions: [], answered: [], flat_answered_rows: 0, open_courts: 0, executor_refuted: false, court_convicted: false, da_defaulted: false }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 604 filtered out; finished in 419.59s
+

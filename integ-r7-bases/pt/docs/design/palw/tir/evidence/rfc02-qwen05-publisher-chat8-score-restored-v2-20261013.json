@@ -1,0 +1,152 @@
+{
+  "jobs": [
+    {
+      "id": "arithmetic-512-1",
+      "task": "arithmetic",
+      "expected_answer": "42",
+      "source": {
+        "generated_tokens": [
+          19,
+          17,
+          151645
+        ],
+        "first_eos_index": 2,
+        "answer_text": "42",
+        "predeclared_task_answer_passed": true
+      },
+      "integer": {
+        "generated_tokens": [
+          19,
+          17,
+          151645
+        ],
+        "first_eos_index": 2,
+        "answer_text": "42",
+        "predeclared_task_answer_passed": true
+      },
+      "equal_generated_tokens": 3,
+      "exact_generated_job": true,
+      "source_integer_actual_fed_token_ids_equal": true,
+      "source_actual_fed_length": 47,
+      "integer_actual_fed_length": 47
+    },
+    {
+      "id": "translation-512-1",
+      "task": "translation",
+      "expected_answer": "Hello",
+      "source": {
+        "generated_tokens": [
+          89015,
+          320,
+          42,
+          26378,
+          40552,
+          9991,
+          8,
+          151645
+        ],
+        "first_eos_index": 7,
+        "answer_text": "こんにちは (Konnichiwa)",
+        "predeclared_task_answer_passed": false
+      },
+      "integer": {
+        "generated_tokens": [
+          89015,
+          320,
+          42,
+          26378,
+          40552,
+          9991,
+          8,
+          151645
+        ],
+        "first_eos_index": 7,
+        "answer_text": "こんにちは (Konnichiwa)",
+        "predeclared_task_answer_passed": false
+      },
+      "equal_generated_tokens": 8,
+      "exact_generated_job": true,
+      "source_integer_actual_fed_token_ids_equal": true,
+      "source_actual_fed_length": 48,
+      "integer_actual_fed_length": 48
+    },
+    {
+      "id": "code-512-1",
+      "task": "code",
+      "expected_answer": "def add(a, b):\n    return a + b",
+      "source": {
+        "generated_tokens": [
+          750,
+          912,
+          2877,
+          11,
+          293,
+          982,
+          262,
+          470,
+          264,
+          488,
+          293,
+          151645
+        ],
+        "first_eos_index": 11,
+        "answer_text": "def add(a, b):\n    return a + b",
+        "predeclared_task_answer_passed": true
+      },
+      "integer": {
+        "generated_tokens": [
+          73594,
+          12669,
+          198,
+          750,
+          912,
+          2877,
+          11,
+          293,
+          982,
+          262,
+          470,
+          264,
+          488,
+          293,
+          198,
+          73594,
+          151645
+        ],
+        "first_eos_index": 16,
+        "answer_text": "```python\ndef add(a, b):\n    return a + b\n```",
+        "predeclared_task_answer_passed": false
+      },
+      "equal_generated_tokens": 0,
+      "exact_generated_job": false,
+      "source_integer_actual_fed_token_ids_equal": false,
+      "source_actual_fed_length": 68,
+      "integer_actual_fed_length": 73
+    }
+  ],
+  "generated_token_agreement": 0.39285714285714285,
+  "actual_compared_output_slots": 28,
+  "exact_generated_job_fraction": 0.6666666666666666,
+  "source_task_answer_fraction": 0.6666666666666666,
+  "integer_task_answer_fraction": 0.3333333333333333,
+  "predeclared_free_running_fidelity_passed": false,
+  "predeclared_task_answers_passed": false,
+  "predeclared_generation_and_answer_thresholds_met": false,
+  "schema": "misaka.rfc02.independent-greedy-task-score.v2",
+  "protocol_sha256": "d4eb309a3836cb0966c887ba9a22802ab6c389aa9caafce76d5934e2c3dbc859",
+  "source_json_sha256": "07951530cb1bc4ecffdc579b7b5496de6456570909f5ec97b949ae6b2c260f15",
+  "integer_json_sha256": "c0495933d5de8160528cb562d0c7aa0134be1254cdd0de0f5758ac1d62052a91",
+  "artifact_sha256": "9af80e4e459cc2334519295fb100c58291382e3e4b4a5ee3e7098e7d1d8a17b6",
+  "source_manifest_sha256": "64ab29ad66c4b852673cc3da25416c72ce6af5c568ee53a78ec1734291ae61a8",
+  "tokenizer_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+  "repository": "Qwen/Qwen2.5-0.5B-Instruct",
+  "revision": "7ae557604adf67be50417f59c2c2f167def9a775",
+  "context": 512,
+  "decode_contract": "greedy-first-EOS-no-padding.v2",
+  "comparison_contract": "positional complete terminated outputs; missing positions fail; no padded credit",
+  "requested_max_tokens_per_job": 32,
+  "original_fixed32_records_and_thresholds_unchanged": true,
+  "complete_task_benchmark_or_maximum_context_proven": false,
+  "native_final_or_a6_a8_proven": false,
+  "full_rfc02_complete": false
+}

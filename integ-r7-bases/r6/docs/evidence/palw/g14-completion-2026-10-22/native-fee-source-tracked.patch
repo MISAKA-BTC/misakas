@@ -1,0 +1,246 @@
+diff --git a/consensus/core/src/lib.rs b/consensus/core/src/lib.rs
+index 574b0e93c..456c737d9 100644
+--- a/consensus/core/src/lib.rs
++++ b/consensus/core/src/lib.rs
+@@ -1079,6 +1079,7 @@ pub mod palw_tir_public_carriage_v1;
+ pub mod palw_tir_public_claim_v1;
+ pub mod palw_tir_public_fp_envelope_v1;
+ pub mod palw_court_carrier_fee_v1;
++pub mod palw_court_source_material_graph_v3;
+ pub mod palw_court_original_escrow_v1;
+ pub mod palw_tir_funded_original_envelope_v1;
+ 
+diff --git a/consensus/src/pipeline/virtual_processor/processor.rs b/consensus/src/pipeline/virtual_processor/processor.rs
+index 282a8a2fd..2bf2a0ca0 100644
+--- a/consensus/src/pipeline/virtual_processor/processor.rs
++++ b/consensus/src/pipeline/virtual_processor/processor.rs
+@@ -1130,7 +1130,7 @@ pub struct VirtualStateProcessor {
+ /// absent, never as "the carrier underpaid".
+ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
+ 
+-/// One object a block's acceptance produced, with what its carrier paid (ADR-0075 SA-1/SA-2).
++/// One accepted object with its carrier fee available for rent after mandatory bond burn.
+ ///
+ /// The pairing exists because `AcceptanceData` cannot express it: it records a transaction id and
+ /// an index and nothing about value, so before this the object walk had no way to read the fee
+@@ -1138,6 +1138,7 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
+ /// the map `calculate_utxo_state` filled, and spent in `palw_v2_accepted_objects`.
+ pub(super) struct PalwCarriedObjectV1 {
+     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
++    /// Internal only: fee available for rent after mandatory bond burn, or the unpriced sentinel.
+     pub(super) carrier_fee: u64,
+     /// Original transaction-local companion, never borrowed from another carrier.
+     pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+@@ -2477,7 +2478,7 @@ impl VirtualStateProcessor {
+                                     header.daa_score,
+                                     // ADR-0075 SA-1/SA-2: what each 0x4b carrier paid, collected
+                                     // by the UTXO walk two frames up, where the fee is knowable.
+-                                    &ctx.palw_v2_accepted_tx_fees,
++                                    &ctx.palw_v2_rent_available_fees,
+                                 );
+                                 let history_custody_pledges = objects
+                                     .iter()
+diff --git a/consensus/src/pipeline/virtual_processor/processor/palw_accept.rs b/consensus/src/pipeline/virtual_processor/processor/palw_accept.rs
+index 4df1abeb3..5eebe401d 100644
+--- a/consensus/src/pipeline/virtual_processor/processor/palw_accept.rs
++++ b/consensus/src/pipeline/virtual_processor/processor/palw_accept.rs
+@@ -1131,7 +1131,7 @@ impl VirtualStateProcessor {
+                 let owed = kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1();
+                 if carrier_fee < owed {
+                     info!(
+-                        "Block {block}: an ObjectChunk opening group {group} was dropped, and the block stands: its carrier paid \
++                        "Block {block}: an ObjectChunk opening group {group} was dropped, and the block stands: its carrier has available after bond burn \
+                          {carrier_fee} sompi and one of the {} pending-chunk slots rents for {owed} (ADR-0075 SA-1)",
+                         kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_GROUPS
+                     );
+@@ -1182,7 +1182,7 @@ impl VirtualStateProcessor {
+                 let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(&object);
+                 if carrier_fee < owed {
+                     info!(
+-                        "Block {block}: a model-registry object was dropped, and the block stands: its carrier paid \
++                        "Block {block}: a model-registry object was dropped, and the block stands: its carrier has available after bond burn \
+                          {carrier_fee} sompi and a row in a bounded registry table rents for {owed} (ADR-0088 Decision 11)"
+                     );
+                     continue;
+@@ -1196,7 +1196,7 @@ impl VirtualStateProcessor {
+                 if carrier_fee < owed {
+                     info!(
+                         "Block {block}: a CourtCloseDeclared for session {session_id} was dropped, and the block stands: its \
+-                         carrier paid {carrier_fee} sompi and adjudicating a close of {count} chunks rents for {owed} \
++                         carrier has {carrier_fee} sompi available after bond burn and adjudicating a close of {count} chunks rents for {owed} \
+                          (ADR-0080 design A)"
+                     );
+                     continue;
+@@ -1359,7 +1359,7 @@ impl VirtualStateProcessor {
+                     let owed = kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(vectors);
+                     if carrier_fee < owed {
+                         info!(
+-                            "Block {block}: a FamilyCertified object was dropped ungraded, and the block stands: its carrier paid \
++                            "Block {block}: a FamilyCertified object was dropped ungraded, and the block stands: its carrier has available after bond burn \
+                              {carrier_fee} sompi and grading {vectors} fault vectors rents for {owed} (ADR-0075 SA-2)"
+                         );
+                         continue;
+@@ -1639,7 +1639,7 @@ impl VirtualStateProcessor {
+                     );
+                     if carrier_fee < owed {
+                         info!(
+-                            "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier paid \
++                            "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier has available after bond burn \
+                              {carrier_fee} sompi and recomputing its prompt rents for {owed}"
+                         );
+                         continue;
+@@ -1789,7 +1789,7 @@ impl VirtualStateProcessor {
+             // original full plan or this owner's own acquisition/work contract.
+             match self.palw_tir_public_minimum_rent_v1(&folded, state_params, point, &object, &tir_public_originals) {
+                 Ok(Some(owed)) if carrier_fee == PALW_RENT_UNPRICED || carrier_fee < owed => {
+-                    info!("Block {block}: a TIR public allocation was dropped: actual carrier rent {carrier_fee} is not a paid allocation of {owed}");
++                    info!("Block {block}: a TIR public allocation was dropped: carrier rent available after bond burn {carrier_fee} is not a paid allocation of {owed}");
+                     continue;
+                 }
+                 Err(why) => {
+@@ -2376,7 +2376,7 @@ impl VirtualStateProcessor {
+         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+         block: BlockHash,
+         block_daa: u64,
+-        carrier_fees: &std::collections::HashMap<TransactionId, u64>,
++        rent_available_fees: &std::collections::HashMap<TransactionId, u64>,
+     ) -> Vec<PalwCarriedObjectV1> {
+         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
+             return Vec::new();
+@@ -2686,14 +2686,12 @@ impl VirtualStateProcessor {
+         // makes the whole rule read as absent rather than as "everyone underpaid".
+         let priced = self.palw_certification_rent_at(block_daa);
+         // G14 R2: past `palw_tir_public_conviction_v1` the TIR route's own carriers (a TFP1 original, a TIR control) read their
+-        // actual fee whatever the certification-rent fence says; every OTHER carrier keeps exactly the reading it had (priced or
++        // actual fee remaining after bond burn whatever the certification-rent fence says; every OTHER carrier keeps exactly the reading it had (priced or
+         // `PALW_RENT_UNPRICED`), so arming this route moves no other object's rent rule.
+         let fee_of = |carrier: TransactionId, tir_route: bool| {
+-            if priced || (tir_public_armed && tir_route) {
+-                carrier_fees.get(&carrier).copied().unwrap_or(0)
+-            } else {
+-                PALW_RENT_UNPRICED
+-            }
++            crate::pipeline::virtual_processor::utxo_validation::palw_carrier_rent_available_v1(
++                rent_available_fees, carrier, priced || (tir_public_armed && tir_route),
++            )
+         };
+         // **The 2026-09-23 Position route matrix, P-B1: a carrier-borne buy or seed names, here, who
+         // it is paid back to if acceptance refuses it** — the one place the carrier transaction is
+diff --git a/consensus/src/pipeline/virtual_processor/tests.rs b/consensus/src/pipeline/virtual_processor/tests.rs
+index ea1bd56fb..d8d8df36e 100644
+--- a/consensus/src/pipeline/virtual_processor/tests.rs
++++ b/consensus/src/pipeline/virtual_processor/tests.rs
+@@ -17708,3 +17708,5 @@ async fn rfc12_utxo_import_target_and_completion_are_generation_bound() {
+ 
+ // Local native capacity is retryable, never a branch preference or invalidity.
+ mod rfc12_native_capacity_selection;
++
++mod carrier_bond_rent_conservation;
+diff --git a/consensus/src/pipeline/virtual_processor/utxo_validation.rs b/consensus/src/pipeline/virtual_processor/utxo_validation.rs
+index 2d70d8b35..e78cc3dd3 100644
+--- a/consensus/src/pipeline/virtual_processor/utxo_validation.rs
++++ b/consensus/src/pipeline/virtual_processor/utxo_validation.rs
+@@ -181,7 +181,8 @@ pub(super) struct UtxoProcessingContext<'a> {
+     /// `AcceptanceData` records a transaction id and an index and nothing about value, and the
+     /// object walk that grades a certification is a pure function of the transactions. The fee is
+     /// known exactly HERE — `calculated_fee` is `in − out` over the composed view — so it is kept
+-    /// here and read by `palw_v2_objects_of_block` two frames along.
++    /// here without changing its raw meaning. The parallel rent-available map deducts mandatory
++    /// bond burn before `palw_v2_objects_of_block` reads purchasing power.
+     ///
+     /// **Every accepted transaction, not a list of PALW bands.** The walk two frames along builds
+     /// one list out of `palw_fp_objects_from_accepted_txs_v3` (0x4a) and
+@@ -196,6 +197,9 @@ pub(super) struct UtxoProcessingContext<'a> {
+     /// Filled only while a V2 bundle is installed AND the rent fence is armed, so on every shipped
+     /// preset it is empty and costs one `is_some_and`.
+     pub palw_v2_accepted_tx_fees: std::collections::HashMap<TransactionId, u64>,
++    /// Actual accepted carrier fee remaining after mandatory released-bond burn.
++    /// The raw fee map above retains its existing meaning.
++    pub palw_v2_rent_available_fees: std::collections::HashMap<TransactionId, u64>,
+     /// **ADR-0125: the merged round blocks and which of them hold their permit**, decided against
+     /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
+     /// every shipped preset walks the mergeset exactly as before.
+@@ -250,6 +254,7 @@ impl<'a> UtxoProcessingContext<'a> {
+             palw_v2_receipt_v4_payouts: BlockHashMap::default(),
+             palw_v2_bond_burns: Default::default(),
+             palw_v2_accepted_tx_fees: Default::default(),
++            palw_v2_rent_available_fees: Default::default(),
+             palw_round_verdicts: None,
+             palw_round_fee_incomes: Vec::new(),
+         }
+@@ -586,9 +591,7 @@ impl VirtualStateProcessor {
+             for (validated_tx, _) in validated_transactions.iter() {
+                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
+                 ctx.accepted_tx_ids.push(validated_tx.id());
+-                if collect_carrier_fees {
+-                    ctx.palw_v2_accepted_tx_fees.insert(validated_tx.id(), validated_tx.calculated_fee);
+-                }
++
+                 // **Audit C-08 part three: the miner does not collect what the chain destroyed.**
+                 //
+                 // A released PALW bond's spend must leave `slashed` sompi unclaimed by any output,
+@@ -597,6 +600,11 @@ impl VirtualStateProcessor {
+                 // documentation ("enters circulation nowhere") would still be false. Burned by
+                 // don't-mint, the mechanism the §F service share already uses.
+                 let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0);
++                if collect_carrier_fees {
++                    palw_record_accepted_carrier_fees_v1(
++                        validated_tx, owed, &mut ctx.palw_v2_accepted_tx_fees, &mut ctx.palw_v2_rent_available_fees,
++                    );
++                }
+                 // **ADR-0075 SA-1/SA-2: the RENT is burned, and only the carriage is the miner's.**
+                 //
+                 // Both prices are transaction fees, and a fee is paid to the coinbase of the block
+@@ -619,15 +627,8 @@ impl VirtualStateProcessor {
+                 let collectible =
+                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
+                 block_fee += collectible;
+-                if finality_fee_active
+-                    && validated_tx.tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
+-                {
+-                    // G14 R2: a TIR rent declaration is BURNED, never re-classified into the finality split (0 below
+-                    // `palw_tir_public_conviction_v1`, so every shipped network classifies exactly as before).
+-                    finality_fee += validated_tx
+-                        .calculated_fee
+-                        .saturating_sub(self.palw_tir_public_declared_rent_v1(validated_tx.tx, pov_daa_score));
+-                }
++                // Finality classifies collectible fees, never destroyed bond/rent funds.
++                finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, collectible, finality_fee_active);
+             }
+ 
+             if let Some(income) = round_income {
+@@ -3745,3 +3746,34 @@ mod tests {
+         }
+     }
+ }
++
++/// Record two views of the same natively validated carrier. Bond burn is senior to rent.
++pub(super) fn palw_record_accepted_carrier_fees_v1(
++    tx: &ValidatedTransaction<'_>,
++    bond_burn: u64,
++    raw: &mut std::collections::HashMap<TransactionId, u64>,
++    rent_available: &mut std::collections::HashMap<TransactionId, u64>,
++) {
++    let available = tx.calculated_fee.checked_sub(bond_burn)
++        .expect("native accepted bond spend paid its mandatory burn");
++    raw.insert(tx.id(), tx.calculated_fee);
++    rent_available.insert(tx.id(), available);
++}
++
++/// Internal fee view: the accepted native fee after mandatory bond burn, never raw F twice.
++pub(in crate::pipeline::virtual_processor) fn palw_carrier_rent_available_v1(
++    available: &std::collections::HashMap<TransactionId, u64>,
++    carrier: TransactionId,
++    priced: bool,
++) -> u64 {
++    if priced { available.get(&carrier).copied().unwrap_or(0) } else { super::processor::PALW_RENT_UNPRICED }
++}
++
++/// A bridge's finality share is a subset of the same collectible amount used for total fees.
++pub(super) fn palw_finality_collectible_fee_v1(tx: &Transaction, collectible: u64, active: bool) -> u64 {
++    if active && tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some()) {
++        collectible
++    } else {
++        0
++    }
++}

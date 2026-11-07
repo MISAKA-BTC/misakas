@@ -1,0 +1,29 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "mixin-bert-encoder",
+  "doc": "A mixin: the BERT lineage's bidirectional post-LN encoder (lowered through the bidirectional program: one position over a padded token axis). The adapter defines vocab, hidden, inter, n, heads, max_pos0, act, eps, pad, offset, type_rows, rel_bias, names, prefix_aliases, model_type; the mixin builds the layers, the embedding (word + learned positions from `offset` + token-type rows + LayerNorm) and an Embedding output. A task head, the pooler and the MLM head are not part of the encoder.",
+  "extends": ["spec-frame"],
+  "config": {"defaults": {"is_decoder": false}, "inert": ["attention_probs_dropout_prob", "hidden_dropout_prob", "classifier_dropout", "initializer_range", "use_cache", "bos_token_id", "eos_token_id", "tie_word_embeddings", "position_embedding_type", "is_decoder", "dropout", "attention_dropout", "qa_dropout", "seq_classif_dropout", "tie_weights_", "sinusoidal_pos_embds"]},
+  "vars": [
+    {"name": "is_decoder", "value": {"$cfg": "is_decoder"}},
+    {"name": "not_causal", "value": {"$check": [{"$not": {"$var": "is_decoder"}}, "is_decoder (a causal BERT) is not modelled"]}},
+    {"name": "pet", "value": {"$cfg?": "position_embedding_type"}},
+    {"name": "pet_ok", "value": {"$check": [{"$or": [{"$eq": [{"$var": "pet"}, null]}, {"$eq": [{"$var": "pet"}, "absolute"]}]}, {"$cat": ["position_embedding_type `", {"$var": "pet"}, "` is not modelled"]}]}},
+    {"name": "dims_ok", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "heads"}, 0]}, {"$eq": [{"$mod": [{"$var": "hidden"}, {"$var": "heads"}]}, 0]}]}, {"$cat": ["hidden_size ", {"$var": "hidden"}, " not divisible by ", {"$var": "heads"}, " heads"]}]}},
+    {"name": "offset_ok", "value": {"$bad": [{"$lt": [{"$var": "offset"}, {"$var": "max_pos0"}]}, {"$cat": ["position offset ", {"$var": "offset"}, " leaves no position"]}]}},
+    {"name": "hd", "value": {"$idiv": [{"$var": "hidden"}, {"$var": "heads"}]}},
+    {"name": "max_pos", "value": {"$sub": [{"$var": "max_pos0"}, {"$var": "offset"}]}},
+    {"name": "tied", "value": false},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "l_mixer", "value": {"Attention": {"heads": {"$var": "heads"}, "kv_heads": {"$var": "heads"}, "head_dim": {"$var": "hd"}, "v_head_dim": {"$var": "hd"}, "q_bias": true, "k_bias": true, "v_bias": true, "o_bias": true, "position": "None", "scale": {"$div": [1.0, {"$sqrt": {"$var": "hd"}}]}}}, "layer": true},
+    {"name": "l_ffn", "value": {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": false, "up_bias": true, "down_bias": true}}, "layer": true},
+    {"name": "l_residual", "value": {"PostNorm": {"mixer_norm": {"$var": "norm"}, "ffn_norm": {"$var": "norm"}}}, "layer": true},
+    {"name": "rel_bias", "value": null},
+    {"name": "type_rows", "value": null},
+    {"name": "embedding", "value": {"dim": {"$var": "hidden"}, "scale": 1.0, "positions": {"rows": {"$var": "max_pos0"}, "offset": {"$var": "offset"}}, "norm": {"$var": "norm"}, "type_rows": {"$var": "type_rows"}, "rel_bias": {"$var": "rel_bias"}}},
+    {"name": "final_norm", "value": null},
+    {"name": "ignored_prefixes", "value": ["pooler.", "cls.", "lm_head.", "vocab_transform.", "vocab_layer_norm.", "vocab_projector."]},
+    {"name": "families", "value": ["E2"]}
+  ],
+  "spec": {"output": {"Embedding": {"proj": null, "normalize": false}}}
+}

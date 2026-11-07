@@ -1,0 +1,2311 @@
+//! **The execution-backend seam** (ADR-0053; the adapter surface ADR-0026 adopted from Ambient
+//! and never made a type).
+//!
+//! A PALW node does three things with an execution and knows, at each of them, only what the CHAIN
+//! told it: run the job this template implies, commit to what it ran, and — as a panel seat —
+//! decide whether somebody else's material answers for the claim they published. This trait is
+//! where those three verbs live, so that no consumer names a runtime crate directly.
+//!
+//! # One execution family, and why the seam survives it
+//!
+//! ADR-0051 proposed a second *family* — a verification scheme, not a model: a pinned GGUF under a
+//! pinned Metal runtime, committing what the inference SAID and verified by tolerant replay.
+//! **ADR-0053 withdraws it.** A tolerance can acquit but never convict, so half the economy would
+//! have been non-convictable work, and the three mechanisms that were supposed to bound that —
+//! the 500‰ family cap, the per-class panel, the court exclusion — were respectively never
+//! constructed, never consumed, and a runtime `if`. What removed the motive was measurement:
+//! Qwen3.6 runs in the integer runtime with 100 % kernel-catalog coverage, so the model the black
+//! box existed to serve is adjudicable without it.
+//!
+//! So there is exactly one family — pinned integer arithmetic, a graph projected from a canonical
+//! IR, disputes ending in the ADR-0049 court — and it is not a value any object carries. **Every
+//! registered class is court-adjudicable by construction**, which is a stronger statement than a
+//! flag that says so: there is no arm to get wrong.
+//!
+//! # What this trait deliberately does not abstract
+//!
+//! Not the court's rules — a backend supplies evidence (`bisect_prefix_state`,
+//! `refutation_for_index`) and never a verdict. Not the artifact format either: the floor DERIVES
+//! its weights from a seed and a converted class ships a file, which
+//! `misaka_palw_base0::classes::resolve_class_v1` already reconciles against the chain's
+//! `(class_id, artifact_root)` pair.
+
+use crate::palw_v2::PalwJobContextV2;
+use kaspa_hashes::Hash64;
+
+/// Immutable retained capture access. Implementations must bound each allocation to `length`;
+/// callers reserve source-reader scratch before opening a backend. This is a responder input,
+/// never a public verifier credential.
+pub trait PalwOriginalCaptureReaderV1: Send + Sync {
+    fn len_v1(&self) -> u64;
+    fn read_v1(&self, offset: u64, length: u32) -> Result<Vec<u8>, String>;
+}
+
+/// Operational preparation reservation, not a native eligibility/fee quote.
+/// Includes the worst-case folded capture replay spool, even for a dense input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureNeedV1 {
+    pub resident_ram_bytes: u64,
+    pub disk_bytes: u64,
+    pub maximum_prepare_io_bytes: u64,
+    pub maximum_replay_leaves: u64,
+    pub maximum_replay_positions: u64,
+    /// Prefix copying in the latest-state continuation (not a linear-time claim).
+    pub maximum_replay_id_words: u64,
+    /// Worst one-unit read-at work, separate from once-only preparation.
+    pub maximum_response_io_bytes: u64,
+    pub maximum_response_tree_hashes: u64,
+}
+
+/// Operational upper bound for ONE reader invocation, not a native paid permit.
+/// IO includes executor traffic/restoration as well as capture and index bytes.
+/// Arithmetic is the registered canonical MAC-equivalent work, not CPU cycles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureWorkV1 {
+    pub io_bytes: u64,
+    pub hash_bytes: u64,
+    pub tree_hashes: u64,
+    pub replay_leaves: u64,
+    pub replay_positions: u64,
+    pub replay_id_words: u64,
+    pub arithmetic_work: u128,
+    /// Registered weight/KV traffic, independently budgeted from arithmetic and IO.
+    pub traffic_bytes: u128,
+}
+impl PalwTirPublicCaptureWorkV1 {
+    pub fn checked_add_v1(self, other: Self) -> Result<Self, String> {
+        let overflow = || "TIR capture cumulative operational work overflow".to_string();
+        Ok(Self {
+            io_bytes: self.io_bytes.checked_add(other.io_bytes).ok_or_else(overflow)?,
+            hash_bytes: self.hash_bytes.checked_add(other.hash_bytes).ok_or_else(overflow)?,
+            tree_hashes: self.tree_hashes.checked_add(other.tree_hashes).ok_or_else(overflow)?,
+            replay_leaves: self.replay_leaves.checked_add(other.replay_leaves).ok_or_else(overflow)?,
+            replay_positions: self.replay_positions.checked_add(other.replay_positions).ok_or_else(overflow)?,
+            replay_id_words: self.replay_id_words.checked_add(other.replay_id_words).ok_or_else(overflow)?,
+            arithmetic_work: self.arithmetic_work.checked_add(other.arithmetic_work).ok_or_else(overflow)?,
+            traffic_bytes: self.traffic_bytes.checked_add(other.traffic_bytes).ok_or_else(overflow)?,
+        })
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureSliceV1 {
+    pub source_id: Hash64,
+    pub request_id: Hash64,
+    /// Monotonic for this reader, including unsuccessful invocations.
+    pub sequence: u64,
+    pub phase: u8,
+    /// Exact input cursor, including original offset, row/tile/leaf and replay position.
+    pub cursor_id: Hash64,
+    pub work: PalwTirPublicCaptureWorkV1,
+    /// The reader's persistent ticket remains held; this is not additional RAM.
+    pub resident_ram_bytes: u64,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwTirPublicCaptureProgressV1 {
+    pub sequence: u64,
+    /// Full pre-debit, not a refundable measurement. None/Err consume their slice too.
+    pub charged: PalwTirPublicCaptureWorkV1,
+    pub last_slice: Option<PalwTirPublicCaptureSliceV1>,
+}
+
+/// A bounded custody readiness promise, NEVER an authenticated execution finding.
+/// The native admission path must independently compare all roots, geometry and
+/// the exact original material horizon, and price retention before crediting it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTirPublicPreparedDescriptorV1 {
+    pub version: u16,
+    pub source_id: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    pub step_root: Hash64,
+    pub step_leaf_count: u64,
+    pub decode_count: u32,
+    pub vocab: u32,
+    pub material_until_daa: u64,
+    pub manifest_digest: Hash64,
+    pub retained_bytes: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirPublicPreparedNeedV1 {
+    /// Held in addition to the existing source reader while publishing.
+    pub additional_ram_bytes: u64,
+    /// New durable bytes; the anonymous preparation ticket remains held too.
+    /// Includes one sealed source and one deterministic partial/retry copy.
+    pub additional_disk_bytes: u64,
+    pub maximum_retained_bytes: u64,
+    pub maximum_file_operations: u64,
+    pub maximum_publish_io_bytes: u64,
+    pub maximum_publish_hash_bytes: u64,
+    pub maximum_publish_slices: u64,
+    /// Reopen holds this RAM while streaming IDs and authenticating each answer.
+    pub reopen_ram_bytes: u64,
+}
+pub trait PalwTirPublicPreparedWriterV1: Send {
+    fn slice_quote_v1(&self) -> Result<PalwTirPublicCaptureSliceV1, String>;
+    fn progress_v1(&self) -> PalwTirPublicCaptureProgressV1;
+    fn poll_quoted_v1(&mut self, quote: &PalwTirPublicCaptureSliceV1) -> Result<Option<PalwTirPublicPreparedDescriptorV1>, String>;
+}
+
+pub trait PalwTirPublicCaptureReaderV1: Send {
+    /// Raw/cold readers return None. A successful publish does not retroactively
+    /// make another reader warm; reopen the exact credited descriptor first.
+    fn prepared_descriptor_v1(&self) -> Option<&PalwTirPublicPreparedDescriptorV1>;
+    /// Only a reader that reached the original committed roots may publish.
+    fn prepared_need_v1(&self) -> Result<PalwTirPublicPreparedNeedV1, String>;
+    /// Native supplies both clocks; local files never extend the retention lease.
+    /// Caller retains the original source ticket plus prepared_need_v1 until done.
+    fn begin_prepared_v1(
+        &self,
+        directory: &std::path::Path,
+        native_material_until_daa: u64,
+        native_now_daa: u64,
+    ) -> Result<Box<dyn PalwTirPublicPreparedWriterV1>, String>;
+    fn slice_quote_v1(
+        &self,
+        request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+    ) -> Result<PalwTirPublicCaptureSliceV1, String>;
+    fn progress_v1(&self) -> PalwTirPublicCaptureProgressV1;
+    /// Rejects a stale or substituted quote before doing preparation/response work.
+    /// Caller must first consume its independently checked native work permit.
+    fn poll_quoted_v1(
+        &mut self,
+        request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+        quote: &PalwTirPublicCaptureSliceV1,
+    ) -> Result<Option<crate::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String>;
+    /// None is bounded preparation in progress, never a DA or semantic verdict.
+    /// Caller additionally holds this exact request's native unit memory permit.
+    fn poll_v1(
+        &mut self,
+        request: &crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+    ) -> Result<Option<crate::palw_tir_public_source_v1::PalwTirPublicResponseV1>, String>;
+}
+
+/// Bounded projection of original Flat public bytes. `None` means structural indexing is still
+/// in progress, not an answer or a verdict. Native EOF authentication remains mandatory.
+pub trait PalwFlatPublicSourceReaderV1: Send {
+    fn poll_v1(
+        &mut self,
+        cursor: crate::palw_flat_constraint_stream_v1::PalwFlatConstraintCursorV1,
+    ) -> Result<Option<crate::palw_flat_constraint_stream_v1::PalwFlatConstraintActionV1>, String>;
+}
+
+/// Bounded projection of an original `Float32` class's public v2 event tree (greedy Float32
+/// Constraint source, behind `palw_staged_float_constraint_v1`). `position` is the owner's
+/// accepted nomination (`None` before it). `None` means not ready, never an answer or a verdict;
+/// the chain authenticates every byte against the claim's trace root.
+pub trait PalwFloatPublicSourceReaderV1: Send {
+    fn poll_v1(
+        &mut self,
+        cursor: crate::palw_float_constraint_source_v1::PalwFloatSourceCursorV1,
+        position: Option<u32>,
+    ) -> Result<Option<crate::palw_float_constraint_source_v1::PalwFloatSourceActionV1>, String>;
+}
+
+/// An outside verifier's own TIR replay of a constrained FP job
+/// ([`PalwExecutionBackendV1::replay_tir_generated_ids_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirReplayV1 {
+    pub generated_ids: Vec<u32>,
+    /// `tiled_logits_trace_root_v1` over the replay's own `post` logits rows and ids.
+    pub full_logits_trace_root: Hash64,
+    /// Composite over this replay's own job, step tree and logits, never copied from the claim.
+    pub execution_root: Hash64,
+    /// Output commitment derived from this replay's generated IDs and job context.
+    pub output_root: Hash64,
+}
+
+/// Operational resources for one independent original-job TIR replay. The caller
+/// reserves RAM and disk BEFORE open; these are not a native admission certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTirOwnStepSourceNeedV1 {
+    pub resident_ram_bytes: u64,
+    pub disk_bytes: u64,
+    pub leaf_count: u64,
+}
+
+/// The first unavailable credential read by the canonical cone evaluator.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwTirPublicConeNeedV1 {
+    StepPreimage { index: u64 },
+    StepOpening { index: u64 },
+    StepRange { first: u64, count: u64 },
+    Prompt { tile: Option<u32> },
+    DecodePin,
+    RegisteredArtifact,
+}
+
+#[derive(Clone, Debug)]
+pub enum PalwTirPublicConeProbeV1 {
+    Need(PalwTirPublicConeNeedV1),
+    Ready {
+        proof: crate::palw_court_v2::PalwCourtVerdictProofV2,
+        meter: crate::palw_tir_court_v1::PalwTirBuilderMeterV1,
+    },
+    /// A construction refusal, not an acquittal or a completed prosecution.
+    Refused {
+        reason: String,
+    },
+}
+
+/// Roots actually computed by the independent replay, never copied from the
+/// accused commitment. Header identity/context remain those of the original job.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwTirOwnStepSourceInfoV1 {
+    pub header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    pub generated_ids: Vec<u32>,
+    pub output_root: Hash64,
+    /// Only the original tiled scheme has a row-root Merkle tree.
+    pub rows_root: Option<Hash64>,
+}
+
+/// Disposable own computation used for search, not an authentication credential
+/// for accused inputs. Level zero nodes include the native indexed-leaf wrapper;
+/// leaf_hashes returns raw original leaf hashes. Every disk read is checked under
+/// this source's computed root. No method reads a producer capture.
+pub trait PalwTirOwnStepSourceV1: Send + Sync {
+    fn info_v1(&self) -> &PalwTirOwnStepSourceInfoV1;
+    fn node_v1(&self, level: u8, index: u64) -> Result<Hash64, String>;
+    /// Descend min(level,10) levels, at most 1024 entries, preserving odd promotion.
+    fn frontier_v1(&self, level: u8, index: u64) -> Result<Vec<Hash64>, String>;
+    fn leaf_hashes_v1(&self, first: u64, count: u32) -> Result<Vec<Hash64>, String>;
+    fn row_node_v1(&self, level: u8, index: u64) -> Result<Hash64, String>;
+    fn row_frontier_v1(&self, level: u8, index: u64) -> Result<Vec<Hash64>, String>;
+}
+
+/// The roots an attempt carries, and the bytes that answer for them.
+///
+/// Family-agnostic on purpose: a block header commits these four values and does not know which
+/// backend produced them. What differs between families is how `material` is checked, not what
+/// the header holds.
+pub struct PalwExecutionOutcomeV1 {
+    /// The logits leg. Which SCHEME this root is under is a class fact — the integer family
+    /// commits `base0_logits_trace_root_v1`, the float families the v2 event-tree root — and the
+    /// dispatch on the class's registered lane already exists in `palw_step_refute`.
+    pub trace_root: Hash64,
+    pub output_root: Hash64,
+    /// The composite the court (where there is one) pins a refutation's binding against.
+    pub execution_root: Hash64,
+    pub trace_manifest_root: Hash64,
+    pub trace_chunk_count: u32,
+    /// What the producer retains for `trace_retention_daa` and broadcasts to its panel. Opaque
+    /// here: only the backend that wrote it can read it, which is the point of the seam.
+    pub material: Vec<u8>,
+}
+
+/// **Whether a claim prices its own work** (ADR-0084 Decision 7's rule, in one place; mainnet
+/// audit, 2026-09-05). A free-prompt claim carries the leaf count it was priced at; an attempt-lane
+/// claim carries `work_leaves == 0` — the state's spelling for "the class's canonical job, priced
+/// by the class" — and its own leaf count is the class's space, not a claim field.
+#[inline]
+pub fn palw_claim_prices_work_v1(work_leaves: u64) -> bool {
+    work_leaves != 0
+}
+
+/// **Is an opening, capture or replay at the claim's own price?** The comparison is made only
+/// when the claim prices its work. Before this existed the seat compared every attempt-lane
+/// artefact's real leaf count against the unpriced `0` — at the replay (fixed by the run-5 rule
+/// this generalises), the capture, the material replay and the interval opening — so on the
+/// attempt lane the seat could never file `Valid` through three of its four routes.
+#[inline]
+pub fn palw_opening_is_at_the_claims_price_v1(opening_leaves: u64, work_leaves: u64) -> bool {
+    !palw_claim_prices_work_v1(work_leaves) || opening_leaves == work_leaves
+}
+
+/// **What a replay of an attempt job yields for a verdict** (ADR-0084 Decision 7): the two roots
+/// the claim committed and, when the family prices work in step leaves, the leaves the replay
+/// covered — a seat refuses a claim whose roots match but whose work does not, as the free-prompt
+/// lane does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwReplayRootsV1 {
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    pub work_leaves: Option<u64>,
+    /// **The output root the replayed execution commits** (SEAT-S2) — the value the claim carries
+    /// as `output_root` when its producer ran this job, computed by the family's own producer rule
+    /// over the ids the replay generated, bit for bit. Every shipped family's replay fills it; `None`
+    /// is a replay that cannot name one. The roots above say the arithmetic is the claim's; this says
+    /// the ANSWER is, and a seat licensing by replay compares it with the claim's committed
+    /// `output_root` (`replay_licenses_v1`) — a claim whose roots are the honest run's and whose
+    /// output root is not is otherwise licensed by every seat that replayed it.
+    pub output_root: Option<Hash64>,
+}
+
+/// The two roots a seat checks material against — the claim's own, read from chain state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwClaimRootsV1 {
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    /// **The job this claim's block asked for**, derived from the block — never read off the
+    /// capture being checked.
+    ///
+    /// The roots alone say "this material computes to what the claim announced". They do not say
+    /// WHICH question was answered, and the anchor is the question: it is a pure function of the
+    /// claim's own block (its pre-PoW hash), its network, its class and its executor bond. Without
+    /// it a gossiped capture is a re-usable asset — anyone can mine a fresh block, announce the
+    /// borrowed roots, and both halves of the verification agree, because a seat compares roots and
+    /// a challenger re-executes the anchor the capture itself names. One inference, unlimited
+    /// blocks, by parties that ran nothing.
+    ///
+    /// `Hash64::default()` means "this caller has no block to bind to" and skips the check — the
+    /// producer checking its own fresh run, and the fixtures. Every path that judges SOMEBODY
+    /// ELSE's material must supply it.
+    pub anchor: Hash64,
+    /// **The whole job an ATTEMPT claim's block asked for** (ADR-0117): `Some(prefill_draw)` for
+    /// a claim of the attempt lane, where `prefill_draw` is `Params::palw_prefill_draw_active_at`
+    /// at the block's own DAA score, and `None` for anything else — a free-prompt claim, whose
+    /// anchor is its job's own id and whose job is the claim's, or a caller with no block (the
+    /// producer's own run, the fixtures).
+    ///
+    /// With `Some`, a seat holding the material checks the material's job context against
+    /// `palw_attempt_v2::palw_attempt_job_v1(job_for_anchor(anchor), prefill_draw)` field for
+    /// field, not only its id. The id alone let a producer answer the right question with a
+    /// smaller job — its decode calls skipped, or a prompt of another length — and every seat that
+    /// held its material vouched for it, while only the seats that replayed caught it.
+    pub attempt_draw: Option<bool>,
+    /// **The claim's committed `output_root`, when the caller has it** (SEAT-S2) — read from chain
+    /// state like the two roots above, never off the material. `None` is a caller with no claim
+    /// output to hand (the producer's own run, the fixtures). Carried beside the roots so every
+    /// check that judges a claim can bind its answer; the replay's own is
+    /// [`PalwReplayRootsV1::output_root`], and the comparison is the caller's.
+    pub output_root: Option<Hash64>,
+    /// **The job pin a FREE-PROMPT claim recorded** (ADR-0152 v3.1 J-1:
+    /// `palw_fp_job_pin_v1(commitment)`, the claim record's `job_identity`), when the caller has it —
+    /// read from chain state like the roots, never off the material. A seat holding an FP capture
+    /// checks the capture's context reproduces it (`palw_fp_job_pin_of_context_v1`) before it signs
+    /// (the 3a review's L-b): the job id alone let a capture of ANOTHER job under this id through,
+    /// and a full seat that licensed it is then liable for the claim's `IdentityMismatch` (J1, FP
+    /// pin). `None` for an attempt claim (its whole job is `attempt_draw`'s) and for a caller with no
+    /// claim record.
+    pub job_pin: Option<Hash64>,
+}
+
+/// What a seat concluded about served material.
+///
+/// Three outcomes and not two, because "I could not verify" and "this does not match" are
+/// different accusations and the receipt lane already distinguishes them: the first is
+/// `Unavailable` against the producer's data-availability obligation, the second is a claim that
+/// simply gathers no quorum and voids. Collapsing them would either accuse an honest producer of
+/// withholding or let a mismatch pass as a network hiccup.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwMaterialVerdictV1 {
+    /// The material answers for the claim's committed roots.
+    Matches,
+    /// It decoded and does not answer for them.
+    Mismatch,
+    /// It could not be checked at all (undecodable, wrong family, unavailable operand).
+    Unverifiable,
+}
+
+/// **One free-prompt run, as the lane's callers need it.**
+///
+/// Three values rather than a tuple because they answer three different questions and only one of
+/// them is the chain's: `outcome` is what a panel serves and a court reads, `facts` is what
+/// `palw_fp_job_context_v3` derives a binding from, and `output_token_ids` is **the answer** — the
+/// reason a person ran this at all. An execution path that returned only the first two would price
+/// the work and lose the product, which is the failure the free-prompt lane exists to avoid: one
+/// inference, both halves.
+pub struct PalwFpRunV1 {
+    pub outcome: PalwExecutionOutcomeV1,
+    pub facts: crate::palw_fp_execution_v3::PalwFpRunFactsV3,
+    /// What the model produced, in token ids. Ids and not text: a family without a tokenizer has
+    /// no rendering to give, and ids are the execution identity in either case (v2 design §10.7).
+    pub output_token_ids: Vec<u32>,
+}
+
+/// **What an answer-only run (RFC-0001 §2.6) returns**: the ids it selected, where its decoder
+/// stopped, and how many leading prompt positions came from a cached prefix rather than a forward
+/// pass. A node-local fact — never an input to any claim (invariant I-3).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpAnswerV1 {
+    pub output_token_ids: Vec<u32>,
+    /// Leading prompt positions served from the prefix cache (0: a fresh prefill).
+    pub cached_prefix_tokens: u32,
+    /// The run ended on one of the caller's `stop_ids` (that id is the last of `output_token_ids`).
+    pub ended_on_stop_id: bool,
+}
+
+/// A pooled embedding: the raw pooled hidden codes, the number of positions pooled, and how many
+/// leading positions came from the prefix cache (last-token pooling only; a node-local fact).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpEmbeddingV1 {
+    pub raw: Vec<i32>,
+    pub positions: u32,
+    pub cached_prefix_tokens: u32,
+}
+
+/// One job of an answer batch ([`PalwExecutionBackendV1::answer_batch_free_prompt_v1`]).
+#[derive(Clone, Copy)]
+pub struct PalwFpAnswerJobV1<'a> {
+    pub job: &'a crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    pub prompt_tokens: &'a [usize],
+}
+
+/// What a seat concluded about ONE opened checkpoint interval (ADR-0077 Decision 8).
+///
+/// Four outcomes, because they are four different accusations: `Valid` is every replayed row
+/// equal to its committed hash; `Fault` is a row that is not — the court's question, carried
+/// with the leaf a challenger opens at; `Mismatch` is an opening that does not bind to THIS
+/// claim's roots at all (a forgery, or the wrong claim), which is the same as nothing served;
+/// `Unverifiable` is bytes this family cannot read. A seat's verdict convicts nobody — conviction
+/// runs only through the court's bisection to one leaf (ADR-0026, ADR-0028).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFpIntervalVerdictV1 {
+    Valid,
+    Fault {
+        leaf_index: u64,
+    },
+    /// ADR-0086 Decision 3: the seat's own leaves do not reproduce the served fold, and this is
+    /// the fault's address — a block of the fold clipped to the range, or the range's edge.
+    FaultInRange {
+        first_leaf_index: u64,
+        leaf_count: u64,
+    },
+    Mismatch,
+    Unverifiable,
+}
+
+/// The execution path, as a node uses it.
+///
+/// Implementor: `misaka_palw_base0::backend::Base0Backend`. The trait stays a trait because the
+/// consumers must not name that crate — a producer, a seat and the court reach an execution
+/// through the same three verbs, and a second implementor is a test double, not a second family.
+/// **What a capture SAYS it ran — read off its binding, never off a duty** (ADR-0073 Decision
+/// 1e). The job context whose hash the execution root commits to, and the size of its step space.
+/// A seat that has verified the capture against the claim's roots prices the claim from
+/// `declared_prefill_tokens` / `exact_decode_tokens` here — the shape the execution root binds,
+/// rather than the shape the commitment declared — and draws its sampled leaves from
+/// `step_leaf_count`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwCaptureShapeV1 {
+    pub job_context: PalwJobContextV2,
+    pub step_leaf_count: u64,
+    /// Layers of the registered graph — S3 samples over this.
+    pub layer_count: u16,
+}
+
+/// **A capture prepared once and opened at many leaves** — what
+/// [`PalwExecutionBackendV1::free_prompt_leaf_prover_v1`] returns (DoS audit 2026-09-24, #4).
+pub trait PalwCaptureLeafProverV1 {
+    /// The refutation for leaf `index`: the same object `refutation_for_free_prompt_index` builds.
+    fn refutation_for_index(&self, index: u64) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String>;
+}
+
+/// The default prover: the per-index verb, called per index. Holds nothing.
+struct PalwPerIndexLeafProverV1<'a, B: PalwExecutionBackendV1 + ?Sized> {
+    backend: &'a B,
+    material: &'a [u8],
+    prompt_token_ids: &'a [u32],
+}
+
+impl<B: PalwExecutionBackendV1 + ?Sized> PalwCaptureLeafProverV1 for PalwPerIndexLeafProverV1<'_, B> {
+    fn refutation_for_index(&self, index: u64) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        self.backend.refutation_for_free_prompt_index(self.material, index, self.prompt_token_ids)
+    }
+}
+
+pub trait PalwExecutionBackendV1: Send + Sync {
+    /// **The concrete backend, for a node-side consumer that needs a family's own API** (RFC-0006 06-A: the held-GDN filer reads
+    /// the Qwen3.6 hybrid's accuser view and recompute kernels). `None` by default; no consensus rule reads it.
+    fn as_any_v1(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
+    /// A human-readable identity for logs — the model id for a converted class, the floor's name
+    /// for the derived one. Never used for dispatch: the chain's `class_id` is.
+    fn model_id(&self) -> &str;
+
+    /// **The job this anchor implies.** A producer must not choose its own prompt — a class whose
+    /// executor picks the input is a class where "run the model" and "find an input whose output I
+    /// like" are the same move — so the job is derived from the template's anchor, and this is
+    /// where that derivation lives for each family.
+    fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String>;
+
+    /// **Which attempt rule this backend runs** (ADR-0152 v3.1 J-5, addendum §4-bis.1): its family's
+    /// own (`Legacy`, the default) or the chain's `CoreV1` — the job an anchor implies and the rendered
+    /// rule every `output_root` is committed by. A node sets it once, from its params
+    /// ([`crate::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1`]), on every backend it resolves,
+    /// so its producer, its seats and the chain's identity checks read one rule. A family whose Legacy
+    /// rule IS `CoreV1` (the floor) keeps the default no-op.
+    fn set_attempt_rules_v1(&mut self, _rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1) {}
+
+    /// **RFC-0002 Phase H / audit 02-B: the class's REGISTERED runtime semantics** (`PalwClassSemanticsV1`: model profile, runtime
+    /// manifest and class, CU ruleset), which a free-prompt context this instance builds carries and the TIR frame matches the
+    /// public header's context against (`PalwClassSemanticsV1::matches_context`). A node reads them from its accepted chain state
+    /// and sets them on every backend it resolves for that class, so a class registered with non-default semantics is run under
+    /// its own statement rather than the backend's defaults. A family whose free-prompt contexts carry no such ids keeps the
+    /// default no-op.
+    fn set_registered_class_facts_v1(&mut self, _facts: crate::palw_fp_execution_v3::PalwFpClassFactsV3) {}
+
+    /// **The attempt rule this instance runs** ([`Self::set_attempt_rules_v1`]); `Legacy` for a
+    /// backend that never takes one. A seat's checks that exist only under `CoreV1` read it
+    /// (the material route's output-root binding, ADR-0152 v3.1 T18p-M), so a `Legacy` network's
+    /// seats judge exactly as before.
+    fn attempt_rules_v1(&self) -> crate::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+        crate::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy
+    }
+
+    /// **ADR-0152 §4-ter N4: whether this backend's chain is past `palw_offence_attribution`** — the
+    /// node's `Params::palw_held_answerability_v1()`. Set once, from the node's params, on every
+    /// backend its registry resolves (as [`Self::set_attempt_rules_v1`] is), so past the fence
+    /// [`Self::supports_dissection`] is held-aware on a real node (the consensus predicate
+    /// `palw_held_class_unanswerable_v1`) and the producer's guard refuses a held class this build
+    /// cannot defend. A family with no fused site (the floor) keeps the default no-op; `false` leaves
+    /// every family byte for byte what it was.
+    fn set_held_answerability_v1(&mut self, _armed: bool) {}
+
+    /// **The prefill run width this instance executes at** (ADR-0117 Decision 2; the 2026-10-01
+    /// replay-memory note, `docs/design/palw/consensus/t12-replay-memory-1001.md`): how many prompt positions a
+    /// family that walks its prefill a layer at a time runs together, holding their committed traces
+    /// until they are captured. A NODE-LOCAL choice, like the cache's runtime profile: every width
+    /// commits the same rows and the same roots, and nothing the chain reads depends on it — it sizes
+    /// one term of the role's working set
+    /// ([`crate::palw_resource_profile_v1::PalwRuntimeLimitsV1::prefill_run_positions`]) and the time
+    /// the run takes. `None` for a family, or an instance whose plan cannot run a prefill a layer at a
+    /// time, whose memory does not move with it: the node then prices the role once, as it always did.
+    fn prefill_run_positions_v1(&self) -> Option<u32> {
+        None
+    }
+
+    /// **Run this instance's prefill `positions` at a time** — set by the node on the instance it
+    /// reserved memory for, at the width it derived that reservation's need at, and read by the
+    /// execution the reservation pays for: one value, carried by the instance from the reservation to
+    /// the run, so the figure reserved and the run that spends it cannot disagree. A family whose
+    /// memory does not move with the width keeps the default no-op; a family that has one reads `0`
+    /// as `1`.
+    fn set_prefill_run_positions_v1(&mut self, _positions: u32) {}
+
+    /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
+    /// the async runtime.
+    fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;
+    /// **The attempt lane's verdict by execution** (ADR-0084 Decision 7). A seat that holds no
+    /// material for an attempt claim re-runs the canonical job the anchor implies and compares
+    /// these roots with the claim's; nothing is fetched. Pure CPU work, run off the runtime like
+    /// [`Self::execute`]. A base0 family answers from the FOLD (ADR-0082 Decision 7) — the same
+    /// roots as the producer's dense run without the tiles the producer retains, which on graph-v5
+    /// is the difference between 784 MB and 64 KiB in memory. The default runs [`Self::execute`]
+    /// and keeps the roots, which is right for a family that has no fold.
+    fn execute_for_verdict(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwReplayRootsV1, String> {
+        let outcome = self.execute(job, prompt)?;
+        Ok(PalwReplayRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            work_leaves: None,
+            output_root: Some(outcome.output_root),
+        })
+    }
+
+    /// **ADR-0133 S1 (1): the producer publishes the checkpoint at a V2 segment's start.**
+    ///
+    /// Opaque family bytes that a seat authenticates against the CLAIM before it replays (SEAT-S4):
+    /// the claim's binding, the committed checkpoint the replay resumes from (its leaf, its opening
+    /// against the checkpoint leg and its state chunks; none is genesis), the claim's decode pin when
+    /// the resume consumes a generated id, and the sibling path of the segment's range to the step
+    /// root — no leaf hash, the leaves are the seat's own. A seat that holds the capture extracts
+    /// this without a forward pass. Defaulted to a refusal: a family with no checkpoint leg cannot
+    /// make a partial seat cheaper than a full replay.
+    fn open_segment_checkpoint_v1(&self, _capture: &[u8], _seat_count: u16, _segment_index: u16) -> Result<Vec<u8>, String> {
+        Err("this execution family publishes no per-segment checkpoint".to_string())
+    }
+
+    /// **ADR-0133 S1 (2)(3): replay one assigned segment from its published checkpoint.**
+    ///
+    /// SEAT-S4: the opening is authenticated against `claim` FIRST — its binding must rebuild the
+    /// claim's `execution_root` (with its trace root, the seat's own `job`, the class's profile), its
+    /// segment must be `claim`'s cut and index, its checkpoint must open against the committed leg
+    /// with chunks that root to it, and its seed must be the claim's committed id. A link that fails
+    /// is `Err` and nothing is replayed. Then the KV cache is restored and only the window runs, and
+    /// `matches` is whether the seat's own leaves root, under the served path, to the claim's step
+    /// root. `job` is the job the seat derived for the claim (never the opening's).
+    fn replay_segment_from_checkpoint_v1(
+        &self,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+        _opening: &[u8],
+        _claim: crate::palw_segment_resume_v1::PalwSegmentClaimV1,
+    ) -> Result<crate::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        Err("this execution family cannot resume a segment from a checkpoint".to_string())
+    }
+
+    /// **ADR-0133 S3: recompute one sampled `(layer, position)` from committed activations.**
+    ///
+    /// `Ok(true)` is agreement with the capture; `Ok(false)` is a lie the court can try; `Err`
+    /// is "I could not check" (no opening, no layer weights). The segment holding the site is
+    /// replayed from the capture's own authenticated opening (SEAT-S4) — against the CAPTURE's
+    /// binding, so whether the capture is the claim's is the caller's question, asked first
+    /// (`verify_material`). Defaulted to a refusal.
+    fn replay_layer_site_v3(
+        &self,
+        _capture: &[u8],
+        _site: crate::palw_layer_sample_v3::PalwLayerSiteV3,
+        _seat_count: u16,
+    ) -> Result<bool, String> {
+        Err("this execution family cannot sample a layer site".to_string())
+    }
+
+    /// **ADR-0133 S1 (4): resume from the checkpoint covering an accused segment's first leaf.**
+    ///
+    /// The court already has per-leaf anchored replay; this names the segment-scoped entry so a
+    /// close that names a segment does not walk from genesis. The opening is the capture's own,
+    /// authenticated against the capture's binding and `job` (SEAT-S4). Defaulted to a refusal.
+    fn replay_accused_segment_v1(
+        &self,
+        _capture: &[u8],
+        _seat_count: u16,
+        _segment_index: u16,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+    ) -> Result<crate::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        Err("this execution family cannot resume an accused segment from a checkpoint".to_string())
+    }
+
+    /// **The free-prompt lane's run — the one verb whose tokens the caller chooses.**
+    ///
+    /// `job_for_anchor` states why an executor must not pick the attempt lane's input: a class
+    /// whose executor chooses the prompt is a class where "run the model" and "find an input whose
+    /// output I like" are the same move. That rule is not relaxed here; it is answered by
+    /// different machinery. A free-prompt win is a quantum ticket against the class's receipt
+    /// target (`palw_fp_admission_v3` item 5) — not a property of the output — the claim binds a
+    /// beacon it cannot have chosen (item 3), its use window is fixed (item 4), and nothing pays
+    /// until the claim certifies (item 1). Grinding the prompt buys none of that.
+    ///
+    /// It is a SEPARATE verb for the same reason. An `execute` that accepted arbitrary tokens and
+    /// was reachable from the attempt path would be exactly the hole the rule closes, so the
+    /// attempt path keeps a verb whose prompt it cannot supply.
+    ///
+    /// Returns [`PalwFpRunV1`]: the outcome a panel and a court consume, the facts the derivation
+    /// needs, and the answer itself.
+    ///
+    /// **The run must be performed under the context the derivation produces**, not under a
+    /// convenience context that resembles it. `palw_fp_execution_root_v3` recomputes the root the
+    /// court demands from that context, so an execution carried out under any other one commits a
+    /// root nobody can reproduce — an honest producer, unconvictable and unpayable.
+    ///
+    /// Defaulted to a refusal: a family that has not implemented this has no free-prompt path, and
+    /// saying so is better than a default that silently produces something the court cannot read.
+    fn execute_free_prompt(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt path".to_string())
+    }
+
+    /// **A seat's check, before it signs.** Never a conviction — a mismatch is the court's to
+    /// convict; a seat that disagrees signs nothing on the merits and the claim voids for want of
+    /// a quorum.
+    fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1;
+
+    /// The shape a capture commits to — see [`PalwCaptureShapeV1`]. `None` when the bytes are not
+    /// this family's capture. Meaningful only AFTER [`Self::verify_material`] has said `Matches`
+    /// for the claim in hand: an unverified capture states whatever its author likes.
+    fn capture_shape(&self, _material: &[u8]) -> Option<PalwCaptureShapeV1> {
+        None
+    }
+
+    /// **A party's answer at one rung of the bisection: its execution's state at `index`.**
+    ///
+    /// The ladder converges only if this is a PREFIX commitment — two executions agreeing through
+    /// `index` must agree here, and two differing before it must not — because that is what makes
+    /// "the first index we disagree on" the same as "the first leaf our executions differ at".
+    ///
+    /// `None` is the honest answer for material this backend cannot read. A silent party loses its
+    /// rung, which is the correct outcome for a party that cannot substantiate its own execution.
+    /// **Open the accused event of a retained capture** (ADR-0062 D3 — the responder's half).
+    /// `(row, tile)` is the event the accusation names; the disclosure is built from the rows the
+    /// producer retained, in the form the class's scheme names, through the same tree functions the
+    /// checker walks. A family that retains no rows answers `Err`, which is "cannot answer" — and,
+    /// on a network that arms the data-availability court, a default.
+    fn disclose_trace_event(
+        &self,
+        _material: &[u8],
+        _row: u32,
+        _tile: u8,
+    ) -> Result<crate::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        Err("this family has no data-availability responder".to_string())
+    }
+
+    fn open_flat_public_source_v1(
+        &self,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn PalwFlatPublicSourceReaderV1>, String> {
+        Err("this family has no bounded original Flat source responder".into())
+    }
+
+    fn tir_public_capture_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source_length: u64,
+    ) -> Result<PalwTirPublicCaptureNeedV1, String> {
+        Err("this family has no bounded original TIR capture reader".into())
+    }
+
+    /// Input must be the exact raw original capture range (FPC1 job scope checked
+    /// by the caller), never a remade answer or an unscoped producer state.
+    fn open_tir_public_capture_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _cache_directory: &std::path::Path,
+    ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
+        Err("this family has no bounded original TIR capture reader".into())
+    }
+
+    fn tir_prepared_capture_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _source_length: u64,
+    ) -> Result<PalwTirPublicPreparedNeedV1, String> {
+        Err("this family has no durable original TIR capture reader".into())
+    }
+
+    /// Reopens only the exact native descriptor/horizon. File manifests are not
+    /// evidence: original IDs and every served Merkle opening are reauthenticated.
+    /// Tiled reopen still streams D IDs and their original outer EOF. Avoiding N
+    /// step reindexing is NOT a proof of restart within a short DA response clock.
+    /// Callers check the native window on every later preparation/response tick.
+    fn reopen_tir_prepared_capture_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _descriptor: &PalwTirPublicPreparedDescriptorV1,
+        _cache_directory: &std::path::Path,
+        _native_material_until_daa: u64,
+        _native_now_daa: u64,
+    ) -> Result<Box<dyn PalwTirPublicCaptureReaderV1>, String> {
+        Err("this family has no durable original TIR capture reader".into())
+    }
+
+    /// Only native irreversible pruning strictly beyond the SAME original paid
+    /// horizon authorizes unlink. File clocks and wall time never authorize GC.
+    fn retire_tir_prepared_capture_v1(
+        &self,
+        _descriptor: &PalwTirPublicPreparedDescriptorV1,
+        _cache_directory: &std::path::Path,
+        _native_material_until_daa: u64,
+        _native_irreversible_daa: u64,
+    ) -> Result<(), String> {
+        Err("this family has no durable original TIR capture retirement".into())
+    }
+
+    /// Open the original public Float32 rows/ids of a retained capture. No in-node backend retains
+    /// f32 rows today (BASE-0 is `Int32`); a Float32 producer either implements this or writes the
+    /// generic public sidecar ([`crate::palw_float_constraint_source_v1::write_float_public_sidecar_v1`]).
+    fn open_float_public_source_v1(
+        &self,
+        _source: std::sync::Arc<dyn PalwOriginalCaptureReaderV1>,
+        _binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Result<Box<dyn PalwFloatPublicSourceReaderV1>, String> {
+        Err("this family has no bounded original Float32 source responder".into())
+    }
+
+    /// Project only original public Float32 rows/ids into the generic sidecar while saving an
+    /// already executed capture. `false` means this family retains no f32 rows.
+    fn write_float_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Project only original public Flat logits/IDs while saving an already executed capture.
+    /// A sidecar is acceleration, never admission authority. `false` means another scheme.
+    fn write_flat_public_source_v1(&self, _material: &[u8], _out: &mut dyn std::io::Write) -> Result<bool, String> {
+        Ok(false)
+    }
+
+    /// Original public commitment metadata only. Implementations must never manufacture a
+    /// legacy binding for another scheme or deserialize the following private capture tensors.
+    fn public_execution_binding_header_v1(
+        &self,
+        _material: &[u8],
+    ) -> Result<crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1, String> {
+        Err("this backend has no original public binding header exporter".into())
+    }
+
+    fn disclose_selected_event_v1(
+        &self,
+        _material: &[u8],
+        _row: u32,
+        _tile: u32,
+        _maximum_leaves: u64,
+    ) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1), String>
+    {
+        Err("this family has no prospective full-width selected source responder".into())
+    }
+
+    /// **A TIR claim's selected tiled event** (Constraint source behind `palw_staged_tir_route_v1`).
+    /// Default `Err`: no in-node backend executes TIR FP jobs. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract** (the node's selected responder and the fold rely on every point):
+    /// * `material` is one retained payload of THIS claim, as the node stores it under
+    ///   `fp_retained_payload_paths(claim)`: the producer's own retained capture, or the copy a
+    ///   Panel custodian received. The responder tries every retained path in turn, so the
+    ///   implementor parses only its own capture format and returns `Err` for anything else, never
+    ///   a guess.
+    /// * `header` is the claim's admitted TIR public header, read from native state. The
+    ///   implementor checks that `material` is this header's run: same `job_context`, same
+    ///   `full_logits_trace_root`. Otherwise it returns `Err`.
+    /// * `row` is the decode-call row `r` (`0 <= r < exact_decode_tokens`). Row `r` is the logits
+    ///   row that selected generated id `r`: the last prefill position for `r = 0`, decode step
+    ///   `r - 1` after that. `tile` indexes `PALW_LOGITS_TILE_LANES` (4,096) lane tiles of that row.
+    /// * Rows are the class's committed `i32` logits, the TIR program's `post` node output, one per
+    ///   decode call, with the full registered vocabulary per row. They are tiled under the claim's
+    ///   context hash: `tiled_logits_row_root_v1` / `tiled_logits_tile_leaf_v1`, rows tree over
+    ///   `exact_decode_tokens` rows, outer root `tiled_logits_trace_root_v1` == the header's
+    ///   `full_logits_trace_root`.
+    /// * The result must equal
+    ///   [`crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1::of_public_rows_view_v1`]
+    ///   `(view, rows, generated_ids, (row, tile), maximum_leaves)`, which is the reference
+    ///   construction. It must pass `authenticate_view_v1` against the view derived from `header`
+    ///   and the registered record. `generated_token_ids` are all of the run's ids.
+    /// * Read-only: no execution, no network. An `Err` means "cannot answer", never a verdict.
+    ///   An unanswered duty is collected by the native fold.
+    fn disclose_tir_selected_event_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _row: u32,
+        _tile: u32,
+        _maximum_leaves: u64,
+    ) -> Result<crate::palw_selected_event_source_v1::PalwSelectedTiledEventV1, String> {
+        Err("this family has no TIR capture with committed logits rows".into())
+    }
+
+    /// **An outside verifier's own TIR replay** of a constrained FP job: the beat nominee's source.
+    /// Default `Err`: no in-node backend executes TIR FP jobs. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * Run the TIR program the chain registered for `header.job_context.shape_profile_id`, from
+    ///   the verifier's OWN registered artifact (never the producer's material), on
+    ///   `prompt_token_ids`. Check first that those ids are the job's (`prompt_tokens`,
+    ///   `prompt_token_ids_hash` and `max_context_tokens` against `job` and `header.job_context`);
+    ///   otherwise return `Err`.
+    /// * Select exactly `header.job_context.exact_decode_tokens` ids with the job's own decode
+    ///   rule: greedy for a constrained job, masked by the job's constraint, first-index ties.
+    ///   This is the rule the Constraint court applies to the committed logits.
+    /// * Return those ids and the run's own tiled logits trace root:
+    ///   `tiled_logits_trace_root_v1(&header.job_context, own_rows, own_ids)`, where the rows are the
+    ///   `post` node's `i32` logits, one per decode call. TIR is integer and deterministic, so an
+    ///   honest claim reproduces `header.full_logits_trace_root` bit for bit. The fraud filer
+    ///   settles the claim as honest when the roots are equal, and pursues it (reservation, then the
+    ///   staged bundle) when they differ.
+    /// * The ids are only a NOMINEE: the filer compares them with the claim's authenticated ids to
+    ///   pick a position and a beating lane. The court decides from the producer's authenticated
+    ///   logits alone, so a wrong replay can cost the verifier a deposit but can never convict an
+    ///   honest producer.
+    /// * An `Err` means "no replay": the claim stays unjudged by this host.
+    fn replay_tir_generated_ids_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+    ) -> Result<PalwTirReplayV1, String> {
+        Err("this family has no TIR FP execution backend".into())
+    }
+
+    fn tir_own_step_source_need_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+    ) -> Result<PalwTirOwnStepSourceNeedV1, String> {
+        Err("this family has no independent TIR step source".into())
+    }
+
+    /// One full original-job replay, with bounded working RAM and a disposable
+    /// disk tree. Restart reruns the public computation, never trusts a disk cursor.
+    fn open_tir_own_step_source_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+        _cache_directory: &std::path::Path,
+    ) -> Result<std::sync::Arc<dyn PalwTirOwnStepSourceV1>, String> {
+        Err("this family has no independent TIR step source".into())
+    }
+
+    fn tir_logits_step_leaf_index_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _row: u32,
+        _lane: u64,
+    ) -> Result<u64, String> {
+        Err("this family has no original TIR logits step coordinate".into())
+    }
+
+    /// Build the existing objective TIR kernel's proof from authenticated PUBLIC
+    /// committed ranges and registered parameters. No producer capture/own-root
+    /// substitution. Missing operands remain unavailable, never an honest verdict.
+    fn build_tir_public_cone_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+    ) -> Result<crate::palw_court_v2::PalwCourtVerdictProofV2, String> {
+        Err("this family has no public sparse TIR arithmetic builder".into())
+    }
+
+    /// The caller debits the ENTIRE allocation before EVERY probe, including
+    /// Need/Refused/error waves: the evaluator exposes a meter only on success.
+    /// Allocations must be cumulative under the original paid work/window.
+    /// copy_budget_bytes is the caller's held before-copy allocation, separate
+    /// from work. Copy/scratch refusal is Refused, never a new DA obligation.
+    /// Ready is a built proof, not the native verifier's verdict.
+    fn probe_tir_public_cone_v1(
+        &self,
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prompt_token_ids: &[u32],
+        _trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        _runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        _leaf_index: u64,
+        _rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        _limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        _copy_budget_bytes: u64,
+    ) -> Result<PalwTirPublicConeProbeV1, String> {
+        Err("this family has no public sparse TIR dependency probe".into())
+    }
+
+    fn build_tir_public_cone_bounded_v1(
+        &self,
+        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        prompt_token_ids: &[u32],
+        trace: Option<&crate::palw_step_refute::PalwTiledDecodeTokensV1>,
+        runs: &[crate::palw_tir_court_v1::PalwTirStepRunDisclosureV1],
+        leaf_index: u64,
+        rules: &crate::palw_tir_court_v1::PalwTirCourtRulesV1,
+        limits: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+        copy_budget_bytes: u64,
+    ) -> Result<(crate::palw_court_v2::PalwCourtVerdictProofV2, crate::palw_tir_court_v1::PalwTirBuilderMeterV1), String> {
+        match self.probe_tir_public_cone_v1(header, prompt_token_ids, trace, runs, leaf_index, rules, limits, copy_budget_bytes)? {
+            PalwTirPublicConeProbeV1::Ready { proof, meter } => Ok((proof, meter)),
+            PalwTirPublicConeProbeV1::Need(need) => Err(format!("public TIR dependency unavailable: {need:?}")),
+            PalwTirPublicConeProbeV1::Refused { reason } => Err(reason),
+        }
+    }
+
+    /// **One committed TIR step leaf** (the TIR prefix-state source behind
+    /// `palw_staged_tir_route_v1`). Default `Err`: no in-node backend executes TIR FP jobs.
+    /// RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * `material` is one retained payload of THIS claim (as for `disclose_tir_selected_event_v1`).
+    ///   Parse only your own capture format; return `Err` for anything else or for a capture that
+    ///   is not `header`'s run (same job context, step Merkle root and leaf count).
+    /// * Return the leaf at step-tree index `leaf_index`: its canonical 4-byte lanes `values_le`
+    ///   (`palw_tir_lanes_le_v1(leaf.dtype, values)`, the bytes the step leg hashed) and its
+    ///   opening against `header.step_merkle_root`
+    ///   (`step_opening_from_leaf_source_capped_v1(step_leaf_count, leaf_index, maximum_leaves, …)`
+    ///   over the run's leaf hashes, `step_tile_leaf_hash_v1(context_hash, class_id, preimage)`).
+    /// * The node asks for the prefix boundary's leaves in order: the consensus reader
+    ///   `palw_staged_tir_prefix_leaf_index_v1` maps a slot's cursor to `leaf_index`. Each answer
+    ///   must authenticate in `PalwTirPrefixStateStreamV1::leaf_v1`.
+    /// * Read-only; `Err` means "cannot answer", never a verdict (the duty is collected).
+    fn disclose_tir_step_leaf_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _leaf_index: u64,
+        _maximum_leaves: u64,
+    ) -> Result<(Vec<u8>, crate::palw_step_leg::PalwStepOpeningV1), String> {
+        Err("this family has no TIR capture with committed step leaves".into())
+    }
+
+    /// **The executor-side declaration of a TIR prefix state** (a version-11 prefix-state job of a
+    /// TIR class). Default `Err`. RFC-0002's TIR executor implements it.
+    ///
+    /// **Interface contract:**
+    /// * Admissible boundaries only: `0 < prefix_tokens < prefill` and `prefix_tokens` a multiple
+    ///   of both the class layout's `checkpoint_interval` and `h_tile`
+    ///   (`PalwTirStepSpaceV1::prefix_state_leaf_count_v1` is `Some`). Otherwise return `Err`: the
+    ///   chain refuses such a claim's quote, and a staged court could not re-derive its state.
+    /// * Return `palw_fp_prefix_state_root_v1(class_id, prefix_tokens, kv_digest)` with
+    ///   `kv_digest = palw_tir_prefix_kv_digest_v1(space, job_context, prefix_tokens, lanes_of)`.
+    ///   `lanes_of(leaf)` is the run's own committed canonical lanes of that boundary leaf (the
+    ///   `Fixed` checkpoint at `prefix_tokens − 1` and the `Hist` chunks `0..prefix_tokens`): the
+    ///   very bytes the step leg commits, so the outside court re-derives this root from the
+    ///   claim's own leaves.
+    /// * The producer must also have published the class layout (tag 169) before claiming. The
+    ///   preclaim quote, the producer's own included, refuses a TIR prefix-state claim without it.
+    fn declare_tir_prefix_state_v1(
+        &self,
+        _material: &[u8],
+        _header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        _prefix_tokens: u32,
+    ) -> Result<Hash64, String> {
+        Err("this family has no TIR FP execution backend".into())
+    }
+
+    fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {
+        None
+    }
+
+    /// **Can this backend take a court's turn at all?**
+    ///
+    /// `false` by default, because the two methods above are defaulted: a family that has not
+    /// implemented them cannot disclose at a rung and cannot assemble a close, so a dispute about
+    /// one of its claims can never leave round 0 whichever party is honest (audit3 H4). That was
+    /// invisible — it read as an ordinary silence — and it decided real money: the chain charged
+    /// the ACCUSER for it, so accusing such a class was a guaranteed loss and its arithmetic was
+    /// unpunishable.
+    ///
+    /// The charge is gone (`rearm_after_unanswered_opening`), but the underlying fact is not, and
+    /// a node should say it out loud at startup rather than let an operator discover it from a
+    /// court that never resolves. Declared rather than probed, because probing would need a
+    /// capture and there is none at boot.
+    fn supports_court(&self) -> bool {
+        false
+    }
+
+    /// **RFC-0002 Part II §II.7.5 Proposal B (node software, no fence): the executor's own conformance test, as a job** — a seat runs it
+    /// once per `(class, artifact root)` before it first proves readiness for the class, and posts no proof when it fails. The job
+    /// runs this backend's executor against the class's reference evaluator on a few positions, streamed (the reference reads one
+    /// tensor at a time), and says in a sentence what it compared (`Ok`) or what differs (`Err`). `None` where the backend has no
+    /// reference of its own to be tested against — the legacy families' kernels ARE the consensus reference. The job owns what it
+    /// needs (`'static`), so a node runs it on a thread of its own: a large class's reference is slow and must not hold a tick.
+    /// A dishonest seat can skip the test and harms only itself: the court convicts it on its first wrong tile.
+    fn executor_conformance_job_v1(&self) -> Option<Box<dyn FnOnce() -> Result<String, String> + Send + 'static>> {
+        None
+    }
+
+    /// **ADR-0093 Decision 1, as built: everything this capture yields about the fused site at
+    /// `narrowed`** — the binding, the opened output tile and query row, the site's registered
+    /// narrowings opened against the class root, the site's INPUTS (the disputed head's query
+    /// slice and the layer's K and V series over the whole history), and the evidence its bottom
+    /// is served from: the anchor the disputed step must carry, with every chunk of its state, or
+    /// the cache-write rows.
+    ///
+    /// ADR-0093 made the obligation one history tile's triple; built, it is smaller: every number a
+    /// move carries is COMPUTED from this evidence by the court's own kernels
+    /// ([`crate::palw_attn_responder_v1`]), so a family reads what it committed and never does the
+    /// arithmetic. Decision 4's hazard — statistics "close but not exact" that convict their own
+    /// producer while it holds the claim's collateral — has no family code to live in.
+    ///
+    /// `carried_prompt` is the user's ids for a free-prompt claim and `None` for an attempt (whose
+    /// prompt is re-derived from the anchor), as [`Self::refutation_for_free_prompt_index`] takes
+    /// them. `Err` by default: a family that cannot answer says so through
+    /// [`Self::supports_dissection`] before a court is armed over it.
+    ///
+    /// `accused_out_tile` is the accused's committed output tile, opened — the one its
+    /// `CourtAttnRootClaimed` carried on chain (ADR-0093 Decision 7). A FOLD keeps no rows and is
+    /// re-executed; when that re-execution is not the committed execution (a forged claim), the
+    /// evidence is built from the re-execution's rows BEFORE the disputed leaf — the court narrowed
+    /// to the first leaf the challenger could not reproduce, so they are the accused's own — and
+    /// this tile, opened against the accused's root without one row the accused must serve. `None`
+    /// keeps the capture's own rows, and a forged fold is refused by name.
+    fn attn_site_evidence(
+        &self,
+        _material: &[u8],
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _accused_out_tile: Option<&crate::palw_attn_court_v1::PalwAttnRowOpeningV1>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        Err("this family cannot read a fused site out of its capture".to_string())
+    }
+
+    /// **The bottom's evidence from the accused's FILING alone** (ADR-0093 Decisions 7 and 8) —
+    /// for the close whose accused capture this node does not hold (an over-cap attempt capture is
+    /// never pulled) or cannot use. The rows before the disputed leaf are this node's own
+    /// re-execution of the accused's job (the court narrowed to the first leaf it could not
+    /// reproduce, so they are the accused's committed rows — the evidence refuses by name unless
+    /// they root, with the filed tile, to the accused's binding); the output tile and, when filed,
+    /// the anchor are the accused's own, off its root claim. Without a filed anchor the checkpoint
+    /// leg is the re-execution's, which is the accused's only when its execution did not follow its
+    /// lie — otherwise the refusal names the anchored root claim that would have carried it.
+    ///
+    /// `Err` by default, like [`Self::attn_site_evidence`]: the two verbs come together.
+    fn attn_site_evidence_from_filing(
+        &self,
+        _filing: &crate::palw_attn_responder_v1::PalwAttnAccusedFilingV1,
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnSiteEvidenceV1, String> {
+        Err("this family cannot read a fused site out of a filing".to_string())
+    }
+
+    /// **ADR-0152 §4-ter N1/N2: a HELD class's fused site, windowed** — the one builder both parties
+    /// of a held dissection call, past `palw_offence_attribution` (N3 routes a held class here).
+    ///
+    /// [`Self::attn_site_evidence`] re-executes the job densely and holds every tile, which a held
+    /// class's canonical job is past at 8k (≈ 10^8 leaves against the `2^26` materialization cap).
+    /// Nothing the court asks needs the tiles: the site reads the query slice at its position and
+    /// layer ℓ's K and V over the history, and the bottom reads the checkpoint after the position
+    /// (`covered = p + 1`), whose state holds exactly those rows. So the evidence is one plain
+    /// forward to the anchor — `O(state)` — plus two committed leaves opened:
+    ///
+    /// * `filing = None` — **the RESPONDER** (the accused executor): `material` is its own
+    ///   retention. The out tile and the query row are opened out of its fold (a block replayed from
+    ///   the interval's anchor, the path from the digests it retained), the anchor is its own
+    ///   retained checkpoint leaf, and the slice sub-roots it files are its own state's. What
+    ///   [`crate::palw_attn_responder_v1::PalwAttnHeldEvidenceV1::root_claim_held_v1`] turns into
+    ///   the `CourtAttnRootClaimedHeld` it must file (tag 57).
+    /// * `filing = Some(..)` — **a CHALLENGER**: `material` is not read (pass `&[]`). The out tile,
+    ///   the anchor and the sub-roots are the accused's, off its held root claim
+    ///   ([`crate::palw_attn_responder_v1::PalwAttnHeldFilingV1::from_object_v1`]); the query row is
+    ///   opened against the accused's step root from a stream of this node's own honest leaves
+    ///   before the disputed one (`PalwStepPrefixStreamV1`, a frontier per level); the state is this
+    ///   node's own, whose slice `(K|V, ℓ)` precedes any lie at the site. When this node's sub-root
+    ///   of that slice is not the filed one the bottom cannot be built from the filing, and
+    ///   `fallback_v1` names the slice (4-ter.3 step 6: the held-DA `StateChunk` route).
+    ///
+    /// `carried_prompt` is as [`Self::attn_site_evidence`] takes it. `Err` by default: a family
+    /// without the windowed builder says so through [`Self::supports_dissection`] for a held class.
+    ///
+    /// **What it costs a node, stated for the timing drill (T-A5; the review's F8).** Not the
+    /// 470 MB the design note gave: at 8,192 positions of the 1.5B row the cache alone is 28 layers ×
+    /// K and V × 8,192 × 256 codes, and the evidence holds the anchor's chunks beside it (the bytes and
+    /// their leaf hashes) with the engine's working set on top — ≈ 1.5–2 GB at the peak, per build.
+    /// The responder's state walk is the seat memo's, and the memo serialises its forwards: two held
+    /// sessions against one executor's claims answer one after the other, each a whole-context forward
+    /// (`palw_held_class_unanswerable_v1` prices one inside the turn). There is deliberately no
+    /// consensus cap on concurrent held sessions per executor: the cap would be a shield — the
+    /// executor's own Sybils would fill it with decoys on its OTHER claims and a seat holding the lie
+    /// would be refused — so the bound is the node's: T-A5 measures the root-claim latency and the
+    /// peak memory at `k` concurrent sessions per executor, and the operator sizes the host.
+    fn attn_site_evidence_held_v1(
+        &self,
+        _material: &[u8],
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _filing: Option<&crate::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
+        Err("this family has no windowed builder for a held fused site".to_string())
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6: the accused's committed cache-write row, opened against ITS step
+    /// root** — what a `CheckpointAccused` carries beside the chunk the producer disclosed.
+    ///
+    /// When a challenger's own sub-root of slice `(K|V, ℓ)` is not the one the accused filed
+    /// (`PalwAttnHeldEvidenceV1::fallback_v1`), the accused's checkpoint disagrees with rows that
+    /// precede its lie; once the producer discloses the disputed tile's chunk (the held DA court's
+    /// `StateChunk`), a row of it that is not the honest row is accused against the row the accused's
+    /// step tree committed at that position: every tile of layer `attn_layer`'s `KCacheWrite`
+    /// (`kind` Key) or `VCacheWrite` (Value) node at history position `history_position`. Those
+    /// leaves precede the narrowed leaf (the cache write comes before the fused site in the canonical
+    /// order, and the anchor holds no position past the site's), so they are the accused's committed
+    /// rows exactly when they are this node's honest ones; each is opened against the accused's step
+    /// root from a stream of this node's own leaves before the narrowed one and the filed path of it
+    /// — one replay to the site, as the windowed challenger's. `Err` by default.
+    fn attn_held_cache_write_rows_v1(
+        &self,
+        _filing: &crate::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _kind: crate::palw_state_chunk_map::PalwStateChunkKindV1,
+        _attn_layer: u16,
+        _history_position: u32,
+    ) -> Result<Vec<crate::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        Err("this family cannot open a held claim's cache-write rows from a filing".to_string())
+    }
+
+    /// **Can this backend take a FUSED dissection's turn?** — deliberately not
+    /// [`Self::supports_court`], which is a different turn.
+    ///
+    /// ADR-0093 Decision 2: `supports_court` means "this family discloses and can take an
+    /// arithmetic turn", which all three shipped families do since the 2026-09-06 audit's C-5
+    /// repair, and two call sites branch on it. One boolean cannot answer for two unrelated turns,
+    /// so widening it would report a disclosure gap that does not exist. This is the second answer.
+    ///
+    /// `true` exactly where [`Self::attn_site_evidence`] is implemented — a family that overrides
+    /// one without the other is advertising a turn it cannot take, and the source guard in
+    /// `misaka-palw-base0` fails on it.
+    fn supports_dissection(&self) -> bool {
+        false
+    }
+
+    /// Versioned held-memory route, resolved by the caller at the active height.
+    /// Existing backends retain their old advertisement unless they implement
+    /// the new evidence builders and override this capability explicitly.
+    fn supports_dissection_with_memory_routing_v2(&self, _active: bool) -> bool {
+        self.supports_dissection()
+    }
+
+    /// **Does this backend's class commit a fused attention site at all?** (ADR-0093 as built.) A
+    /// claim of such a class disputed down to a fused leaf is answered by a root claim, which only
+    /// a backend that [`Self::supports_dissection`] can file; a producer asks both before it
+    /// underwrites a claim it could not defend there. `false` by default: the floor has none.
+    fn has_fused_site(&self) -> bool {
+        false
+    }
+
+    /// **The terminal move's evidence: everything the court needs to recompute step `index`.**
+    ///
+    /// Returned by BOTH sides, and deliberately the same call for both: an honest executor closing
+    /// its own case and a challenger closing a real fraud assemble the identical object, and
+    /// `adjudicate_court_close_v2` is what decides which way it reads. A prover that could only be
+    /// run by one side would be a prover that decides the verdict.
+    ///
+    /// `Err` for an index this capture cannot open.
+    fn refutation_for_index(
+        &self,
+        _material: &[u8],
+        _index: u64,
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        Err("this backend cannot open a refutation at that index".to_string())
+    }
+
+    /// **The anchor a block asks its job of** — the family's own derivation, from chain facts only.
+    ///
+    /// Every input is recomputable by anyone holding the block: the network domain, the header's
+    /// pre-PoW hash, the class, and the executor's bond outpoint. That is what makes the anchor
+    /// checkable rather than merely declared — a producer cannot choose it, and a party verifying
+    /// somebody else's claim derives the same value the producer was forced to use.
+    ///
+    /// **The default is the shared derivation, deliberately** — the producer computes the anchor
+    /// before it resolves a backend at all, so every family already runs the job this names. A
+    /// `None` default would have been the quiet kind of wrong: a family that simply never
+    /// implemented the method would answer "I cannot derive it", every seat would decline to judge
+    /// its claims, and the class would stop licensing with nothing in any log saying why.
+    ///
+    /// A family that genuinely derives its job differently overrides this. `None` is reserved for
+    /// a family with no canonical job at all, and a caller that gets it must decline to judge
+    /// rather than fall back to the anchor named inside the material — that is the thing under
+    /// test.
+    /// `nonce_bucket` is `palw_nonce_bucket_v1(header.nonce)` — the execution the block's nonce was
+    /// supposed to be paid for by (ADR-0071 Decision 2). A verifier reads it off the accepted
+    /// header it already fetched, so it is a fact about the claim like the other four and not
+    /// something the material under judgement gets to say.
+    /// **The prover's refutation for leaf `index` of a FREE-PROMPT capture** (ADR-0073 Decision
+    /// 1c) — the same object [`Self::refutation_for_index`] assembles, for a capture whose prompt
+    /// the caller chose.
+    ///
+    /// An attempt's prompt is a pure function of the job's anchor, so that prover re-derives it and
+    /// a carried copy would only be a second place to disagree with the chain. A free-prompt job's
+    /// prompt is the user's: it exists on chain (the 0x4a payload) and in the job material,
+    /// hash-bound to the binding's `job_context.prompt_token_ids_hash`, and derives from nothing —
+    /// so it is an INPUT here. An implementation MUST refuse ids that do not hash to the binding's
+    /// own value rather than pass them through: the court reads a wrong list as
+    /// `InputSetNotCanonical`, which is no verdict, and a close that assembles but never adjudicates
+    /// is a stalled court that the backstop settles against whoever was owed the move.
+    ///
+    /// Default: refused. A family with no free-prompt path has no capture this could open.
+    fn refutation_for_free_prompt_index(
+        &self,
+        _material: &[u8],
+        _index: u64,
+        _prompt_token_ids: &[u32],
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        Err("this backend cannot open a free-prompt refutation at that index".to_string())
+    }
+
+    /// **One free-prompt capture, prepared ONCE, opened at as many leaves as the caller draws**
+    /// (DoS audit 2026-09-24, #4 — the CPU half).
+    ///
+    /// A panel seat samples a served capture at up to `DRAWS_MAX = 32` leaves, and on a class whose
+    /// retention is a fold every [`Self::refutation_for_free_prompt_index`] re-executes the whole
+    /// job into dense tiles to answer ONE leaf — no cache, so one sampled claim cost up to 32 full
+    /// re-executions of a job the producer chose the size of. The prover this returns holds the
+    /// decoded capture and its dense tiles for its own life and answers each index from them: one
+    /// re-execution per sampled claim, whatever the draw count. Dropping it frees the tiles, so a
+    /// caller holds its memory reservation exactly as long as it holds the prover.
+    ///
+    /// Every refusal the per-index prover makes before its first leaf (a capture that does not
+    /// decode, one past the materialization cap, a prompt that is not the binding's) is made here,
+    /// once, by name. Default: the per-index verb, unprepared — correct for a family whose capture
+    /// is already dense and cheap to reopen, and exactly as costly as before for one that is not.
+    fn free_prompt_leaf_prover_v1<'a>(
+        &'a self,
+        material: &'a [u8],
+        prompt_token_ids: &'a [u32],
+    ) -> Result<Box<dyn PalwCaptureLeafProverV1 + 'a>, String> {
+        Ok(Box::new(PalwPerIndexLeafProverV1 { backend: self, material, prompt_token_ids }))
+    }
+
+    fn job_anchor_v1(
+        &self,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        class_id: Hash64,
+        executor_bond: &crate::tx::TransactionOutpoint,
+        nonce_bucket: u64,
+    ) -> Option<Hash64> {
+        Some(crate::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, executor_bond, nonce_bucket))
+    }
+
+    /// **The weight rows that refutation reads — exactly those, proven against the class root.**
+    ///
+    /// The court recomputes the disputed step, and recomputing it means reading operands out of
+    /// the registered artifact. It holds no weights of its own, so a close must carry them; and it
+    /// refuses any row that does not prove against the `artifact_root` the class registered under,
+    /// so carrying the wrong ones is the same as carrying none.
+    ///
+    /// **Asked of the adjudicator, never enumerated here.** The set of rows a step reads is decided
+    /// by the arithmetic the adjudicator walks, and a second enumeration written on the prover side
+    /// would be a second opinion about that — one that agrees today and diverges the first time a
+    /// kernel changes which operand it touches, in the direction where an honest producer cannot
+    /// close. So the implementation runs the real adjudicator against the full inventory through a
+    /// recording oracle and opens what it actually resolved. Opening the whole inventory instead
+    /// would be correct and unaffordable: a close has a byte ceiling, and a class's weights do not
+    /// fit under it.
+    ///
+    /// `Err` for a family with no court and for an artifact this backend cannot root.
+    fn operand_openings_for(
+        &self,
+        _refutation: &crate::palw_step_refute::PalwExecutionStepRefutationV1,
+    ) -> Result<Vec<crate::palw_artifact::PalwArtifactOpeningV1>, String> {
+        Err("this execution family cannot be adjudicated".to_string())
+    }
+    /// **ADR-0135 Decision 4: the artifact's row inventory as digests** — every leaf's hash, none
+    /// of its bytes — so a seat can find the leaf a readiness challenge names and root a proof
+    /// without holding the inventory's bytes in memory. `Err` for a family that cannot root.
+    fn artifact_inventory_digest(&self) -> Result<crate::palw_artifact::PalwArtifactInventoryDigestV1, String> {
+        Err("this execution family cannot root its artifact".to_string())
+    }
+
+    /// **One leaf of the artifact, opened against the class root** (ADR-0135 Decision 4): the row's
+    /// bytes and its Merkle path, for a `SeatReadinessProved`. `Err` for a family that cannot root,
+    /// or an index outside the inventory.
+    fn artifact_row_opening(&self, _index: u32) -> Result<crate::palw_artifact::PalwArtifactOpeningV1, String> {
+        Err("this execution family cannot open its artifact".to_string())
+    }
+
+    /// **What one attempt with this many prefill tokens will allocate**, in bytes, or `None` for a
+    /// family that cannot say. The producer refuses an attempt whose figure does not fit the host
+    /// (`replay_memory_budget_v1`) instead of starting it and being killed — the item 6 acceptance
+    /// run's 2M producer allocated ~16 GiB in the first minute of its first attempt on a host with a
+    /// 5.25 GiB share, and nothing in its path had asked.
+    /// The prefill length of this class's canonical job — what a replay or an attempt of it will
+    /// prefill — so a caller can size the working set without building a job. `None` where the family
+    /// has no canonical job.
+    fn canonical_job_prefill_tokens(&self) -> Option<usize> {
+        None
+    }
+
+    fn attempt_working_set_bytes(&self, _prefill_tokens: usize) -> Option<u64> {
+        None
+    }
+
+    /// **The runtime representation this backend holds its cache in** — a node-local, named choice
+    /// (`A16-KV-i32`, `A16-KV-i16`) reported in telemetry and never a chain fact. `None` for a
+    /// family whose cache has no such profile.
+    fn runtime_profile_v1(&self) -> Option<crate::palw_resource_profile_v1::PalwRuntimeProfileV1> {
+        None
+    }
+
+    /// **Bytes this backend holds resident beyond the artifact's file** — tables derived at load
+    /// that no file-size proxy sees. The dense tier generates its rotary table when the artifact is
+    /// decoded (`RopeTableV1::generate`): 2 × `max_position` × `d_head / 2` × 4 bytes, which at the
+    /// 2M context is 1.07 GiB of the producer's steady-state anonymous memory. Already resident
+    /// once the class is loaded, so it is reported beside a role's need and not added to it.
+    fn artifact_derived_resident_bytes_v1(&self) -> u64 {
+        0
+    }
+
+    /// **What `role` needs to execute `job` on this backend, term by term** (ADR-0151 follow-up,
+    /// item 1) — the ONE derivation the producer's gate, the panel's pre-check and the court's
+    /// replay read, so the three roles cannot be priced by three estimates again. `None` for
+    /// `job` means the class's canonical job. `None` for a family that cannot say; the caller then
+    /// has the file-size proxy and nothing better.
+    fn resource_profile_v1(
+        &self,
+        _job: Option<&PalwJobContextV2>,
+        _role: crate::palw_resource_profile_v1::PalwResourceRoleV1,
+    ) -> Option<crate::palw_resource_profile_v1::PalwResourceProfileV1> {
+        None
+    }
+
+    /// **The artifact's root and leaf count, without its inventory** (ADR-0151 follow-up, item 6's
+    /// finding). A readiness challenge draws against the leaf count and compares against the root,
+    /// and neither needs a leaf materialized. The default goes through the digest, which is correct
+    /// and is what a family that can stream overrides.
+    fn artifact_root_and_leaf_count(&self) -> Result<(crate::Hash64, u32), String> {
+        let digest = self.artifact_inventory_digest()?;
+        Ok((digest.root(), digest.leaf_count()))
+    }
+
+    /// **RFC-0004 §6.3/§6.7 (spec 17 §17.7.1): the tree a possession proof of this class opens**, when it
+    /// is not the tree of the class's registered root. A composite candidate's registered root is
+    /// `H(parent_class ‖ parent_root ‖ adapter_root ‖ P)` — no inventory root, and no multiproof opens it —
+    /// so its possession is proved over its ADAPTER section: this is that section's own root (the chain's
+    /// `adapter_root`) and leaf count. [`Self::artifact_readiness_material`] and
+    /// [`Self::artifact_readiness_material_streamed_v1`] then serve THAT tree: its root, its leaf hashes,
+    /// the drawn leaves rebased to it (the draw is over this leaf count). `None` — the default — for every
+    /// class whose registered root is its inventory's, which is every class but a composite candidate.
+    fn artifact_possession_tree_v1(&self) -> Option<Result<(crate::Hash64, u32), String>> {
+        None
+    }
+
+    /// **What a readiness multiproof is built from, in one pass**: the root, every leaf's hash, and
+    /// the drawn leaves' bytes — the inputs of `palw_artifact_multiproof_v1`, in the draw's order.
+    ///
+    /// The per-row verb above is fine for one leaf and ruinous for sixteen at a 2M context: each call
+    /// re-folds the whole tree and re-streams the artifact for one row's bytes. A family that can walk
+    /// its inventory once answers this directly; the default composes the per-row verb so a family
+    /// that never overrides it keeps working — correctly, and as slowly as before.
+    fn artifact_readiness_material(
+        &self,
+        draw: &[u32],
+    ) -> Result<(crate::Hash64, Vec<crate::Hash64>, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String> {
+        let digest = self.artifact_inventory_digest()?;
+        let leaves: Vec<crate::Hash64> = digest.rows().iter().map(|row| row.leaf_hash).collect();
+        let opened = draw.iter().map(|i| self.artifact_row_opening(*i).map(|o| (*i, o.operand))).collect::<Result<Vec<_>, _>>()?;
+        Ok((digest.root(), leaves, opened))
+    }
+
+    /// **The readiness material as a STREAM** (the pre-t12 drill of 2026-09-25): the same walk as
+    /// [`Self::artifact_readiness_material`], but every leaf hash goes to `on_leaf` in inventory order
+    /// instead of into a vector — `(root, leaf_count, drawn operands in the draw's order)` back. With
+    /// `palw_artifact::PalwArtifactMultiproofStreamV1` the prover then holds `O(k · log n)` hashes, not
+    /// 64 bytes a leaf, so a seat can prove beside a replay that holds the rest of its memory share.
+    /// `None`: this family cannot stream, and the caller builds from the vector.
+    #[allow(clippy::type_complexity)]
+    fn artifact_readiness_material_streamed_v1(
+        &self,
+        _draw: &[u32],
+        _on_leaf: &mut dyn FnMut(crate::Hash64),
+    ) -> Option<Result<(crate::Hash64, u32, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String>> {
+        None
+    }
+
+    /// **RFC-0001 §2.6/§2.7: the free-prompt ANSWER with no commitment** — the node-only serving
+    /// path. The same engine, the same decoder (`PalwFreePromptJobV3::decoder_v1`) and so the same
+    /// token ids a committed run of the job would select, but nothing is captured: no fold, no
+    /// checkpoint leg, no retention. That is what lets a worker resume from a cached prefix
+    /// (the committed fold hashes every prefill tile under the job's context and cannot) and
+    /// what a batch of sequences shares. `stop_ids` end the run at the first of them (the display
+    /// stop a committed run only observes). The default serves nothing, and the caller falls back
+    /// to the committed path.
+    fn answer_free_prompt_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _stop_ids: &[u32],
+        _on_token: &mut dyn FnMut(u32),
+    ) -> Result<PalwFpAnswerV1, String> {
+        Err("this backend serves no answer-only path".to_string())
+    }
+
+    /// **ADR-0096 Decision 8: the token-to-bytes table a constrained job's mask is read through**, if this host holds the one the
+    /// job names ([`crate::palw_fp_constraint_job_v1::palw_token_table_for_job_v1`]: the process's tables, registered from
+    /// `--palw-token-table` files and looked up by the root the CLAIM committed to). A host that holds none files
+    /// `Unverifiable` for a constrained claim and cannot produce one.
+    fn token_table_for_job_v1(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    ) -> Option<std::sync::Arc<crate::palw_fp_constraint_job_v1::PalwTokenTableV1>> {
+        crate::palw_fp_constraint_job_v1::palw_token_table_for_job_v1(job)
+    }
+
+    /// **RFC-0001 §2.6 stage 2: the prefix STATE of a prompt's first `prefix_ids.len()` ids** — the object a
+    /// prefix-state claim (FP job version 11) names ([`crate::palw_fp_prefix_v1`]): the family's digest of the K/V state
+    /// after the prefix, under the class's id and the prefix's length. Deterministic in the ids, so a producer that holds
+    /// the state and a seat that recomputes (or holds it in a cache) agree. The default serves nothing.
+    fn prefix_state_v1(
+        &self,
+        _class_id: crate::Hash64,
+        _tokenizer_id: crate::Hash64,
+        _prefix_ids: &[u32],
+    ) -> Result<crate::palw_freeprompt_v3::PalwFpPrefixStateV1, String> {
+        Err("this backend serves no prefix-state path".to_string())
+    }
+
+    /// **A seat's check of a prefix-state claim's state**: the job's named state against the one this backend derives for
+    /// the claim's own prompt prefix (from its cache or by recomputation). `Ok(())` is agreement; the error names the
+    /// disagreement. A job that is not a prefix-state job is `Ok(())` (it names no state).
+    fn verify_prefix_state_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3, prompt_ids: &[u32]) -> Result<(), String> {
+        let Some(named) = crate::palw_fp_prefix_v1::palw_fp_prefix_tail_v1(job) else { return Ok(()) };
+        let k = named.prefix_tokens as usize;
+        if k == 0 || k >= prompt_ids.len() {
+            return Err("the named prefix is not a proper prefix of the prompt".to_string());
+        }
+        let derived = self.prefix_state_v1(job.class_id, job.tokenizer_id, &prompt_ids[..k])?;
+        if derived != *named {
+            return Err(format!(
+                "the job names prefix state {} over {} positions and this backend derives {} for the prompt's first {k} ids",
+                named.state_root, named.prefix_tokens, derived.state_root
+            ));
+        }
+        Ok(())
+    }
+
+    /// **RFC-0001 §2.8: the pooled final-layer hidden state of a prompt** — the local embeddings
+    /// service. Node-only and never a claim; the pooling and the normalization are
+    /// [`crate::palw_embedding_pool_v1`]'s. The default serves nothing.
+    fn embed_prompt_v1(
+        &self,
+        _prompt_tokens: &[usize],
+        _class_id: crate::Hash64,
+        _tokenizer_id: crate::Hash64,
+        _pool: crate::palw_embedding_pool_v1::PalwEmbeddingPoolV1,
+    ) -> Result<PalwFpEmbeddingV1, String> {
+        Err("this backend serves no embedding path".to_string())
+    }
+
+    /// **RFC-0001 §2.7 stage 2: several answers at once.** A backend with a batch-invariant decode
+    /// runs them in one loop (each answer exactly the one [`Self::answer_free_prompt_v1`] gives the
+    /// job alone); the default answers them one after another. `on_token(i, id)` reports job `i`'s
+    /// ids as they are selected.
+    fn answer_batch_free_prompt_v1(
+        &self,
+        jobs: &[PalwFpAnswerJobV1<'_>],
+        stop_ids: &[u32],
+        on_token: &mut dyn FnMut(usize, u32),
+    ) -> Result<Vec<PalwFpAnswerV1>, String> {
+        jobs.iter()
+            .enumerate()
+            .map(|(i, j)| self.answer_free_prompt_v1(j.job, j.prompt_tokens, stop_ids, &mut |id| on_token(i, id)))
+            .collect()
+    }
+
+    /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each
+    /// generated id in decode order, as soon as it is selected, from the SAME run whose capture
+    /// and commitment the returned [`PalwFpRunV1`] carries — never from a second inference. The
+    /// default runs the non-streaming verb and replays the ids afterwards, which is correct and not
+    /// streaming; a family overrides it inside its decode loop.
+    fn execute_free_prompt_streaming(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<PalwFpRunV1, String> {
+        let run = self.execute_free_prompt(job, prompt_tokens)?;
+        for id in &run.output_token_ids {
+            on_token(*id);
+        }
+        Ok(run)
+    }
+
+    /// **How many checkpoint intervals a retained free-prompt capture has** (ADR-0077
+    /// Decision 8). Interval 0 is the prefill and the calls up to the first checkpoint (replayed
+    /// from genesis — the prompt); interval `j ≥ 1` is the calls after checkpoint `j − 1`, replayed
+    /// from that checkpoint's state chunks. `None` when this family cannot read the bytes.
+    fn fp_interval_count(&self, _capture: &[u8]) -> Option<u32> {
+        None
+    }
+
+    /// **The same count, from CHAIN data alone** — the job's prompt length and the commitment's
+    /// executed decode count (both on the accepted 0x4a payload) and this family's own checkpoint
+    /// interval for the class. A seat draws its intervals from this, never from a count the
+    /// executor reports: an executor that could shrink the count could predict the draw. Must
+    /// agree with [`Self::fp_interval_count`] on every capture this family produces (a test
+    /// pins it). `None` when this family has no free-prompt path.
+    fn fp_interval_count_for(&self, _prompt_tokens: u32, _decode_tokens_executed: u32) -> Option<u32> {
+        None
+    }
+
+    /// **The executor's side of Decision 8: open interval `index` of its own retained capture.**
+    ///
+    /// The opening carries the binding (what `verify_binding_v1` authenticates against the
+    /// claim's execution root), the checkpoint chunk at the interval's start opened against the
+    /// checkpoint leg root, the range opening of the interval's leaves against the step leg root,
+    /// and the ids the interval consumed and produced opened against the prompt hash and the
+    /// decode pin — never the capture whole. Opaque bytes: only the family that wrote them reads
+    /// them, which is the point of the seam. Bytes are `O(interval × row + log₂ leaves)`,
+    /// independent of the job's length (R1).
+    fn open_fp_interval(&self, _capture: &[u8], _index: u32, _prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        Err("this execution family cannot open a checkpoint interval".to_string())
+    }
+
+    /// **The seat's side of Decision 8: replay one opened interval and compare every row
+    /// EXACTLY.** The class is a pinned integer computation, so "close" is not a verdict. The
+    /// seat first binds the opening to `claim` (execution root, trace root, the FP job id as the
+    /// anchor) and prices it (`work_leaves` must equal the binding's `step_leaf_count`), then
+    /// restores the state from the opened chunk, runs the interval with the class's own kernels,
+    /// and checks the recomputed leaves against the committed range. Fetching and hashing the whole
+    /// capture is what this replaces.
+    fn verify_fp_interval_opening(
+        &self,
+        _opening: &[u8],
+        _claim: PalwClaimRootsV1,
+        _index: u32,
+        _prompt_token_ids: &[u32],
+        _work_leaves: u64,
+    ) -> PalwFpIntervalVerdictV1 {
+        PalwFpIntervalVerdictV1::Unverifiable
+    }
+
+    /// **[`Self::verify_fp_interval_opening`] under the CLAIM's decode rule** (RFC-0001 §A, G5):
+    /// the replay derives each selecting row's id with the job's pipeline over its committed
+    /// answer — `job` and `committed_output_ids` are the claim's, authenticated by the caller
+    /// (the job by its id and pin, the answer by the claim's `output_root`), never the opening's.
+    /// A V3 job is exactly [`Self::verify_fp_interval_opening`]: V3 claims keep the V3 verifier.
+    /// Every family that replays through `palw_decode_pipeline_v4::palw_fp_replay_select_v1`
+    /// inherits this; a family that derives ids some other way must override it.
+    #[allow(clippy::too_many_arguments)]
+    fn verify_fp_interval_opening_under_job_v1(
+        &self,
+        opening: &[u8],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        work_leaves: u64,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        committed_output_ids: &[u32],
+    ) -> PalwFpIntervalVerdictV1 {
+        // ADR-0096 Decision 8: a constrained claim is replayed through its mask, which needs this class's token table; a
+        // host without it (or with another class's) cannot judge the claim — `Unverifiable`, an abstention, not a fault.
+        let mask = match crate::palw_fp_constraint_job_v1::palw_fp_constraint_mask_for_host_v1(job, self.token_table_for_job_v1(job)) {
+            Ok(mask) => mask,
+            Err(_) => return PalwFpIntervalVerdictV1::Unverifiable,
+        };
+        crate::palw_fp_constraint_job_v1::palw_fp_with_constraint_scope_v1(mask, || {
+            let rule = crate::palw_decode_pipeline_v4::PalwFpReplayRuleV1::of_job(job, committed_output_ids);
+            crate::palw_decode_pipeline_v4::palw_fp_with_replay_rule_v1(rule, || {
+                self.verify_fp_interval_opening(opening, claim, index, prompt_token_ids, work_leaves)
+            })
+        })
+    }
+
+    /// **ADR-0082 Decision 9: the seat's cache is RECOMPUTED from the prompt it holds, never
+    /// fetched.** Run the job's prefill and its first `decode_calls` decode calls (the committed
+    /// output ids, teacher-forced) with this family's own kernels, and return the checkpoint
+    /// leg's committed root for the state at that point — the tiled cache root under the
+    /// class's state chunk map — so a seat can compare 64 bytes against the executor's
+    /// checkpoint instead of fetching a history that grows with the context. Compute is one
+    /// forward pass of the job; bytes are none. Defaulted to a refusal: a family without this
+    /// verb cannot seat a graph-v5 row, and `Incapable` is the honest verdict.
+    ///
+    /// **`covered` is the checkpoint LEAF's own counter, in the unit the CLASS's cadence counts
+    /// in** — `palw_checkpoint_covered_at_index_v1`'s value, which is a decode call on a per-call
+    /// class and a cache POSITION on a per-position one. It is the number an interval opening
+    /// carries, so it is the number the seam takes; a seam that took decode calls would have every
+    /// caller convert, and the caller that forgot would compare a `prefill + covered`-position
+    /// state against a `covered`-position root — audit B's C-2, and a guaranteed mismatch on every
+    /// honest graph-v5 claim. The family converts once, with
+    /// `palw_checkpoint_positions_at_v1`.
+    fn fp_recompute_checkpoint_root(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+        _output_token_ids: &[u32],
+        _covered: u32,
+    ) -> Result<crate::Hash64, String> {
+        Err("this execution family cannot recompute a checkpoint root from the prompt".to_string())
+    }
+
+    /// **The largest `covered` a checkpoint leaf of this job's leg can carry** — the cheap half of
+    /// the guard a panel applies before it spends a forward pass on an opening's claimed anchor.
+    ///
+    /// In the CLASS's cadence unit, like every other `covered` on this seam: `decode_calls` on a
+    /// per-call class, `prefill + decode_calls` on a per-position one. The default is the per-call
+    /// rule spelled out — a DECLARED choice rather than a panel-side assumption, and the honest
+    /// one for a family whose classes all run that cadence. A family with a per-position class
+    /// overrides it, and one that did not would have its panel refuse every honest opening of that
+    /// class before recomputing anything (audit B, C-2).
+    ///
+    /// This is a bound and not the rule: `verify_fp_interval_opening` re-derives the anchor from
+    /// the geometry and refuses an opening that named another one, so a loose bound costs a
+    /// forward pass and a tight one costs the quorum.
+    fn fp_checkpoint_covered_bound_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> u32 {
+        job.decode_token_limit.saturating_sub(1)
+    }
+
+    /// **ADR-0103 Decision 2: which route this family's seat takes to an interval's start**, for a
+    /// class under the held map — `Recompute` where the whole context fits `window_receipt` at the
+    /// family's replay rate, `Resume` otherwise; `None` for every other class (the shipped seat
+    /// recomputes, ADR-0082 Decision 9). The seat and the executor both ask it, with the ruleset's
+    /// window, so neither can choose the route the other did not.
+    fn fp_held_route_v1(&self, _window_receipt_daa: u64) -> Option<crate::palw_held_context_v1::PalwHeldSeatRouteV1> {
+        None
+    }
+
+    /// **ADR-0103 Decision 2, the executor's half of the Resume route: the state interval `index`
+    /// resumes from**, served — the checkpoint named, its slices' chunks and every slice's top leaf
+    /// carried. Opaque bytes, read only by the family that wrote them.
+    fn open_fp_resume_v1(&self, _capture: &[u8], _index: u32, _prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        Err("this execution family serves no resume state".to_string())
+    }
+
+    /// **The seat's half: verify a fetched state against the committed checkpoint and hold it as
+    /// this seat's own** — so the interval verification that follows replays from it exactly as it
+    /// would from a recomputed one. Returns the state's root, the number the seat compares against
+    /// the opening's anchor. A chunk that does not verify is a refusal by name, and nothing is kept.
+    fn fp_accept_resume_v1(
+        &self,
+        _resume: &[u8],
+        _context: &crate::palw_v2::PalwJobContextV2,
+        _prompt_token_ids: &[u32],
+        _covered: u32,
+    ) -> Result<crate::Hash64, String> {
+        Err("this execution family accepts no resume state".to_string())
+    }
+
+    /// **Drop the seat state and the attention walk THIS instance holds** (ADR-0082 D9; ADR-0110 §9.5).
+    /// Both are the instance's own and go with it; this is the explicit form, for a caller that keeps
+    /// an instance across claims and for a node that wants the memory back. Until the next recompute
+    /// the row check on this instance is `Unverifiable`. Defaulted: a family that keeps nothing.
+    fn fp_forget_seat_state_v1(&self) {}
+
+    /// **The committed output ids of a retained capture, read by the family that wrote it**
+    /// (ADR-0082 Decision 9's companion verb). A seat that recomputes the cache teacher-forces the
+    /// executor's own answer, so it needs the ids the commitment binds — and it must get them
+    /// through the seam, never by naming a family's material decoder from the panel. `None` when
+    /// the bytes are not this family's capture. Defaulted so a family without a free-prompt path
+    /// answers honestly.
+    fn fp_committed_output_ids(&self, _capture: &[u8]) -> Option<Vec<u32>> {
+        None
+    }
+
+    /// **ADR-0085 §6 item 4, the executor's half: the interval opening WITH the close annex** for
+    /// the `disputed` step leaves an open court session names. Leaves outside the interval are
+    /// another interval's to serve and are skipped; a family with no annex to give serves the plain
+    /// opening, which is what the default does.
+    fn open_fp_interval_with_close(
+        &self,
+        capture: &[u8],
+        index: u32,
+        prompt_token_ids: &[u32],
+        disputed: &[u64],
+    ) -> Result<Vec<u8>, String> {
+        let _ = disputed;
+        self.open_fp_interval(capture, index, prompt_token_ids)
+    }
+
+    /// **ADR-0086 Decision 6, the executor's half: one block's leaf hashes** of an interval this
+    /// executor serves, `Base0FpBlockLeavesV1` bytes. A seat that found a `FaultInRange` names the
+    /// leaf from these against its own replay. `block_index` is the request's number: the block's
+    /// own index, or — for a class under the held regime — its distance from the block holding the
+    /// interval's first leaf (ADR-0121 Decision 3), which the family resolves against the opening.
+    fn open_fp_block_leaves(
+        &self,
+        _capture: &[u8],
+        _interval_index: u32,
+        _block_index: u64,
+        _prompt_token_ids: &[u32],
+    ) -> Result<Vec<u8>, String> {
+        Err("this execution family serves no block leaves".to_string())
+    }
+
+    /// **ADR-0111 Decision 6, the executor's answer to a held state-chunk accusation** (ADR-0103
+    /// Decision 4): checkpoint `checkpoint`'s leaf opened against the binding's checkpoint root, and
+    /// chunk `chunk` of its state with the path under the class's map, built from this executor's
+    /// retention. The default refuses by name — and the court reads a refusal as silence, so a
+    /// family that executes a held class answers here or its executor is slashed for withholding.
+    fn held_state_chunk_answer_v1(
+        &self,
+        _capture: &[u8],
+        _prompt_token_ids: &[u32],
+        _checkpoint: u32,
+        _chunk: u32,
+    ) -> Result<(crate::palw_attn_court_v1::PalwAttnCheckpointAnchorV1, crate::palw_attn_court_v1::PalwAttnChunkOpeningV1), String>
+    {
+        Err("this execution family answers no held state chunk".to_string())
+    }
+
+    /// **ADR-0111 Decision 6, the executor's answer to a held step-range accusation**: the leaf
+    /// hashes of `[first, first + count)` and the frontier that folds them to the binding's step
+    /// root, from this executor's retention. Refused by name by default, as above.
+    fn held_step_range_answer_v1(
+        &self,
+        _capture: &[u8],
+        _prompt_token_ids: &[u32],
+        _first: u64,
+        _count: u32,
+    ) -> Result<crate::palw_step_leg::PalwStepRangeOpeningV1, String> {
+        Err("this execution family answers no held step range".to_string())
+    }
+
+    /// **ADR-0086 Decision 6, the seat's half: name the leaf a served block disagrees on**, from
+    /// this node's own replay of the interval. `Ok(None)`: every served leaf is this seat's own.
+    fn fp_name_the_leaf_v1(
+        &self,
+        _opening: &[u8],
+        _block_leaves: &[u8],
+        _claim: PalwClaimRootsV1,
+        _index: u32,
+        _prompt_token_ids: &[u32],
+        _generated_token_ids: &[u32],
+        _work_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        Err("this execution family names no leaf from a served block".to_string())
+    }
+
+    /// **ADR-0121 §7: name the leaf a served EDGE disagrees on** — the interval's blocks that
+    /// straddle its ends, whole in no interval and digested by no opening, checked by the range's
+    /// own root walk instead: the served edges (this node's own where one is not served), the
+    /// opening's digests and siblings must walk to the committed root, and the leaf named is the
+    /// first served one that differs from this node's replay. `Err` when the walk fails with the
+    /// edges held: the edge still this node's own is the one to ask for.
+    #[allow(clippy::too_many_arguments)]
+    fn fp_name_the_edge_leaf_v1(
+        &self,
+        _opening: &[u8],
+        _served_edges: &[Vec<u8>],
+        _claim: PalwClaimRootsV1,
+        _index: u32,
+        _prompt_token_ids: &[u32],
+        _generated_token_ids: &[u32],
+        _work_leaves: u64,
+    ) -> Result<Option<u64>, String> {
+        Err("this execution family names no leaf from a served edge".to_string())
+    }
+
+    /// **ADR-0085 Decision 3: which interval owns step leaf `leaf`** of this context's job — the
+    /// challenger's first question when a court narrows to a step and it holds no capture.
+    fn fp_interval_of_leaf_v1(&self, _context: &PalwJobContextV2, _leaf: u64) -> Option<u32> {
+        None
+    }
+
+    /// **ADR-0085 Decision 3: the close, assembled from served intervals and this node's own
+    /// replay.** `held` are `(interval, opening bytes)` this node holds for the claim; the one
+    /// covering `leaf` must carry the annex. Byte for byte the capture path's object for the same
+    /// `(claim, leaf)` (ADR-0085 X1), or a refusal by name.
+    fn refutation_from_served_intervals(
+        &self,
+        _held: &[(u32, Vec<u8>)],
+        _claim: PalwClaimRootsV1,
+        _prompt_token_ids: &[u32],
+        _generated_token_ids: &[u32],
+        _work_leaves: u64,
+        _leaf: u64,
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        Err("this execution family assembles no close from served intervals".to_string())
+    }
+
+    /// **A leaf's refutation from this executor's own retention** (ADR-0111 Decisions 1–2; ADR-0121)
+    /// — what [`crate::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1`] asks before it
+    /// falls back to the whole-capture prover. The default is ADR-0085's path: the leaf's interval
+    /// opened with the close annex for that leaf, and the close assembled from it
+    /// ([`palw_fp_leaf_refutation_by_annex_v1`]). A family whose retention is a fold builds it from
+    /// the tree and the blocks the step reads instead, holding the step's rows rather than the
+    /// interval's; the object is the same (ADR-0085 X1).
+    fn fp_leaf_refutation_v1(
+        &self,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        claim: PalwClaimRootsV1,
+        work_leaves: u64,
+        leaf: u64,
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        palw_fp_leaf_refutation_by_annex_v1(self, capture, prompt_token_ids, claim, work_leaves, leaf)
+    }
+
+    /// **The claim's `output_root`, recomputed from the answer's ids** (ADR-0084 Decision 1;
+    /// ADR-0078 X6's rule, `output_commitment_v2(job_context_hash, ids, rendered_hash)`, spelled by
+    /// the family that holds the context and the rendered-hash rule).
+    ///
+    /// This is how a seat binds a served answer envelope (`FPA1`) to the chain before it spends a
+    /// forward pass on its ids: the root the ids recompute must equal the root the claim
+    /// committed. The context is built exactly as [`Self::fp_recompute_checkpoint_root`] builds
+    /// it — the executed count is the job's budget and the stop reason is `ExactBudgetReached`,
+    /// which is the one shape this lane's runs have — so an honest claim's ids recompute its root
+    /// and a forged list never does. `None` when this family has no free-prompt path; a caller
+    /// then holds no binding and files nothing on those ids.
+    fn fp_output_root_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _output_token_ids: &[u32],
+    ) -> Option<crate::Hash64> {
+        None
+    }
+
+    /// **The context a free-prompt job runs under, as this family builds it** (ADR-0084
+    /// Decision 4). The one place the class facts, the exactly-decoded budget and the network id
+    /// meet: `execute_free_prompt` runs under it, the checkpoint recompute rebuilds it, and the
+    /// context-taking seams below take it — so a seat holds ONE context per claim, on either lane,
+    /// and the lane decides only where the context comes from (this, or `job_for_anchor`).
+    ///
+    /// **The budget is a PARAMETER, because a run that stopped early is still this job's run**
+    /// (ADR-0074 Decision 7; mainnet audit 2026-09-06 M-4). `decode_tokens_executed` is what
+    /// actually ran — `job.decode_token_limit` for a run that reached its ceiling, less for an
+    /// `EndOfGeneration` one. Every family that hard-paired the ceiling with
+    /// `ExactBudgetReached` built a context no early-stopping claim can reproduce, which excluded
+    /// such a claim from this lane entirely. `palw_fp_job_context_v3` re-checks the pairing, so a
+    /// count above the ceiling is refused here rather than believed.
+    ///
+    /// `None` when this family has no free-prompt path.
+    fn fp_job_context_for_executed_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _decode_tokens_executed: u32,
+    ) -> Option<PalwJobContextV2> {
+        None
+    }
+
+    /// [`Self::fp_job_context_for_executed_v1`] at the job's declared ceiling — what a PRODUCER
+    /// about to run the job knows, and what every caller that had no executed count meant. A seat
+    /// must not use this: it holds the answer, and the answer's length is the executed count
+    /// (ADR-0084 Decision 1).
+    fn fp_job_context_v1(&self, job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<PalwJobContextV2> {
+        self.fp_job_context_for_executed_v1(job, job.decode_token_limit)
+    }
+
+    /// **What this family's geometry prices a CONTEXT at, in step leaves** (ADR-0074 Decision 5,
+    /// ADR-0084 Decision 4): `palw_step::step_leaf_count_capped_v1(profile, context, ladder)` for
+    /// the profile this backend holds, at the ruleset ladder it was built with.
+    ///
+    /// It exists so a seat can ask the ONE question the chain cannot ask for it: is the context I
+    /// derived from what was served the context the chain PAID for? Without it the seat's
+    /// interval draw takes its denominator from a number the accused wrote
+    /// (`PalwFpChainCountsV1`'s own doc), and a served two-call job buys the whole claim's quanta.
+    /// `None` when this family cannot price a context; a seat that gets `None` files nothing on
+    /// this lane rather than guessing, which is never an accusation.
+    fn fp_context_work_leaves_v1(&self, _context: &PalwJobContextV2) -> Option<u64> {
+        None
+    }
+
+    /// **The job context an interval opening's binding carries** (ADR-0084 Decision 4).
+    ///
+    /// A seat holds one context per claim and must be able to check that the evidence is about
+    /// THAT context. The binding pins its own `job_id` against the claim's anchor and its own
+    /// `step_leaf_count` against the geometry, and neither of those pins the two token counts — so
+    /// a producer can bind a wide context to a narrow job's id and have the seat's draw sized by
+    /// the narrow one. `None` when the bytes are not this family's opening.
+    fn fp_opening_job_context_v1(&self, _opening: &[u8]) -> Option<PalwJobContextV2> {
+        None
+    }
+
+    /// **ADR-0082 Decision 9, keyed on the CONTEXT** (ADR-0084 Decision 4): the job's prefix,
+    /// teacher-forced on this seat's own kernels, and the tiled root of the state it reaches — for
+    /// a free-prompt job's context ([`Self::fp_job_context_v1`]) and for an attempt claim's
+    /// ([`Self::job_for_anchor`]) alike, which is what lets the interval arm serve both lanes.
+    /// `covered` is the checkpoint leaf's own counter, in the class's cadence unit, as on the
+    /// free-prompt seam. Defaulted to a refusal: a family without this verb cannot seat a
+    /// checkpointed row, and `Incapable` is the honest verdict.
+    fn checkpoint_root_for_context_v1(
+        &self,
+        _context: &PalwJobContextV2,
+        _prompt_token_ids: &[u32],
+        _output_token_ids: &[u32],
+        _covered: u32,
+    ) -> Result<crate::Hash64, String> {
+        Err("this execution family cannot recompute a checkpoint root from a context".to_string())
+    }
+
+    /// [`Self::fp_checkpoint_covered_bound_v1`], keyed on the context: the largest `covered` a
+    /// checkpoint leaf of this context's leg can carry, in the class's own cadence unit. The
+    /// default is the per-call rule spelled out over the context's decode count.
+    fn checkpoint_covered_bound_for_context_v1(&self, context: &PalwJobContextV2) -> u32 {
+        context.exact_decode_tokens.saturating_sub(1)
+    }
+
+    /// **`output_root` from the answer's ids, under a context** (ADR-0084 Decisions 1 and 4;
+    /// ADR-0078 X6): `output_commitment_v2(context_hash, ids, rendered_hash_for_family(ids))`.
+    /// A seat binds a served answer envelope — `FPA1` under the job's context, `ATA1` under the
+    /// anchor's — to the claim's committed root with this, before any forward pass. `None` when
+    /// this family renders nothing it can name.
+    fn output_root_for_context_v1(&self, _context: &PalwJobContextV2, _output_token_ids: &[u32]) -> Option<crate::Hash64> {
+        None
+    }
+
+    /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
+    ///
+    /// A court that has never convicted on a live chain is a court nobody has evidence works, and
+    /// the only way to get that evidence is for some producer to actually be wrong. Re-deriving
+    /// the commitment from the corrupted capture is what makes this a real fraud rather than a
+    /// mismatch: the producer's roots are self-consistent and honestly its own, and the ONLY way
+    /// to catch it is to run the canonical job yourself — which is exactly the fraud the court
+    /// exists for and exactly the one no seat check can see.
+    ///
+    /// Callers must refuse to reach this on a network carrying value. It is a method rather than a
+    /// test helper because the drill has to go through the same production path the honest
+    /// producer does; a fault injected somewhere else would prove something about the injector.
+    fn execute_with_injected_fault(
+        &self,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+        _leaf_index: u64,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        Err("this backend has no drill fault".to_string())
+    }
+
+    /// **The same DRILL fault on the free-prompt lane** (ADR-0100 §6 step 2): run the job, corrupt
+    /// one lane of the tile at `leaf_index`, and hand back the run the corrupted capture IS — its
+    /// four leg roots and its execution root re-derived from the capture, so
+    /// [`crate::palw_fp_execution_v3::palw_fp_commitment_from_context_v3`] assembles the liar's
+    /// commitment exactly as it assembles an honest one.
+    ///
+    /// It is its own verb because the attempt-lane one cannot serve here: its outcome carries a
+    /// re-derived execution root, but the free-prompt commitment recomputes that root from the
+    /// run's FACTS, and facts measured on the honest run describe a capture that was never
+    /// committed — the assembly refuses the pair by name (`ContextDoesNotReproduceTheRoot`), and a
+    /// drill that never commits a claim convicts nobody. Same rule as the attempt lane: callers
+    /// refuse to reach this on a network carrying value.
+    fn execute_free_prompt_with_injected_fault(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _leaf_index: u64,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt drill fault".to_string())
+    }
+
+    /// **The free-prompt drill, with the lie named** (ADR-0152 §4-ter N5) — `fault` is either the
+    /// shipped tile lie ([`PalwFreePromptDrillFaultV1::Leaf`], what [`Self::execute_free_prompt_with_injected_fault`]
+    /// makes) or a lie in a fused attention output, followed downstream or not
+    /// ([`PalwFreePromptDrillFaultV1::AttnOutput`]). What this instance serves for the job afterwards replays
+    /// the same lie. Same rule as every drill verb: callers refuse to reach it on a network carrying
+    /// value.
+    fn execute_free_prompt_with_drill_fault_v2(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _fault: PalwFreePromptDrillFaultV1,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt drill fault".to_string())
+    }
+
+    /// **G14 drill D-06: a free-prompt run whose committed token at decode `position` is NOT the job's own selection** — the
+    /// best lane the job's rule does not choose — with every step after it computed honestly from that token and every root
+    /// re-derived from the capture, so only the frame's decode-token door (or a seat's replay) sees the lie. Same contract as
+    /// every drill verb: callers refuse to reach it on a network carrying value. A backend without the verb refuses.
+    fn execute_free_prompt_with_selection_fault_v1(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _position: u32,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt selection drill".to_string())
+    }
+
+    /// **A DRILL fault of any kind** ([`PalwDrillFaultV1`], ADR-0152 v3.1 addendum §4-bis.10) on the
+    /// attempt lane: the job run through this family's own dense capture path — the prompt, context
+    /// or prefill moved before the run, or the rows, ids, legs or roots moved after it — and every
+    /// root the claim carries re-derived from what was committed. `StepLeaf` is
+    /// [`Self::execute_with_injected_fault`]. The same contract: callers refuse to reach this on a
+    /// network carrying value.
+    fn execute_with_drill_fault(
+        &self,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+        _fault: PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        Err("this backend has no drill".to_string())
+    }
+}
+
+/// **DRILL ONLY: the lie a free-prompt drill run commits** (ADR-0152 §4-ter N5; the trait's contract:
+/// never on a network carrying value). The free-prompt lane's own set, apart from the attempt lane's
+/// [`PalwDrillFaultV1`] (v3.1 addendum §4-bis.10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFreePromptDrillFaultV1 {
+    /// The committed tile at `leaf` with its first lane moved by one; the execution honest — the
+    /// shipped drill.
+    Leaf { leaf: u64 },
+    /// **A lie in a fused attention output.** Layer `layer`'s fused site at the canonical
+    /// coordinate `(call, position)` (a decode call `c > 0` is position 0 of its call), lane
+    /// `head · d_head + lane` of its output row, moved by `delta`.
+    ///
+    /// `follow = false`: only the committed row moves and every row after it is the honest
+    /// execution's — the inconsistent forger, whose next checkpoint convicts it. `follow = true`:
+    /// the engine computes everything after it FROM the lie — the rest of the layer, every later
+    /// layer, every later position through the cache — so the checkpoints after it hold rows the
+    /// lie fed: the consistent forger 4-ter F9 names, whose anchor an honest challenger reaches only
+    /// through the filed slice sub-roots.
+    AttnOutput { call: u32, layer: u16, position: u32, head: u16, lane: u16, delta: i32, follow: bool },
+    /// **A lie in a CACHE row** (ADR-0152 §4-ter.3 step 6's forger): the `kind` (0 = K, 1 = V) row
+    /// layer `layer` writes at the canonical coordinate `(call, position)` is committed HONEST as its
+    /// cache-write step row, while the cache — every checkpoint that holds the position, every later
+    /// read — holds lane `lane` of it moved by `delta`. The attention at that position and after
+    /// reads the moved row (the committed outputs follow it), so the anchor's slice `(K|V, layer)`
+    /// disagrees with the producer's own cache-write rows: the held dissection's bottom cannot be
+    /// built from the filing, and the checkpoint court convicts on the disclosed chunk.
+    CacheRow { call: u32, layer: u16, position: u32, kind: u8, lane: u16, delta: i32 },
+}
+
+/// **How a `BendLogits` drill moves a lane** (ADR-0152 v3.1 addendum §4-bis.10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillBendV1 {
+    /// The lane becomes the row's argmax.
+    NewArgmax,
+    /// The lane moves and the argmax does not — the R1 residual: the committed token is still the
+    /// row's selection, so only `LogitsNotStepOutput` (12) sees it.
+    SameArgmax,
+}
+
+/// **The drill faults** (ADR-0152 v3.1 addendum §4-bis.10) — every way a producer can commit
+/// something other than its honest run that F1, F1c and F1-M exist to convict, each produced
+/// through the producer's OWN execution path and committed as the producer commits (every root
+/// re-derived, the material self-consistent), so a drill — and T18p-M — exercises the real commit
+/// and not an injector. The contract of
+/// [`PalwExecutionBackendV1::execute_with_injected_fault`] holds: never on a network carrying value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillFaultV1 {
+    /// One lane of one step tile moved at `leaf` (`execute_with_injected_fault`) — 5.
+    StepLeaf(u64),
+    /// Logits row `row` bent at `lane` (the first interior lane that can move so when `None`) over
+    /// the honest step tree, the trace root re-committed — 12.
+    BendLogits { row: u32, mode: PalwDrillBendV1, lane: Option<u32> },
+    /// Another anchor's prompt run under this job's id and seed — 9 (J5b) or 13 past 4,096 ids.
+    RelabelPrompt { from: Hash64 },
+    /// The job's prefill cut to `n` ids, run — 9 (J5a).
+    ShortPrefill(u32),
+    /// An instance field written into the context (the tokenizer id), run — 9 (J5a).
+    LegacyContextField,
+    /// A prompt root with no preimage committed in the context, run — 9 (J5b) or 13.
+    GarbagePromptRoot,
+    /// The claim's execution root replaced by one no binding reproduces.
+    UnboundExecutionRoot(Hash64),
+    /// The activation leg root replaced, re-committed — 9 (J6).
+    ActivationRoot(Hash64),
+    /// The checkpoint interval replaced, re-committed — 9 (J7).
+    CheckpointInterval(u32),
+    /// Token `pos` replaced by `lane`, re-committed — 8 (flat) or 11 `NotSelected` (tiled).
+    TokenNotSelected { pos: u32, lane: u32 },
+    /// Token `pos` replaced by an id past the vocabulary, re-committed — 8 or 11 `OutOfVocab`.
+    TokenOutOfVocab { pos: u32 },
+    /// The claim's output root replaced — 10.
+    OutputRoot(Hash64),
+}
+
+/// **ADR-0085's path to a leaf's refutation, for a family's own retention**: the leaf's interval
+/// opened with the close annex for that one leaf, and the close assembled from it — a replay of one
+/// interval from its anchor, never of the job. The default of
+/// [`PalwExecutionBackendV1::fp_leaf_refutation_v1`], spelled as a function so a family that
+/// overrides the verb for one retention can still take it for another.
+pub fn palw_fp_leaf_refutation_by_annex_v1<B: PalwExecutionBackendV1 + ?Sized>(
+    backend: &B,
+    capture: &[u8],
+    prompt_token_ids: &[u32],
+    claim: PalwClaimRootsV1,
+    work_leaves: u64,
+    leaf: u64,
+) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+    let shape = backend.capture_shape(capture).ok_or("the capture has no shape this family reads")?;
+    let generated = backend.fp_committed_output_ids(capture).unwrap_or_default();
+    let interval = backend.fp_interval_of_leaf_v1(&shape.job_context, leaf).ok_or_else(|| format!("leaf {leaf} is in no interval"))?;
+    let opened = backend.open_fp_interval_with_close(capture, interval, prompt_token_ids, &[leaf])?;
+    backend.refutation_from_served_intervals(&[(interval, opened)], claim, prompt_token_ids, &generated, work_leaves, leaf)
+}
+
+#[cfg(test)]
+mod tests {
+    /// **There is no family value to get wrong.** The type that used to answer "can a dispute
+    /// about this class end in a conviction?" is gone (ADR-0053), and this test is what keeps it
+    /// gone: a re-introduced flag would give some future consumer an arm to take, and the arm the
+    /// withdrawn family needed was the one that skipped the coverage gate.
+    #[test]
+    fn the_seam_carries_no_verification_scheme_flag() {
+        let src = include_str!("palw_backend.rs");
+        for banned in ["PalwExecutionFamilyV1", "is_court_adjudicable", "MetalGguf"] {
+            assert!(
+                !src.split("fn the_seam_carries_no_verification_scheme_flag").next().unwrap().contains(banned),
+                "{banned} is back in the execution seam — ADR-0053 withdrew the second family"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod price_rule_tests {
+    use super::*;
+
+    /// The price rule, both arms (mainnet audit, 2026-09-05).
+    #[test]
+    fn an_unpriced_claim_is_at_its_price_at_any_leaf_count_and_a_priced_one_only_at_its_own() {
+        assert!(!palw_claim_prices_work_v1(0));
+        assert!(palw_claim_prices_work_v1(30));
+        assert!(palw_opening_is_at_the_claims_price_v1(6_630_544, 0), "an attempt-lane claim prices no leaves");
+        assert!(palw_opening_is_at_the_claims_price_v1(30, 30));
+        assert!(!palw_opening_is_at_the_claims_price_v1(31, 30), "a priced claim must reproduce its price");
+    }
+}
+
+#[cfg(test)]
+mod output_root_tests {
+    use super::*;
+
+    /// A family with no fold: its replay IS its `execute`, and whatever that commits is the claim's.
+    struct ExecuteOnly(Hash64);
+
+    impl PalwExecutionBackendV1 for ExecuteOnly {
+        fn model_id(&self) -> &str {
+            "execute-only"
+        }
+        fn job_for_anchor(&self, _anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
+            Err("not used".into())
+        }
+        fn execute(&self, _job: &PalwJobContextV2, _prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
+            Ok(PalwExecutionOutcomeV1 {
+                trace_root: Hash64::from_u64_word(1),
+                output_root: self.0,
+                execution_root: Hash64::from_u64_word(3),
+                trace_manifest_root: Hash64::from_u64_word(4),
+                trace_chunk_count: 1,
+                material: Vec::new(),
+            })
+        }
+        fn verify_material(&self, _material: &[u8], _claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
+            PalwMaterialVerdictV1::Unverifiable
+        }
+    }
+
+    /// **SEAT-S2: the default replay carries the output root its execution commits** — the value a
+    /// producer running the same verb put in its claim, so the seat's comparison has something to
+    /// compare, and an answer that moved is a different root.
+    #[test]
+    fn the_default_replay_carries_the_executions_output_root() {
+        let job = crate::palw_base0_profile::rc_job_context(
+            &crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("the floor"),
+            8,
+            4,
+        );
+        let honest = ExecuteOnly(Hash64::from_u64_word(0x0A)).execute_for_verdict(&job, &[]).expect("replays");
+        assert_eq!(honest.output_root, Some(Hash64::from_u64_word(0x0A)));
+        assert_eq!(
+            (honest.execution_root, honest.trace_root, honest.work_leaves),
+            (Hash64::from_u64_word(3), Hash64::from_u64_word(1), None)
+        );
+        let moved = ExecuteOnly(Hash64::from_u64_word(0x0B)).execute_for_verdict(&job, &[]).expect("replays");
+        assert_ne!(moved.output_root, honest.output_root, "another answer is another output root");
+        assert_eq!(moved.execution_root, honest.execution_root, "the roots alone cannot tell the two apart");
+    }
+}
+
+mod operations;
+pub use operations::{PalwExecutionOpsV1, PalwReplayOpsV1, PalwMaterialOpsV1, PalwCourtEvidenceOpsV1, PalwResourceOpsV1};
+
+#[cfg(test)]
+mod operation_view_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Configured {
+        rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1,
+        calls: AtomicUsize,
+    }
+    impl PalwExecutionBackendV1 for Configured {
+        fn model_id(&self) -> &str { "configured-operation-view" }
+        fn job_for_anchor(&self, _anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
+            Err("no anchor fixture".into())
+        }
+        fn set_attempt_rules_v1(&mut self, rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1) {
+            self.rules = rules;
+        }
+        fn attempt_rules_v1(&self) -> crate::palw_attempt_rules_v1::PalwAttemptRulesV1 { self.rules }
+        fn execute(&self, _job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
+            assert_eq!(prompt, &[3, 5]);
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let answer = if self.rules == crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 { 11 } else { 12 };
+            Ok(PalwExecutionOutcomeV1 {
+                trace_root: Hash64::from_u64_word(1), output_root: Hash64::from_u64_word(answer),
+                execution_root: Hash64::from_u64_word(3), trace_manifest_root: Hash64::from_u64_word(4),
+                trace_chunk_count: 1, material: Vec::new(),
+            })
+        }
+        fn verify_material(&self, _material: &[u8], _claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
+            PalwMaterialVerdictV1::Unverifiable
+        }
+    }
+    fn configured() -> Configured {
+        let mut backend = Configured { rules: Default::default(), calls: AtomicUsize::new(0) };
+        backend.set_attempt_rules_v1(crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1);
+        backend
+    }
+
+    #[test]
+    fn operation_views_keep_the_configured_instance_and_its_inherited_replay() {
+        let backend = configured();
+        let job = crate::palw_base0_profile::rc_job_context(
+            &crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).unwrap(), 8, 4,
+        );
+        let execution = PalwExecutionOpsV1::new(&backend);
+        assert_eq!(execution.attempt_rules_v1(), crate::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1);
+        let direct = execution.execute(&job, &[3, 5]).unwrap();
+        // The compatibility trait's default replay calls THIS instance's overridden execution.
+        let replay = PalwReplayOpsV1::new(&backend).execute_for_verdict(&job, &[3, 5]).unwrap();
+        assert_eq!(direct.output_root, Hash64::from_u64_word(11));
+        assert_eq!(replay.output_root, Some(direct.output_root));
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn unsupported_operations_stay_refusals_or_absent_in_every_view() {
+        let backend = configured();
+        assert!(PalwMaterialOpsV1::new(&backend).open_fp_interval(&[], 0, &[]).is_err());
+        assert!(PalwCourtEvidenceOpsV1::new(&backend).attn_site_evidence_held_v1(&[], 0, None, None).is_err());
+        assert!(PalwResourceOpsV1::new(&backend).runtime_profile_v1().is_none());
+        assert!(PalwResourceOpsV1::new(&backend).capture_shape(&[]).is_none());
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0, "an absent capability does not start a substitute execution");
+    }
+}

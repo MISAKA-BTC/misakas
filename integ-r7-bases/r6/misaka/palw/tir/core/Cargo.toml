@@ -1,0 +1,33 @@
+[package]
+name = "misaka-palw-tir"
+description = "RFC-0002 PALW-TIR v1: the canonical integer tensor IR — primitive set, TirProgramV1 and its canonical encoding, and the slow, obviously-correct reference interpreter the court will run"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# A LEAF crate on purpose: `kaspa-consensus-core` will depend on it for admission and for the
+# court, so it depends on nothing of this repository. Identity hashing stays with the caller; this
+# crate exposes canonical bytes.
+[dependencies]
+borsh.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# Reproduces the frozen BASE-0 KAT digest (`misaka_palw_base0::kat::KAT_DIGEST`) through the IR's
+# primitives without depending on the crate that generated it.
+blake2b_simd.workspace = true
+# RFC-0003's R (random inputs of version-2 programs) and canonical outputs, for the version-2 vectors;
+# the IR itself never hashes — a caller supplies random inputs.
+misaka-palw-gen.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

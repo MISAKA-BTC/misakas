@@ -1,0 +1,2228 @@
+use crate::constants::{MAX_SOMPI, TX_VERSION};
+use kaspa_consensus_core::config::params::PqEnforcementMode;
+use kaspa_consensus_core::dns_finality::{
+    DnsTxKind, dns_tx_kind, validate_compute_capability_payload, validate_compute_certificate_payload, validate_compute_challenge_tx,
+    validate_compute_commitment_payload, validate_compute_verdict_payload, validate_precommit_evidence_tx,
+    validate_slashing_evidence_tx, validate_stake_attestation_shard_payload, validate_stake_bond_tx, validate_stake_precommit_payload,
+    validate_stake_unbond_payload,
+};
+use kaspa_consensus_core::palw_carriage::{palw_carriage_tx_kind, validate_palw_carriage_stage1_tx};
+use kaspa_consensus_core::palw_lifecycle_objects_v2::validate_palw_lifecycle_tx;
+use kaspa_consensus_core::subnets::{
+    SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER,
+};
+use kaspa_consensus_core::token::{validate_token_burn_payload, validate_token_transfer_payload};
+use kaspa_consensus_core::tx::Transaction;
+use kaspa_txscript::script_class::{ScriptClass, parse_evm_deposit_lock};
+use std::collections::HashSet;
+
+use super::{
+    TransactionValidator,
+    errors::{TxResult, TxRuleError},
+};
+
+impl TransactionValidator {
+    /// Performs a variety of transaction validation checks which are independent of any
+    /// context -- header or utxo. **Note** that any check performed here should be moved to
+    /// header contextual validation if it becomes HF activation dependent. This is bcs we rely
+    /// on checks here to be truly independent and avoid calling it multiple times wherever possible
+    /// (e.g., BBT relies on mempool in isolation checks even though virtual daa score might have changed)   
+    pub fn validate_tx_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        self.check_transaction_inputs_in_isolation(tx)?;
+        self.check_transaction_outputs_in_isolation(tx)?;
+        self.check_transaction_pq_output_classes(tx)?;
+        self.check_activation_sink_outputs_in_isolation(tx)?;
+        self.check_improvement_sink_outputs_in_isolation(tx)?;
+        self.check_coinbase_in_isolation(tx)?;
+
+        check_transaction_output_value_ranges(tx)?;
+        check_duplicate_transaction_inputs(tx)?;
+        check_gas(tx)?;
+        let original_inner = if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            && tx.payload.starts_with(kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAGIC_V1)
+        {
+            if self.palw_tir_public_conviction_fence.is_none() {
+                return Err(TxRuleError::InvalidPalwFpPayload(
+                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
+                ));
+            }
+            // The bounded envelope decoder is not a source-validity or payment credential.
+            // Only the original FP checks below see this transient payload view.
+            let envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
+                .map_err(|_| {
+                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
+                })?;
+            let mut inner = tx.clone();
+            inner.payload = envelope.original_payload;
+            Some(inner)
+        } else if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            && tx.payload.starts_with(kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
+        {
+            if self.palw_staged_public_court_fence.is_none() {
+                return Err(TxRuleError::InvalidPalwFpPayload(
+                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
+                ));
+            }
+            let envelope =
+                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload).map_err(|_| {
+                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
+                })?;
+            let mut inner = tx.clone();
+            inner.payload = envelope.original_payload;
+            Some(inner)
+        } else {
+            None
+        };
+        check_transaction_subnetwork(
+            original_inner.as_ref().unwrap_or(tx),
+            self.palw_panel_da_admissible,
+            self.palw_prompt_ids_form,
+            self.palw_lifecycle_undecodable_tolerated,
+            kaspa_consensus_core::palw_fp_objects_v3::palw_fp_isolation_work_leaves_cap_v1(self.palw_held_context_fence.is_some()),
+            kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
+                self.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+            ),
+            // RFC-0004 A6, height-free: an evaluation claim (FP job version 9) is admitted by its own
+            // lane's rules wherever the ruleset carries `palw_improvement_v1`; the header-context door
+            // decides the height.
+            self.palw_improvement_fence.is_some(),
+            // RFC-0003 §I.4.4: the tensor claim's height-free door — `true` only where the ruleset carries
+            // `palw_fp_job_v5`; the header-context door decides the height.
+            self.palw_fp_job_v5_fence.is_some(),
+            // RFC-0001 §2.6 stage 2: the prefix-state claim's height-free door — `true` only where the ruleset carries
+            // `palw_fp_prefix_state`; the header-context door decides the height.
+            self.palw_fp_prefix_state_fence.is_some(),
+            // RFC-0001 §2.6 stage 2b: the inherited-prefix claim's height-free door.
+            self.palw_fp_prefix_inherit_fence.is_some(),
+            // ADR-0096 Decision 8: the constrained claim's height-free door — `true` only where the ruleset carries
+            // `palw_fp_decode_constraint`; the header-context door decides the height.
+            self.palw_fp_decode_constraint_fence.is_some(),
+        )?;
+        check_transaction_version(tx)
+    }
+
+    /// kaspa-pq PQ-only (ADR-0019 §7 / docs/design/pq/kaspa-pq-design-mldsa87.md): on a
+    /// PQ-active network **every** transaction output — native spend, coinbase
+    /// (miner payout *and* validator-reward), and DNS-overlay — must use the sole
+    /// standard ML-DSA-87 P2PKH script class, so no non-PQ output (legacy
+    /// secp256k1, P2SH, or a signature-free script such as `OP_TRUE`) can ever
+    /// enter the UTXO set. This complements §6 (which rejects *spending* non-PQ
+    /// UTXOs at the script engine and the input-class check) by blocking their
+    /// *creation*.
+    ///
+    /// There are intentionally **no exemptions**. The earlier coinbase / DNS
+    /// carve-outs were a consensus hole: a block producer could put a non-PQ
+    /// script in the coinbase miner output, or in a stake-bond output-1+ /
+    /// attestation output, and mint a UTXO spendable without an ML-DSA signature.
+    /// Every legitimate output is already ML-DSA P2PKH — validator-reward and
+    /// stake-bond outputs are built by `p2pkh_mldsa87_spk`, and miners must pay a
+    /// real ML-DSA P2PKH address (the no-wallet placeholder is ML-DSA P2PKH too).
+    /// `SlashingEvidence` carries no outputs, so it is unaffected.
+    ///
+    /// This is a context-free rule, so it lives in isolation. kaspa-pq networks
+    /// activate PQ enforcement at genesis (`pq_activation_daa_score = 0`), so
+    /// gating on `pq_enforcement == Consensus` alone is correct here (isolation
+    /// has no DAA score available). The genesis block is committed directly
+    /// (`process_genesis`), never through this validator, and its premine output
+    /// is ML-DSA P2PKH regardless. M-06 (launch policy): this design assumes PQ is
+    /// genesis-active. A future net wanting a NON-genesis PQ activation could not
+    /// reuse this isolation rule as-is — it would have to thread the activation DAA
+    /// score into a context-bearing check instead.
+    fn check_transaction_pq_output_classes(&self, tx: &Transaction) -> TxResult<()> {
+        if !matches!(self.pq_enforcement, PqEnforcementMode::Consensus) {
+            return Ok(());
+        }
+        for (i, output) in tx.outputs.iter().enumerate() {
+            let class = ScriptClass::from_script(&output.script_public_key);
+            // kaspa-pq EVM Lane v0.4 §9.2: the EVM_DEPOSIT_LOCK output class is
+            // consensus-allowed (PQ-safe — its only script spend path is the
+            // embedded ML-DSA P2PKH refund, gated by the timeout context rule;
+            // the claim path consumes it via the accepting block's diff with no
+            // script run). It is NOT a standard send class: wallets/mempool
+            // standardness still treat it as deliberate-construction-only.
+            if class == ScriptClass::EvmDepositLock {
+                // Audit F3: reject an EVM_DEPOSIT_LOCK whose embedded claim_tip exceeds its own
+                // value. The claim path rejects claim_tip > amount (consensus/.../evm/mod.rs), so
+                // such a lock can NEVER be claimed — it would only strand value until the refund
+                // window (permanent if timeout == u64::MAX). RPC + validator builders already reject
+                // it; this closes the raw-tx hole so consensus never mints an unclaimable deposit.
+                // (Context-free, so it belongs in isolation; class detection implies it parses.)
+                let lock = parse_evm_deposit_lock(&output.script_public_key)
+                    .expect("EvmDepositLock class detection implies the lock script parses");
+                if lock.claim_tip_sompi > output.value {
+                    return Err(TxRuleError::EvmDepositLockTipExceedsValue(i, lock.claim_tip_sompi, output.value));
+                }
+                continue;
+            }
+            // ADR-0087 Decision 3: a model market's sink is unspendable by design and holds the
+            // MSK a buy pays into the curve; recognised by its exact script, and only on a network
+            // that declares the market at all (a dormant network keeps this rule unchanged). Found
+            // by the devnet drill: without this arm no carrier buy was ever consensus-valid on a
+            // PQ-only network — ADR-0087's tests folded the object but never validated its carrier.
+            if self.model_sink_outputs_allowed
+                && kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some()
+            {
+                continue;
+            }
+            // ADR-0152-adjacent (Activation Pool): the activation sink is the same unspendable form
+            // with its own tag, legal only on a ruleset that declares the pool — and there only when
+            // bound (`check_activation_sink_outputs_in_isolation`, below).
+            if self.palw_activation_pool_fence.is_some()
+                && kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&output.script_public_key).is_some()
+            {
+                continue;
+            }
+            // RFC-0004 (spec 17 §17.11.1): the improvement sink, legal only on a ruleset that declares
+            // `palw_improvement_v1` — and there only when bound (below).
+            if self.palw_improvement_fence.is_some()
+                && kaspa_consensus_core::palw_improve_pool_v1::palw_improvement_sink_line_v1(&output.script_public_key).is_some()
+            {
+                continue;
+            }
+            if !class.is_pq_standard() {
+                return Err(TxRuleError::NonPqStandardOutputClass(i));
+            }
+        }
+        Ok(())
+    }
+
+    /// **ADR-0152-adjacent (Activation Pool; the review's A8): an activation sink is block-valid only
+    /// bound.** On a ruleset that declares the pool, every `OP_RETURN "MSKACT01" <class>` output must
+    /// be the one its lifecycle carrier's `ActivationPoolFunded` names, with the value it declares and
+    /// the class it names — so MSK can never enter an activation sink without a pool to credit
+    /// (the defect the model market's `MSKMDL01` sink still has, memory 2026-09-24). A block carrying
+    /// an unbound one is invalid here, at isolation, not merely dropped at a mempool. Context-free
+    /// (the transaction alone); the height is the header-context door's. Inert where the pool is not
+    /// declared: the output class rule above refuses the form on a PQ network as it always did.
+    fn check_activation_sink_outputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        if self.palw_activation_pool_fence.is_none() {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_binding_refusal_v1(tx) {
+            Some((index, why)) => Err(TxRuleError::ActivationSinkUnbound(index, why)),
+            None => Ok(()),
+        }
+    }
+
+    /// **RFC-0004 (spec 17 §17.11.1): an improvement sink is block-valid only bound**, on a ruleset
+    /// that declares `palw_improvement_v1` — the activation sink's rule for the improvement pool.
+    fn check_improvement_sink_outputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        if self.palw_improvement_fence.is_none() {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_improve_pool_v1::palw_improvement_sink_binding_refusal_v1(tx) {
+            Some((index, why)) => Err(TxRuleError::ImprovementSinkUnbound(index, why)),
+            None => Ok(()),
+        }
+    }
+
+    fn check_transaction_inputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        self.check_transaction_inputs_count(tx)?;
+        self.check_transaction_signature_scripts(tx)
+    }
+
+    fn check_transaction_outputs_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        self.check_transaction_outputs_count(tx)?;
+        self.check_transaction_script_public_keys(tx)
+    }
+
+    fn check_coinbase_in_isolation(&self, tx: &Transaction) -> TxResult<()> {
+        if !tx.is_coinbase() {
+            return Ok(());
+        }
+        if !tx.inputs.is_empty() {
+            return Err(TxRuleError::CoinbaseHasInputs(tx.inputs.len()));
+        }
+
+        if tx.mass() > 0 {
+            return Err(TxRuleError::CoinbaseNonZeroMassCommitment);
+        }
+
+        // `ghostdag_k + 2` was the classic mergeset bound: one output per blue (at most `k + 1`)
+        // plus one aggregate for the reds. It was never widened for ConsensusV2, which appends the
+        // §D inclusion bounty, the §E validator payouts and the Decision 10 escrow releases — so on
+        // testnet-11 the first claim to reach `Final` produced a 4-output coinbase against a limit
+        // of 3, and the producer's own chain refused 112 consecutive blocks it had built itself.
+        //
+        // **And `k` was still the wrong bound afterwards, for the same reason one level down**
+        // (mainnet audit, 2026-09-05). ADR-0058 pays every entitled in-window RED its own output
+        // (`outputs.push(...)` per red in `expected_coinbase_transaction`), and the reds are not
+        // bounded by `ghostdag_k` — they are bounded by the MERGESET, which is 180 on every V2
+        // preset against a limit of `1 + 2 + 25 = 28`. A mergeset carrying more than ~26 entitled
+        // reds therefore makes the coinbase this very node builds fail its own isolation check:
+        // the 112-block halt above, reachable again, and reachable on purpose by anyone willing to
+        // widen a mergeset. The flag is unfenced — `self.palw_state_params_v2.is_some()` — so it is
+        // on for testnet-11 today and for any carded mainnet.
+        //
+        // Safe to widen because it is not the rule that decides coinbase correctness:
+        // `validate_coinbase_transaction` compares against the coinbase this node computes, by
+        // exact hash. This is a cheap size guard ahead of that work, and widening it can only stop
+        // it rejecting coinbases that are in fact correct.
+        // One output per mergeset block (every blue, and every entitled red under ADR-0058), one
+        // aggregate for the reds that are not entitled, and the appended kinds.
+        //
+        // **"The appended kinds" was three of six** (mainnet audit, 2026-09-06, H-3).
+        // `PALW_V2_COINBASE_EXTRA_OUTPUTS` counts the §D bounty, the §E participation fan-out and
+        // the D10 escrow releases. The builder also appends the VLT audit fee, the §E deferred
+        // quality bonus, the §F reserve drip and the ADR-0033 credit outputs, and the middle two
+        // fan out per (epoch this block finalizes) × (validator included in it) — with
+        // `epoch_length_blocks = 2` that is ~mergeset/2 epochs, so at mainnet's own
+        // `min_active_validators = 12` a mergeset of 26 already puts the coinbase past this cap.
+        // The block that would merge the wide tips away is itself unbuildable, so it is a permanent
+        // halt rather than a stall.
+        //
+        // Widening cannot admit a wrong coinbase — `validate_coinbase_transaction` compares by
+        // exact hash — but it IS a relaxation, so it sits behind `palw_validator_payout_bounds`,
+        // which arms it on a card and leaves testnet-11's cap where it is. Past that fence the two
+        // fan-outs are bounded at their reserved slots, so the wider cap and the tighter builder
+        // are one change and must arm together.
+        self.check_coinbase_outputs_bound(tx, self.mergeset_size_history.map_or(self.mergeset_size_limit, |h| h.upper_bound()))?;
+
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if output.script_public_key.script().len() > self.coinbase_payload_script_public_key_max_len as usize {
+                return Err(TxRuleError::CoinbaseScriptPublicKeyTooLong(i));
+            }
+        }
+        Ok(())
+    }
+
+    /// Context-free decoding uses the largest declared bound. Block validation restores the exact
+    /// historical bound at the authenticated selected parent; the expected coinbase hash is also checked.
+    pub fn check_coinbase_dag_width(&self, tx: &Transaction, selected_parent_daa: u64) -> TxResult<()> {
+        if tx.is_coinbase()
+            && let Some(history) = self.mergeset_size_history
+        {
+            self.check_coinbase_outputs_bound(tx, history.get(selected_parent_daa))?;
+        }
+        Ok(())
+    }
+
+    fn check_coinbase_outputs_bound(&self, tx: &Transaction, mergeset_size_limit: u64) -> TxResult<()> {
+        let outputs_limit = mergeset_size_limit
+            + 1
+            + if self.palw_validator_payout_bounds_declared {
+                kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED
+            } else {
+                kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS
+            }
+            // ADR-0125: one aggregate fee output per permitted bond of the round lane.
+            + if self.palw_round_lane_declared {
+                kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 as u64
+            } else {
+                0
+            }
+            // RFC-0009: a V4 receipt block is paid as two outputs (the miner leg and the builder's), so a ruleset that declares the
+            // redemption may carry one more per mergeset block.
+            + if self.palw_receipt_v4_declared { mergeset_size_limit } else { 0 };
+        if tx.outputs.len() as u64 > outputs_limit {
+            return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));
+        }
+
+        Ok(())
+    }
+
+    fn check_transaction_outputs_count(&self, tx: &Transaction) -> TxResult<()> {
+        if tx.is_coinbase() {
+            // We already check coinbase outputs count vs. Ghostdag K + 2
+            return Ok(());
+        }
+        if tx.outputs.len() > self.max_tx_outputs {
+            return Err(TxRuleError::TooManyOutputs(tx.outputs.len(), self.max_tx_inputs));
+        }
+
+        Ok(())
+    }
+
+    fn check_transaction_inputs_count(&self, tx: &Transaction) -> TxResult<()> {
+        if !tx.is_coinbase() && tx.inputs.is_empty() {
+            return Err(TxRuleError::NoTxInputs);
+        }
+
+        if tx.inputs.len() > self.max_tx_inputs {
+            return Err(TxRuleError::TooManyInputs(tx.inputs.len(), self.max_tx_inputs));
+        }
+
+        Ok(())
+    }
+
+    // The main purpose of this check is to avoid overflows when calculating transaction mass later.
+    fn check_transaction_signature_scripts(&self, tx: &Transaction) -> TxResult<()> {
+        if let Some(i) = tx.inputs.iter().position(|input| input.signature_script.len() > self.max_signature_script_len) {
+            return Err(TxRuleError::TooBigSignatureScript(i, self.max_signature_script_len));
+        }
+
+        Ok(())
+    }
+
+    // The main purpose of this check is to avoid overflows when calculating transaction mass later.
+    fn check_transaction_script_public_keys(&self, tx: &Transaction) -> TxResult<()> {
+        if let Some(i) = tx.outputs.iter().position(|out| out.script_public_key.script().len() > self.max_script_public_key_len) {
+            return Err(TxRuleError::TooBigScriptPublicKey(i, self.max_script_public_key_len));
+        }
+
+        Ok(())
+    }
+}
+
+fn check_duplicate_transaction_inputs(tx: &Transaction) -> TxResult<()> {
+    let mut existing = HashSet::new();
+    for input in &tx.inputs {
+        if !existing.insert(input.previous_outpoint) {
+            return Err(TxRuleError::TxDuplicateInputs);
+        }
+    }
+    Ok(())
+}
+
+fn check_gas(tx: &Transaction) -> TxResult<()> {
+    // This should be revised if subnetworks are activated (along with other validations that weren't copied from kaspad)
+    if tx.gas > 0 {
+        return Err(TxRuleError::TxHasGas);
+    }
+    Ok(())
+}
+
+fn check_transaction_version(tx: &Transaction) -> TxResult<()> {
+    if tx.version != TX_VERSION {
+        return Err(TxRuleError::UnknownTxVersion(tx.version));
+    }
+    Ok(())
+}
+
+fn check_transaction_output_value_ranges(tx: &Transaction) -> TxResult<()> {
+    let mut total: u64 = 0;
+    for (i, output) in tx.outputs.iter().enumerate() {
+        if output.value == 0 {
+            return Err(TxRuleError::TxOutZero(i));
+        }
+
+        if output.value > MAX_SOMPI {
+            return Err(TxRuleError::TxOutTooHigh(i));
+        }
+
+        if let Some(new_total) = total.checked_add(output.value) {
+            total = new_total
+        } else {
+            return Err(TxRuleError::OutputsValueOverflow);
+        }
+
+        if total > MAX_SOMPI {
+            return Err(TxRuleError::TotalTxOutTooHigh);
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_transaction_subnetwork(
+    tx: &Transaction,
+    palw_panel_da_admissible: bool,
+    palw_prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    palw_lifecycle_undecodable_tolerated: bool,
+    // ADR-0119 Decision 6: `palw_fp_isolation_work_leaves_cap_v1` — height-free, as isolation is.
+    palw_fp_work_leaves_cap: u64,
+    // RFC-0001 §A.4: `PalwFpDecodeRulesV1::door` — height-free, as isolation is.
+    palw_fp_decode_rules_door: kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1,
+    // RFC-0004 A6: the ruleset carries `Params::palw_improvement_v1` — height-free, as isolation is.
+    palw_improvement_door: bool,
+    // RFC-0003 §I.4.4: the ruleset carries `palw_fp_job_v5` (a tensor claim's door) — height-free too.
+    palw_gen_door: bool,
+    // RFC-0001 §2.6 stage 2: the ruleset carries `palw_fp_prefix_state` — height-free, as isolation is.
+    palw_prefix_door: bool,
+    // RFC-0001 §2.6 stage 2b: the ruleset carries `palw_fp_prefix_inherit` — height-free.
+    palw_inherit_door: bool,
+    // ADR-0096 Decision 8: the ruleset carries `palw_fp_decode_constraint` — height-free.
+    palw_constraint_door: bool,
+) -> TxResult<()> {
+    if tx.is_coinbase() || tx.subnetwork_id.is_native() {
+        Ok(())
+    } else if let Some(kind) = dns_tx_kind(&tx.subnetwork_id) {
+        // kaspa-pq Phase 10 (ADR-0009): DNS finality overlay subnetworks are
+        // routed + stateless-validated by full nodes (unlike the upstream
+        // `SubnetworksDisabled` blanket reject). Stateful checks — on-chain
+        // bond existence, rollout-stage gating, ML-DSA-87 signature
+        // verification, the `U ≥ R + E` dominance bound — land in later PRs.
+        match kind {
+            // ADR-0016 D.1: the StakeBond stateless check also verifies its
+            // output-0 locks the declared stake (value == amount, owner P2PKH).
+            DnsTxKind::StakeBond => validate_stake_bond_tx(&tx.payload, &tx.outputs),
+            DnsTxKind::StakeAttestationShard => validate_stake_attestation_shard_payload(&tx.payload),
+            // ADR-0013 Addendum C.2: a slashing tx is a pure evidence carrier —
+            // it must declare no outputs so consensus can mint the reporter
+            // reward at (slashing_tx_id, 0) without colliding with a tx output.
+            DnsTxKind::SlashingEvidence => validate_slashing_evidence_tx(&tx.payload, &tx.outputs),
+            // kaspa-pq H-05: stateless shape of a stake-unbond request (owner-key
+            // binding + signature are verified in the stateful block-validity rule).
+            DnsTxKind::StakeUnbond => validate_stake_unbond_payload(&tx.payload),
+            // MISAKA Verified LLM Token-Weighted BFT: stateless shape of a compute
+            // certificate. Executor/verifier signatures, sortition membership, the
+            // model-cost-table lookup and the challenge window are stateful and run
+            // in the credit walk — a structurally valid certificate still mints zero
+            // VLT if any of those fail.
+            DnsTxKind::ComputeCertificate => validate_compute_certificate_payload(&tx.payload),
+            // Like slashing evidence, a compute challenge is a pure evidence carrier
+            // and must declare no outputs (the reporter reward is minted at
+            // (challenge_tx_id, 0)).
+            DnsTxKind::ComputeChallenge => validate_compute_challenge_tx(&tx.payload, &tx.outputs),
+            // A validator's declaration that it runs a given (model, runtime, determinism class)
+            // profile. Signature, bond binding, model-table membership and the expiry cap are
+            // stateful and run in the credit walk when it builds a job's verifier pool.
+            DnsTxKind::ComputeCapability => validate_compute_capability_payload(&tx.payload),
+            // Phase 1 of the two-phase sortition. Its whole job is to exist on chain BEFORE the
+            // beacon epoch, so the stateless layer only checks shape; the binding to a
+            // certificate and the beacon derivation are stateful.
+            DnsTxKind::ComputeCommitment => validate_compute_commitment_payload(&tx.payload),
+            // A sortitioned verifier's standalone verdict. The self-consistency check (the
+            // declared verdict must be what comparing the two receipt hashes implies) is
+            // context-free and lives here; committee membership and the signature are stateful.
+            DnsTxKind::ComputeVerdict => validate_compute_verdict_payload(&tx.payload),
+            // Round 2 of DNS finality (ADR-0128). The declared lock's *internal* possibility is
+            // context-free and checked here; whether it is the lock the chain shows, and whether the
+            // precommit counts, is decided past `Params::dns_bft_gate` by the virtual processor.
+            DnsTxKind::StakePrecommit => validate_stake_precommit_payload(&tx.payload),
+            // Round 2's equivocation evidence. Like slashing evidence it is a pure evidence
+            // carrier and must declare no outputs; the two signatures are verified as a
+            // block-validity rule, because this payload burns a bond and anyone can author a
+            // contradiction naming someone else's.
+            DnsTxKind::PrecommitEvidence => validate_precommit_evidence_tx(&tx.payload, &tx.outputs),
+        }
+        .map_err(TxRuleError::InvalidDnsOverlayPayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_TRANSFER {
+        // MISAKA Compute Token Program (design v0.1 §4.3): the token-op band is
+        // routed + stateless-validated like every overlay band — admitting the
+        // ids was part of a coordinated release, exactly as 0x10-0x1a and
+        // 0x20-0x22 were, so this shape check stays on every network. The token
+        // overlay that applied an op is removed: an admitted op moves nothing.
+        validate_token_transfer_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_TOKEN_BURN {
+        validate_token_burn_payload(&tx.payload).map_err(TxRuleError::InvalidTokenPayload)?;
+        Ok(())
+    } else if let Some(kind) = palw_carriage_tx_kind(&tx.subnetwork_id) {
+        // MISAKA PALW chain carriage (ADR-0029 Stage 1): the 0x40-0x45 band is routed +
+        // stateless-validated like every overlay band before it. The body is decoded DIRECTLY
+        // as the id's kind — no Stage-0 magic; at Stage 1 the kind lives in the subnetwork id —
+        // and judged by the SAME per-kind validators the Stage-0 extractor runs, plus the
+        // evidence-carrier no-outputs rule for refutations and their chunks (the
+        // slashing-evidence precedent). Bond existence, ML-DSA-87 signature validity and every
+        // cross-object question are stateful and are NOT consensus rules yet (Stage 2 is
+        // explicitly out of scope; the in-node store only indexes).
+        //
+        // DEPLOYMENT: admitting these ids is part of a coordinated release, exactly as
+        // 0x10-0x1a, 0x20-0x22 and 0x30-0x31 were — to a node without this dispatch they are
+        // `SubnetworksDisabled`, so a block carrying one splits an unupgraded fleet. Shipping
+        // this arm IS the release artifact, not a live activation.
+        validate_palw_carriage_stage1_tx(kind, &tx.payload, &tx.outputs).map_err(TxRuleError::InvalidPalwCarriagePayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_PALW_FP_COMMITMENT {
+        // ADR-0044 free-prompt commitment (0x4a). Its own id rather than a carriage kind, because
+        // the codec and the signing context are the free-prompt family's, and routing one band's
+        // payload through the other band's validator is what separate ids exist to prevent.
+        //
+        // **This arm and the one below it are why a V2 network can produce weight at all.** Both
+        // ids were defined, both had extractors, both had tests — and neither had a route, so
+        // `check_transaction_subnetwork` reached the blanket reject below and every carrier of
+        // either kind was refused at admission. A commitment could not be published, a claim could
+        // not be licensed, a court could not be opened; every claim that did exist voided at
+        // `BindTimeout` and PALW weight stayed permanently zero.
+        // **Both door facts come from the ruleset the validator was built with** (ADR-0077 D16,
+        // ADR-0081 D3): the mode-2 shape is admitted only where the fence is carried, and the
+        // carried prompt ids must hash to the job under the network's form — flat everywhere the
+        // fence is dormant, the tiled Merkle root on a genesis that armed it. A door that spelled
+        // `false, Flat` here would refuse every honest commitment on such a network.
+        // **RFC-0003 §I.4.4 and RFC-0004 A6, both doors in one**: a tensor claim (FP job version 10) is judged
+        // by its own door where the ruleset carries `palw_fp_job_v5`, an evaluation claim (version 9) by its own
+        // where it carries `palw_improvement_v1`, and every other payload — a claim whose door is shut included —
+        // by the lane's own door exactly as before, which refuses both versions by name (`UnsupportedVersion`
+        // for a tensor claim, undecodable bytes for an evaluation claim), as a build without the fences does.
+        kaspa_consensus_core::palw_fp_constraint_job_v1::validate_palw_fp_commitment_tx_under_v9(
+            &tx.payload,
+            palw_panel_da_admissible,
+            palw_prompt_ids_form,
+            palw_fp_work_leaves_cap,
+            // RFC-0001 §A.4, height-free: a V4 job's shape passes only where the ruleset carries
+            // the decode-rules fence; the header-context door decides the height.
+            palw_fp_decode_rules_door,
+            // RFC-0004 A6, height-free: an evaluation claim (version 9, whose bytes follow the FP
+            // payload's with a tail) goes to its own lane's door only where the ruleset carries
+            // `palw_improvement_v1`; everywhere else its bytes are undecodable here, as to a build
+            // without the fence. The header-context door decides the height.
+            palw_improvement_door,
+            palw_gen_door,
+            palw_prefix_door,
+            palw_inherit_door,
+            palw_constraint_door,
+        )
+        .map_err(TxRuleError::InvalidPalwFpPayload)?;
+        Ok(())
+    } else if tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
+        // ADR-0042 Decisions 7/8 claim lifecycle (0x4b): the licensing, the producer default and
+        // the four court moves. The kinds that may NOT ride — bond and class registration, the
+        // chain-derived panel binding, the free-prompt commitment that has its own id — are
+        // refused here by the same table the extraction walk applies, so admission and extraction
+        // give one answer.
+        validate_palw_lifecycle_tx(&tx.payload, palw_lifecycle_undecodable_tolerated)
+            .map_err(TxRuleError::InvalidPalwLifecyclePayload)?;
+        Ok(())
+    } else {
+        Err(TxRuleError::SubnetworksDisabled(tx.subnetwork_id.clone()))
+    }
+}
+
+// kaspa-pq Phase 9: re-enabled with 128-char (64-byte Hash64) txids per ADR-0008.
+// Isolation validation does not verify signatures, so the only change required
+// from the original fixtures is widening the spent-outpoint id to Hash64.
+#[cfg(test)]
+mod tests {
+    use kaspa_consensus_core::{
+        subnets::{SUBNETWORK_ID_COINBASE, SUBNETWORK_ID_NATIVE, SubnetworkId},
+        tx::{ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput, scriptvec},
+    };
+    use kaspa_core::assert_match;
+
+    use crate::{
+        constants::TX_VERSION,
+        params::MAINNET_PARAMS,
+        processes::transaction_validator::{TransactionValidator, errors::TxRuleError},
+    };
+
+    #[test]
+    fn validate_tx_in_isolation_test() {
+        let mut params = MAINNET_PARAMS.clone();
+        params.max_tx_inputs = 10;
+        params.max_tx_outputs = 15;
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        );
+
+        let valid_cb = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput {
+                value: 0x12a05f200,
+                script_public_key: ScriptPublicKey::new(
+                    0,
+                    scriptvec!(
+                        0xa9, 0x14, 0xda, 0x17, 0x45, 0xe9, 0xb5, 0x49, 0xbd, 0x0b, 0xfa, 0x1a, 0x56, 0x99, 0x71, 0xc7, 0x7e, 0xba,
+                        0x30, 0xcd, 0x5a, 0x4b, 0x87
+                    ),
+                ),
+            }],
+            0,
+            SUBNETWORK_ID_COINBASE,
+            0,
+            vec![9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        );
+
+        tv.validate_tx_in_isolation(&valid_cb).unwrap();
+
+        let valid_tx = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint {
+                    transaction_id: TransactionId::from_slice(&[
+                        0x03, 0x2e, 0x38, 0xe9, 0xc0, 0xa8, 0x4c, 0x60, 0x46, 0xd6, 0x87, 0xd1, 0x05, 0x56, 0xdc, 0xac, 0xc4, 0x1d,
+                        0x27, 0x5e, 0xc5, 0x5f, 0xc0, 0x07, 0x79, 0xac, 0x88, 0xfd, 0xf3, 0x57, 0xa1, 0x87, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    ]),
+                    index: 0,
+                },
+                signature_script: vec![
+                    0x49, // OP_DATA_73
+                    0x30, 0x46, 0x02, 0x21, 0x00, 0xc3, 0x52, 0xd3, 0xdd, 0x99, 0x3a, 0x98, 0x1b, 0xeb, 0xa4, 0xa6, 0x3a, 0xd1, 0x5c,
+                    0x20, 0x92, 0x75, 0xca, 0x94, 0x70, 0xab, 0xfc, 0xd5, 0x7d, 0xa9, 0x3b, 0x58, 0xe4, 0xeb, 0x5d, 0xce, 0x82, 0x02,
+                    0x21, 0x00, 0x84, 0x07, 0x92, 0xbc, 0x1f, 0x45, 0x60, 0x62, 0x81, 0x9f, 0x15, 0xd3, 0x3e, 0xe7, 0x05, 0x5c, 0xf7,
+                    0xb5, 0xee, 0x1a, 0xf1, 0xeb, 0xcc, 0x60, 0x28, 0xd9, 0xcd, 0xb1, 0xc3, 0xaf, 0x77, 0x48,
+                    0x01, // 73-byte signature
+                    0x41, // OP_DATA_65
+                    0x04, 0xf4, 0x6d, 0xb5, 0xe9, 0xd6, 0x1a, 0x9d, 0xc2, 0x7b, 0x8d, 0x64, 0xad, 0x23, 0xe7, 0x38, 0x3a, 0x4e, 0x6c,
+                    0xa1, 0x64, 0x59, 0x3c, 0x25, 0x27, 0xc0, 0x38, 0xc0, 0x85, 0x7e, 0xb6, 0x7e, 0xe8, 0xe8, 0x25, 0xdc, 0xa6, 0x50,
+                    0x46, 0xb8, 0x2c, 0x93, 0x31, 0x58, 0x6c, 0x82, 0xe0, 0xfd, 0x1f, 0x63, 0x3f, 0x25, 0xf8, 0x7c, 0x16, 0x1b, 0xc6,
+                    0xf8, 0xa6, 0x30, 0x12, 0x1d, 0xf2, 0xb3, 0xd3, // 65-byte pubkey
+                ],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![
+                TransactionOutput {
+                    value: 0x2123e300,
+                    script_public_key: ScriptPublicKey::new(
+                        0,
+                        scriptvec!(
+                            0x76, // OP_DUP
+                            0xa9, // OP_HASH160
+                            0x14, // OP_DATA_20
+                            0xc3, 0x98, 0xef, 0xa9, 0xc3, 0x92, 0xba, 0x60, 0x13, 0xc5, 0xe0, 0x4e, 0xe7, 0x29, 0x75, 0x5e, 0xf7,
+                            0xf5, 0x8b, 0x32, 0x88, // OP_EQUALVERIFY
+                            0xac  // OP_CHECKSIG
+                        ),
+                    ),
+                },
+                TransactionOutput {
+                    value: 0x108e20f00,
+                    script_public_key: ScriptPublicKey::new(
+                        0,
+                        scriptvec!(
+                            0x76, // OP_DUP
+                            0xa9, // OP_HASH160
+                            0x14, // OP_DATA_20
+                            0x94, 0x8c, 0x76, 0x5a, 0x69, 0x14, 0xd4, 0x3f, 0x2a, 0x7a, 0xc1, 0x77, 0xda, 0x2c, 0x2f, 0x6b, 0x52,
+                            0xde, 0x3d, 0x7c, 0x88, // OP_EQUALVERIFY
+                            0xac  // OP_CHECKSIG
+                        ),
+                    ),
+                },
+            ],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        tv.validate_tx_in_isolation(&valid_tx).unwrap();
+
+        let mut tx: Transaction = valid_tx.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(3);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::SubnetworksDisabled(_)));
+
+        let mut tx = valid_tx.clone();
+        tx.inputs = vec![];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::NoTxInputs));
+
+        let mut tx = valid_tx.clone();
+        tx.inputs = (0..params.max_tx_inputs + 1).map(|_| valid_tx.inputs[0].clone()).collect();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::TooManyInputs(_, _)));
+
+        let mut tx = valid_tx.clone();
+        tx.inputs[0].signature_script = vec![0; params.max_signature_script_len + 1];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::TooBigSignatureScript(_, _)));
+
+        let mut tx = valid_tx.clone();
+        tx.outputs = (0..params.max_tx_outputs + 1).map(|_| valid_tx.outputs[0].clone()).collect();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::TooManyOutputs(_, _)));
+
+        let mut tx = valid_tx.clone();
+        tx.outputs[0].script_public_key = ScriptPublicKey::new(0, scriptvec![0u8; params.max_script_public_key_len + 1]);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::TooBigScriptPublicKey(_, _)));
+
+        let mut tx = valid_tx.clone();
+        tx.inputs.push(tx.inputs[0].clone());
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::TxDuplicateInputs));
+
+        let mut tx = valid_tx.clone();
+        tx.gas = 1;
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::TxHasGas));
+
+        let mut tx = valid_tx.clone();
+        tx.payload = vec![0];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        let mut tx = valid_tx;
+        tx.version = TX_VERSION + 1;
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::UnknownTxVersion(_)));
+    }
+
+    /// MISAKA Compute Token Program (design v0.1 §4.3): a transaction on the
+    /// token-op band is routed to the token validators — accepted when the
+    /// payload passes stateless validation, rejected with `InvalidTokenPayload`
+    /// (not the blanket `SubnetworksDisabled`) when it does not. Per-field
+    /// coverage lives in `kaspa_consensus_core::token`; this confirms the wiring.
+    #[test]
+    fn validate_token_subnetwork_tx() {
+        use kaspa_consensus_core::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER};
+        use kaspa_consensus_core::token::{TOK_ASSET_ID, TOKEN_PAYLOAD_VERSION_V1, TokenTransferPayload, TokenTxError};
+        use kaspa_hashes::Hash64;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        );
+        let base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        // Well-formed transfer payload → accepted (the effect stays fenced; this
+        // is admission only).
+        let transfer = TokenTransferPayload {
+            version: TOKEN_PAYLOAD_VERSION_V1,
+            asset_id: TOK_ASSET_ID,
+            from_pubkey: vec![0x11u8; STAKE_VALIDATOR_PUBKEY_LEN],
+            to: Hash64::from_bytes([0x22u8; 64]),
+            amount: 1_000,
+            nonce: 1,
+            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_TOKEN_TRANSFER;
+        tx.payload = borsh::to_vec(&transfer).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Phase A knows only TOK — any other asset id is rejected at the door.
+        let mut alien = transfer.clone();
+        alien.asset_id = 7;
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_TOKEN_TRANSFER;
+        tx.payload = borsh::to_vec(&alien).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidTokenPayload(TokenTxError::UnknownAsset(7))));
+
+        // Undecodable bytes on the burn subnetwork → InvalidTokenPayload(Decode),
+        // proving 0x31 is routed to the validator rather than rejected outright.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_TOKEN_BURN;
+        tx.payload = vec![0xffu8, 0x00];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidTokenPayload(TokenTxError::Decode)));
+    }
+
+    /// MISAKA PALW chain carriage (ADR-0029 Stage 1): a transaction on the PALW band
+    /// (0x40-0x45) is routed to the per-kind stateless validators — accepted when the bare
+    /// Borsh BODY (no Stage-0 magic) passes, rejected with `InvalidPalwCarriagePayload` (not
+    /// the blanket `SubnetworksDisabled`) when it does not. Per-field coverage lives in
+    /// `kaspa_consensus_core::palw_carriage`; this confirms the consensus-layer wiring, that
+    /// the band has hard edges (an unrouted id still rejects), and that Stage-0 native
+    /// carriage stays untouched.
+    #[test]
+    fn validate_palw_carriage_subnetwork_tx() {
+        use kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN;
+        use kaspa_consensus_core::palw_carriage::{
+            PALW_CARRIAGE_VERSION_V1, PalwAttestationCarriageV1, PalwCarriageError, PalwEvidenceChunkCarriageV1,
+        };
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_PALW_ATTESTATION, SUBNETWORK_ID_PALW_EVIDENCE_CHUNK};
+        use kaspa_hashes::Hash64;
+
+        let params = MAINNET_PARAMS.clone();
+        // A-2: this test asserts the lifecycle band (0x4B) TOLERATES an undecodable body, which is
+        // the audit-armed ruleset's door; arm it here (production reads it from the fence).
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        )
+        .with_lifecycle_undecodable_tolerated_for_tests(true);
+        let base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        // Well-formed attestation carriage BODY (bare Borsh — the Stage-0 payload minus its
+        // 7-byte envelope) → accepted, outputs and all (only evidence kinds refuse outputs).
+        let attestation = PalwAttestationCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            commitment_root: Hash64::from_bytes([0x71u8; 64]),
+            attestation: kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
+                version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,
+                executor_id: Hash64::from_bytes([0xA2u8; 64]),
+                job_context_hash: Hash64::from_bytes([0xC7u8; 64]),
+                full_logits_trace_root: Hash64::from_bytes([0x71u8; 64]),
+                committed_root: Hash64::from_bytes([0x71u8; 64]),
+                bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 1 },
+                signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+            },
+            attester_id: Hash64::from_bytes([0xA2u8; 64]),
+            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 1 },
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_ATTESTATION;
+        tx.payload = borsh::to_vec(&attestation).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Same id + garbage body → InvalidPalwCarriagePayload(BodyDecode), proving the id is
+        // routed to the validators rather than rejected outright.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_ATTESTATION;
+        tx.payload = vec![0xffu8, 0x00];
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx),
+            Err(TxRuleError::InvalidPalwCarriagePayload(PalwCarriageError::BodyDecode(_)))
+        );
+
+        // Decodable body that fails the SAME stateless rule Stage 0 enforces (attester drifted
+        // from the inner signer) → rejected at the door.
+        let mut drifted = attestation.clone();
+        drifted.attester_id = Hash64::from_bytes([0xA3u8; 64]);
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_PALW_ATTESTATION;
+        tx.payload = borsh::to_vec(&drifted).unwrap();
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx),
+            Err(TxRuleError::InvalidPalwCarriagePayload(PalwCarriageError::AttesterMismatch))
+        );
+
+        // Evidence carriers declare no outputs (ADR-0029 §2, the slashing-evidence rule): a
+        // valid chunk with `base`'s output → rejected; with none → accepted.
+        let chunk = PalwEvidenceChunkCarriageV1 {
+            version: PALW_CARRIAGE_VERSION_V1,
+            evidence_group_id: Hash64::from_bytes([0xF1u8; 64]),
+            chunk_index: 0,
+            chunk_count: 2,
+            bytes: vec![0xABu8; 8],
+        };
+        let mut tx_with_out = base.clone();
+        tx_with_out.subnetwork_id = SUBNETWORK_ID_PALW_EVIDENCE_CHUNK;
+        tx_with_out.payload = borsh::to_vec(&chunk).unwrap();
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx_with_out),
+            Err(TxRuleError::InvalidPalwCarriagePayload(PalwCarriageError::EvidenceCarrierHasOutputs(1)))
+        );
+        let mut tx = tx_with_out;
+        tx.outputs = vec![];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // The band grew by one: 0x46 is the equivocation kind, so it ROUTES — it is judged on its
+        // body like every other band member, not turned away at the subnetwork. (`base`'s payload
+        // is another kind's body, so the rejection is a decode failure, which is the proof that
+        // routing happened at all.)
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x46);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
+
+        // 0x47 is the step-conviction kind, so it routes too — the band grew again when
+        // arithmetic conviction landed.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x47);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
+
+        // 0x48 is the bisection-move kind, so it routes too.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x48);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
+
+        // 0x49 is the receipt kind, so it routes too.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x49);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwCarriagePayload(_)));
+
+        // 0x4A and 0x4B are routed too, but NOT as carriage kinds — they are the free-prompt
+        // commitment and the claim lifecycle, each with its own codec, so an attestation body on
+        // either lands in that band's own validator and is refused by that band's own error. The
+        // error type IS the assertion: a `InvalidPalwCarriagePayload` here would mean one band's
+        // payload had reached another band's validator, which is what separate ids prevent.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x4A);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidPalwFpPayload(_)));
+
+        // **A-2: the lifecycle band (0x4B) TOLERATES a payload it cannot decode as a lifecycle
+        // object.** A cross-band body here does not decode as `PalwLifecycleTxPayloadV2`, so it is
+        // Ok at isolation and the extraction walk folds nothing for it — band separation is
+        // enforced at the fold, not by failing the block, so an object kind a later build appends
+        // does not split an older one. (The FP band above still rejects at isolation; only the
+        // lifecycle validator was made forward-compatible.)
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x4B);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // The hard edge moved with them: 0x4C (one past the last routed id) is NOT routed and
+        // still rejects with the blanket `SubnetworksDisabled` — an unknown id stays a
+        // coordinated-release matter.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SubnetworkId::from_byte(0x4C);
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::SubnetworksDisabled(_)));
+
+        // Stage-0 carriage is untouched: the SAME object with its magic envelope on the NATIVE
+        // subnetwork remains admission-legal (native payloads are opaque to consensus).
+        let mut tx = base;
+        tx.payload = kaspa_consensus_core::palw_carriage::encode_palw_carriage_v1(
+            &kaspa_consensus_core::palw_carriage::PalwCarriageV1::Attestation(attestation),
+        );
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+    }
+
+    /// kaspa-pq Phase 10 (ADR-0009): a transaction routed by a DNS finality
+    /// overlay subnetwork is accepted when its payload passes stateless
+    /// validation, and rejected with `InvalidDnsOverlayPayload` (not the
+    /// upstream blanket `SubnetworksDisabled`) when it does not. Exhaustive
+    /// per-field payload coverage lives in `kaspa_consensus_core::dns_finality`;
+    /// this test only confirms the consensus-layer wiring.
+    #[test]
+    fn validate_dns_overlay_subnetwork_tx() {
+        use kaspa_consensus_core::dns_finality::{
+            DNS_PAYLOAD_VERSION_V1, DnsTxError, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload,
+            StakeAttestation, StakeBondPayload, p2pkh_mldsa87_spk, validator_id_from_pubkey,
+        };
+        use kaspa_consensus_core::subnets::{SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_BOND};
+        use kaspa_hashes::Hash64;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        );
+
+        // A native funding-style tx (one input, one output) reused as the
+        // carrier; only `subnetwork_id` + `payload` vary across cases.
+        let base = Transaction::new(
+            0,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x11u8; 64]), index: 0 },
+                signature_script: vec![0u8; 64],
+                sequence: u64::MAX,
+                sig_op_count: 0,
+            }],
+            vec![TransactionOutput { value: 0x2123e300, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x76, 0xa9, 0x14)) }],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+
+        // Well-formed stake-bond payload → accepted.
+        let validator_pubkey = vec![0xccu8; STAKE_VALIDATOR_PUBKEY_LEN];
+        let bond = StakeBondPayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            owner_pubkey_hash: Hash64::from_bytes([0xaau8; 64]),
+            // audit H-04: canonical key-derived overlay identity.
+            validator_pubkey_hash: validator_id_from_pubkey(&validator_pubkey),
+            validator_pubkey,
+            amount: 1_000,
+            activation_daa_score: 0,
+            unbonding_period_blocks: 1,
+            owner_reward_spk_payload: [0xddu8; 64],
+        };
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
+        tx.payload = borsh::to_vec(&bond).unwrap();
+        // ADR-0016 D.1: output-0 must lock the stake (value == amount, owner P2PKH).
+        tx.outputs[0] = TransactionOutput::new(bond.amount, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Bond whose output-0 does not lock `amount` (ADR-0016 D.1) → rejected.
+        let mut tx_unlocked = tx.clone();
+        tx_unlocked.outputs[0] = TransactionOutput::new(bond.amount - 1, p2pkh_mldsa87_spk(&bond.owner_reward_spk_payload));
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx_unlocked),
+            Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::BondOutputValueMismatch { .. }))
+        );
+
+        // Malformed stake-bond payload (zero amount) → InvalidDnsOverlayPayload.
+        let mut bad = bond.clone();
+        bad.amount = 0;
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_STAKE_BOND;
+        tx.payload = borsh::to_vec(&bad).unwrap();
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::ZeroBondAmount)));
+
+        // Undecodable bytes on a DNS subnetwork → InvalidDnsOverlayPayload(Decode),
+        // proving the id is routed to the validators rather than rejected outright.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
+        tx.payload = vec![0xffu8, 0x00];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::Decode)));
+
+        // ADR-0013 Addendum C.2: a slashing-evidence tx is a pure evidence
+        // carrier whose reporter reward is minted by consensus at
+        // (slashing_tx_id, 0). A well-formed payload is accepted iff the tx
+        // declares no outputs; any output would create a UTXO that collides
+        // with that mint. Build valid equivocation evidence (two attestations
+        // sharing one (bond_outpoint, validator_id, epoch) triple but
+        // approving different anchors).
+        let attestation = |target: u8| StakeAttestation {
+            version: DNS_PAYLOAD_VERSION_V1,
+            validator_id: Hash64::from_bytes([0xa5u8; 64]),
+            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
+            epoch: 7,
+            target_hash: Hash64::from_bytes([target; 64]),
+            target_daa_score: 1_234_567,
+            validator_set_commitment: Hash64::default(), // audit #4: VSC is a fixed-zero invariant
+            signature: vec![0x33u8; STAKE_ATTESTATION_SIG_LEN],
+        };
+        let evidence = SlashingEvidencePayload {
+            version: DNS_PAYLOAD_VERSION_V1,
+            bond_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_slice(&[0x77u8; 64]), index: 42 },
+            attestation_a: attestation(0x11),
+            attestation_b: attestation(0x33),
+            reporter_reward_spk_payload: [0xeeu8; 64],
+        };
+        let evidence_payload = borsh::to_vec(&evidence).unwrap();
+
+        // Valid evidence + no outputs → accepted.
+        let mut tx = base.clone();
+        tx.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
+        tx.payload = evidence_payload.clone();
+        tx.outputs = vec![];
+        assert_match!(tv.validate_tx_in_isolation(&tx), Ok(()));
+
+        // Valid evidence + a (non-zero) declared output → rejected with
+        // SlashingEvidenceHasOutputs. (A zero-value output is independently
+        // caught earlier by the `TxOutZero` range check, so the carrier here
+        // keeps `base`'s non-zero output to exercise this rule specifically.)
+        let mut tx_with_out = base;
+        tx_with_out.subnetwork_id = SUBNETWORK_ID_SLASHING_EVIDENCE;
+        tx_with_out.payload = evidence_payload;
+        assert_match!(
+            tv.validate_tx_in_isolation(&tx_with_out),
+            Err(TxRuleError::InvalidDnsOverlayPayload(DnsTxError::SlashingEvidenceHasOutputs(1)))
+        );
+    }
+}
+
+#[cfg(test)]
+mod pq_output_class_enforcement_tests {
+    //! kaspa-pq PQ-only (ADR-0019 §7 / docs/design/pq/kaspa-pq-design-mldsa87.md): the
+    //! consensus output-class rule. On a PQ-active network every transaction
+    //! output — native, coinbase (miner + validator-reward), and DNS-overlay —
+    //! must be ML-DSA P2PKH; there are no exemptions. Drives the private
+    //! `check_transaction_pq_output_classes` directly so it is isolated from the
+    //! other in-isolation checks.
+    use super::TransactionValidator;
+    use kaspa_consensus_core::config::params::{MAINNET_PARAMS, PqEnforcementMode};
+    use kaspa_consensus_core::errors::tx::TxRuleError;
+    use kaspa_consensus_core::subnets::{SUBNETWORK_ID_COINBASE, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_BOND};
+    use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput};
+    use kaspa_txscript::caches::TxScriptCacheCounters;
+    use kaspa_txscript::opcodes::codes;
+    use smallvec::smallvec;
+    use std::sync::Arc;
+
+    fn validator(mode: PqEnforcementMode) -> TransactionValidator {
+        let p = &MAINNET_PARAMS;
+        let mut tv = TransactionValidator::new_for_tests(
+            p.max_tx_inputs,
+            p.max_tx_outputs,
+            p.max_signature_script_len,
+            p.max_script_public_key_len,
+            p.coinbase_payload_script_public_key_max_len,
+            p.coinbase_maturity,
+            p.mergeset_size_limit(),
+            Arc::new(TxScriptCacheCounters::default()),
+        );
+        // new_for_tests defaults to Disabled; set the mode under test.
+        tv.pq_enforcement = mode;
+        tv.pq_activation_daa_score = 0;
+        tv
+    }
+
+    /// kaspa-pq ML-DSA-87 P2PKH (ADR-0019 §8):
+    /// `OP_DUP OP_BLAKE2B_512 OP_DATA64 <64B> OP_EQUALVERIFY OP_CHECKSIGMLDSA87` (69 bytes).
+    fn pq_p2pkh_spk() -> ScriptPublicKey {
+        let mut s = vec![codes::OpDup, codes::OpBlake2b512, codes::OpData64];
+        s.extend_from_slice(&[0u8; 64]);
+        s.push(codes::OpEqualVerify);
+        s.push(codes::OpCheckSigMlDsa87);
+        ScriptPublicKey::new(0, s.into())
+    }
+
+    /// A non-ML-DSA-P2PKH script (`OP_TRUE` -> ScriptClass::NonStandard).
+    fn legacy_spk() -> ScriptPublicKey {
+        ScriptPublicKey::new(0, smallvec![codes::OpTrue])
+    }
+
+    fn tx_with_output(spk: ScriptPublicKey, subnetwork: kaspa_consensus_core::subnets::SubnetworkId) -> Transaction {
+        Transaction::new(0, vec![], vec![TransactionOutput { value: 1000, script_public_key: spk }], 0, subnetwork, 0, vec![])
+    }
+
+    #[test]
+    fn disabled_mode_allows_any_output_class() {
+        let tv = validator(PqEnforcementMode::Disabled);
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
+    }
+
+    #[test]
+    fn consensus_mode_allows_mldsa_p2pkh_output() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
+    }
+
+    /// ADR-0087 Decision 3, as the devnet drill found it: the market's sink output (`OP_RETURN
+    /// "MSKMDL01" <line id>`) is consensus-legal ONLY on a network that declares the market; a
+    /// dormant network refuses it exactly as before, and no other `OP_RETURN` form rides along.
+    /// **ADR-0152-adjacent (Activation Pool; the review's A8): an activation sink is block-valid only
+    /// bound, only where the ruleset declares the pool, and only from the pool's height.** The whole
+    /// isolation door (`validate_tx_in_isolation`) and the header-context door, on one carrier:
+    /// bound it passes; with no object, a mis-named index, amount or class, or on a non-lifecycle
+    /// transaction it is refused by name — so no activation sink can burn MSK silently. A ruleset
+    /// without the pool refuses the form as the PQ output rule always did; one that schedules it
+    /// refuses it below the height.
+    #[test]
+    fn an_activation_sink_is_valid_only_bound_and_only_where_the_pool_is_declared() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_spk_v1;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        let class = kaspa_consensus_core::Hash64::from_u64_word(0xC1A5);
+        let carrier = |object: Option<PalwConsensusObjectV2>, subnet| {
+            let mut tx = tx_with_output(pq_p2pkh_spk(), subnet);
+            tx.outputs.push(TransactionOutput { value: 700_000_000, script_public_key: palw_activation_sink_spk_v1(&class) });
+            tx.payload = object
+                .map(|object| borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap())
+                .unwrap_or_default();
+            tx.finalize();
+            tx
+        };
+        let funded = |amount, sink_index, class_id| Some(PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, sink_index });
+        let armed = |fence: Option<ForkActivation>| validator(PqEnforcementMode::Consensus).with_activation_pool_fence(fence);
+        let pool = armed(Some(ForkActivation::always()));
+        let isolation = |tv: &TransactionValidator, tx: &Transaction| -> Result<(), TxRuleError> {
+            tv.check_transaction_pq_output_classes(tx)?;
+            tv.check_activation_sink_outputs_in_isolation(tx)
+        };
+        let bound = carrier(funded(700_000_000, 1, class), SUBNETWORK_ID_PALW_LIFECYCLE);
+        assert_eq!(isolation(&pool, &bound), Ok(()), "a bound sink is a legal output on a pool ruleset");
+        assert_eq!(pool.validate_tx_in_header_context(&bound, LockTimeArg::Finalized, 0), Ok(()));
+        for (tx, why) in [
+            (carrier(None, SUBNETWORK_ID_NATIVE), "rides only a lifecycle carrier"),
+            (carrier(None, SUBNETWORK_ID_PALW_LIFECYCLE), "carries no ActivationPoolFunded"),
+            (carrier(funded(700_000_000, 0, class), SUBNETWORK_ID_PALW_LIFECYCLE), "is not the output"),
+            (carrier(funded(1, 1, class), SUBNETWORK_ID_PALW_LIFECYCLE), "another amount"),
+            (
+                carrier(funded(700_000_000, 1, kaspa_consensus_core::Hash64::from_u64_word(9)), SUBNETWORK_ID_PALW_LIFECYCLE),
+                "another class",
+            ),
+        ] {
+            match isolation(&pool, &tx) {
+                Err(TxRuleError::ActivationSinkUnbound(1, reason)) => assert!(reason.contains(why), "{why}: {reason}"),
+                other => panic!("{why}: expected an unbound sink at output 1, got {other:?}"),
+            }
+        }
+        // No pool on the ruleset: the output class rule refuses the form, as it always did.
+        assert_eq!(isolation(&armed(None), &bound), Err(TxRuleError::NonPqStandardOutputClass(1)));
+        assert_eq!(armed(Some(ForkActivation::never())).palw_activation_pool_fence, None, "never is absence");
+        // Scheduled: isolation admits the form, header context refuses it below the height.
+        let scheduled = armed(Some(ForkActivation::new(9_000_000)));
+        assert_eq!(isolation(&scheduled, &bound), Ok(()));
+        assert_eq!(
+            scheduled.validate_tx_in_header_context(&bound, LockTimeArg::Finalized, 8_999_999),
+            Err(TxRuleError::ActivationSinkBeforePoolActivation(1, 8_999_999))
+        );
+        assert_eq!(scheduled.validate_tx_in_header_context(&bound, LockTimeArg::Finalized, 9_000_000), Ok(()));
+        // An ordinary transaction is untouched on every ruleset.
+        let plain = tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE);
+        assert_eq!(isolation(&pool, &plain), Ok(()));
+    }
+
+    #[test]
+    fn consensus_mode_admits_the_model_sink_only_where_the_market_is_declared() {
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let sink = tx_with_output(palw_model_sink_spk_v1(&line), SUBNETWORK_ID_NATIVE);
+        let dormant = validator(PqEnforcementMode::Consensus);
+        assert_eq!(dormant.check_transaction_pq_output_classes(&sink), Err(TxRuleError::NonPqStandardOutputClass(0)));
+        let mut declared = validator(PqEnforcementMode::Consensus);
+        declared.model_sink_outputs_allowed = true;
+        assert!(
+            declared.check_transaction_pq_output_classes(&sink).is_ok(),
+            "the sink is the one unspendable output the market needs"
+        );
+        // a look-alike: an OP_RETURN with another tag is not the sink and stays refused
+        let mut other = vec![codes::OpReturn, codes::OpData8];
+        other.extend_from_slice(b"MSKMDL02");
+        let not_sink = tx_with_output(ScriptPublicKey::new(0, other.into()), SUBNETWORK_ID_NATIVE);
+        assert_eq!(declared.check_transaction_pq_output_classes(&not_sink), Err(TxRuleError::NonPqStandardOutputClass(0)));
+        assert!(declared.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE)).is_ok());
+    }
+
+    /// **Lane sink (the 2026-09-25 Position review's #1, post-launch): a model sink is valid only
+    /// bound, from the fence's height on — and exactly as before below it.**
+    ///
+    /// testnet-12's shape (the market from genesis), with the binding armed at 60 and at 500 (the
+    /// common post-launch height) against the released door (`None`). Every burn route the review
+    /// listed — a sink-only transfer, a carrier with no object, a value mismatch (buy and seed), a
+    /// line mismatch, an out-of-range and a wrong `sink_index`, an extra sink, a sink on another
+    /// object's carrier (a sell), a carrier with no refund payee — is admitted by the header context
+    /// below the height on both doors, and refused by name from the height on the armed door only;
+    /// the honest buy and seed (change at output 0, the sink at 1, as `misaka palw model-buy` /
+    /// `model-seed` build them) pass everywhere. Isolation stays permissive on both (the height is
+    /// the header context's), and a `never()` fence is no fence.
+    #[test]
+    fn a_model_sink_is_valid_only_bound_from_the_sink_fence() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(0x11E);
+        let other_line = kaspa_consensus_core::Hash64::from_u64_word(0x22E);
+        const PAID: u64 = 700_000_000;
+        // Output 0 the change (a P2PKH-ML-DSA-87 payee) when `change`, then `rest`.
+        let carrier = |object: Option<PalwConsensusObjectV2>, subnet, change: bool, rest: Vec<TransactionOutput>| {
+            let mut outputs =
+                if change { vec![TransactionOutput { value: 5_000, script_public_key: pq_p2pkh_spk() }] } else { vec![] };
+            outputs.extend(rest);
+            let payload = object
+                .map(|object| borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap())
+                .unwrap_or_default();
+            Transaction::new(0, vec![], outputs, 0, subnet, 0, payload)
+        };
+        let sink = |value, line| TransactionOutput { value, script_public_key: palw_model_sink_spk_v1(&line) };
+        let buy = |msk_in, sink_index, line_id| {
+            Some(PalwConsensusObjectV2::ModelBuy {
+                line_id,
+                holder: kaspa_consensus_core::Hash64::from_u64_word(0xB0),
+                msk_in,
+                min_units_out: 0,
+                sink_index,
+            })
+        };
+        let seed = |msk_seed, sink_index| {
+            Some(PalwConsensusObjectV2::ModelSeed {
+                line_id: line,
+                seeder: kaspa_consensus_core::Hash64::from_u64_word(0x5E),
+                msk_seed,
+                sink_index,
+            })
+        };
+        let sell = Some(PalwConsensusObjectV2::ModelSell {
+            line_id: line,
+            holder: kaspa_consensus_core::Hash64::from_u64_word(0xB0),
+            units_in: 1,
+            min_msk_out: 0,
+            held_units: 1,
+            not_after_daa: 1_000,
+            pubkey: vec![1],
+            signature: vec![1],
+        });
+        // testnet-12's door: the market declared from genesis; the binding as given.
+        let door = |fence: Option<ForkActivation>| {
+            let mut tv = validator(PqEnforcementMode::Consensus);
+            tv.palw_model_market_fence = Some(ForkActivation::always());
+            tv.model_sink_outputs_allowed = true;
+            tv.with_model_sink_bound_fence(fence)
+        };
+        let honest = [
+            carrier(buy(PAID, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]),
+            carrier(seed(PAID, 1), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]),
+            // A carrier that pays no sink is untouched (a mis-named object only fails to ride).
+            carrier(buy(PAID, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![]),
+            // An ordinary transfer is untouched.
+            tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE),
+        ];
+        let unbound = [
+            (carrier(None, SUBNETWORK_ID_NATIVE, true, vec![sink(PAID, line)]), 1, "rides only a lifecycle carrier"),
+            (tx_with_output(palw_model_sink_spk_v1(&line), SUBNETWORK_ID_NATIVE), 0, "rides only a lifecycle carrier"),
+            (carrier(None, SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "carries no ModelBuy or ModelSeed"),
+            (carrier(buy(PAID + 1, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "another amount"),
+            (carrier(seed(PAID - 1, 1), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "another amount"),
+            (carrier(buy(PAID, 1, other_line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "another line"),
+            (carrier(buy(PAID, 9, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "is not the output"),
+            (carrier(buy(PAID, 0, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "is not the output"),
+            (
+                carrier(buy(PAID, 1, line), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line), sink(PAID, line)]),
+                2,
+                "is not the output",
+            ),
+            (carrier(sell.clone(), SUBNETWORK_ID_PALW_LIFECYCLE, true, vec![sink(PAID, line)]), 1, "carries no ModelBuy or ModelSeed"),
+            (
+                carrier(buy(PAID, 0, line), SUBNETWORK_ID_PALW_LIFECYCLE, false, vec![sink(PAID, line)]),
+                0,
+                "pays no P2PKH-ML-DSA-87 output",
+            ),
+        ];
+        let released = door(None);
+        let never = door(Some(ForkActivation::never()));
+        for height in [60u64, 500] {
+            let armed = door(Some(ForkActivation::new(height)));
+            for daa in [0, height - 1, height, height + 1, u64::MAX] {
+                for tx in &honest {
+                    assert_eq!(armed.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()), "honest, {height}@{daa}");
+                    assert_eq!(released.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()));
+                }
+                for (tx, index, why) in &unbound {
+                    // Isolation is height-free and stays permissive: the class rule admits the sink.
+                    assert_eq!(armed.check_transaction_pq_output_classes(tx), Ok(()), "{why}");
+                    // The released door (testnet-12 as launched) and a never() fence admit it everywhere.
+                    assert_eq!(released.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()), "{why}");
+                    assert_eq!(never.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa), Ok(()), "{why}");
+                    let verdict = armed.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa);
+                    if daa < height {
+                        assert_eq!(verdict, Ok(()), "{why}: below the fence ({height}) at {daa} the released rule, byte for byte");
+                    } else {
+                        match verdict {
+                            Err(TxRuleError::ModelSinkUnbound(i, reason)) => {
+                                assert_eq!(i, *index, "{why}");
+                                assert!(reason.contains(why), "{why}: {reason}");
+                            }
+                            other => panic!("{why}: from the fence ({height}) at {daa} an unbound sink is refused, got {other:?}"),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// **ADR-0087 Decision 6: a build that SCHEDULES the market must accept, below the activation,
+    /// exactly what a build that does not carry the market accepts** (mainnet audit 2026-09-06,
+    /// M-9).
+    ///
+    /// The rule is an EQUALITY between two arms, not an agreement with one error value: arm (a) is
+    /// a dormant ruleset and arm (b) is the same ruleset with the fence scheduled at 9,000,000.
+    /// Below the activation both must REFUSE the same sink transaction — (a) in isolation, (b) in
+    /// header context, since isolation must stay permissive or no sink could ever be valid. At and
+    /// above the activation (b) accepts. Arm (c), armed from genesis, accepts everywhere.
+    ///
+    /// Before the repair (b) accepted the sink at DAA 0, H blocks before any market existed.
+    #[test]
+    fn a_scheduled_market_admits_the_sink_only_at_its_own_activation() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let sink = tx_with_output(palw_model_sink_spk_v1(&line), SUBNETWORK_ID_NATIVE);
+
+        // The three arms differ only in the fence they carry; the isolation boolean is DERIVED
+        // from it, exactly as `TransactionValidator::new` derives it.
+        let arm = |fence: Option<ForkActivation>| {
+            let mut tv = validator(PqEnforcementMode::Consensus);
+            tv.palw_model_market_fence = fence;
+            tv.model_sink_outputs_allowed = fence.is_some();
+            tv
+        };
+        // The whole verdict for one arm at one score: isolation first, then header context.
+        let verdict = |tv: &TransactionValidator, daa: u64| -> Result<(), TxRuleError> {
+            tv.check_transaction_pq_output_classes(&sink)?;
+            tv.validate_tx_in_header_context(&sink, LockTimeArg::Finalized, daa)
+        };
+
+        let dormant = arm(None);
+        let scheduled = arm(Some(ForkActivation::new(9_000_000)));
+        let from_genesis = arm(Some(ForkActivation::always()));
+
+        // (a) and (b) agree below the activation — that equality IS Decision 6.
+        assert!(verdict(&dormant, 8_999_999).is_err(), "a dormant ruleset has no sink output class");
+        assert!(
+            verdict(&scheduled, 8_999_999).is_err(),
+            "scheduling the fence must not relax a consensus rule before the fence's own score"
+        );
+        assert!(verdict(&dormant, 0).is_err());
+        assert!(verdict(&scheduled, 0).is_err());
+        // ..and they disagree only where the decision says they must: at the activation.
+        assert!(verdict(&scheduled, 9_000_000).is_ok(), "the market exists at its activation");
+        assert!(verdict(&scheduled, u64::MAX).is_ok());
+        assert!(verdict(&dormant, 9_000_000).is_err(), "a dormant ruleset never gets a market");
+
+        // The refusals are named, and each half names itself: isolation refuses the CLASS on a
+        // dormant ruleset, header context refuses the HEIGHT on a scheduled one.
+        assert_eq!(dormant.check_transaction_pq_output_classes(&sink), Err(TxRuleError::NonPqStandardOutputClass(0)));
+        assert!(scheduled.check_transaction_pq_output_classes(&sink).is_ok(), "isolation must stay permissive");
+        assert_eq!(
+            scheduled.validate_tx_in_header_context(&sink, LockTimeArg::Finalized, 8_999_999),
+            Err(TxRuleError::ModelSinkBeforeMarketActivation(0, 8_999_999))
+        );
+
+        // (c) armed from genesis: both doors open at DAA 0.
+        assert!(verdict(&from_genesis, 0).is_ok());
+
+        // A non-sink transaction is untouched by the new door on every arm, at every score.
+        let plain = tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE);
+        for tv in [&dormant, &scheduled, &from_genesis] {
+            assert!(tv.validate_tx_in_header_context(&plain, LockTimeArg::Finalized, 0).is_ok());
+        }
+    }
+
+    /// **RFC-0001 §A.4, both doors: FP Job V4 is admitted exactly from `Params::palw_fp_decode_rules`,
+    /// and a new V3 job exactly below it.** Isolation is height-free: with no fence the V4 shape is
+    /// refused there (the bytes a pre-V4 build refuses, so both builds agree), with a scheduled fence
+    /// both shapes pass isolation and the header-context door splits them by the containing block's
+    /// DAA — V4 refused below, V3 refused at or past.
+    #[test]
+    fn fp_job_v4_is_admitted_exactly_from_the_decode_rules_fence() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_decode_pipeline_v4::DecodeConfigV4;
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3,
+        };
+        let h = kaspa_consensus_core::Hash64::from_u64_word;
+        let commitment_tx = |decode: Option<DecodeConfigV4>| {
+            let mut job = PalwFreePromptJobV3 {
+                version: PALW_FP_V3_VERSION,
+                network_domain: h(1),
+                class_id: h(2),
+                executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_u64_word(3),
+                    0,
+                ),
+                executor_pubkey: vec![4; 8],
+                operator_id: h(5),
+                anchor_block: h(6),
+                anchor_daa: 7,
+                job_nonce: [8; 32],
+                tokenizer_id: h(9),
+                prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&[1, 2, 3]),
+                prompt_tokens: 3,
+                decode_token_limit: 4,
+                max_context_tokens: 20,
+                privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+                prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+                sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                decode: None,
+                tail: None,
+            };
+            if let Some(decode) = decode {
+                job = job.into_v4(decode);
+            }
+            let payload = PalwFpCommitmentTxPayloadV3 {
+                version: PALW_FP_V3_VERSION,
+                commitment: PalwFreePromptCommitmentV3 {
+                    trace_root: h(11),
+                    output_root: h(12),
+                    execution_root: h(13),
+                    schedule_root: h(14),
+                    decode_tokens_executed: 2,
+                    stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+                    work_leaves: 1 << 12,
+                    trace_manifest_root: h(15),
+                    trace_chunk_count: 1,
+                    trace_retention_daa: 1_000,
+                    job,
+                },
+                prompt_token_ids: vec![1, 2, 3],
+                signature: vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            };
+            Transaction::new(
+                0,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                borsh::to_vec(&payload).unwrap(),
+            )
+        };
+        let v3 = commitment_tx(None);
+        let v4 = commitment_tx(Some(DecodeConfigV4 { stop_sequences: vec![vec![7, 7]], ..DecodeConfigV4::NOOP }));
+        let dormant = validator(PqEnforcementMode::Disabled);
+        let scheduled = validator(PqEnforcementMode::Disabled).with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)));
+        let fp = |tv: &TransactionValidator, tx: &Transaction| {
+            super::check_transaction_subnetwork(
+                tx,
+                false,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false,
+                kaspa_consensus_core::palw_fp_objects_v3::palw_fp_isolation_work_leaves_cap_v1(false),
+                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
+                    tv.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+                ),
+                tv.palw_improvement_fence.is_some(),
+                tv.palw_fp_job_v5_fence.is_some(),
+                tv.palw_fp_prefix_state_fence.is_some(),
+                tv.palw_fp_prefix_inherit_fence.is_some(),
+                tv.palw_fp_decode_constraint_fence.is_some(),
+            )
+        };
+        // Isolation: no fence, the V4 shape is refused (as a pre-V4 build refuses its bytes); a
+        // scheduled fence admits both shapes.
+        assert!(fp(&dormant, &v3).is_ok());
+        assert!(matches!(fp(&dormant, &v4), Err(TxRuleError::InvalidPalwFpPayload(_))), "{:?}", fp(&dormant, &v4));
+        assert!(fp(&scheduled, &v3).is_ok() && fp(&scheduled, &v4).is_ok());
+        // The header context splits them by the containing block's height.
+        let header =
+            |tv: &TransactionValidator, tx: &Transaction, daa: u64| tv.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa);
+        assert!(header(&scheduled, &v3, 1_499).is_ok());
+        assert!(matches!(header(&scheduled, &v4, 1_499), Err(TxRuleError::PalwFpJobVersionAtHeight(_, 1_499))));
+        assert!(header(&scheduled, &v4, 1_500).is_ok());
+        assert!(matches!(header(&scheduled, &v3, 1_500), Err(TxRuleError::PalwFpJobVersionAtHeight(_, 1_500))));
+        // No fence: the header context is inert (isolation already refused V4).
+        assert!(header(&dormant, &v3, u64::MAX).is_ok() && header(&dormant, &v4, 0).is_ok());
+
+        // Transport-only TFP fixture: these synthetic roots/signatures are not an admitted
+        // class, a paid allocation, or a finding of computational correctness.
+        let wrap = |tx: &Transaction| {
+            use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+            use kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1;
+            use kaspa_consensus_core::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1;
+            use kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1;
+            let mut original: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).unwrap();
+            let c = &mut original.commitment;
+            let context = palw_fp_job_context_v3(
+                &c.job,
+                &PalwFpClassFactsV3 {
+                    model_profile_id: h(20),
+                    runtime_manifest_hash: h(21),
+                    runtime_class_id: h(22),
+                    shape_profile_id: c.job.class_id,
+                    cu_ruleset_id: h(23),
+                },
+                &PalwFpRunFactsV3 {
+                    decode_tokens_executed: c.decode_tokens_executed,
+                    stop_reason: c.stop_reason,
+                    full_logits_trace_root: c.trace_root,
+                    activation_leg_root: h(24),
+                    checkpoint_leg_root: h(25),
+                    step_leg_root: h(26),
+                    step_leaf_count: c.work_leaves,
+                },
+                b"tfp-ingress-test",
+            )
+            .unwrap();
+            c.execution_root = kaspa_consensus_core::palw_tir_step_v1::palw_tir_execution_root_v1(
+                &context.context_hash(),
+                &c.trace_root,
+                &c.job.class_id,
+                c.work_leaves,
+                &h(27),
+            );
+            let header = PalwPublicTirBindingHeaderV1 {
+                version: 1,
+                job_context: context,
+                artifact_root: h(28),
+                full_logits_trace_root: c.trace_root,
+                step_leaf_count: c.work_leaves,
+                step_merkle_root: h(27),
+                committed_execution_root: c.execution_root,
+            };
+            let pledge = PalwTirPublicCustodyPledgeV1 {
+                version: 1,
+                claim: kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(c),
+                producer: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(c.job.executor_bond),
+                execution_root: c.execution_root,
+                job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(c),
+                source_id: h(29),
+                resource_plan_id: h(30),
+                maximum_custodians: 2,
+                accept_until_daa: 2_000,
+                material_until_daa: 4_000,
+                signature: vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            };
+            let envelope = PalwTirPublicFpEnvelopeV1 {
+                version: 1,
+                original_payload: borsh::to_vec(&original).unwrap(),
+                header,
+                pledge,
+                declared_rent_sompi: 1,
+                history_pledge: None,
+            };
+            let mut outer = tx.clone();
+            outer.payload = envelope.encode_v1().unwrap();
+            outer.finalize();
+            outer
+        };
+        let wrapped_v4 = wrap(&v4);
+        let new_lane = validator(PqEnforcementMode::Disabled)
+            .with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)))
+            .with_tir_public_conviction_fence(Some(ForkActivation::new(1_000)));
+        assert!(matches!(header(&new_lane, &wrapped_v4, 999), Err(TxRuleError::InvalidPalwFpPayload(_))));
+        // The original V4 door still applies after TFP's own fence.
+        assert!(matches!(header(&new_lane, &wrapped_v4, 1_499), Err(TxRuleError::PalwFpJobVersionAtHeight(_, 1_499))));
+        assert!(header(&new_lane, &wrapped_v4, 1_500).is_ok());
+        assert!(matches!(header(&scheduled, &wrapped_v4, 1_500), Err(TxRuleError::InvalidPalwFpPayload(_))));
+        let mut old_lane_only = validator(PqEnforcementMode::Disabled);
+        old_lane_only.palw_staged_public_court_fence = Some(ForkActivation::always());
+        assert!(matches!(header(&old_lane_only, &wrapped_v4, 1_500), Err(TxRuleError::InvalidPalwFpPayload(_))));
+        let mut funded = wrapped_v4.clone();
+        funded.inputs.push(kaspa_consensus_core::tx::TransactionInput {
+            previous_outpoint: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_u64_word(31),
+                0,
+            ),
+            signature_script: vec![],
+            sequence: u64::MAX,
+            sig_op_count: 0,
+        });
+        funded.outputs.push(TransactionOutput { value: 1, script_public_key: legacy_spk() });
+        funded.finalize();
+        assert!(new_lane.validate_tx_in_isolation(&funded).is_ok());
+        assert!(matches!(old_lane_only.validate_tx_in_isolation(&funded), Err(TxRuleError::InvalidPalwFpPayload(_))));
+        let identity = wrapped_v4.id();
+        let payload = wrapped_v4.payload.clone();
+        assert!(header(&new_lane, &wrapped_v4, 1_500).is_ok());
+        assert_eq!(wrapped_v4.id(), identity);
+        assert_eq!(wrapped_v4.payload, payload, "the original-payload view must never replace the actual outer transaction");
+        let mut malformed = wrapped_v4;
+        malformed.payload.truncate(8);
+        assert!(matches!(header(&new_lane, &malformed, 1_500), Err(TxRuleError::InvalidPalwFpPayload(_))));
+    }
+
+    /// **RFC-0004 A6, both doors: an evaluation claim (FP job version 9) is admitted exactly from
+    /// `Params::palw_improvement_v1`, over the V4 rules its job carries.** Isolation is height-free:
+    /// a ruleset that does not carry the fence refuses the claim's bytes as undecodable (what a build
+    /// without the fence says), one that carries it admits them — if it schedules the decode rules the
+    /// job carries — and the header-context door splits by the containing block's DAA: below the fence,
+    /// below the decode rules, or past the structural work cap below the held regime, the claim is
+    /// refused by name. So a build that schedules the fence and one that does not agree on every
+    /// transaction below it.
+    #[test]
+    fn an_evaluation_claim_is_admitted_exactly_from_the_improvement_fence() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3,
+            PalwFpV3Error, PalwFreePromptCommitmentV3, PalwFreePromptJobV3,
+        };
+        use kaspa_consensus_core::palw_improve_eval_v1::*;
+        use kaspa_consensus_core::palw_improve_state_v1::{PalwEvalSubjectV1, PalwScoringKindV1};
+        let h = kaspa_consensus_core::Hash64::from_u64_word;
+        let prompt = [1u32, 2, 3];
+        let generated = vec![5u32, 6];
+        let params = PalwEvalStageParamsV1::ExactMatch { open: -1, close: -1 };
+        let claim_tx = |work_leaves: u64| {
+            let eval = PalwEvalJobV1 {
+                line_id: h(1),
+                epoch: 1,
+                item: 0,
+                subject: PalwEvalSubjectV1::Parent,
+                kind: PalwScoringKindV1::ExactMatch,
+                part: 0,
+                mode: PalwEvalModeV1::Generate { seed: h(2), max_new: 4, stop_ids: vec![] },
+            };
+            let job = PalwFreePromptJobV3 {
+                version: PALW_FP_EVAL_VERSION,
+                network_domain: h(1),
+                class_id: h(2),
+                executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_u64_word(3),
+                    0,
+                ),
+                executor_pubkey: vec![4; 8],
+                operator_id: h(5),
+                anchor_block: h(6),
+                anchor_daa: 7,
+                job_nonce: [0; 32],
+                tokenizer_id: h(9),
+                prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt),
+                prompt_tokens: 3,
+                decode_token_limit: 4,
+                max_context_tokens: 20,
+                privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+                prompt_mode: PALW_FP_PROMPT_MODE_USER,
+                sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                decode: Some(palw_improve_eval_decode_config_v1(&[])),
+                tail: Some(kaspa_consensus_core::palw_freeprompt_v3::PalwFpJobTailV1::Eval(Box::new(eval.clone()))),
+            };
+            let (trace_root, output_root) = (h(11), palw_improve_eval_generated_root_v1(&generated));
+            let commitment = PalwFreePromptCommitmentV3 {
+                trace_root,
+                output_root,
+                schedule_root: kaspa_consensus_core::Hash64::default(),
+                execution_root: palw_improve_eval_execution_root_v1(
+                    &eval.id(),
+                    &h(2),
+                    work_leaves,
+                    &trace_root,
+                    &palw_improve_eval_prompt_root_v1(&prompt),
+                    3,
+                    &params,
+                    &output_root,
+                    &palw_improve_eval_finalized_root_v1(&[]),
+                    &[],
+                ),
+                decode_tokens_executed: 2,
+                stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+                work_leaves,
+                trace_manifest_root: kaspa_consensus_core::Hash64::default(),
+                trace_chunk_count: 1,
+                trace_retention_daa: 1_000,
+                job,
+            };
+            let payload = PalwFpCommitmentTxPayloadV3 {
+                version: PALW_FP_V3_VERSION,
+                commitment,
+                prompt_token_ids: prompt.to_vec(),
+                signature: vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            };
+            let layout = kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1 {
+                version: kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: 8,
+                checkpoint_interval: 1,
+                h_tile: 16,
+                commit_tiles: vec![4],
+                state_tiles: vec![],
+            };
+            let tail = PalwEvalClaimTailV1 {
+                generated: generated.clone(),
+                score: vec![],
+                subject_layout: layout,
+                params,
+                read: None,
+                opening: None,
+            };
+            Transaction::new(
+                0,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                palw_fp_eval_payload_encode_v1(&payload, &tail),
+            )
+        };
+        let tx = claim_tx(40);
+        let wide = claim_tx(1 << 33);
+        let bare = validator(PqEnforcementMode::Disabled);
+        let decode_only = validator(PqEnforcementMode::Disabled).with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)));
+        let improvement_only = validator(PqEnforcementMode::Disabled).with_improvement_fence(Some(ForkActivation::new(2_000)));
+        let armed = validator(PqEnforcementMode::Disabled)
+            .with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)))
+            .with_improvement_fence(Some(ForkActivation::new(2_000)));
+        let late_decode = validator(PqEnforcementMode::Disabled)
+            .with_fp_decode_rules_fence(Some(ForkActivation::new(3_000)))
+            .with_improvement_fence(Some(ForkActivation::new(2_000)));
+        let held = {
+            let mut tv = validator(PqEnforcementMode::Disabled)
+                .with_fp_decode_rules_fence(Some(ForkActivation::new(1_500)))
+                .with_improvement_fence(Some(ForkActivation::new(2_000)));
+            tv.palw_held_context_fence = Some(ForkActivation::new(9_000_000));
+            tv
+        };
+        let isolation = |tv: &TransactionValidator, tx: &Transaction| {
+            super::check_transaction_subnetwork(
+                tx,
+                false,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                false,
+                kaspa_consensus_core::palw_fp_objects_v3::palw_fp_isolation_work_leaves_cap_v1(tv.palw_held_context_fence.is_some()),
+                kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::door(
+                    tv.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+                ),
+                tv.palw_improvement_fence.is_some(),
+                tv.palw_fp_job_v5_fence.is_some(),
+                tv.palw_fp_prefix_state_fence.is_some(),
+                tv.palw_fp_prefix_inherit_fence.is_some(),
+                tv.palw_fp_decode_constraint_fence.is_some(),
+            )
+        };
+        let header =
+            |tv: &TransactionValidator, tx: &Transaction, daa: u64| tv.validate_tx_in_header_context(tx, LockTimeArg::Finalized, daa);
+        // Isolation: no fence, the claim's bytes are not an FP payload — a build without the fence says
+        // the same; with it (and the decode rules its job carries) they are admitted.
+        let undecodable = Err(TxRuleError::InvalidPalwFpPayload(PalwFpV3Error::PayloadUndecodable));
+        assert_eq!(isolation(&bare, &tx), undecodable);
+        assert_eq!(isolation(&decode_only, &tx), undecodable, "the decode rules alone do not admit a version-9 job");
+        assert!(isolation(&armed, &tx).is_ok(), "{:?}", isolation(&armed, &tx));
+        assert_eq!(
+            isolation(&improvement_only, &tx),
+            Err(TxRuleError::InvalidPalwFpPayload(PalwFpV3Error::DecodeRulesNotArmed)),
+            "the V4 rules its job carries are not scheduled"
+        );
+        // The header context splits them by the containing block's height.
+        let named = |r: Result<(), TxRuleError>, needle: &str, daa: u64| match r {
+            Err(TxRuleError::PalwFpJobVersionAtHeight(why, at)) => why.contains(needle) && at == daa,
+            _ => false,
+        };
+        assert!(named(header(&armed, &tx, 1_999), "palw_improvement_v1", 1_999), "below the fence, by name");
+        assert!(named(header(&armed, &tx, 0), "palw_improvement_v1", 0));
+        assert!(header(&armed, &tx, 2_000).is_ok() && header(&armed, &tx, u64::MAX).is_ok(), "from the fence");
+        assert!(named(header(&late_decode, &tx, 2_999), "palw_fp_decode_rules", 2_999), "below the V4 rules its job carries");
+        assert!(header(&late_decode, &tx, 3_000).is_ok());
+        // No fence: the header context is inert (isolation refused the claim already).
+        for tv in [&bare, &decode_only] {
+            assert!(header(tv, &tx, 0).is_ok() && header(tv, &tx, u64::MAX).is_ok());
+        }
+        // The held regime's ladder: a claim past the structural cap needs the regime in force.
+        assert!(isolation(&held, &wide).is_ok(), "isolation's cap is the regime's 2^40");
+        assert_eq!(header(&held, &wide, 8_999_999), Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(1 << 33, 8_999_999)));
+        assert!(header(&held, &wide, 9_000_000).is_ok());
+        assert!(header(&held, &tx, 8_999_999).is_ok(), "inside the structural cap");
+        assert!(isolation(&armed, &wide).is_err(), "no regime: the structural cap refuses it at isolation");
+        // An FP commitment and a native transaction are untouched by the door, on every arm.
+        let native = tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE);
+        for tv in [&bare, &decode_only, &improvement_only, &armed, &late_decode, &held] {
+            assert!(header(tv, &native, 2_500).is_ok());
+        }
+    }
+
+    /// **ADR-0119 Decision 6: a build that SCHEDULES the held regime accepts, below the fence,
+    /// exactly the free-prompt commitments a build without it accepts** — the market's equality
+    /// (M-9) on the work-leaves cap. Arm (a) declares no regime and arm (b) schedules it at
+    /// 9,000,000. Isolation is height-free, so (b)'s isolation cap is the regime's `2^40`; the
+    /// header-context door then refuses a commitment past the structural `2^32` below the fence, by
+    /// name, and admits it from the fence on. A commitment inside the structural cap is untouched.
+    #[test]
+    fn a_scheduled_held_regime_admits_a_held_jobs_leaves_only_from_its_own_fence() {
+        use crate::processes::transaction_validator::tx_validation_in_header_context::LockTimeArg;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, PalwFreePromptJobV3,
+        };
+        let h = kaspa_consensus_core::Hash64::from_u64_word;
+        let commitment_tx = |work_leaves: u64| {
+            let job = PalwFreePromptJobV3 {
+                version: PALW_FP_V3_VERSION,
+                network_domain: h(1),
+                class_id: h(2),
+                executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::from_u64_word(3),
+                    0,
+                ),
+                executor_pubkey: vec![4; 8],
+                operator_id: h(5),
+                anchor_block: h(6),
+                anchor_daa: 7,
+                job_nonce: [8; 32],
+                tokenizer_id: h(9),
+                prompt_token_ids_hash: h(10),
+                prompt_tokens: 16,
+                decode_token_limit: 4,
+                max_context_tokens: 20,
+                privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA,
+                prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+                sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+                temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+                decode: None,
+                tail: None,
+            };
+            let payload = PalwFpCommitmentTxPayloadV3 {
+                version: PALW_FP_V3_VERSION,
+                commitment: PalwFreePromptCommitmentV3 {
+                    trace_root: h(11),
+                    output_root: h(12),
+                    execution_root: h(13),
+                    schedule_root: h(14),
+                    decode_tokens_executed: 4,
+                    stop_reason: PalwFpStopReasonV3::EndOfGeneration,
+                    work_leaves,
+                    trace_manifest_root: h(15),
+                    trace_chunk_count: 1,
+                    trace_retention_daa: 1_000,
+                    job,
+                },
+                prompt_token_ids: Vec::new(),
+                signature: Vec::new(),
+            };
+            Transaction::new(
+                0,
+                vec![],
+                vec![],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                borsh::to_vec(&payload).unwrap(),
+            )
+        };
+        let arm = |fence: Option<ForkActivation>| {
+            let mut tv = validator(PqEnforcementMode::Consensus);
+            tv.palw_held_context_fence = fence;
+            tv
+        };
+        let dormant = arm(None);
+        let scheduled = arm(Some(ForkActivation::new(9_000_000)));
+        let wide = commitment_tx(1 << 33);
+        let header = |tv: &TransactionValidator, daa: u64| tv.validate_tx_in_header_context(&wide, LockTimeArg::Finalized, daa);
+        assert!(header(&dormant, 0).is_ok() && header(&dormant, u64::MAX).is_ok(), "no regime: the isolation cap already refused it");
+        assert_eq!(header(&scheduled, 8_999_999), Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(1 << 33, 8_999_999)));
+        assert_eq!(header(&scheduled, 0), Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(1 << 33, 0)));
+        assert!(header(&scheduled, 9_000_000).is_ok(), "from the fence a held job's leaves are the chain's to carry");
+        let narrow = commitment_tx(1 << 20);
+        for tv in [&dormant, &scheduled] {
+            for daa in [0, 8_999_999, 9_000_000] {
+                assert!(tv.validate_tx_in_header_context(&narrow, LockTimeArg::Finalized, daa).is_ok(), "inside the structural cap");
+            }
+        }
+        assert!(
+            scheduled
+                .validate_tx_in_header_context(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_NATIVE), LockTimeArg::Finalized, 0)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn consensus_mode_rejects_legacy_output() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        assert_eq!(
+            tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_NATIVE)),
+            Err(TxRuleError::NonPqStandardOutputClass(0))
+        );
+    }
+
+    #[test]
+    fn consensus_mode_rejects_non_pq_coinbase_output() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        // The coinbase miner output is block-producer-controlled; a non-PQ script
+        // there (e.g. OP_TRUE) would mint a signature-free UTXO. No exemption now.
+        assert_eq!(
+            tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_COINBASE)),
+            Err(TxRuleError::NonPqStandardOutputClass(0))
+        );
+        // A canonical ML-DSA P2PKH coinbase output is accepted.
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_COINBASE)).is_ok());
+    }
+
+    #[test]
+    fn consensus_mode_rejects_non_pq_overlay_output() {
+        let tv = validator(PqEnforcementMode::Consensus);
+        // DNS-overlay outputs beyond the payload-pinned bond output-0 (stake-bond
+        // change / attestation change) are class-checked too — no blanket exemption.
+        assert_eq!(
+            tv.check_transaction_pq_output_classes(&tx_with_output(legacy_spk(), SUBNETWORK_ID_STAKE_BOND)),
+            Err(TxRuleError::NonPqStandardOutputClass(0))
+        );
+        assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_STAKE_BOND)).is_ok());
+    }
+
+    /// **The cap must cover the BUILDER, and the builder's kinds are enumerated here rather than
+    /// re-summed from the cap's own constants** (mainnet audit, 2026-09-06, H-3).
+    ///
+    /// The previous form computed `worst_case` as `mergeset + 1 + 1 + MAX_VALIDATOR_PAYOUTS +
+    /// MAX_PAYOUTS_PER_BLOCK` and asserted that `outputs_limit` — the same expression, rearranged —
+    /// admits it and refuses one more. That is a tautology: it holds for every value of every
+    /// constant, including the values under which a full mergeset left exactly ZERO slots for three
+    /// appended kinds nobody had named. It is the shape this repo keeps meeting — a check shaped to
+    /// agree with its own doc — and it is why the 2026-09-05 widening looked proved and was not.
+    ///
+    /// The list below is the audit of `expected_coinbase_transaction` +
+    /// `validator_reward_outputs_for_block`, one row per site that pushes into the coinbase's
+    /// output vector, each with the constant that bounds it. A kind with no bound is `None` and
+    /// fails the test BY NAME.
+    #[test]
+    fn the_coinbase_cap_counts_every_kind_the_builder_appends() {
+        // This module is not the one at the top of the file and does not inherit its imports.
+        use crate::params::MAINNET_PARAMS;
+        use crate::processes::transaction_validator::{TransactionValidator, errors::TxRuleError};
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_V2_COINBASE_EXTRA_OUTPUTS, PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED, PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS,
+            PALW_V2_MAX_PAYOUTS_PER_BLOCK, PALW_V2_MAX_RESERVE_DRIP_PAYOUTS, PALW_V2_MAX_VALIDATOR_PAYOUTS,
+        };
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE;
+        use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput, scriptvec};
+        use kaspa_core::assert_match;
+
+        let params = MAINNET_PARAMS.clone();
+        let coinbase_with = |n: usize| {
+            Transaction::new(
+                0,
+                vec![],
+                (0..n).map(|_| TransactionOutput { value: 1, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x51)) }).collect(),
+                0,
+                SUBNETWORK_ID_COINBASE,
+                0,
+                vec![],
+            )
+        };
+        let make = |declared: bool| {
+            TransactionValidator::new_for_tests(
+                params.max_tx_inputs,
+                params.max_tx_outputs,
+                params.max_signature_script_len,
+                params.max_script_public_key_len,
+                params.coinbase_payload_script_public_key_max_len,
+                params.coinbase_maturity(),
+                params.mergeset_size_limit(),
+                Default::default(),
+            )
+            .with_validator_payout_bounds_for_tests(declared)
+        };
+
+        // Every site that pushes into the coinbase's output vector, with the constant that bounds
+        // it — `None` where nothing does. The two dormant kinds read their own preset field, so a
+        // preset that ever arms one without a bound beside it turns this row `None` and fails here.
+        let dns = params.dns_params.as_ref().expect("mainnet carries the DNS overlay");
+        let kinds: Vec<(&str, Option<u64>)> = vec![
+            ("mergeset payout (per blue, per ADR-0058 entitled red)", Some(params.mergeset_size_limit())),
+            ("unentitled-red aggregate", Some(1)),
+            ("§E participation", Some(PALW_V2_MAX_VALIDATOR_PAYOUTS)),
+            ("VLT §6 audit fee", (dns.vlt.vlt_shadow_activation_daa_score == u64::MAX || dns.vlt.audit_fee_sompi == 0).then_some(0)),
+            ("§E deferred quality bonus", Some(PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS)),
+            ("§F reserve drip", Some(PALW_V2_MAX_RESERVE_DRIP_PAYOUTS)),
+            ("§D inclusion bounty", Some(1)),
+            ("ADR-0042 D10 escrow releases", Some(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64)),
+        ];
+        let unbounded: Vec<&str> = kinds.iter().filter(|(_, b)| b.is_none()).map(|(n, _)| *n).collect();
+        assert!(
+            unbounded.is_empty(),
+            "every kind the coinbase builder appends must carry a bound the isolation cap reserves a slot for; \
+             these carry none: {unbounded:?}"
+        );
+        let worst_case: u64 = kinds.iter().map(|(_, b)| b.unwrap()).sum();
+
+        // Past the fence: the cap admits the enumerated worst case and refuses one more.
+        let carded = make(true);
+        assert!(
+            carded.check_coinbase_in_isolation(&coinbase_with(worst_case as usize)).is_ok(),
+            "a coinbase paying every kind at its bound must pass; the builder can emit {worst_case} outputs"
+        );
+        assert_match!(
+            carded.check_coinbase_in_isolation(&coinbase_with(worst_case as usize + 1)),
+            Err(TxRuleError::CoinbaseTooManyOutputs(_, _))
+        );
+        assert_eq!(
+            worst_case,
+            params.mergeset_size_limit() + 1 + PALW_V2_COINBASE_EXTRA_OUTPUTS_BOUNDED,
+            "the enumerated worst case and the cap are one statement — a kind added to the builder without a slot \
+             reserved for it moves them apart"
+        );
+
+        // **And testnet-11's cap does not move.** Pinned as the number a live chain enforces, so a
+        // widening that reached it would be a red test rather than a silent relaxation.
+        let t11 = make(false);
+        let dormant_cap = params.mergeset_size_limit() + 1 + PALW_V2_COINBASE_EXTRA_OUTPUTS;
+        assert!(t11.check_coinbase_in_isolation(&coinbase_with(dormant_cap as usize)).is_ok());
+        assert_match!(
+            t11.check_coinbase_in_isolation(&coinbase_with(dormant_cap as usize + 1)),
+            Err(TxRuleError::CoinbaseTooManyOutputs(_, _))
+        );
+        assert!(
+            dormant_cap < worst_case,
+            "and the gap that is still open on testnet-11 is stated as a number: its cap is {dormant_cap} against a \
+             builder that can emit {worst_case}"
+        );
+
+        // The bound the pre-ADR-0058 arithmetic gave, stated so THAT regression cannot come back
+        // quietly either: a cap counting blues only sits below the mergeset bound, so an ordinary
+        // wide DAG was past it.
+        let old_cap = params.ghostdag_k() as usize + 2 + PALW_V2_COINBASE_EXTRA_OUTPUTS as usize;
+        assert!(
+            old_cap < params.mergeset_size_limit() as usize,
+            "the premise: a cap counting blues only sits BELOW the mergeset bound ({old_cap} against {}), so a mergeset \
+             wide enough to pass it is an ordinary DAG rather than an attack",
+            params.mergeset_size_limit()
+        );
+        assert!(
+            t11.check_coinbase_in_isolation(&coinbase_with(old_cap + 1)).is_ok(),
+            "one output past the blues-only cap must be legal — that cap was the 112-block halt"
+        );
+    }
+}
+
+/// Audit A-2 (reproduction): the tx-isolation BLOCK rule (body_validation_in_isolation's
+/// `check_transactions_in_isolation` maps any error here to `TxInIsolationValidationFailed`)
+/// refuses a lifecycle carrier whose object kind this build does not know.
+#[cfg(test)]
+mod audit_a2_isolation_tests {
+    use super::*;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionInput, TransactionOutpoint};
+    use kaspa_core::assert_match;
+
+    fn carrier(tag: u8) -> Transaction {
+        let mut w = vec![1u8, 0, tag];
+        w.extend_from_slice(&[0x11u8; 64]);
+        w.extend_from_slice(&2u32.to_le_bytes());
+        w.extend_from_slice(&3u32.to_le_bytes());
+        w.extend_from_slice(&[7u8, 7, 7]);
+        Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput {
+                previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xA2), index: 0 },
+                signature_script: vec![],
+                sequence: 0,
+                sig_op_count: 0,
+            }],
+            vec![],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            w,
+        )
+    }
+
+    fn tv(tolerate: bool) -> TransactionValidator {
+        let params = crate::params::MAINNET_PARAMS.clone();
+        TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        )
+        .with_lifecycle_undecodable_tolerated_for_tests(tolerate)
+    }
+
+    #[test]
+    fn an_unknown_lifecycle_kind_is_not_block_invalid_at_isolation_on_an_audit_armed_ruleset() {
+        // **Audit-armed** (`palw_audit_2026_09_11` declared): a kind a later build appends is
+        // TOLERATED at isolation, so the carrying block is not invalidated for this build alone.
+        let armed = tv(true);
+        let known = armed.validate_tx_in_isolation(&carrier(39));
+        let unknown = armed.validate_tx_in_isolation(&carrier(43));
+        assert_eq!(known, Ok(()), "the dormant-fence kind this build knows rides");
+        assert_eq!(
+            unknown,
+            Ok(()),
+            "INVARIANT (audit-armed): a lifecycle kind a later build appends must not be refused at tx isolation (a block \
+             rule) — else the carrying block and every descendant are invalid for this build only"
+        );
+    }
+
+    #[test]
+    fn an_unknown_lifecycle_kind_is_block_invalid_below_the_audit_fence() {
+        // **The other side of the fence** (the audit ruleset not declared, every build in the field
+        // today): the unknown kind is still refused, so a fenced build and an unfenced one agree
+        // that such a carrier is block-invalid until the audit ruleset ships. A kind this build DOES
+        // decode still rides — only the undecodable/unknown-version shape differs across the fence.
+        let unarmed = tv(false);
+        assert_eq!(unarmed.validate_tx_in_isolation(&carrier(39)), Ok(()), "a decodable kind rides on either side of the fence");
+        assert_match!(unarmed.validate_tx_in_isolation(&carrier(43)), Err(TxRuleError::InvalidPalwLifecyclePayload(_)));
+    }
+}
+
+#[cfg(test)]
+mod rfc18_width_tests {
+    use super::*;
+    use kaspa_consensus_core::config::params::{ForkActivation, ForkedParam, MAINNET_PARAMS};
+    use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionOutput, scriptvec};
+
+    #[test]
+    fn rfc18_width_coinbase_guard_uses_both_eras_in_isolation_and_exact_parent_in_context() {
+        let p = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            p.max_tx_inputs,
+            p.max_tx_outputs,
+            p.max_signature_script_len,
+            p.max_script_public_key_len,
+            p.coinbase_payload_script_public_key_max_len,
+            p.coinbase_maturity(),
+            10,
+            Default::default(),
+        )
+        .with_mergeset_size_history(ForkedParam::new(10, 30, ForkActivation::new(100)));
+        let n = 30 + 1 + kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS;
+        let tx = Transaction::new(
+            0,
+            vec![],
+            (0..n).map(|_| TransactionOutput { value: 1, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x51)) }).collect(),
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE,
+            0,
+            vec![],
+        );
+        assert!(tv.check_coinbase_in_isolation(&tx).is_ok());
+        assert!(matches!(tv.check_coinbase_dag_width(&tx, 99), Err(TxRuleError::CoinbaseTooManyOutputs(..))));
+        assert!(tv.check_coinbase_dag_width(&tx, 100).is_ok());
+        assert!(tv.check_coinbase_dag_width(&tx, 99).is_err(), "reorg restores the bound");
+    }
+}

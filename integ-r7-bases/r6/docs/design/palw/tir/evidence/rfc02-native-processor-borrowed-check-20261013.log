@@ -1,0 +1,79 @@
+   Compiling jobserver v0.1.32
+   Compiling num-traits v0.2.19
+   Compiling rustix v0.38.37
+   Compiling cc v1.2.61
+    Checking chrono v0.4.38
+    Checking rand v0.8.6
+   Compiling kaspa-utils v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/hashes)
+    Checking polling v3.7.3
+    Checking async-io v2.3.4
+    Checking async-global-executor v2.4.1
+   Compiling pkg-config v0.3.31
+    Checking async-std v1.13.0
+    Checking ordered-float v2.10.1
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/core)
+    Checking serde-value v0.7.0
+   Compiling glob v0.3.1
+   Compiling clang-sys v1.8.1
+    Checking workflow-core v0.18.0
+    Checking log4rs v1.4.0
+    Checking workflow-wasm v0.18.0
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/challenge)
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/gen)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/muhash)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+    Checking kaspa-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/core)
+    Checking kaspa-math v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/math)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript/errors)
+   Compiling minimal-lexical v0.2.1
+   Compiling libloading v0.8.5
+   Compiling nom v7.1.3
+   Compiling vcpkg v0.2.15
+   Compiling either v1.13.0
+   Compiling bindgen v0.72.1
+   Compiling cexpr v0.6.0
+   Compiling itertools v0.13.0
+   Compiling libz-sys v1.1.20
+    Checking kaspa-wasm-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/wasm/core)
+   Compiling bzip2-sys v0.1.11+1.0.8
+   Compiling zstd-sys v2.0.13+zstd.1.5.6
+   Compiling lz4-sys v1.11.1+lz4-1.10.0
+   Compiling rustc-hash v2.1.1
+   Compiling bitflags v2.9.4
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Checking num-integer v0.1.46
+   Compiling paste v1.0.15
+   Compiling librocksdb-sys v0.17.3+10.4.2
+   Compiling convert_case v0.4.0
+   Compiling derive_more v0.99.18
+    Checking num-bigint v0.4.6
+    Checking tinyvec_macros v0.1.1
+    Checking tinyvec v1.8.0
+    Checking num-rational v0.4.2
+    Checking num-iter v0.1.45
+    Checking num-complex v0.4.6
+    Checking num v0.4.3
+   Compiling enum-primitive-derive v0.3.0
+    Checking unicode-normalization v0.1.25
+    Checking misaka-palw-tir-artifact v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/artifact)
+    Checking tempfile v3.13.0
+    Checking bincode v1.3.3
+    Checking misaka-palw-host-security v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/security)
+    Checking unicode-properties v0.1.4
+    Checking duration-string v0.4.0
+    Checking crossbeam-channel v0.5.15
+    Checking kaspa-txscript v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/notify)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/pq/validator-core)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/notify)
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/base0)
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/components/consensusmanager)
+    Checking kaspa-pow v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/pow)
+    Checking rocksdb v0.24.0
+    Checking kaspa-database v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/database)
+    Checking kaspa-consensus v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4m 23s

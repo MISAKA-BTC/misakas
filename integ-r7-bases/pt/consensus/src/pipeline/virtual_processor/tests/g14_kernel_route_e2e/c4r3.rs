@@ -1,0 +1,675 @@
+//! **C4 round 3 — independent adversarial review of the kernel route on the REAL node** (branch `adv/c4r3-real-node`).
+//!
+//! Everything here runs through the same harness as the lane's own E2E (the parent module): signed `0x4b` carriers, the mempool,
+//! the node's template, the chain block's fold, the read API. A test whose name says `observation` pins behaviour that is by design
+//! or already a named GAP, quantified; a test `#[ignore = "FAIL F-C4R3-nn …"]` asserts the SAFE property and fails on this
+//! revision (run it with `-- --ignored`). Findings and numbers: `docs/evidence/palw/implementation-records/adversarial-e2e-record.md`, round 3.
+//!
+//! **The node-less path.** The user's mandatory test 3 asks that the false claim arrive as a signed object relayed by a third party
+//! (`misaka-palw-remote`), not only from inside the producer's process. [`relay`] builds the producer's carrier with the producer's
+//! own keys, then hands the finished bytes to `misaka_palw_remote::relay::broadcast_signed_tx` — the library a node-less miner uses —
+//! which pre-flights the funding signature, fans out to every node it knows (here: one that lies about what it accepted, and the
+//! real node's mempool), and judges each reply against the id it computed from the bytes. Only what the real node accepted is mined.
+use super::*;
+use kaspa_consensus_core::config::params::Params;
+use kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1;
+use misaka_palw_remote::relay::{NodeOutcome, RelayNode, Reply, broadcast_signed_tx, tx_id_of_bytes};
+
+// ---- the node-less path --------------------------------------------------------------------------------------------------
+
+/// The real node as a relay target: the mempool's own check, and what it accepted is what its next template carries.
+struct NodeRelay<'a> {
+    net: &'a Net,
+    accepted: std::cell::RefCell<Vec<Transaction>>,
+}
+
+impl RelayNode for NodeRelay<'_> {
+    fn node_id(&self) -> &str {
+        "the-real-node"
+    }
+    fn submit_raw_tx(&self, tx: &Transaction) -> Reply {
+        match self.net.mempool(tx) {
+            Ok(()) => {
+                self.accepted.borrow_mut().push(tx.clone());
+                Reply::Accepted(tx_id_of_bytes(tx))
+            }
+            Err(e) => Reply::Refused(e.to_string()),
+        }
+    }
+}
+
+/// A relay that claims to have accepted something else (it relayed other bytes, or lies): never counted, always reported.
+struct LyingRelay;
+
+impl RelayNode for LyingRelay {
+    fn node_id(&self) -> &str {
+        "a-lying-relay"
+    }
+    fn submit_raw_tx(&self, _tx: &Transaction) -> Reply {
+        Reply::Accepted(Hash64::from_u64_word(0xBAD))
+    }
+}
+
+/// **Relay one signed object node-less**: the carrier is built and signed with card `card`'s keys, then handed — as finished bytes —
+/// to the remote library's broadcast; the real node's acceptance is the only one that counts. The carrying block is mined, then the
+/// block that folds it (the harness's `send` contract).
+async fn relay(net: &mut Net, card: usize, object: &Obj) {
+    let funding = net.funding[card].1.clone();
+    let tx = net.carrier(card, object);
+    let (report, accepted) = {
+        let node = NodeRelay { net, accepted: Default::default() };
+        let report =
+            broadcast_signed_tx(&tx, Some(&funding), &[&LyingRelay, &node], 1).expect("the real node takes the relayed carrier");
+        (report, node.accepted.into_inner())
+    };
+    assert_eq!(report.id, tx_id_of_bytes(&tx), "the relay judges replies against the id of its own bytes");
+    assert_eq!(report.tampered(), vec!["a-lying-relay"], "the lying relay is reported, never counted");
+    assert!(report.per_node.iter().any(|(n, o)| n == "the-real-node" && *o == NodeOutcome::Accepted));
+    assert_eq!(accepted.len(), 1);
+    let ttpb = net.ttpb();
+    let carrying = net.chain.heartbeat(ttpb, accepted).await;
+    assert!(carrying.transactions.iter().any(|t| t.id() == tx.id()), "the node's template carries the relayed carrier");
+    net.chain.heartbeat(ttpb, Vec::new()).await;
+}
+
+impl World {
+    /// [`World::claim`], but the producer runs no node: its seal and its reveal reach the chain only through [`relay`].
+    async fn relayed_claim(&mut self, producer: usize, job: &KernelJobV1, lie: bool) -> Claim {
+        let ledger = self.net.ledger();
+        let generated = greedy(&self.fx, &ledger, &self.class, &job.prompt, job.max_new_tokens as usize);
+        let at = matmul_at(&self.fx.program, 1);
+        let kid = self.net.kid(producer);
+        let produced = produce(&self.fx, &ledger, &self.class, job, kid, generated, |t| {
+            if lie {
+                bump(&mut t.values[at.0 as usize][at.1 as usize][at.2 as usize], 1)
+            }
+        });
+        let id = produced.claim.id();
+        let (seal, reveal) = seal_and_reveal(&ledger, kid, &produced.object);
+        let seal = self.net.route(producer, &seal);
+        relay(&mut self.net, producer, &seal).await;
+        let reveal = self.net.route(producer, &reveal);
+        relay(&mut self.net, producer, &reveal).await;
+        assert!(self.net.ledger().claims.contains_key(&id), "the relayed claim committed over its relayed seal");
+        Claim { id, producer, trace: produced.trace, at }
+    }
+
+    /// The outsider's proof, relayed node-less too.
+    async fn relayed_proof(&mut self, card: usize, claim: &Digest, proof: ProsecutionV1) {
+        let o = self.net.route(card, &K::FileProof { accuser: self.net.kid(card), claim: *claim, proof });
+        relay(&mut self.net, card, &o).await;
+    }
+}
+
+// ---- mandatory test 3 (user): producer + whole Panel collude; an outside bonded verifier convicts from public material ----
+
+/// **Mandatory test 3, Panel-licensed, node-less.** The producer runs no node: its signed seal and lying reveal reach the chain
+/// through the remote relay library (one relay lies and is reported). Every interim seat signs a passing receipt. An ordinary
+/// bonded outsider — no seat, no producer state, no `ServedView`, only the read API and the producer's public DA — fresh-verifies,
+/// relays its proof the same node-less way, and the REAL producer bond is slashed; nothing lands on the relay or on the seats.
+#[tokio::test]
+async fn g14_c4r3_mandatory_3_a_relayed_lie_covered_by_every_seat_is_convicted_by_an_outsider() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let before = w.net.collateral(0);
+    let lie = w.relayed_claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    let seat_collateral: Vec<u64> = seats.iter().map(|s| w.net.collateral(*s)).collect();
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0xC4);
+    w.relayed_proof(outsider, &lie.id, proof).await;
+    let pol = w.policy();
+    assert!(w.net.ledger().claims[&lie.id].convicted, "convicted from public material alone");
+    assert_eq!(w.net.collateral(0), before - pol.claim_collateral, "the real producer bond pays the whole reservation");
+    assert_eq!(w.net.owed(outsider), pol.claim_collateral * u64::from(pol.accuser_reward_permille) / 1000);
+    // G14 lane closure G-K1 (2026-10-16, T-N11): wherever the kernel route exists — it exists only past
+    // `palw_probabilistic_constraints_v1`, the fence this harness arms — every counted passing receipt locked its signer's
+    // liability, and the conviction charges each interim seat exactly that lock (burned). This assert said the opposite ("the interim
+    // seats are not the route's to slash") and predates G-K1; the rule is G-K1's (g14-completeness-proof §1 I5, appendix C), the test
+    // follows it. Without the fence there is no kernel route, hence no seat to lock or charge:
+    // `g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged`.
+    let lock = kaspa_consensus_core::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(
+        pol.claim_reward,
+        kaspa_consensus_core::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1,
+    );
+    assert!(lock > 0);
+    for (s, c) in seats.iter().zip(seat_collateral) {
+        assert_eq!(w.net.collateral(*s), c - lock, "G-K1: each interim seat that passed the lie is charged its signer lock");
+    }
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+/// **The other half of the reconciliation: below `palw_probabilistic_constraints_v1` the kernel route does not exist**, so no interim
+/// seat is drawn, locked or charged (and the G-K1 charge cannot reach anyone). testnet-12 as launched with the harness cards and the
+/// route's fence NOT armed: the class registration carrier lands nowhere — the route has no class, no claim, no receipt.
+#[tokio::test]
+async fn g14_c4r3_without_the_route_fence_no_kernel_seat_is_locked_or_charged() {
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    let mut params = config.params.clone();
+    params.palw_probabilistic_constraints_v1 = None;
+    params.skip_proof_of_work = true;
+    let mut net = Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new);
+    let fx = fixture();
+    let register = K::RegisterClass {
+        descriptor: k2_tir_v2_descriptor().digest(),
+        program_bytes: fx.program.encode(),
+        plan: fx.plan.clone(),
+        param_commitments: fx.pc.clone(),
+    };
+    let o = net.route(1, &register);
+    let tx = net.carrier(1, &o);
+    let ttpb = net.ttpb();
+    if net.mempool(&tx).is_ok() {
+        net.chain.heartbeat(ttpb, vec![tx]).await;
+        net.chain.heartbeat(ttpb, Vec::new()).await;
+    }
+    let route = net.api();
+    assert!(
+        route.as_ref().and_then(|api| api.ledger().ok().map(|ledger| ledger.classes.is_empty())).unwrap_or(true),
+        "no kernel class below the fence"
+    );
+    assert!(
+        route.as_ref().is_none_or(|api| !api.aux.keys().any(|(table, _)| {
+            *table == kaspa_consensus_core::palw_g14_lane_closure_v1::PALW_G14_LANE_CLOSURE_TABLE_V1
+        })),
+        "no signer lock exists below the fence"
+    );
+}
+
+/// **Mandatory test 3, OPV (Panel = 0), node-less, before and after Final.** Two lies relayed by their producer: one is convicted
+/// inside the window, the other finalizes (nobody looked) and is convicted inside the liability horizon — both by an outsider
+/// built from the read API, both relayed.
+#[tokio::test]
+async fn g14_c4r3_mandatory_3_opv_relayed_lies_are_convicted_before_and_after_final() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::opv().await;
+    let job_a = w.job().await;
+    let job_b = w.job().await;
+    let before = w.net.collateral(0);
+    let a = w.relayed_claim(0, &job_a, true).await;
+    let b = w.relayed_claim(0, &job_b, true).await;
+    let outsider = w.outsiders(&a, &[], 1)[0];
+    let (policy, view_b) = opv_view(&w, &b.id);
+    let proof = w.prosecution(&a.id, &a.published(&w.fx, &[]), 0xA1);
+    w.relayed_proof(outsider, &a.id, proof).await;
+    assert!(matches!(w.net.claim_state(&a.id), ClaimStateV1::Convicted { .. }), "{:?}", w.net.claim_state(&a.id));
+    w.net.beat_to(view_b.final_floor_daa).await;
+    assert!(matches!(w.net.claim_state(&b.id), ClaimStateV1::Final { .. }), "b finalized unprosecuted");
+    let proof = w.prosecution(&b.id, &b.published(&w.fx, &[]), 0xB2);
+    w.relayed_proof(outsider, &b.id, proof).await;
+    assert!(w.net.ledger().claims[&b.id].convicted, "b convicted inside its liability horizon");
+    let r = policy.economics.reservation_per_claim;
+    let fee = policy.economics.admission_fee;
+    assert_eq!(w.net.collateral(0), before - 2 * r - 2 * fee, "both reservations slashed from the real bond (and two admission fees)");
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+// ---- G14 pre-emption: a self-inflicted default ------------------------------------------------------------------------------
+
+/// The pieces of the pre-emption run, measured.
+struct Escape {
+    producer_loss: u64,
+    sybil_gain: i128,
+    outsider_fee: u64,
+    /// What the conviction owes the outsider (its bounty), measured in the folding block.
+    outsider_paid: u64,
+    /// The claim's whole reservation at admission.
+    reservation: u64,
+    /// What the self-inflicted default collected (the default penalty).
+    penalty: u64,
+    convicted: bool,
+    state: ClaimStateV1,
+    censored_daa: u64,
+}
+
+/// **The colluders' cheapest escape from a provable fraud**: the producer publishes EVERYTHING (the outsider can convict from public
+/// material alone), and the colluders' own bond (`sybil`, any operator) files a demand on a position as soon as the claim is open;
+/// the producer stays silent. The outsider's proof is kept out of the chain (censored, or merely slow) until the demand's deadline.
+/// Then the outsider files.
+async fn escape_by_self_default(mut w: World, cover: bool) -> Escape {
+    let job = w.job().await;
+    let before = w.net.collateral(0);
+    let lie = w.claim(0, &job, true).await;
+    let seats = if cover { w.seats(&lie.id) } else { Vec::new() };
+    if cover {
+        w.cover(&lie.id).await;
+    }
+    let cards = w.outsiders(&lie, &seats, 2);
+    let (sybil, outsider) = (cards[0], cards[1]);
+    let sybil_before = w.net.collateral(sybil) as i128 + w.net.owed(sybil) as i128;
+    // The outsider holds a valid proof from the first block the claim is open.
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0xE5);
+    let opened = w.net.daa();
+    w.demand(sybil, &lie.id, 0).await;
+    let deadline = w.net.ledger().demands[&(lie.id, 0, 0)].deadline_daa;
+    w.net.beat_to(deadline).await;
+    // Measured at the default's block, before the next coinbase pays the queued share out of the bond's view.
+    let sybil_gain = w.net.collateral(sybil) as i128 + w.net.owed(sybil) as i128 - sybil_before;
+    let producer_loss = before - w.net.collateral(0);
+    let outsider_before = w.net.collateral(outsider);
+    let reservation = w.net.ledger().opv.claims.get(&lie.id).map_or(w.policy().claim_collateral, |o| o.reservation);
+    w.proof(outsider, &lie.id, proof).await;
+    let ledger = w.net.ledger();
+    Escape {
+        producer_loss,
+        sybil_gain,
+        outsider_fee: outsider_before - w.net.collateral(outsider),
+        outsider_paid: w.net.owed(outsider),
+        reservation,
+        penalty: w.policy().default_penalty,
+        convicted: ledger.claims[&lie.id].convicted,
+        state: ledger.claims[&lie.id].life.state.clone(),
+        censored_daa: deadline - opened,
+    }
+}
+
+/// **F-C4R3-02 (P1, Panel-licensed): a provable fraud was laundered into a FREE availability default by keeping one valid proof out
+/// of the chain for `court_deadline_daa` (20 DAA), not for the window plus the liability horizon (250 DAA).** The colluders' bond
+/// demands a position and the producer stays silent: at the deadline the claim is `Unavailable`. Before the fix the producer paid
+/// `default_penalty` (100 KAS), the colluders' bond was paid the whole of it back as the sole demander, the reservation (1,000 KAS)
+/// was released, and the outsider's TRUE fraud proof filed one block later was **dismissed with the filing fee**. **Fixed (G14-R4)**:
+/// the default is split like a slash, the rest of the reservation stays held until `default + liability_daa`, and a valid proof in
+/// that horizon convicts it (the honest accuser's bounty undiluted, no fee). SAFE property asserted: a valid proof of a lie filed
+/// inside the claim's own horizon convicts it, and an honest prosecutor is never charged for a true proof.
+#[tokio::test]
+async fn g14_c4r3_a_self_inflicted_default_must_not_erase_a_provable_fraud() {
+    kaspa_core::log::try_init_logger("warn");
+    let e = escape_by_self_default(World::new().await, true).await;
+    eprintln!(
+        "[F-C4R3-02 panel] censored {} DAA; producer lost {}; colluding demander gained {}; outsider fee {}, bounty {}; convicted {}; {:?}",
+        e.censored_daa, e.producer_loss, e.sybil_gain, e.outsider_fee, e.outsider_paid, e.convicted, e.state
+    );
+    assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
+    assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
+    assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what the conviction collected (the reservation less
+    // the default's penalty), and the default's demanders plus the bounty stay within the share of everything collected. The
+    // honest accuser's residual dilution (the Sybil demander's part of the default's share) is ECON's.
+    let s = u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1);
+    assert_eq!(e.outsider_paid, (e.reservation - e.penalty) * s / 1000, "the bounty is the share of what the conviction collected");
+    assert!(
+        (e.sybil_gain + e.outsider_paid as i128) * 1000 <= (e.reservation as i128) * s as i128,
+        "every reporter together: at most the share of what the default and the conviction collected"
+    );
+}
+
+/// F-C4R3-02 on an OPV class: the same escape (it used to cost the colluders only RFC-0015's 10 % default burn). Fixed the same way.
+#[tokio::test]
+async fn g14_c4r3_opv_a_self_inflicted_default_must_not_erase_a_provable_fraud() {
+    kaspa_core::log::try_init_logger("warn");
+    let e = escape_by_self_default(World::opv().await, false).await;
+    eprintln!(
+        "[F-C4R3-02 opv] censored {} DAA; producer lost {}; colluding demander gained {}; outsider fee {}, bounty {}; convicted {}; {:?}",
+        e.censored_daa, e.producer_loss, e.sybil_gain, e.outsider_fee, e.outsider_paid, e.convicted, e.state
+    );
+    assert!(e.convicted, "a valid proof inside the claim's horizon convicts it (it was {:?})", e.state);
+    assert_eq!(e.outsider_fee, 0, "a true fraud proof never costs its filer the dismissal fee");
+    assert!(e.sybil_gain < e.producer_loss as i128, "the colluding demander recoups less than the default cost the producer");
+    // C4 F-C4R4-15: one reporter pool per claim — the bounty is the share of what the conviction collected (the reservation less
+    // the default's penalty), and the default's demanders plus the bounty stay within the share of everything collected. The
+    // honest accuser's residual dilution (the Sybil demander's part of the default's share) is ECON's.
+    let s = u64::from(PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1);
+    assert_eq!(e.outsider_paid, (e.reservation - e.penalty) * s / 1000, "the bounty is the share of what the conviction collected");
+    assert!(
+        (e.sybil_gain + e.outsider_paid as i128) * 1000 <= (e.reservation as i128) * s as i128,
+        "every reporter together: at most the share of what the default and the conviction collected"
+    );
+}
+
+// ---- GAP-R7: proof front-running (closed by the accuser seal) ------------------------------------------------------------
+
+/// **GAP-R7 (closed by the accuser seal, G14-R4; was an observation): a lifted proof pays its earliest sealer, never the copyist.**
+/// A `FileProof`'s proof bytes name no accuser: anyone who sees the honest outsider's carrier (every relay, every block producer)
+/// lifts the proof out of the PUBLIC carrier bytes, re-signs it under its own bond and gets it into a block first. Measured before
+/// the fix: the copyist was paid the whole bounty (500 KAS), the outsider's filing was a worth-0 `Duplicate`, and with the producer's
+/// own bond as the copyist the lie cost the colluders HALF its reservation. Now the outsider SEALS its proof first (kernel route
+/// object `SealProof`, tag 15 inside tag 110: `H(claim ‖ accuser ‖ H(proof))`), then files it; the copy — here lifted by the
+/// PRODUCER'S OWN BOND, the worst case — is included first and convicts, and the bounty goes to the earliest seal of those exact
+/// bytes: the outsider. SAFE property asserted: the sealer is paid the whole bounty, the copyist nothing, and the colluders lose the
+/// whole reservation.
+#[tokio::test]
+async fn g14_c4r3_gap_r7_a_lifted_proof_pays_its_earliest_sealer_not_the_copyist() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let before = w.net.collateral(0);
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let copyist = 0; // the colluders' own bond: the producer itself lifts the outsider's proof
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x7A);
+    // Seal, then reveal: the seal hides the proof and names its accuser.
+    let (kid, claim) = (w.net.kid(outsider), lie.id);
+    let seal = w.net.route(outsider, &K::SealProof { accuser: kid, claim, seal: proof_seal_v1(&claim, &kid, &proof) });
+    w.net.send(vec![(outsider, seal)]).await;
+    assert!(w.net.ledger().proof_seals.contains_key(&(lie.id, kid)), "the seal is on chain");
+    let honest = w.net.route(outsider, &K::FileProof { accuser: kid, claim, proof });
+    // What a mempool watcher sees: the honest carrier's object bytes. The proof is lifted from them, nothing else.
+    let Obj::KernelRouteV1 { bytes, .. } = &honest else { unreachable!() };
+    let K::FileProof { proof: lifted, .. } = K::decode(bytes).expect("public bytes decode") else { panic!("a FileProof") };
+    let copy = w.net.route(copyist, &K::FileProof { accuser: w.net.kid(copyist), claim, proof: lifted });
+    w.net.send(vec![(copyist, copy)]).await; // the copy wins inclusion
+    // (measured in the folding block, before the next coinbase pays the queue out)
+    let (sealer_paid, copyist_paid) = (w.net.owed(outsider), w.net.owed(copyist));
+    let pol = w.policy();
+    let bounty = pol.claim_collateral * u64::from(pol.accuser_reward_permille) / 1000;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "the copy convicts");
+    eprintln!("[GAP-R7] sealer paid {sealer_paid}, copyist paid {copyist_paid}, producer lost {}", before - w.net.collateral(0));
+    assert_eq!(sealer_paid, bounty, "the earliest sealer of the convicting bytes is paid the whole bounty");
+    assert_eq!(copyist_paid, 0, "the copyist is paid nothing");
+    assert_eq!(before - w.net.collateral(0), pol.claim_collateral, "the colluders lose the whole reservation (not half)");
+    assert!(w.net.ledger().proof_seals.is_empty(), "the conviction spent the claim's seals");
+    // The outsider's own filing, late, is a Duplicate: no second slash, no fee.
+    let outsider_collateral = w.net.collateral(outsider);
+    w.net.send(vec![(outsider, honest)]).await;
+    assert_eq!(w.net.collateral(outsider), outsider_collateral);
+    let z = w.net.replay().await;
+    w.net.assert_same(&z, "replay");
+}
+
+// ---- consensus robustness: the route's header and the next release -------------------------------------------------------
+
+/// The node is shut down and started again over the same database as the NEXT release: `edit` changes its parameters the way a
+/// release that schedules a further fence does (the parameter fingerprint moves; nothing in force moves).
+fn restart_as_next_release(w: World, db: std::sync::Arc<kaspa_database::prelude::DB>, edit: impl FnOnce(&mut Params)) -> World {
+    let World { net, fx, class, jobs } = w;
+    let Net { chain, config, bundle, premine, floats, funding, domain, rnd, _keep } = net;
+    let (simulated_time, nonce) = (chain.ctx.simulated_time, chain.nonce_for_reopen());
+    drop(chain);
+    let mut params = config.params.clone();
+    edit(&mut params);
+    let config = Config::new(params);
+    let mut resumed = config.clone();
+    resumed.process_genesis = false;
+    let (sender, receiver) = async_channel::unbounded();
+    let second = TestConsensus::with_db(db, &resumed, sender);
+    let chain = t12_reopened_chain(second, &resumed, &bundle, simulated_time, nonce);
+    let mut keep = _keep;
+    keep.push(Box::new(receiver));
+    let net = Net { chain, config, bundle, premine, floats, funding, domain, rnd, _keep: keep };
+    World { net, fx, class, jobs }
+}
+
+/// **F-C4R3-01 (P0 wherever the route is armed — latent: the fence is refused at every real height): the first release after
+/// activation that schedules ANY further fence halts every node that takes it.** The route's ledger policy binds
+/// `ruleset_digest = Params::consensus_params_id()`, the stored route header keeps it, and `ensure_route_header` refuses a stored
+/// route "folded under another policy". But `consensus_params_id` hashes every SCHEDULED fence (that is how the int-13 re-pin moved
+/// testnet-12's from `5ee7fd8e…` to `2e567642…` with nothing in force changing). So the upgraded node's closing tick fails on the
+/// first block with a live claim or demand — the block is invalid for it — while un-upgraded nodes accept it: a split at the binary
+/// swap, not at any height. SAFE property asserted: a release that schedules an unrelated future fence keeps folding the route and
+/// the outsider still convicts.
+#[tokio::test]
+async fn g14_c4r3_a_release_that_schedules_an_unrelated_fence_keeps_the_route_folding() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    kaspa_core::log::try_init_logger("warn");
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over(|c| TestConsensus::with_db(db.clone(), c, sender));
+    net._keep.push(Box::new(receiver));
+    let mut w = World::on(net).await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x01);
+    let id_before = w.net.config.params.consensus_params_id();
+    let sink = w.net.chain.sink();
+
+    // The next release schedules an unrelated fence far in the future (any flag-day release does this).
+    let mut w = restart_as_next_release(w, db.clone(), |p| p.palw_signed_registration_v1 = Some(ForkActivation::new(1_000_000)));
+    assert_ne!(w.net.config.params.consensus_params_id(), id_before, "the release moved the parameter fingerprint");
+    assert_eq!(w.net.chain.sink(), sink);
+    // It carries on: a block over the live claim folds, and the outsider's proof convicts.
+    w.proof(outsider, &lie.id, proof).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "the upgraded node still folds the route");
+}
+
+// ---- OPV: one global live-claim cap ---------------------------------------------------------------------------------------
+
+/// **F-C4R3-05 (P2 DoS, OPV lane capture).** RFC-0015's `max_live_claims_total` was ONE network-wide counter, a claim counted while
+/// its reservation was held — through the window AND the whole liability horizon (≈ 250 DAA at the interim terms) — and admission was
+/// free. So `⌈total / per_producer⌉` bonds (11 at the interim 32 / 3) filled the lane with HONEST claims on jobs they posted
+/// themselves, and every other producer's OPV claim was refused for as long as they kept refilling. The harness has eight cards, so
+/// the cap is scaled (total 6, per producer 3: two occupying bonds); the relation is the same. **Fixed (G14-R4)**: only PRE-FINAL
+/// claims hold admission slots, a producer with no pre-Final claim is always admitted by the total (no set of bonds holds the lane
+/// against another; the per-producer cap still bounds each bond), and every admission burns a non-refundable fee. SAFE property
+/// asserted: an honest producer outside the occupiers can still get an OPV claim admitted.
+#[tokio::test]
+async fn g14_c4r3_opv_two_bonds_must_not_be_able_to_hold_the_whole_opv_lane() {
+    kaspa_core::log::try_init_logger("warn");
+    opv_test_eligible(&opv_admitted());
+    let mut fence = PalwPanelFreeFenceV1::interim_v1(ForkActivation::new(1), Vec::new());
+    fence.economics.max_live_claims_total = 6;
+    fence.economics.max_live_claims_per_producer = 3;
+    let mut w = World::on_opv(Net::over_cfg(kernel_config_with(Some(fence)), TestConsensus::new)).await;
+    let mut held = Vec::new();
+    for occupier in [2usize, 3] {
+        for _ in 0..3 {
+            let job = w.job().await;
+            held.push(w.claim(occupier, &job, false).await);
+        }
+    }
+    let ledger = w.net.ledger();
+    assert_eq!(ledger.opv_live_counts(&w.net.kid(2)).1, 6, "six live OPV claims: the lane is full");
+    let job = w.job().await;
+    // An honest producer outside the occupiers now tries.
+    let honest = w.claim_with(4, &job, false, Delivery::Direct).await;
+    let admitted = w.net.ledger().claims.contains_key(&honest.id);
+    let (_, view) = opv_view(&w, &held[0].id);
+    eprintln!(
+        "[F-C4R3-05] lane full: honest claim admitted = {admitted}; an occupier's slot frees only at Final + liability (Final {} , liability {} DAA)",
+        view.final_floor_daa,
+        w.policy().liability_daa
+    );
+    assert!(admitted, "an honest producer outside two occupying bonds can still have an OPV claim admitted");
+    let ledger = w.net.ledger();
+    assert_eq!(ledger.opv_open_counts(&w.net.kid(4)), (1, 7), "past the total by exactly its first claim");
+    // Its second is refused while the occupiers hold the total; and an occupier at its per-producer cap is refused as before.
+    let job = w.job().await;
+    let second = w.claim_with(4, &job, false, Delivery::Direct).await;
+    assert!(!w.net.ledger().claims.contains_key(&second.id), "the total binds a producer that already holds a pre-Final claim");
+}
+
+/// **F-C4R3-01, second instance (G-RULESET, tag 108).** The envelope must name `Params::consensus_params_id`, which moves with every
+/// SCHEDULED fence. During a rollout the fleet runs two builds that differ only in a future fence (exactly what the handshake keeps
+/// as peers, M1-6): an envelope signed for the old build's id is registered by old nodes and dropped by upgraded ones, so the two
+/// compute different PALW roots for the same block and the upgraded node disqualifies it — a split at the binary swap, at no height.
+/// SAFE property asserted: a node of the next release (one more fence, far in the future) follows the same chain.
+/// **Fixed (OB-P0)**: the envelope names the fork-id fired digest at a DAA its signer states, never `consensus_params_id`.
+#[tokio::test]
+async fn g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_in_a_future_fence() {
+    kaspa_core::log::try_init_logger("warn");
+    let f = onb_fixture(11);
+    let mut net = Net::over_cfg(kernel_config_onboarding(), TestConsensus::new);
+    net.beat_to(1).await;
+    let registrant = 1usize;
+    let params_id = net.config.params.consensus_params_id();
+    let class_obj = net.v2_registration(&f, registrant, net.daa() + 30);
+    let Obj::ClassRegisteredTirV1 { class_id: v2_class, .. } = &class_obj else { unreachable!() };
+    let v2_class = *v2_class;
+    let now = net.daa();
+    let envelope = net.envelope(registrant, class_obj, now, now + 200, net.fork_digest_at(now));
+    net.send(vec![(registrant, envelope)]).await;
+    assert!(net.chain.tip_state().1.class(&v2_class).is_some(), "the old build registered the class through the envelope");
+    // The next chain block commits the root of that state (a header commits its selected parent's root).
+    let ttpb = net.ttpb();
+    net.chain.heartbeat(ttpb, Vec::new()).await;
+    // The next release: the same rules in force, one more fence scheduled far ahead.
+    let mut next = net.config.params.clone();
+    next.palw_receipt_spend_v4 = Some(ForkActivation::new(1_000_000));
+    assert_ne!(next.consensus_params_id(), params_id);
+    assert_eq!(next.consensus_identity_id(), net.config.params.consensus_identity_id(), "the handshake keeps the two builds as peers");
+    let upgraded = t12_genesis_chain(&Config::new(next), &net.bundle, &net.premine, &net.floats);
+    for b in chain_blocks(&net.chain, net.chain.sink()) {
+        arrive(&upgraded, b, "a block of the old build").await;
+    }
+    eprintln!(
+        "[F-C4R3-01 envelope] upgraded sink == old sink: {}; class registered on the upgraded node: {}; PALW roots equal: {}",
+        upgraded.sink() == net.chain.sink(),
+        upgraded.tip_state().1.class(&v2_class).is_some(),
+        upgraded.tip_state().1.state_root() == net.chain.tip_state().1.state_root()
+    );
+    assert_eq!(upgraded.sink(), net.chain.sink(), "the upgraded node follows the chain the old build produced");
+    assert_eq!(upgraded.tip_state().1.state_root(), net.chain.tip_state().1.state_root(), "and agrees about its PALW state");
+}
+
+// ---- censorship: the chunk lane ---------------------------------------------------------------------------------------------
+
+/// **F-C4R3-03 (P1 wherever the route is armed): the colluders held every chunked prosecution off the chain for 4,000 DAA with 8
+/// junk chunks.** Every kernel object larger than one carrier — a real class's `FileProof`, a position `Respond`, an onboarding
+/// refutation — rode `ObjectChunk`s, and the chunk lane is ONE network-wide table of `PALW_OBJECT_CHUNK_MAX_GROUPS` = 8 half-assembled
+/// groups, each held until `PALW_OBJECT_CHUNK_TTL_DAA` = 4,000 DAA unless completed. A chunk is unsigned and anyone may open a group:
+/// eight one-part junk groups (8 × the flat 0.2 KAS slot rent, ADR-0075 SA-1 — a price, not the deposit SA-1 asked for) and no new
+/// group opens anywhere. The lie's window (50 DAA) and its whole liability horizon (200 DAA) passed inside that; the outsider's chunked
+/// proof never opened a group. (The fixture's proof fits one carrier, so it is cut at 1 KiB here to stand for a real class's.)
+///
+/// **Fixed (G14-R4): G14 prosecution objects have the route's OWN chunk lane** (`KernelRouteChunkV1`, tag 113, aux table 41): a group
+/// is keyed by the bond that SIGNS its chunks, each bond holds at most two groups backed by a deposit forfeited if the group never
+/// completes, and a group never outlives its target's deadline. The colluders still fill the certification lane's eight slots AND
+/// their own bonds' rooms in the new lane; the outsider's proof rides its own room and convicts. SAFE property asserted: a chunked
+/// proof filed inside the horizon convicts.
+#[tokio::test]
+async fn g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain() {
+    use kaspa_consensus_core::palw_kernel_route_v1::{
+        PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1, PalwKernelChunkTargetV1, PalwKernelChunkV1,
+    };
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let ClaimStateV1::ProbabilisticPass { window_end_daa, .. } = w.net.claim_state(&lie.id) else { panic!("covered") };
+    let pol = w.policy();
+    // The colluders fill the network's chunk table: eight one-part junk groups, two parts declared, never completed.
+    let junk_groups: Vec<Hash64> = (0..8u64).map(|g| Hash64::from_u64_word(0xC4C4_0000 + g)).collect();
+    let mut junk = Vec::new();
+    for (i, group) in junk_groups.iter().enumerate() {
+        let card = [0usize, 1, 2, 3][i % 4]; // any funded key: a chunk is unsigned
+        junk.push((card, Obj::ObjectChunk { group: *group, index: 0, count: 2, bytes: vec![i as u8; 32] }));
+    }
+    // ... and every colluding bond (the producer and the Panel's seats) fills its own room in the route's lane too.
+    let colluders: Vec<usize> = std::iter::once(0).chain(seats.iter().copied()).collect();
+    for (k, card) in colluders.iter().enumerate() {
+        for g in 0..PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1 as u64 {
+            let chunk = PalwKernelChunkV1 {
+                opener: w.net.bond(*card),
+                group: Hash64::from_u64_word(0xC4C4_1000 + 16 * k as u64 + g),
+                target: PalwKernelChunkTargetV1::Claim(lie.id),
+                index: 0,
+                count: 2,
+                bytes: vec![g as u8; 32],
+            };
+            junk.push((*card, w.net.sign_chunk(*card, chunk)));
+        }
+    }
+    w.net.send(junk).await;
+    let held = junk_groups.iter().filter(|g| w.net.chain.tip_state().1.pending_chunk_group(g).is_some()).count();
+    assert_eq!(held, 8, "the junk holds every pending-chunk slot");
+    let route = w.net.chain.tip_state().1.kernel_route().cloned().expect("the route");
+    assert!(colluders.iter().all(|c| route.chunk_groups_of_v1(&w.net.bond(*c)) == PALW_KERNEL_CHUNK_GROUPS_PER_BOND_V1));
+
+    // The outsider's (chunked) proof, through the route's own lane, in its own room; sent at once and again each 40 DAA if need be.
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x3C);
+    let horizon = window_end_daa + pol.liability_daa;
+    let mut attempts = 0;
+    while w.net.daa() <= horizon && !w.net.ledger().claims[&lie.id].convicted {
+        let o = w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof: proof.clone() });
+        let chunks = w.net.kernel_chunks(outsider, &o, PalwKernelChunkTargetV1::Claim(lie.id), 1024);
+        assert!(chunks.len() >= 2, "a genuinely chunked proof");
+        w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
+        attempts += 1;
+        let target = w.net.daa() + 40;
+        w.net.beat_to(target.min(horizon + 1)).await;
+    }
+    eprintln!(
+        "[F-C4R3-03] {attempts} chunked attempts between DAA {} and the horizon {horizon}: convicted = {}; claim {:?}",
+        window_end_daa - pol.challenge_window_daa,
+        w.net.ledger().claims[&lie.id].convicted,
+        w.net.claim_state(&lie.id)
+    );
+    assert!(w.net.ledger().claims[&lie.id].convicted, "a chunked proof filed inside the horizon convicts");
+    assert_eq!(attempts, 1, "at the first attempt: the junk never touched the outsider's room");
+}
+
+/// Control for F-C4R3-03: the same 1 KiB-chunked proof convicts when the chunk lane is free (so the failure above is the lane's).
+#[tokio::test]
+async fn g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free() {
+    kaspa_core::log::try_init_logger("warn");
+    let mut w = World::new().await;
+    let job = w.job().await;
+    let lie = w.claim(0, &job, true).await;
+    let seats = w.seats(&lie.id);
+    w.cover(&lie.id).await;
+    let outsider = w.outsiders(&lie, &seats, 1)[0];
+    let proof = w.prosecution(&lie.id, &lie.published(&w.fx, &[]), 0x3C);
+    let o = w.net.route(outsider, &K::FileProof { accuser: w.net.kid(outsider), claim: lie.id, proof });
+    let chunks = kaspa_consensus_core::palw_state_v2::palw_object_chunks_with_cap_v1(&o, 1024).unwrap().expect("chunked");
+    assert!(chunks.len() >= 2);
+    w.net.send(chunks.into_iter().map(|c| (outsider, c)).collect()).await;
+    assert!(w.net.ledger().claims[&lie.id].convicted, "a chunked proof convicts when the lane is free");
+}
+
+/// **Lane g14-court-capacity-r2: the kernel route's claim door reads `palw_detection_policy_v1`** (g14-detection-policy §10 item 2).
+/// The route's harness with the detection fence armed at genesis and NO policy for the class (armed without its validation, as the
+/// route's own fence): the class registers and its job posts, but a claim's sealed reveal is dropped at the route's door — no claim,
+/// so no reward, weight or consensus credit, and nothing for a seat to sign. Below the fence (every other test here) claims commit.
+#[tokio::test]
+async fn g14r2_a_kernel_claim_of_a_class_without_a_detection_policy_is_dropped() {
+    kaspa_core::log::try_init_logger("warn");
+    let (config, _, premine, floats) = kernel_config();
+    let mut params = config.params.clone();
+    params.palw_detection_policy_v1 = Some(kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyFenceV1 {
+        activation: ForkActivation::new(0),
+        policies: Vec::new(),
+    });
+    params.sync_palw_detection_policy_v1();
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        unreachable!("testnet-12 is ConsensusV2")
+    };
+    let bundle = bundle.clone();
+    assert!(bundle.state.detection_policy_v1().is_some(), "the fold reads the mirror");
+    let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
+    let job = w.job().await;
+    let claim = w.claim_with(0, &job, false, Delivery::Direct).await;
+    assert!(!w.net.ledger().claims.contains_key(&claim.id), "past the detection fence a class with no policy takes no kernel claim");
+}
+
+/// **Lane g14-court-capacity-r2: a plain kernel claim meets the policy's FULL plan, its N from its priced structure** (its evaluated
+/// positions: `commitments.len()`, at its job's stream `prompt + generated − 1`). The same job and claim, three networks: a policy
+/// whose honest cost the route's per-claim collateral covers — the claim commits; a policy whose deterrence bound the collateral does
+/// not meet — dropped (no claim); a policy whose `n_max` is below the claim's N — dropped.
+#[tokio::test]
+async fn g14r2_a_plain_kernel_claim_meets_its_policys_full_plan() {
+    kaspa_core::log::try_init_logger("warn");
+    // The class id and the claim's facts on a network without the fence (the fixture is deterministic).
+    let probe = World::new().await;
+    let class = Hash64::from_bytes(probe.class);
+    let collateral = probe.policy().claim_collateral;
+    drop(probe);
+    let run = |policy: kaspa_consensus_core::palw_detection_policy_v1::PalwDetectionPolicyV1| async move {
+        let mut w = World::on(Net::over_cfg(with_detection_policies(kernel_config(), vec![policy]), TestConsensus::new)).await;
+        let job = w.job().await;
+        let claim = w.claim_with(0, &job, false, Delivery::Direct).await;
+        let positions = (job.prompt.len() + job.max_new_tokens as usize).saturating_sub(1);
+        (w.net.ledger().claims.contains_key(&claim.id), positions)
+    };
+    let (committed, n) = run(kernel_detection_policy(class, 1)).await;
+    eprintln!("[g14r2 kernel] plain claim: N = {n} positions, route collateral {collateral}");
+    assert!(committed, "a policy the collateral meets admits the claim");
+    let (committed, _) = run(kernel_detection_policy(class, collateral)).await;
+    assert!(!committed, "collateral below the deterrence bound: dropped");
+    let mut narrow = kernel_detection_policy(class, 1);
+    narrow.n_max = u32::try_from(n).unwrap() - 1;
+    let (committed, _) = run(narrow).await;
+    assert!(!committed, "N above n_max: dropped");
+}
+

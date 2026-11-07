@@ -1,0 +1,144 @@
+{
+ "encoder.block.0.layer.0.SelfAttention.k.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.0.layer.0.SelfAttention.o.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.0.layer.0.SelfAttention.q.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8,
+   4
+  ]
+ },
+ "encoder.block.0.layer.0.SelfAttention.v.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.0.layer.0.layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.block.0.layer.1.DenseReluDense.wi_0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "encoder.block.0.layer.1.DenseReluDense.wi_1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "encoder.block.0.layer.1.DenseReluDense.wo.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "encoder.block.0.layer.1.layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.block.1.layer.0.SelfAttention.k.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.1.layer.0.SelfAttention.o.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.1.layer.0.SelfAttention.q.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.1.layer.0.SelfAttention.v.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.block.1.layer.0.layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.block.1.layer.1.DenseReluDense.wi_0.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "encoder.block.1.layer.1.DenseReluDense.wi_1.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "encoder.block.1.layer.1.DenseReluDense.wo.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "encoder.block.1.layer.1.layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.final_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "shared.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ }
+}

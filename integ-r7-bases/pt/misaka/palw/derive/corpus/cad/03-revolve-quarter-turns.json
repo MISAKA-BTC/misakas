@@ -1,0 +1,29 @@
+{
+  "v": 1,
+  "frac_bits": 0,
+  "sketches": {
+    "profile": [
+      [
+        2,
+        0
+      ],
+      [
+        6,
+        0
+      ],
+      [
+        6,
+        4
+      ],
+      [
+        2,
+        4
+      ]
+    ]
+  },
+  "solid": {
+    "op": "revolve",
+    "sketch": "profile",
+    "segments": 4
+  }
+}

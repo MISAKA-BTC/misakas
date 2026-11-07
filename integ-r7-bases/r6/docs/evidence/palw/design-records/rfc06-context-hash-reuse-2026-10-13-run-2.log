@@ -1,0 +1,9 @@
+
+running 1 test
+[rfc06-step-hash] cache_bytes=200
+[rfc06-step-hash] version=2 leaves=100000 canonical_us=241170 cached_us=59219
+[rfc06-step-hash] version=3 leaves=100000 canonical_us=197763 cached_us=63737
+test tests::cached_hashing_measurement_preserves_every_leaf_and_merkle_root ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.85s
+

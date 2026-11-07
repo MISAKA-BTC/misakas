@@ -1,0 +1,16 @@
+
+running 11 tests
+test palw_filer_false_valid::tests::the_filer_is_armed_past_rcore_plus_on_a_carrying_node_only ... ok
+test palw_filer_false_valid::tests::the_panel_notes_proofs_and_runs_the_step_where_it_should ... ok
+test palw_filer_false_valid::tests::the_book_is_bounded ... ok
+test palw_filer_false_valid::tests::a_replay_filers_executor_refuted_is_noted_as_the_claims_proof ... ok
+test palw_filer_false_valid::tests::the_door_hands_the_filing_to_the_reporter_filer_once_and_it_commits_first ... ok
+test palw_filer_false_valid::tests::a_filing_is_handed_to_the_reporter_filer_a_bounded_number_of_times ... ok
+test palw_filer_false_valid::tests::a_filed_signer_is_left_alone_while_in_flight_and_then_the_chain_decides ... ok
+test palw_filer_false_valid::tests::a_conviction_is_watched_until_final_and_a_reorg_that_takes_it_is_filed_again ... ok
+test palw_filer_false_valid::tests::a_filing_the_chain_now_refuses_is_left_to_the_filer_and_then_the_chain_decides ... ok
+test palw_filer_false_valid::tests::no_answer_but_a_decline_a_final_conviction_or_the_send_budget_settles_a_seat ... ok
+test palw_filer_false_valid::tests::the_scan_admits_only_what_the_chain_relied_on_and_files_the_liable_seats ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 597 filtered out; finished in 0.19s
+

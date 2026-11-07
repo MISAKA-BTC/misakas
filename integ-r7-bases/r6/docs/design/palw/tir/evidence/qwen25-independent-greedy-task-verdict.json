@@ -1,0 +1,142 @@
+{
+  "schema": "misaka.rfc02.independent-greedy-task-verdict.v1",
+  "date": "2026-10-11",
+  "base_commit": "4d8b6438f",
+  "verdict": "ACTUAL_INDEPENDENT_FREE_RUNNING_DIAGNOSTIC_FAILED_FIXED_THRESHOLDS_FULL_RFC02_INCOMPLETE",
+  "goal_status": "active",
+  "full_rfc02_complete": false,
+  "frozen_protocol": "docs/design/palw/tir/evidence/qwen25-independent-greedy-task-protocol.json",
+  "protocol_sha256": "c0909ad72a242093424e9974d7b61f3c72ed50196d9c2a68f549234018b4a998",
+  "checkpoint": {
+    "repository": "Qwen/Qwen2.5-1.5B-Instruct",
+    "revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+    "context": 32,
+    "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+    "source_manifest_sha256": "0c45f44e969b7c226d3fb8444ac5dff91c8d98001127cc2dcae8749c251994a3",
+    "tokenizer_sha256": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539"
+  },
+  "input_and_output": {
+    "jobs": 3,
+    "requested_new_tokens_per_job": 8,
+    "total_fed_positions": 75,
+    "generated_tokens": 24,
+    "eos_semantics": "Exact requested generation count; first EOS used only for display/scoring, never an early execution stop. Each implementation feeds its own generated tokens, not source reference tokens."
+  },
+  "predeclared_thresholds": {
+    "generated_token_agreement_min": 0.95,
+    "exact_generated_job_fraction_min": 0.6666666666666666,
+    "both_source_and_integer_task_answer_fraction_min": 1.0
+  },
+  "observed": {
+    "generated_token_agreement": 0.9166666666666666,
+    "exact_generated_job_fraction": 0.6666666666666666,
+    "source_task_answer_fraction": 0.3333333333333333,
+    "integer_task_answer_fraction": 0.3333333333333333,
+    "predeclared_free_running_fidelity_passed": false,
+    "predeclared_task_answers_passed": false,
+    "predeclared_generation_and_answer_thresholds_met": false
+  },
+  "failures_retained": [
+    "Arithmetic fixed8 output disagrees at indexes6/7 after both implementations already emitted EOS at1; the full24-output denominator is retained.",
+    "Translation source and integer both output Hello. instead of the frozen exact expected Hello; punctuation was not removed to claim pass.",
+    "Code source and integer both exhaust eight requested tokens without EOS and output an incomplete fenced expression; neither is a complete accepted task."
+  ],
+  "commands": [
+    {
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo build --locked -p misaka-palw-sdk --example check-source-checkpoint-generation",
+      "exit_code": 0,
+      "build_seconds": 96
+    },
+    {
+      "command": "HF_HUB_OFFLINE=1 /usr/bin/time -l /tmp/rfc02-source-reference-venv/bin/python misaka-palw-tir-lower/tools/hf_checkpoint_generation.py /Users/wata/Downloads/Qwen2.5-1.5B-Instruct docs/design/palw/tir/evidence/qwen25-real-pilot-protocol.json docs/design/palw/tir/evidence/qwen25-independent-greedy-task-protocol.json /tmp/rfc02-qwen25-independent-greedy-source.json",
+      "exit_code": 0,
+      "whole_process_wall_seconds": 15.62,
+      "whole_process_max_rss_bytes": 6367248384
+    },
+    {
+      "command": "/usr/bin/time -l /tmp/rfc02-greedy-generation-integer-binary /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/qwen25-32.palwtir /tmp/rfc02-qwen25-independent-greedy-source.json docs/design/palw/tir/evidence/qwen25-independent-greedy-task-protocol.json",
+      "exit_code": 1,
+      "whole_process_wall_seconds": 206.33,
+      "whole_process_max_rss_bytes": 1974124544
+    },
+    {
+      "command": "/tmp/rfc02-source-reference-venv/bin/python misaka-palw-tir-lower/tools/score_checkpoint_generation.py /Users/wata/Downloads/Qwen2.5-1.5B-Instruct docs/design/palw/tir/evidence/qwen25-real-pilot-protocol.json docs/design/palw/tir/evidence/qwen25-independent-greedy-task-protocol.json /tmp/rfc02-qwen25-independent-greedy-source.json /tmp/rfc02-qwen25-independent-greedy-integer-result.json /tmp/rfc02-qwen25-independent-greedy-task-score.json",
+      "exit_code": 1
+    },
+    {
+      "command": "python3 -m unittest discover -s misaka-palw-tir-lower/tools -p test_hf_checkpoint_generation.py -v",
+      "exit_code": 0,
+      "passed": 4,
+      "runtime_seconds": 0.001
+    }
+  ],
+  "compiled_sources": {
+    "direct_source_pins": {
+      "misaka-palw-sdk/examples/check-source-checkpoint-generation.rs": "0b8ffba7c544769b698b69968d077bbe5a35e626654f05a0fbfc2b6c0932a74e",
+      "misaka-palw-tir-lower/tools/hf_checkpoint_generation.py": "4988cdddbd926ab75af3b23fec9637c413fa4b28401237753574982c4fdfce85",
+      "misaka-palw-tir-lower/tools/score_checkpoint_generation.py": "d34796b389a11ea8ff94d9d2631ea9594963cb9c23987c3fe6af6210a327218d",
+      "misaka-palw-tir-lower/tools/test_hf_checkpoint_generation.py": "6892b9a21cc32a3206a7e8d63117064f81fc4876822a850d17e2e9437dfa7460",
+      "docs/design/palw/tir/evidence/qwen25-independent-greedy-task-protocol.json": "c0909ad72a242093424e9974d7b61f3c72ed50196d9c2a68f549234018b4a998",
+      "/tmp/rfc02-greedy-generation-integer-binary": "3e698c107d102700efdd8ac3b92035d03b2dab08498321ce249c5664cf26079a"
+    },
+    "binary": "/tmp/rfc02-greedy-generation-integer-binary",
+    "binary_sha256": "3e698c107d102700efdd8ac3b92035d03b2dab08498321ce249c5664cf26079a",
+    "existing_python_pin_helper": "misaka-palw-tir-lower/tools/hf_checkpoint_reference.py",
+    "pin_helper_sha256": "b76a7afc0a23386e8923f83a73f9cb6f76549c8dc9e268456045007d6d767253",
+    "scope": "Example built during parallel native7/point9 work before later court9/detect9/replay9/resource10/settlement changes. Direct four source files/protocol/binary frozen above. Local TirExecutor and mapped integer execution are used; no native consumer or new resource module is executed. This is not a uniform build receipt for other concurrent work."
+  },
+  "scope_limits": [
+    "One actual pinned BF16 checkpoint, float32 eager CPU HF reference and mapped integer artifact, three short context32 finite jobs only.",
+    "Independent HF source executes full source model without local HL reference; before/after source SHA and integer artifact SHA are checked. Claimed revision label is not independently authenticated by these offline tools.",
+    "Declared payload/preallocation limits do not certify total Torch/Rust allocator RSS, proof/retention/transport fees or production throughput.",
+    "No complete task benchmark, maximum context32768, media/H graph/native execution, honest Final, cohort denominator or A6/A8 coverage is established.",
+    "91.6667% generated token agreement is a different diagnostic metric from model A6/A8; it fails this frozen95% threshold and cannot be substituted for requested90% cohort acceptance."
+  ],
+  "artifacts": [
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-source.json",
+      "bytes": 3583,
+      "sha256": "5335311c3ee8a318ecfc1e0f49af84d3ad70b91360c7cd07ff5a658c89c7aaeb"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-integer-result.json",
+      "bytes": 1774,
+      "sha256": "ec3f35125cca087a3ce2558f464d6e3956eb4ebd3fe6fc2e47e0be1aceb029ce"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-task-score.json",
+      "bytes": 3706,
+      "sha256": "e5c01020d1a05b37bb88c1565d1c6ea361e79ced25f8fe3949d5e8663f773f2b"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-source-run.log",
+      "bytes": 895,
+      "sha256": "57d8199c5340c57c3835ef6b12476f84fadfcccc142e827dad3e6a138d4aa5b3"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-integer-run.log",
+      "bytes": 965,
+      "sha256": "fefe2f4a4bee75f2cc115fdaca3f5c19d9cf789b26260a01f6576d1adcc5b7af"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-task-score-run.log",
+      "bytes": 329,
+      "sha256": "9d8a3f4ef81669431122b3b6d1428cfc57aa999fec2a5d9ca7e598c53d2b536d"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-preallocation-tests.log",
+      "bytes": 652,
+      "sha256": "5d9354b0e9a2239299eb3d67b4f2f6a0cdbf7e7a9bbc7976447a770d9470ed27"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-integer-build.log",
+      "bytes": 10706,
+      "sha256": "29f4cc9023c7042dab19faed3453dc6fa373fa37409246b8aa62cf65cb73a80b"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-independent-greedy-source-preimages.json",
+      "bytes": 799,
+      "sha256": "56a4a4121319b71c5a13a89eb24056e163337993b9bcaa74ba01238d0a512767"
+    }
+  ]
+}

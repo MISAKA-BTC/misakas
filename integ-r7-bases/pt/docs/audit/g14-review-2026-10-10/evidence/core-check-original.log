@@ -1,0 +1,32 @@
+    Checking kaspa-consensus-core v1.1.0 (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/consensus/core)
+error[E0560]: struct `palw_kernel_route_v1::PalwKernelRouteStateV1` has no field named `ledger_cache`
+   --> consensus/core/src/palw_kernel_route_v1.rs:717:89
+    |
+717 |         let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() };
+    |                                                                                         ^^^^^^^^^^^^ `palw_kernel_route_v1::PalwKernelRouteStateV1` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+error[E0433]: failed to resolve: use of undeclared type `KernelLedgerCacheV1`
+   --> consensus/core/src/palw_kernel_route_v1.rs:717:103
+    |
+717 |         let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() };
+    |                                                                                                       ^^^^^^^^^^^^^^^^^^^
+    |                                                                                                       |
+    |                                                                                                       use of undeclared type `KernelLedgerCacheV1`
+    |                                                                                                       help: a struct with a similar name exists: `KernelLedgerV1`
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0433, E0560.
+For more information about an error, try `rustc --explain E0433`.
+warning: `kaspa-consensus-core` (lib) generated 1 warning
+error: could not compile `kaspa-consensus-core` (lib) due to 2 previous errors; 1 warning emitted

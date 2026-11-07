@@ -1,0 +1,120 @@
+{
+  "package": "palw-scalable-court-rfc-v2",
+  "created_date": "2026-10-19",
+  "status": "DRAFT_NOT_IMPLEMENTED_NOT_ARMED",
+  "entrypoint": "RFC-DRAFT-palw-scalable-objective-court-v2.md",
+  "source_snapshot_sha256": "136f95326e9831f7778b9f8e73028c12b1f8f8ae00468b22770f8e54bec4c512",
+  "verification": {
+    "arithmetic_and_toy_tests_passed": 27,
+    "node_e2e_executed": false,
+    "rust_compiled": false,
+    "production_performance_measured": false
+  },
+  "files": [
+    {
+      "path": "ADR-DRAFT-scalable-court-v2.md",
+      "bytes": 5521,
+      "sha256": "e1f7cbdba99e2d5657d365c018c08538de347565f5ba50bf6c54165f6b03edbd"
+    },
+    {
+      "path": "README.md",
+      "bytes": 4091,
+      "sha256": "73132319c1e0f6882d603b4776903183f83f3459aa7fea720c6d79d58e53b23e"
+    },
+    {
+      "path": "RFC-DRAFT-palw-scalable-objective-court-v2.md",
+      "bytes": 55346,
+      "sha256": "39b4a5b1a75a97bfddfb4144716cfd76f5516d69123dfd60b02292a27f393235"
+    },
+    {
+      "path": "arithmetic-test-results.txt",
+      "bytes": 2588,
+      "sha256": "e6480ac5e50cf680f1b7c9adf42661db57e0048138a6869f2e9a77178c1f462f"
+    },
+    {
+      "path": "arming-record.template.json",
+      "bytes": 1896,
+      "sha256": "26332040d6688d892005d5992c9275d8285e5652c6c3309d64c39848898c9241"
+    },
+    {
+      "path": "capacity-report.json",
+      "bytes": 3264,
+      "sha256": "0da83e6a99496d909d8e2e7f27153a6c8932e06b67eb880bc3ba464ee50743ae"
+    },
+    {
+      "path": "capacity_planner.py",
+      "bytes": 9473,
+      "sha256": "ec57a30a50e24ce96c97788f58fcd263576341345067fe0adf35806d46ff57d0"
+    },
+    {
+      "path": "package-checks.txt",
+      "bytes": 323,
+      "sha256": "121c7b0d7435553cb5502f24f61444eee1e4f02c8af7e11951c2eec06ad87a49"
+    },
+    {
+      "path": "reference-v1/ADR-DRAFT-palw-court-door-3200.md",
+      "bytes": 6306,
+      "sha256": "8af182cadb8d6daacd4e7fd684dd494ad7227c107409cf1e3597180a4c1bd473"
+    },
+    {
+      "path": "reference-v1/README.md",
+      "bytes": 2351,
+      "sha256": "c7c9225e4a80579886cb78820844bcdc9061b69c42b15e9ebfb8c6e63f1028ca"
+    },
+    {
+      "path": "reference-v1/RFC-DRAFT-palw-court-door-3200.md",
+      "bytes": 41818,
+      "sha256": "c7eb026b46429e10a054a791f31d69b838cb0a4353d88c3cbd8b25e6d9645b58"
+    },
+    {
+      "path": "reference-v1/budget-self-test.txt",
+      "bytes": 734,
+      "sha256": "01bce0a6af2a47d257e010e393347b8ecc25371672bc2cd7832a787fcb120522"
+    },
+    {
+      "path": "reference-v1/budget-template-report.json",
+      "bytes": 12577,
+      "sha256": "057ee1183b0936d4711284b049cb1fcf989bc7d4aa1cf9c8a2faeefecf6b064b"
+    },
+    {
+      "path": "reference-v1/delta-plan-report.json",
+      "bytes": 1021,
+      "sha256": "7eaf227d29582a28855f00864702ebb023619895d30c86f5b9093f53ab6ce120"
+    },
+    {
+      "path": "reference-v1/door-budget.template.json",
+      "bytes": 9236,
+      "sha256": "4a6a39f01b1cab6fc2c8c9d6d3ce5252d930dbe1d306a48155ebec31abab10fa"
+    },
+    {
+      "path": "reference-v1/door_budget.py",
+      "bytes": 15361,
+      "sha256": "1143c57b5ddc3a9bc52955d216c91dcfb5eb60aa241a4b566e60c127d1ccb108"
+    },
+    {
+      "path": "reference-v1/geometry-report.json",
+      "bytes": 843,
+      "sha256": "86e16f0b8a165c9432a79756cfa39861ea787c62de1bab7e27d8e42419d9a6d7"
+    },
+    {
+      "path": "reference-v1/repository-scan.json",
+      "bytes": 787,
+      "sha256": "d89b5547f696d6925dc785b91313e8aecb570fa1db2708ca7b731d112ccbb42a"
+    },
+    {
+      "path": "reference-v1/source-audit.md",
+      "bytes": 67732,
+      "sha256": "afc1b6dd56a1e2841d282797049d7f48badb2b7bad90844d0684281aabd65b95"
+    },
+    {
+      "path": "source-audit-v2.md",
+      "bytes": 26717,
+      "sha256": "28c56a1f7a98df72cde886f16a00f7a9a33fc5e776f60ab919baf67523253d14"
+    },
+    {
+      "path": "test_capacity_planner.py",
+      "bytes": 4866,
+      "sha256": "9694b6cf5fb01f5a308df337d5e91f4662469a04d75abb2f22ff1cbaf2c9e553"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+diff --git a/contrib/t12-deploy-kit/lib.sh b/contrib/t12-deploy-kit/lib.sh
+index 1efe44a39..f4fd5fc55 100755
+--- a/contrib/t12-deploy-kit/lib.sh
++++ b/contrib/t12-deploy-kit/lib.sh
+@@ -557,8 +557,15 @@ cgroup_memory() {
+     pid=$(systemctl show -p MainPID --value "$u"); rss_kb=$(awk '/VmRSS/{print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
+     say "  cgroup: memory.max $([ "$max" = max ] && echo none || echo "$((max / 1048576)) MiB"), current $((cur / 1048576)) MiB (anon $((anon / 1048576)), file/page cache $((file / 1048576))), process RSS $((${rss_kb:-0} / 1024)) MiB"
+     if [ "$max" != max ]; then
++        # 10-01: kaspad frees memory with MADV_FREE (mimalloc purge_decommits=false), which stays charged to the cgroup
++        # until the kernel needs it; the node's ledger (int-10.1) credits those pages, so the figure that matters is
++        # max − (current − lazyfree). LazyFree is the clean part of the process's anonymous memory (smaps_rollup).
++        local lazy_kb lazy
++        lazy_kb=$(awk '/^LazyFree:/{s+=$2} END{print s+0}' "/proc/$pid/smaps_rollup" 2>/dev/null || echo 0)
++        lazy=$(( lazy_kb / 1024 ))
+         live=$(( (max - cur) / 1048576 - 1024 ))
+-        [ "$live" -ge "$N_SHARE" ] || warn "b$N_ID: memory.max − memory.current − 1 GiB = ${live} MiB < share ${N_SHARE} MiB — the ledger is bound by the cgroup, not the share (page cache ${file:+$((file / 1048576)) MiB}); PLAN.md §2: raise this node's memmax or set '-'"
++        say "  cgroup: freed-not-yet-reclaimed (MADV_FREE) $((lazy)) MiB; ledger headroom without that credit ${live} MiB, with it $((live + lazy)) MiB"
++        [ "$((live + lazy))" -ge "$N_SHARE" ] || warn "b$N_ID: memory.max − (memory.current − lazyfree) − 1 GiB = $((live + lazy)) MiB < share ${N_SHARE} MiB — the ledger is bound by the cgroup, not the share (page cache ${file:+$((file / 1048576)) MiB}); PLAN.md §2: raise this node's memmax or set '-'"
+     fi
+ }
+ 
+diff --git a/contrib/t12-deploy-kit/t12check.py b/contrib/t12-deploy-kit/t12check.py
+index 4020e398c..712399b7b 100755
+--- a/contrib/t12-deploy-kit/t12check.py
++++ b/contrib/t12-deploy-kit/t12check.py
+@@ -254,6 +254,31 @@ def main():
+         holders = pick(st, "memoryHolders", default="")
+         if holders:
+             print(f"  memory holders: {str(holders)[:200]}")
++        # 10-01 (panel backlog, F4): the verification debt — key=value pairs from the ledger, the seat and the producer.
++        ver = str(pick(st, "verification", default="") or "")
++        if ver:
++            print(f"  verification: {ver[:400]}")
++            kv = dict(p.split("=", 1) for p in ver.split() if "=" in p)
++            def num(key):
++                try:
++                    return int(kv[key])
++                except (KeyError, ValueError):
++                    return None
++            naive, credited = num("cgroup_naive_mib"), num("cgroup_credited_mib")
++            if naive is not None and credited is not None and share and naive - 1024 < share // (1 << 20) <= credited - 1024:
++                print(f"  NOTE: the kernel's max−current is {naive} MiB but {credited - naive} MiB of the cgroup is freed memory it will "
++                      f"take back; the ledger counts it as headroom (the 10-01 b6 reading)")
++            if kv.get("debt_hold") == "true":
++                print("  WARNING: producer backpressure is HOLDING — this bond's claims are waiting for their panel's quorum")
++            if kv.get("load_limited") == "true":
++                print("  WARNING: the seat runs one replay at a time — the host's load per CPU is over 3.0 (an over-committed host)")
++            if (num("overdue") or 0) > 0:
++                print(f"  WARNING: {num('overdue')} seat replay(s) are past 4x their class's timing and no longer hold a slot")
++            wait = num("seat_oldest_wait_daa")
++            if wait is not None and wait > 30:
++                print(f"  WARNING: this seat's oldest duty has waited {wait} DAA for its panel's quorum (healthy: 2-6)")
++            if num("seat_receipts_1h") is not None and (num("seat_duties") or 0) > 20 and num("seat_receipts_1h") < 20:
++                print(f"  WARNING: this seat filed only {num('seat_receipts_1h')} receipts in the last hour with {num('seat_duties')} duties on the chain")
+         # 09-25: the seat duties are always on for a bonded node — the startup 'PALW duties' line is the
+         # PLAN; this is whether the panel worker actually started (its key and bond loaded, the gossip
+         # inbox was free).

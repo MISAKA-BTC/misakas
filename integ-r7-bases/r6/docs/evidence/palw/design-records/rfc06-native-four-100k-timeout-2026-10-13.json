@@ -1,0 +1,11 @@
+{
+  "status": "INCOMPLETE",
+  "exitCode": 124,
+  "timeoutSeconds": 900,
+  "stage": "funded key setup, before generated_funded_workers terminal output",
+  "native100kMeasured": false,
+  "carriageCapMeasured": false,
+  "completePeakRssMeasured": false,
+  "reason": "predeclared deadline expired; no extension of running criteria",
+  "rawLogSha256": "9f5166ce587d46806ac4db3d000fa4bc5694dc61ef96e8a4764c9a1fe81e99d9"
+}

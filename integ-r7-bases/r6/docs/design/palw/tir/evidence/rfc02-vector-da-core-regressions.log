@@ -1,0 +1,94 @@
+
+FILTER palw_model_conformance_v2
+
+running 9 tests
+test palw_model_conformance_v2::consumer_codec_tests::scoped_model_aux_allocations_are_disjoint_from_provider_and_onboarding_tables ... ok
+test palw_model_conformance_v2::consumer_codec_tests::scoped_model_post_codec_rejects_name_and_piece_floods_before_reading_bodies ... ok
+test palw_model_conformance_v2::consumer_codec_tests::scoped_model_post_codec_roundtrips_and_rejects_counts_versions_and_trailing_bytes ... ok
+test palw_model_conformance_v2::tests::complete_model_domain_enumerates_all_lengths_and_mixed_inputs_for_encoder_and_stateful_decoder ... ok
+test palw_model_conformance_v2::tests::complete_model_domain_keeps_real_encoder_and_decoder_vocabularies_outside_enumeration ... ok
+test palw_model_conformance_v2::tests::complete_model_domain_prices_large_source_tensors_before_decoding ... ok
+test palw_model_conformance_v2::tests::complete_model_domain_refuses_exponential_inputs_unknown_semantics_and_unbound_plans ... ok
+test palw_model_conformance_v2::tests::complete_model_inventory_refuses_missing_surplus_and_reordered_or_relabelled_bytes ... ok
+test palw_model_conformance_v2::tests::complete_model_reference_preserves_prefix_state_and_hashes_non_output_values ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 3630 filtered out; finished in 0.17s
+
+
+FILTER palw_model_artifact_v2
+
+running 3 tests
+test palw_model_artifact_v2::tests::bounded_model_decoder_preserves_instance_wire_and_refuses_counts_and_legacy_rows ... ok
+test palw_model_artifact_v2::tests::model_binding_identity_binds_every_scope_coordinate_and_reservation_uses_the_horizon ... ok
+test palw_model_artifact_v2::tile_decoder_tests::bounded_model_tile_decoder_matches_wire_and_rejects_inventory_lengths_before_reading_body ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 3636 filtered out; finished in 0.00s
+
+
+FILTER palw_onboarding
+
+running 9 tests
+test palw_onboarding_tile_v3::tests::attacker_lengths_are_refused_before_any_field_body_is_read ... ok
+test palw_onboarding_tile_v3::tests::authenticated_wrong_metadata_is_a_binding_fault_and_legacy_wire_is_unchanged ... ok
+test palw_onboarding_tile_v3::tests::bounded_tile_wire_matches_kernel_leaf_at_all_dtype_widths ... ok
+test palw_onboarding_tile_v3::tests::strided_column_tiles_use_exact_indices_and_convict_a_forged_column_root ... ok
+test palw_onboarding_tile_v3::tests::tile_court_authenticates_both_roots_and_refuses_copied_or_disjoint_coordinates ... ok
+test palw_onboarding_tile_v3::tests::tile_court_compares_exact_byte_coordinates_across_ranks_widths_and_piece_boundaries ... ok
+test palw_onboarding_v1::tests::the_envelope_names_the_fork_id_fired_digest_which_a_future_fence_does_not_move ... ok
+test palw_onboarding_v1::tests::the_onboarding_object_tags_are_the_allocated_ones ... ok
+test palw_onboarding_v1::tests::the_tables_are_the_allocated_ones_and_a_binding_reads_its_state_from_the_clock ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 3630 filtered out; finished in 3.31s
+
+
+FILTER palw_opv_bootstrap_v1
+
+running 6 tests
+test palw_opv_bootstrap_v1::tests::a_bootstrap_that_needs_the_beacon_closes_the_cycle_and_the_walk_says_so ... ok
+test palw_opv_bootstrap_v1::tests::every_eligibility_reason_is_an_edge_of_the_graph_and_every_edge_a_reason ... ok
+test palw_opv_bootstrap_v1::tests::every_reward_channel_names_the_bond_budget_it_draws_and_reserves_it_at_acceptance ... ok
+test palw_opv_bootstrap_v1::tests::no_condition_of_opv_eligibility_the_beacon_or_the_reward_gate_depends_on_acquiring_a_model ... ok
+test palw_opv_bootstrap_v1::tests::the_complete_check_policy_validates_and_draws_no_beacon ... ok
+test palw_opv_bootstrap_v1::tests::the_graph_reaches_opv_from_genesis_only_through_the_complete_check ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 3633 filtered out; finished in 0.00s
+
+
+FILTER every_kernel_inner_kind_has_exactly_one_row
+
+running 1 test
+test palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3638 filtered out; finished in 0.00s
+
+
+FILTER every_int12_wire_type_is_unchanged_or_classified
+
+running 1 test
+test palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3638 filtered out; finished in 0.15s
+
+
+FILTER every_landed_kind_is_pinned_to_its_wire_form
+
+running 1 test
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3638 filtered out; finished in 0.14s
+
+
+FILTER palw_provider_court_v1::tests::the_fence_is_dormant
+
+running 1 test
+test palw_provider_court_v1::tests::the_fence_is_dormant_everywhere_hashed_when_set_and_refused_when_armed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3638 filtered out; finished in 0.00s
+
+
+FILTER palw_probabilistic_constraints_v1::tests::the_fence_is_dormant
+
+running 1 test
+test palw_probabilistic_constraints_v1::tests::the_fence_is_dormant_everywhere_and_refused_when_armed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3638 filtered out; finished in 0.00s

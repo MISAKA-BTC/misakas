@@ -1,0 +1,68 @@
+{
+  "v": 1,
+  "ppq": 960,
+  "tempo_us_per_quarter": 16777215,
+  "time_signature": [
+    32,
+    32
+  ],
+  "tracks": [
+    {
+      "name": "sparse",
+      "channel": 9,
+      "program": 127,
+      "notes": [
+        {
+          "pitch": 36,
+          "velocity": 127,
+          "onset": 0,
+          "duration": 1
+        },
+        {
+          "pitch": 38,
+          "velocity": 1,
+          "onset": 129,
+          "duration": 16384
+        },
+        {
+          "pitch": 40,
+          "velocity": 64,
+          "onset": 2113665,
+          "duration": 1
+        }
+      ]
+    },
+    {
+      "name": "max-delta",
+      "channel": 0,
+      "program": 0,
+      "notes": [
+        {
+          "pitch": 60,
+          "velocity": 64,
+          "onset": 1,
+          "duration": 268435455
+        }
+      ]
+    },
+    {
+      "name": "",
+      "channel": 15,
+      "program": 0,
+      "notes": []
+    },
+    {
+      "name": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "channel": 3,
+      "program": 5,
+      "notes": [
+        {
+          "pitch": 127,
+          "velocity": 127,
+          "onset": 268435455,
+          "duration": 1
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "List two fruits as a JSON array of strings."
+      }
+    ],
+    "response_format": {
+      "type": "json_object"
+    },
+    "max_tokens": 32
+  },
+  "expect": {
+    "verdict": "accepted"
+  }
+}

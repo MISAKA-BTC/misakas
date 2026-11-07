@@ -1,0 +1,94 @@
+
+running 4 tests
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token has been running for over 60 seconds
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+[service-tiled] normal jury at span 1112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-tiled] normal jury at span 1112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-public] ordinary FP Job V6 admission: claim bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0, 2 quanta, 6611032 pwu, fee 331137
+[service-public] ordinary FP Job V6 admission: claim 384dd9de0e94c67d490065b304853baa60f4efce77da16735e0d9f56a2940b33f9aaf283a40b9da4ff8fcca613dcd7ea55a647ef3c17862f038a2fce1a65ded7, 2 quanta, 6611032 pwu, fee 331137
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles' (3876249) panicked at kaspad/src/palw_service_public_e2e.rs:1223:5:
+assertion failed: !duties.is_empty()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles ... FAILED
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token' (3876250) panicked at kaspad/src/palw_service_public_e2e.rs:1223:5:
+assertion failed: !duties.is_empty()
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token ... FAILED
+[service-tiled] ordinary geometry hidden 256, FP work 9012040, native network quantum 2707216
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-tiled] ordinary signed class registration accepted; root c9acf5b17d129f344c6cc9c70e075a8a5dd39420f1e2d8b43afb108c08a136ea52b71c995b63f2295ffdb5e6c3edd63db747e60b15f51efc60572b2f62d646cc, 4099 lanes, canonical 1/2
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] normal FP family certification accepted from 3 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 133 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 258 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 383 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+[service-public] heartbeat advance 508 -> 1009
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop has been running for over 60 seconds
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults has been running for over 60 seconds
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 633 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 758 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 883 -> 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+[service-public] heartbeat advance 1008 -> 1009
+[service-public] ordinary bond registered before DAA 8, maturity 1000, now 1009
+[service-tiled] normal jury at span 1112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-public] ordinary FP Job V6 admission: claim bd321c7cf508f0356d71715090a1ded6a3cbec4e4037f548f976fb5e75e32c061335615d1681fa7eed7416e459d28085422f23d1350c047e0bc296a5183d56e0, 2 quanta, 6611032 pwu, fee 331137
+[service-tiled] normal jury at span 1112: state Some(Probation { probes_passed: 0 }), ready 7, room 2543549, reason probing: 0/10 finals passed, 0 failed since entry
+[service-public] ordinary FP Job V6 admission: claim 0cb0071cb850c9ba560ec1dbadb6f55bb75e01797d549e44253713299a4982d70c4384b13c2922b8cd43231cc1c4b4893754f70fb3f8c5bafedd158c97d62899, 2 quanta, 6611032 pwu, fee 331137
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults' (3880711) panicked at kaspad/src/palw_service_public_e2e.rs:1223:5:
+assertion failed: !duties.is_empty()
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults ... FAILED
+
+thread 'palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop' (3880665) panicked at kaspad/src/palw_service_public_e2e.rs:1223:5:
+assertion failed: !duties.is_empty()
+test palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_beaten_across_tiles
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_forbidden_token
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_premature_stop
+    palw_panel::palw_service_public_e2e::fresh_public_bond_service_registered_tiled_constraint_withheld_selected_tile_defaults
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 640 filtered out; finished in 465.34s
+

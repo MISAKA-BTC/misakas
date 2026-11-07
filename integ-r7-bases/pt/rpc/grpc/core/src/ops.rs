@@ -1,0 +1,191 @@
+use crate::protowire::{kaspad_request::Payload as RequestPayload, kaspad_response::Payload as ResponsePayload, *};
+use kaspa_rpc_core::RpcError;
+use workflow_core::enums::Describe;
+
+macro_rules! payload_type_enum {
+    ($(#[$meta:meta])* $vis:vis enum $name:ident {
+    $($(#[$variant_meta:meta])* $variant_name:ident $(= $zero:literal)?,)*
+    }) => {
+        paste::paste! {
+            $(#[$meta])*
+            $vis enum $name {
+                $($(#[$variant_meta])* $variant_name $(= $zero)?),*
+            }
+
+            impl $name {
+                pub fn to_error_response(&self, error: RpcError) -> ResponsePayload {
+                    match self {
+                        $($name::$variant_name => [<$variant_name ResponseMessage>]::from(error).into()),*
+                    }
+                }
+            }
+
+            impl std::convert::From<&RequestPayload> for $name {
+                fn from(value: &RequestPayload) -> Self {
+                    match value {
+                        $(RequestPayload::[<$variant_name Request>](_) => $name::$variant_name),*
+                    }
+                }
+            }
+
+            impl TryFrom<&ResponsePayload> for $name {
+                type Error = ();
+
+                fn try_from(value: &ResponsePayload) -> Result<Self, Self::Error> {
+                    match value {
+                        $(ResponsePayload::[<$variant_name Response>](_) => Ok($name::$variant_name)),*,
+                        _ => Err(())
+                    }
+                }
+            }
+
+        }
+    }
+}
+
+payload_type_enum! {
+#[repr(u8)]
+#[derive(Describe, Debug, Copy, Clone, Eq, Hash, PartialEq)]
+pub enum KaspadPayloadOps {
+    SubmitBlock = 0,
+    GetBlockTemplate,
+    GetCurrentNetwork,
+    GetBlock,
+    GetBlocks,
+    GetInfo,
+    Shutdown,
+    GetPeerAddresses,
+    GetSink,
+    GetMempoolEntry,
+    GetMempoolEntries,
+    GetConnectedPeerInfo,
+    AddPeer,
+    SubmitTransaction,
+    SubmitTransactionReplacement,
+    GetSubnetwork,
+    GetVirtualChainFromBlock,
+    GetBlockCount,
+    GetBlockDagInfo,
+    ResolveFinalityConflict,
+    GetHeaders,
+    GetUtxosByAddresses,
+    GetBalanceByAddress,
+    GetBalancesByAddresses,
+    GetSinkBlueScore,
+    Ban,
+    Unban,
+    EstimateNetworkHashesPerSecond,
+    GetMempoolEntriesByAddresses,
+    GetCoinSupply,
+    Ping,
+    GetMetrics,
+    GetConnections,
+    GetSystemInfo,
+    GetServerInfo,
+    GetSyncStatus,
+    GetDaaScoreTimestampEstimate,
+    GetFeeEstimate,
+    GetFeeEstimateExperimental,
+    GetCurrentBlockColor,
+    GetUtxoReturnAddress,
+    GetVirtualChainFromBlockV2,
+    // kaspa-pq Phase 10 (ADR-0009)
+    GetDnsConfirmation,
+    // kaspa-pq EVM Lane v0.4 (§16)
+    SubmitEvmTransaction,
+    GetEvmTransactionReceipt,
+    GetEvmTxInclusionStatus,
+    // kaspa-pq EVM Lane v0.4 (§9.2)
+    SubmitEvmDepositClaim,
+    // kaspa-pq large-UTXO pagination
+    GetUtxosByAddressPage,
+    // kaspa-pq Phase 11 (ADR-0010)
+    GetValidatorStatus,
+    // MISAKA Compute Token Program (design v0.1 §9.3)
+    GetTokenLedgerEntry,
+    GetPalwProducerFacts,
+    // ADR-0078 Decision 5: the consumer's read of a claim's derivations
+    GetPalwDerivedArtifacts,
+    GetPalwFreePromptClaim,
+    // ADR-0080 design A: a declared close, mid-assembly
+    GetPalwPendingChunkGroup,
+    // ADR-0087 Decision 8: the model market
+    GetPalwModelMarket,
+    GetPalwModelPositions,
+    // ADR-0088 Decision 12: the model registry
+    GetPalwModelLine,
+    GetPalwModelVersion,
+    GetPalwModelLines,
+    GetPalwModelProposals,
+    GetPalwClaims,
+    GetPalwClasses,
+    GetPalwNodeStatus,
+    GetPalwRegistrationTerms,
+    GetPalwRoundLane,
+    GetPalwSettlement,
+    GetPrecommitDuty,
+    GetPalwClassContexts,
+    GetPalwClassEconomics,
+    GetPalwModelRegistry,
+    GetPalwFreePromptPrice,
+    GetPalwClassPanelStatus,
+    GetPalwPanelSeats,
+    GetPalwPanelStatus,
+    GetPalwPanelAssignments,
+    GetPalwModelPreflight,
+    SubmitPalwModelRegistration,
+    GetPalwModelRegistrationStatus,
+    GetPalwModel,
+    GetPalwModelReadiness,
+    GetPalwModelAdmission,
+    GetPalwModelCertification,
+    GetPalwVesting,
+    GetPalwActivationPool,
+    GetPalwCapacityShadow,
+    GetPalwStateProof,
+    GetPalwForkChoiceOpening,
+    GetPalwLegacyDispute,
+    GetPalwLegacyDisputes,
+    GetPalwFraudFilerStatus,
+    GetPalwPanelV3Status,
+    GetPalwExecV2Status,
+    GetPalwMonetaryMaterial,
+    GetPalwStateCarriage,
+    GetPalwRewardVesting,
+    GetPalwStagedPreclaimQuote,
+    GetPalwRouterBindingV2,
+    GetPalwPaidClaim,
+    GetPalwAcceptanceReads,
+    GetPalwRfc0016Report,
+    GetPalwKernelClaim,
+    GetPalwKernelRows,
+    GetPalwKernelFinals,
+    GetPalwModelRefutationSeals,
+    GetPalwOnboarding,
+    GetPalwConformanceEvidence,
+    GetTokenSupply,
+    GetTokenEmissionInfo,
+
+    // Subscription commands for starting/stopping notifications
+    NotifyBlockAdded,
+    NotifyNewBlockTemplate,
+    NotifyFinalityConflict,
+    NotifyUtxosChanged,
+    NotifySinkBlueScoreChanged,
+    NotifyPruningPointUtxoSetOverride,
+    NotifyVirtualDaaScoreChanged,
+    NotifyVirtualChainChanged,
+    NotifyPalwClassReadinessChanged,
+    NotifyPalwPanelAssignment,
+    NotifyPalwPanelReceipt,
+    NotifyPalwPanelEligibilityChanged,
+
+    // Legacy stop subscription commands
+    StopNotifyingUtxosChanged,
+    StopNotifyingPruningPointUtxoSetOverride,
+
+    // Please note:
+    // Notification payloads existing in ResponsePayload are not considered valid ops.
+    // The conversion from a notification ResponsePayload into KaspadPayloadOps fails.
+}
+}

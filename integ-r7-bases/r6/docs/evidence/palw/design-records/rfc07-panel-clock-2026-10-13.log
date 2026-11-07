@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_panel_source_fee_v2::tests::panel_source_clock_covers_consumers_and_refuses_impossible_entropy_windows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3921 filtered out; finished in 0.02s
+

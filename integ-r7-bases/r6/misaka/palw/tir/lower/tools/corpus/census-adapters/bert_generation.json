@@ -1,0 +1,28 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "bert_generation",
+  "doc": "BertGenerationDecoder (Google, the encoder-decoder warm-starts): BERT's blocks (post-LN LayerNorm, biased separate q/k/v/o, an ungated gelu MLP) under a CAUSAL mask (is_decoder true), word + learned position embeddings from 0 and an embedding LayerNorm (no token types), no final norm, a tied head with its own bias (lm_head.bias). The class is BertGenerationDecoder (not ...ForCausalLM). PENDING VALIDATION (written during the quiet window; the census config needs is_decoder = true). Third-party adapter (lane H): data only.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["BertGenerationDecoder"], "model_types": ["bert-generation"]},
+  "config": {
+    "defaults": {"hidden_act": "gelu", "layer_norm_eps": 1e-12, "tie_word_embeddings": true, "is_decoder": true},
+    "inert": ["attention_probs_dropout_prob", "hidden_dropout_prob", "add_cross_attention"]
+  },
+  "vars": [
+    {"name": "dec_ok", "value": {"$check": [{"$cfg": "is_decoder"}, "is_decoder is false: BertGeneration is then a bidirectional encoder"]}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_eps"}},
+    {"name": "norm", "value": {"kind": "Layer", "eps": {"$var": "eps"}, "gain": "W", "bias": true}},
+    {"name": "qkv_bias", "value": true},
+    {"name": "o_bias", "value": true},
+    {"name": "mbias", "value": true},
+    {"name": "mlp_gated", "value": false},
+    {"name": "l_position", "layer": true, "value": "None"},
+    {"name": "residual", "value": {"PostNorm": {"mixer_norm": {"$var": "norm"}, "ffn_norm": {"$var": "norm"}}}},
+    {"name": "embedding", "value": {"dim": {"$var": "hidden"}, "scale": 1.0, "positions": {"rows": {"$var": "max_pos"}, "offset": 0}, "norm": {"$var": "norm"}}},
+    {"name": "final_norm", "value": null},
+    {"name": "head", "value": {"tied": {"$var": "tied"}, "bias": true}},
+    {"name": "p", "value": "bert."},
+    {"name": "names", "value": {"embed": "bert.embeddings.word_embeddings", "pos_embed": "bert.embeddings.position_embeddings", "embed_norm": "bert.embeddings.LayerNorm", "lm_head": {"$if": [{"$var": "tied"}, "bert.embeddings.word_embeddings", "lm_head"]}, "lm_head_bias": "lm_head.bias", "attn.q": "bert.encoder.layer.{L}.attention.self.query", "attn.k": "bert.encoder.layer.{L}.attention.self.key", "attn.v": "bert.encoder.layer.{L}.attention.self.value", "attn.o": "bert.encoder.layer.{L}.attention.output.dense", "norm.mix": "bert.encoder.layer.{L}.attention.output.LayerNorm", "mlp.up": "bert.encoder.layer.{L}.intermediate.dense", "mlp.down": "bert.encoder.layer.{L}.output.dense", "norm.ffn": "bert.encoder.layer.{L}.output.LayerNorm"}},
+    {"name": "model_type", "value": "bert-generation"}
+  ]
+}

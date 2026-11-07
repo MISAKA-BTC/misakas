@@ -1,0 +1,86 @@
+
+running 31 tests
+test palw_lifecycle_objects_v2::tests::a2u::a_not_in_force_kind_is_undecodable_in_the_live_builds_words ... ok
+test palw_lifecycle_objects_v2::tests::a2u::an_owning_fence_needs_the_audit_fence_declared ... ok
+test palw_lifecycle_objects_v2::tests::a2u::below_its_fence_a_new_kind_is_judged_as_the_live_build_judges_undecodable_bytes ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_appended_form_has_a_guarded_owner_arm ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified ... 
+thread 'palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified' (3175765) panicked at consensus/core/src/palw_lifecycle_objects_v2.rs:4024:13:
+the live build's wire types changed without a classification in PALW_INT12_WIRE_CHANGES_V1 — a change inside a kind it decodes is bytes it cannot read as this build does, and below its fence must be read as it reads them (A-2 uniformity): [
+    "consensus/core/src/palw_offence_v1.rs::PalwPromptProofV1 (changed: now 14f2c2b7896b15f4)",
+]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test palw_lifecycle_objects_v2::tests::a2u::every_kernel_inner_kind_has_exactly_one_row ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_kind_in_the_enum_has_exactly_one_owner ... ok
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form ... 
+thread 'palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form' (3175868) panicked at consensus/core/src/palw_lifecycle_objects_v2.rs:4239:13:
+[a2u-pins] A-2 wire pins differ (A-2 uniformity).
+* PALW_A2_INT12_VARIANTS_WIRE_V1 (pinned 0xd1982421da455cca, now 0xa3d952342067b612): a variant the live build decodes changed its declaration — classify it (an Int12Inner row and a guarded owner arm, or a re-read and its probe), never by re-pinning alone.
+* PALW_A2_NEW_KIND_WIRE_V1: a lane that creates or changes a post-int-12 kind re-pins it here and keeps the change under its row's fence. Current pins:
+[a2u-pins-begin]
+    (104, 0x98d7608e0a24ad99),
+    (105, 0xdaed6c0cfaf81e2f),
+    (106, 0x888f101d106c24bc),
+    (107, 0x0081a402000ddbf4),
+    (108, 0xac8ecc3ff97ec415),
+    (109, 0xcd35f41524be4a4f),
+    (110, 0x7da0346d0633de78),
+    (111, 0x2d490db20d075bfe),
+    (113, 0xca1188bcd2f663d2),
+    (120, 0xcbb24fb8f993e5c6),
+    (130, 0x5774ef35c9a3fdaa),
+    (140, 0xa4ab9f7696775588),
+    (150, 0x5fb8c8b2822f8386),
+    (151, 0x6a81242ebaeba7fd),
+    (152, 0xc48f175fa3456d1e),
+    (153, 0x74bac59d2cf50cd4),
+    (154, 0x047359d4d8ba0a7b),
+    (155, 0x6d9c4e7671a9cac7),
+    (156, 0x7e5d332147511ca1),
+    (157, 0xc7acaf87a3fefb35),
+    (158, 0x380636cbf4ee26ab),
+    (159, 0x0395636b651f74fa),
+[a2u-pins-end]
+FAILED
+test palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_sits_in_its_row_with_the_rows_fence ... [a2u] rows awaiting their lane's merge:
+  CoinbaseTrailer { magic: [80, 88, 65, 50] } → palw_exec_payload_v2 (X8R anchor trailer)
+  Int12Inner { key: "consensus/core/src/palw_gen_v1.rs::PalwGenProfileV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileV1::Head = 6, the class's hand-read profile byte inside tag 68 (re-read))
+  Int12Inner { key: "consensus/core/src/palw_gen_class_v1.rs::PalwGenProfileOffersV1" } → palw_task_heads_v1 (HFX task heads: PalwGenProfileOffersV1::Head (3), inside tag 68 (appended))
+  FpJobForm { what: "PalwGenBodyV1::Head (2) inside a generative job" } → palw_task_heads_v1 (HFX task heads)
+  HeaderFormula { what: "header.palw_state_root = H(fork-choice leaf || ADR-0043 root) past the fence" } → palw_fork_choice_commitment_v1 (L2FC)
+  StateEncoding { what: "bond budget engine Q/B/R/F (deltas 190–199, tail 0xEF, root block bond_budget/v1)" } → palw_bond_budget_v1 (BUDGET (ADR-0176))
+  StateEncoding { what: "model coinbase allocated by distinct locked miner capital f(S_m) inside the budget" } → palw_model_bond_allocation_v1 (BUDGET (ADR-0177))
+  StateEncoding { what: "R-1 reporter share and DA-6 exposure: 1,000 bps below, 4,900 bps past" } → palw_reporter_share_v2 (INTF (ADR-0032 amendment))
+ok
+test palw_lifecycle_objects_v2::tests::a2u::every_tag_row_is_inside_its_allocation ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_fence_list_is_the_enum ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kind_list_is_frozen ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_int12_kinds_refused_past_a_fence_are_the_rows ... ok
+test palw_lifecycle_objects_v2::tests::a2u::the_new_kind_table_is_the_owner_function ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_cannot_declare_collateral_it_did_not_lock ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_that_locks_its_collateral_rides ... ok
+test palw_lifecycle_objects_v2::tests::a_bond_registration_without_a_signature_does_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::a_class_registration_rides_only_when_it_carries_what_checks_it ... ok
+test palw_lifecycle_objects_v2::tests::a_lifecycle_object_rides_a_transaction_and_arrives_in_acceptance_order ... ok
+test palw_lifecycle_objects_v2::tests::a_malformed_carrier_is_skipped_with_a_reason ... ok
+test palw_lifecycle_objects_v2::tests::admission_accepts_exactly_what_the_walk_extracts ... ok
+test palw_lifecycle_objects_v2::tests::an_historical_full_v2_possession_proof_still_rides_and_reaches_the_fold ... ok
+test palw_lifecycle_objects_v2::tests::an_unsigned_reporter_commitment_may_not_ride ... ok
+test palw_lifecycle_objects_v2::tests::certification_objects_ride_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::consensus_object_discriminants_are_the_ones_the_chain_carries ... ok
+test palw_lifecycle_objects_v2::tests::derived_artifacts_ride_signed_and_shaped_and_extract_unchanged ... ok
+test palw_lifecycle_objects_v2::tests::naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve ... ok
+test palw_lifecycle_objects_v2::tests::objects_that_must_not_ride_are_skipped_with_their_own_reason ... ok
+test palw_lifecycle_objects_v2::tests::the_band_id_is_what_selects_this_walk ... ok
+test palw_lifecycle_objects_v2::tests::the_seed_testnet_11_carried_at_daa_1945_still_decodes ... ok
+test palw_lifecycle_objects_v2::tests::the_two_unauthenticated_objects_may_not_ride ... ok
+
+failures:
+
+failures:
+    palw_lifecycle_objects_v2::tests::a2u::every_int12_wire_type_is_unchanged_or_classified
+    palw_lifecycle_objects_v2::tests::a2u::every_landed_kind_is_pinned_to_its_wire_form
+
+test result: FAILED. 29 passed; 2 failed; 0 ignored; 0 measured; 3589 filtered out; finished in 0.44s
+

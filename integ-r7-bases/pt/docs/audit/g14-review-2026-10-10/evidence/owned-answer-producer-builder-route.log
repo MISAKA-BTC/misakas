@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_panel::court_responder_coverage_pin::the_panel_pursues_a_named_leaf_serves_its_evidence_and_answers_the_held_court ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 625 filtered out; finished in 0.01s
+

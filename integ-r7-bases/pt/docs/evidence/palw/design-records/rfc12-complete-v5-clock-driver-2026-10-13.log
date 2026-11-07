@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/misaka-rfc12-private-bootstrap.py", line 284, in <module>
+    plan = plan_for(binary, args.salt, fixture, bootstrap, args.timeout)
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/misaka-rfc12-private-bootstrap.py", line 251, in main
+    parser.add_argument('--factory-timeout', type=int, default=60)
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/misaka-rfc12-private-bootstrap.py", line 180, in run
+    # Validate actual carrier costs before permitting the first broadcast; the
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/rfc12_complete_bootstrap.py", line 164, in run
+    rows = wait_mature(drill, bootstrap, agreement)
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/rfc12_complete_bootstrap.py", line 98, in wait_mature
+    return drill.wait(mature, 'actual native artifact binding maturity without clock injection')
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/misaka-rfc12-private-bootstrap.py", line 36, in wait
+    return super().wait(bounded, label)
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/misaka-rfc12-private-smoke.py", line 156, in wait
+    return super().wait(checked, label)
+  File "/Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/scripts/drills/misaka-rfc12-multiprocess.py", line 266, in wait
+    time.sleep(.5)
+KeyboardInterrupt

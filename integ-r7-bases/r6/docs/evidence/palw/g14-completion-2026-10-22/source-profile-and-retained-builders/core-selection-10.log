@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_tir_public_source_v1::parameter_cover_v1::root_input_tests::token_source_helper_is_identical_to_native_court_split_at_boundaries ... ok
+test palw_tir_public_source_v1::parameter_cover_v1::root_input_tests::actual_input0_numerical_roots_name_prompt_and_generated_coordinates ... ok
+test palw_tir_public_source_v1::parameter_cover_v1::root_input_tests::actual_root_input_coordinates_keep_parameter_relation_and_authenticate_carry_units ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4768 filtered out; finished in 2.36s
+

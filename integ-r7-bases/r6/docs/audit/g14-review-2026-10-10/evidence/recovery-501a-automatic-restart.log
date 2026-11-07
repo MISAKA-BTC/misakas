@@ -1,0 +1,32 @@
+
+running 1 test
+test palw_panel::palw_service_public_e2e::recovery::automatic_producer_multipart_and_fresh_verifier_resume_after_partial_transport ... [service-public] normal FP family certification accepted from 6 public drill carriers
+[service-public] registered FP graph publicly carried by ordinary ClassLaneCertified
+[service-public] heartbeat advance 135 -> 1011
+[service-public] heartbeat advance 260 -> 1011
+[service-public] heartbeat advance 385 -> 1011
+[service-public] heartbeat advance 510 -> 1011
+[service-public] heartbeat advance 635 -> 1011
+[service-public] heartbeat advance 760 -> 1011
+[service-public] heartbeat advance 885 -> 1011
+[service-public] heartbeat advance 1010 -> 1011
+[service-public] ordinary bond registered before DAA 10, maturity 1000, now 1011
+[service-public] large constraint job bytes 112291, ordinary transaction transient mass 499184 / 500000
+[service-public] ordinary FP Job V6 admission: claim e94717b4e42b1edc545ee972dd34e1d1b7296570ad843d1a32f9cc9fc4b347074e03b6a9462155c7d72c8f2dc57a13ccc90ef4494e5d76b5aed4c36a1392dc46, 3 quanta, 9110079 pwu, fee 1693825
+[service-public] fresh database validated 2065 public blocks at DAA 1032
+[service-public] original FP body/acceptance rows pruned; rooted job metadata present = false
+2026-10-11 19:35:15.752+09:00 [INFO ] [palw-panel] starting (bond=(7114f092bc0636065fe3c89afd5990bc40b3f135d488f8586864200832cf82a518979cc2063477c11f1a1d2794ea97c5edb6c63d36a7257ec0808a954bcbc571, 0), submitter=funded, register=off)
+2026-10-11 19:35:15.761+09:00 [WARN ] [palw-panel] the gossip inbox was already taken — panel service disabled
+
+thread 'palw_panel::palw_service_public_e2e::recovery::automatic_producer_multipart_and_fresh_verifier_resume_after_partial_transport' (4189222) panicked at kaspad/src/palw_service_recovery_e2e.rs:151:9:
+automatic producer worker stopped
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_service_public_e2e::recovery::automatic_producer_multipart_and_fresh_verifier_resume_after_partial_transport
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 663 filtered out; finished in 408.14s
+

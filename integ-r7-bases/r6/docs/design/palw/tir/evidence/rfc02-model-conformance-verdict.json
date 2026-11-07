@@ -1,0 +1,106 @@
+{
+  "schema": "rfc02-model-conformance-verdict/v1",
+  "recorded_at_utc": "2026-10-10T17:34:42.145263+00:00",
+  "baseline_commit": "32092793b60b8c3d31227af1fecd98c8cd59280e",
+  "branch": "codex/rfc02-implementation",
+  "goal_complete": false,
+  "previous_goal_turn": "Progress: authenticated scoped model bindings implemented, 31 checks verified, commit 32092793b pushed and remote equality confirmed.",
+  "scope": "Pure finite-input-domain conformance reference for exact current v4/v5 semantics, with joint model source/v3 PC root recomputation and all typed node values. No chain consumer, registration promotion, release certificate or activation.",
+  "criteria": [
+    "Every nonempty token word, at every allowed length; no repeated-token or stateless shortcut.",
+    "Stateful decoder prefixes replay from reference-defined initialization; encoder inputs use canonical ids/count padding and remain outside model roots.",
+    "Exact descriptor and program/plan scope; changed descriptor, program-root binding and invalid position plan refuse.",
+    "Input count, leaf count, model bytes, conservative reference memory envelope and work are derived before tensor decoding and replay.",
+    "Missing, surplus, relabelled, shifted or shortened model inventory refuses before tensor allocation.",
+    "Truthful source and three claimed implementation roots equal the reference; wrong model/PC root or any wrong role root refuses.",
+    "Intermediate value corruption changes the trace digest even when final logits remain unchanged.",
+    "Saved BERT fixture and actual Qwen declared program exceed enumeration bounds; no model-family or full-checkpoint support PASS inferred."
+  ],
+  "verification": {
+    "distinct_tests_passed": 26,
+    "logs": [
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-conformance-core-final.log",
+        "tests_passed": 6,
+        "raw_log_sha256": "9b7f3d781b2086668305d8ce568eaa71b5f01b0b26418357657e126f0ad312ab",
+        "saved_log_sha256": "fc995492fcef7af77f06357b014943619fca93211e24abaa10ccadcf1109e027"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-conformance-inventory.log",
+        "tests_passed": 6,
+        "raw_log_sha256": "fae582a4749e62523d232d931acf2e460931798cbf7130148a909d6e9cbc2e9a",
+        "saved_log_sha256": "4f32da2134ae95c27df579c70a01c512c6cc25d4a7c73b0f6f5a0f8b26d01e20"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-conformance-binding.log",
+        "tests_passed": 3,
+        "raw_log_sha256": "00c4e11d2533412fd0c890f54307051b09e1a4e7b18c3f2c7fe61c33342fe593",
+        "saved_log_sha256": "f1877faf7d03a5358d73015f4abf4b1a1f14f1770b440a09adb39cff63fb02b1"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-conformance-onboarding.log",
+        "tests_passed": 9,
+        "raw_log_sha256": "3c4348fd8450c663bdc6715b1b68e79dbb40abe6ab12f52b3c81793d92302bb2",
+        "saved_log_sha256": "692e5555cdec406c0cbbc044a039e56477301ed4b8eaf50f5c6b87cd650dfd90"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-conformance-wire-pins.log",
+        "tests_passed": 1,
+        "raw_log_sha256": "b6a50822ae9810ecb4fcf7450fdeb57cd4b982bf33ebff3e6166878074386aa1",
+        "saved_log_sha256": "a6ffb44ba59981e44bedcfd773463ed980e1f7f23b0789cdf890d65f460ddaa2"
+      },
+      {
+        "path": "docs/design/palw/tir/evidence/rfc02-model-conformance-dormancy.log",
+        "tests_passed": 1,
+        "raw_log_sha256": "3736b6520450010a5e51216e6481e17dd0508ecfcd482ba0e2b63f17f73b9a49",
+        "saved_log_sha256": "d8201560f30e73b3a490798898770eb0f88b79045c73f7c8d1758844bd67f29c"
+      }
+    ],
+    "format_and_diff_check": true
+  },
+  "source": [
+    {
+      "path": "consensus/core/src/palw_model_conformance_v2.rs",
+      "bytes": 25052,
+      "sha256": "85851fdfe7f092a4a418a29c5e74bebd43d88fe8bdc3b2c3b448ceb462fcd339"
+    },
+    {
+      "path": "consensus/core/src/lib.rs",
+      "bytes": 46476,
+      "sha256": "388c462f0adb37ced9f15321bdc23c0573a981cff90ff5d5840547e89aabe204"
+    }
+  ],
+  "reference_material": [
+    {
+      "path": "/Users/wata/.codex/attachments/5158286c-c29e-4428-af86-9225cb5b3330/pasted-text-1.txt",
+      "bytes": 22733,
+      "sha256": "06b4ea15410af05ffa96fb6ad3e2a49b5941f1dbc7e4c80931732f52971cce06"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/rfc02-bert-model-artifact-court.borsh",
+      "bytes": 33424,
+      "sha256": "86e66422a825061204adfe5d730eb9e7946ae99a51ab28a0e20913ee92eaf2fe"
+    },
+    {
+      "path": "docs/design/palw/tir/evidence/qwen25-real-declared-program.tir",
+      "bytes": 14011,
+      "sha256": "a4de8e80ecd4c8dfcbf6ad2faac54779609c373afb40602f1372d2bd63c2d516"
+    }
+  ],
+  "binary": {
+    "path": "target/debug/deps/kaspa_consensus_core-38863d86af2a1f17",
+    "bytes": 99238888,
+    "sha256": "d2084abc71dbb90fe97d8eb44e3f3622dda7e325f138466aff7f3510df4b0dbd"
+  },
+  "initial_attempt": "Compile failed on a misspelled descriptor field memory_model; corrected to memory_model_id. A resource fixture initially declared an unused tensor and was correctly refused by normal form; replaced it with a used wide embedding to exercise the intended resource limit. No failed attempt counted as a passing test.",
+  "limitations": [
+    "Pure API only. The authenticated consumer must match stored statement and candidate, price and charge before judgement, persist an immutable full scope and retain all eligibility gates.",
+    "Reference RAM/work values are conservative local envelopes; they are not a demonstrated complete network resource vector or isolated measured performance bound.",
+    "Comparing supplied role roots is not evidence of runtime-pack implementation identity or independence, and not source-checkpoint fidelity.",
+    "Parameter-free inventory has no root under the existing artifact grammar and the reference cannot certify it.",
+    "Full large/stateful release conformance needs scalable complete digest/refutation (GAP-70), including arbitrary opaque/withheld PC roots.",
+    "Full checkpoint/task/context fidelity and all common-feature support, actual computation G14/fresh outsider Final/redemption, shared resources/capital/neutrality/honest liveness, A1-A8 coverage and reviewed shipping activation remain required."
+  ],
+  "shipping_activation_changed": false,
+  "wire_or_state_allocations_changed": false
+}

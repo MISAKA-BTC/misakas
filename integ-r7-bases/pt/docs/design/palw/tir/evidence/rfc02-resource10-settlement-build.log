@@ -1,0 +1,9 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 58s
+  Executable unittests src/lib.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227)
+  Executable tests/k2_ledger_route.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_ledger_route-2c94b50c1beae975)
+  Executable tests/k2_opv.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_opv-d08510595c8aa839)
+  Executable tests/k2_opv_pipeline.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_opv_pipeline-810444658188a947)
+  Executable tests/settlement_conservation.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/settlement_conservation-01780cfa2bf01bbd)
+  Executable tests/verifier_pay.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/verifier_pay-c19ea34d5a12ecd1)

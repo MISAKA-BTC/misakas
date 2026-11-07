@@ -9,6 +9,10 @@ include.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Isolated native test processes only; ordinary release builds leave this absent.
+test-clock = []
+
 [dependencies]
 cfg-if.workspace = true
 futures-util.workspace = true

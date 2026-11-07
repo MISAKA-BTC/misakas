@@ -1,0 +1,18 @@
+<think>
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A JSON string `{"v":1,"ppq":480,"tempo_us_per_quarter":500000,"time_signature":[4,4],"tracks":[{"name":"lead","channel":0,"program":0,"notes":[{"pitch":60,"velocity":100,"onset":0,"duration":480}]}]}`.
+    *   Task: Copy this JSON exactly.
+    *   Constraint: Output nothing else (no markdown code blocks, no explanations, no extra text).
+
+2.  **Verify the Input:**
+    *   The input is a valid JSON object.
+    *   Structure: Root object with keys `v`, `ppq`, `tempo_us_per_quarter`, `time_signature`, `tracks` (array), `notes` (array).
+
+3.  **Determine Output Format:**
+    *   The user wants the JSON string *exactly* as provided.
+    *   No markdown formatting (e.g., ```json ... ```) unless implied, but usually "copy this JSON exactly" implies raw text. However, standard practice for LLMs is to output raw text.
+    *   Wait, the instruction says "output nothing else". This means no markdown block, no quotes around the whole thing if it's not part of the JSON, but the JSON itself is the content.
+    *   I need to ensure I don't add extra whitespace or newlines that weren't in the original, though JSON parsers usually handle whitespace. The original string has specific spacing.
+    *   Original: `{"v":1,"ppq":480,"tempo_us_per_quarter":500000,"time_signature":[4,4],"tracks":[{"name":"lead","channel":0,"program":0,"notes":[{"pitch":60,"velocity":100,"onset":0,"duration

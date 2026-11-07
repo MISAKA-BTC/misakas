@@ -1,0 +1,47 @@
+Audit,ID,Severity,Title,Status,Commit,Note
+Kaspa-Diff,C-02,Critical,Remote signer cross-purpose/context bypass (double-sign),Fixed,987d8ba,Bind ML-DSA context to purpose in try_sign; regression test rejects_cross_purpose_context_borrowing_c02; signer 10/10
+Kaspa-Diff,C-01,Critical,Sidecar signs RPC digest not bound to equivocation metadata,Fixed,9ca86dd,Downgraded by verification to self-DoS (consensus recomputes+rejects); pin genesis_hash + local recompute + fail-closed + check-before-sign; validator 4/4
+Kaspa-Diff,H-01,High,DNS seeder publishes unverified addresses (eclipse),Fixed,117f915,Seeder serves only publicly-routable IPs; addressmanager get_verified_addresses() accessor; deeper diversity/RRL/QNAME = follow-up
+Kaspa-Diff,H-02,High,Legacy getUtxosByAddresses unbounded materialization,Fixed,373938d,Hard cap 250k entries -> Err before serialize; steer to page/balance API
+Kaspa-Diff,H-03,High,Monolithic EVM/DNS pruning snapshot import DoS,Fixed,373938d,Pre-deserialize byte caps (header 1MiB/EVM 256MiB/overlay 64MiB); chunk/stream manifest = follow-up
+Kaspa-Diff,H-04,High,EVM full-state per-block + no pruning,Fixed(EVM-NFT H-01),a087aec,Pruning processor deletes EVM stores; inert mainnet/simnet; archival keeps history; test added
+Kaspa-Diff,H-05,High,Ethereum HTTP RPC resource exhaustion,Fixed(EVM-NFT H-02),fa564e5,Conn semaphore 512 + 30s timeout + batch 100 + resp 16MiB + loopback bind warn
+Kaspa-Diff,H-06,High,eth_call/estimateGas context mismatch + fail-open,Fixed(EVM-NFT H-03),fa564e5;1e30a64,Fail-closed snapshot + estimate hard-error propagation + reject historical block selector
+Kaspa-Diff,H-07,High,safe/finalized/historical semantics inaccurate,Fixed(EVM-NFT H-04),a32c37f,get_evm_canonical_heads resolver + account_at(selector) + full-tx bool + parentHash
+Kaspa-Diff,H-08,High,eth_getLogs silent 10k truncation + logIndex,Fixed(EVM-NFT H-05),fa564e5;8553a12,>10k returns error; block-global receipt logIndex; real EIP-234 bloom
+Kaspa-Diff,H-09,High,tx status reports side-branch as accepted,Fixed(EVM-NFT H-06),fa564e5,Canonical receipt source of truth; orphaned state separated
+Kaspa-Diff,H-10,High,EVM mempool stateless admission + score mismatch,Partial,cf10535,Eviction/selection unified on effective-tip + atomic replacement (squat closed); stateful affordability admission = bounded-DoS follow-up
+Kaspa-Diff,H-11,High,Mainnet DNS finality active with one validator,Fixed,7cbfab9,PRODUCTION min_active_validators 1->3; testnet pinned 1; config-only; genesis unchanged; final count/work-calibration = launch gate
+Kaspa-Diff,M-01,Medium,EVM replacement non-atomic,Fixed(EVM-NFT M-01),cf10535,Atomic swap (projected validation before removing old tx)
+Kaspa-Diff,M-02,Medium,Validator seed file loose perms (warn-only),Fixed,2d558bc,Fail-closed symlink_metadata regular-file + reject group/world-readable
+Kaspa-Diff,M-03,Medium,Signer thread-per-conn + unbounded idle,Fixed,959058a,Bound concurrent connections at 64 (handshake read-timeout already present)
+Kaspa-Diff,M-04,Medium,Signer audit log no external anchor,Deferred,,Forensic only (SignedEpochStore guard prevents double-sign); periodic signed checkpoint to TPM/transparency log = follow-up
+Kaspa-Diff,M-05,Medium,Borsh receipt root exposed as receiptsRoot,Fixed(EVM-NFT M-02),6f5cd85,Documented as MISAKA custom commitment (RPC capability + docs); standard-RLP = fenced consensus follow-up
+Kaspa-Diff,M-06,Medium,F002 fixed gas + no withdraw count cap,Fixed(EVM-NFT M-03),39b1057;09e5a4d;3650a66,MAX_WITHDRAWALS_PER_EVM_BLOCK=256 enforced behind inert fence (both gas paths); adversarial-reviewed 7/7
+Kaspa-Diff,M-07,Medium,NFT mint authority not irreversibly sealable,Fixed(EVM-NFT M-04),39e5f6a,finishMinting() irreversible seal + mintingFinished() view
+Kaspa-Diff,M-08,Medium,NFT metadata validity / dependency pin,Fixed(EVM-NFT M-05/M-06),39e5f6a,Strict constructor (empty URI/zero manifest rejected) + manifestHash in interface; solc 0.8.28 + OZ v5.0.2 pinned + reproducible bytecode
+Kaspa-Diff,M-09,Medium,(maps to EVM-NFT NFT/metadata),Fixed,39e5f6a,See M-08
+Kaspa-Diff,M-10,Medium,EVM CLI plaintext key/mnemonic,Fixed(EVM-NFT M-07),8ac2646,Read-side perm/symlink guard + zeroize; encrypted keystore = follow-up
+Kaspa-Diff,M-11,Medium,pending/fee/sync/tx RPC fields inaccurate,Fixed(EVM-NFT M-08),6f5cd85;a32c37f,gasPrice=base fee; pending nonce overlay; pending-tx fallback; effectiveGasPrice; eth_syncing real; v/r/s = follow-up
+Kaspa-Diff,M-12,Medium,ML-DSA sigop mass Apple-Silicon-centric,Deferred,,Operational: run cargo bench mldsa87_verify_portable on low-end x86/ARM no-SIMD before mainnet; ~25-50x headroom today
+EVM-NFT,H-01,High,EVM full-state per-block + no pruning,Fixed,a087aec,DB-GC in pruning processor; no consensus change
+EVM-NFT,H-02,High,Ethereum HTTP RPC resource exhaustion,Fixed,fa564e5,Semaphore/timeout/batch/resp caps + loopback warn
+EVM-NFT,H-03,High,eth_call/estimateGas mismatch + fail-open,Fixed,fa564e5;1e30a64,Fail-closed + estimate hard-error + historical-block reject; exact BASEFEE/PREVRANDAO sim = follow-up
+EVM-NFT,H-04,High,safe/finalized/historical/parentHash,Fixed,a32c37f,Canonical heads resolver + account_at + full-tx; historical eth_call exec = follow-up
+EVM-NFT,H-05,High,eth_getLogs truncation + logIndex,Fixed,fa564e5;8553a12,Error past cap + block-global logIndex + real bloom
+EVM-NFT,H-06,High,tx status side-branch canonicality,Fixed,fa564e5,Canonical receipt; orphaned separated
+EVM-NFT,H-07,High,Mempool stateless admission + eviction score,Fixed,cf10535,Effective-tip eviction + atomic replacement; tests
+EVM-NFT,M-01,Medium,Non-atomic replacement,Fixed,cf10535,Atomic swap + test
+EVM-NFT,M-02,Medium,Borsh receipt root,Documented,6f5cd85,Custom-commitment doc; standard-RLP = fenced follow-up
+EVM-NFT,M-03,Medium,F002 withdrawal cap,Fixed,39b1057;09e5a4d;3650a66,Const + fenced enforcement (both paths) + 7/7 review
+EVM-NFT,M-04,Medium,NFT mint seal,Fixed,39e5f6a,finishMinting()
+EVM-NFT,M-05,Medium,NFT strict metadata,Fixed,39e5f6a,Strict ctor + manifestHash interface
+EVM-NFT,M-06,Medium,Reproducible NFT build,Fixed,39e5f6a,solc/OZ pin + BUILD.md bytecode manifest
+EVM-NFT,M-07,Medium,CLI plaintext key,Fixed,8ac2646,Perm/symlink guard + zeroize
+EVM-NFT,M-08,Medium,RPC pending/fee/sync/tx fields,Fixed,6f5cd85;a32c37f,gasPrice/pending-nonce/pending-tx/effective-fee/sync; v/r/s = follow-up
+EVM-NFT,L-01,Low,NFT test depth,Fixed,39e5f6a,Receiver/role/fuzz/invariant tests (30/30)
+EVM-NFT,L-02,Low,Unsafe example contracts,Fixed,b60a9d5,Marketplace nonReentrant + UNSAFE labeling
+EVM-NFT,L-03,Low,JSON-RPC edge compliance,Fixed,6f5cd85,Notification/empty-batch handling
+EVM-NFT,I-01,Info,Logic Capsule gateway unimplemented,Disclosed,,Product gap; finalized-owner gate documented
+EVM-NFT,I-02,Info,NFT ownership is secp256k1 not PQ,Disclosed,39e5f6a,Stated in contract NatSpec + docs
+EVM-NFT,I-03,Info,ERC-2981 royalty not enforced,Disclosed,,Documented (informational standard)

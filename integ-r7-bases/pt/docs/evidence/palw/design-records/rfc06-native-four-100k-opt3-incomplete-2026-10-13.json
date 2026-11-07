@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-native-four-100k-opt3-measurement",
+  "argv": [
+    "/usr/bin/time",
+    "-l",
+    "/tmp/misaka-rfc67812-node-target/debug/deps/kaspa_consensus-bdd9082aecb2b1ea",
+    "--exact",
+    "pipeline::virtual_processor::tests::t12_permissionless_panel_e2e::complete_population::rfc06_complete_population_native_100k_four_retained_seals_and_fifth_refusal",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "timeoutSeconds": 900,
+  "complete": false,
+  "realP2pAccepted": false,
+  "securityApproval": false,
+  "exitCode": 124,
+  "reason": "predeclared deadline expired; whole test and complete RSS unmeasured",
+  "durationSeconds": 900.022,
+  "status": "FAIL_OR_INCOMPLETE",
+  "carriageExists": false,
+  "carriageBytes": null
+}

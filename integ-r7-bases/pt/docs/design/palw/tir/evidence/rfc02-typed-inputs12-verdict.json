@@ -1,0 +1,58 @@
+{
+  "schema": "misaka.rfc02.typed-inputs12-component.v1",
+  "captured_utc": "2026-10-11T10:06:29.316796+00:00",
+  "verdict": "BOUNDED_TYPED_EXTERNAL_INPUT_COMPONENT_PASS_FULL_RFC02_INCOMPLETE",
+  "full_rfc02_complete": false,
+  "native_job_or_model_admission": false,
+  "a6_a8_cohort_credit": false,
+  "new_tests_passed": 5,
+  "source_manifest": "rfc02-typed-inputs12-source-sha256.json",
+  "source_preimages": "rfc02-typed-inputs12-dependency-preimages.tar.gz",
+  "source_preimages_sha256": "b83bc89dc313da49856acbbcfb2e2ffbb384471007649eab929baf070f0de6ba",
+  "before_after_identical": true,
+  "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_inputs12",
+  "exit_code": 0,
+  "log": "rfc02-typed-inputs12-tests.log",
+  "log_sha256": "733aba293a2a9be1d6ee8714bc20878b649e1a412e89ae7fda9c39a2192292b9",
+  "test_binary": "/tmp/rfc02-typed-inputs12-final-test-binary",
+  "test_binary_sha256": "e646387902769b4fb303aec394e2caf8a5fcc1d0b563790530a3cc5954742510",
+  "source_direct": {
+    "misaka-palw-kernel/src/flat_inputs12.rs": "5e34d3062c3122256cf9bdb40a8eeb3cfa63d4dff2a103ab28309a26d643c62c",
+    "misaka-palw-kernel/src/flat_lengths7.rs": "8e2ac98780175568aab303619d74da9c03318868311eef2e5a84adaf41611841",
+    "misaka-palw-kernel/tests/flat_inputs12.rs": "bf60edce7d6644b9c6706b674cb97958d2112de7979ee0889def19b6d7d81814"
+  },
+  "limits": {
+    "external_inputs": 16,
+    "raw_payload_bytes": 16777216,
+    "i128_payload_bytes": 33554432,
+    "source_pc_instances": 16384
+  },
+  "synthetic_fixture": {
+    "modality": {
+      "token": 0,
+      "patch_maximum": 4,
+      "audio_maximum": 6,
+      "actual_patch": 3,
+      "actual_audio": 5
+    },
+    "positions": 3,
+    "actual_raw_bytes": 32,
+    "actual_i128_bytes": 128,
+    "independent_arithmetic_outputs": [
+      16,
+      32,
+      48
+    ],
+    "v2_v1_view_exact_outputs": true,
+    "same_complete_court9": true,
+    "patch_audio_and_prior_state_honest_dismiss_and_wrong_convict": true,
+    "borrowed_inputs_rejected": true
+  },
+  "limitations": [
+    "Job external tensors are constant across admitted positions; per-position or random/earlier-stage inputs not installed.",
+    "No post-write stage support; source params cannot be resized.",
+    "Local lifetime input budget covers callbacks/raw/i128 payload only, not PC hashing/tree scratch/scope preparation/native21axis quota, metadata or provider work.",
+    "Real source PC authenticates namespace and template root, not independent original BF16 fidelity.",
+    "No native input codec/transport/retention, job escrow, execution class/Final or real media checkpoint coverage."
+  ]
+}

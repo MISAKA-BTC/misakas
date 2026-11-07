@@ -1,0 +1,51 @@
+{
+  "architectures": [
+    "ModernBertDecoderForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "bos_token_id": 1,
+  "classifier_activation": "gelu",
+  "classifier_bias": false,
+  "classifier_dropout": 0.0,
+  "cls_token_id": 50281,
+  "decoder_bias": true,
+  "dtype": "bfloat16",
+  "embedding_dropout": 0.0,
+  "eos_token_id": 2,
+  "hidden_activation": "gelu",
+  "hidden_size": 32,
+  "initializer_cutoff_factor": 2.0,
+  "initializer_range": 0.02,
+  "intermediate_size": 64,
+  "layer_types": [
+    "full_attention",
+    "sliding_attention"
+  ],
+  "local_attention": 128,
+  "max_position_embeddings": 128,
+  "mlp_bias": false,
+  "mlp_dropout": 0.0,
+  "model_type": "modernbert-decoder",
+  "norm_bias": false,
+  "norm_eps": 1e-05,
+  "num_attention_heads": 4,
+  "num_hidden_layers": 2,
+  "pad_token_id": 0,
+  "rope_parameters": {
+    "full_attention": {
+      "rope_theta": 160000.0,
+      "rope_type": "default"
+    },
+    "sliding_attention": {
+      "rope_theta": 10000.0,
+      "rope_type": "default"
+    }
+  },
+  "sep_token_id": 50282,
+  "sliding_window": 64,
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

@@ -1,0 +1,418 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+warning: unused variable: `nodes`
+   --> misaka-palw-kernel/tests/k2_public.rs:178:9
+    |
+178 |     let nodes: u64 = c.trace.values[0].iter().map(|o| o.len() as u64).sum();
+    |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_nodes`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-kernel` (test "k2_public") generated 1 warning (run `cargo fix --test "k2_public" -p misaka-palw-kernel` to apply 1 suggestion)
+warning: unused import: `common::opv_world::*`
+ --> misaka-palw-kernel/tests/k2_rows.rs:6:5
+  |
+6 | use common::opv_world::*;
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-kernel` (test "k2_rows") generated 1 warning (run `cargo fix --test "k2_rows" -p misaka-palw-kernel` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.81s
+     Running unittests src/lib.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 81 tests
+test beacon::tests::grinding_is_counted_into_the_network_bound ... ok
+test assurance::tests::a_union_bound_over_probabilistic_results_and_no_number_for_a_legacy_or_judged_one ... ok
+test descriptor::tests::any_change_to_a_descriptor_or_binding_is_a_new_identity ... ok
+test descriptor::tests::locked_in_activates_at_its_daa_and_deprecation_stops_new_work ... ok
+test descriptor::tests::the_builtin_kernel_is_implemented_not_active ... ok
+test beacon::tests::late_inclusion_and_malformed_policies_are_refused ... ok
+test beacon::tests::no_seed_exists_until_the_window_is_on_chain_and_final ... ok
+test beacon::tests::a_reorg_of_the_window_is_a_counted_rebind_and_too_many_time_out ... ok
+test challenge::tests::the_seed_moves_with_every_commitment_and_labels_separate_streams ... ok
+test family::tests::every_tir_v1_primitive_has_one_family_and_none_is_media ... ok
+test field::tests::an_integer_error_below_the_moduli_product_survives_in_some_modulus ... ok
+test field::tests::integers_map_with_sign_and_round_trip_small_values ... ok
+test improve::tests::a_candidate_is_a_new_admitted_class_of_the_parents_family_under_a_pinned_kernel ... ok
+test improve::tests::promotion_keeps_statistics_and_computational_error_apart_and_refuses_unpinned_suites ... ok
+test improve::tests::the_sign_test_table_is_exact_in_integers ... ok
+test field::tests::multiplication_agrees_with_double_and_add_for_every_modulus ... ok
+test job::tests::a_job_is_refused_at_posting_outside_the_class ... ok
+test job::tests::greedy_takes_the_lowest_index_on_a_tie ... ok
+test ledger::tests::a_class_must_fit_its_filing_response_and_commitments_in_the_route_objects ... ok
+test ledger::tests::a_filing_past_the_class_envelope_is_dismissed_before_any_court_runs ... ok
+test lifecycle::tests::a_challengeable_claim_has_no_tally_and_a_tally_event_is_an_error_never_a_no_op ... ok
+test lifecycle::tests::a_covered_claim_finalizes_only_after_its_window_and_retention ... ok
+test lifecycle::tests::a_dispute_blocks_an_optimistic_final_a_dismissal_resumes_and_a_conviction_voids ... ok
+test lifecycle::tests::a_dispute_blocks_final_a_dismissal_resumes_and_a_conviction_voids ... ok
+test lifecycle::tests::a_service_holds_an_optimistic_final_until_its_proof_grace_has_elapsed ... ok
+test lifecycle::tests::a_service_holds_final_until_its_proof_grace_has_elapsed ... ok
+test lifecycle::tests::an_optimistic_claim_finalizes_by_the_explicit_window_rule_alone_with_no_tally ... ok
+test lifecycle::tests::coverage_during_a_dispute_starts_the_window_and_final_waits_for_the_verdict ... ok
+test lifecycle::tests::disputes_are_open_to_any_bond_and_bounded_by_count_and_court_work ... ok
+test lifecycle::tests::missing_material_is_the_da_path_not_a_conviction ... ok
+test lifecycle::tests::silence_and_partial_coverage_never_pass ... ok
+test lifecycle::tests::the_network_bound_charges_attempts_and_the_environment ... ok
+test merkle3::tests::a_wire_shape_that_overflows_is_malformed_never_a_panic ... ok
+test merkle::tests::an_opening_whose_shape_overflows_is_malformed_never_a_panic ... ok
+test merkle::tests::every_row_and_column_opens_against_the_commitment_and_nothing_else_does ... ok
+test element::tests::leaf_openings_file_their_values_at_the_dtype_width ... ok
+test merkle::tests::row_node_runs_authenticate_at_every_level_and_localize_a_changed_row ... ok
+test mode::tests::the_legacy_mode_keeps_its_historical_id_and_another_mode_is_another_class ... ok
+test mode::tests::the_mode_wire_discriminants_are_declared_and_an_unknown_one_is_never_success ... ok
+test opv::tests::saturating_the_court_for_the_whole_exposure_must_cost_more_than_the_claims_maximum_gain ... ok
+test opv::tests::the_clock_facts_a_fresh_verifier_plans_by ... ok
+test opv::tests::the_assurance_statement_never_claims_correctness ... ok
+test opv::tests::the_example_policy_satisfies_every_relation_and_each_relation_is_load_bearing ... ok
+test opv::tests::the_receipt_path_follows_the_mode_and_a_licence_is_never_fabricated_or_hidden ... ok
+test opv::tests::the_reservation_rule_reads_gain_penalty_and_the_assumed_detection ... ok
+test public::wire_overflow_tests::a_wire_tensor_whose_shape_overflows_is_refused_never_a_panic ... ok
+test route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind ... ok
+test route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal ... ok
+test route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling ... ok
+test route::tests::the_wire_form_is_version_discriminant_then_the_fields ... ok
+test scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position ... ok
+test scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations ... ok
+test scope::tests::the_budget_stays_below_every_relation_and_never_refuses ... ok
+test scope::tests::the_node_materials_separate_weights_copies_and_activations ... ok
+test scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another ... ok
+test merkle::tests::the_commitment_binds_dtype_shape_and_every_element ... ok
+test seg::tests::prompt_tiles_open_against_the_prompt_root ... ok
+test seg::tests::segment_roots_from_position_roots_alone_are_the_commitments_own ... ok
+test seg_encoder::tests::a_program_without_the_two_trailing_inputs_has_no_encoder_binding ... ok
+test spec::composite::tests::a_prompt_concatenates_its_sources_in_order ... ok
+test spec::memory::tests::a_line_advances_at_final_is_superseded_by_a_stale_claim_and_rolls_back_on_a_late_conviction ... ok
+test spec::memory::tests::the_memory_root_binds_slots_and_commitments ... ok
+test spec::retrieval::tests::a_malformed_snapshot_leaf_is_judged_and_an_entry_demand_serves_the_claims_own_item ... ok
+test spec::retrieval::tests::a_slice_is_served_whole_and_a_forged_one_is_a_fake_opening ... ok
+test spec::retrieval::tests::a_wrong_item_and_a_missed_better_item_are_convicted_and_honest_entries_are_not ... ok
+test spec::retrieval::tests::every_path_verifies_and_nothing_else_does ... ok
+test spec::retrieval::tests::inclusion_refuses_a_misordered_duplicate_or_out_of_range_result ... ok
+test spec::retrieval::tests::the_rule_is_the_sort_with_ties_to_the_lowest_id ... ok
+test spec::tests::a_combination_outside_the_four_is_refused_by_name_and_a_version_too ... ok
+test spec::tests::the_extension_is_its_own_descriptor_and_well_formed ... ok
+test seg::tests::every_node_opens_against_the_segment_roots_and_nothing_else_does ... ok
+test seg_detect::tests::the_descent_finds_the_first_divergent_position_in_at_most_log2_s_probes ... ok
+test element::tests::the_streamed_trace_is_the_trace ... ok
+test element::tests::the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value ... ok
+test element::tests::a_malformed_value_a_forged_decode_and_tampered_openings_are_judged_objectively ... ok
+test merkle3::tests::every_row_range_proves_against_the_commitment ... ok
+test seg_da::tests::the_fast_layout_is_the_reference_layout ... ok
+test element::tests::element_courts_are_priced_by_the_tile_not_the_tensor ... ok
+test element::tests::every_filing_is_within_its_priced_bound ... ok
+test element::tests::a_lie_in_any_value_is_found_and_convicted_and_no_honest_element_is ... ok
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements has been running for over 60 seconds
+test merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements ... ok
+
+test result: ok. 81 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 142.43s
+
+     Running tests/c4r4.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/c4r4-35d2e920aa312f8a)
+
+running 15 tests
+test f_c4r4_03_a_squatter_seal_never_holds_a_posters_escrow_or_exit_past_the_ttl_and_one_seal_ttl ... ok
+test f_c4r4_17_claim_specific_demands_must_not_rebuild_the_registered_weights ... ignored, FAIL F-C4R4-17: demanding every position of one claim rebuilds the class's projection weights exactly (the kernel's hook `cumulative_scope_allows_v1` waits for DA16b's predicate)
+test f_c4r4_12_obs_the_losing_sealer_of_a_job_race_forfeits_its_deposit ... ok
+test f_c4r4_02_obs_watcher_absence_leaves_an_unverified_lie_permanent_and_quantifies_the_loss ... ok
+test f_c4r4_15_a_default_then_a_self_conviction_must_not_recycle_more_than_the_accuser_share ... ok
+test f_c4r4_05_one_junk_filing_must_not_buy_a_whole_blocks_court ... ok
+test f_c4r4_13_a_service_past_the_check_deadline_must_not_time_the_claim_out_before_its_proof ... ok
+test f_c4r4_obs_g14_q4_without_the_model_an_outsider_cannot_convict_a_matmul_lie ... ok
+test f_c4r4_obs_capture_a_self_demand_stretches_one_admission_slot_to_the_hard_deadline ... ok
+test f_c4r4_06_obs_checking_an_unpublished_honest_claim_burns_one_demand_bond_per_position ... ok
+test f_c4r4_14_free_junk_responses_must_not_force_an_honest_producers_default ... ok
+test f_c4r4_07_obs_a_lying_producers_sybil_takes_the_bounty_of_its_own_conviction ... ok
+test f_c4r4_04_the_pre_final_default_liability_horizon_convicts_on_its_last_day_and_not_after ... ok
+test f_c4r4_15_control_a_plain_self_conviction_at_49_percent_loses_at_least_51_percent ... ok
+test f_c4r4_08_a_beacon_window_sees_more_finals_than_the_live_cap_and_no_final_names_its_poster ... ok
+
+test result: ok. 14 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.21s
+
+     Running tests/court_scope.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/court_scope-98920eea43543a16)
+
+running 1 test
+test f_c4r4_17_class_serves_no_clear_activation_of_a_weight_relation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/econ_bounty.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/econ_bounty-cd3a9b309d8540db)
+
+running 3 tests
+test after_a_self_inflicted_default_the_honest_accuser_is_paid_441_not_490 ... ok
+test checking_honest_claims_pays_the_verifier_nothing ... ok
+test at_49_percent_a_liars_own_sybil_takes_every_bounty_and_every_self_dealing_path_loses_51_percent ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/econ_seal_veto.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/econ_seal_veto-1a28da060d5e76bc)
+
+running 2 tests
+test one_withheld_seal_vetoes_every_attempt_whose_window_contains_it ... ok
+test an_abandoned_mixed_seal_vetoes_at_its_claims_default_and_stalls_longer_than_a_withheld_one ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/g14_reexecution.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/g14_reexecution-055b82f172a535a1)
+
+running 3 tests
+test admission_prices_exact_localization_even_when_the_probabilistic_plan_fits ... ok
+test local_artifact_aliases_and_false_commitment_filings_cannot_convict ... ok
+test an_unannounced_fault_past_sixteen_positions_is_convicted_with_zero_demands_and_zero_disclosures ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+
+     Running tests/g14_review_regressions.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/g14_review_regressions-f9ae4127f1df3047)
+
+running 5 tests
+test review_ram_bound_covers_the_artifacts_existing_tensor_storage ... ok
+test per_layer_artifact_instances_are_counted_and_low_ram_is_refused ... ok
+test full_join_metadata_does_not_cancel_or_delay_the_public_default ... ok
+test full_join_and_seal_metadata_does_not_preempt_a_new_outsiders_conviction ... ok
+test review_retained_state_bound_covers_all_authenticated_served_positions ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.50s
+
+     Running tests/k2_adversarial.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_adversarial-649b7bb3df88b9a0)
+
+running 6 tests
+test a_cheap_but_unsound_custom_suite_cannot_admit_a_class ... ok
+test a_weight_that_is_not_the_committed_one_is_unavailable_never_a_pass ... ok
+test a_swapped_expert_choice_is_caught_at_the_router ... ok
+test a_permuted_history_window_is_caught_at_its_append ... ok
+test receipts_under_a_stale_anchor_are_refused_after_a_reorg_rebind ... ok
+test verdicts_are_identical_across_runs_scopes_and_a_byte_only_verifier ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/k2_e2e.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_e2e-714904bf44d55b2a)
+
+running 17 tests
+test an_i128_accumulator_and_a_missing_family_are_kernel_extensions_not_successes ... ok
+test a_challenge_drawn_before_the_evidence_was_bound_is_refused ... ok
+test a_plan_cannot_omit_weaken_overclaim_or_underprice ... ok
+test an_honest_claim_passes_with_its_derived_bound ... ok
+test a_forged_history_row_cannot_hide_behind_its_own_position ... ok
+test a_fabricated_segment_boundary_a_weaker_suite_or_another_output_is_refused_before_any_check ... ok
+test registration_is_kernel_not_active_on_the_shipped_schedule_and_eligible_under_an_armed_one ... ok
+test the_honest_trace_is_the_reference_evaluators ... ok
+test a_value_served_but_not_committed_is_the_da_path_never_a_conviction ... ok
+test receipts::the_fold_refuses_a_receipt_that_overstates_soundness_names_another_scope_or_is_late ... ok
+test a_false_matmul_scalar_is_found_by_freivalds_localized_and_convicted_by_the_public_court ... ok
+test receipts::a_failing_receipt_opens_a_dispute_no_later_pass_erases_and_equivocation_is_recorded ... ok
+test weight_products_are_batched_across_the_scope_so_checks_and_weight_reads_do_not_grow_per_token ... ok
+test a_false_value_in_every_exact_family_is_recomputed_and_convicted ... ok
+test a_segment_scope_checks_only_its_positions_and_reads_its_entry_from_the_committed_predecessor ... ok
+test receipts::segment_receipts_license_only_with_per_segment_quorum_and_audits_and_repeats_never_count ... ok
+test every_single_scalar_lie_in_one_product_is_caught ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+     Running tests/k2_family_review.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_family_review-3b790e3068f60507)
+
+running 3 tests
+test every_declared_family_has_a_checker_a_public_court_and_a_finite_bound ... ok
+test a_lie_at_every_node_of_the_reference_classes_is_localized_and_convicted ... ok
+test every_primitive_is_convicted_from_commitments_without_any_producer_values_or_fault_hint ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.89s
+
+     Running tests/k2_ledger.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_ledger-fdd77ffc761908eb)
+
+running 19 tests
+test a_class_without_a_complete_public_prosecution_never_registers ... ok
+test a_post_final_default_forfeits_the_whole_reservation_and_is_never_a_conviction ... ok
+test an_uncovered_claim_never_locks_its_job_and_the_first_covered_claim_holds_it ... ok
+test a_provider_liable_default_never_charges_the_producer_and_a_lapse_voids_without_conviction ... ok
+test a_post_final_demand_must_fit_its_whole_path_in_the_liability_horizon ... ok
+test a_bond_that_copies_a_published_claim_is_refused_and_a_failed_holder_frees_the_job ... ok
+test da_responses_are_classified_and_a_default_is_an_availability_penalty_not_a_conviction ... ok
+test open_demand_sessions_never_preempt_a_direct_proof_or_crowd_out_a_demand_and_settle_deterministically ... ok
+test a_borrowed_trace_is_refused_at_inclusion_and_a_substituted_output_is_convicted_by_the_decode_court ... ok
+test a_self_consistent_trace_under_other_weights_is_convicted_and_a_failed_check_alone_never_convicts ... ok
+test spam_demands_and_joins_cannot_push_final_past_window_end_plus_court_deadline_plus_proof_grace ... ok
+test a_self_inflicted_default_never_erases_a_provable_fraud_and_a_true_proof_never_pays_a_fee ... ok
+test a_full_panel_collusion_loses_to_one_outside_bond_before_final_and_after_it ... ok
+test the_state_is_a_pure_fold_so_restart_ibd_and_reorg_agree_and_collateral_is_never_double_used ... ok
+test a_history_window_is_never_served_and_a_misderived_window_is_convicted_from_the_rows_alone ... ok
+test a_served_demand_bond_is_refunded_on_conviction_or_default_and_burned_only_at_an_unconvicted_horizon ... ok
+test withheld_positions_are_demanded_in_one_round_and_the_served_values_convict_or_silence_defaults ... ok
+test a_lifted_proof_pays_its_earliest_sealer_and_self_conviction_still_costs_more_than_the_reward ... ok
+test spam_cannot_hold_final_past_window_end_plus_court_deadline_and_a_proof_at_window_end_blocks_final ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.30s
+
+     Running tests/k2_ledger_pipeline.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_ledger_pipeline-d547344c03eddea5)
+
+running 5 tests
+test a_pipeline_class_needs_its_decode_rule_and_the_media_pipeline_kernel_and_a_job_is_checked_at_posting ... ok
+test a_trace_drawn_from_another_seed_or_of_another_job_is_refused_and_an_r_that_is_not_the_jobs_seed_is_convicted ... ok
+test a_vision_language_claim_with_a_substituted_id_is_convicted_by_the_decode_court_and_withheld_stages_are_demanded ... ok
+test pipeline_replay_localizes_stage_edge_random_image_and_decode_without_any_producer_values ... ok
+test a_text_to_image_pipeline_with_r_finalizes_honest_and_a_stage_lie_an_edge_lie_or_a_false_draw_of_r_is_convicted ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/k2_ledger_route.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_ledger_route-d03090cc5cff2e93)
+
+running 19 tests
+test a_class_registers_commitments_only_over_an_attested_artifact_and_never_twice ... ok
+test an_object_is_applied_only_if_signed_by_the_actor_it_names_and_a_refusal_changes_nothing ... ok
+test a_claim_seal_is_bonded_kept_on_the_claim_row_and_forfeited_when_withheld ... ok
+test each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else ... ok
+test a_seal_on_a_job_another_claim_took_is_forfeited_at_its_expiry ... ok
+test malformed_and_oversized_objects_are_refused_transactionally_through_the_strict_codec ... ok
+test the_root_does_not_depend_on_the_order_the_binary_lists_its_kernels ... ok
+test the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector ... ok
+test the_panels_coverage_is_derived_by_the_consumer_never_submitted_and_silence_never_passes ... ok
+test a_claims_challenge_subject_feeds_the_single_contracts_seed_and_the_ledger_stores_no_beacon ... ok
+test a_proof_resubmitted_after_a_restart_or_an_ibd_replay_is_a_duplicate ... ok
+test the_court_work_budget_bounds_what_one_block_can_make_the_network_run ... ok
+test an_outsider_authenticates_the_public_artifact_against_the_registered_commitments ... ok
+test simultaneous_public_challengers_convict_once_and_the_second_is_a_duplicate_with_no_second_slash ... ok
+test an_over_budget_object_is_refused_without_a_fee_and_a_later_block_still_convicts ... ok
+test a_final_reward_is_paid_once_out_of_the_posters_escrow_and_nothing_is_ever_issued ... ok
+test every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_minted_internally ... ok
+test a_direct_proof_inside_the_grace_pre_empts_final_whether_sessions_are_settled_or_still_open ... ok
+test invalid_challenge_spam_is_priced_by_free_collateral_and_bounded_by_the_block_budget ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+     Running tests/k2_opv.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_opv-b9e6a1695a459326)
+
+running 28 tests
+test an_optimistic_policy_is_a_genesis_constant_validated_against_the_ledger_policy ... ok
+test a_class_whose_prosecution_could_be_censored_for_less_than_it_pays_is_not_admitted ... ok
+test below_the_panel_free_fence_a_salted_reveal_is_refused_and_changes_nothing ... ok
+test an_optimistic_self_inflicted_default_never_erases_a_provable_fraud ... ok
+test a_copied_optimistic_claim_is_always_refused_because_the_first_reveal_holds_the_job_and_a_seal_cannot_be_pre_dated ... ok
+test an_optimistic_final_is_a_panel_independent_beacon_source_and_a_panel_licensed_one_is_not ... ok
+test an_honest_optimistic_claim_finalizes_by_the_window_rule_with_no_panel_and_no_fabricated_tally ... ok
+test past_the_fence_a_re_seal_forfeits_the_replaced_seal_at_its_position_so_no_seal_is_withdrawn_for_free ... ok
+test past_the_fence_a_withheld_seal_is_kept_as_forfeited_and_the_beacon_read_lists_every_seal_in_seal_order ... ok
+test past_the_panel_free_fence_a_claim_opens_only_its_salted_seal_and_the_salt_is_kept_for_the_beacon ... ok
+test empty_receipts_a_zero_quorum_and_a_missing_tally_never_count_as_checked ... ok
+test route_tag_13_is_the_mode_carrying_registration_and_an_unknown_mode_is_never_success ... ok
+test a_proof_in_the_windows_last_block_blocks_final_and_an_unserved_demand_decides_the_claim_by_its_deadline ... ok
+test the_network_policy_admits_a_class_for_the_optimistic_mode_a_registrant_never_chooses_it_for_its_own_program ... ok
+test the_optimistic_state_root_form_is_versioned_and_pinned_by_a_golden_vector ... ok
+test an_invalid_challenge_is_dismissed_with_its_fee_and_never_touches_an_honest_optimistic_claim ... ok
+test a_flood_of_claims_never_takes_the_runs_reserved_for_proofs ... ok
+test replay_and_reorg_reach_the_same_state_with_no_double_reward_slash_or_clock_restart ... ok
+test a_collateral_another_subsystem_took_is_not_a_bounty_source_and_fake_fraud_and_fake_default_loops_cost_their_players ... ok
+test a_junk_squatter_is_slashed_by_any_outsider_and_a_withholding_squatter_defaults_so_squatting_a_job_costs_the_squatter ... ok
+test withheld_material_is_a_default_not_a_fraud_conviction_and_the_claim_never_finalizes ... ok
+test the_mode_is_part_of_the_class_identity_and_an_optimistic_class_registers_only_where_the_policy_the_fence_and_the_gate_allow ... ok
+test the_reservation_is_the_policys_not_a_panel_lock_and_concurrent_claims_never_reuse_a_collateral ... ok
+test a_lying_optimistic_claim_is_convicted_before_final_and_after_it_by_one_outsider_and_the_job_is_freed ... ok
+test live_claim_caps_and_the_aggregate_gain_bound_a_producers_unsettled_exposure ... ok
+test panel_licensed_classes_behave_exactly_as_before_whether_or_not_the_ledger_has_an_optimistic_policy ... ok
+test n_cheap_sybil_bonds_pay_for_every_slot_and_cannot_hold_the_opv_lane_past_one_window ... ok
+test spam_demands_and_joins_cannot_hold_an_optimistic_final_past_the_discovered_hard_deadline ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.44s
+
+     Running tests/k2_opv_pipeline.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_opv_pipeline-cb2fd5df6cdfde9b)
+
+running 2 tests
+test a_pipeline_class_binds_its_mode_and_an_optimistic_pipeline_claim_finalizes_with_no_panel ... ok
+test a_lie_in_an_optimistic_pipeline_stage_is_localized_and_convicted_by_a_fresh_outsider ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/k2_pipeline.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_pipeline-959d1dfa458c018a)
+
+running 9 tests
+test a_pipeline_plan_cannot_drop_an_edge_or_a_stage_or_overclaim ... ok
+test a_pipeline_needs_the_media_pipeline_family_and_is_eligible_under_an_armed_v3 ... ok
+test a_pipeline_claim_is_bound_to_its_job_and_its_r_binding ... ok
+test a_false_image_edge_is_convicted_and_withheld_upstream_rows_are_unavailable ... ok
+test a_false_edge_or_a_false_draw_of_r_is_convicted_by_the_edge_court ... ok
+test a_lie_inside_a_stage_is_convicted_by_the_stage_court ... ok
+test the_kernels_stage_traces_are_the_reference_pipeline_run ... ok
+test rfc04_promotion_reads_only_final_small_check_evaluations_and_a_forged_score_never_counts ... ok
+test a_lie_in_every_stage_input_of_every_reference_pipeline_is_an_edge_fault_the_edge_court_convicts ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/k2_public.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_public-4d61968e403ffbd9)
+
+running 6 tests
+test a_promotion_opens_a_reward_only_when_every_evaluation_claim_is_publicly_prosecutable ... ok
+test no_reward_opens_without_a_complete_public_prosecution_of_exactly_that_profile ... ok
+test a_fresh_verifier_refuses_an_unknown_kernel_another_program_or_another_artifact ... ok
+test withheld_material_ends_in_an_objective_producer_default_never_a_conviction ... ok
+test a_fresh_public_bond_convicts_from_published_bytes_and_a_byte_level_court_agrees ... ok
+test a_checkers_own_randomness_finds_the_lie_and_the_court_convicts_whatever_vectors_found_it ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/k2_real_scale.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_real_scale-cefa5ee20d4c5c8f)
+
+running 12 tests
+test k2s_every_tile_and_part_constant_fits_the_node_carrier ... ok
+test k2s_raw_tensor_aliases_of_public_bytes_cannot_authenticate ... ok
+test k2s_the_gate_rederives_the_plan_and_prices_decoded_working_memory_and_all_progress ... ok
+test k2s_full_shared_demand_and_join_limits_do_not_block_an_outside_proof_or_default ... ok
+test k2s_fresh_streaming_replay_uses_only_registered_model_and_authenticated_public_material ... ok
+test k2s_a_withheld_position_is_demanded_then_defaults_never_a_conviction ... ok
+test k2s_small_model_values_are_never_served_and_a_model_holder_convicts_from_commitments ... ok
+test k2s_a_lie_in_one_segment_is_localized_to_one_element_and_convicted_with_bounded_bytes ... ok
+test k2s_a_position_is_served_in_parts_and_its_demand_bonds_wait_for_the_grace ... ok
+test k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_and_an_honest_one_finalizes ... ok
+test k2s_a_reexecuting_verifier_finds_any_lie_with_certainty_reading_two_positions ... ok
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers has been running for over 60 seconds
+test k2s_huihui_qwen35_9b_8k_passes_the_real_scale_gate_and_the_carriers ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.50s
+
+     Running tests/k2_rows.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_rows-0d499d8cff41feee)
+
+running 3 tests
+test demand_positions_sort_numerically_not_by_their_little_endian_bytes ... ok
+test rows_round_trip_and_root_at_every_stage_of_a_prosecution ... ok
+test opv_rows_round_trip_and_root_in_the_opv_root_form ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/k2_wide.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/k2_wide-8d792933f59930e6)
+
+running 7 tests
+test moduli_are_the_fewest_whose_product_exceeds_the_span ... ok
+test the_honest_wide_claim_passes_with_two_moduli_on_its_i128_product ... ok
+test a_lie_that_aliases_to_zero_mod_2_127_minus_1_is_caught_by_the_second_modulus ... ok
+test an_i128_accumulator_is_an_extension_under_v1_and_eligible_under_an_armed_v2 ... ok
+test a_claim_bound_to_one_kernel_is_never_judged_by_the_other ... ok
+test every_scalar_lie_in_the_i128_product_is_caught_and_convicted ... ok
+test v1_and_v2_coexist_and_deprecation_stops_only_new_registrations ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/typed_roots.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/typed_roots-c3b667570ba3ace2)
+
+running 15 tests
+test an_unarmed_ledger_refuses_every_spec_object_and_an_untyped_ledger_roots_as_before ... ok
+test composite_registration_refuses_memory_components_nesting_and_kind_mismatches_by_name ... ok
+test memory_a_lied_token_is_convicted_by_the_decode_court_of_its_step ... ok
+test composite_a_lie_in_the_tool_stage_is_convicted_at_that_stage_and_a_filing_against_the_honest_model_is_dismissed ... ok
+test bounds_per_kind_fit_the_carriers_and_refuse_past_each_ceiling_by_name ... ok
+test memory_a_lie_that_finalized_is_convicted_after_final_and_the_line_rolls_back ... ok
+test memory_registration_and_inclusion_refusals_are_by_name ... ok
+test retrieval_inclusion_refuses_a_misordered_or_short_result ... ok
+test memory_a_withheld_pre_state_is_a_default_and_a_served_one_completes_the_check ... ok
+test weights_only_spec_is_byte_for_byte_the_legacy_registration_in_both_modes ... ok
+test composite_a_lie_in_the_model_stage_is_convicted_at_the_model_stage ... ok
+test retrieval_a_wrong_item_and_a_missed_better_item_are_each_convicted_and_a_withheld_slice_defaults ... ok
+test composite_the_logits_to_query_edge_court_convicts_a_carried_query_that_is_not_the_upstream_logits ... ok
+test memory_test_time_parameter_updates_are_a_parameter_subset_slot ... ok
+test memory_end_to_end_a_lie_in_one_step_is_convicted_and_memory_is_carried_across_two_jobs ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests misaka_palw_kernel
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

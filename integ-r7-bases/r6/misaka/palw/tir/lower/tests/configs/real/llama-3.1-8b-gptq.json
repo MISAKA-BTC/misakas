@@ -1,0 +1,11 @@
+{
+  "architectures": [
+    "LlamaForCausalLM"
+  ],
+  "hidden_size": 4096,
+  "model_type": "llama",
+  "quantization_config": {
+    "bits": 4,
+    "quant_method": "gptq"
+  }
+}

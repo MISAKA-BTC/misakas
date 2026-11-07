@@ -1,0 +1,1465 @@
+//! **The adapter expression language** (`misaka.palw.model-adapter.v1`).
+//!
+//! An adapter is data: JSON in which an object with exactly one key that starts with `$` is an
+//! *operator node* and every other object, array and scalar is a literal (objects and arrays are
+//! evaluated element-wise, so a template for a `ModelSpec` is a `ModelSpec` with operator nodes where
+//! a value depends on the configuration). The language is deliberately small, pure and total:
+//!
+//! * no I/O, no recursion by name, no unbounded loop: evaluation takes at most [`MAX_STEPS`] work
+//!   units, [`MAX_CALL_DEPTH`] evaluator calls, [`MAX_DEPTH`] JSON levels, lists of at most
+//!   [`MAX_LIST`] elements and [`MAX_EXPANSION_BYTES`] cumulative logical allocation bytes;
+//! * every read of the configuration goes through the key-tracking [`Cfg`], so a key no rule reads
+//!   is refused (`NOT_LOWERABLE`), never ignored;
+//! * numbers keep their integer-ness (`$add` of two integers is an integer); `$div` is a float
+//!   division, `$idiv` a floor division.
+//!
+//! | group | operators |
+//! | --- | --- |
+//! | configuration | `$cfg` (`"key"` or `["key", default]`), `$cfg?` (null if absent), `$cfgn` (`["key", default]`: absent → default, explicit null → null), `$alias` (`[["k1","k2"], default?]`), `$has`, `$root` (the wrapper config of a VLM), `$forbid` (`["key", why]`), `$require_eq` (`["key", value, why]`), `$get` (`[object, "key", default?]`) |
+//! | tensors (when a tensor index is given) | `$has_tensor` (true / false / null if unknown), `$tensor_flag` (`[name, default]`: present?, else the default, recorded as assumed), `$tensor_shape`, `$tensor_prefix` (`{candidates, probe, default}`), `$tensor_prefix_scan` (`{probe, exclude?, default}`: the one prefix the index stores `probe` under; two is a refusal) |
+//! | variables | `$var`, `$let` (`["name", value, body]`) |
+//! | arithmetic | `$add $sub $mul $div $idiv $mod $neg $abs $min $max $pow $sqrt $ln $exp $floor $ceil $round $int $float` |
+//! | logic | `$eq $ne $lt $le $gt $ge $and $or $not $if` (`[c, a, b]`) `$switch` (`[value, {case: result}, default]`) |
+//! | lists, objects and strings | `$list $range $len $index $contains $concat $flatten $repeat $map $is_num` (`[list, "name", body]`) `$sum $cat $chars` (a string as the list of its characters) `$starts_with $ends_with $merge $omit $set` |
+//! | checks | `$check` (`[cond, message]`: NOT_LOWERABLE if false), `$bad` (`[cond, message]`: bad config) |
+//! | generic features | `$act` (an HF activation name → `Act`), `$rope` / `$rope_temp` (a rope spec / query temperature from the config's rope fields), `$rope_plain` (the default frequencies at a given base), `$alibi` (ALiBi slopes), `$scope` (`{key, inert, body}`: evaluate with the configuration narrowed to a nested object), `$partial_rotary` (the effective partial-rotary factor), `$layers` (`{count, each}`), `$layer_types` (`{n, allowed, each, key?}`: the config's `layer_types` — or the list under `key` — validated, or the class's own rule) |
+
+use crate::cfg::Cfg;
+use crate::error::{LowerError, Result};
+use crate::hf_schema::TensorIndex;
+use serde_json::{Map, Number, Value};
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
+
+pub const MAX_STEPS: usize = 4_000_000;
+pub const MAX_DEPTH: usize = 96;
+/// Actual evaluator calls (including lazy globals); the operator dispatcher has a larger stack
+/// frame than a JSON traversal. Keep this safe on the ordinary 2 MiB worker/test stack.
+pub const MAX_CALL_DEPTH: usize = 32;
+pub const MAX_LIST: usize = 1 << 20;
+pub const MAX_LAYERS: usize = 4096;
+/// Cumulative logical allocation budget, including copied subtrees and UTF-8 bytes.
+/// This is a compiler limit, not a consensus resource or an estimate of process RSS.
+pub const MAX_EXPANSION_BYTES: usize = 64 << 20;
+pub const EXPANSION_LIMIT: &str = "FRONTEND_EXPANSION_LIMIT";
+
+/// The configuration scope in force: the decoder's, or a nested object's inside a `$sub`.
+pub enum CfgRef<'a> {
+    Base(&'a Cfg<'a>),
+    Nested(std::rc::Rc<Cfg<'a>>),
+}
+
+impl<'a> std::ops::Deref for CfgRef<'a> {
+    type Target = Cfg<'a>;
+    fn deref(&self) -> &Cfg<'a> {
+        match self {
+            CfgRef::Base(b) => b,
+            CfgRef::Nested(n) => n,
+        }
+    }
+}
+
+/// Everything an expression can read.
+pub struct Env<'a> {
+    /// The decoder's configuration (key-tracked).
+    base: &'a Cfg<'a>,
+    /// Nested configuration scopes (`$scope`), innermost last.
+    scopes: RefCell<Vec<std::rc::Rc<Cfg<'a>>>>,
+    /// The wrapper configuration of a VLM, when the decoder lives in a nested object.
+    pub root: Option<&'a Cfg<'a>>,
+    /// HF config-class defaults: used when a key is absent from the configuration.
+    pub defaults: &'a Map<String, Value>,
+    pub tensors: Option<&'a TensorIndex>,
+    /// `architectures[0]`, for messages.
+    pub arch: &'a str,
+    /// Scoped bindings (`$let`, `$map`, the layer index).
+    vars: RefCell<Vec<(String, Value)>>,
+    /// Global variables: evaluated on first use (dependencies in any order), memoised.
+    globals_pending: RefCell<std::collections::BTreeMap<String, Value>>,
+    globals_done: RefCell<std::collections::BTreeMap<String, Value>>,
+    /// Per-layer variables (`"layer": true`): expressions, evaluated afresh for each layer of a
+    /// `$layers`, on first use within it.
+    layer_exprs: RefCell<Vec<(String, Value, bool)>>,
+    layer_pending: RefCell<std::collections::BTreeMap<String, Value>>,
+    layer_done: RefCell<std::collections::BTreeMap<String, Value>>,
+    in_progress: RefCell<BTreeSet<String>>,
+    steps: Cell<usize>,
+    expanded_bytes: Cell<usize>,
+    /// Counts actual calls, including lazy variable evaluation, which starts a new expression.
+    eval_depth: Cell<usize>,
+    /// Keys whose value is the class default, not the configuration's.
+    pub assumed: RefCell<BTreeSet<String>>,
+}
+
+fn bad(msg: impl Into<String>) -> LowerError {
+    LowerError::bad(msg)
+}
+
+/// Bound the traversal itself as well as the copy it describes. Object accounting includes
+/// key storage and map links; allocator overhead is not a protocol value.
+fn value_cost(value: &Value, depth: usize) -> Result<(usize, usize)> {
+    if depth > MAX_DEPTH {
+        return Err(bad(format!("{EXPANSION_LIMIT}: value nested too deeply")));
+    }
+    let mut work = 1usize;
+    let mut bytes = std::mem::size_of::<Value>();
+    let mut add = |child: &Value, extra: usize| -> Result<()> {
+        let (w, b) = value_cost(child, depth + 1)?;
+        work = work.checked_add(w).filter(|n| *n <= MAX_STEPS).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        bytes = bytes
+            .checked_add(b)
+            .and_then(|n| n.checked_add(extra))
+            .filter(|n| *n <= MAX_EXPANSION_BYTES)
+            .ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        Ok(())
+    };
+    match value {
+        Value::Array(a) => {
+            if a.len() > MAX_LIST {
+                return Err(bad(EXPANSION_LIMIT));
+            }
+            for v in a {
+                add(v, 0)?;
+            }
+        }
+        Value::Object(o) => {
+            if o.len() > MAX_LIST {
+                return Err(bad(EXPANSION_LIMIT));
+            }
+            for (k, v) in o {
+                add(v, k.len().saturating_add(64))?;
+            }
+        }
+        Value::String(s) => {
+            bytes = bytes.checked_add(s.len()).filter(|n| *n <= MAX_EXPANSION_BYTES).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        }
+        _ => {}
+    }
+    Ok((work, bytes))
+}
+
+fn num(v: &Value) -> Option<N> {
+    match v {
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(N::I(i))
+            } else if let Some(u) = n.as_u64() {
+                i64::try_from(u).ok().map(N::I).or(Some(N::F(u as f64)))
+            } else {
+                n.as_f64().map(N::F)
+            }
+        }
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum N {
+    I(i64),
+    F(f64),
+}
+
+impl N {
+    fn f(self) -> f64 {
+        match self {
+            N::I(i) => i as f64,
+            N::F(f) => f,
+        }
+    }
+    fn value(self) -> Result<Value> {
+        match self {
+            N::I(i) => Ok(Value::from(i)),
+            N::F(f) => Number::from_f64(f).map(Value::Number).ok_or_else(|| bad("an expression produced a non-finite number")),
+        }
+    }
+}
+
+/// Integral floats read as integers (a `16.0` where a count is wanted), everything else as is.
+pub fn normalize(v: Value) -> Value {
+    match v {
+        Value::Number(n) => {
+            if n.is_f64()
+                && let Some(f) = n.as_f64()
+                && f.fract() == 0.0
+                && f.abs() < 9.0e15
+            {
+                Value::from(f as i64)
+            } else {
+                Value::Number(n)
+            }
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(normalize).collect()),
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, normalize(v))).collect()),
+        other => other,
+    }
+}
+
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (num(a), num(b)) {
+        (Some(x), Some(y)) => x.f() == y.f(),
+        _ => match (a, b) {
+            (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| values_equal(p, q)),
+            _ => a == b,
+        },
+    }
+}
+
+fn as_bool(v: &Value, op: &str) -> Result<bool> {
+    v.as_bool().ok_or_else(|| bad(format!("`{op}` wants a boolean, got {v}")))
+}
+
+fn as_usize(v: &Value, op: &str) -> Result<usize> {
+    match num(v) {
+        Some(N::I(i)) if i >= 0 => Ok(i as usize),
+        Some(N::F(f)) if f >= 0.0 && f.fract() == 0.0 && f < 9.0e15 => Ok(f as usize),
+        _ => Err(bad(format!("`{op}` wants a non-negative integer, got {v}"))),
+    }
+}
+
+fn as_str<'v>(v: &'v Value, op: &str) -> Result<&'v str> {
+    v.as_str().ok_or_else(|| bad(format!("`{op}` wants a string, got {v}")))
+}
+
+/// The operator of a node: `Some((op, arg))` for an object with exactly one key starting with `$`.
+pub fn operator(v: &Value) -> Option<(&str, &Value)> {
+    let o = v.as_object()?;
+    if o.len() == 1 {
+        let (k, a) = o.iter().next()?;
+        if k.starts_with('$') && k.len() > 1 {
+            return Some((k.as_str(), a));
+        }
+    }
+    None
+}
+
+impl<'a> Env<'a> {
+    pub fn new(
+        cfg: &'a Cfg<'a>,
+        root: Option<&'a Cfg<'a>>,
+        defaults: &'a Map<String, Value>,
+        tensors: Option<&'a TensorIndex>,
+        arch: &'a str,
+    ) -> Self {
+        Env {
+            base: cfg,
+            scopes: RefCell::new(Vec::new()),
+            root,
+            defaults,
+            tensors,
+            arch,
+            vars: RefCell::new(Vec::new()),
+            globals_pending: RefCell::new(Default::default()),
+            globals_done: RefCell::new(Default::default()),
+            layer_exprs: RefCell::new(Vec::new()),
+            layer_pending: RefCell::new(Default::default()),
+            layer_done: RefCell::new(Default::default()),
+            in_progress: RefCell::new(BTreeSet::new()),
+            steps: Cell::new(0),
+            expanded_bytes: Cell::new(0),
+            eval_depth: Cell::new(0),
+            assumed: RefCell::new(BTreeSet::new()),
+        }
+    }
+
+    fn cur(&self) -> CfgRef<'a> {
+        match self.scopes.borrow().last() {
+            Some(n) => CfgRef::Nested(n.clone()),
+            None => CfgRef::Base(self.base),
+        }
+    }
+
+    fn charge(&self, work: usize, bytes: usize) -> Result<()> {
+        let steps = self.steps.get().checked_add(work).filter(|n| *n <= MAX_STEPS);
+        let expanded = self.expanded_bytes.get().checked_add(bytes).filter(|n| *n <= MAX_EXPANSION_BYTES);
+        match (steps, expanded) {
+            (Some(steps), Some(expanded)) => {
+                self.steps.set(steps);
+                self.expanded_bytes.set(expanded);
+                Ok(())
+            }
+            _ => Err(bad(format!("{EXPANSION_LIMIT}: adapter exceeds its work or allocation budget"))),
+        }
+    }
+
+    /// Reserve before cloning: a small expression can otherwise expand a nested `$repeat` to
+    /// arbitrarily many values while spending only a handful of evaluator steps.
+    fn reserve_copy(&self, value: &Value, copies: usize) -> Result<()> {
+        let (work, bytes) = value_cost(value, 0)?;
+        let work = work.checked_mul(copies).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        let bytes = bytes.checked_mul(copies).ok_or_else(|| bad(EXPANSION_LIMIT))?;
+        self.charge(work, bytes)
+    }
+
+    fn copy_value(&self, value: &Value) -> Result<Value> {
+        self.reserve_copy(value, 1)?;
+        Ok(value.clone())
+    }
+
+    fn reserve_list(&self, len: usize) -> Result<()> {
+        if len > MAX_LIST {
+            return Err(bad(format!("{EXPANSION_LIMIT}: adapter list too long")));
+        }
+        self.charge(len, len.checked_mul(std::mem::size_of::<Value>()).ok_or_else(|| bad(EXPANSION_LIMIT))?)
+    }
+
+    /// Declare a per-layer variable (an expression evaluated for each layer, `i` bound, when first
+    /// read or — `force` — for every layer).
+    pub fn add_layer_var(&self, name: &str, expr: Value, force: bool) {
+        self.layer_exprs.borrow_mut().push((name.to_string(), expr, force));
+    }
+
+    /// Declare a global variable; it is evaluated when first read, or by [`Env::force_globals`].
+    pub fn define_global(&self, name: &str, expr: Value) {
+        self.globals_pending.borrow_mut().insert(name.to_string(), expr);
+    }
+
+    /// Bind a global variable to a value.
+    pub fn set_var(&self, name: &str, v: Value) {
+        self.globals_done.borrow_mut().insert(name.to_string(), v);
+    }
+
+    /// Evaluate the named globals now (the adapter's `"force": true` variables: checks and
+    /// refusals that no other expression reads).
+    pub fn force_globals(&self, order: &[String]) -> Result<()> {
+        for n in order {
+            self.global(n)?;
+        }
+        Ok(())
+    }
+
+    fn global(&self, name: &str) -> Result<Value> {
+        if let Some(v) = self.globals_done.borrow().get(name) {
+            return self.copy_value(v);
+        }
+        let expr = self.globals_pending.borrow().get(name).map(|v| self.copy_value(v)).transpose()?;
+        let expr = expr.ok_or_else(|| bad(format!("{}: the adapter reads variable `{name}`, which it never defines", self.arch)))?;
+        if !self.in_progress.borrow_mut().insert(format!("g:{name}")) {
+            return Err(bad(format!("{}: variable `{name}` is defined in terms of itself", self.arch)));
+        }
+        let r = self.ev(&expr, 1).map_err(|e| in_var(e, name));
+        self.in_progress.borrow_mut().remove(&format!("g:{name}"));
+        let v = r?;
+        self.globals_done.borrow_mut().insert(name.to_string(), self.copy_value(&v)?);
+        Ok(v)
+    }
+
+    fn var(&self, name: &str) -> Result<Value> {
+        if let Some((_, v)) = self.vars.borrow().iter().rev().find(|(n, _)| n == name) {
+            return self.copy_value(v);
+        }
+        if let Some(v) = self.layer_done.borrow().get(name) {
+            return self.copy_value(v);
+        }
+        let lexpr = self.layer_pending.borrow().get(name).map(|v| self.copy_value(v)).transpose()?;
+        if let Some(expr) = lexpr {
+            if !self.in_progress.borrow_mut().insert(format!("l:{name}")) {
+                return Err(bad(format!("{}: layer variable `{name}` is defined in terms of itself", self.arch)));
+            }
+            let r = self.ev(&expr, 1).map_err(|e| in_var(e, name));
+            self.in_progress.borrow_mut().remove(&format!("l:{name}"));
+            let v = r?;
+            self.layer_done.borrow_mut().insert(name.to_string(), self.copy_value(&v)?);
+            return Ok(v);
+        }
+        self.global(name)
+    }
+
+    fn with_var<T>(&self, name: &str, v: Value, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.vars.borrow_mut().push((name.to_string(), v));
+        let r = f();
+        self.vars.borrow_mut().pop();
+        r
+    }
+
+    /// A configuration value, or the class default; `None` when neither (explicit `null` reads as absent).
+    fn lookup(&self, key: &str) -> Result<Option<Value>> {
+        match self.cur().raw(key) {
+            Some(v) => self.copy_value(v).map(Some),
+            None => self
+                .defaults
+                .get(key)
+                .filter(|v| !v.is_null())
+                .map(|v| {
+                    self.assumed.borrow_mut().insert(key.to_string());
+                    self.copy_value(v)
+                })
+                .transpose(),
+        }
+    }
+
+    /// Evaluate a template or expression.
+    pub fn eval(&self, v: &Value) -> Result<Value> {
+        self.ev(v, 0)
+    }
+
+    fn ev(&self, v: &Value, depth: usize) -> Result<Value> {
+        let active = self.eval_depth.get();
+        if depth > MAX_DEPTH || active >= MAX_CALL_DEPTH {
+            return Err(bad(format!("{EXPANSION_LIMIT}: adapter expression nested too deeply")));
+        }
+        self.charge(1, 0)?;
+        self.eval_depth.set(active + 1);
+        let result = self.ev_inner(v, depth);
+        self.eval_depth.set(active);
+        result
+    }
+
+    fn ev_inner(&self, v: &Value, depth: usize) -> Result<Value> {
+        if let Some((op, arg)) = operator(v) {
+            return self.op(op, arg, depth);
+        }
+        match v {
+            Value::Array(a) => {
+                self.reserve_list(a.len())?;
+                a.iter().map(|e| self.ev(e, depth + 1)).collect::<Result<Vec<_>>>().map(Value::Array)
+            }
+            Value::Object(o) => {
+                let mut out = Map::new();
+                for (k, e) in o {
+                    if k.starts_with('$') {
+                        return Err(bad(format!("`{k}` is an operator and must be the only key of its object")));
+                    }
+                    self.charge(1, k.len().saturating_add(64))?;
+                    out.insert(k.clone(), self.ev(e, depth + 1)?);
+                }
+                Ok(Value::Object(out))
+            }
+            other => self.copy_value(other),
+        }
+    }
+
+    fn args(&self, arg: &Value, depth: usize) -> Result<Vec<Value>> {
+        match arg {
+            Value::Array(a) => a.iter().map(|e| self.ev(e, depth + 1)).collect(),
+            other => Ok(vec![self.ev(other, depth + 1)?]),
+        }
+    }
+
+    fn arity(&self, op: &str, a: &[Value], n: usize) -> Result<()> {
+        if a.len() != n {
+            return Err(bad(format!("`{op}` takes {n} argument(s), got {}", a.len())));
+        }
+        Ok(())
+    }
+
+    fn nums(&self, op: &str, a: &[Value]) -> Result<Vec<N>> {
+        a.iter().map(|v| num(v).ok_or_else(|| bad(format!("`{op}` wants numbers, got {v}")))).collect()
+    }
+
+    // Keep operator families in separate stack frames: lazy variables and deeply nested
+    // templates must reach the depth refusal on an ordinary worker stack.
+    fn op(&self, op: &str, arg: &Value, depth: usize) -> Result<Value> {
+        match op {
+            "$cfg" | "$cfg?" | "$cfgn" | "$alias" | "$has" | "$root" | "$forbid" | "$require_eq" | "$get" => {
+                self.op_configuration(op, arg, depth + 1)
+            }
+            "$has_tensor" | "$tensor_flag" | "$tensor_shape" | "$tensor_prefix" | "$tensor_prefix_scan" => {
+                self.op_tensors(op, arg, depth + 1)
+            }
+            "$var" | "$let" => self.op_variables(op, arg, depth + 1),
+            "$add" | "$sub" | "$mul" | "$div" | "$idiv" | "$mod" | "$neg" | "$abs" | "$sqrt" | "$ln" | "$exp" | "$floor" | "$ceil"
+            | "$round" | "$int" | "$float" | "$min" | "$max" | "$pow" => self.op_arithmetic(op, arg, depth + 1),
+            "$eq" | "$ne" | "$lt" | "$le" | "$gt" | "$ge" | "$and" | "$or" | "$not" | "$if" | "$switch" => {
+                self.op_comparison_logic(op, arg, depth + 1)
+            }
+            "$list" | "$range" | "$chars" | "$len" | "$index" | "$contains" | "$is_num" | "$is_list" | "$sort" | "$unique"
+            | "$find" | "$flatten" | "$concat" | "$repeat" | "$map" | "$sum" | "$cat" | "$starts_with" | "$ends_with" | "$merge"
+            | "$omit" | "$set" => self.op_lists_strings(op, arg, depth + 1),
+            "$check" | "$bad" => self.op_checks(op, arg, depth + 1),
+            "$act" | "$layer_types" | "$scope" | "$alibi" | "$rope_plain" | "$per_layer" | "$rope_config" | "$partial_rotary"
+            | "$rope" | "$rope_temp" | "$layers" => self.op_generic_features(op, arg, depth + 1),
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_configuration(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$cfg" => {
+                let (key, default) = match arg {
+                    Value::String(k) => (k.as_str(), None),
+                    Value::Array(a) if a.len() == 2 => (as_str(&a[0], "$cfg")?, Some(&a[1])),
+                    _ => return Err(bad("`$cfg` takes a key or [key, default]")),
+                };
+                match self.lookup(key)? {
+                    Some(v) => Ok(v),
+                    None => match default {
+                        Some(e) => self.ev(e, d),
+                        None => Err(bad(format!("{}: `{key}` is required", self.arch))),
+                    },
+                }
+            }
+            // The configuration's own value or null: never a class default (an optional key has none).
+            "$cfg?" => self.cur().raw(as_str(arg, "$cfg?")?).map(|v| self.copy_value(v)).transpose().map(|v| v.unwrap_or(Value::Null)),
+            "$cfgn" => {
+                // `usize_or_null`: absent → the class default; an explicit `null` stays null (a
+                // checkpoint switches `sliding_window` off by writing null).
+                let (key, inline) = match arg {
+                    Value::String(k) => (k.as_str(), None),
+                    Value::Array(a) if a.len() == 2 => (as_str(&a[0], "$cfgn")?, Some(&a[1])),
+                    _ => return Err(bad("`$cfgn` takes a key or [key, default]")),
+                };
+                match self.cur().raw_nullable(key) {
+                    Some(Some(v)) => self.copy_value(v),
+                    Some(None) => Ok(Value::Null),
+                    None => match self.defaults.get(key).filter(|v| !v.is_null()) {
+                        Some(v) => {
+                            self.assumed.borrow_mut().insert(key.to_string());
+                            self.copy_value(v)
+                        }
+                        None => match inline {
+                            Some(e) => self.ev(e, d),
+                            None => Ok(Value::Null),
+                        },
+                    },
+                }
+            }
+            "$alias" => {
+                let (keys, default) = match arg {
+                    Value::Array(a) if !a.is_empty() && a.len() <= 2 => (&a[0], a.get(1)),
+                    _ => return Err(bad("`$alias` takes [[keys…], default?]")),
+                };
+                let keys: Vec<&str> =
+                    keys.as_array().ok_or_else(|| bad("`$alias` wants a list of keys"))?.iter().filter_map(Value::as_str).collect();
+                let mut out: Option<Value> = None;
+                for k in &keys {
+                    // The configuration's own values only: a class default for one spelling must
+                    // not "disagree" with the value another spelling carries.
+                    let v = self.cur().raw(k).map(|v| self.copy_value(v)).transpose()?;
+                    match (&out, v) {
+                        (None, Some(v)) => out = Some(v),
+                        (Some(a), Some(b)) if !values_equal(a, &b) => {
+                            return Err(bad(format!("{}: aliases {keys:?} disagree: {a} vs {b}", self.arch)));
+                        }
+                        _ => {}
+                    }
+                }
+                match (out, default) {
+                    (Some(v), _) => Ok(v),
+                    (None, Some(e)) => {
+                        if let Some(first) = keys.first() {
+                            self.assumed.borrow_mut().insert((*first).to_string());
+                        }
+                        self.ev(e, d)
+                    }
+                    (None, None) => Err(bad(format!("{}: one of {keys:?} is required", self.arch))),
+                }
+            }
+            "$has" => Ok(Value::Bool(self.cur().has(as_str(arg, "$has")?))),
+            "$root" => {
+                let r = self.root.ok_or_else(|| bad("`$root` in an adapter with no wrapper configuration"))?;
+                r.raw(as_str(arg, "$root")?).map(|v| self.copy_value(v)).transpose().map(|v| v.unwrap_or(Value::Null))
+            }
+            "$forbid" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                self.cur().forbid(as_str(&a[0], op)?, as_str(&a[1], op)?)?;
+                Ok(Value::Bool(true))
+            }
+            "$require_eq" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 3)?;
+                self.cur().require_eq(as_str(&a[0], op)?, &a[1], as_str(&a[2], op)?)?;
+                Ok(Value::Bool(true))
+            }
+            "$get" => {
+                let a = self.args(arg, d)?;
+                if a.len() < 2 || a.len() > 3 {
+                    return Err(bad("`$get` takes [object, key, default?]"));
+                }
+                let key = as_str(&a[1], op)?;
+                match a[0].as_object().and_then(|o| o.get(key)).filter(|v| !v.is_null()) {
+                    Some(v) => self.copy_value(v),
+                    None => a.get(2).map(|v| self.copy_value(v)).transpose().map(|v| v.unwrap_or(Value::Null)),
+                }
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_tensors(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$has_tensor" => {
+                let name = as_str(&self.ev(arg, d)?, op)?.to_string();
+                Ok(match self.tensors {
+                    Some(t) => Value::Bool(t.has(&name)),
+                    None => Value::Null,
+                })
+            }
+            "$tensor_flag" => {
+                // Whether the checkpoint has a tensor: from the tensor index when there is one;
+                // else the stated default, recorded as an assumption (a configuration alone cannot
+                // say whether a projection carries a bias or a norm exists).
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let name = as_str(&a[0], op)?;
+                let default = as_bool(&a[1], op)?;
+                Ok(Value::Bool(match self.tensors {
+                    Some(t) => t.has(name),
+                    None => {
+                        self.assumed
+                            .borrow_mut()
+                            .insert(format!("tensor `{name}` assumed {}", if default { "present" } else { "absent" }));
+                        default
+                    }
+                }))
+            }
+            "$tensor_shape" => {
+                let name = as_str(&self.ev(arg, d)?, op)?.to_string();
+                Ok(match self.tensors.and_then(|t| t.shape(&name)) {
+                    Some(s) => Value::Array(s.iter().map(|x| Value::from(*x as u64)).collect()),
+                    None => Value::Null,
+                })
+            }
+            "$tensor_prefix" => {
+                let o = arg.as_object().ok_or_else(|| bad("`$tensor_prefix` takes {candidates, probe, default}"))?;
+                let cands = self.ev(o.get("candidates").ok_or_else(|| bad("`$tensor_prefix`: candidates"))?, d)?;
+                let probe = as_str(&self.ev(o.get("probe").ok_or_else(|| bad("`$tensor_prefix`: probe"))?, d)?, op)?.to_string();
+                let default = self.ev(o.get("default").ok_or_else(|| bad("`$tensor_prefix`: default"))?, d)?;
+                if let Some(t) = self.tensors {
+                    for c in cands.as_array().ok_or_else(|| bad("`$tensor_prefix`: candidates is a list"))? {
+                        let c = as_str(c, op)?;
+                        if t.has(&format!("{c}{probe}")) {
+                            return Ok(Value::String(c.to_string()));
+                        }
+                    }
+                }
+                Ok(default)
+            }
+            "$tensor_prefix_scan" => {
+                // **The one prefix under which the checkpoint stores `probe`**, found in the tensor index rather than named in
+                // advance: a multimodal wrapper keeps its text decoder under the attribute path of its language model
+                // (`model.text_model.`, `model.language_model.`, `language_model.model.`), which differs per wrapper class.
+                // `exclude` lists prefixes never taken (a vision tower's own `embed_tokens`); two or more distinct prefixes is a
+                // refusal by name (the decoder is not identified), none is `default`, and no index is `default` too.
+                let o = arg.as_object().ok_or_else(|| bad("`$tensor_prefix_scan` takes {probe, exclude?, default}"))?;
+                let probe = as_str(&self.ev(o.get("probe").ok_or_else(|| bad("`$tensor_prefix_scan`: probe"))?, d)?, op)?.to_string();
+                if probe.is_empty() {
+                    return Err(bad("`$tensor_prefix_scan`: an empty probe matches every tensor"));
+                }
+                let exclude: Vec<String> = match o.get("exclude") {
+                    Some(e) => self
+                        .ev(e, d)?
+                        .as_array()
+                        .ok_or_else(|| bad("`$tensor_prefix_scan`: exclude is a list"))?
+                        .iter()
+                        .map(|x| as_str(x, op).map(str::to_string))
+                        .collect::<Result<_>>()?,
+                    None => Vec::new(),
+                };
+                let default = self.ev(o.get("default").ok_or_else(|| bad("`$tensor_prefix_scan`: default"))?, d)?;
+                let Some(t) = self.tensors else { return Ok(default) };
+                let found: BTreeSet<String> = t
+                    .names()
+                    .filter_map(|n| n.strip_suffix(probe.as_str()))
+                    .filter(|x| x.is_empty() || x.ends_with('.'))
+                    .filter(|x| !exclude.iter().any(|e| x.starts_with(e.as_str())))
+                    .map(str::to_string)
+                    .collect();
+                match found.len() {
+                    0 => Ok(default),
+                    1 => Ok(Value::String(found.into_iter().next().expect("one"))),
+                    _ => Err(LowerError::not_lowerable(format!(
+                        "the checkpoint stores `{probe}` under {} prefixes ({}): which one is the text decoder is not identified",
+                        found.len(),
+                        found.iter().map(|x| format!("`{x}`")).collect::<Vec<_>>().join(", ")
+                    ))),
+                }
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_variables(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$var" => self.var(as_str(arg, "$var")?),
+            "$let" => {
+                let a = arg.as_array().filter(|a| a.len() == 3).ok_or_else(|| bad("`$let` takes [name, value, body]"))?;
+                let name = as_str(&a[0], op)?;
+                let v = self.ev(&a[1], d)?;
+                self.with_var(name, v, || self.ev(&a[2], d))
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_arithmetic(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$add" | "$sub" | "$mul" => {
+                let a = self.args(arg, d)?;
+                if a.len() < 2 {
+                    return Err(bad(format!("`{op}` takes at least two arguments")));
+                }
+                let ns = self.nums(op, &a)?;
+                let mut acc = ns[0];
+                for x in &ns[1..] {
+                    acc = match (acc, *x) {
+                        (N::I(p), N::I(q)) => {
+                            let r = match op {
+                                "$add" => p.checked_add(q),
+                                "$sub" => p.checked_sub(q),
+                                _ => p.checked_mul(q),
+                            };
+                            N::I(r.ok_or_else(|| bad("integer overflow in an adapter expression"))?)
+                        }
+                        (p, q) => N::F(match op {
+                            "$add" => p.f() + q.f(),
+                            "$sub" => p.f() - q.f(),
+                            _ => p.f() * q.f(),
+                        }),
+                    };
+                }
+                acc.value()
+            }
+            "$div" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let ns = self.nums(op, &a)?;
+                if ns[1].f() == 0.0 {
+                    return Err(bad("division by zero in an adapter expression"));
+                }
+                N::F(ns[0].f() / ns[1].f()).value()
+            }
+            "$idiv" | "$mod" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let (x, y) = (as_i64(&a[0], op)?, as_i64(&a[1], op)?);
+                if y == 0 {
+                    return Err(bad("division by zero in an adapter expression"));
+                }
+                Ok(Value::from(if op == "$idiv" { x.div_euclid(y) } else { x.rem_euclid(y) }))
+            }
+            "$neg" | "$abs" | "$sqrt" | "$ln" | "$exp" | "$floor" | "$ceil" | "$round" | "$int" | "$float" => {
+                let v = self.ev(arg, d)?;
+                let n = num(&v).ok_or_else(|| bad(format!("`{op}` wants a number, got {v}")))?;
+                match op {
+                    "$neg" => match n {
+                        N::I(i) => Ok(Value::from(i.checked_neg().ok_or_else(|| bad("integer overflow"))?)),
+                        N::F(f) => N::F(-f).value(),
+                    },
+                    "$abs" => match n {
+                        N::I(i) => Ok(Value::from(i.checked_abs().ok_or_else(|| bad("integer overflow"))?)),
+                        N::F(f) => N::F(f.abs()).value(),
+                    },
+                    "$sqrt" => {
+                        if n.f() < 0.0 {
+                            return Err(bad("`$sqrt` of a negative number"));
+                        }
+                        N::F(n.f().sqrt()).value()
+                    }
+                    "$ln" => {
+                        if n.f() <= 0.0 {
+                            return Err(bad("`$ln` of a non-positive number"));
+                        }
+                        N::F(crate::detmath::ln(n.f())).value()
+                    }
+                    "$exp" => N::F(crate::detmath::exp(n.f())).value(),
+                    "$floor" => N::I(n.f().floor() as i64).value(),
+                    "$ceil" => N::I(n.f().ceil() as i64).value(),
+                    "$round" => N::I(n.f().round() as i64).value(),
+                    "$int" => match n {
+                        N::I(i) => Ok(Value::from(i)),
+                        N::F(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Ok(Value::from(f as i64)),
+                        N::F(f) => Err(bad(format!("`$int` of the non-integer {f}"))),
+                    },
+                    _ => N::F(n.f()).value(),
+                }
+            }
+            "$min" | "$max" => {
+                let mut a = self.args(arg, d)?;
+                // `{"$max": <expression that is a list>}`: the elements are the operands.
+                if a.len() == 1
+                    && let Value::Array(l) = &a[0]
+                {
+                    for v in l {
+                        self.reserve_copy(v, 1)?;
+                    }
+                    a = l.clone();
+                }
+                if a.is_empty() {
+                    return Err(bad(format!("`{op}` takes at least one argument")));
+                }
+                let ns = self.nums(op, &a)?;
+                let mut best = 0;
+                for (i, x) in ns.iter().enumerate() {
+                    let better = if op == "$min" { x.f() < ns[best].f() } else { x.f() > ns[best].f() };
+                    if better {
+                        best = i;
+                    }
+                }
+                ns[best].value()
+            }
+            "$pow" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let ns = self.nums(op, &a)?;
+                match (ns[0], ns[1]) {
+                    (N::I(b), N::I(e)) if (0..=62).contains(&e) => {
+                        Ok(Value::from(b.checked_pow(e as u32).ok_or_else(|| bad("integer overflow in `$pow`"))?))
+                    }
+                    // Through detmath, like every transcendental the conversion evaluates: a constant an adapter computes must
+                    // be the same number on every machine (`math: "libm-v1"`).
+                    (b, e) => N::F(crate::detmath::powf(b.f(), e.f())).value(),
+                }
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_comparison_logic(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$eq" | "$ne" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let e = values_equal(&a[0], &a[1]);
+                Ok(Value::Bool(if op == "$eq" { e } else { !e }))
+            }
+            "$lt" | "$le" | "$gt" | "$ge" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let ord = match (num(&a[0]), num(&a[1])) {
+                    (Some(x), Some(y)) => x.f().partial_cmp(&y.f()),
+                    _ => match (&a[0], &a[1]) {
+                        (Value::String(x), Value::String(y)) => Some(x.cmp(y)),
+                        _ => return Err(bad(format!("`{op}` compares numbers or strings, got {} and {}", a[0], a[1]))),
+                    },
+                }
+                .ok_or_else(|| bad("comparison of an undefined number"))?;
+                Ok(Value::Bool(match op {
+                    "$lt" => ord.is_lt(),
+                    "$le" => ord.is_le(),
+                    "$gt" => ord.is_gt(),
+                    _ => ord.is_ge(),
+                }))
+            }
+            "$and" | "$or" => {
+                let a = arg.as_array().ok_or_else(|| bad(format!("`{op}` takes a list")))?;
+                for e in a {
+                    let b = as_bool(&self.ev(e, d)?, op)?;
+                    if op == "$and" && !b {
+                        return Ok(Value::Bool(false));
+                    }
+                    if op == "$or" && b {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(op == "$and"))
+            }
+            "$not" => Ok(Value::Bool(!as_bool(&self.ev(arg, d)?, op)?)),
+            "$if" => {
+                let a = arg.as_array().filter(|a| a.len() == 3).ok_or_else(|| bad("`$if` takes [cond, then, else]"))?;
+                if as_bool(&self.ev(&a[0], d)?, op)? { self.ev(&a[1], d) } else { self.ev(&a[2], d) }
+            }
+            "$switch" => {
+                let a =
+                    arg.as_array().filter(|a| a.len() == 3).ok_or_else(|| bad("`$switch` takes [value, {case: result}, default]"))?;
+                let v = self.ev(&a[0], d)?;
+                let key = match &v {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    other => return Err(bad(format!("`$switch` on {other}"))),
+                };
+                match a[1].as_object().and_then(|m| m.get(&key)) {
+                    Some(e) => self.ev(e, d),
+                    None => self.ev(&a[2], d),
+                }
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_lists_strings(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$list" => Ok(Value::Array(self.args(arg, d)?)),
+            "$range" => {
+                let n = as_usize(&self.ev(arg, d)?, op)?;
+                self.reserve_list(n)?;
+                Ok(Value::Array((0..n as u64).map(Value::from).collect()))
+            }
+            // A string as the list of its characters, each a one-character string (Nemotron-H's `hybrid_override_pattern`).
+            "$chars" => {
+                let v = self.ev(arg, d)?;
+                let s = as_str(&v, op)?;
+                self.reserve_list(s.chars().count())?;
+                self.charge(s.len(), s.len())?;
+                Ok(Value::Array(s.chars().map(|c| Value::String(c.to_string())).collect()))
+            }
+            "$len" => {
+                let v = self.ev(arg, d)?;
+                match &v {
+                    Value::Array(a) => Ok(Value::from(a.len() as u64)),
+                    Value::String(s) => Ok(Value::from(s.chars().count() as u64)),
+                    Value::Object(o) => Ok(Value::from(o.len() as u64)),
+                    other => Err(bad(format!("`$len` of {other}"))),
+                }
+            }
+            "$index" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let l = a[0].as_array().ok_or_else(|| bad("`$index` wants a list"))?;
+                let i = as_usize(&a[1], op)?;
+                self.copy_value(l.get(i).ok_or_else(|| bad(format!("`$index` {i} of a list of {}", l.len())))?)
+            }
+            "$contains" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                match &a[0] {
+                    Value::Array(l) => Ok(Value::Bool(l.iter().any(|x| values_equal(x, &a[1])))),
+                    Value::String(s) => Ok(Value::Bool(s.contains(as_str(&a[1], op)?))),
+                    other => Err(bad(format!("`$contains` on {other}"))),
+                }
+            }
+            "$is_num" => Ok(Value::Bool(num(&self.ev(arg, d)?).is_some())),
+            "$is_list" => Ok(Value::Bool(self.ev(arg, d)?.is_array())),
+            // A list of numbers (or of strings) in ascending order.
+            "$sort" => {
+                let v = self.ev(arg, d)?;
+                self.reserve_copy(&v, 1)?;
+                let mut items = v.as_array().ok_or_else(|| bad("`$sort` wants a list"))?.clone();
+                self.charge(items.len().saturating_mul(items.len().max(1).ilog2() as usize + 1), 0)?;
+                if items.iter().all(|x| num(x).is_some()) {
+                    items.sort_by(|a, b| {
+                        num(a).map(|x| x.f()).partial_cmp(&num(b).map(|x| x.f())).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                } else if items.iter().all(Value::is_string) {
+                    items.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                } else {
+                    return Err(bad("`$sort` wants numbers or strings"));
+                }
+                Ok(Value::Array(items))
+            }
+            // The list without repeats, first occurrences kept in order.
+            "$unique" => {
+                let v = self.ev(arg, d)?;
+                let items = v.as_array().ok_or_else(|| bad("`$unique` wants a list"))?;
+                let mut out: Vec<Value> = Vec::new();
+                for x in items {
+                    // The pairwise search is work even when no expression is evaluated in it.
+                    let (cost, _) = value_cost(x, 0)?;
+                    self.charge(cost.saturating_mul(out.len()), 0)?;
+                    if !out.iter().any(|y| values_equal(x, y)) {
+                        out.push(self.copy_value(x)?);
+                    }
+                }
+                Ok(Value::Array(out))
+            }
+            // `[list, value]`: the index of the value in the list, or null.
+            "$find" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let l = a[0].as_array().ok_or_else(|| bad("`$find` wants a list"))?;
+                Ok(l.iter().position(|x| values_equal(x, &a[1])).map_or(Value::Null, |i| Value::from(i as u64)))
+            }
+            "$flatten" => {
+                let v = self.ev(arg, d)?;
+                let mut out = Vec::new();
+                for l in v.as_array().ok_or_else(|| bad("`$flatten` wants a list of lists"))? {
+                    let items = l.as_array().ok_or_else(|| bad("`$flatten` wants a list of lists"))?;
+                    if out.len().saturating_add(items.len()) > MAX_LIST {
+                        return Err(bad(EXPANSION_LIMIT));
+                    }
+                    self.reserve_copy(l, 1)?;
+                    out.extend(items.iter().cloned());
+                }
+                Ok(Value::Array(out))
+            }
+            "$concat" => {
+                let a = self.args(arg, d)?;
+                let mut out = Vec::new();
+                for l in &a {
+                    let items = l.as_array().ok_or_else(|| bad("`$concat` wants lists"))?;
+                    if out.len().saturating_add(items.len()) > MAX_LIST {
+                        return Err(bad(EXPANSION_LIMIT));
+                    }
+                    self.reserve_copy(l, 1)?;
+                    out.extend(items.iter().cloned());
+                }
+                Ok(Value::Array(out))
+            }
+            "$repeat" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let n = as_usize(&a[1], op)?;
+                if n > MAX_LIST {
+                    return Err(bad("`$repeat` too long"));
+                }
+                self.reserve_copy(&a[0], n)?;
+                Ok(Value::Array(vec![a[0].clone(); n]))
+            }
+            "$map" => {
+                let a = arg.as_array().filter(|a| a.len() == 3).ok_or_else(|| bad("`$map` takes [list, name, body]"))?;
+                let l = self.ev(&a[0], d)?;
+                let name = as_str(&a[1], op)?;
+                let items = l.as_array().ok_or_else(|| bad("`$map` wants a list"))?;
+                self.reserve_list(items.len())?;
+                let mut out = Vec::with_capacity(items.len());
+                for it in items {
+                    out.push(self.with_var(name, self.copy_value(it)?, || self.ev(&a[2], d))?);
+                }
+                Ok(Value::Array(out))
+            }
+            "$sum" => {
+                let l = self.ev(arg, d)?;
+                let items = l.as_array().ok_or_else(|| bad("`$sum` wants a list"))?;
+                let ns = self.nums(op, items)?;
+                let mut acc = N::I(0);
+                for x in ns {
+                    acc = match (acc, x) {
+                        (N::I(p), N::I(q)) => N::I(p.checked_add(q).ok_or_else(|| bad("integer overflow"))?),
+                        (p, q) => N::F(p.f() + q.f()),
+                    };
+                }
+                acc.value()
+            }
+            "$cat" => {
+                let a = self.args(arg, d)?;
+                let mut s = String::new();
+                for v in &a {
+                    match v {
+                        Value::String(x) => {
+                            self.charge(1, x.len())?;
+                            s.push_str(x);
+                        }
+                        Value::Number(n) => {
+                            self.charge(1, 32)?;
+                            s.push_str(&n.to_string());
+                        }
+                        Value::Bool(b) => {
+                            self.charge(1, 5)?;
+                            s.push_str(&b.to_string());
+                        }
+                        other => return Err(bad(format!("`$cat` of {other}"))),
+                    }
+                }
+                Ok(Value::String(s))
+            }
+            "$starts_with" | "$ends_with" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                let (s, p) = (as_str(&a[0], op)?, as_str(&a[1], op)?);
+                Ok(Value::Bool(if op == "$starts_with" { s.starts_with(p) } else { s.ends_with(p) }))
+            }
+            "$merge" => {
+                // Shallow merge of objects, later wins.
+                let a = self.args(arg, d)?;
+                let mut out = Map::new();
+                for o in &a {
+                    for (k, v) in o.as_object().ok_or_else(|| bad("`$merge` wants objects"))? {
+                        self.charge(1, k.len().saturating_add(64))?;
+                        out.insert(k.clone(), self.copy_value(v)?);
+                    }
+                }
+                Ok(Value::Object(out))
+            }
+            "$omit" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 2)?;
+                self.reserve_copy(&a[0], 1)?;
+                let mut o = a[0].as_object().cloned().ok_or_else(|| bad("`$omit` wants an object"))?;
+                for k in a[1].as_array().ok_or_else(|| bad("`$omit` wants a list of keys"))? {
+                    o.remove(as_str(k, op)?);
+                }
+                Ok(Value::Object(o))
+            }
+            "$set" => {
+                let a = self.args(arg, d)?;
+                self.arity(op, &a, 3)?;
+                self.reserve_copy(&a[0], 1)?;
+                let mut o = a[0].as_object().cloned().ok_or_else(|| bad("`$set` wants an object"))?;
+                let key = as_str(&a[1], op)?;
+                self.charge(1, key.len().saturating_add(64))?;
+                o.insert(key.to_string(), self.copy_value(&a[2])?);
+                Ok(Value::Object(o))
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_checks(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$check" | "$bad" => {
+                let a = arg.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(format!("`{op}` takes [condition, message]")))?;
+                if as_bool(&self.ev(&a[0], d)?, op)? {
+                    Ok(Value::Bool(true))
+                } else {
+                    let m = format!("{}: {}", self.arch, as_str(&self.ev(&a[1], d)?, op)?);
+                    Err(if op == "$check" { LowerError::not_lowerable(m) } else { LowerError::bad(m) })
+                }
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn op_generic_features(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        match op {
+            "$act" => {
+                let v = self.ev(arg, d)?;
+                let name = as_str(&v, op)?;
+                let a = crate::spec::Act::from_hf(name)
+                    .ok_or_else(|| LowerError::not_lowerable(format!("{}: activation `{name}` is not modelled", self.arch)))?;
+                serde_json::to_value(a).map_err(|e| bad(e.to_string()))
+            }
+            "$layer_types" => {
+                // `layer_types` (validated: one per layer, each allowed) or, when the config has
+                // none, the class's own rule `each` (variable `i` = the layer).
+                let o = arg.as_object().ok_or_else(|| bad("`$layer_types` takes {n, allowed, each}"))?;
+                let n = as_usize(&self.ev(o.get("n").ok_or_else(|| bad("`$layer_types`: n"))?, d)?, op)?;
+                if n > MAX_LAYERS {
+                    return Err(bad(format!("{EXPANSION_LIMIT}: too many layers")));
+                }
+                let allowed: Vec<String> = self
+                    .ev(o.get("allowed").ok_or_else(|| bad("`$layer_types`: allowed"))?, d)?
+                    .as_array()
+                    .ok_or_else(|| bad("`$layer_types`: allowed is a list"))?
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect();
+                // The key the list is stored under (`layer_types` unless the class says otherwise: Nemotron-H's `layers_block_type`).
+                let key = match o.get("key") {
+                    Some(k) => as_str(&self.ev(k, d)?, op)?.to_string(),
+                    None => "layer_types".to_string(),
+                };
+                match self.cur().raw(&key) {
+                    Some(Value::Array(a)) => {
+                        if a.len() != n {
+                            return Err(bad(format!("{}: {key} has {} entries for {n} layers", self.arch, a.len())));
+                        }
+                        for t in a {
+                            let t = t.as_str().ok_or_else(|| bad(format!("{}: {key} holds a non-string", self.arch)))?;
+                            if !allowed.iter().any(|x| x == t) {
+                                return Err(LowerError::not_lowerable(format!("{}: layer type `{t}` is not modelled", self.arch)));
+                            }
+                        }
+                        self.reserve_list(a.len())?;
+                        a.iter().map(|v| self.copy_value(v)).collect::<Result<Vec<_>>>().map(Value::Array)
+                    }
+                    Some(_) => Err(bad(format!("{}: `{key}` is not a list", self.arch))),
+                    None => {
+                        let each = o.get("each").ok_or_else(|| bad("`$layer_types`: each"))?;
+                        if n > MAX_LAYERS {
+                            return Err(LowerError::not_lowerable(format!("{n} layers")));
+                        }
+                        self.reserve_list(n)?;
+                        let mut out = Vec::with_capacity(n);
+                        for i in 0..n {
+                            out.push(self.with_var("i", Value::from(i as u64), || self.ev(each, d))?);
+                        }
+                        Ok(Value::Array(out))
+                    }
+                }
+            }
+            "$scope" => {
+                // Evaluate `body` with the configuration narrowed to a nested object (MPT's
+                // attn_config): its own key tracking, refused leftovers and all.
+                let o = arg.as_object().ok_or_else(|| bad("`$scope` takes {key, inert?, body}"))?;
+                let key = as_str(&self.ev(o.get("key").ok_or_else(|| bad("`$scope`: key"))?, d)?, op)?.to_string();
+                let Some(map) = self.cur().opt_obj(&key)? else {
+                    // Absent: the body is not evaluated; its value is null.
+                    return Ok(Value::Null);
+                };
+                let nested = std::rc::Rc::new(self.cur().nested(map, key));
+                if let Some(Value::Array(a)) = o.get("inert") {
+                    let keys: Vec<&str> = a.iter().filter_map(Value::as_str).collect();
+                    nested.inert(&keys);
+                }
+                self.scopes.borrow_mut().push(nested.clone());
+                let r = self.ev(o.get("body").ok_or_else(|| bad("`$scope`: body"))?, d);
+                self.scopes.borrow_mut().pop();
+                let v = r?;
+                nested.finish()?;
+                Ok(v)
+            }
+            "$alibi" => {
+                // ALiBi slopes (`kind`: "bloom" or "mpt"), as the position term of an attention.
+                let o = arg.as_object().ok_or_else(|| bad("`$alibi` takes {heads, kind, ...}"))?;
+                let heads = as_usize(&self.ev(o.get("heads").ok_or_else(|| bad("`$alibi`: heads"))?, d)?, op)?;
+                if heads == 0 {
+                    return Err(bad("`$alibi`: heads must be positive"));
+                }
+                self.reserve_list(heads)?;
+                let kind = as_str(&self.ev(o.get("kind").ok_or_else(|| bad("`$alibi`: kind"))?, d)?, op)?.to_string();
+                let slopes = match kind.as_str() {
+                    "bloom" => crate::rope::alibi_slopes_bloom(heads),
+                    "mpt" => {
+                        let m = num(&self.ev(o.get("bias_max").ok_or_else(|| bad("`$alibi`: bias_max"))?, d)?)
+                            .ok_or_else(|| bad("bias_max"))?
+                            .f();
+                        crate::rope::alibi_slopes_mpt(heads, m)
+                    }
+                    other => return Err(bad(format!("`$alibi`: unknown slope kind `{other}`"))),
+                };
+                let flag = |k: &str| -> Result<bool> {
+                    o.get(k).map(|e| self.ev(e, d).and_then(|v| as_bool(&v, op))).transpose().map(|b| b.unwrap_or(false))
+                };
+                let spec = crate::rope::AlibiSpec {
+                    slopes,
+                    scaled_by_softmax_scale: flag("scaled_by_softmax_scale")?,
+                    bf16_bias: flag("bf16_bias")?,
+                };
+                serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
+            }
+            "$rope_plain" => {
+                // A rope with the default frequencies at a given base, reading no rope key.
+                let o = arg.as_object().ok_or_else(|| bad("`$rope_plain` takes {dim, theta, style?}"))?;
+                let dim = as_usize(&self.ev(o.get("dim").ok_or_else(|| bad("`$rope_plain`: dim"))?, d)?, op)?;
+                let theta = num(&self.ev(o.get("theta").ok_or_else(|| bad("`$rope_plain`: theta"))?, d)?)
+                    .ok_or_else(|| bad("rope theta"))?
+                    .f();
+                let style = match o.get("style").map(|e| self.ev(e, d)).transpose()? {
+                    Some(Value::String(s)) if s == "Interleaved" => crate::rope::RopeStyle::Interleaved,
+                    _ => crate::rope::RopeStyle::Half,
+                };
+                if dim == 0 || dim % 2 != 0 {
+                    return Err(bad(format!("{}: rotary dim {dim} must be even and positive", self.arch)));
+                }
+                if dim > crate::rope::MAX_ROTARY_DIM {
+                    return Err(bad(format!(
+                        "{}: rotary dim {dim} is past the {} a program rotates",
+                        self.arch,
+                        crate::rope::MAX_ROTARY_DIM
+                    )));
+                }
+                let spec =
+                    crate::rope::RopeSpec { rotary_dim: dim, offset: 0, style, freqs: crate::rope::RopeFreqs::plain(theta, dim) };
+                serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
+            }
+            "$per_layer" => {
+                // A per-layer override object keyed by layer index (`per_layer_config`): a list of
+                // `n` entries, each the layer's object or null. Keys must be indices; an entry's keys
+                // must be among `allowed` (anything else is a rule this lowerer does not model); an
+                // index past the last layer is ignored. A null/absent object gives null.
+                let o = arg.as_object().ok_or_else(|| bad("`$per_layer` takes {object, allowed, n}"))?;
+                let n = as_usize(&self.ev(o.get("n").ok_or_else(|| bad("`$per_layer`: n"))?, d)?, op)?;
+                if n > MAX_LAYERS {
+                    return Err(bad("`$per_layer`: too many layers"));
+                }
+                let allowed: Vec<String> = match o.get("allowed") {
+                    Some(e) => self
+                        .ev(e, d)?
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let obj = self.ev(o.get("object").ok_or_else(|| bad("`$per_layer`: object"))?, d)?;
+                let m = match &obj {
+                    Value::Null => return Ok(Value::Null),
+                    Value::Object(m) => m,
+                    other => return Err(bad(format!("{}: per-layer overrides must be an object, got {other}", self.arch))),
+                };
+                self.reserve_list(n)?;
+                let mut out = vec![Value::Null; n];
+                for (k, v) in m {
+                    let i: usize = k.parse().map_err(|_| bad(format!("{}: per-layer key `{k}` is not a layer index", self.arch)))?;
+                    if let Some(x) = v.as_object().and_then(|e| e.keys().find(|k| !allowed.contains(k))) {
+                        return Err(LowerError::not_lowerable(format!("{}: per-layer entry `{x}` is not modelled", self.arch)));
+                    }
+                    if i < n {
+                        out[i] = self.copy_value(v)?;
+                    }
+                }
+                Ok(Value::Array(out))
+            }
+            "$rope_config" => {
+                // The rope parameters the configuration names, before any computation: {rope_type,
+                // theta, params} (the keys are read, so they count as used). For a rule that depends on
+                // them (DeepSeek's `mscale_all_dim` on the attention scale).
+                let o = arg.as_object().ok_or_else(|| bad("`$rope_config` takes {theta?, layer_type?}"))?;
+                let theta = o
+                    .get("theta")
+                    .map(|e| self.ev(e, d))
+                    .transpose()?
+                    .filter(|v| !v.is_null())
+                    .map(|v| num(&v).map(N::f).ok_or_else(|| bad("rope theta")))
+                    .transpose()?;
+                let layer_type = o.get("layer_type").map(|e| self.ev(e, d)).transpose()?.and_then(|v| v.as_str().map(str::to_string));
+                let rc = crate::rope::read_rope_config(&self.cur(), theta, layer_type.as_deref())?;
+                Ok(serde_json::json!({"rope_type": rc.rope_type, "theta": rc.theta, "params": rc.params}))
+            }
+            "$partial_rotary" => {
+                // The effective partial-rotary factor: `rope_parameters.partial_rotary_factor`
+                // (transformers 5), else the first of the legacy keys present, else the default.
+                let o = arg.as_object().ok_or_else(|| bad("`$partial_rotary` takes {legacy, default}"))?;
+                let legacy: Vec<String> = match o.get("legacy") {
+                    Some(e) => self
+                        .ev(e, d)?
+                        .as_array()
+                        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                        .unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let default = num(&self.ev(o.get("default").ok_or_else(|| bad("`$partial_rotary`: default"))?, d)?)
+                    .ok_or_else(|| bad("partial default"))?
+                    .f();
+                let rp_factor =
+                    self.cur().opt_obj("rope_parameters")?.and_then(|rp| rp.get("partial_rotary_factor").and_then(Value::as_f64));
+                if let Some(v) = rp_factor {
+                    for k in &legacy {
+                        if let Some(x) = self.cur().opt_f64(k)?
+                            && (x - v).abs() > 1e-12
+                        {
+                            return Err(LowerError::not_lowerable(format!(
+                                "{}: `{k}`={x} disagrees with rope_parameters' {v}",
+                                self.arch
+                            )));
+                        }
+                    }
+                    return N::F(v).value();
+                }
+                // Every legacy key present is read, and they must agree (transformers 5 writes `partial_rotary_factor` beside
+                // GPT-NeoX's `rotary_pct`): the first present is the factor.
+                let mut found: Option<(String, f64)> = None;
+                for k in &legacy {
+                    if let Some(x) = self.cur().opt_f64(k)? {
+                        match &found {
+                            None => found = Some((k.clone(), x)),
+                            Some((k0, x0)) if (x - x0).abs() > 1e-12 => {
+                                return Err(LowerError::not_lowerable(format!("{}: `{k}`={x} disagrees with `{k0}`={x0}", self.arch)));
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                }
+                match found {
+                    Some((_, x)) => N::F(x).value(),
+                    None => N::F(default).value(),
+                }
+            }
+            "$rope" | "$rope_temp" => self.rope(op, arg, d),
+            "$layers" => {
+                let o = arg.as_object().ok_or_else(|| bad("`$layers` takes {count, each}"))?;
+                let n = as_usize(&self.ev(o.get("count").ok_or_else(|| bad("`$layers`: count"))?, d)?, op)?;
+                if n == 0 {
+                    return Err(bad(format!("{}: a decoder needs at least one layer", self.arch)));
+                }
+                if n > MAX_LAYERS {
+                    return Err(LowerError::not_lowerable(format!("{} layers (the lowerer reads at most {MAX_LAYERS})", n)));
+                }
+                let each = o.get("each").ok_or_else(|| bad("`$layers`: each"))?;
+                self.reserve_list(n)?;
+                let mut out = Vec::with_capacity(n);
+                let lvars = self.layer_exprs.borrow();
+                // Every layer copies these pending expressions, even a lazy one it never reads.
+                // Reserve those copies before cloning or installing any layer-local bindings.
+                for (name, expr, _) in lvars.iter() {
+                    self.reserve_copy(expr, n + 1)?;
+                    self.charge(n + 1, name.len().saturating_mul(n + 1))?;
+                }
+                let lvars: Vec<(String, Value, bool)> = lvars.clone();
+                self.vars.borrow_mut().push(("n".into(), Value::from(n as u64)));
+                for i in 0..n {
+                    let mark = self.vars.borrow().len();
+                    self.vars.borrow_mut().push(("i".into(), Value::from(i as u64)));
+                    *self.layer_pending.borrow_mut() = lvars.iter().map(|(n, e, _)| (n.clone(), e.clone())).collect();
+                    self.layer_done.borrow_mut().clear();
+                    // Variables marked `force` are evaluated for every layer (their checks run).
+                    let mut r: Result<Value> = Ok(Value::Null);
+                    for (name, _, force) in &lvars {
+                        if *force && let Err(x) = self.var(name) {
+                            r = Err(x);
+                            break;
+                        }
+                    }
+                    if r.is_ok() {
+                        r = self.ev(each, d);
+                    }
+                    self.vars.borrow_mut().truncate(mark);
+                    self.layer_pending.borrow_mut().clear();
+                    self.layer_done.borrow_mut().clear();
+                    match r {
+                        Ok(v) => out.push(v),
+                        Err(e) => {
+                            self.vars.borrow_mut().pop();
+                            return Err(e);
+                        }
+                    }
+                }
+                self.vars.borrow_mut().pop();
+                Ok(Value::Array(out))
+            }
+            other => Err(bad(format!("unknown adapter operator `{other}`"))),
+        }
+    }
+
+    fn rope(&self, op: &str, arg: &Value, d: usize) -> Result<Value> {
+        let o = arg.as_object().ok_or_else(|| bad(format!("`{op}` takes an object")))?;
+        let get = |k: &str| -> Result<Option<Value>> { o.get(k).map(|e| self.ev(e, d)).transpose() };
+        let rotary_dim = as_usize(&get("dim")?.ok_or_else(|| bad(format!("`{op}`: dim")))?, op)?;
+        let style = match get("style")? {
+            Some(Value::String(s)) if s == "Half" => crate::rope::RopeStyle::Half,
+            Some(Value::String(s)) if s == "Interleaved" => crate::rope::RopeStyle::Interleaved,
+            None => crate::rope::RopeStyle::Half,
+            Some(other) => return Err(bad(format!("`{op}`: style {other}"))),
+        };
+        let theta = get("theta")?.filter(|v| !v.is_null()).map(|v| num(&v).map(N::f).ok_or_else(|| bad("rope theta"))).transpose()?;
+        let layer_type = get("layer_type")?.and_then(|v| v.as_str().map(str::to_string));
+        let partial = get("partial")?.map(|v| num(&v).map(N::f).ok_or_else(|| bad("rope partial"))).transpose()?.unwrap_or(1.0);
+        let max_pos = get("max_pos")?.filter(|v| !v.is_null()).map(|v| as_usize(&v, op)).transpose()?;
+        let top_orig = get("top_orig")?.filter(|v| !v.is_null()).map(|v| as_usize(&v, op)).transpose()?;
+        let q_scaled = get("q_scaled")?.map(|v| as_bool(&v, op)).transpose()?.unwrap_or(false);
+        let offset = get("offset")?.map(|v| as_usize(&v, op)).transpose()?.unwrap_or(0);
+        // `"reverse": true` — rotation by −θ (nanochat's `rotate_half`; `ROPE_REVERSED_V1`).
+        let reverse = get("reverse")?.map(|v| as_bool(&v, op)).transpose()?.unwrap_or(false);
+        if reverse && op != "$rope" {
+            return Err(bad(format!("`{op}`: reverse applies to a rope, not a temperature")));
+        }
+        // `"longrope": "short_only"`: LongRoPE as Phi-3.5-MoE runs it in transformers 5.17 (the short
+        // factors at every length); an ordinary `default` rope falls through to the usual reading.
+        let short_only = match get("longrope")? {
+            None | Some(Value::Null) => false,
+            Some(Value::String(s)) if s == "short_only" => true,
+            Some(other) => return Err(bad(format!("`{op}`: longrope mode {other}"))),
+        };
+        if short_only
+            && op == "$rope"
+            && let Some(mut spec) = crate::rope::longrope_short_only_spec(&self.cur(), rotary_dim, theta)?
+        {
+            spec.offset = offset;
+            return serde_json::to_value(&spec).map_err(|e| bad(e.to_string()));
+        }
+        let (mut spec, temp) = crate::rope::rope_spec_from_config(
+            &self.cur(),
+            rotary_dim,
+            style,
+            theta,
+            layer_type.as_deref(),
+            partial,
+            max_pos,
+            top_orig,
+            q_scaled,
+        )?;
+        spec.offset = offset;
+        if reverse {
+            spec.freqs = spec.freqs.reverse()?;
+        }
+        if op == "$rope" {
+            serde_json::to_value(&spec).map_err(|e| bad(e.to_string()))
+        } else {
+            serde_json::to_value(temp).map_err(|e| bad(e.to_string()))
+        }
+    }
+
+    pub fn steps_used(&self) -> usize {
+        self.steps.get()
+    }
+}
+
+/// Name the variable an evaluation error arose in (the innermost one only), so an adapter author
+/// can find the expression.
+fn in_var(e: LowerError, name: &str) -> LowerError {
+    let tag = format!(" [in variable `{name}`]");
+    match e {
+        LowerError::NotLowerable(m) if !m.contains("[in variable") => LowerError::NotLowerable(m + &tag),
+        LowerError::BadConfig(m) if !m.contains("[in variable") => LowerError::BadConfig(m + &tag),
+        e => e,
+    }
+}
+
+fn as_i64(v: &Value, op: &str) -> Result<i64> {
+    match num(v) {
+        Some(N::I(i)) => Ok(i),
+        Some(N::F(f)) if f.fract() == 0.0 && f.abs() < 9.0e15 => Ok(f as i64),
+        _ => Err(bad(format!("`{op}` wants integers, got {v}"))),
+    }
+}

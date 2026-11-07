@@ -1,0 +1,9 @@
+
+running 4 tests
+test bounded_record_codec_refuses_nested_count_namespace_layer_truncation_and_trailing_floods ... ok
+test candidate9_preparation_binds_generated_metadata_resource_and_explicit_new_namespace ... ok
+test candidate9_signing_independently_checks_all_roots_and_network_actor_signature ... ok
+test stored_class_consistency_is_insufficient_without_complete_independent_geometry_and_tariff_checks ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+

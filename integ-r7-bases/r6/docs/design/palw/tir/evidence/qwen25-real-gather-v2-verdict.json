@@ -1,0 +1,94 @@
+{
+  "schema": "misaka.rfc02.real-program-gather-court-revision.v1",
+  "observed_at_utc": "2026-10-10T12:51:11.220639+00:00",
+  "base_commit": "9836721b9b6fb57e50c2a1b878e7d08fdd7d816e",
+  "measured_code_sha256": {
+    "misaka-palw-kernel/src/element.rs": "1e513136263350b8607d4ce263838be5c9622549f22eb3e591c1b1c6c63a6691",
+    "misaka-palw-kernel/src/seg_scope.rs": "12129c4d414afbceb93c2a65c8e0a8301e515eedae12f382c49262bbddcabcc9",
+    "misaka-palw-kernel/src/descriptor.rs": "af15e5fbaac21bc8d10aab063085e43ab3bc63c4ebdab1026f312ddae46c39a3",
+    "misaka-palw-kernel/examples/profile-courts.rs": "11be2ac7f96967dd49eb8d1e112e523a99ac5162aed7404f2cc561efb521a3ef",
+    "misaka-palw-sdk/src/preflight/kernel.rs": "f09d62d0d3648e1b34a01a66e2b9e7937fc5283eeb4c8e1eef92c63fa715984a"
+  },
+  "preflight_binary_sha256": "12097777ebc715148ca57b3731354331bbe3c3c9a5c31eb78b3bd568a936f51e",
+  "program_file": "qwen25-real-pilot-program.tir",
+  "program_bytes": 14011,
+  "program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+  "checkpoint_repository": "Qwen/Qwen2.5-1.5B-Instruct",
+  "checkpoint_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "profile": {
+    "descriptor_digest": "4fa5621e07f75fe493421315de0373eac6982fdd40e33a9481b93c420cb9bd6f027baa3e56b04a88ccb431698d2d67462d751c60c85bee9aef51c08de4a9ae6b",
+    "program_root": "a1360976cdff92e473dff36769bf468140e4fb5a03150ed3be67d7af3ca72d0a5e21f4d1bf70aa4e39678aa5d6d82bdb499556f3b01999be362adb9e7a560f3d",
+    "plan_root": "0e31e5b93b6088bcb5b2b7a2e61faa9aecee0c9d62f9fe51a5d303367a3e762cec4b4a9b79c237bbb7e760b6d2679ecad9182f97088e29d4b3443d999fcd2dd2",
+    "positions": "32",
+    "plan_worst_court_bytes": "629606",
+    "plan_worst_court_work": "473589248"
+  },
+  "old_worst_court_work": 629171712,
+  "new_worst_court_work": 473589248,
+  "guaranteed_proof_work_unchanged": 536870912,
+  "limits_raised": false,
+  "core_fences_activated": false,
+  "withholding_rule_changed": false,
+  "tensor_commitment_preimages_changed": false,
+  "pricing_descriptor_identity_changed": true,
+  "hypothetical_static_node_bounds_fit": true,
+  "shipping_kernel_active": false,
+  "real_weight_public_court_final_proven": false,
+  "synthetic_court": {
+    "output_elements": 151936,
+    "proof_bytes": 608815,
+    "work": 356634368,
+    "honest_dismissal": true,
+    "fresh_output_lie_conviction": true,
+    "substituted_or_missing_parameters_refused": true
+  },
+  "synthetic_root_measurement": {
+    "profile": "debug",
+    "dtype": "i64",
+    "table_elements": 63,
+    "output_elements": 151936,
+    "alternating_warmed_trials_per_variant": 6,
+    "includes_both_commitment_trees": true,
+    "all_results_and_roots_equal": true,
+    "frozen_coordinate_upper_median_ns": 106613875,
+    "flat_upper_median_ns": 25958625,
+    "hardware_timing_is_not_consensus_gate": true
+  },
+  "validation": {
+    "kernel_lib_passed": 90,
+    "kernel_lib_ignored_existing_manual_hash_benchmark": 1,
+    "kernel_real_scale_passed": 13,
+    "kernel_typed_roots_passed": 15,
+    "sdk_preflight_passed": 5,
+    "direct_cli_passed": 2,
+    "node_complete_check_passed": 1,
+    "total_distinct_passed": 126
+  },
+  "evidence_sha256": {
+    "qwen25-real-gather-v2-profile-before.tsv": "e6cf81283c0b37d02d56a90ef9af6fe8f628a241941c894b6c7bf2c52f360e23",
+    "qwen25-real-gather-v2-profile-after.tsv": "491ca6078dec8b0ec4ad0d342afd8d2f8432431402a1defec33b93aaaea7f10c",
+    "qwen25-real-kernel-preflight-gather-v2.json": "75dfc136067044474ff224412dd492604c57a40b3ff2136a2fb98c16e7a49bed",
+    "qwen25-real-gather-v2-root-measurement.log": "32cfbd35d9ebb49ec2c5a3ef3cda9d9c26551a43dd504d7ba52fb876b82abf78",
+    "qwen25-real-gather-v2-synthetic-court.log": "66b5dfa0a62162bec0e29aaf83129920815bbae1ed4eed351ec59b8243e0cd90",
+    "qwen25-real-gather-v2-kernel-tests.log": "11ffec8042cd3d37788c485a81e710f76e8951f9d7b9f9aafa17e939a881d708",
+    "qwen25-real-gather-v2-sdk-tests.log": "e5cdd8ddb6ef82c8b2786e13a3896be689ef0b1a6b72079885fcec07d5cab87a",
+    "qwen25-real-gather-v2-cli-tests.log": "6480f3b157acae85a34601f58ff3ea7f61f460813597d0b75854eda3c5b80788",
+    "qwen25-real-gather-v2-node-tests.log": "34055865c83984098ae0438fd0eb2634cfb7bd3d48169c8705fb57f8721256bf"
+  },
+  "full_rfc02_complete": false,
+  "next_required_evidence": [
+    "Real artifact operands and registered roots through public node execution, fresh checking, court and Final/redemption",
+    "Independent source model reference, task quality and long-context fidelity",
+    "Remaining common features and complete multimodal tasks",
+    "A6/A8 coverage and aggregate resource/economic gates"
+  ],
+  "raw_log_sha256": {
+    "qwen25-real-gather-v2-cli-tests.log": "e6d6c289815c038ac4d11bc3ab6ef297c1fbfcbbb0a2daa1519fa70db2dd28af",
+    "qwen25-real-gather-v2-kernel-tests.log": "f886fb151e4a730271e041e203bfc31cb8ef9f139aca918ab5f65e787364ae4a",
+    "qwen25-real-gather-v2-node-tests.log": "82b50d0131458dddca28b6d7cbc3fee8c0b4788817a7b8eb154daf70191d846f",
+    "qwen25-real-gather-v2-root-measurement.log": "24a89a16212f9246087ea9421d8a5f035057e17d2aab58a3a95539d0b66f5531",
+    "qwen25-real-gather-v2-sdk-tests.log": "2cb74c4340788280cff78e697149d9768cf67c8b6dcd8ec97725ca687b377116",
+    "qwen25-real-gather-v2-synthetic-court.log": "197adad9daaf71330d42cd7fd68445e348773e827dc5b96e82116891297c8ab7"
+  },
+  "log_normalization": "Trailing blank lines removed; diagnostic content unchanged."
+}

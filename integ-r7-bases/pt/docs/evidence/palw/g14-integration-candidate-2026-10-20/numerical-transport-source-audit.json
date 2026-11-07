@@ -1,0 +1,23 @@
+{
+  "parent": "93a17e4380f8a50bdc09350eb8b700351ff0edf4",
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "1c4658a0cf993284561734b2928d3cb7d6fcbca3a31c3ef55e13a0648ff35204",
+    "consensus/core/src/palw_court_shared_tir_fold_v1.rs": "cf484df2828402ade538027034cb981567d96fcda10cb54b1fb7ff26af63efca",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "1b425b7661ad16194b8950be5854b61b21690a85c33c06f7e44af93a46ea2d61",
+    "consensus/core/src/palw_court_numerical_transport_v1.rs": "6f2fdd5e4ae5ab2a413aa6bcb75b60794d1ee3e7edcffc056d2eafac15b7a21a"
+  },
+  "runtime_patch_reconstruction": "PASS: fresh resolved temporary cwd, four source files byte-identical",
+  "unchanged_files": [
+    "consensus/core/src/palw_court_shared_tir_stream_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_stream_state_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_root_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_round_v1.rs",
+    "consensus/core/src/palw_court_shared_tir_bottom_v1.rs",
+    "consensus/core/src/palw_staged_court_state_v1.rs",
+    "consensus/core/src/palw_state_v2.rs",
+    "consensus/core/src/palw_native_resource_v1/generated.rs",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs"
+  ],
+  "scope": "Separate manifest/body namespace; no DATA target/lifecycle/native row/key/codec changes; actual typed folds remain unchanged; only private complete-bundle adapter added",
+  "resource_scope": "Known reusable sender buffer and actual DTO preflight/decode owner; caller-held fragments and full CPU/IO/retention/ingress/profile remain separately unclosed"
+}

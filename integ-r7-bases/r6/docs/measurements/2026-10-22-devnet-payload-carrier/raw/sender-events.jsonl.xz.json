@@ -1,0 +1,22 @@
+{
+  "kind": "lossless JSONL compression; original retained unchanged",
+  "original_path": "/private/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-payload-devnet-k10ph1lg/run/sender-events.jsonl",
+  "original_sha256": "d963cab8d4ed2141888f6e2cf0f7ea9418db6c1e3580c94e599ddac60353738f",
+  "original_bytes": 21307690,
+  "target_path": "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet/docs/measurements/2026-10-22-devnet-payload-carrier/raw/sender-events.jsonl.xz",
+  "target_xz_sha256": "3f23b50e4247c0c92009fe5ab8f0dbc683fba43ab3918c8334d80b71dc148035",
+  "target_xz_bytes": 123968,
+  "uncompressed_bytes": 21307690,
+  "uncompressed_sha256": "d963cab8d4ed2141888f6e2cf0f7ea9418db6c1e3580c94e599ddac60353738f",
+  "roundtrip_identical": true,
+  "elapsed_seconds": 0.19608592987060547,
+  "filters": [
+    {
+      "codec": "LZMA2",
+      "dictionary_bytes": 67108864,
+      "mode": "FAST",
+      "match_finder": "HC4",
+      "nice_len": 64
+    }
+  ]
+}

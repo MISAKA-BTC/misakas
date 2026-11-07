@@ -1,0 +1,11 @@
+
+running 6 tests
+test palw_fp_constraint_job_v1::tests::the_job_wire_and_id_are_the_versions_own ... ok
+test palw_fp_constraint_job_v1::tests::the_doors_admit_the_constrained_claim_only_where_and_when_the_fence_says ... ok
+test palw_fp_constraint_job_v1::tests::the_decoder_commits_the_admitted_argmax_and_the_lowest_eog_when_nothing_is_admitted ... ok
+test palw_fp_constraint_job_v1::tests::the_token_table_is_a_digest_and_a_mask_needs_the_jobs_tokenizer ... ok
+test palw_fp_constraint_job_v1::tests::the_walk_carries_a_constrained_claim_on_its_stand_in_and_skips_it_by_name_otherwise ... ok
+test palw_fp_constraint_job_v1::tests::the_replay_rule_selects_what_the_producer_selected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 3624 filtered out; finished in 0.02s
+

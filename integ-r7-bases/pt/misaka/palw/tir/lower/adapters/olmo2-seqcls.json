@@ -1,0 +1,17 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "olmo2-seqcls",
+  "doc": "Olmo2ForSequenceClassification: the `olmo2` adapter's decoder with a sequence-classification head instead of the language-model head (mixin-seqcls): the last prompt token's final-norm row through `score` to `num_labels` logits.",
+  "extends": [
+    "olmo2",
+    "mixin-seqcls"
+  ],
+  "match": {
+    "architectures": [
+      "Olmo2ForSequenceClassification"
+    ],
+    "model_types": [
+      "olmo2"
+    ]
+  }
+}

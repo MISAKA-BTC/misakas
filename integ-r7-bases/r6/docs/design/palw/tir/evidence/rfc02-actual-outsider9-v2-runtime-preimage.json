@@ -1,0 +1,17 @@
+{
+  "recorded_utc": "2026-10-11T12:26:47.887224+00:00",
+  "binary": "/tmp/rfc02-actual-outsider9-v2-immutable-810a49fb0033/kaspa_consensus-678bc0334014b538",
+  "binary_sha256": "810a49fb0033966fd8c9c93ff301c4bbf57139863464d9add5b5c230efb0fb82",
+  "owned_file_preimages": {
+    "consensus/Cargo.toml": "74623a5e22255fc96fd3c5d5602e81f47c0561889a1b7f0717867bff79b0dc8a",
+    "Cargo.lock": "f4e68f82aba40d73b8aaa1a5b17d83c4580bf5f11c99199b750498cef9aefc95",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9.rs": "67ccfb982ac1fc638c611f9feece6b68f28f379580bce4c12e93070ff78004d8",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance/flat_native_v9/actual_outsider.rs": "4a0d6bf137ffc804368c5a19caae4b3751702444fed0b62c16ec0a482f1fdab8",
+    "misaka-palw-sdk/src/flat_streamed_locator_v9.rs": "c1de63f5778384cb28ba8b75cb605871cb51343b9192d920eda4e9b2cfabeafd",
+    "misaka-palw-sdk/src/flat_snapshot_v9.rs": "0acb109048acda9edbfbc8ef0bd79e8198b5734727c24ab1061777aad47677a9",
+    "misaka-palw-sdk/src/lib.rs": "e1f858fc092343d084f3a006f9c8b1fcdde8325e299c8181267188a6545de645",
+    "docs/design/palw/tir/evidence/qwen25-real-generic9-fixture.borsh": "f023ac340642759675c8154c4747e316c2f9a0beda8ef5c5f5c54033a9d896bf",
+    "docs/design/palw/tir/evidence/rfc02-actual-outsider9-protocol-v2.json": "1d9dd3bbdeeb204fa62108c153777cf4470a4ae553658bbb14df763f3c41a0cf"
+  },
+  "scope": "Diagnostic v2 compiler build; owned consumer/test and protocol source pin, no coherent complete concurrently changing dependency closure."
+}

@@ -1,0 +1,25 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s
+     Running tests/g14_review_regressions.rs (target/debug/deps/g14_review_regressions-f9ae4127f1df3047)
+
+running 2 tests
+RAM: artifact wire=3072 evidence/position=1104 claimed RAM=4176 live artifact data alone=20480
+
+thread 'review_ram_bound_covers_the_artifacts_existing_tensor_storage' (1656642) panicked at misaka-palw-kernel/tests/g14_review_regressions.rs:24:5:
+the bound must cover even the artifact's live data, before caches and temporaries
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test review_ram_bound_covers_the_artifacts_existing_tensor_storage ... FAILED
+retained state: positions=63, claimed bound=1582080, served rows alone=4220181
+
+thread 'review_retained_state_bound_covers_all_authenticated_served_positions' (1656643) panicked at misaka-palw-kernel/tests/g14_review_regressions.rs:43:5:
+the per-claim retained bound must cover its persisted served bytes
+test review_retained_state_bound_covers_all_authenticated_served_positions ... FAILED
+
+failures:
+
+failures:
+    review_ram_bound_covers_the_artifacts_existing_tensor_storage
+    review_retained_state_bound_covers_all_authenticated_served_positions
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+
+error: test failed, to rerun pass `-p misaka-palw-kernel --test g14_review_regressions`

@@ -1,0 +1,17 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.57s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227)
+
+running 8 tests
+test flat_resources10::tests::malformed_raw_width_shape_dtype_or_authentication_spends_attempt_and_retry_is_prepaid ... ok
+test flat_resources10::tests::same_job_cannot_borrow_a_new_actor_input_extent_parameter_root_or_vector_across_retries ... ok
+test flat_resources10::tests::aggregate_plan_block_bond_and_network_refusals_are_atomic_and_do_not_reset_for_new_actor_or_job ... ok
+test flat_resources10::tests::checked_resource_aggregation_cannot_wrap_and_exact_namespaces_and_extents_are_required ... ok
+test flat_resources10::tests::public_vector_tampering_never_authorizes_underpriced_source_work_or_borrowed_court_scope ... ok
+test flat_resources10::tests::every_resource_dimension_is_refused_before_parameter_callback_for_all_four_ceiling_scopes ... ok
+test flat_resources10::tests::bounded_reference_matches_all_twenty_five_primitives_and_state_across_positions ... ok
+QWEN_RESOURCE10_METADATA_ONLY nodes=7658 positions=32 quantities=[49812602880, 804390110720, 6406748539392, 173477813728, 936635996672, 190116278528, 17821988416, 55840, 4249892000, 11204800, 15816704, 7789480224, 245056, 1, 228106240, 141228, 24346393, 245199872, 1835516100, 40509440, 4343239673] vector=c7349230d87d16ed202eb25722c8268deff9635453d0d633c74edd46695c1d6066e20016a07b692e2c3411bd290a50c0798776ece1f9da5176961cb9a587090a source_weights_loaded=false reference_executed=false native_admission=false final=false full_rfc02=false
+test flat_resources10::tests::actual_qwen_metadata_prices_source_scans_hashes_reference_memory_and_unrolled_nodes_without_loading_weights ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 156 filtered out; finished in 0.15s
+

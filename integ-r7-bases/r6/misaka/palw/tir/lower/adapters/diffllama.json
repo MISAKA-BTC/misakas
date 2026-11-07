@@ -1,0 +1,15 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "diffllama",
+  "doc": "DiffLlama (DiffLlamaForCausalLM, differential attention, https://huggingface.co/papers/2410.05258; transformers 5.17 modular_diffllama.py): Llama's pre-norm decoder whose attention runs once over the keys and a double-wide value [V_g | V_{g+Hkv/2}] per kv head, subtracts the second half of the heads' contexts from the first with a learned lambda, RMS-norms each pair over 2*head_dim without a gain and scales by 1 - lambda_init (ATTN_DIFFERENTIAL_V1). lambda = exp(sum lambda_q1*lambda_k1) - exp(sum lambda_q2*lambda_k2) + lambda_init(layer), lambda_init(layer) = 0.8 - 0.6*exp(-0.3*layer): a constant of the layer's weights, made at conversion. num_key_value_heads must be even; attention_dropout > 0 is refused (HF refuses it too). Features: ATTN_DIFFERENTIAL_V1, ATTN_GQA_V1, ROPE_DEFAULT_V1, NORM_RMS_V1, MLP_DENSE_GATED_V1.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["DiffLlamaForCausalLM"], "model_types": ["diffllama"]},
+  "config": {"defaults": {"vocab_size": 32000, "hidden_size": 2048, "intermediate_size": 8192, "num_hidden_layers": 16, "num_attention_heads": 32, "num_key_value_heads": 8, "max_position_embeddings": 2048, "rms_norm_eps": 1e-05}, "inert": ["lambda_std_dev"]},
+  "vars": [
+    {"name": "no_dropout", "value": {"$let": ["_", {"$forbid": ["attention_dropout", "DiffLlama refuses attention_dropout > 0: the differential combination has no defined dropout"]}, false]}},
+    {"name": "kv_even", "value": {"$bad": [{"$and": [{"$gt": [{"$var": "kv"}, 0]}, {"$eq": [{"$mod": [{"$var": "kv"}, 2]}, 0]}]}, "DiffLlama needs an even num_key_value_heads"]}},
+    {"name": "attn_extra", "value": {"differential": {"lambda_init": {"base": 0.8, "amp": 0.6, "rate": 0.3}, "norm_eps": {"$var": "eps"}}}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"attn.lambda_q1": "{p}layers.{L}.self_attn.lambda_q1", "attn.lambda_k1": "{p}layers.{L}.self_attn.lambda_k1", "attn.lambda_q2": "{p}layers.{L}.self_attn.lambda_q2", "attn.lambda_k2": "{p}layers.{L}.self_attn.lambda_k2"}]}},
+    {"name": "model_type", "value": "diffllama"}
+  ]
+}

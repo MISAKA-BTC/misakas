@@ -1,0 +1,165 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 34,
+  "file": "widest.json",
+  "readable": true,
+  "input": "https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/resolve/85864749cd611b4353ce1decdb286193298f64c7",
+  "bytes_read": 1139574,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "deepseek_v2",
+  "architectures": [
+   "DeepseekV2ForCausalLM"
+  ],
+  "frontend_level": "B",
+  "adapter": "deepseek-v2",
+  "features_used": 13,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "BF16"
+  ],
+  "weights_bytes": 31412968448,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 16032082348,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 22d34bb2411f56e2\u2026, \u03b5_check \u2264 2^-224 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 32783
+  },
+  "admission_verdict": "ADMISSIBLE (pending admission v10's layout checks (declared tiles, C \u2264 min C_j, the canonical job, close bytes, the window court) need a declared layout)",
+  "admission_gate": "admitted",
+  "admission_gate_detail": null,
+  "layout": {
+   "max_context": 32783,
+   "checkpoint_interval": 65536,
+   "h_tile": 8,
+   "commit_tiles": 45,
+   "logits_tile": 256,
+   "searched": true,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 18523595584,
+  "verdict": {
+   "convert": "ok",
+   "register": "ok",
+   "mine": "blocked"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "mine",
+    "code": "SEAT_MEMORY_SHORT",
+    "arg": null,
+    "what": "no seat tier holds the class: a seat never becomes ready for it, because it cannot replay a claim",
+    "have": 18523595584,
+    "need": 8589934592,
+    "unit": "bytes",
+    "safe_paths": [
+     "or a smaller model, or a larger seat"
+    ]
+   }
+  ],
+  "notes": [
+   "the declared context is 32,783 positions: the widest at which admission v10 admits the class (the program reads up to 262,144; --max-context N declares another)",
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)"
+  ]
+ },
+ "declared": {
+  "exit": 34,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "https://huggingface.co/deepseek-ai/DeepSeek-V2-Lite-Chat/resolve/85864749cd611b4353ce1decdb286193298f64c7",
+  "bytes_read": 1139574,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "deepseek_v2",
+  "architectures": [
+   "DeepseekV2ForCausalLM"
+  ],
+  "frontend_level": "B",
+  "adapter": "deepseek-v2",
+  "features_used": 13,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": []
+  },
+  "storage": [
+   "BF16"
+  ],
+  "weights_bytes": 31412968448,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 16032082348,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 6738f4666204029c\u2026, \u03b5_check \u2264 2^-230 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 512
+  },
+  "admission_verdict": "ADMISSIBLE (pending admission v10's layout checks (declared tiles, C \u2264 min C_j, the canonical job, close bytes, the window court) need a declared layout)",
+  "admission_gate": "admitted",
+  "admission_gate_detail": null,
+  "layout": {
+   "max_context": 512,
+   "checkpoint_interval": 65536,
+   "h_tile": 8,
+   "commit_tiles": 45,
+   "logits_tile": 256,
+   "searched": false,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 16062727920,
+  "verdict": {
+   "convert": "ok",
+   "register": "ok",
+   "mine": "blocked"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "mine",
+    "code": "SEAT_MEMORY_SHORT",
+    "arg": null,
+    "what": "no seat tier holds the class: a seat never becomes ready for it, because it cannot replay a claim",
+    "have": 16062727920,
+    "need": 8589934592,
+    "unit": "bytes",
+    "safe_paths": [
+     "or a smaller model, or a larger seat"
+    ]
+   }
+  ],
+  "notes": [
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)"
+  ]
+ }
+}

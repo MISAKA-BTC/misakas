@@ -1,0 +1,45 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.78s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/misaka_palw_kernel-3e75f80c67bc7227)
+
+running 37 tests
+test flat_quota11::protected_tests::all_raw_fragment_boundaries_refuse_before_debit_and_successful_duplicates_use_no_retry ... ok
+test flat_quota11::protected_tests::canonical_original_operator_highwater_witness_refuses_nonce_rewind_rotation_and_max_nonce ... ok
+test flat_quota11::protected_tests::closed_job_cannot_gc_live_seal_and_expired_one_row_gc_never_refunds_or_recredits ... ok
+test flat_quota11::protected_tests::every_positive_protected_axis_enforces_plan_block_actor_network_atomically ... ok
+test flat_quota11::protected_tests::exact_reserved_vector_includes_two_courts_one_finish_two_da_and_two_attempts_per_part ... ok
+test flat_quota11::protected_tests::exact_source_pc_filing_and_fixed_native_factory_match_public_factory_without_underreservation ... ok
+test flat_quota11::protected_tests::failed_fragments_retain_two_prepaid_attempts_and_cannot_reuse_the_first_private_token ... ok
+test flat_quota11::protected_tests::fixed_retained_actor_four_and_global_1024_limits_are_enforced_before_allocation ... ok
+test flat_quota11::protected_tests::fixed_selected_native_rows_match_full_book_reservation_court_and_fragment_algebra ... ok
+test flat_quota11::protected_tests::immature_wrong_owner_wrong_plan_and_failed_court_attempts_never_borrow_a_guarantee ... ok
+test flat_quota11::protected_tests::ordinary_floods_leave_both_producer_and_paid_seal_da_court_guarantees_available ... ok
+test flat_quota11::protected_tests::original_paid_seal_checks_exact_subject_funding_operator_clock_and_shared_slots ... ok
+test flat_quota11::protected_tests::out_of_order_fragments_bind_count_cap_sum_and_pay_whole_court_finish_once ... ok
+test flat_quota11::protected_tests::producer_and_seal_guarantees_survive_equal_daa_blocks_and_ancestor_replay_together ... ok
+test flat_quota11::protected_tests::protected_rooted_restore_rejects_conserved_rewind_counts_truncation_duplicate_and_trailing_bytes ... ok
+test flat_quota11::protected_tests::selected_rooted_codecs_bound_exact_widths_and_authenticate_all_four_native_records ... ok
+test flat_quota11::protected_tests::selected_shard_baseline_is_once_only_and_preserves_other_subject_aggregate_guarantees ... ok
+test flat_quota11::tests::actual_class_scopes_and_rooted_stored_plan_are_independently_bound ... ok
+test flat_quota11::tests::actual_one_class_thirty_two_reserves_class_court_restore_post_and_whole_chunk_without_underpricing ... ok
+test flat_quota11::tests::bounded_snapshot_codec_refuses_count_floods_truncation_duplicates_and_trailing_bytes ... ok
+test flat_quota11::tests::closed_expired_collection_allows_new_jobs_without_nonce_reuse_or_old_guarantee_refunds ... ok
+test flat_quota11::tests::duplicate_jobs_and_multiple_actors_share_caps_and_bounded_retained_counts ... ok
+test flat_quota11::tests::every_axis_and_all_four_cap_scopes_are_atomic_at_baseline ... ok
+test flat_quota11::tests::expired_terminal_current_debits_survive_failures_and_ordinary_floods_without_old_credit ... ok
+test flat_quota11::tests::failed_current_close_keeps_debit_open_and_only_exact_genuine_terminal_marks_closed ... ok
+test flat_quota11::tests::failed_expensive_attempts_stay_spent_and_oversized_carriers_refuse_before_debit ... ok
+test flat_quota11::tests::freshly_checked_class_factory_matches_independent_actual_and_maximum_derivation ... ok
+test flat_quota11::tests::interval_crossing_is_refused_and_rollover_never_rebinds_old_subject ... ok
+test flat_quota11::tests::late_native_terminal_mark_requires_exact_prepaid_book_and_never_refunds_old_guarantee ... ok
+test flat_quota11::tests::native_baseline_factory_rejects_every_foreign_anchor_and_public_baseline_backdoor ... ok
+test flat_quota11::tests::ordinary_admission_flood_cannot_take_mature_court_da_chunk_or_close_guarantee ... ok
+test flat_quota11::tests::overflow_fixed_policy_and_restored_guarantee_tampering_refuse_atomically ... ok
+test flat_quota11::tests::public_challenger_failures_spend_only_own_unreserved_pool_preserving_mature_owner_guarantee ... ok
+test flat_quota11::tests::rooted_native_restore_refuses_locally_conserved_counter_row_erasure_and_guarantee_increase ... ok
+test flat_quota11::tests::subject_input_class_actor_and_plan_bindings_cannot_change_or_duplicate_baseline ... ok
+test flat_quota11::tests::terminal_anchor_and_restored_class_cannot_authorize_new_baseline_or_early_collection ... ok
+test flat_quota11::tests::trusted_equal_daa_blocks_keep_interval_and_lifetime_credit_and_rollback_replays_exactly ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 165 filtered out; finished in 0.28s
+

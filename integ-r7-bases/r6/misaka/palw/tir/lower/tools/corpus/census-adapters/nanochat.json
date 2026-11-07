@@ -1,0 +1,132 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "nanochat",
+ "doc": "NanoChat (Karpathy, native transformers 5 class): every RMSNorm is WEIGHTLESS (x * rsqrt(mean x^2 + eps)), an extra weightless RMS norm on the embeddings before the layers, an ungated fc1/fc2 MLP with ReLU^2, final_logit_softcapping, and per-head q/k RMS norms applied AFTER the rotation (HF: 'RoPE -> Norm instead of the usual Norm -> RoPE'). The post-rotation order is expressed by `attn_extra.qk_norm_after_rope` (FR-02, landed on tir/generic). Third-party adapter (lane H): data only. Rotation by -theta: `$rope` with `reverse` (ROPE_REVERSED_V1, FR-35).",
+ "extends": [
+  "decoder-core"
+ ],
+ "match": {
+  "architectures": [
+   "NanoChatForCausalLM"
+  ],
+  "model_types": [
+   "nanochat"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "hidden_act": "relu2",
+   "tie_word_embeddings": false
+  }
+ },
+ "vars": [
+  {
+   "name": "rope",
+   "value": {
+    "$rope": {
+     "dim": {
+      "$var": "rope_dim"
+     },
+     "style": {
+      "$var": "rope_style"
+     },
+     "theta": {
+      "$var": "rope_theta"
+     },
+     "partial": {
+      "$var": "rope_partial"
+     },
+     "max_pos": {
+      "$var": "max_pos"
+     },
+     "q_scaled": {
+      "$var": "q_scaled"
+     },
+     "reverse": true
+    }
+   }
+  },
+  {
+   "name": "attn_extra",
+   "value": {
+    "qk_norm_after_rope": true
+   }
+  },
+  {
+   "name": "norm",
+   "value": {
+    "kind": "Rms",
+    "eps": {
+     "$var": "eps"
+    },
+    "gain": "None",
+    "bias": false
+   }
+  },
+  {
+   "name": "mlp_gated",
+   "value": false
+  },
+  {
+   "name": "qk_norm",
+   "value": {
+    "norm": {
+     "kind": "Rms",
+     "eps": {
+      "$var": "eps"
+     },
+     "gain": "None",
+     "bias": false
+    },
+    "scope": "PerHeadShared"
+   }
+  },
+  {
+   "name": "cap",
+   "value": {
+    "$cfg?": "final_logit_softcapping"
+   }
+  },
+  {
+   "name": "head",
+   "value": {
+    "tied": {
+     "$var": "tied"
+    },
+    "softcap": {
+     "$var": "cap"
+    }
+   }
+  },
+  {
+   "name": "embedding",
+   "value": {
+    "dim": {
+     "$var": "hidden"
+    },
+    "scale": 1.0,
+    "norm": {
+     "$var": "norm"
+    }
+   }
+  },
+  {
+   "name": "names",
+   "value": {
+    "$merge": [
+     {
+      "$var": "names_base"
+     },
+     {
+      "mlp.up": "{p}layers.{L}.mlp.fc1",
+      "mlp.down": "{p}layers.{L}.mlp.fc2"
+     }
+    ]
+   }
+  },
+  {
+   "name": "model_type",
+   "value": "nanochat"
+  }
+ ]
+}

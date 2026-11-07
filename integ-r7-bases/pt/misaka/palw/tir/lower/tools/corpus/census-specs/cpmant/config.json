@@ -1,0 +1,24 @@
+{
+  "architectures": [
+    "CpmAntForCausalLM"
+  ],
+  "dim_ff": 10240,
+  "dim_head": 128,
+  "dropout_p": 0.0,
+  "dtype": "bfloat16",
+  "eps": 1e-06,
+  "hidden_size": 32,
+  "init_std": 1.0,
+  "model_type": "cpmant",
+  "num_attention_heads": 4,
+  "num_hidden_layers": 2,
+  "position_bias_max_distance": 2048,
+  "position_bias_num_buckets": 512,
+  "prompt_length": 32,
+  "prompt_types": 32,
+  "segment_types": 32,
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

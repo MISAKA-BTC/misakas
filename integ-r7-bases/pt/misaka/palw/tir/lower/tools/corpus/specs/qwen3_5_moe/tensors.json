@@ -1,0 +1,769 @@
+{
+ "lm_head.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.embed_tokens.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.0.linear_attn.A_log": {
+  "dtype": "BF16",
+  "shape": [
+   4
+  ]
+ },
+ "model.layers.0.linear_attn.conv1d.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   1,
+   4
+  ]
+ },
+ "model.layers.0.linear_attn.dt_bias": {
+  "dtype": "BF16",
+  "shape": [
+   4
+  ]
+ },
+ "model.layers.0.linear_attn.in_proj_a.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.0.linear_attn.in_proj_b.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.0.linear_attn.in_proj_qkv.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.0.linear_attn.in_proj_z.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.linear_attn.norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.0.linear_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.0.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.0.mlp.experts.0.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.0.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.1.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.0.mlp.experts.1.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.1.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.2.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.0.mlp.experts.2.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.2.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.3.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.0.mlp.experts.3.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.experts.3.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.0.mlp.shared_expert.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.0.mlp.shared_expert.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.shared_expert.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.0.mlp.shared_expert_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   32
+  ]
+ },
+ "model.layers.0.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.1.linear_attn.A_log": {
+  "dtype": "BF16",
+  "shape": [
+   4
+  ]
+ },
+ "model.layers.1.linear_attn.conv1d.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   1,
+   4
+  ]
+ },
+ "model.layers.1.linear_attn.dt_bias": {
+  "dtype": "BF16",
+  "shape": [
+   4
+  ]
+ },
+ "model.layers.1.linear_attn.in_proj_a.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.1.linear_attn.in_proj_b.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.1.linear_attn.in_proj_qkv.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.1.linear_attn.in_proj_z.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.linear_attn.norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.1.linear_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.0.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.1.mlp.experts.0.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.0.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.1.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.1.mlp.experts.1.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.1.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.2.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.1.mlp.experts.2.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.2.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.3.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.1.mlp.experts.3.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.experts.3.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.1.mlp.shared_expert.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.1.mlp.shared_expert.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.shared_expert.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.1.mlp.shared_expert_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   32
+  ]
+ },
+ "model.layers.1.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.2.linear_attn.A_log": {
+  "dtype": "BF16",
+  "shape": [
+   4
+  ]
+ },
+ "model.layers.2.linear_attn.conv1d.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   1,
+   4
+  ]
+ },
+ "model.layers.2.linear_attn.dt_bias": {
+  "dtype": "BF16",
+  "shape": [
+   4
+  ]
+ },
+ "model.layers.2.linear_attn.in_proj_a.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.2.linear_attn.in_proj_b.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.2.linear_attn.in_proj_qkv.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.2.linear_attn.in_proj_z.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.linear_attn.norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.2.linear_attn.out_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.0.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.2.mlp.experts.0.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.0.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.1.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.2.mlp.experts.1.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.1.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.2.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.2.mlp.experts.2.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.2.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.3.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.2.mlp.experts.3.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.experts.3.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.2.mlp.shared_expert.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.2.mlp.shared_expert.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.shared_expert.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.2.mlp.shared_expert_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   32
+  ]
+ },
+ "model.layers.2.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.input_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.0.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.3.mlp.experts.0.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.0.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.1.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.3.mlp.experts.1.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.1.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.2.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.3.mlp.experts.2.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.2.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.3.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.3.mlp.experts.3.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.experts.3.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   4,
+   32
+  ]
+ },
+ "model.layers.3.mlp.shared_expert.down_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "model.layers.3.mlp.shared_expert.gate_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.shared_expert.up_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.mlp.shared_expert_gate.weight": {
+  "dtype": "BF16",
+  "shape": [
+   1,
+   32
+  ]
+ },
+ "model.layers.3.post_attention_layernorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "model.layers.3.self_attn.k_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.3.self_attn.k_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.layers.3.self_attn.o_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "model.layers.3.self_attn.q_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   8
+  ]
+ },
+ "model.layers.3.self_attn.q_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "model.layers.3.self_attn.v_proj.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16,
+   32
+  ]
+ },
+ "model.norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ }
+}

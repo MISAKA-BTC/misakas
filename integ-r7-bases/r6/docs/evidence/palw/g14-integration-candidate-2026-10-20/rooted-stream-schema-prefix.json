@@ -1,0 +1,25 @@
+{
+  "parent": "33738ea26",
+  "source": "consensus/core/src/palw_staged_court_state_v1.rs",
+  "source_sha256": "f20b6bcc1d4d01bed37e73aed5eb6ded3756683235340755f33865804bbdaaf6",
+  "enums": {
+    "PalwStagedCourtKeyV1": {
+      "old_count": 17,
+      "new_count": 19,
+      "old_variants_byte_identical": true,
+      "appended": [
+        "CourtSharedStream(Hash64),",
+        "CourtSharedChunk(Hash64,u64),"
+      ]
+    },
+    "PalwStagedCourtRowV1": {
+      "old_count": 23,
+      "new_count": 25,
+      "old_variants_byte_identical": true,
+      "appended": [
+        "CourtSharedStream(Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirStreamV1>),",
+        "CourtSharedChunk(Box<crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1>),"
+      ]
+    }
+  }
+}

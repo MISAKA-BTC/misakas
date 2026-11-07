@@ -1,0 +1,30 @@
+{
+  "base": "7b59c3489",
+  "original_trait_methods": 106,
+  "original_trait_and_old_tests_byte_prefix_unchanged": true,
+  "operation_forwarders_checked": 97,
+  "unique_methods_forwarded": 96,
+  "retained_compatibility_hooks": [
+    "as_any_v1",
+    "execute_free_prompt_with_drill_fault_v2",
+    "execute_free_prompt_with_injected_fault",
+    "execute_free_prompt_with_selection_fault_v1",
+    "execute_with_drill_fault",
+    "execute_with_injected_fault",
+    "set_attempt_rules_v1",
+    "set_held_answerability_v1",
+    "set_prefill_run_positions_v1",
+    "set_registered_class_facts_v1"
+  ],
+  "node_files_exact_after_inverse_parameter_and_factory_substitution": [
+    "kaspad/src/palw_backends.rs",
+    "kaspad/src/palw_filer_held.rs",
+    "kaspad/src/palw_panel.rs",
+    "kaspad/src/palw_panel/gdn_filer_tick.rs",
+    "kaspad/src/palw_panel/held_court.rs",
+    "kaspad/src/palw_panel/held_court_e2e.rs",
+    "kaspad/src/palw_panel/seat_r_tests.rs"
+  ],
+  "parameter_and_argument_sites": 43,
+  "scope": "Source forwarding/caller projection only. Runtime and crate type checks are reported separately; this is not exhaustive execution equivalence."
+}

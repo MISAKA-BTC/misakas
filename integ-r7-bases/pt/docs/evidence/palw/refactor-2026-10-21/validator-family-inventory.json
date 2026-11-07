@@ -1,0 +1,257 @@
+[
+  {
+    "family": "panel",
+    "arms": 17,
+    "variants": [
+      "VerificationVertexV1",
+      "TrapCommittedV1",
+      "TrapRevealedV1",
+      "PanelBeaconProofV3",
+      "VertexEquivocationV1",
+      "MaterialDisclosedV2",
+      "PanelUnavailableQuorum",
+      "PanelBound",
+      "ReceiptLicensed",
+      "ProducerDefaulted",
+      "ReceiptLicensedV2",
+      "ReceiptLicensedBatchV1",
+      "AuditReceiptBatchV1",
+      "AttemptRidersV1",
+      "OptimisticLicensed",
+      "TirShardReceiptLicensed",
+      "ShardReceiptLicensed",
+      "MaterialDisclosed"
+    ],
+    "inputs": [
+      "state",
+      "state_params",
+      "point",
+      "panel_params"
+    ],
+    "old_outer_continues": 0
+  },
+  {
+    "family": "execution",
+    "arms": 5,
+    "variants": [
+      "ExecWorkRootOpenedV2",
+      "ExecOriginRecordedV1",
+      "FreePromptCommitted",
+      "GenTensorCommitted",
+      "DerivedArtifactV1"
+    ],
+    "inputs": [
+      "state",
+      "state_params",
+      "point"
+    ],
+    "old_outer_continues": 0
+  },
+  {
+    "family": "reporting",
+    "arms": 3,
+    "variants": [
+      "ReporterCommitted",
+      "ReporterRevealed",
+      "ObjectiveOffence"
+    ],
+    "inputs": [
+      "state",
+      "state_params",
+      "point"
+    ],
+    "old_outer_continues": 3
+  },
+  {
+    "family": "court",
+    "arms": 43,
+    "variants": [
+      "CourtOpened",
+      "CourtCloseDeclared",
+      "CourtCloseChunk",
+      "CourtDisclosed",
+      "CourtVerdictPosted",
+      "CourtClosed",
+      "CourtAttnRootClaimed",
+      "CourtAttnRootClaimedAnchored",
+      "CourtAttnRootClaimedHeld",
+      "CourtAttnDissected",
+      "CourtAttnChildChosen",
+      "CourtTirRootClaimed",
+      "CourtGenRootClaimed",
+      "CourtEvalRootClaimed",
+      "CourtTirDissected",
+      "CourtTirChildChosen",
+      "DefaultAccused",
+      "TirShardCourtAccused",
+      "GenShardCourtAccused",
+      "HeldLeafChallengeDeclared",
+      "GdnStepAccusedV2",
+      "MemoryRoutingV2",
+      "ShardCourtAccused",
+      "CheckpointAccused",
+      "DefaultAccusedTirStep",
+      "DefaultAccusedPipelineStep",
+      "DefaultAccusedHeld",
+      "MaterialDisclosedHeld",
+      "TirShardPlanDeclared",
+      "DisputeReservedV1",
+      "DisputeReacquiredV1",
+      "DisputeReleasedV1",
+      "LegacyHeldDemandedV2",
+      "LegacyHeldAnsweredV2",
+      "PublicCourtStreamOpenedV1",
+      "TirPublicControlV1",
+      "TirPublicGrantReadyV1",
+      "PublicCourtStreamOpenedNativeV1",
+      "PublicCourtStreamLeafV1",
+      "PublicCourtStreamMoveV1",
+      "ObjectiveEvidenceDeclaredV1",
+      "ObjectiveEvidenceChunkV1",
+      "LegacyHeldAnswerDeclaredV2",
+      "LegacyHeldAnswerChunkV2",
+      "LegacyLeafRecomputedV2"
+    ],
+    "inputs": [
+      "state",
+      "state_params",
+      "point"
+    ],
+    "old_outer_continues": 10
+  },
+  {
+    "family": "model_market",
+    "arms": 15,
+    "variants": [
+      "ModelBuy",
+      "ModelSeed",
+      "ActivationPoolFunded",
+      "ModelSell",
+      "ModelLineFounded",
+      "ModelVersionPublished",
+      "ModelVersionPromoted",
+      "ModelVersionWithdrawn",
+      "ModelLineBenefitsDeclared",
+      "ModelLineRolesSet",
+      "ModelLineOwnerTransferred",
+      "ModelLineRetired",
+      "ModelProposalPosted",
+      "ModelProposalClosed",
+      "ModelEvaluationPosted"
+    ],
+    "inputs": [
+      "state",
+      "point"
+    ],
+    "old_outer_continues": 0
+  },
+  {
+    "family": "class_registration",
+    "arms": 12,
+    "variants": [
+      "ClassRegistered",
+      "ClassFrozen",
+      "ClassManifestV2",
+      "ClassShardPlanDeclared",
+      "ClassRegisteredGenV1",
+      "ClassRegisteredTirV1",
+      "FamilyCertified",
+      "ClassLaneCertified",
+      "ClassLaneCertifiedTirV1",
+      "TirClassLayoutPublishedV1",
+      "TirClassContainerBoundV1",
+      "ClassSemanticsDeclaredV1",
+      "AdapterClassListed"
+    ],
+    "inputs": [
+      "state",
+      "state_params",
+      "point"
+    ],
+    "old_outer_continues": 2
+  },
+  {
+    "family": "bond_readiness",
+    "arms": 9,
+    "variants": [
+      "BondRetireRequested",
+      "BondRegistered",
+      "BondCapabilityDeclared",
+      "SeatReadinessProvedV2",
+      "SeatReadinessProved",
+      "RoundPermitEquivocated",
+      "TirSeatReadinessProved",
+      "BondShardsDeclared",
+      "BondCapitalAssignedV1"
+    ],
+    "inputs": [
+      "state",
+      "point"
+    ],
+    "old_outer_continues": 0
+  },
+  {
+    "family": "kernel_material",
+    "arms": 16,
+    "variants": [
+      "ObjectChunk",
+      "KernelRouteV1",
+      "KernelRouteChunkV1",
+      "ArtifactBoundV1",
+      "ArtifactBindingChallengedV1",
+      "KernelBoundV1",
+      "ConformanceCommittedV1",
+      "ConformanceEvidenceV1",
+      "MonetaryMaterialEnrolledV1",
+      "MonetaryMaterialReplacedV1",
+      "MonetaryMaterialActionV1",
+      "ProviderLeaseV1",
+      "ProviderChallengeV1",
+      "ProviderAnswerV1",
+      "DaTransferV1",
+      "KernelConstraintReceiptV1"
+    ],
+    "inputs": [
+      "state",
+      "state_params",
+      "point"
+    ],
+    "old_outer_continues": 1
+  },
+  {
+    "family": "improvement",
+    "arms": 11,
+    "variants": [
+      "ModelLineImprovementPolicySet",
+      "ImprovementPoolFunded",
+      "LineageHeadRolledBack",
+      "HardCaseSubmitted",
+      "SetterSetCommitted",
+      "DatasetRegistered",
+      "TeachingArtifactCommitted",
+      "DataUseOptIn",
+      "SetterSetRevealed",
+      "SetterKeysRevealed",
+      "HardCaseKeyRevealed",
+      "TeachingArtifactRevealed",
+      "TeacherLicenceRegistered",
+      "CandidateSubmitted"
+    ],
+    "inputs": [
+      "state",
+      "point"
+    ],
+    "old_outer_continues": 0
+  },
+  {
+    "family": "structural",
+    "arms": 2,
+    "variants": [
+      "SignedRegistrationV1",
+      "ReservedPipelineDa84",
+      "ReservedPipelineDa85"
+    ],
+    "inputs": [],
+    "old_outer_continues": 0
+  }
+]

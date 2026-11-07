@@ -1,0 +1,35 @@
+[package]
+name = "misaka-palw-shadow"
+description = "MISAKA PALW Stage-0 shadow drill (ADR-0029 §5): submitter, attester, watcher and reporter over native-subnetwork carriage — consensus-inert, telemetry only"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "palw-shadow"
+path = "src/main.rs"
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-pq-validator-core.workspace = true
+kaspa-rpc-core.workspace = true
+kaspa-wrpc-client.workspace = true
+kaspa-hashes.workspace = true
+
+borsh.workspace = true
+faster-hex.workspace = true
+rand.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+clap = { workspace = true, features = ["env"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,44 @@
+warning: method `delete_batch` is never used
+  --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/rewarded_epochs.rs:72:12
+   |
+48 | impl DbRewardedEpochsStore {
+   | -------------------------- method in this implementation
+...
+72 |     pub fn delete_batch(&self, batch: &mut WriteBatch, hash: BlockHash) -> Result<(), StoreError> {
+   |            ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `clone_with_new_cache` and `set_batch` are never used
+  --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/epoch_accumulator.rs:56:12
+   |
+51 | impl DbEpochAccumulatorStore {
+   | ---------------------------- methods in this implementation
+...
+56 |     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
+   |            ^^^^^^^^^^^^^^^^^^^^
+...
+73 |     pub fn set_batch(&self, batch: &mut WriteBatch, epoch: u64, tally: EpochTally) -> Result<(), StoreError> {
+   |            ^^^^^^^^^
+
+warning: field `db` is never read
+   --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/epoch_accumulator.rs:140:5
+    |
+139 | pub struct DbReserveBalanceStore {
+    |            --------------------- field in this struct
+140 |     db: Arc<DB>,
+    |     ^^
+    |
+    = note: `DbReserveBalanceStore` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: method `clone_with_new_cache` is never used
+   --> /Users/wata/.codex/worktrees/rfc-6-7-8-12/MISAKA-testnet/consensus/src/model/stores/epoch_accumulator.rs:149:12
+    |
+144 | impl DbReserveBalanceStore {
+    | -------------------------- method in this implementation
+...
+149 |     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^^^
+
+warning: 4 warnings emitted
+

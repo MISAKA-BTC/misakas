@@ -1,0 +1,20 @@
+{
+  "base": "510039f9d5628cf7ab3ab10e144f0183795d30da",
+  "source_snapshot": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-s1-first-source-jas5zpgm",
+  "sources": {
+    "consensus/core/src/lib.rs": "effc8a7b916639c1d8151e366db39805536afc8aed101f9b2f548418af081367",
+    "consensus/core/src/palw_court_archive_discharge_v1.rs": "e5b1d7f1ac83c9e4ef94768321ed512264ef1ef505fdcdaa2098682124a1bd0c",
+    "consensus/core/src/palw_court_archive_verify_v1.rs": "979f61dbc48e39224146456f1c61ffd87bcc1a66cb7f8da759c5d87713b4a5b6",
+    "consensus/core/src/palw_court_end_archive_v1.rs": "2139a237766d7624337ff77550ec1399a1456502b806fe1365a9a511939e3b2a",
+    "consensus/core/src/palw_court_service_state_v2.rs": "854b103ae9e49b2b18f15b95f42d8da66eefa123ea2b73f3a2cee64250559460",
+    "consensus/core/src/palw_native_resource_v1/generated.rs": "507533cef2f13412e362e4423415183043293f75bda96a0909407a1c03debb72",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "630c87ca0885fcd30a4706817111fe234b53c6217ab20c1060617ef3e84db64d",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "dcef1b3f2f730eed260f2664156dd31beb5d8954ecf69a5d2af941a02f56c04e",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "59d430da41b64da55981cb874fc3cf4932036385443a7e10a1e7a886135dd619",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "457a62615c6921231886efac97f0757557048308415021ff8a8d0ed34a03eba7",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "6423c385c37d74e57c72c4ab33e821ebb87a0356326888dd0119982041653ba5",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "fa1382d54158d92434a990d12acce39fa5ac5192f3e220c4f60e2e705e83d17b",
+    "consensus/core/tests/palw_tir_parameter_cover.rs": "df09e90c58411549dc0a7fa4a6144e98b8a452c1b9d207ab6e57231f9c81ffc8",
+    "scripts/drills/rfc06_native_manual_wire_review_v1.py": "15f05108aa659d42a60dc414e61f84039ab8b17d989442994724cbb7faac5edb"
+  }
+}

@@ -1,0 +1,45 @@
+[package]
+name = "misaka-evm-indexer"
+description = "MISAKA EVM token-transfer indexer service (§10.5/§10.6). Drives the audited core reconcile planner + decoder against a live node over public Ethereum JSON-RPC, materializing transfers/balances into a TransferStore backend (in-memory or PostgreSQL). Off-chain: links NO consensus/revm/secp."
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+default-run = "misaka-evm-indexer"
+
+# The off-chain indexer SERVICE. It consumes the node ONLY through the public
+# Ethereum JSON-RPC shapes (§8 eth_getLogs backfill + eth_blockNumber /
+# eth_getBlockByNumber for reconcile), so — like the §9 eth-rpc adapter — it
+# hand-rolls a tiny HTTP/1.1 JSON-RPC CLIENT over tokio rather than pull
+# reqwest/hyper (which need tokio >=1.44 vs the workspace's pinned 1.42.1). The
+# reorg/decoding correctness lives in `misaka-evm-indexer-core`; this crate is
+# the IO driver around it. It links no consensus/revm/secp and is a standalone
+# bin, entirely outside the node's secp-free default build.
+[features]
+default = []
+# PostgreSQL backend (else the in-memory reference store). Pulls the pg crate +
+# its tokio-postgres driver only when selected.
+pg = ["dep:misaka-evm-indexer-pg"]
+
+[dependencies]
+misaka-evm-indexer-core = { path = "../core" }
+misaka-evm-indexer-pg = { path = "../store-pg", optional = true }
+
+alloy-primitives = { version = "0.8" }
+async-trait.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+faster-hex.workspace = true
+# Hand-rolled HTTP/1.1 JSON-RPC client + the polling driver. `net`+`io-util` for
+# the TcpStream client, `time` for poll/backoff intervals, `sync` for shutdown,
+# `macros`+`rt-multi-thread` for the bin entrypoint. No framework that would
+# break the tokio 1.42.1 pin.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
+
+[lints]
+workspace = true

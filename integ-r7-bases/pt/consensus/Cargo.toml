@@ -1,0 +1,145 @@
+[package]
+name = "kaspa-consensus"
+description = "Kaspa consensus library"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# ML-DSA-87 SIGNING. A normal dependency rather than a dev one because `TestConsensus` compiles
+# into the lib and its V2 attempt carriage must sign what the chain verifies — a harness that
+# fabricates the one credential admission checks cannot measure admission. The verification side
+# (kaspa-txscript) already depends on this crate, so the edge is direct rather than new.
+libcrux-ml-dsa.workspace = true
+# ADR-0042 (PR-08 store shape) / ADR-0044 Unit C: the PALW V2 state store persists the consensus
+# types' canonical Borsh bytes verbatim as its rows, so borsh is a normal dependency now — it
+# used to be dev-only (the DNS-overlay harness).
+borsh.workspace = true
+arc-swap.workspace = true
+async-channel.workspace = true
+bincode.workspace = true
+crossbeam-channel.workspace = true
+faster-hex.workspace = true
+futures-util.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-consensus-notify.workspace = true
+kaspa-consensusmanager.workspace = true
+kaspa-core.workspace = true
+kaspa-database.workspace = true
+kaspa-evm = { workspace = true, optional = true }
+kaspa-hashes.workspace = true
+kaspa-math.workspace = true
+kaspa-merkle.workspace = true
+kaspa-muhash.workspace = true
+kaspa-notify.workspace = true
+kaspa-pow.workspace = true
+kaspa-txscript.workspace = true
+kaspa-txscript-errors.workspace = true
+kaspa-utils.workspace = true
+log.workspace = true
+once_cell.workspace = true
+parking_lot.workspace = true
+rayon.workspace = true
+rocksdb.workspace = true
+secp256k1 = { workspace = true, optional = true }
+serde.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+rand = { workspace = true, features = ["small_rng"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# ADR-0135: the canonical class table describes a genesis class to the registry fold.
+misaka-palw-base0.workspace = true
+# G14 lane D: the kernel route's object decoder and receipt context (the fold itself is in consensus-core).
+misaka-palw-kernel.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+serde_json.workspace = true
+flate2.workspace = true
+rand_distr.workspace = true
+kaspa-txscript-errors.workspace = true
+kaspa-addresses.workspace = true
+# ADR-0042: the PALW-RC producer's execution half lives here, and the only test that proves a
+# testnet-12 block can be produced at all needs both halves in one process. Dev-only — a node's
+# consensus never links a model runtime (ADR-0042 Decision 4).
+misaka-palw-base0.workspace = true
+# G14 lane D: the E2E builds a producer, seats and a fresh verifier from the kernel's public API, over the sketch's tiny fixtures.
+misaka-palw-kernel.workspace = true
+misaka-palw-tir.workspace = true
+# RFC02 actual fresh finder: mapped execution is test-only; consensus courts
+# continue to authenticate bounded public operands without loading weights.
+misaka-palw-tir-exec = { path = "../misaka/palw/tir/exec", features = ["node"] }
+misaka-palw-tir-sketch = { path = "../misaka/palw/tir/sketch" }
+# Lane K2S (GAP-40): the K2-TIR-v5 node E2E lowers a tiny HF encoder fixture with its weights (dev-only, as the SDK does).
+misaka-palw-tir-lower = { path = "../misaka/palw/tir/lower" }
+# RFC-0015: the E2E decodes the Panel-independent beacon fact (WorkFinalEventV1) the route exports.
+misaka-palw-challenge.workspace = true
+# Onboarding P0: the real-node E2E signs the tag-108 envelope and the tag-109 objects with the SDK's builders and runs the SDK's
+# fresh verifier over the node's public reads (dev-only: a node's consensus never links the SDK).
+misaka-palw-sdk.workspace = true
+# RFC-0009 stage C's chain-block E2E (`rfc9_v4_chain_e2e`): the claim's material and the miner's `RDA4` authorization reach the Panel and the
+# builder through the independent DA providers (directory + the 127.0.0.1 reference server) — the miner is offline. Library only (no `rpc`).
+# C4 round 3: the node-less path of the user's mandatory test 3 relays the producer's signed carrier through RFC-0009's relay library.
+misaka-palw-remote.workspace = true
+# G14C (GAP-03): the canonical G14 harness reads the kernel route through the RPC ops' own builders (`kaspa_rpc_core::convert::palw_kernel`,
+# which the RPC service calls) and carries each answer through the RPC's JSON wire form. rpc-core depends on consensus-core only.
+kaspa-rpc-core.workspace = true
+# Lane G14-R: the PALW read ops over a REAL socket (`tests/g14r_socket_rpc.rs`) — the shipping gRPC server and wRPC proxy on 127.0.0.1
+# in front of a test node, and the real clients. None of these depends on kaspa-consensus (no cycle).
+async-trait.workspace = true
+kaspa-grpc-server.workspace = true
+kaspa-grpc-client.workspace = true
+kaspa-wrpc-server.workspace = true
+kaspa-wrpc-client.workspace = true
+workflow-rpc.workspace = true
+
+[[bench]]
+name = "parallel_muhash"
+harness = false
+
+[[bench]]
+name = "check_scripts"
+harness = false
+# kaspa-pq PQ-only: this bench signs its fixtures with legacy secp256k1, so it is
+# skipped unless `legacy-secp256k1` is enabled (ADR-0019 §14).
+required-features = ["legacy-secp256k1"]
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` (default) builds the consensus crate
+# without secp256k1; `legacy-secp256k1` re-enables the legacy secp256k1 test
+# fixtures and propagates to consensus-core + txscript. The release/node build is
+# secp-free — enforced by `cargo tree -p kaspa-consensus -e normal`
+# (scripts/ci/pq-ci-guard.sh, HARD_SECP_GATE=1).
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = [
+    "dep:secp256k1",
+    "kaspa-consensus-core/legacy-secp256k1",
+    "kaspa-txscript/legacy-secp256k1",
+]
+html_reports = []
+devnet-prealloc = ["kaspa-consensus-core/devnet-prealloc"]
+private-integration-config = ["kaspa-consensus-core/private-integration-config"]
+# Explicit private acceptance build only; absent from every default/release feature set.
+rfc12-import-failpoints = ["private-integration-config"]
+# kaspa-pq Selected-Parent EVM Lane (ADR-0020). Pulls the optional `kaspa-evm`
+# executor crate (revm + secp/k256 ecrecover) ONLY here — non-default, so the
+# secp-free guard (`cargo tree -e normal`) is unaffected. Twin of the
+# `legacy-secp256k1` opt-in.
+evm = ["dep:kaspa-evm", "kaspa-consensus-core/evm"]
+
+[lints]
+workspace = true

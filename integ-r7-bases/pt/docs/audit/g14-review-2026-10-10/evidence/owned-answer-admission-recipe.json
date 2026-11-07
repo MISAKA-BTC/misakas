@@ -1,0 +1,20 @@
+{
+  "verified_commit": "514d9214d1744a0c17cb5db990186249dc3d1c60",
+  "scope": "70 unique tests for input/job multipart admission (41 core, 28 node, 1 real-signature gate); excludes subsequent uncommitted history-index changes",
+  "source_sha256": {
+    "consensus/core/src/palw_legacy_answer_chunks_v2.rs": "2766d286b73d6c89c26df8233d3f986e3c757a4e8ee0c1dceb83fe45bbe2848a",
+    "consensus/core/src/palw_legacy_held_da_v2.rs": "fd62f9c50a9d7420c2be3d9b8e922a00a657f8ac2d1f244f306e78dedc41a48c",
+    "consensus/core/src/palw_legacy_public_filer_fold_v1.rs": "4de0a989aea319216bd28f0841b36d7c11fbff8b5adf70e2f853e6b7dad80a0e",
+    "consensus/core/src/palw_state_v2.rs": "a5445bca953f0912fb7ec34b9138060111c805ef1719bed10e0212113e69afe1",
+    "consensus/src/pipeline/virtual_processor/processor.rs": "bf4d20b948c44e9d0f28e700a0816c93033b586c2bc484ce4588e5d6a57688fe",
+    "consensus/src/pipeline/virtual_processor/tests/t12_legacy_held_da_gate.rs": "a9eda1d834192e6157c622610470ffbb0580e06271f564070cd9542e6a8321da",
+    "kaspad/src/palw_panel.rs": "8708a4703503532dcc215aebccf9525d3f1a58588cc805b43e28bd01b40733f1",
+    "kaspad/src/palw_panel/da_answer_chunks.rs": "6aaae80c6882e7427ad07c7576be3ffec8a9f185581ab9f36f22b73d3d685450",
+    "kaspad/src/palw_fraud_filer.rs": "35e53136629c848b35c3921a21b11653327e0d768c4f2d5ea660a8b26ed78dcd"
+  },
+  "binary_sha256": {
+    "kaspa_consensus_core-f189e885ba5285ec": "d70e86dc79b404123f0a6f20b94043dd88b1514ad277a0b69a5df88154105097",
+    "kaspad_lib-a562e45711087c1e": "6f7b33f7d5faf10c4c13890c14d91c3eb7b1251d17488dde670df8bd05632e24",
+    "kaspa_consensus-475f24db2a807f9e": "22a453cffda518fb3fb0763427e5b3917260ab42650930ad2c393e3a96ab99cc"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "unit_tests": 16,
+  "tests": [
+    {
+      "test": "strict reports inherited errors",
+      "passed": true
+    },
+    {
+      "test": "new missing target rejected",
+      "passed": true
+    },
+    {
+      "test": "unreviewed documented image activation rejected",
+      "passed": true
+    },
+    {
+      "test": "modified baseline refuses overwrite",
+      "passed": true
+    },
+    {
+      "test": "outside-docs reference blocks automatic replacement",
+      "passed": true
+    },
+    {
+      "test": "application preserves extra files and full backup; applied tree checks pass",
+      "passed": true
+    }
+  ],
+  "scope": "temporary copies only; no real repository or network changes"
+}

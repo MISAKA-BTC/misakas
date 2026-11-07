@@ -1,0 +1,7 @@
+{
+  "source-before-repair.rs": "efd53748718a532e327f2c54769069fcf8ce24e5bd60ea962ff335a004fe4400",
+  "source.patch": "a8137dfecbefa0023c9e529a67bf22b0eaa2780d3db3809b921bd7cd4eb9704f",
+  "core-build.log": "5417eacd46f8ffb95912719858b145e8f1dd3e776ab6473873541b85292a23bc",
+  "verification.json": "3827e1799d88728f126d59453aa5ea66e764c8bf8205fe7bb4a12e7c267e6f56",
+  "aborted-build-reason.md": "c71f7eb058ae84ecdae601cb5a2f1ce68cd5f31d70a884ad137fae79562467a0"
+}

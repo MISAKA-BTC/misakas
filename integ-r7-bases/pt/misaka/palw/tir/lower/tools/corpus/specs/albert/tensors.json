@@ -1,0 +1,163 @@
+{
+ "embeddings.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "embeddings.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   16
+  ]
+ },
+ "embeddings.position_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "embeddings.token_type_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   2,
+   16
+  ]
+ },
+ "embeddings.word_embeddings.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.LayerNorm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.LayerNorm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.dense.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.dense.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.key.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.key.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.query.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.query.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.value.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.attention.value.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.ffn.bias": {
+  "dtype": "BF16",
+  "shape": [
+   64
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.ffn.weight": {
+  "dtype": "BF16",
+  "shape": [
+   64,
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.ffn_output.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.ffn_output.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   64
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.full_layer_layer_norm.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.albert_layer_groups.0.albert_layers.0.full_layer_layer_norm.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.embedding_hidden_mapping_in.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "encoder.embedding_hidden_mapping_in.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "pooler.bias": {
+  "dtype": "BF16",
+  "shape": [
+   32
+  ]
+ },
+ "pooler.weight": {
+  "dtype": "BF16",
+  "shape": [
+   32,
+   32
+  ]
+ }
+}

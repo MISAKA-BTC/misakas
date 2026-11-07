@@ -1,0 +1,118 @@
+{
+  "schema": "misaka.rfc11.existing-coverage-audit.v1",
+  "meaning": "Recount of saved reports, not fresh execution or an HF probability sample.",
+  "inputs": [
+    {
+      "path": "misaka-palw-tir-lower/tools/corpus/report.json",
+      "sha256": "e6878537144c5d9c6a863b8f86a4e01304ab131e66d56bd3c4a51d0afe26092a"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tools/corpus/census_report.json",
+      "sha256": "b3d1df1fc2a39b6f9de6e0ee63fc618f74462749726ef6a83d736071cda648ce"
+    },
+    {
+      "path": "misaka-palw-sdk/tests/golden/corpus_preflight_v1.json",
+      "sha256": "14df824b3ff8a39c5c3479cf4b7e427f23d4b73dce326dcbdeb27fc055a627b3"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tests/corpus_v2.rs",
+      "sha256": "2c9915f230972671b5a83988a12daa178daebaa92e9e4ef28efa89cc218270ea"
+    },
+    {
+      "path": "misaka-palw-sdk/tests/corpus_preflight.rs",
+      "sha256": "778aea74fd9e88c7bd4909a4e555ae9a0cc2950cf0e837cb7f5b3a6b9fc5888a"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tools/corpus/corpus_v2.json",
+      "sha256": "7afb33be071dd99a2def5dafdc9c956e958144d210ba3983cbfd619d5f2babb1"
+    },
+    {
+      "path": "misaka-palw-tir-lower/tools/corpus/census_v2.json",
+      "sha256": "a2e869d44118a3caee7ecff34bdbcda91796301b67200f25ea40a928dfff81c1"
+    }
+  ],
+  "architecture_corpus": {
+    "entries": 100,
+    "levels": {
+      "A": 6,
+      "B": 84,
+      "C": 10
+    },
+    "a_or_b": 90,
+    "failed_stage": {
+      "float_vs_hf": 2,
+      "not_recorded": 90,
+      "read": 8
+    }
+  },
+  "additional_architecture_report": {
+    "entries": 91,
+    "levels": {
+      "A": 1,
+      "B": 53,
+      "C": 37
+    },
+    "a_or_b": 54,
+    "failed_stage": {
+      "float_vs_hf": 1,
+      "not_recorded": 54,
+      "read": 36
+    }
+  },
+  "pinned_shape_preflight": {
+    "entries": 100,
+    "default_context": 128,
+    "material": "Header-only safetensors from curated light specs; no checkpoint tensor data.",
+    "stages": {
+      "convert": {
+        "blocked": 13,
+        "ok": 87
+      },
+      "register": {
+        "blocked": 4,
+        "ok": 74,
+        "unknown": 22
+      },
+      "mine": {
+        "blocked": 1,
+        "ok": 77,
+        "unknown": 22
+      }
+    },
+    "convert_and_register_ok": 73,
+    "corpus_a_or_b_and_convert_and_register_ok": 72,
+    "registration_blocked": [
+      {
+        "id": "deepseek_v32",
+        "blockers": [
+          "ADMISSION_EXCEEDS(operand_count)"
+        ]
+      },
+      {
+        "id": "deepseek_v4",
+        "blockers": [
+          "CLOSE_SIZE_OVER_CAP(IR dissection root claim bytes)",
+          "COURT_COST_OVER_CEILING"
+        ]
+      },
+      {
+        "id": "gemma3n_text",
+        "blockers": [
+          "ADMISSION_EXCEEDS(max_program_bytes)",
+          "ADMISSION_EXCEEDS(program_bytes)"
+        ]
+      },
+      {
+        "id": "internlm2",
+        "blockers": [
+          "COURT_COST_OVER_CEILING(IR tile multiply-accumulates)"
+        ]
+      }
+    ]
+  },
+  "verdict": {
+    "hub_registration_coverage": "UNPROVEN",
+    "accepted_chain_evidence": "Not established by these reports or their harnesses.",
+    "caveat": "A/B is expressibility, register:ok is a saved preflight stage, and neither is accepted full-task registration. Missing stages are not passes; status counts are not a sequential funnel."
+  }
+}

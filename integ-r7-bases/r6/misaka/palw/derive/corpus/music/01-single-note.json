@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "ppq": 480,
+  "tempo_us_per_quarter": 500000,
+  "time_signature": [4, 4],
+  "tracks": [
+    {
+      "name": "lead",
+      "channel": 0,
+      "program": 0,
+      "notes": [
+        { "pitch": 60, "velocity": 100, "onset": 0, "duration": 480 }
+      ]
+    }
+  ]
+}

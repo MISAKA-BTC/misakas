@@ -1,0 +1,318 @@
+//! **`misaka palw registry` — ADR-0135's permissionless model registry as the node holds it.**
+//!
+//! The node answers `getPalwModelRegistry` (op 186) with each class's lifecycle row (state, the
+//! work read off its graph, the profile derived from it, the last boundary's reading), the seats
+//! ready for it now, and every seat's possession proof. Nothing here is set by a human: a class
+//! walks REGISTERED → PREFETCHING → PROBATION → ACTIVE_LIMITED → ACTIVE on chain-visible facts and
+//! falls to HELD alone. Below the fence the rows are empty and the command says so.
+
+use crate::node::Ctx;
+use crate::{CliError, CliResult, OutputFormat, exit};
+use kaspa_rpc_core::api::rpc::RpcApi;
+use kaspa_rpc_core::{GetPalwModelRegistryResponse, RpcPalwClassBlocking};
+use serde_json::json;
+
+fn short(id: &str) -> String {
+    id.chars().take(12).collect::<String>() + "…"
+}
+
+pub(crate) fn render(r: &GetPalwModelRegistryResponse) -> String {
+    let mut out = String::new();
+    let fence = if r.scheduled { format!("scheduled at DAA {}", r.fence_daa) } else { "dormant (no fence scheduled)".to_string() };
+    out.push_str(&format!(
+        "Model registry (ADR-0135): {fence} · {} at the tip (DAA {}) · span {} DAA{}\n",
+        if r.active { "ACTIVE" } else { "not in force" },
+        r.tip_daa,
+        r.span_daa,
+        if r.active && r.tip_daa < r.grace_until_daa {
+            format!(" · activation grace until DAA {}", r.grace_until_daa)
+        } else {
+            String::new()
+        }
+    ));
+    if r.active {
+        out.push_str(&format!(
+            "  globals: {} MAC-eq a span · {} bytes a span · {} + {} seats · {} ‰ utilization · {} probation claims · {} stable spans · readiness age {} spans × {} collateral\n",
+            r.reference_work_per_span,
+            r.reference_bytes_per_span,
+            r.seat_count,
+            r.spare_seats,
+            r.utilization_permille,
+            r.probation_claims,
+            r.stable_epochs,
+            r.readiness_probe_max_age_spans,
+            r.readiness_collateral_multiple
+        ));
+    }
+    // RFC-0019: the annual model catalog this node's binary carries (`ApprovedModels(h)`), the root in force and the next switch.
+    // Readiness is measured off-chain (scripts/release/misaka-catalog-readiness.py), never read from a node as a vote.
+    let c = &r.annual_catalog;
+    if c.scheduled {
+        out.push_str(&format!(
+            "  annual catalog (RFC-0019): tier fence DAA {} ({}) · edition {} in force · root {}{} · kernel ≤ v{} · readiness {}\n",
+            c.fence_daa,
+            if c.active { "in force" } else { "scheduled" },
+            c.current_edition,
+            short(&c.current_root),
+            if c.has_next {
+                format!(" · next: edition {} at DAA {} (root {})", c.next_edition, c.next_activation_daa, short(&c.next_root))
+            } else {
+                " · no further edition carried".to_string()
+            },
+            c.kernel_version_max,
+            c.readiness
+        ));
+        for e in &c.editions {
+            out.push_str(&format!(
+                "    edition {:>3} · DAA {:>10} · {:>9} · +{} models · root {} · previous {}\n",
+                e.edition,
+                e.activation_daa,
+                e.state,
+                e.models,
+                short(&e.root),
+                short(&e.previous_root)
+            ));
+        }
+    } else {
+        out.push_str("  annual catalog (RFC-0019): not scheduled on this network (palw_model_tier_v1 absent)\n");
+    }
+    if r.work_target_shadow {
+        out.push_str(&format!(
+            "  work target (ADR-0137 shadow): W {} CCU/block · floor W₀ {} · network draws (Q32) {} · effective {} · epoch {} · closed model blocks {}/{} expected · rate {} sompi/G · panel in-flight replay {} · horizon {} spans · final-work epochs {}\n",
+            r.work_target, r.work_floor, r.work_network_draws_q32, r.work_effective, r.work_epoch_index, r.work_closed_model_blocks, r.work_closed_expected_blocks, r.work_rate_sompi_per_giga, r.panel_inflight_replay, r.panel_horizon_spans, r.final_work_epochs
+        ));
+    }
+    out.push_str(&format!(
+        "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6} {:>7} {:>5} {:>5} {:>6}\n",
+        "class",
+        "state",
+        "since",
+        "window",
+        "prefetch",
+        "cap",
+        "need",
+        "ready",
+        "inflight",
+        "util‰",
+        "adm‰",
+        "share",
+        "priced",
+        "ccu/W‰",
+        "room",
+        "fw10‰",
+        "fw100‰"
+    ));
+    for c in r.classes.iter().filter(|c| c.has_row) {
+        out.push_str(&format!("    {} — {}\n", short(&c.class_id), c.reason));
+    }
+    // RFC-0002 Part II §II.7.4: what blocks each class, and at which stage (convert / register / mine). A node that serves
+    // no such reading (a version-1 registry) is read the same way, by the same function.
+    let derived;
+    let blocking: &[RpcPalwClassBlocking] = if r.blocking.is_empty() {
+        derived = kaspa_rpc_core::palw_registry_blockings(r);
+        &derived
+    } else {
+        &r.blocking
+    };
+    for b in blocking {
+        out.push_str(&format!(
+            "    {} ▸ {}: {}{} — {}\n        next: {}\n",
+            short(&b.class_id),
+            b.stage,
+            b.code,
+            if b.has_count { format!(" ({}/{})", b.have, b.need) } else { String::new() },
+            b.what,
+            b.next
+        ));
+    }
+    // RFC-0002 Part II §II.7.5 Proposal A: past `palw_class_seating`, each class's seating — the distinct ready operators, how many of
+    // them are independent of the registrant, and the share of the class's claims whose outsider would hold it.
+    for s in &r.seating {
+        out.push_str(&format!(
+            "    {} ▸ seating: {}/{} ready operators, {}/{} independent, {} base operators → licensable share {} ‰\n",
+            short(&s.class_id),
+            s.ready_operators,
+            s.needed_operators,
+            s.independent_operators,
+            s.needed_independent,
+            s.base_operators,
+            s.licensable_share_permille
+        ));
+    }
+    let voids: u32 = r.classes.iter().map(|c| c.no_capable_panel_voids).sum();
+    if voids > 0 {
+        out.push_str(&format!("  ({voids} claims voided as NoCapablePanel across the classes)\n"));
+    }
+    if r.active {
+        out.push_str(&format!(
+            "  classes: {} active · {} limited · {} probation · {} prefetching · {} registered · {} held · bonds: {} active, {} with headroom for a seat\n",
+            r.classes_active, r.classes_active_limited, r.classes_probation, r.classes_prefetching, r.classes_registered, r.classes_held, r.bonds_active, r.bonds_with_headroom
+        ));
+    }
+    for c in &r.classes {
+        out.push_str(&format!(
+            "  {:<14} {:<15} {:>6} {:>7} {:>8} {:>5} {:>6} {:>6} {:>8} {:>8} {:>8} {:>6} {:>6} {:>7} {:>5} {:>5} {:>6}\n",
+            format!("{}{}", short(&c.class_id), if c.is_base_class { "*" } else { "" }),
+            if c.has_row { c.state.clone() } else { "legacy".to_string() },
+            c.since_span,
+            c.verification_window_spans,
+            c.artifact_prefetch_spans,
+            c.max_inflight_claims,
+            c.required_ready_seats,
+            c.ready_seats_now,
+            c.inflight_now,
+            c.utilization_permille,
+            c.admission_milli,
+            c.share_permille,
+            if c.priced_share_permille == 0 { "-".to_string() } else { c.priced_share_permille.to_string() },
+            c.work_ratio_permille,
+            c.panel_room,
+            c.final_work_share_10_permille,
+            c.final_work_share_100_permille
+        ));
+    }
+    if r.readiness.is_empty() {
+        out.push_str("  no possession proofs on the chain\n");
+    } else {
+        out.push_str(&format!("  possession proofs ({}):\n", r.readiness.len()));
+        for p in &r.readiness {
+            out.push_str(&format!(
+                "    {}:{} → {} leaf {} at DAA {} (span {}){}\n",
+                short(&p.bond_txid),
+                p.bond_index,
+                short(&p.class_id),
+                p.leaf_index,
+                p.proved_daa,
+                p.proved_span,
+                if p.not_ready_reason.is_empty() { String::new() } else { format!(" · not ready: {}", p.not_ready_reason) }
+            ));
+        }
+    }
+    out
+}
+
+pub(crate) async fn run(ctx: &Ctx) -> CliResult {
+    let reader = crate::palw_derived::connect(ctx).await?;
+    let answer = reader.client.get_palw_model_registry().await;
+    let _ = reader.client.disconnect().await;
+    let response = answer.map_err(|e| {
+        CliError::new(exit::CONNECTION, format!("getPalwModelRegistry: {e} (a node built before ADR-0135 does not serve it)"))
+    })?;
+    if !response.available {
+        return Err(CliError::new(exit::GENERIC, "the node keeps no PALW class state (not a ConsensusV2 network)"));
+    }
+    match ctx.output {
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({ "schema": "misaka.palw.registry.v1", "registry": response })).expect("serializable")
+        ),
+        OutputFormat::Human => print!("{}", render(&response)),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_rpc_core::{RpcPalwModelLifecycle, RpcPalwSeatReadiness};
+
+    #[test]
+    fn adr0135_the_registry_renders_its_rows_and_says_when_it_is_dormant() {
+        let dormant = GetPalwModelRegistryResponse { available: true, tip_daa: 5_798, ..Default::default() };
+        let text = render(&dormant);
+        assert!(text.contains("dormant (no fence scheduled)") && text.contains("no possession proofs"), "{text}");
+
+        let live = GetPalwModelRegistryResponse {
+            available: true,
+            tip_daa: 7_000,
+            scheduled: true,
+            fence_daa: 6_500,
+            active: true,
+            span_daa: 5,
+            seat_count: 5,
+            spare_seats: 2,
+            classes: vec![RpcPalwModelLifecycle {
+                class_id: "ab".repeat(32),
+                has_row: true,
+                state: "Held".to_string(),
+                verification_window_spans: 2,
+                max_inflight_claims: 9,
+                required_ready_seats: 7,
+                ready_seats_now: 3,
+                reason: "held: 3 seats were ready when it was held, 5 are needed for a panel (recovers through probation once 7 are ready — compare readySeatsNow for what is ready right now)".to_string(),
+                ..Default::default()
+            }],
+            readiness: vec![RpcPalwSeatReadiness {
+                bond_txid: "cd".repeat(32),
+                class_id: "ab".repeat(32),
+                proved_daa: 6_990,
+                fresh: false,
+                not_ready_reason: "stale".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let text = render(&live);
+        assert!(
+            text.contains("scheduled at DAA 6500")
+                && text.contains("Held")
+                && text.contains("not ready: stale")
+                && text.contains("recovers through probation"),
+            "{text}"
+        );
+        // The stage and what is missing (RFC-0002 Part II §II.7.4): three seats ready, a panel needs five.
+        assert!(
+            text.contains("▸ mine: PANEL_NOT_DRAWABLE (3/5)") && text.contains("only 3 seats are ready now and a panel needs 5"),
+            "{text}"
+        );
+        // A node that serves its own reading is shown as it says.
+        let mut served = live.clone();
+        served.blocking = vec![RpcPalwClassBlocking {
+            class_id: "ab".repeat(64),
+            stage: "register".to_string(),
+            code: "ADMISSION_JURY".to_string(),
+            what: "waiting for the jury".to_string(),
+            has_count: false,
+            next: "keep a seat ready".to_string(),
+            ..Default::default()
+        }];
+        let text = render(&served);
+        assert!(
+            text.contains("▸ register: ADMISSION_JURY — waiting for the jury") && text.contains("next: keep a seat ready"),
+            "{text}"
+        );
+        assert!(!text.contains("PANEL_NOT_DRAWABLE"), "a served reading replaces the derived one: {text}");
+    }
+
+    /// RFC-0019: the catalog section says what the binary carries, what is in force and what switches next — and that readiness is
+    /// off-chain; a node before wire version 4 (or a network without the tier fence) reads "not scheduled".
+    #[test]
+    fn rfc0019_the_registry_renders_the_annual_catalog() {
+        use kaspa_rpc_core::{RpcPalwAnnualCatalogEdition, RpcPalwAnnualCatalogStatus};
+        let none = GetPalwModelRegistryResponse { available: true, tip_daa: 13_000, ..Default::default() };
+        assert!(render(&none).contains("annual catalog (RFC-0019): not scheduled"));
+        let mut r = none.clone();
+        r.annual_catalog = RpcPalwAnnualCatalogStatus {
+            scheduled: true,
+            fence_daa: 14_000,
+            active: false,
+            current_edition: 0,
+            current_root: "ab".repeat(64),
+            has_next: false,
+            editions: vec![RpcPalwAnnualCatalogEdition {
+                edition: 0,
+                activation_daa: 0,
+                previous_root: "00".repeat(64),
+                root: "ab".repeat(64),
+                models: 0,
+                state: "ACTIVE".to_string(),
+            }],
+            kernel_version_max: 1,
+            readiness: "off-chain".to_string(),
+            ..Default::default()
+        };
+        let text = render(&r);
+        assert!(text.contains("tier fence DAA 14000 (scheduled)") && text.contains("edition 0 in force"), "{text}");
+        assert!(text.contains("no further edition carried") && text.contains("readiness off-chain"), "{text}");
+    }
+}

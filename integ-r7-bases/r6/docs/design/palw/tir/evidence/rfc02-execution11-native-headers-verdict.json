@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "scope": "bounded pure execution11 native headers, staged preparation/Fund and original historical-court money transitions only",
+  "outcome": "PASS",
+  "tests": 26,
+  "added_distinct_tests_since_pushed_execution12": 14,
+  "production_seconds": 8.4,
+  "test_runtime_seconds_reported": 0.01,
+  "wall_seconds_including_build": 8.99,
+  "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_execution11",
+  "executable": "/tmp/rfc02-execution11-native-headers-final26-immutable",
+  "executable_sha256": "4f78af6225b6228883e8e05893c5a7f19f270e7e14d85211a69995b3049f4988",
+  "owned_sources_before_after_stable": true,
+  "owned_source_manifest": "rfc02-execution11-native-headers-owned-preimage.json",
+  "owned_source_manifest_sha256": "ebd46d46d710beae1a10070d959b134237d1ce119c046a35c3d7468c33fa1a77",
+  "archive_sha256": "0fd0fb0aa0a648c699ecf7a72667f49cdcc5202771ba18858cf1fe3f01ac595c",
+  "test_log": "rfc02-execution11-native-headers-final26-tests.log",
+  "test_log_sha256": "11d657e59a5f3e034c260d3c1ebb5d31ab5ec150d8f1805e9d479b57a380e8d8",
+  "full_concurrent_dependency_source_freeze": false,
+  "normal_frozen_scope_work_cap_unchanged": true,
+  "native_actual_original_coin_debit_proven": false,
+  "native_funded_final_redemption_proven": false,
+  "accepted_native_final_cohort": 0,
+  "A6_A8_90_percent_proven": false,
+  "limitations": [
+    "Authenticated original candidate/class/header/preparation/nonce/court rows and atomic original coin debit/payout remain trusted native boundary fixtures in these pure tests.",
+    "Native light class header relies on the independently derived original candidate9 resource root; public imports/SDK checking still derive all resources independently.",
+    "Current native eligibility is exact to the block hash and DAA. A readonly fixed header cannot admit another job or quota baseline.",
+    "Historical source/computation settlement requires original verified exact-scope court identity/inclusion. No binding-refuted flag or new late court suffices.",
+    "Native must authenticate original finder operator identity. A historical same-operator finder receives no bounty and the full collected slash is burned."
+  ],
+  "retained_trials": [
+    "rfc02-execution11-native-restore-initial17-tests.log",
+    "rfc02-execution11-native-headers-initial23-tests.log",
+    "rfc02-execution11-native-headers-initial25-tests.log",
+    "rfc02-execution11-native-headers-initial-build-failure.log"
+  ],
+  "initial25_preimage_scope": "Production/tests changed after initial25 compiler read; retained initial archive/log is diagnostic, not a uniformly frozen final closure.",
+  "immutable_replay": {
+    "tests": 26,
+    "log": "rfc02-execution11-native-headers-final26-replay.log",
+    "sha256": "335920c6238c1e9dcf1be31dcb1a10534f20182a5c9becd1ee935748a5ea8996"
+  }
+}

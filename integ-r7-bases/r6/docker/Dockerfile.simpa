@@ -1,0 +1,58 @@
+# ---------------------------------------- Chef image -------------------------------------------
+# Pinned to the multi-arch manifest digest (resolved 2026-06-14). Dependabot keeps it current.
+FROM rust:1.90-alpine@sha256:b4b54b176a74db7e5c68fdfe6029be39a02ccbcfe72b6e5a3e18e2c61b57ae26 AS chef
+RUN apk --no-cache add \
+  musl-dev \
+  protobuf-dev \
+  g++ \
+  clang15-dev \
+  linux-headers \
+  wasm-pack \
+  openssl-dev
+RUN cargo install cargo-chef --version 0.1.77 --locked
+WORKDIR /app
+
+# ---------------------------------------- Planner image ----------------------------------------
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# ---------------------------------------- Builder image ----------------------------------------
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+
+ENV RUSTFLAGS="-C target-feature=-crt-static" \
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL="sparse"
+
+# Build dependencies - this is the caching Docker layer
+RUN cargo chef cook --release --recipe-path recipe.json -p simpa --bin simpa
+
+COPY . .
+RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,id=cargo-target,target=/app/target,sharing=locked \
+    cargo build --release --bin simpa \
+    && cp /app/target/release/simpa /app/simpa   # <-- outside the mount, persists
+
+
+# ---------------------------------------- Runtime image ----------------------------------------
+# Pinned to the multi-arch manifest digest (resolved 2026-06-14) — was untagged (floated to :latest).
+FROM alpine:latest@sha256:a2d49ea686c2adfe3c992e47dc3b5e7fa6e6b5055609400dc2acaeb241c829f4 AS runtime
+WORKDIR /app
+
+RUN apk --no-cache add \
+  libgcc \
+  libstdc++ \
+  tini \
+  ca-certificates \
+  && addgroup -S kaspa \
+  && adduser -S -G kaspa -h /home/kaspa -s /sbin/nologin kaspa \
+  && mkdir -p /home/kaspa /app \
+  && chown -R kaspa:kaspa /home/kaspa /app
+
+COPY --from=builder --chown=kaspa:kaspa /app/simpa .
+
+ENV HOME=/home/kaspa
+USER kaspa
+ENTRYPOINT [ "/sbin/tini", "--" ]
+CMD [ "/app/simpa" ]

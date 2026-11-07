@@ -1,0 +1,27 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vit",
+  "kind": "vision",
+  "doc": "ViT (ViTModel; google/vit-*, DeiT without the distillation token is a separate adapter): a biased non-overlapping patch convolution as a matmul over the integer-normalised pixels (mean = std = 0.5 unless the processor says otherwise), a class token, learned positions at the class's grid, pre-LN layers (layernorm_before/after, a gelu MLP, qkv_bias), the final layernorm, and the class row as the embedding (the pooler is not read). Written as data only: there is no Rust reader of this family. Features: VISION_FROM_SPEC_V1.",
+  "match": {"architectures": ["ViTModel"], "model_types": ["vit"]},
+  "config": {"defaults": {"hidden_size": 768, "num_hidden_layers": 12, "image_size": 224, "patch_size": 16, "num_attention_heads": 12, "intermediate_size": 3072, "hidden_act": "gelu", "layer_norm_eps": 1e-12, "qkv_bias": true}, "inert": ["attention_probs_dropout_prob", "hidden_dropout_prob", "initializer_range", "num_channels", "encoder_stride", "pooler_act", "pooler_output_size", "add_pooling_layer", "use_mask_token"]},
+  "vars": [
+    {"name": "qkv_ok", "value": {"$check": [{"$eq": [{"$cfg": "qkv_bias"}, true]}, "ViT with qkv_bias = false is not lowered"]}},
+    {"name": "d", "value": {"$cfg": "hidden_size"}},
+    {"name": "layers", "value": {"$cfg": "num_hidden_layers"}},
+    {"name": "image", "value": {"$cfg": "image_size"}}
+  ],
+  "spec": {
+    "architecture": {"$var": "arch"},
+    "h": {"$var": "image"}, "w": {"$var": "image"}, "downscale": 1,
+    "patch": {"$cfg": "patch_size"}, "temporal": 1, "merge": 1,
+    "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5],
+    "d": {"$var": "d"}, "heads": {"$cfg": "num_attention_heads"}, "inter": {"$cfg": "intermediate_size"},
+    "layers": {"$var": "layers"}, "run": {"$var": "layers"},
+    "act": {"$act": {"$cfg": "hidden_act"}}, "swiglu": false, "rms": false, "eps": {"$cfg": "layer_norm_eps"},
+    "pre_norm": false, "cls": true, "patch_bias": true, "learned_pos": true, "rope_theta": null, "window": null,
+    "out": {"ClipPooled": {"proj": null}},
+    "names": {"patch.w": "embeddings.patch_embeddings.projection.weight", "patch.b": "embeddings.patch_embeddings.projection.bias", "cls": "embeddings.cls_token", "pos": "embeddings.position_embeddings", "post_norm": "layernorm", "norm1": "encoder.layer.{L}.layernorm_before", "norm2": "encoder.layer.{L}.layernorm_after", "attn.q": "encoder.layer.{L}.attention.attention.query", "attn.k": "encoder.layer.{L}.attention.attention.key", "attn.v": "encoder.layer.{L}.attention.attention.value", "attn.o": "encoder.layer.{L}.attention.output.dense", "mlp.up": "encoder.layer.{L}.intermediate.dense", "mlp.down": "encoder.layer.{L}.output.dense"},
+    "ignored": ["pooler."]
+  }
+}

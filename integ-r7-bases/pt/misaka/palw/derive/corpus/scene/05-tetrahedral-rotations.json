@@ -1,0 +1,487 @@
+{
+  "v": 1,
+  "frac_bits": 8,
+  "materials": [
+    {
+      "name": "m0",
+      "base_color": [
+        256,
+        0,
+        0,
+        256
+      ],
+      "metallic": 0,
+      "roughness": 64,
+      "double_sided": false
+    },
+    {
+      "name": "m1",
+      "base_color": [
+        0,
+        256,
+        0,
+        256
+      ],
+      "metallic": 64,
+      "roughness": 128,
+      "double_sided": false
+    },
+    {
+      "name": "m2",
+      "base_color": [
+        0,
+        0,
+        256,
+        256
+      ],
+      "metallic": 128,
+      "roughness": 192,
+      "double_sided": true
+    },
+    {
+      "name": "m3",
+      "base_color": [
+        256,
+        256,
+        0,
+        128
+      ],
+      "metallic": 256,
+      "roughness": 256,
+      "double_sided": false
+    }
+  ],
+  "nodes": [
+    {
+      "name": "rig",
+      "translation": [
+        0,
+        256,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        2
+      ],
+      "scale": [
+        128,
+        128,
+        128
+      ],
+      "shape": null,
+      "material": null,
+      "children": [
+        {
+          "name": "r0",
+          "translation": [
+            -144,
+            -96,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            2
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m0",
+          "children": []
+        },
+        {
+          "name": "r1",
+          "translation": [
+            -48,
+            -96,
+            0
+          ],
+          "rotation": [
+            2,
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m1",
+          "children": []
+        },
+        {
+          "name": "r2",
+          "translation": [
+            48,
+            -96,
+            0
+          ],
+          "rotation": [
+            0,
+            2,
+            0,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m2",
+          "children": []
+        },
+        {
+          "name": "r3",
+          "translation": [
+            144,
+            -96,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            2,
+            0
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m3",
+          "children": []
+        },
+        {
+          "name": "r4",
+          "translation": [
+            -144,
+            0,
+            0
+          ],
+          "rotation": [
+            1,
+            1,
+            1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m0",
+          "children": []
+        },
+        {
+          "name": "r5",
+          "translation": [
+            -48,
+            0,
+            0
+          ],
+          "rotation": [
+            1,
+            -1,
+            1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m1",
+          "children": []
+        },
+        {
+          "name": "r6",
+          "translation": [
+            48,
+            0,
+            0
+          ],
+          "rotation": [
+            -1,
+            1,
+            1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m2",
+          "children": []
+        },
+        {
+          "name": "r7",
+          "translation": [
+            144,
+            0,
+            0
+          ],
+          "rotation": [
+            -1,
+            -1,
+            1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m3",
+          "children": []
+        },
+        {
+          "name": "r8",
+          "translation": [
+            -144,
+            96,
+            0
+          ],
+          "rotation": [
+            1,
+            1,
+            -1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m0",
+          "children": []
+        },
+        {
+          "name": "r9",
+          "translation": [
+            -48,
+            96,
+            0
+          ],
+          "rotation": [
+            1,
+            -1,
+            -1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m1",
+          "children": []
+        },
+        {
+          "name": "r10",
+          "translation": [
+            48,
+            96,
+            0
+          ],
+          "rotation": [
+            -1,
+            1,
+            -1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m2",
+          "children": []
+        },
+        {
+          "name": "r11",
+          "translation": [
+            144,
+            96,
+            0
+          ],
+          "rotation": [
+            -1,
+            -1,
+            -1,
+            1
+          ],
+          "scale": [
+            1,
+            1,
+            1
+          ],
+          "shape": {
+            "shape": "box",
+            "min": [
+              -32,
+              -16,
+              -8
+            ],
+            "max": [
+              32,
+              16,
+              8
+            ]
+          },
+          "material": "m3",
+          "children": []
+        }
+      ]
+    }
+  ]
+}

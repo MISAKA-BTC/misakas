@@ -1,0 +1,20 @@
+Compiled sourceaafa9b234; coreopt0/debug0.
+Binary SHA256 3a0f5ac45d6dc0076efbc8e3d0bd5a01b681d8d5d147a884f617c9dae2985a32
+
+FILTER backend::tests::registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names
+
+running 1 test
+test backend::tests::registered_floor_i8_prefix_matches_public_cache_writes_and_refuses_wrong_names ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 1.36s
+
+FILTER_EXIT 0
+
+FILTER qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order
+
+running 1 test
+test qwen36_backend::tests::registered_hybrid_prefix_commits_all_cache_components_and_exact_chunk_order ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 500 filtered out; finished in 2.12s
+
+FILTER_EXIT 0

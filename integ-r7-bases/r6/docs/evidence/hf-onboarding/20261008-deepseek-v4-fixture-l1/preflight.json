@@ -1,0 +1,236 @@
+{
+ "schema": "misaka.h1.preflight.v1",
+ "command": "misaka --network testnet-12 --output json model preflight hf://REPO@REV --depth shape [--max-context N]",
+ "header_only": true,
+ "widest": {
+  "exit": 34,
+  "file": "widest.json",
+  "readable": true,
+  "input": "deepseek_v4",
+  "bytes_read": 12697,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "deepseek_v4",
+  "architectures": [
+   "DeepseekV4ForCausalLM"
+  ],
+  "frontend_level": "B",
+  "adapter": "deepseek-v4",
+  "features_used": 20,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": [
+    {
+     "kind": "mtp",
+     "what": "multi-token-prediction heads",
+     "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them",
+     "modal": false,
+     "evidence": [
+      "config.num_nextn_predict_layers"
+     ],
+     "tensors": 0,
+     "bytes": 0
+    }
+   ]
+  },
+  "storage": [
+   "BF16",
+   "I64"
+  ],
+  "weights_bytes": 90302,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 1536083,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 22be4ed399fa78bd\u2026, \u03b5_check \u2264 2^-229 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 32783
+  },
+  "admission_verdict": "ADMISSIBLE_GENERIC (estimated slowdown 1.69x on generic kernels: Div x178 (4514 element-ops); Mul x177 (4492 element-ops); Clamp x156 (4294 element-ops); Concat x34 (2806 element-ops); Slice x98 (2198 element-ops); Iota x19 (1078 element-ops))",
+  "admission_gate": "COURT_COST_EXCEEDS_CEILING",
+  "admission_gate_detail": "the class's IR terminal close bytes as carried of 106878567 exceeds the ruleset's ceiling of 3200000",
+  "layout": {
+   "max_context": 32783,
+   "checkpoint_interval": 65536,
+   "h_tile": 64,
+   "commit_tiles": 146,
+   "logits_tile": 4096,
+   "searched": false,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 1473035,
+  "verdict": {
+   "convert": "blocked",
+   "register": "blocked",
+   "mine": "ok"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "QUANT_NO_DESCRIPTOR",
+    "arg": "safetensors/I64",
+    "what": "1 tensor(s) the class reads are stored as I64, and no descriptor reads that type",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "the model's original (float) checkpoint, if it publishes one",
+     "a descriptor file for the format (--quant-format <file.json>): a data change, no code"
+    ]
+   },
+   {
+    "stage": "register",
+    "code": "CLOSE_SIZE_OVER_CAP",
+    "arg": "IR terminal close bytes as carried",
+    "what": "IR terminal close bytes as carried: 106878567 against a ceiling of 3200000",
+    "have": 106878567,
+    "need": 3200000,
+    "unit": "bytes",
+    "safe_paths": [
+     "a narrower tile (--tile-len) or logits tile lowers a close; a smaller --max-context lowers the work"
+    ]
+   },
+   {
+    "stage": "register",
+    "code": "COURT_COST_OVER_CEILING",
+    "arg": null,
+    "what": "a cost the court pays to prosecute the class is over its ceiling (court_cost: IR terminal close bytes as carried)",
+    "have": 106878567,
+    "need": 3200000,
+    "unit": "units",
+    "safe_paths": []
+   }
+  ],
+  "notes": [
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)"
+  ]
+ },
+ "declared": {
+  "exit": 34,
+  "max_context": 512,
+  "file": "declared.json",
+  "readable": true,
+  "input": "deepseek_v4",
+  "bytes_read": 12697,
+  "depth": {
+   "requested": "shape",
+   "reached": "shape",
+   "stopped_at": null
+  },
+  "network_daa": 5585,
+  "model_type": "deepseek_v4",
+  "architectures": [
+   "DeepseekV4ForCausalLM"
+  ],
+  "frontend_level": "B",
+  "adapter": "deepseek-v4",
+  "features_used": 20,
+  "features_not_supported": [],
+  "scope": {
+   "schema": "misaka.palw.feature-scope.v1",
+   "task": "text-generation",
+   "input": "token ids",
+   "output": "next-token logits",
+   "text_only": false,
+   "excluded": [
+    {
+     "kind": "mtp",
+     "what": "multi-token-prediction heads",
+     "why": "extra heads that propose further tokens (speculative decoding); the next-token distribution is the main head's, so the class does not need them",
+     "modal": false,
+     "evidence": [
+      "config.num_nextn_predict_layers"
+     ],
+     "tensors": 0,
+     "bytes": 0
+    }
+   ]
+  },
+  "storage": [
+   "BF16",
+   "I64"
+  ],
+  "weights_bytes": 90302,
+  "missing_shards": [],
+  "artifact_estimate_bytes": 1536083,
+  "kernel": {
+   "kernel": "K2-TIR-v1 5b8156b3b85ac734",
+   "shipped": "KERNEL_NOT_ACTIVE",
+   "hypothetical": "ELIGIBLE_AT",
+   "detail": "ELIGIBLE_AT daa 5585: kernel 5b8156b3b85ac734\u2026, plan 7959a69ea069ae0d\u2026, \u03b5_check \u2264 2^-235 (static admission only)",
+   "bucket": "kernel_extension_gap",
+   "max_positions": 512
+  },
+  "admission_verdict": "ADMISSIBLE_GENERIC (estimated slowdown 1.69x on generic kernels: Div x178 (4514 element-ops); Mul x177 (4492 element-ops); Clamp x156 (4294 element-ops); Concat x34 (2806 element-ops); Slice x98 (2198 element-ops); Iota x19 (1078 element-ops))",
+  "admission_gate": "COURT_COST_EXCEEDS_CEILING",
+  "admission_gate_detail": "the class's IR dissection root claim bytes of 619541 exceeds the ruleset's ceiling of 100000",
+  "layout": {
+   "max_context": 512,
+   "checkpoint_interval": 65536,
+   "h_tile": 64,
+   "commit_tiles": 146,
+   "logits_tile": 4096,
+   "searched": false,
+   "widest_context": 262144
+  },
+  "seat_needed_bytes": 1473035,
+  "verdict": {
+   "convert": "blocked",
+   "register": "blocked",
+   "mine": "ok"
+  },
+  "unknown_because": {},
+  "blockers": [
+   {
+    "stage": "convert",
+    "code": "QUANT_NO_DESCRIPTOR",
+    "arg": "safetensors/I64",
+    "what": "1 tensor(s) the class reads are stored as I64, and no descriptor reads that type",
+    "have": null,
+    "need": null,
+    "unit": null,
+    "safe_paths": [
+     "the model's original (float) checkpoint, if it publishes one",
+     "a descriptor file for the format (--quant-format <file.json>): a data change, no code"
+    ]
+   },
+   {
+    "stage": "register",
+    "code": "CLOSE_SIZE_OVER_CAP",
+    "arg": "IR dissection root claim bytes",
+    "what": "IR dissection root claim bytes: 619541 against a ceiling of 100000",
+    "have": 619541,
+    "need": 100000,
+    "unit": "bytes",
+    "safe_paths": [
+     "a narrower tile (--tile-len) or logits tile lowers a close; a smaller --max-context lowers the work"
+    ]
+   },
+   {
+    "stage": "register",
+    "code": "COURT_COST_OVER_CEILING",
+    "arg": null,
+    "what": "a cost the court pays to prosecute the class is over its ceiling (court_cost: IR dissection root claim bytes)",
+    "have": 619541,
+    "need": 100000,
+    "unit": "units",
+    "safe_paths": []
+   }
+  ],
+  "notes": [
+   "court window: under palw_model_court_window (dormant on this network) the class would be given its own window of 3,000 DAA (the network's is 3,000 DAA)"
+  ]
+ }
+}

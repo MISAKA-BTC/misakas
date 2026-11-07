@@ -1,0 +1,161 @@
+{
+ "schema": "misaka.cov-p1p2.header-fixture.v1",
+ "repo": "huihui-ai/Llama-3.3-70B-Instruct-abliterated",
+ "revision": "fa13334669544bab573e0e5313cad629a9c02e2c",
+ "license": "llama3.3",
+ "weights_read": false,
+ "shards": {
+  "model-00001-of-00030.safetensors": {
+   "header_sha256": "0355be298917324ed07332052f73e16fedd4f46668b1791fccba3870828f5c52",
+   "file_bytes": 4584408808,
+   "lfs_sha256": "ecc71fd04e8e99e629c76abd2b026736f146d604e30413223a07b8974b9e4186"
+  },
+  "model-00002-of-00030.safetensors": {
+   "header_sha256": "1615ab8210f81a17eb582853cb20994bf5ebc3859358e6067099701c9e3b48ea",
+   "file_bytes": 4664167376,
+   "lfs_sha256": "321bb956ec1436717dd609350f3a30632e275f86c6985bd3dd0f33239e660bd5"
+  },
+  "model-00003-of-00030.safetensors": {
+   "header_sha256": "646aab2cb2bfb256c7e416fd80e53604d8ff12a977accc514462dc3f14aa5a6e",
+   "file_bytes": 4999711704,
+   "lfs_sha256": "2c1f77c1ca784d390fffe1eadda2bdaca1378783de870cb4b801ac6d91b668b7"
+  },
+  "model-00004-of-00030.safetensors": {
+   "header_sha256": "d6923306a877446bc0edaddfcde22821b00299e7ed3be61a4db0281204f6fe9b",
+   "file_bytes": 4966157032,
+   "lfs_sha256": "b820220678f3bbcc1e2a966eaf765517d215f3990d617cdb0fd35fc456ae4a89"
+  },
+  "model-00005-of-00030.safetensors": {
+   "header_sha256": "c715104c7a94f7f6b6dfb34557f5ae67ebce3f6b64ba458000044754afb14c56",
+   "file_bytes": 4664134408,
+   "lfs_sha256": "fdec4ceb8cbad5d46625695cb0e6e59f227f777e120b1247fdcfd627d3c8cc68"
+  },
+  "model-00006-of-00030.safetensors": {
+   "header_sha256": "3f34000b247d4638d73ee8502e5a9e4214e4acd3772f31a2caf1226d4b74f3be",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "20efd0e0d9f7c56d0ffca6e77e3135e6818b936c1a908b18bfea660bc3a5a1a3"
+  },
+  "model-00007-of-00030.safetensors": {
+   "header_sha256": "13297b2433a53ac79f5b602d98407b532ae400d55ef150b821c342ff5bb9b626",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "491644afc254d75e65f86123ada15dd37ea8e045d2be4ac50d6ea9188dbf0b8c"
+  },
+  "model-00008-of-00030.safetensors": {
+   "header_sha256": "bbce2c1f0fc75fa8c5946099139a8836261a272614fe23d3646cc10f56adbf4d",
+   "file_bytes": 4999711728,
+   "lfs_sha256": "4a436fa74873584fb447ce30840a576f6fd1a24208bc23db251f325136f8aa5d"
+  },
+  "model-00009-of-00030.safetensors": {
+   "header_sha256": "e8e860e308216d371d25252d1ed3fbee0440c8fa781cac073a5bd7a6a40ad9de",
+   "file_bytes": 4966157056,
+   "lfs_sha256": "411229ce6f46e81b004e85366a8889a697f46fd83632f52c28be1707f5140725"
+  },
+  "model-00010-of-00030.safetensors": {
+   "header_sha256": "2a427d52edcd252c3a78d3d6af405b399dc3ab881010c5e61404b187971c162c",
+   "file_bytes": 4664134408,
+   "lfs_sha256": "5891817187eaff2fd941796f788a84d6c28c3c6dd8c696de499bb1a904c3a589"
+  },
+  "model-00011-of-00030.safetensors": {
+   "header_sha256": "2996e54cf4b8a17627b519b2d263e1ef6333fdc2956b7e8c8e96e0d972598b90",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "c8cd0ee9a74709f97438c01958426add345422416b36cfb79ac8602b7ed03295"
+  },
+  "model-00012-of-00030.safetensors": {
+   "header_sha256": "e2bdcdbdb12f8251944af390d0d8441bf4b75c2985815356439e2b2b62d8bac0",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "804f259d6ad605b873d5fc638e461015a27bd9d646583bd3bb23b12266a945e5"
+  },
+  "model-00013-of-00030.safetensors": {
+   "header_sha256": "ab1dafef09aad1ab2614eccebee519b30fbfc313058a83b073b65ddf99af0dba",
+   "file_bytes": 4999711728,
+   "lfs_sha256": "3529dd19b9fbb7b777d2617d4414a9a2cfad4a7f063ba6958bdcb89a3ec063c4"
+  },
+  "model-00014-of-00030.safetensors": {
+   "header_sha256": "942d82cc5165f3a3897f2d76a839bbd4025fc7004f6b0001b4676a16cad600be",
+   "file_bytes": 4966157056,
+   "lfs_sha256": "192ba98a5f76164c8dd2c221d85f5446e65f440a7f75b0cb97a44fcdaaf088a9"
+  },
+  "model-00015-of-00030.safetensors": {
+   "header_sha256": "3ce1a57b4d39b3706ba14d59a1166d3f91c128e211ed72175246186df567f915",
+   "file_bytes": 4664134408,
+   "lfs_sha256": "6e72da9adbf1e37bc70b5b2e1c1b08b6d3f01eea695d66024634d980c9a03c82"
+  },
+  "model-00016-of-00030.safetensors": {
+   "header_sha256": "5b46a7441389881d65bd36fbc009b999a865874f25fadc8d334b4437e8d825ba",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "28b6a15b8ffebab95c6bb69a349e4d535d2aaea70d90fb91dcc1ff43b12f6c06"
+  },
+  "model-00017-of-00030.safetensors": {
+   "header_sha256": "f328645193d2c9c5e0e197c1d9ec0d5c68eb5b1d0a97c4574232cfcecef611bb",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "caaf04a6cb917a193b67ffbb9b44593d6a0e65720f6eb8942a12d531c81e5d75"
+  },
+  "model-00018-of-00030.safetensors": {
+   "header_sha256": "0782d5f7b9df2dd0c50eae3e8c90c70b311e02210f0bdfa2664ac7b3397a9141",
+   "file_bytes": 4999711728,
+   "lfs_sha256": "25f07149924fb513a1431c9d9a62162e0590d9c149e78659b24f4c229ea9a0dd"
+  },
+  "model-00019-of-00030.safetensors": {
+   "header_sha256": "64bd7d49829e03551928cc028c72bf51ee747df0b421b1b5e89e57e2a3280fa2",
+   "file_bytes": 4966157056,
+   "lfs_sha256": "4aed6fc5d54286e47db905ae4e4685360db4b8c10cbfec3d551f0dbbddee1faf"
+  },
+  "model-00020-of-00030.safetensors": {
+   "header_sha256": "d8aee5e6fa2dc9a3324ef0d9a76e4c65785857e21e12ef9123c6bb1bd3896679",
+   "file_bytes": 4664134408,
+   "lfs_sha256": "a5c9da770b36576789562a31e6e88b2b72539142fcf2615a7f54347b1106e78c"
+  },
+  "model-00021-of-00030.safetensors": {
+   "header_sha256": "8b610e4b553f1fa73a65d06ac4b585ac945e8126088c04383dd94c2455307bc6",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "99f169e8fa66010fce7a272558485ee68533e07188d8291e2fb47d026c27de6b"
+  },
+  "model-00022-of-00030.safetensors": {
+   "header_sha256": "27c1fb6e0fdd9a2185b05488afc64f6d9f51e5d2a57c67808faa6b2968f5d6fc",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "8527ba8c7b5aa49ecc89ae8fc34702b3b39006c9e58fd6d4eb9c46465253def5"
+  },
+  "model-00023-of-00030.safetensors": {
+   "header_sha256": "b6f79818cc599fafe4be1bcd3c65a66010efb63d5e43f5bd18d6fdc31d96dd77",
+   "file_bytes": 4999711728,
+   "lfs_sha256": "89aba554b78f030886c92a7444e052401a1970460ad202a7386073d46a22167b"
+  },
+  "model-00024-of-00030.safetensors": {
+   "header_sha256": "c072e42acc6b2121fcf77f4483eacfcf7a9795024663c6845e2aa55d2b1412ae",
+   "file_bytes": 4966157056,
+   "lfs_sha256": "b2ec885cbd00bf740265b6ce539b73767e062b6bec7b1f5e3fee9777a1aa19be"
+  },
+  "model-00025-of-00030.safetensors": {
+   "header_sha256": "41f20ea945fb1768d9847cb7d2fa722aef8cc04d316fe191338940e3bd4c1e60",
+   "file_bytes": 4664134408,
+   "lfs_sha256": "00bd277069d4dec332fc8847024656bb9a14110964e8a0c2d21d713740bab643"
+  },
+  "model-00026-of-00030.safetensors": {
+   "header_sha256": "48eb87a4082b1dd5dfe8a6864ab283737ec2437e8fb6287c9a3e499d3d9143c8",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "db6156182e0e7602c763915c9e6f91f86f4e1429eca3f47758b52fc1abb35fc7"
+  },
+  "model-00027-of-00030.safetensors": {
+   "header_sha256": "81396c64db5075a337a123212c9325000863e07d1c897e5790fb4ffa5c6f4a30",
+   "file_bytes": 4664167408,
+   "lfs_sha256": "a4bb1b481ad326b9fa7916492df6b1fc66c2df85ea8147f2d201d6c0a0410ddd"
+  },
+  "model-00028-of-00030.safetensors": {
+   "header_sha256": "f6ba9710d239f49ab8fc656a1fb57e516ba9b9841131f2903b9dc88e4b34c354",
+   "file_bytes": 4999711728,
+   "lfs_sha256": "181ec0b8fc8542086a73dd42511f62cc17f32f3689ded1ff79d29a8c0147a663"
+  },
+  "model-00029-of-00030.safetensors": {
+   "header_sha256": "c43e1cf9265585472951ceee172474853f5a1ae81acbee98578f7caa93ecadea",
+   "file_bytes": 4966173536,
+   "lfs_sha256": "de4b6e30b5a5d6c02bc1596ebe919e1aab6f8a169e9ce569debf7c4d0c7b421d"
+  },
+  "model-00030-of-00030.safetensors": {
+   "header_sha256": "94424839e8e3b65dc7641d6851b73dac8c226a220075109d10fa3e0e4f223a23",
+   "file_bytes": 2101346432,
+   "lfs_sha256": "b0436c98c9b4f78e61f6769e588e0853179b970e2a084ae2886e2daebf1ce13d"
+  }
+ },
+ "total_file_bytes": 141107497872,
+ "note": "each shard file is its 8-byte length and JSON header only, cut after the header (source::read_safetensors_header is lenient about the data region); fetched by HTTP range from the pinned revision by scripts/genesis/genesis_header_fixtures.py"
+}

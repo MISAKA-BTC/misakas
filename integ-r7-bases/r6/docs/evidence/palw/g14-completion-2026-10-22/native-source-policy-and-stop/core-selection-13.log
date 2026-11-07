@@ -1,0 +1,8 @@
+
+running 1 test
+prefix local test actual quote: initial=3653888 replay=1176 total=3655064 source=3619984 step_space_additional=8208 structural_items=1174
+prefix local test actual quote: initial=3653888 replay=1176 total=3655064 source=3619984 step_space_additional=8208 structural_items=1174
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::private_prefix_material_replay_authenticates_canonical_boundary_and_refuses_missing_other_source_or_corruption ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4771 filtered out; finished in 0.72s
+

@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized] target(s) in 0.69s
+     Running unittests src/lib.rs (target/debug/deps/kaspad_lib-5c485cb7922bbe61)
+
+running 2 tests
+test palw_public_token_table::tests::file_backed_registry_serves_the_exact_root_and_tokenizer_only ... FAILED
+test palw_panel::palw_fraud_filer::constraint_scheduler::tests::generic_constraint_streams_large_rendering_to_exact_rooted_fault_and_restarts ... FAILED
+
+failures:
+
+---- palw_public_token_table::tests::file_backed_registry_serves_the_exact_root_and_tokenizer_only stdout ----
+
+thread 'palw_public_token_table::tests::file_backed_registry_serves_the_exact_root_and_tokenizer_only' (18750469) panicked at kaspad/src/palw_public_token_table.rs:352:9:
+assertion `left == right` failed
+  left: (d9d9fa88f54004cba9ef60ac8c5854b4dfbf0358253482c97e4d7b277f7ec52444867f713897f601ff0169a8f5743890150e0a8e0b94d46478fe50bf07c0b96a, 3)
+ right: (d9d9fa88f54004cba9ef60ac8c5854b4dfbf0358253482c97e4d7b277f7ec52444867f713897f601ff0169a8f5743890150e0a8e0b94d46478fe50bf07c0b96a, 2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- palw_panel::palw_fraud_filer::constraint_scheduler::tests::generic_constraint_streams_large_rendering_to_exact_rooted_fault_and_restarts stdout ----
+
+thread 'palw_panel::palw_fraud_filer::constraint_scheduler::tests::generic_constraint_streams_large_rendering_to_exact_rooted_fault_and_restarts' (18750468) panicked at kaspad/src/palw_constraint_scheduler.rs:278:54:
+called `Result::unwrap()` on an `Err` value: "constraint accepted seed changed"
+
+
+failures:
+    palw_panel::palw_fraud_filer::constraint_scheduler::tests::generic_constraint_streams_large_rendering_to_exact_rooted_fault_and_restarts
+    palw_public_token_table::tests::file_backed_registry_serves_the_exact_root_and_tokenizer_only
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.25s
+
+error: test failed, to rerun pass `-p kaspad --lib`
+exit 101

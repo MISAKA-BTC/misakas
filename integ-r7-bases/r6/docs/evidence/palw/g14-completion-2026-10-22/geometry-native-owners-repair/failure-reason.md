@@ -1,0 +1,1 @@
+Compilation failed E0382: TirNativeRequestsV1::bytes_v1 consumes its receiver; the per-Vec minimum accumulator was consumed in a two-iteration loop. Repair computes its u64 byte count once before the loop and reuses that scalar. No quota/count/limit changes. Failed source and diagnostics are preserved.

@@ -1,0 +1,166 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "encdec-frame",
+  "kind": "encdec",
+  "doc": "A mixin: the frame of every encoder-decoder spec (misaka.palw.encdec-spec.v1) — the math (positions, norms, activation, scales) and where the checkpoint's tensors live (`names`), as hooks (variables) an adapter defines. It reads no configuration key itself. An adapter of kind `encdec` is read by `hf_schema::read_encdec`; the lowering is the encoder-decoder route (ENCDEC_FROM_SPEC_V1, docs/design/palw/tir/frontend-as-data-v1.md section 3).",
+  "vars": [
+    {
+      "name": "gated",
+      "value": false
+    },
+    {
+      "name": "bias",
+      "value": false
+    },
+    {
+      "name": "embed_scale",
+      "value": 1.0
+    },
+    {
+      "name": "embed_norm",
+      "value": false
+    },
+    {
+      "name": "final_norm",
+      "value": false
+    },
+    {
+      "name": "head_scale",
+      "value": 1.0
+    },
+    {
+      "name": "logits_bias",
+      "value": false
+    },
+    {
+      "name": "decoder_start",
+      "value": {
+        "$let": [
+          "s",
+          {
+            "$cfg?": "decoder_start_token_id"
+          },
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "s"
+                  },
+                  null
+                ]
+              },
+              {
+                "$var": "s"
+              },
+              {
+                "$let": [
+                  "p",
+                  {
+                    "$cfg?": "pad_token_id"
+                  },
+                  {
+                    "$if": [
+                      {
+                        "$ne": [
+                          {
+                            "$var": "p"
+                          },
+                          null
+                        ]
+                      },
+                      {
+                        "$var": "p"
+                      },
+                      0
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "spec": {
+    "architecture": {
+      "$var": "arch"
+    },
+    "vocab": {
+      "$var": "vocab"
+    },
+    "d": {
+      "$var": "d"
+    },
+    "enc_layers": {
+      "$var": "enc_layers"
+    },
+    "dec_layers": {
+      "$var": "dec_layers"
+    },
+    "enc_heads": {
+      "$var": "enc_heads"
+    },
+    "dec_heads": {
+      "$var": "dec_heads"
+    },
+    "enc_head_dim": {
+      "$var": "enc_head_dim"
+    },
+    "dec_head_dim": {
+      "$var": "dec_head_dim"
+    },
+    "enc_ffn": {
+      "$var": "enc_ffn"
+    },
+    "dec_ffn": {
+      "$var": "dec_ffn"
+    },
+    "act": {
+      "$var": "act"
+    },
+    "gated": {
+      "$var": "gated"
+    },
+    "rms": {
+      "$var": "rms"
+    },
+    "eps": {
+      "$var": "eps"
+    },
+    "pre_norm": {
+      "$var": "pre_norm"
+    },
+    "bias": {
+      "$var": "bias"
+    },
+    "positions": {
+      "$var": "positions"
+    },
+    "embed_scale": {
+      "$var": "embed_scale"
+    },
+    "embed_norm": {
+      "$var": "embed_norm"
+    },
+    "final_norm": {
+      "$var": "final_norm"
+    },
+    "attn_scale": {
+      "$var": "attn_scale"
+    },
+    "head_scale": {
+      "$var": "head_scale"
+    },
+    "logits_bias": {
+      "$var": "logits_bias"
+    },
+    "decoder_start": {
+      "$var": "decoder_start"
+    },
+    "names": {
+      "$var": "names"
+    }
+  }
+}

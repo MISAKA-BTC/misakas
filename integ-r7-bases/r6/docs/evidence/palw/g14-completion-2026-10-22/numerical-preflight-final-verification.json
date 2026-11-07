@@ -1,0 +1,157 @@
+{
+  "base": "ab0d57199a01bdf3c98d9e2b3f05584d08016e3e",
+  "sources": {
+    "consensus/core/src/lib.rs": "db4f277ae8c984b7e19d53ec7ef24a7d1d19a7190eea8816047b3a7f37979a8a",
+    "consensus/core/src/palw_court_funding_preflight_v1.rs": "3ac79d98ab2184761c0be6dfd49f22ef22d9744243564bf74da19d0ecc853df7",
+    "consensus/core/src/palw_court_numerical_geometry_v3.rs": "bb92297af01bfc990edbd70e1b46019214c93cbdedd4596503fc6403d07ea141",
+    "consensus/core/tests/palw_tir_court_verify_cpu.rs": "05c239ee972ab57d7e99f327b5633460b4a9a1bf1d11f2d1b5e422da8d6d0bce"
+  },
+  "source_reconstruction_verified": true,
+  "added_source_snapshot": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-added-source",
+  "tracked_patch": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-tracked.patch",
+  "pin": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3",
+  "commands": [
+    {
+      "args": [
+        "cargo",
+        "check",
+        "--release",
+        "-p",
+        "kaspa-consensus-core",
+        "-p",
+        "kaspa-consensus",
+        "--tests"
+      ],
+      "exit": 0,
+      "seconds": 103.642,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-all-tests-check.log"
+    },
+    {
+      "args": [
+        "cargo",
+        "test",
+        "--release",
+        "-p",
+        "kaspa-consensus-core",
+        "--lib",
+        "--test",
+        "palw_the_release_did_not_move",
+        "--test",
+        "palw_activation_pool_is_t12_only",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit": 0,
+      "seconds": 413.467,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-core-build.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+        "palw_court_numerical_geometry_v3::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 1.267,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-numerical-geometry.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+        "palw_court_funding_preflight_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.01,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-funding-preflight.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+        "palw_court_source_material_graph_v3::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.112,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-source-graph.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+        "palw_court_carrier_fee_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.009,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-fee.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+        "palw_court_original_escrow_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.009,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-funding.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+        "palw_tir_funded_original_envelope_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.061,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-funded-envelope.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+        "palw_tir_public_fp_envelope_v1::tests",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.053,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-legacy-envelope.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/palw_the_release_did_not_move",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.702,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-t12.log"
+    },
+    {
+      "args": [
+        "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/palw_activation_pool_is_t12_only",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "seconds": 0.64,
+      "log": "docs/evidence/palw/g14-completion-2026-10-22/numerical-preflight-final-activation.log"
+    }
+  ],
+  "executables": {
+    "palw_activation_pool_is_t12_only": {
+      "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/palw_activation_pool_is_t12_only",
+      "sha256": "a881653a5ed911e55db27f0edebab92b5a47df6c6400ab3787df00598caf081d"
+    },
+    "palw_the_release_did_not_move": {
+      "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/palw_the_release_did_not_move",
+      "sha256": "899e0be1a7fd1eaf86843da1584b0cd37264c4ed76203566029bfd3c8b33b64d"
+    },
+    "kaspa_consensus_core": {
+      "path": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/g14-numerical-preflight-y58kxkb3/kaspa_consensus_core",
+      "sha256": "1bc748ca3015c5c505905e035c4ee6580a10fe55c33dc24493ff9c319c3bcf65"
+    }
+  },
+  "initial_runs": [
+    "numerical-preflight-verification.json",
+    "numerical-preflight-repair-verification.json"
+  ],
+  "geometry_non_test_prefix_unchanged": true,
+  "source_hashes_unchanged": true
+}

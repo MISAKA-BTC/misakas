@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_state_v2::tests::rfc06_retained_transition_and_rehearsal_preserve_default_off_canonical_bytes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4697 filtered out; finished in 0.00s
+

@@ -1,0 +1,8 @@
+
+running 3 tests
+test palw_native_resource_v1::tir::tests::structural_tir_array_and_cardinality_overflow_refuses ... ok
+test palw_native_resource_v1::tir::tests::retained_tir_program_shape_refuses_truncation_and_hostile_lengths ... ok
+test palw_native_resource_v1::tir::tests::retained_tir_decode_preserves_the_exact_canonical_program ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4742 filtered out; finished in 0.00s
+

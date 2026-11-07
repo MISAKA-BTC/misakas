@@ -1,0 +1,25 @@
+<think>
+
+</think>
+
+{
+  "v": 1,
+  "ppq": 480,
+  "tempo_us_per_quarter": 500000,
+  "time_signature": [4, 4],
+  "tracks": [
+    {
+      "name": "C Major Arpeggio",
+      "channel": 0,
+      "program": 1,
+      "notes": [
+        {
+          "pitch": 60,
+          "velocity": 85,
+          "onset": 0,
+          "duration": 1
+        }
+      ]
+    }
+  ]
+}

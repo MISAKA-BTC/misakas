@@ -1,0 +1,26 @@
+{
+  "archive": "misakas-pre(2).zip",
+  "sha256": "136f95326e9831f7778b9f8e73028c12b1f8f8ae00468b22770f8e54bec4c512",
+  "scanned_extensions": [
+    ".rs",
+    ".md",
+    ".toml",
+    ".py",
+    ".sh"
+  ],
+  "matches": {
+    "PALW_TIR_FRAME_COST_RECORDS_V1": [],
+    "ADR-0191": [],
+    "b6e8a3d16": [],
+    "PALW_G14_ARMING_RECORDS_V1": [
+      "consensus/core/src/palw_legacy_held_da_v2.rs",
+      "consensus/core/src/palw_legacy_public_filer_v1.rs",
+      "consensus/core/src/palw_g14_gates_v1.rs",
+      "consensus/core/tests/g14_close_gates.rs",
+      "consensus/core/tests/g14_close_legacy.rs",
+      "consensus/core/src/config/params.rs",
+      "consensus/core/src/config/params/validation.rs",
+      "docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md"
+    ]
+  }
+}

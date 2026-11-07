@@ -1,0 +1,11 @@
+
+running 6 tests
+test palw_state_v2::tests::held_close_chunks_clock::the_executors_duty_turn_is_terminal_where_the_challengers_group_stands ... ok
+test palw_state_v2::tests::held_close_chunks_clock::with_both_groups_standing_the_session_waits_at_the_terminal_on_the_executors_clause_first ... ok
+test palw_state_v2::tests::held_close_chunks_clock::a_silent_executor_is_not_convicted_past_the_old_rung_while_the_challengers_close_assembles ... ok
+test palw_state_v2::tests::held_close_chunks_clock::a_lapsed_challenger_group_convicts_the_challenger_and_nobody_else ... ok
+test palw_state_v2::tests::held_close_chunks_clock::a_challenger_only_group_keys_the_session_at_its_backstop ... ok
+test palw_state_v2::tests::held_close_chunks_clock::the_clause_moves_no_clock_but_the_challenger_only_one_at_an_ir_or_pipeline_terminal ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 4676 filtered out; finished in 0.00s
+

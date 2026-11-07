@@ -1,0 +1,98 @@
+{
+  "scope": "SYNTHETIC_ARITHMETIC_ONLY_NOT_NODE_OR_ECONOMIC_VALIDATION",
+  "tests_run": 16,
+  "passed": true,
+  "failures": 0,
+  "errors": 0,
+  "minimum_sompi": 10000000000000,
+  "illustrative_liability_per_claim_coins": 12000,
+  "account_table": [
+    {
+      "outstanding_claims": 1,
+      "account_liability_coins": 12000,
+      "account_required_coins": 100000,
+      "extra_above_100k_coins": 0
+    },
+    {
+      "outstanding_claims": 5,
+      "account_liability_coins": 60000,
+      "account_required_coins": 100000,
+      "extra_above_100k_coins": 0
+    },
+    {
+      "outstanding_claims": 8,
+      "account_liability_coins": 96000,
+      "account_required_coins": 100000,
+      "extra_above_100k_coins": 0
+    },
+    {
+      "outstanding_claims": 9,
+      "account_liability_coins": 108000,
+      "account_required_coins": 108000,
+      "extra_above_100k_coins": 8000
+    },
+    {
+      "outstanding_claims": 20,
+      "account_liability_coins": 240000,
+      "account_required_coins": 240000,
+      "extra_above_100k_coins": 140000
+    }
+  ],
+  "conviction_cashflow_coins": {
+    "miner_account": 88000,
+    "requester": 6000,
+    "fee_escrow": 0,
+    "panel": 6000,
+    "burned": 6000
+  },
+  "dismissal_cashflow_coins": {
+    "miner_account": 100000,
+    "requester": 2000,
+    "fee_escrow": 0,
+    "panel": 4000,
+    "burned": 0
+  },
+  "synthetic_capital_sensitivity": [
+    {
+      "claims_per_day_assumed": 1,
+      "hold_days_assumed": 2,
+      "outstanding_claims_assumed": 2,
+      "account_coins": 100000,
+      "production_coins": 12000,
+      "total_two_buckets_coins": 112000
+    },
+    {
+      "claims_per_day_assumed": 5,
+      "hold_days_assumed": 2,
+      "outstanding_claims_assumed": 10,
+      "account_coins": 120000,
+      "production_coins": 60000,
+      "total_two_buckets_coins": 180000
+    },
+    {
+      "claims_per_day_assumed": 10,
+      "hold_days_assumed": 2,
+      "outstanding_claims_assumed": 20,
+      "account_coins": 240000,
+      "production_coins": 120000,
+      "total_two_buckets_coins": 360000
+    },
+    {
+      "claims_per_day_assumed": 30,
+      "hold_days_assumed": 2,
+      "outstanding_claims_assumed": 60,
+      "account_coins": 720000,
+      "production_coins": 360000,
+      "total_two_buckets_coins": 1080000
+    }
+  ],
+  "unverified": [
+    "real tariff costs",
+    "panel profitability",
+    "miner participation",
+    "REAL and heartbeat rates",
+    "all legal branches of real profiles",
+    "F02/F03 inclusion assumptions",
+    "node consensus and reorg/IBD"
+  ]
+}

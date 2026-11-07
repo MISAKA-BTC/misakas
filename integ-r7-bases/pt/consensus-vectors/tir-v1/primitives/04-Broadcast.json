@@ -1,0 +1,211 @@
+{
+  "format": "palw-tir-v1/primitive-vectors/1",
+  "spec": "docs/spec/palw/04b-tensor-ir.md",
+  "primitive": "Broadcast",
+  "tag": 4,
+  "cases": [
+    {
+      "name": "row_to_matrix",
+      "prim": {
+        "name": "Broadcast",
+        "attrs": [],
+        "borsh_hex": "04"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            3
+          ],
+          "data": [
+            "1",
+            "2",
+            "3"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          3
+        ],
+        "data": [
+          "1",
+          "2",
+          "3",
+          "1",
+          "2",
+          "3"
+        ]
+      }
+    },
+    {
+      "name": "column_expand",
+      "prim": {
+        "name": "Broadcast",
+        "attrs": [],
+        "borsh_hex": "04"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2,
+            1
+          ],
+          "data": [
+            "7",
+            "-7"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          4
+        ]
+      },
+      "expect": {
+        "dtype": "i32",
+        "shape": [
+          2,
+          4
+        ],
+        "data": [
+          "7",
+          "7",
+          "7",
+          "7",
+          "-7",
+          "-7",
+          "-7",
+          "-7"
+        ]
+      }
+    },
+    {
+      "name": "scalar",
+      "prim": {
+        "name": "Broadcast",
+        "attrs": [],
+        "borsh_hex": "04"
+      },
+      "inputs": [
+        {
+          "dtype": "i8",
+          "shape": [],
+          "data": [
+            "-128"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i8",
+        "shape": [
+          3
+        ]
+      },
+      "expect": {
+        "dtype": "i8",
+        "shape": [
+          3
+        ],
+        "data": [
+          "-128",
+          "-128",
+          "-128"
+        ]
+      }
+    },
+    {
+      "name": "head_grouping",
+      "prim": {
+        "name": "Broadcast",
+        "attrs": [],
+        "borsh_hex": "04"
+      },
+      "inputs": [
+        {
+          "dtype": "i16",
+          "shape": [
+            2,
+            1,
+            2
+          ],
+          "data": [
+            "1",
+            "2",
+            "3",
+            "4"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i16",
+        "shape": [
+          2,
+          3,
+          2
+        ]
+      },
+      "expect": {
+        "dtype": "i16",
+        "shape": [
+          2,
+          3,
+          2
+        ],
+        "data": [
+          "1",
+          "2",
+          "1",
+          "2",
+          "1",
+          "2",
+          "3",
+          "4",
+          "3",
+          "4",
+          "3",
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "error_not_size_one",
+      "prim": {
+        "name": "Broadcast",
+        "attrs": [],
+        "borsh_hex": "04"
+      },
+      "inputs": [
+        {
+          "dtype": "i32",
+          "shape": [
+            2
+          ],
+          "data": [
+            "1",
+            "2"
+          ]
+        }
+      ],
+      "out": {
+        "dtype": "i32",
+        "shape": [
+          3
+        ]
+      },
+      "expect_error": "Shape"
+    }
+  ]
+}

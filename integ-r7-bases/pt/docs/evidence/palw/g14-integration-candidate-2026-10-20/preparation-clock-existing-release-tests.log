@@ -1,0 +1,10 @@
+
+running 5 tests
+test palw_tir_frame_cost_v1::tests::owner_queue_wait_scales_with_the_open_capacity_bound ... ok
+test palw_tir_frame_cost_v1::tests::the_cost_record_list_is_empty_and_refuses_every_network ... ok
+test palw_tir_frame_cost_v1::tests::a_turn_span_does_not_grow_with_custodians_end_to_end ... ok
+test palw_tir_frame_cost_v1::tests::sequential_filing_v2_keeps_v1_bytes_and_cannot_erase_serial_wait ... ok
+test palw_tir_frame_cost_v1::tests::sequential_filing_v2_flows_through_real_plan_and_keeps_door_cap ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 4669 filtered out; finished in 0.04s
+

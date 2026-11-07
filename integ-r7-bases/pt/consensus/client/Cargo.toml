@@ -1,0 +1,50 @@
+[package]
+name = "kaspa-consensus-client"
+description = "Kaspa consensus client data structures"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): secp256k1 is optional, gated behind
+# `legacy-secp256k1`. The WASM SDK profile (`wasm32-sdk`) bundles the legacy
+# secp256k1 schnorr signer (`sign_with_multiple_v3`) + error variant, so it pulls
+# `legacy-secp256k1` in. The native node (kaspad) never enables `wasm32-sdk`, so its
+# rpc-core -> consensus-wasm -> consensus-client path stays secp-free.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1"]
+wasm32-sdk = ["legacy-secp256k1"]
+wasm32-types = []
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-math.workspace = true
+kaspa-txscript.workspace = true
+kaspa-utils.workspace = true
+kaspa-wasm-core.workspace = true
+
+ahash.workspace = true
+cfg-if.workspace = true
+faster-hex.workspace = true
+hex.workspace = true
+js-sys.workspace = true
+rand.workspace = true
+secp256k1 = { workspace = true, optional = true }
+serde_json.workspace = true
+serde-wasm-bindgen.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+wasm-bindgen.workspace = true
+itertools.workspace = true
+
+workflow-wasm.workspace = true
+workflow-log.workspace = true
+
+[lints]
+workspace = true

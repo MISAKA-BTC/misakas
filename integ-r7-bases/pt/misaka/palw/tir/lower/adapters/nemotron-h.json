@@ -1,0 +1,734 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "nemotron-h",
+  "doc": "Nemotron-H (NemotronHForCausalLM; nvidia/Nemotron-H-*, Nemotron-3-Nano): a hybrid in which EVERY layer is ONE block under ONE pre-norm and its residual add (LAYER_FFN_ONLY_V1): a Mamba-2 mixer (`linear_attention`, M), attention with no rotary embedding (`full_attention`, *), a plain relu^2 MLP (`mlp`, -) or a routed MoE (`moe`, E). The layer types come from `layers_block_type` or the legacy string `hybrid_override_pattern` (M E * -). Mamba-2 has the gate applied first and a grouped RMS norm (n_groups groups); its dt clamp is NOT applied (HF's prefill clamps at time_step_min, its decode and the original training code do not; the per-position semantics are the decode's). The MoE is DeepSeek-V3's router (sigmoid, a selection-only correction bias, renormalised, routed_scaling_factor; groups only when n_group > 1) over PLAIN experts down(relu^2(up(x))) (MOE_EXPERTS_PLAIN_V1) with a plain shared expert of moe_shared_expert_intermediate_size, and an optional latent projection around the routed experts (moe_latent_size, MOE_LATENT_PROJ_V1: fc1_latent_proj, fc2_latent_proj); the router and the shared expert read the layer's input. Tensors: backbone.embeddings, layers.{L}.norm and layers.{L}.mixer.*, backbone.norm_f, lm_head; the multi-token-prediction tensors `mtp.*` are ones HF's class does not load. Features: LAYER_FFN_ONLY_V1, MIXER_MAMBA2_V1, ATTN_GQA_V1, POS_NOPE_V1, MLP_DENSE_PLAIN_V1, MLP_MOE_TOPK_V1, MLP_MOE_ROUTER_SIGMOID_V1, MLP_MOE_SELECTION_BIAS_V1, MLP_MOE_NORM_TOPK_V1, MLP_MOE_SHARED_EXPERT_V1, MOE_EXPERTS_PLAIN_V1, MOE_LATENT_PROJ_V1, NORM_RMS_V1.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "NemotronHForCausalLM"
+    ],
+    "model_types": [
+      "nemotron_h"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 131072,
+      "hidden_size": 4096,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 8,
+      "head_dim": 128,
+      "max_position_embeddings": 4096,
+      "intermediate_size": 21504,
+      "mlp_hidden_act": "relu2",
+      "mlp_bias": false,
+      "ssm_state_size": 128,
+      "mamba_num_heads": 128,
+      "mamba_head_dim": 64,
+      "mamba_hidden_act": "silu",
+      "moe_intermediate_size": 7688,
+      "moe_shared_expert_intermediate_size": 7688,
+      "num_experts_per_tok": 2,
+      "routed_scaling_factor": 1.0,
+      "n_group": 1,
+      "topk_group": 1,
+      "norm_topk_prob": true,
+      "use_bias": false,
+      "layer_norm_epsilon": 1e-05
+    },
+    "inert": [
+      "attention_bias",
+      "attention_dropout",
+      "sliding_window",
+      "use_mamba_kernels",
+      "expand",
+      "mamba_proj_bias",
+      "mamba_ssm_cache_dtype",
+      "time_step_max",
+      "time_step_limit",
+      "time_step_floor",
+      "chunk_size",
+      "n_shared_experts",
+      "moe_shared_expert_overlap",
+      "num_nextn_predict_layers",
+      "mtp_layers_block_type",
+      "mtp_hybrid_override_pattern",
+      "initializer_range",
+      "residual_in_fp32",
+      "hidden_dropout",
+      "rescale_prenorm_residual",
+      "num_logits_to_keep",
+      "num_hidden_layers",
+      "norm_eps",
+      "use_cache",
+      "time_step_min",
+      "mamba_dt_min",
+      "mamba_expand",
+      "mamba_dt_max",
+      "mamba_dt_limit",
+      "mamba_dt_init_floor",
+      "mamba_chunk_size"
+    ]
+  },
+  "vars": [
+    {
+      "name": "eps",
+      "value": {
+        "$cfg": "layer_norm_epsilon"
+      }
+    },
+    {
+      "name": "tied",
+      "value": {
+        "$cfg": "tie_word_embeddings"
+      }
+    },
+    {
+      "name": "has_list",
+      "value": {
+        "$ne": [
+          {
+            "$cfg?": "layers_block_type"
+          },
+          null
+        ]
+      }
+    },
+    {
+      "name": "pattern",
+      "value": {
+        "$cfg?": "hybrid_override_pattern"
+      }
+    },
+    {
+      "name": "types",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$check": [
+              {
+                "$or": [
+                  {
+                    "$var": "has_list"
+                  },
+                  {
+                    "$ne": [
+                      {
+                        "$var": "pattern"
+                      },
+                      null
+                    ]
+                  }
+                ]
+              },
+              "needs layers_block_type or hybrid_override_pattern"
+            ]
+          },
+          {
+            "$layer_types": {
+              "n": {
+                "$if": [
+                  {
+                    "$var": "has_list"
+                  },
+                  {
+                    "$len": {
+                      "$cfg?": "layers_block_type"
+                    }
+                  },
+                  {
+                    "$len": {
+                      "$var": "pattern"
+                    }
+                  }
+                ]
+              },
+              "allowed": [
+                "linear_attention",
+                "full_attention",
+                "mlp",
+                "moe"
+              ],
+              "key": "layers_block_type",
+              "each": {
+                "$switch": [
+                  {
+                    "$index": [
+                      {
+                        "$chars": {
+                          "$var": "pattern"
+                        }
+                      },
+                      {
+                        "$var": "i"
+                      }
+                    ]
+                  },
+                  {
+                    "M": "linear_attention",
+                    "E": "moe",
+                    "*": "full_attention",
+                    "-": "mlp"
+                  },
+                  {
+                    "$check": [
+                      false,
+                      "hybrid_override_pattern: a character other than M E * -"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "n",
+      "value": {
+        "$len": {
+          "$var": "types"
+        }
+      }
+    },
+    {
+      "name": "act",
+      "value": {
+        "$act": {
+          "$cfg": "mlp_hidden_act"
+        }
+      }
+    },
+    {
+      "name": "mbias",
+      "value": {
+        "$cfg": "mlp_bias"
+      }
+    },
+    {
+      "name": "ssm_act_ok",
+      "value": {
+        "$check": [
+          {
+            "$eq": [
+              {
+                "$cfg": "mamba_hidden_act"
+              },
+              "silu"
+            ]
+          },
+          "mamba_hidden_act must be silu (the convolution's activation)"
+        ]
+      }
+    },
+    {
+      "name": "ng",
+      "value": {
+        "$alias": [
+          [
+            "n_groups",
+            "mamba_n_groups"
+          ],
+          8
+        ]
+      }
+    },
+    {
+      "name": "mamba2",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$var": "ssm_act_ok"
+          },
+          {
+            "Mamba2": {
+              "heads": {
+                "$cfg": "mamba_num_heads"
+              },
+              "head_dim": {
+                "$cfg": "mamba_head_dim"
+              },
+              "groups": {
+                "$var": "ng"
+              },
+              "state": {
+                "$cfg": "ssm_state_size"
+              },
+              "conv_kernel": {
+                "$alias": [
+                  [
+                    "conv_kernel",
+                    "mamba_d_conv"
+                  ],
+                  4
+                ]
+              },
+              "conv_bias": {
+                "$alias": [
+                  [
+                    "use_conv_bias",
+                    "mamba_conv_bias"
+                  ],
+                  true
+                ]
+              },
+              "proj_bias": {
+                "$cfg": "use_bias"
+              },
+              "norm_eps": {
+                "$var": "eps"
+              },
+              "norm_groups": {
+                "$var": "ng"
+              },
+              "dt_min": 0.0,
+              "dt_max": null,
+              "d_mlp": 0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "attn",
+      "value": {
+        "Attention": {
+          "heads": {
+            "$var": "heads"
+          },
+          "kv_heads": {
+            "$var": "kv"
+          },
+          "head_dim": {
+            "$var": "hd"
+          },
+          "v_head_dim": {
+            "$var": "hd"
+          },
+          "q_bias": false,
+          "k_bias": false,
+          "v_bias": false,
+          "o_bias": false,
+          "qk_norm": null,
+          "position": "None",
+          "scale": {
+            "$var": "attn_scale"
+          },
+          "window": null,
+          "q_temperature": null
+        }
+      }
+    },
+    {
+      "name": "mlp",
+      "value": {
+        "Mlp": {
+          "intermediate": {
+            "$cfg": "intermediate_size"
+          },
+          "act": {
+            "$var": "act"
+          },
+          "gated": false,
+          "up_bias": {
+            "$var": "mbias"
+          },
+          "down_bias": {
+            "$var": "mbias"
+          }
+        }
+      }
+    },
+    {
+      "name": "moe_keys_read",
+      "value": {
+        "$let": [
+          "_",
+          {
+            "$cfg?": "n_routed_experts"
+          },
+          {
+            "$let": [
+              "_",
+              {
+                "$cfg?": "num_local_experts"
+              },
+              {
+                "$let": [
+                  "_",
+                  {
+                    "$cfg?": "moe_intermediate_size"
+                  },
+                  {
+                    "$let": [
+                      "_",
+                      {
+                        "$cfg?": "moe_shared_expert_intermediate_size"
+                      },
+                      {
+                        "$let": [
+                          "_",
+                          {
+                            "$cfg?": "moe_latent_size"
+                          },
+                          {
+                            "$let": [
+                              "_",
+                              {
+                                "$cfg?": "num_experts_per_tok"
+                              },
+                              {
+                                "$let": [
+                                  "_",
+                                  {
+                                    "$cfg?": "routed_scaling_factor"
+                                  },
+                                  {
+                                    "$let": [
+                                      "_",
+                                      {
+                                        "$cfg?": "n_group"
+                                      },
+                                      {
+                                        "$let": [
+                                          "_",
+                                          {
+                                            "$cfg?": "topk_group"
+                                          },
+                                          {
+                                            "$cfg?": "norm_topk_prob"
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "n_exp",
+      "value": {
+        "$alias": [
+          [
+            "n_routed_experts",
+            "num_local_experts"
+          ],
+          8
+        ]
+      },
+      "lazy": true
+    },
+    {
+      "name": "n_group",
+      "value": {
+        "$cfg": "n_group"
+      },
+      "lazy": true
+    },
+    {
+      "name": "topk_group",
+      "value": {
+        "$cfg": "topk_group"
+      },
+      "lazy": true
+    },
+    {
+      "name": "normalize",
+      "value": {
+        "$cfg": "norm_topk_prob"
+      },
+      "lazy": true
+    },
+    {
+      "name": "router",
+      "value": {
+        "scoring": "Sigmoid",
+        "linear_bias": false,
+        "selection_bias": true,
+        "groups": {
+          "$if": [
+            {
+              "$and": [
+                {
+                  "$eq": [
+                    {
+                      "$var": "n_group"
+                    },
+                    1
+                  ]
+                },
+                {
+                  "$eq": [
+                    {
+                      "$var": "topk_group"
+                    },
+                    1
+                  ]
+                }
+              ]
+            },
+            null,
+            {
+              "n_group": {
+                "$var": "n_group"
+              },
+              "topk_group": {
+                "$var": "topk_group"
+              },
+              "score": "Top2Sum"
+            }
+          ]
+        },
+        "normalize": {
+          "$var": "normalize"
+        },
+        "norm_eps": {
+          "$if": [
+            {
+              "$var": "normalize"
+            },
+            1e-20,
+            0.0
+          ]
+        },
+        "scale": {
+          "$cfg": "routed_scaling_factor"
+        },
+        "jitter_eps": 0.0,
+        "per_expert_scale": false
+      },
+      "lazy": true
+    },
+    {
+      "name": "moe",
+      "value": {
+        "Moe": {
+          "experts": {
+            "$var": "n_exp"
+          },
+          "top_k": {
+            "$cfg": "num_experts_per_tok"
+          },
+          "intermediate": {
+            "$cfg": "moe_intermediate_size"
+          },
+          "act": {
+            "$var": "act"
+          },
+          "router": {
+            "$var": "router"
+          },
+          "shared": {
+            "intermediate": {
+              "$cfg": "moe_shared_expert_intermediate_size"
+            },
+            "sigmoid_gate": false
+          },
+          "gated": false,
+          "latent": {
+            "$cfg?": "moe_latent_size"
+          }
+        }
+      },
+      "lazy": true
+    },
+    {
+      "name": "ty",
+      "layer": true,
+      "value": {
+        "$index": [
+          {
+            "$var": "types"
+          },
+          {
+            "$var": "i"
+          }
+        ]
+      }
+    },
+    {
+      "name": "l_mixer",
+      "layer": true,
+      "value": {
+        "$switch": [
+          {
+            "$var": "ty"
+          },
+          {
+            "linear_attention": {
+              "$var": "mamba2"
+            },
+            "full_attention": {
+              "$var": "attn"
+            }
+          },
+          "None"
+        ]
+      }
+    },
+    {
+      "name": "l_ffn",
+      "layer": true,
+      "value": {
+        "$switch": [
+          {
+            "$var": "ty"
+          },
+          {
+            "mlp": {
+              "$var": "mlp"
+            },
+            "moe": {
+              "$let": [
+                "_",
+                {
+                  "$check": [
+                    {
+                      "$not": {
+                        "$var": "mbias"
+                      }
+                    },
+                    "mlp_bias with a MoE layer: the shared expert's and the latent projections' biases are not modelled"
+                  ]
+                },
+                {
+                  "$var": "moe"
+                }
+              ]
+            }
+          },
+          "None"
+        ]
+      }
+    },
+    {
+      "name": "l_residual",
+      "layer": true,
+      "value": {
+        "$switch": [
+          {
+            "$var": "ty"
+          },
+          {
+            "linear_attention": {
+              "Sequential": {
+                "pre_mixer": {
+                  "$var": "norm"
+                },
+                "multiplier": 1.0
+              }
+            },
+            "full_attention": {
+              "Sequential": {
+                "pre_mixer": {
+                  "$var": "norm"
+                },
+                "multiplier": 1.0
+              }
+            }
+          },
+          {
+            "Sequential": {
+              "pre_ffn": {
+                "$var": "norm"
+              },
+              "multiplier": 1.0
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "p",
+      "value": {
+        "$tensor_prefix": {
+          "candidates": [
+            "backbone.",
+            "model."
+          ],
+          "probe": "embeddings.weight",
+          "default": "backbone."
+        }
+      }
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "mtp."
+      ]
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "embed": "{p}embeddings",
+            "final_norm": "{p}norm_f",
+            "lm_head": {
+              "$if": [
+                {
+                  "$var": "tied"
+                },
+                {
+                  "$cat": [
+                    {
+                      "$var": "p"
+                    },
+                    "embeddings"
+                  ]
+                },
+                "lm_head"
+              ]
+            },
+            "norm.mix": "{p}layers.{L}.norm",
+            "norm.ffn": "{p}layers.{L}.norm",
+            "attn.q": "{p}layers.{L}.mixer.q_proj",
+            "attn.k": "{p}layers.{L}.mixer.k_proj",
+            "attn.v": "{p}layers.{L}.mixer.v_proj",
+            "attn.o": "{p}layers.{L}.mixer.o_proj",
+            "mlp.up": "{p}layers.{L}.mixer.up_proj",
+            "mlp.down": "{p}layers.{L}.mixer.down_proj",
+            "mamba2.in": "{p}layers.{L}.mixer.in_proj",
+            "mamba2.conv": "{p}layers.{L}.mixer.conv1d",
+            "mamba2.dt_bias": "{p}layers.{L}.mixer.dt_bias",
+            "mamba2.A_log": "{p}layers.{L}.mixer.A_log",
+            "mamba2.D": "{p}layers.{L}.mixer.D",
+            "mamba2.norm": "{p}layers.{L}.mixer.norm",
+            "mamba2.out": "{p}layers.{L}.mixer.out_proj",
+            "moe.router": "{p}layers.{L}.mixer.gate",
+            "moe.sel_bias": "{p}layers.{L}.mixer.gate.e_score_correction_bias",
+            "moe.up": "{p}layers.{L}.mixer.experts.{E}.up_proj",
+            "moe.down": "{p}layers.{L}.mixer.experts.{E}.down_proj",
+            "moe.shared.up": "{p}layers.{L}.mixer.shared_experts.up_proj",
+            "moe.shared.down": "{p}layers.{L}.mixer.shared_experts.down_proj",
+            "moe.latent_in": "{p}layers.{L}.mixer.fc1_latent_proj",
+            "moe.latent_out": "{p}layers.{L}.mixer.fc2_latent_proj"
+          }
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "nemotron_h"
+    }
+  ]
+}

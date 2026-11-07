@@ -202,6 +202,7 @@ pub(super) struct Chain {
     pub(super) nonce: u64,
     pub(super) history: Vec<Block>,
     wall_deadline: Option<std::time::Instant>,
+    natural_heartbeat_stamps: bool,
     _pruned_db: Option<kaspa_database::utils::DbLifetime>,
 }
 impl Drop for Chain {
@@ -237,6 +238,7 @@ impl Chain {
             nonce: 0,
             history: vec![],
             wall_deadline: None,
+            natural_heartbeat_stamps: false,
             _pruned_db: None,
         }
     }
@@ -248,28 +250,101 @@ impl Chain {
     }
     pub(super) async fn insert(&mut self, block: MutableBlock) -> Block {
         let block = block.to_immutable();
+        // The isolated test observes the production template's own slot after
+        // simulated calendar time elapses. Ordinary process time is unchanged.
+        kaspa_core::time::test_clock::advance_to(block.header.timestamp);
         if self.config.params.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(block.header.daa_score)) {
+            let clock_wait_started = std::time::Instant::now();
+            let mut next_clock_report = clock_wait_started + Duration::from_secs(30);
             while let Err(latest) = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_lead_admits_v1(
                 block.header.timestamp,
                 kaspa_core::time::unix_now(),
             ) {
                 assert!(
                     self.wall_deadline.is_none_or(|deadline| std::time::Instant::now() < deadline),
-                    "the original service wall deadline expired while waiting for the native clock lead cap"
+                    "the original service wall deadline expired while waiting for the native clock lead cap: block DAA {}, block time {}, allowed through {}, wall now {}",
+                    block.header.daa_score,
+                    block.header.timestamp,
+                    latest,
+                    kaspa_core::time::unix_now()
                 );
+                let waiting = std::time::Instant::now();
+                if waiting >= next_clock_report {
+                    eprintln!("[service-public] native clock lead wait: DAA {}, timestamp {}, allowed {}, wall {}, waited {:?}", block.header.daa_score, block.header.timestamp, latest, kaspa_core::time::unix_now(), waiting.duration_since(clock_wait_started));
+                    next_clock_report = waiting + Duration::from_secs(30);
+                }
                 tokio::time::sleep(Duration::from_millis(block.header.timestamp.saturating_sub(latest).min(1_000))).await;
+                // A protocol-required clock wait is not a stalled service. Charge
+                // no such sleep to the unchanged 360-second non-clock budget.
+                if let Some(deadline) = self.wall_deadline.as_mut() {
+                    *deadline += waiting.elapsed();
+                }
             }
         }
-        self.tc.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("real pipeline accepts block");
+        let task = self.tc.validate_and_insert_block(block.clone()).virtual_state_task;
+        if let Some(deadline) = self.wall_deadline {
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), task).await
+                .expect("service deadline during native pipeline validation").expect("real pipeline accepts block");
+        } else {
+            task.await.expect("real pipeline accepts block");
+        }
         self.history.push(block.clone());
         block
     }
     pub(super) fn stamp(&mut self, block: &mut MutableBlock) {
-        self.time += self.config.params.target_time_per_block();
+        // The real heartbeat adapter sets its own next slot. The socket receiver
+        // fixture must not charge an extra full block interval to BOTH the holder
+        // and its merging step on top of that native clock.
+        self.time += if self.natural_heartbeat_stamps { 1 } else { self.config.params.target_time_per_block() };
         self.nonce += 1;
         block.header.timestamp = self.time;
         block.header.nonce = self.nonce;
         block.header.finalize();
+    }
+    /// Socket transport runs before the anchor-clock fence. Real executed
+    /// floor attempts advance its native DAA without consuming one-hour heartbeat
+    /// slots. The backend executes every anchor; no synthetic roots or clock rule
+    /// overrides are used to make the public request deadlines elapse.
+    fn socket_clock_attempt(&mut self, txs: Vec<Transaction>) -> MutableBlock {
+        use kaspa_consensus_core::palw_attempt_v2::*;
+        assert!(!self.config.params.palw_anchor_clock.is_some_and(|f| f.is_active(self.daa())));
+        let card = 7;
+        let bond = self.bonds[card];
+        let backend = public_fp_backend(self);
+        let facts = self.tc.palw_producer_facts_v2(self.bundle.base_class_id, Some(bond.0)).unwrap();
+        facts.ready_to_produce(&card_pubkey(card)).unwrap();
+        self.time += 1;
+        self.nonce += 1;
+        for draw in 0u64..4096 {
+            let mut template = self.tc.build_block_template(
+                MinerData::new(card_payout_spk(card), draw.to_le_bytes().to_vec()),
+                Box::new(OnetimeTxSelector::new(txs.clone())), TemplateBuildMode::Standard,
+            ).unwrap();
+            template.block.header.timestamp = self.time;
+            template.block.header.nonce = self.nonce;
+            let header = &template.block.header;
+            let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+            let anchor = execution_anchor_v3(self.network_domain, pre_pow, facts.class_id, &bond.0, header.nonce);
+            let (canonical, prompt) = backend.job_for_anchor(anchor).unwrap();
+            let job = palw_attempt_job_v1(canonical, self.config.params.palw_prefill_draw_active_at(header.daa_score));
+            let run = backend.execute(&job, &prompt).unwrap();
+            let attempt = PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION, network_domain: self.network_domain,
+                challenge: challenge_v2(self.network_domain, pre_pow, header.timestamp, header.nonce, facts.class_id, &bond.0),
+                class_id: facts.class_id, executor_bond: bond.0, executor_pubkey: card_pubkey(card),
+                operator_id: facts.bond.as_ref().unwrap().operator_id, artifact_root: facts.artifact_root,
+                trace_root: run.trace_root, output_root: run.output_root, execution_root: run.execution_root, pwu: facts.pwu,
+                trace_manifest_root: attempt_trace_manifest_root_v1(run.trace_root, PALW_ATTEMPT_V2_TRACE_CHUNKS),
+                trace_chunk_count: PALW_ATTEMPT_V2_TRACE_CHUNKS,
+                trace_retention_daa: header.daa_score.saturating_add(facts.min_trace_retention_daa),
+            };
+            if class_ticket_v3(&attempt, anchor) > facts.class_target { continue }
+            let signature = signed(card, attempt_id_v2(&attempt).as_byte_slice(), PALW_ATTEMPT_V2_MLDSA87_CONTEXT);
+            template.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+            template.block.header.finalize();
+            return template.block;
+        }
+        panic!("the socket fixture's actual floor attempt did not win within its execution budget");
     }
     pub(super) async fn heartbeat(&mut self, txs: Vec<Transaction>) -> Block {
         let mut template = self
@@ -341,6 +416,12 @@ impl Chain {
                 .expect("fresh DB validates public block history");
         }
         assert_eq!(fresh.daa(), self.daa());
+        assert_eq!(fresh.tc.get_sink(), self.tc.get_sink());
+        assert_eq!(
+            fresh.tc.palw_state_v2_store.read().load_tip(&fresh.bundle.state).unwrap().unwrap().1.state_root(),
+            self.tc.palw_state_v2_store.read().load_tip(&self.bundle.state).unwrap().unwrap().1.state_root(),
+            "independent block replay agrees on the full rooted PALW state"
+        );
         eprintln!("[service-public] fresh database validated {} public blocks at DAA {}", self.history.len(), fresh.daa());
         fresh.time = self.time;
         fresh.nonce = self.nonce;
@@ -586,10 +667,19 @@ async fn pool_heartbeat_observed(
     recovery: &mut Option<recovery::RecoveryRun>,
     verifier: &mut ServiceRun,
 ) -> Block {
+    let deadline = chain.wall_deadline.unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(360));
     let session = manager.consensus().unguarded_session();
-    let mut template = pool.clone().get_block_template(&session, MinerData::new(card_payout_spk(0), vec![])).await.unwrap();
-    chain.stamp(&mut template.block);
-    let (template, _) = chain.tc.heartbeat_adapt_block_template(template).unwrap();
+    let mut template = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline),
+        pool.clone().get_block_template(&session, MinerData::new(card_payout_spk(0), vec![]))).await
+        .expect("service deadline during actual mempool template construction").unwrap();
+    let socket_clock = recovery.as_ref().is_some_and(|r| r.socket_transport())
+        && !chain.config.params.palw_anchor_clock.is_some_and(|f| f.is_active(chain.daa()));
+    if socket_clock {
+        template.block = chain.socket_clock_attempt(template.block.transactions[1..].to_vec());
+    } else {
+        chain.stamp(&mut template.block);
+        template = chain.tc.heartbeat_adapt_block_template(template).unwrap().0;
+    }
     if let Some(recovery) = recovery.as_mut() {
         let objects: Vec<_> = template
             .block
@@ -602,9 +692,13 @@ async fn pool_heartbeat_observed(
     }
     chain.time = chain.time.max(template.block.header.timestamp);
     let block = chain.insert(template.block).await;
-    pool.clone().handle_new_block_transactions(&session, block.header.daa_score, block.transactions.clone()).await.unwrap();
+    let deadline = chain.wall_deadline.unwrap_or(deadline);
+    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline),
+        pool.clone().handle_new_block_transactions(&session, block.header.daa_score, block.transactions.clone())).await
+        .expect("service deadline during native mempool update").unwrap();
     if let Some(recovery) = recovery.as_mut() {
-        recovery.after_accepted_carrier(chain, claim).await;
+        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), recovery.after_accepted_carrier(chain, claim)).await
+            .expect("service deadline during accepted carrier recovery");
     }
     block
 }
@@ -765,6 +859,7 @@ enum PublicCase {
     TiledPrefixInherited,
     TiledPublicPrefixInitial,
     TiledPublicPrefixInherited,
+    TiledHonestPrefixAcrossFence,
     TiledTokenizerLength,
     TiledTokenizerKeyBound,
 }
@@ -817,7 +912,8 @@ impl PublicCase {
     fn reacquire_honest(self) -> bool {
         matches!(
             self,
-            Self::PrunedHonestFpV3Job
+            Self::TiledHonestPrefixAcrossFence
+                | Self::PrunedHonestFpV3Job
                 | Self::UnretainedHonestFpV3Job
                 | Self::UnretainedMultipartHonestFpV3Job
                 | Self::UnretainedLargeConstraintJob
@@ -838,6 +934,9 @@ impl PublicCase {
             Self::TiledPrefixInherited | Self::TiledPublicPrefixInherited => Some(6),
             _ => None,
         }
+    }
+    fn prefix_mode(self) -> Option<u8> {
+        if self == Self::TiledHonestPrefixAcrossFence { Some(7) } else { self.prefix_fault() }
     }
     fn staged_tokenizer(self) -> bool {
         matches!(self, Self::TiledTokenizerLength | Self::TiledTokenizerKeyBound)
@@ -865,7 +964,8 @@ impl PublicCase {
     fn tiled(self) -> bool {
         matches!(
             self,
-            Self::TiledConstraintForbidden
+            Self::TiledHonestPrefixAcrossFence
+                | Self::TiledConstraintForbidden
                 | Self::TiledConstraintStop
                 | Self::TiledConstraintBeaten
                 | Self::TiledConstraintWithheld
@@ -1253,6 +1353,7 @@ async fn carry_fp_commitment(
     chain: &mut Chain,
     floats: &mut [Funding],
     commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    event: &kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
     prompt: &Vec<u32>,
     large: bool,
 ) -> Hash64 {
@@ -1315,7 +1416,55 @@ async fn carry_fp_commitment_with_original(
         .price
         .expect("the ordinary registry admits and prices this FP job");
     let signer = kaspa_pq_validator_core::ValidatorKey::from_seed([0xB0; 32]);
+    let header = kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Legacy(
+        kaspa_consensus_core::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1::of_binding_v1(event.binding()),
+    );
+    // Use the same authenticated prospective resource quote as the real producer. A
+    // staged claim without this custody envelope is deliberately not admitted by the fold.
+    let prospective = if chain.config.params.palw_staged_public_court_v1_active_at(chain.daa()) {
+        chain.tc.palw_staged_preclaim_quote_v1(commitment.clone(), header.clone()).unwrap()
+    } else {
+        None
+    };
+    let pledge = prospective.map(|(_, quote)| {
+        use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
+        let mut pledge = PalwHistoryCustodyPledgeV1 {
+            version: 1,
+            claim: kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(commitment),
+            producer: chain.bonds[0],
+            execution_root: commitment.execution_root,
+            job_identity: kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment),
+            cu_ruleset_id: header.job_context_v1().cu_ruleset_id,
+            resource_plan_id: quote.resource_plan_id,
+            maximum_records: quote.maximum_records,
+            maximum_custodians: quote.maximum_custodians,
+            accept_until_daa: quote.plan.terms.open_until_daa,
+            material_until_daa: quote.plan.terms.open_until_daa.checked_add(quote.material_span_daa).unwrap(),
+            signature: vec![],
+        };
+        pledge.signature = signed(0, pledge.pledge_id_v1().as_byte_slice(), PALW_HISTORY_PLEDGE_CONTEXT_V1);
+        pledge.check_v1().unwrap();
+        pledge
+    });
     let build = |fee| {
+        if let Some(pledge) = &pledge {
+            return signer
+                .build_fp_commitment_tx_original_public_v1(
+                    &chain.config.params,
+                    chain.daa(),
+                    chain.network_domain,
+                    chain.config.params.palw_prompt_ids_form_v1(),
+                    commitment.clone(),
+                    carried.clone(),
+                    kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: quote.quanta, pwu: quote.pwu },
+                    pledge,
+                    &header,
+                    floats[0].0,
+                    &floats[0].1,
+                    fee,
+                )
+                .unwrap();
+        }
         if large {
             return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
         }
@@ -1468,9 +1617,10 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         config.params.palw_staged_public_court_v1 = Some(ForkActivation::new(0));
         config.params.validate_palw_staged_public_court_v1().unwrap();
     }
-    if case.prefix_fault().is_some() {
+    if case.prefix_mode().is_some() {
         config.params.palw_fp_prefix_state = Some(ForkActivation::new(0));
-        config.params.palw_fp_prefix_inherit = Some(ForkActivation::new(0));
+        config.params.palw_fp_prefix_inherit =
+            Some(ForkActivation::new(if case == PublicCase::TiledHonestPrefixAcrossFence { 1200 } else { 0 }));
         config.params.validate_palw_fp_prefix_state_v1().unwrap();
         config.params.validate_palw_fp_prefix_inherit_v1().unwrap();
     }
@@ -1523,6 +1673,9 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 staged_tokenizer::declare_semantics(fixture, case, &mut chain, &mut floats).await;
             } else {
                 fixture.declare_semantics(&mut chain, &mut floats).await;
+            }
+            if case.staged_tokenizer() || case.native_prefix() {
+                fixture.inventory_tokenizer(&mut chain, &mut floats).await;
             }
         }
     }
@@ -1903,6 +2056,8 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         || matches!(recovery_mode, Some(recovery::RecoveryMode::Network | recovery::RecoveryMode::NetworkVerifier));
     let service_start = chain.history.len();
     let mut next_da_progress = chain.daa() + 100;
+    let paced_socket = recovery.as_ref().is_some_and(|r| r.socket_transport()) && case.reacquire_honest();
+    let mut last_idle_advance = std::time::Instant::now();
     let mut reserved = false;
     let mut demanded = false;
     let mut answer_submitted = None;
@@ -1955,6 +2110,7 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 "production template includes an actual service carrier"
             );
             pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
+            last_idle_advance = std::time::Instant::now();
         }
         if let Some(recovery) = recovery.as_mut() {
             recovery
@@ -2129,7 +2285,8 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
         }
         if (matches!(
             case,
-            PublicCase::UnretainedHonestFpV3Job
+            PublicCase::TiledHonestPrefixAcrossFence
+                | PublicCase::UnretainedHonestFpV3Job
                 | PublicCase::UnretainedMultipartHonestFpV3Job
                 | PublicCase::UnretainedLargeConstraintJob
         ) || case.constraint_fault().is_some()
@@ -2500,14 +2657,15 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 let roots = kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
                     execution_root: view.execution_root,
                     trace_root: view.trace_root,
-                    anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&commitment.job),
+                    anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_canonical_anchor_v1(&commitment.job),
                     attempt_draw: None,
                     output_root: None,
                     job_pin: Some(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(commitment)),
                 };
-                let backend = public_fp_backend(&chain);
+                let backend: Box<dyn PalwExecutionBackendV1> =
+                    if let Some(fixture) = &tiled { fixture.backend(&chain) } else { Box::new(public_fp_backend(&chain)) };
                 let (binding, answer) = crate::palw_legacy_held_v2::palw_legacy_held_capture_answer_v2(
-                    &backend,
+                    backend.as_ref(),
                     &outcome.material,
                     ids,
                     roots,
@@ -2549,7 +2707,9 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 honest.da_defaulted,
                 chain.daa()
             );
-            if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond)) {
+            if honest.record.as_ref().is_some_and(|record| record.closed.contains(&bond))
+                && (case != PublicCase::TiledHonestPrefixAcrossFence || matches!(honest.phase, PalwClaimPhaseV2::Final { .. }))
+            {
                 assert!(!input_chunks.is_empty(), "the full input was reacquired through real public carriers");
                 if case.unretained_fp() {
                     assert!(job_preimage_submitted, "the job was reacquired before the input or replay");
@@ -2604,6 +2764,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                     "[service-public] honest pruned FP input reacquired, independently replayed and reservation released at DAA {}",
                     chain.daa()
                 );
+                if case == PublicCase::TiledHonestPrefixAcrossFence {
+                    assert!(
+                        honest.accepted_daa < 1200 && chain.daa() >= 1200,
+                        "the real claim crosses the inherit fence before Final"
+                    );
+                }
                 break;
             }
         }
@@ -2838,8 +3004,16 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                                         .is_ok_and(|p| p.claim_id == claim
                                             && matches!(
                                                 p.contradiction,
-                                                kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { .. }
-                                            )),
+                                                kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::StagedCourt { .. }
+                                                if case.native_prefix() || case.staged_tokenizer()
+                                            )
+                                            || p.claim_id == claim
+                                                && !case.native_prefix()
+                                                && !case.staged_tokenizer()
+                                                && matches!(
+                                                    p.contradiction,
+                                                    kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::CourtFraud { .. }
+                                                )),
                                     _ => false,
                                 }),
                                 "each collected fullPanel continuation names the actual rooted court outcome"
@@ -2999,6 +3173,10 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
     assert_eq!(meta_released.strong_count(), 0);
     drop(_meta_lifetime);
     eprintln!("[service-public] actual service start/exit joined, callback owner released");
+    if case == PublicCase::TiledHonestPrefixAcrossFence {
+        chain.import_fresh(&premine).await;
+        assert!(matches!(chain.view(claim).phase, PalwClaimPhaseV2::Final { .. }));
+    }
 }
 
 // Lane G14-R: the actual service resumes after a restart and on a fresh database, without a second reservation or a duplicate demand.

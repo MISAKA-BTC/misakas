@@ -1,0 +1,522 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "laguna",
+ "doc": "Laguna: afmoe-style attention - per-head shared q/k RMS norm before the rotation, a SEPARATE output gate softplus(g_proj x) per head (gating true / 'per-head') or per element, a per-layer head count (num_attention_heads_per_layer), sliding/full layers with a rotary base and partial-rotary factor keyed by layer type - and a pre-norm block whose MLP is dense or sparse per layer (mlp_layer_types): a sigmoid router with a selection bias (mlp.experts.e_score_correction_bias), renormalised, times moe_routed_scaling_factor, plus a shared expert. Router logit soft-capping and routing weights on the input are refused. Third-party adapter (lane H): data only.",
+ "extends": [
+  "decoder-core"
+ ],
+ "match": {
+  "architectures": [
+   "LagunaForCausalLM"
+  ],
+  "model_types": [
+   "laguna"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "tie_word_embeddings": false,
+   "sliding_window": 512,
+   "moe_router_logit_softcapping": 0.0,
+   "moe_apply_router_weight_on_input": false,
+   "moe_routed_scaling_factor": 1.0,
+   "gating": true
+  },
+  "inert": [
+   "output_router_logits"
+  ]
+ },
+ "vars": [
+  {
+   "name": "cap_ok",
+   "value": {
+    "$check": [
+     {
+      "$le": [
+       {
+        "$cfg": "moe_router_logit_softcapping"
+       },
+       0
+      ]
+     },
+     "moe_router_logit_softcapping > 0 is not modelled"
+    ]
+   }
+  },
+  {
+   "name": "rw_ok",
+   "value": {
+    "$check": [
+     {
+      "$eq": [
+       {
+        "$cfg": "moe_apply_router_weight_on_input"
+       },
+       false
+      ]
+     },
+     "routing weight on the input is not modelled here"
+    ]
+   }
+  },
+  {
+   "name": "sw",
+   "value": {
+    "$cfgn": [
+     "sliding_window",
+     512
+    ]
+   }
+  },
+  {
+   "name": "types",
+   "value": {
+    "$layer_types": {
+     "n": {
+      "$var": "n"
+     },
+     "allowed": [
+      "full_attention",
+      "sliding_attention"
+     ],
+     "each": "full_attention"
+    }
+   }
+  },
+  {
+   "name": "heads_pl",
+   "value": {
+    "$cfg": "num_attention_heads_per_layer"
+   }
+  },
+  {
+   "name": "gating",
+   "value": {
+    "$cfg": "gating"
+   }
+  },
+  {
+   "name": "per_head",
+   "value": {
+    "$or": [
+     {
+      "$eq": [
+       {
+        "$var": "gating"
+       },
+       true
+      ]
+     },
+     {
+      "$eq": [
+       {
+        "$var": "gating"
+       },
+       "per-head"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "mlt",
+   "value": {
+    "$cfg?": "mlp_layer_types"
+   }
+  },
+  {
+   "name": "rp",
+   "value": {
+    "$cfg?": "rope_parameters"
+   }
+  },
+  {
+   "name": "rope",
+   "value": {
+    "$rope": {
+     "dim": {
+      "$floor": {
+       "$mul": [
+        {
+         "$var": "hd"
+        },
+        {
+         "$get": [
+          {
+           "$get": [
+            {
+             "$var": "rp"
+            },
+            "full_attention",
+            {}
+           ]
+          },
+          "partial_rotary_factor",
+          1.0
+         ]
+        }
+       ]
+      }
+     },
+     "theta": 500000.0,
+     "partial": {
+      "$get": [
+       {
+        "$get": [
+         {
+          "$var": "rp"
+         },
+         "full_attention",
+         {}
+        ]
+       },
+       "partial_rotary_factor",
+       1.0
+      ]
+     },
+     "layer_type": "full_attention",
+     "max_pos": {
+      "$var": "max_pos"
+     }
+    }
+   }
+  },
+  {
+   "name": "is_sw",
+   "layer": true,
+   "value": {
+    "$eq": [
+     {
+      "$index": [
+       {
+        "$var": "types"
+       },
+       {
+        "$var": "i"
+       }
+      ]
+     },
+     "sliding_attention"
+    ]
+   }
+  },
+  {
+   "name": "h_i",
+   "layer": true,
+   "value": {
+    "$index": [
+     {
+      "$var": "heads_pl"
+     },
+     {
+      "$var": "i"
+     }
+    ]
+   }
+  },
+  {
+   "name": "l_position",
+   "layer": true,
+   "value": {
+    "Rope": {
+     "$if": [
+      {
+       "$var": "is_sw"
+      },
+      {
+       "$rope": {
+        "dim": {
+         "$floor": {
+          "$mul": [
+           {
+            "$var": "hd"
+           },
+           {
+            "$get": [
+             {
+              "$get": [
+               {
+                "$var": "rp"
+               },
+               "sliding_attention",
+               {}
+              ]
+             },
+             "partial_rotary_factor",
+             1.0
+            ]
+           }
+          ]
+         }
+        },
+        "theta": 10000.0,
+        "partial": {
+         "$get": [
+          {
+           "$get": [
+            {
+             "$var": "rp"
+            },
+            "sliding_attention",
+            {}
+           ]
+          },
+          "partial_rotary_factor",
+          1.0
+         ]
+        },
+        "layer_type": "sliding_attention",
+        "max_pos": {
+         "$var": "max_pos"
+        }
+       }
+      },
+      {
+       "$var": "rope"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "qk_norm",
+   "value": {
+    "norm": {
+     "kind": "Rms",
+     "eps": {
+      "$var": "eps"
+     },
+     "gain": "W",
+     "bias": false
+    },
+    "scope": "PerHeadShared"
+   }
+  },
+  {
+   "name": "l_mixer",
+   "layer": true,
+   "value": {
+    "Attention": {
+     "heads": {
+      "$var": "h_i"
+     },
+     "kv_heads": {
+      "$var": "kv"
+     },
+     "head_dim": {
+      "$var": "hd"
+     },
+     "v_head_dim": {
+      "$var": "hd"
+     },
+     "q_bias": {
+      "$var": "qkv_bias"
+     },
+     "k_bias": {
+      "$var": "qkv_bias"
+     },
+     "v_bias": {
+      "$var": "qkv_bias"
+     },
+     "o_bias": {
+      "$var": "o_bias"
+     },
+     "qk_norm": {
+      "$var": "qk_norm"
+     },
+     "position": {
+      "$var": "l_position"
+     },
+     "scale": {
+      "$var": "attn_scale"
+     },
+     "window": {
+      "$if": [
+       {
+        "$var": "is_sw"
+       },
+       {
+        "$var": "sw"
+       },
+       null
+      ]
+     },
+     "gate": {
+      "act": "Softplus",
+      "per_head": {
+       "$var": "per_head"
+      }
+     },
+     "param_prefix": {
+      "$cat": [
+       "attn_h",
+       {
+        "$var": "h_i"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "e",
+   "value": {
+    "$cfg": "num_experts"
+   }
+  },
+  {
+   "name": "k",
+   "value": {
+    "$cfg": "num_experts_per_tok"
+   }
+  },
+  {
+   "name": "topk_ok",
+   "value": {
+    "$bad": [
+     {
+      "$and": [
+       {
+        "$gt": [
+         {
+          "$var": "k"
+         },
+         0
+        ]
+       },
+       {
+        "$le": [
+         {
+          "$var": "k"
+         },
+         {
+          "$var": "e"
+         }
+        ]
+       }
+      ]
+     },
+     "top-k out of range"
+    ]
+   }
+  },
+  {
+   "name": "moe_inter",
+   "value": {
+    "$cfg": "moe_intermediate_size"
+   }
+  },
+  {
+   "name": "sh_inter",
+   "value": {
+    "$cfg": "shared_expert_intermediate_size"
+   }
+  },
+  {
+   "name": "router",
+   "value": {
+    "scoring": "Sigmoid",
+    "linear_bias": false,
+    "selection_bias": true,
+    "groups": null,
+    "normalize": true,
+    "norm_eps": 0.0,
+    "scale": {
+     "$cfg": "moe_routed_scaling_factor"
+    },
+    "jitter_eps": 0.0,
+    "per_expert_scale": false
+   }
+  },
+  {
+   "name": "l_ffn",
+   "layer": true,
+   "value": {
+    "$if": [
+     {
+      "$eq": [
+       {
+        "$index": [
+         {
+          "$var": "mlt"
+         },
+         {
+          "$var": "i"
+         }
+        ]
+       },
+       "sparse"
+      ]
+     },
+     {
+      "Moe": {
+       "experts": {
+        "$var": "e"
+       },
+       "top_k": {
+        "$var": "k"
+       },
+       "intermediate": {
+        "$var": "moe_inter"
+       },
+       "act": {
+        "$var": "act"
+       },
+       "router": {
+        "$var": "router"
+       },
+       "shared": {
+        "intermediate": {
+         "$var": "sh_inter"
+        },
+        "sigmoid_gate": false
+       }
+      }
+     },
+     {
+      "Mlp": {
+       "intermediate": {
+        "$var": "inter"
+       },
+       "act": {
+        "$var": "act"
+       },
+       "gated": true,
+       "up_bias": {
+        "$var": "mbias"
+       },
+       "down_bias": {
+        "$var": "mbias"
+       }
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "names",
+   "value": {
+    "$merge": [
+     {
+      "$var": "names_base"
+     },
+     {
+      "attn.gate": "{p}layers.{L}.self_attn.g_proj",
+      "moe.router": "{p}layers.{L}.mlp.gate",
+      "moe.sel_bias": "{p}layers.{L}.mlp.experts.e_score_correction_bias",
+      "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj",
+      "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj",
+      "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj",
+      "moe.shared.gate": "{p}layers.{L}.mlp.shared_expert.gate_proj",
+      "moe.shared.up": "{p}layers.{L}.mlp.shared_expert.up_proj",
+      "moe.shared.down": "{p}layers.{L}.mlp.shared_expert.down_proj"
+     }
+    ]
+   }
+  },
+  {
+   "name": "model_type",
+   "value": "laguna"
+  }
+ ]
+}

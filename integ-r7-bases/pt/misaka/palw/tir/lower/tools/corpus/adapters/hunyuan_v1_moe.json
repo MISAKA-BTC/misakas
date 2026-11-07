@@ -1,0 +1,197 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "hunyuan-v1-moe",
+  "doc": "Hunyuan-A13B (HunYuanMoEV1): per-head RMS q/k norms (query_layernorm, key_layernorm) applied AFTER the rotation; softmax router (top-k, renormalised) beside an always-on shared MLP; num_experts and moe_topk may be lists by layer. Third-party adapter (lane H): data only EXCEPT the norm placement, which this adapter can only approximate by norming before the rotation (see feature request FR-02).",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "HunYuanMoEV1ForCausalLM"
+    ],
+    "model_types": [
+      "hunyuan_v1_moe"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 290943,
+      "hidden_size": 4096,
+      "intermediate_size": 11008,
+      "num_hidden_layers": 32,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 32,
+      "max_position_embeddings": 2048,
+      "rms_norm_eps": 1e-05,
+      "tie_word_embeddings": false,
+      "attention_bias": false,
+      "num_experts": 1,
+      "moe_topk": 1
+    },
+    "inert": [
+      "eod_token_id",
+      "sep_token_id"
+    ]
+  },
+  "vars": [
+    {
+      "name": "attn_extra",
+      "value": {
+        "qk_norm_after_rope": true
+      }
+    },
+    {
+      "name": "e_cfg",
+      "value": {
+        "$cfg": "num_experts"
+      }
+    },
+    {
+      "name": "k_cfg",
+      "value": {
+        "$cfg": "moe_topk"
+      }
+    },
+    {
+      "name": "e",
+      "value": {
+        "$if": [
+          {
+            "$is_list": {
+              "$var": "e_cfg"
+            }
+          },
+          {
+            "$index": [
+              {
+                "$var": "e_cfg"
+              },
+              {
+                "$var": "i"
+              }
+            ]
+          },
+          {
+            "$var": "e_cfg"
+          }
+        ]
+      },
+      "layer": true
+    },
+    {
+      "name": "k",
+      "value": {
+        "$if": [
+          {
+            "$is_list": {
+              "$var": "k_cfg"
+            }
+          },
+          {
+            "$index": [
+              {
+                "$var": "k_cfg"
+              },
+              {
+                "$var": "i"
+              }
+            ]
+          },
+          {
+            "$var": "k_cfg"
+          }
+        ]
+      },
+      "layer": true
+    },
+    {
+      "name": "qk_norm",
+      "value": {
+        "norm": {
+          "kind": "Rms",
+          "eps": {
+            "$var": "eps"
+          },
+          "gain": "W",
+          "bias": false
+        },
+        "scope": "PerHeadShared"
+      }
+    },
+    {
+      "name": "router",
+      "value": {
+        "scoring": "Softmax",
+        "linear_bias": false,
+        "selection_bias": false,
+        "groups": null,
+        "normalize": true,
+        "norm_eps": 0.0,
+        "scale": 1.0,
+        "jitter_eps": 0.0,
+        "per_expert_scale": false
+      }
+    },
+    {
+      "name": "l_ffn",
+      "value": {
+        "Moe": {
+          "experts": {
+            "$var": "e"
+          },
+          "top_k": {
+            "$var": "k"
+          },
+          "intermediate": {
+            "$var": "inter"
+          },
+          "act": {
+            "$var": "act"
+          },
+          "router": {
+            "$var": "router"
+          },
+          "shared": {
+            "intermediate": {
+              "$var": "inter"
+            },
+            "sigmoid_gate": false
+          }
+        }
+      },
+      "layer": true
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "attn.q_norm": "{p}layers.{L}.self_attn.query_layernorm",
+            "attn.k_norm": "{p}layers.{L}.self_attn.key_layernorm",
+            "moe.router": "{p}layers.{L}.mlp.gate.wg",
+            "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj",
+            "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj",
+            "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj",
+            "moe.shared.gate": "{p}layers.{L}.mlp.shared_mlp.gate_proj",
+            "moe.shared.up": "{p}layers.{L}.mlp.shared_mlp.up_proj",
+            "moe.shared.down": "{p}layers.{L}.mlp.shared_mlp.down_proj"
+          }
+        ]
+      }
+    },
+    {
+      "name": "families",
+      "value": [
+        "C3",
+        "C8"
+      ]
+    },
+    {
+      "name": "model_type",
+      "value": "hunyuan_v1_moe"
+    }
+  ]
+}

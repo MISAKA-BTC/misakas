@@ -1,0 +1,13 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "solar_open",
+  "doc": "Solar-Open (Upstage): GLM-4.5's MoE decoder with every layer sparse (no first_k_dense_replace, no dense intermediate_size), no q/k norm (use_qk_norm removed) and no multi-token-prediction layers. Third-party adapter (lane H): data only, extends the built-in glm4-moe.",
+  "extends": ["glm4-moe"],
+  "match": {"architectures": ["SolarOpenForCausalLM"], "model_types": ["solar_open"]},
+  "vars": [
+    {"name": "first_dense", "value": 0},
+    {"name": "qk_on", "value": false},
+    {"name": "mtp", "value": 0},
+    {"name": "model_type", "value": "solar_open"}
+  ]
+}

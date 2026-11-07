@@ -1,0 +1,16 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "logprobs": true,
+    "top_logprobs": 3
+  },
+  "expect": {
+    "verdict": "refused",
+    "reason_contains": "logprobs is refused by name"
+  }
+}

@@ -1,0 +1,925 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "kimi-linear",
+  "doc": "Kimi-Linear (KimiLinearForCausalLM; moonshotai/Kimi-Linear-*): Llama's pre-norm residual (input_layernorm, post_attention_layernorm), and per layer either KIMI DELTA ATTENTION (layer type `linear_attention`; MIXER_KDA_V1: q, k, v projections each through a depthwise causal convolution (q_conv1d, k_conv1d, v_conv1d, kernel linear_conv_kernel_dim, SiLU), per-head L2 norm of q and k, a CHANNEL-WISE forget gate -exp(A_log[head])*softplus(f_b(f_a(x)) + dt_bias) per key channel, beta = sigmoid(b_proj x), the gated delta rule, and a per-head RMS norm gated by sigmoid(g_b(g_a(x))) before o_proj) or multi-head latent attention WITH NO ROTATION AT ALL (`full_attention`; MIXER_MLA_NOPE_V1: the rope slice of q and the shared key are raw projections, scale qk_head_dim^-1/2, latent norms with eps 1e-6 not rms_norm_eps), and per layer a dense gated SiLU MLP or the DeepSeek-V3 mixture of experts (mlp_layer_types, else the first first_k_dense_replace layers are dense; sigmoid router with a selection bias, top-2-sum groups, renormalised by sum + 1e-20 and scaled by routed_scaling_factor, one shared expert of moe_intermediate_size * num_shared_experts; experts stored as block_sparse_moe.experts.N.{w1 gate, w3 up, w2 down}). The layer types come from `layer_types`, else from linear_attn_config's 1-based kda_layers / full_attn_layers (the hub's spelling; HF's class reads it the same way), else every fourth layer from the fifth is full attention; the KDA geometry from linear_attn_config (num_heads, head_dim, short_conv_kernel_size) or linear_num_heads, linear_head_dim, linear_conv_kernel_dim. The dense layers' MLP is `mlp.*` as on the hub (transformers 5.17 SAVES it as block_sparse_moe.* through the reverse of its blanket mlp -> block_sparse_moe rename, and reads either; this adapter binds the hub's name). Features: MIXER_KDA_V1, MIXER_MLA_NOPE_V1, CONV_DEPTHWISE_CAUSAL_V1, MIXER_MLA_V1, MOE_ROUTER_V1, NORM_RMS_V1, MLP_DENSE_GATED_V1.",
+  "extends": [
+    "decoder-core"
+  ],
+  "match": {
+    "architectures": [
+      "KimiLinearForCausalLM"
+    ],
+    "model_types": [
+      "kimi_linear"
+    ]
+  },
+  "config": {
+    "defaults": {
+      "vocab_size": 163840,
+      "hidden_size": 2304,
+      "intermediate_size": 9216,
+      "moe_intermediate_size": 1024,
+      "num_hidden_layers": 27,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 32,
+      "routed_scaling_factor": 2.446,
+      "kv_lora_rank": 512,
+      "q_lora_rank": null,
+      "qk_rope_head_dim": 64,
+      "v_head_dim": 128,
+      "qk_nope_head_dim": 128,
+      "topk_group": 1,
+      "rms_norm_eps": 1e-05,
+      "linear_head_dim": 128,
+      "linear_num_heads": 32,
+      "linear_conv_kernel_dim": 4,
+      "mla_use_nope": true,
+      "moe_layer_freq": 1,
+      "moe_router_activation_func": "sigmoid",
+      "num_nextn_predict_layers": 0,
+      "tie_word_embeddings": false,
+      "attention_bias": false
+    },
+    "inert": [
+      "head_dim",
+      "qk_head_dim",
+      "attention_dropout",
+      "initializer_range",
+      "use_cache",
+      "pretraining_tp",
+      "use_grouped_topk"
+    ]
+  },
+  "vars": [
+    {
+      "name": "lac",
+      "value": {
+        "$cfg?": "linear_attn_config"
+      }
+    },
+    {
+      "name": "dims_ok",
+      "value": {
+        "$bad": [
+          {
+            "$gt": [
+              {
+                "$var": "heads"
+              },
+              0
+            ]
+          },
+          "num_attention_heads must be positive"
+        ]
+      }
+    },
+    {
+      "name": "kv_eq",
+      "value": {
+        "$let": [
+          "kvc",
+          {
+            "$cfg?": "num_key_value_heads"
+          },
+          {
+            "$check": [
+              {
+                "$or": [
+                  {
+                    "$eq": [
+                      {
+                        "$var": "kvc"
+                      },
+                      null
+                    ]
+                  },
+                  {
+                    "$eq": [
+                      {
+                        "$var": "kvc"
+                      },
+                      {
+                        "$var": "heads"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "num_key_value_heads differs from num_attention_heads (the eager attention repeats the expanded K/V by heads / num_key_value_heads)"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "mla_nope",
+      "value": {
+        "$require_eq": [
+          "mla_use_nope",
+          true,
+          "this adapter reads the NoPE latent attention (no rotation); a config that turns the rope on is another function"
+        ]
+      }
+    },
+    {
+      "name": "moe_freq",
+      "value": {
+        "$require_eq": [
+          "moe_layer_freq",
+          1,
+          "the MoE layers follow mlp_layer_types / first_k_dense_replace; a layer frequency other than 1 is not read"
+        ]
+      }
+    },
+    {
+      "name": "router_act",
+      "value": {
+        "$require_eq": [
+          "moe_router_activation_func",
+          "sigmoid",
+          "the router is the DeepSeek-V3 one: sigmoid scores"
+        ]
+      }
+    },
+    {
+      "name": "mtp",
+      "value": {
+        "$cfg": "num_nextn_predict_layers"
+      }
+    },
+    {
+      "name": "mtp_ok",
+      "value": {
+        "$bad": [
+          {
+            "$eq": [
+              {
+                "$var": "mtp"
+              },
+              0
+            ]
+          },
+          "multi-token-prediction layers are not read"
+        ]
+      }
+    },
+    {
+      "name": "e",
+      "value": {
+        "$alias": [
+          [
+            "num_experts",
+            "num_local_experts",
+            "n_routed_experts"
+          ],
+          256
+        ]
+      }
+    },
+    {
+      "name": "k",
+      "value": {
+        "$alias": [
+          [
+            "num_experts_per_token",
+            "num_experts_per_tok"
+          ],
+          8
+        ]
+      }
+    },
+    {
+      "name": "topk_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "k"
+                  },
+                  0
+                ]
+              },
+              {
+                "$le": [
+                  {
+                    "$var": "k"
+                  },
+                  {
+                    "$var": "e"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "$cat": [
+              "top-k ",
+              {
+                "$var": "k"
+              },
+              " of ",
+              {
+                "$var": "e"
+              },
+              " experts"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "n_shared",
+      "value": {
+        "$alias": [
+          [
+            "num_shared_experts",
+            "n_shared_experts"
+          ],
+          1
+        ]
+      }
+    },
+    {
+      "name": "moe_inter",
+      "value": {
+        "$cfg": "moe_intermediate_size"
+      }
+    },
+    {
+      "name": "rsf",
+      "value": {
+        "$cfg": "routed_scaling_factor"
+      }
+    },
+    {
+      "name": "normalize",
+      "value": {
+        "$alias": [
+          [
+            "moe_renormalize",
+            "norm_topk_prob"
+          ],
+          true
+        ]
+      }
+    },
+    {
+      "name": "ng",
+      "value": {
+        "$alias": [
+          [
+            "num_expert_group",
+            "n_group"
+          ],
+          1
+        ]
+      }
+    },
+    {
+      "name": "tg",
+      "value": {
+        "$cfg": "topk_group"
+      }
+    },
+    {
+      "name": "groups_ok",
+      "value": {
+        "$bad": [
+          {
+            "$and": [
+              {
+                "$gt": [
+                  {
+                    "$var": "ng"
+                  },
+                  0
+                ]
+              },
+              {
+                "$eq": [
+                  {
+                    "$mod": [
+                      {
+                        "$var": "e"
+                      },
+                      {
+                        "$var": "ng"
+                      }
+                    ]
+                  },
+                  0
+                ]
+              },
+              {
+                "$gt": [
+                  {
+                    "$var": "tg"
+                  },
+                  0
+                ]
+              },
+              {
+                "$le": [
+                  {
+                    "$var": "tg"
+                  },
+                  {
+                    "$var": "ng"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "$cat": [
+              "kimi_linear: ",
+              {
+                "$var": "e"
+              },
+              " experts in ",
+              {
+                "$var": "ng"
+              },
+              " groups, top ",
+              {
+                "$var": "tg"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "first_dense",
+      "value": {
+        "$let": [
+          "v",
+          {
+            "$cfg?": "first_k_dense_replace"
+          },
+          {
+            "$if": [
+              {
+                "$ne": [
+                  {
+                    "$var": "v"
+                  },
+                  null
+                ]
+              },
+              {
+                "$var": "v"
+              },
+              1
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "groups",
+      "value": {
+        "n_group": {
+          "$var": "ng"
+        },
+        "topk_group": {
+          "$var": "tg"
+        },
+        "score": "Top2Sum"
+      }
+    },
+    {
+      "name": "max_pos",
+      "value": {
+        "$alias": [
+          [
+            "max_position_embeddings",
+            "model_max_length"
+          ],
+          1048576
+        ]
+      }
+    },
+    {
+      "name": "rope",
+      "value": null
+    },
+    {
+      "name": "kda_list",
+      "value": {
+        "$get": [
+          {
+            "$var": "lac"
+          },
+          "kda_layers",
+          null
+        ]
+      }
+    },
+    {
+      "name": "full_list",
+      "value": {
+        "$get": [
+          {
+            "$var": "lac"
+          },
+          "full_attn_layers",
+          null
+        ]
+      }
+    },
+    {
+      "name": "types",
+      "value": {
+        "$layer_types": {
+          "n": {
+            "$var": "n"
+          },
+          "allowed": [
+            "linear_attention",
+            "full_attention"
+          ],
+          "each": {
+            "$if": [
+              {
+                "$and": [
+                  {
+                    "$ne": [
+                      {
+                        "$var": "kda_list"
+                      },
+                      null
+                    ]
+                  },
+                  {
+                    "$ne": [
+                      {
+                        "$var": "full_list"
+                      },
+                      null
+                    ]
+                  }
+                ]
+              },
+              {
+                "$if": [
+                  {
+                    "$contains": [
+                      {
+                        "$var": "full_list"
+                      },
+                      {
+                        "$add": [
+                          {
+                            "$var": "i"
+                          },
+                          1
+                        ]
+                      }
+                    ]
+                  },
+                  "full_attention",
+                  "linear_attention"
+                ]
+              },
+              {
+                "$if": [
+                  {
+                    "$and": [
+                      {
+                        "$gt": [
+                          {
+                            "$var": "i"
+                          },
+                          0
+                        ]
+                      },
+                      {
+                        "$eq": [
+                          {
+                            "$mod": [
+                              {
+                                "$var": "i"
+                              },
+                              4
+                            ]
+                          },
+                          0
+                        ]
+                      }
+                    ]
+                  },
+                  "full_attention",
+                  "linear_attention"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "mlp_types",
+      "value": {
+        "$layer_types": {
+          "n": {
+            "$var": "n"
+          },
+          "key": "mlp_layer_types",
+          "allowed": [
+            "dense",
+            "sparse"
+          ],
+          "each": {
+            "$if": [
+              {
+                "$lt": [
+                  {
+                    "$var": "i"
+                  },
+                  {
+                    "$var": "first_dense"
+                  }
+                ]
+              },
+              "dense",
+              "sparse"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "lh_cfg",
+      "value": {
+        "$get": [
+          {
+            "$var": "lac"
+          },
+          "num_heads",
+          {
+            "$cfg": "linear_num_heads"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ld_cfg",
+      "value": {
+        "$get": [
+          {
+            "$var": "lac"
+          },
+          "head_dim",
+          {
+            "$cfg": "linear_head_dim"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lk_cfg",
+      "value": {
+        "$get": [
+          {
+            "$var": "lac"
+          },
+          "short_conv_kernel_size",
+          {
+            "$cfg": "linear_conv_kernel_dim"
+          }
+        ]
+      }
+    },
+    {
+      "name": "kda",
+      "value": {
+        "heads": {
+          "$var": "lh_cfg"
+        },
+        "head_dim": {
+          "$var": "ld_cfg"
+        },
+        "conv_kernel": {
+          "$var": "lk_cfg"
+        },
+        "gate_rank": {
+          "$var": "ld_cfg"
+        },
+        "conv_act": "Silu",
+        "l2_eps": 1e-06,
+        "norm_eps": {
+          "$var": "eps"
+        },
+        "gate_act": "Sigmoid"
+      }
+    },
+    {
+      "name": "lat_norm",
+      "value": {
+        "kind": "Rms",
+        "eps": 1e-06,
+        "gain": "W",
+        "bias": false
+      }
+    },
+    {
+      "name": "kv_lora",
+      "value": {
+        "$cfg": "kv_lora_rank"
+      }
+    },
+    {
+      "name": "q_lora",
+      "value": {
+        "$cfgn": "q_lora_rank"
+      }
+    },
+    {
+      "name": "rope_d",
+      "value": {
+        "$cfg": "qk_rope_head_dim"
+      }
+    },
+    {
+      "name": "nope_d",
+      "value": {
+        "$cfg": "qk_nope_head_dim"
+      }
+    },
+    {
+      "name": "v_d",
+      "value": {
+        "$cfg": "v_head_dim"
+      }
+    },
+    {
+      "name": "qk_d",
+      "value": {
+        "$add": [
+          {
+            "$var": "nope_d"
+          },
+          {
+            "$var": "rope_d"
+          }
+        ]
+      }
+    },
+    {
+      "name": "mla_scale",
+      "value": {
+        "$div": [
+          1.0,
+          {
+            "$sqrt": {
+              "$var": "qk_d"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "mla",
+      "value": {
+        "heads": {
+          "$var": "heads"
+        },
+        "q_lora_rank": {
+          "$var": "q_lora"
+        },
+        "kv_lora_rank": {
+          "$var": "kv_lora"
+        },
+        "qk_nope_head_dim": {
+          "$var": "nope_d"
+        },
+        "qk_rope_head_dim": {
+          "$var": "rope_d"
+        },
+        "v_head_dim": {
+          "$var": "v_d"
+        },
+        "q_a_norm": {
+          "$var": "lat_norm"
+        },
+        "kv_a_norm": {
+          "$var": "lat_norm"
+        },
+        "a_bias": {
+          "$var": "abias"
+        },
+        "rope": null,
+        "scale": {
+          "$var": "mla_scale"
+        }
+      }
+    },
+    {
+      "name": "l_mixer",
+      "value": {
+        "$if": [
+          {
+            "$eq": [
+              {
+                "$index": [
+                  {
+                    "$var": "types"
+                  },
+                  {
+                    "$var": "i"
+                  }
+                ]
+              },
+              "full_attention"
+            ]
+          },
+          {
+            "Mla": {
+              "$var": "mla"
+            }
+          },
+          {
+            "Kda": {
+              "$var": "kda"
+            }
+          }
+        ]
+      },
+      "layer": true
+    },
+    {
+      "name": "router",
+      "value": {
+        "scoring": "Sigmoid",
+        "linear_bias": false,
+        "selection_bias": true,
+        "groups": {
+          "$var": "groups"
+        },
+        "normalize": {
+          "$var": "normalize"
+        },
+        "norm_eps": {
+          "$if": [
+            {
+              "$var": "normalize"
+            },
+            1e-20,
+            0.0
+          ]
+        },
+        "scale": {
+          "$var": "rsf"
+        },
+        "jitter_eps": 0.0,
+        "per_expert_scale": false
+      }
+    },
+    {
+      "name": "shared",
+      "value": {
+        "$if": [
+          {
+            "$gt": [
+              {
+                "$var": "n_shared"
+              },
+              0
+            ]
+          },
+          {
+            "intermediate": {
+              "$mul": [
+                {
+                  "$var": "moe_inter"
+                },
+                {
+                  "$var": "n_shared"
+                }
+              ]
+            },
+            "sigmoid_gate": false
+          },
+          null
+        ]
+      }
+    },
+    {
+      "name": "l_ffn",
+      "value": {
+        "$if": [
+          {
+            "$eq": [
+              {
+                "$index": [
+                  {
+                    "$var": "mlp_types"
+                  },
+                  {
+                    "$var": "i"
+                  }
+                ]
+              },
+              "sparse"
+            ]
+          },
+          {
+            "Moe": {
+              "experts": {
+                "$var": "e"
+              },
+              "top_k": {
+                "$var": "k"
+              },
+              "intermediate": {
+                "$var": "moe_inter"
+              },
+              "act": {
+                "$var": "act"
+              },
+              "router": {
+                "$var": "router"
+              },
+              "shared": {
+                "$var": "shared"
+              }
+            }
+          },
+          {
+            "Mlp": {
+              "intermediate": {
+                "$var": "inter"
+              },
+              "act": {
+                "$var": "act"
+              },
+              "gated": true,
+              "up_bias": false,
+              "down_bias": false
+            }
+          }
+        ]
+      },
+      "layer": true
+    },
+    {
+      "name": "names",
+      "value": {
+        "$merge": [
+          {
+            "$var": "names_base"
+          },
+          {
+            "mla.q": "{p}layers.{L}.self_attn.q_proj",
+            "mla.q_a": "{p}layers.{L}.self_attn.q_a_proj",
+            "mla.q_a_norm": "{p}layers.{L}.self_attn.q_a_layernorm",
+            "mla.q_b": "{p}layers.{L}.self_attn.q_b_proj",
+            "mla.kv_a": "{p}layers.{L}.self_attn.kv_a_proj_with_mqa",
+            "mla.kv_a_norm": "{p}layers.{L}.self_attn.kv_a_layernorm",
+            "mla.kv_b": "{p}layers.{L}.self_attn.kv_b_proj",
+            "mla.o": "{p}layers.{L}.self_attn.o_proj",
+            "kda.q": "{p}layers.{L}.self_attn.q_proj",
+            "kda.k": "{p}layers.{L}.self_attn.k_proj",
+            "kda.v": "{p}layers.{L}.self_attn.v_proj",
+            "kda.q_conv": "{p}layers.{L}.self_attn.q_conv1d",
+            "kda.k_conv": "{p}layers.{L}.self_attn.k_conv1d",
+            "kda.v_conv": "{p}layers.{L}.self_attn.v_conv1d",
+            "kda.f_a": "{p}layers.{L}.self_attn.f_a_proj",
+            "kda.f_b": "{p}layers.{L}.self_attn.f_b_proj",
+            "kda.dt_bias": "{p}layers.{L}.self_attn.dt_bias",
+            "kda.A_log": "{p}layers.{L}.self_attn.A_log",
+            "kda.b": "{p}layers.{L}.self_attn.b_proj",
+            "kda.g_a": "{p}layers.{L}.self_attn.g_a_proj",
+            "kda.g_b": "{p}layers.{L}.self_attn.g_b_proj",
+            "kda.norm": "{p}layers.{L}.self_attn.o_norm",
+            "kda.out": "{p}layers.{L}.self_attn.o_proj",
+            "moe.router": "{p}layers.{L}.block_sparse_moe.gate",
+            "moe.sel_bias": "{p}layers.{L}.block_sparse_moe.gate.e_score_correction_bias",
+            "moe.gate": "{p}layers.{L}.block_sparse_moe.experts.{E}.w1",
+            "moe.up": "{p}layers.{L}.block_sparse_moe.experts.{E}.w3",
+            "moe.down": "{p}layers.{L}.block_sparse_moe.experts.{E}.w2",
+            "moe.shared.gate": "{p}layers.{L}.block_sparse_moe.shared_experts.gate_proj",
+            "moe.shared.up": "{p}layers.{L}.block_sparse_moe.shared_experts.up_proj",
+            "moe.shared.down": "{p}layers.{L}.block_sparse_moe.shared_experts.down_proj"
+          }
+        ]
+      }
+    },
+    {
+      "name": "families",
+      "value": [
+        "C3",
+        "C4",
+        "C8"
+      ]
+    },
+    {
+      "name": "model_type",
+      "value": "kimi_linear"
+    }
+  ]
+}

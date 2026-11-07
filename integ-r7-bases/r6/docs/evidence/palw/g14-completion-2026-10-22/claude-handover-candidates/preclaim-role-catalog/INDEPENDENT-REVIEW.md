@@ -1,0 +1,11 @@
+# Independent read review — native preclaim known actor catalog
+
+Reviewed module.rs, incremental requirement/fixture changes and existing custody check/signature predicates on 2026-10-22. Repository/build untouched. No concrete blocking authority/scope issue found by read; candidate remains uncompiled/unexecuted.
+
+The catalog can be derived only from the actual private native PreparedOriginalGeometry/requirements origin. It rechecks accepting context/current immutable preparation conditions, actual frame/native Source/old pledge claim, producer, execution/job/resource identities, custodian upper and exact terms. Existing custody check enforces accepted DAA strictly before pledge acceptance endpoint and actual material horizon; the old pledge signature is rechecked against the literal current executor bond key. Current Active status/operator-key identity is verified. Reuse through actor_catalog repeats the real checks rather than trusting cached Copy data.
+
+Only known legacy source responsibility is named. Anonymous potential graph roles remain a separate scalar, not assigned entries or slot0=producer. New semantic supplier/operator/allbranch/financial consent is explicitly missing and no old signature is reinterpreted as accepting it. Source actor key ID remains data identity, not native address payload or UTXO authorization. No payer consent substitution, generic script bypass, fake new consent body, paid/default/Complete or funded admission path appears.
+
+The fixed catalog snapshot is included in the existing exact wrapper-size reservation; no new key/signature/material Vec or guessed actor array is copied. Repeated legacy signature/job/pledge hash work remains its documented separately admitted native scratch/CPU scope, not a fully calibrated new cost profile. Existing Source/numerical/input native resource errors remain distinct. Active/current key status here is not proof of enough actual funding or future availability.
+
+The actual native fixture covers identity and potential-slot count, typed missing categories and exact key/operator/retiring mutation refusal without new Frame/site/roots. It still requires compilation and old paired/native regression execution; this read review is not a completion/adoption claim.

@@ -1,0 +1,27 @@
+[package]
+name = "kaspa-txscript-errors"
+description = "Kaspa txscript errors"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+thiserror.workspace = true
+secp256k1 = { workspace = true, optional = true }
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` is the default; `legacy-secp256k1`
+# re-introduces the secp256k1 dependency, used only by the legacy
+# `InvalidSignature(secp256k1::Error)` variant. Release builds compile secp out.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1"]
+
+[lints]
+workspace = true

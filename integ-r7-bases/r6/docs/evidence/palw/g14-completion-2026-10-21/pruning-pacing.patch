@@ -1,0 +1,38 @@
+diff --git a/kaspad/src/palw_service_public_e2e.rs b/kaspad/src/palw_service_public_e2e.rs
+index 176d1ba34..8a2f26f3b 100644
+--- a/kaspad/src/palw_service_public_e2e.rs
++++ b/kaspad/src/palw_service_public_e2e.rs
+@@ -2687,7 +2687,12 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
+             );
+             break;
+         }
+-        if demanded {
++        if recovery.as_ref().is_some_and(|recovery| recovery.recovering_pruned_round()) {
++            // One actual native/template block per pass while the real restarted
++            // workers drain the existing parallel round and reacquire pruned input.
++            // Keep the original hard clock and the real-Honest/release assertions.
++            pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
++        } else if demanded {
+             for _ in 0..50 {
+                 pool_heartbeat_observed(&mut chain, &manager, &pool, claim, &mut recovery, &mut running).await;
+             }
+diff --git a/kaspad/src/palw_service_recovery_e2e.rs b/kaspad/src/palw_service_recovery_e2e.rs
+index 63d66f669..a3caf8ed9 100644
+--- a/kaspad/src/palw_service_recovery_e2e.rs
++++ b/kaspad/src/palw_service_recovery_e2e.rs
+@@ -301,6 +301,15 @@ impl RecoveryRun {
+         self.pruned_numbered_before = Some((reservation.sessions_opened, reservation.reserved_daa));
+     }
+ 
++    /// After the body is actually pruned, let both restarted production workers
++    /// consume the ordinary block stream. The generic harness's 50-block bursts
++    /// can expire the original reservation while a two-second worker is draining
++    /// its sixteen carriers. This changes only test-clock pacing, never a chain
++    /// deadline, fee, session/lane limit or the native acceptance path.
++    pub(super) fn recovering_pruned_round(&self) -> bool {
++        self.mode == RecoveryMode::PrunedRound && self.pruned_round.is_some()
++    }
++
+     pub(super) fn verifier_paused(&self) -> bool {
+         self.mode == RecoveryMode::PrunedRound && self.paused_input && self.pruned_round.is_none()
+     }

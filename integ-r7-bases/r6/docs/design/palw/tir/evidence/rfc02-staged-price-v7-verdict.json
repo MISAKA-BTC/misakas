@@ -1,0 +1,174 @@
+{
+  "schema": "misaka.palw.rfc02.staged-candidate-pricing.v7",
+  "date": "2026-10-11",
+  "verdict": "STAGED_CANDIDATE_PRICING_COMPONENT_PASS_REAL_QWEN_COURT_SCOPE_REFUSES_FULL_RFC02_INCOMPLETE",
+  "goal_status": "active",
+  "full_rfc02_complete": false,
+  "base_commit": "5b1eaaf1c6280f3ecbae4d46807c7174f45d00ff",
+  "selected_distinct_tests_passed": 10,
+  "new_component_tests": 5,
+  "cumulative_protected_component_pool_passes": 263,
+  "new_test_names": [
+    "invalid_artifact_hash_attempt_is_paid_before_authentication",
+    "malformed_canonical_decode_pays_only_first_debit_and_consumes_retry",
+    "scheduled_work_is_reserved_before_scope_or_range_and_shared_budget_refusals_keep_parse_debit",
+    "staged_cost_is_exact_schedule_count_and_never_allocates_tensor_extent",
+    "two_debits_are_one_attempt_and_leave_ordinary_proof_reserve"
+  ],
+  "costs": {
+    "first_stage": "B*B + 64*B + 8832*P + 16384",
+    "metadata_stage": "16*N*1024",
+    "N": "actual scheduled node occurrences counted before unrolling",
+    "one_adjudication": true,
+    "retained_invalid_attempts": true,
+    "ordinary_proof_reserve_preserved": true,
+    "PWU_reward_scope_roots_or_caps_changed": false
+  },
+  "source_sha256": {
+    "misaka-palw-kernel/src/flat_candidate7.rs": "05f6938be65b580d9c65d72e93fd07a05bfeddbdff51780cd053afceafbdfb23",
+    "misaka-palw-kernel/tests/flat_candidate7_costs.rs": "90ae43c32b23bd7a10422bf8d1232878fb136771a0aafe5b486512b568221396",
+    "misaka-palw-kernel/tests/flat_candidate7.rs": "2db03d77a06ca490d6f4760e1c9054cd18fd43e97263758a170259ef90f80da1",
+    "misaka-palw-sdk/examples/check-flat-checkpoint-admission7.rs": "f9cd51e1682b6b7fce0e6d37afad3562dda3577cbd25b276f92fcc8cdc28c788"
+  },
+  "document_sha256": {
+    "docs/rfc/0002-palw-tensor-ir.md": "df2db010b6866514b54e54b605edbf1d6f91f154b762cb6f13416106a6a036b2",
+    "docs/spec/palw/04b-tensor-ir.md": "29f008c8cf7a206e6fd902f1f8477c008d371975145da78aa64450a21046c6ae",
+    "docs/design/palw/tir/rfc0002-implementation.md": "b1b3622c1b09d6dbb8c452169fcaf4ba8c82c9e16ede4cdd8a71c8242a5cb2f6"
+  },
+  "binaries": {
+    "costs": {
+      "compiled_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate7_costs-c272e49074bfba06",
+      "immutable_path": "/tmp/rfc02-staged-price7-costs",
+      "sha256": "e867599c2866ea6218468631a2e2123acd8ebf6c58d81facf958aff50cdfe6a1"
+    },
+    "metadata": {
+      "compiled_path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/examples/check-flat-checkpoint-admission7",
+      "immutable_path": "/tmp/rfc02-staged-price7-metadata",
+      "sha256": "2b173d4b5fc55ea2d76c9cef0c1b1dcef4feb97b65733756a13355acf79f6e6c"
+    }
+  },
+  "input_sha256_before_and_after": {
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/program.tir": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+    "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1"
+  },
+  "runs": {
+    "costs": {
+      "command": [
+        "/tmp/rfc02-staged-price7-costs",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/rfc02-staged-price7-root-costs.log",
+      "sha256": "5da3d25ccbd4161efa7018f211aefbed2877e538880d628f0b8a70767a000822"
+    },
+    "metadata": {
+      "command": [
+        "/tmp/rfc02-staged-price7-metadata",
+        "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/program.tir",
+        "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/rfc02-real/qwen25-pilot/kernel-params-v3.borsh",
+        "32"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/rfc02-staged-price7-root-metadata.log",
+      "sha256": "992991213fda8130c834596d5d8c8e58e3844cb70f18b527f723fb8d0a17ba34"
+    }
+  },
+  "logs": {
+    "final_cost_build": {
+      "file": "rfc02-staged-price-v7-cost-build.log",
+      "sha256": "e77b13c5be21746eb458e23afabec78d1b35c3be9e0aaac412839a40d301e351",
+      "raw_sha256": "3d27d3e8e4668d37904dc52ca41969d730ba8a718b77513b78c23d4aa31501a8",
+      "normalization": "Trailing blank lines removed only."
+    },
+    "final_cost_run": {
+      "file": "rfc02-staged-price-v7-cost-run.log",
+      "sha256": "c8aacd312fbc65174a3349cffb219ab1a431ad989f1d0a6b4c8642756c641d02",
+      "raw_sha256": "5da3d25ccbd4161efa7018f211aefbed2877e538880d628f0b8a70767a000822",
+      "normalization": "Trailing blank lines removed only."
+    },
+    "existing_and_new_prior_run": {
+      "file": "rfc02-staged-price-v7-prior-regressions.log",
+      "sha256": "70bef1a543f8acbea67575d882d6927b37ffcb2dc155ad0e1c3f7db5f5319ef5",
+      "raw_sha256": "61eda354066cda2c2521dc2b5f26f15d15389b4cf354831697866b7d0fab9790",
+      "normalization": "Trailing blank lines removed only."
+    },
+    "metadata_build": {
+      "file": "rfc02-staged-price-v7-metadata-build.log",
+      "sha256": "40bb18e94ecf85225a4da9f2b9b59be82b9cc2bcb0dbd0558cfc83b53605a386",
+      "raw_sha256": "40bb18e94ecf85225a4da9f2b9b59be82b9cc2bcb0dbd0558cfc83b53605a386",
+      "normalization": "Trailing blank lines removed only."
+    }
+  },
+  "build_commands": [
+    "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_candidate7 --test flat_candidate7_costs -- --nocapture",
+    "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_candidate7_costs",
+    "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo build --locked -p misaka-palw-sdk --example check-flat-checkpoint-admission7"
+  ],
+  "build_scope": {
+    "final_cost_run": "Final frozen pricing source with immutable binary, test_threads=1. Other agents have uncommitted native7 and point9 module integrations; this is a component run, not a complete committed-tree uniform build.",
+    "five_existing_candidate_regressions": "Successful preceding staged-pricing build/run predates a later test diagnostic-label correction and redundant &d borrow cleanup. No candidate logic changed; final five new cost tests include the cleanup.",
+    "metadata": "Separate SDK example binary; exact direct example and pricing sources frozen. Actual input bytes pinned before/after; no source weights loaded or authenticated.",
+    "cargo_test_threads": "Both cargo runs used the default test thread count; the independent immutable final cost rerun explicitly used one thread."
+  },
+  "actual_qwen_metadata": {
+    "all_metadata_components_fit_interim_consumer": false,
+    "canonical_program_decode_passed": true,
+    "class_registered_execution_eligible_or_final_proven": false,
+    "complete_task_or_source_fidelity_proven": false,
+    "descriptor": "4fa5621e07f75fe493421315de0373eac6982fdd40e33a9481b93c420cb9bd6f027baa3e56b04a88ccb431698d2d67462d751c60c85bee9aef51c08de4a9ae6b",
+    "full_rfc02_complete": false,
+    "guaranteed_proof_work": 536870912,
+    "interim_consumer_admission_work_limit": 536870912,
+    "max_positions": 32,
+    "node_state_admission_or_activation_checked": false,
+    "ordinary_component_memory_limit": 68719476736,
+    "parameter_instances": 1636,
+    "parameter_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729",
+    "predecode_tariff_fits_interim_consumer": true,
+    "predecode_work": 211670361,
+    "program_bytes": 14011,
+    "registration_tariff_fits_interim_consumer": true,
+    "registration_work": 337139033,
+    "scheduled_metadata_passes": 16,
+    "scheduled_metadata_work": 125468672,
+    "scheduled_nodes": 7658,
+    "schema": "misaka.rfc02.actual-checkpoint-flat-v7-staged-metadata-audit.v2",
+    "scope_derivation_passed": false,
+    "scope_refusal": "NotAuthentic(\"flat relation exceeds court resource caps\")",
+    "source_weights_loaded_or_authenticated_by_this_run": false,
+    "template_nodes": 314
+  },
+  "actual_qwen_metadata_file": "qwen25-flat7-staged-pricing-metadata-audit.json",
+  "synthetic_metadata": {
+    "program_bytes": 307,
+    "predecode_work": 139113,
+    "scheduled_metadata_work": 49152,
+    "total_work": 188265,
+    "weights_or_max_context_execution": false
+  },
+  "historical_observations_preserved": [
+    "rfc02-candidate-length-v7-verdict.json",
+    "qwen25-flat7-metadata-audit.json"
+  ],
+  "formatting": {
+    "command": "rustfmt --edition 2024 --check --config skip_children=true,reorder_modules=false [four listed pricing source files]",
+    "exit_code": 0
+  },
+  "execution_context": {
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "cargo_locked": true,
+    "incremental": 0,
+    "budget_stack_arithmetic_overrides": false
+  },
+  "remaining_required": [
+    "Unified native posted graph and maximum/actual length scheduled metadata prices",
+    "Header-specific guarded bounded chunk assembly and its price",
+    "Complete mixed point9 scope/checker/replay/native dispatch",
+    "Full execution/proof/hash/store/delivery/retry per-plan/block/bond/network resource and original-capital/reward conservation",
+    "Complete typed H/media jobs, actual checkpoints/tasks/contexts",
+    "Independent honest execution Final/redemption and actual A6/A8 with retained denominators"
+  ],
+  "conditional_mode_A": "preserved; no consensus model-availability obligation",
+  "shipping_fences": "dormant"
+}

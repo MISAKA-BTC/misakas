@@ -1,0 +1,17 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "temperature": 0,
+    "top_p": 1,
+    "frequency_penalty": 0,
+    "presence_penalty": 0
+  },
+  "expect": {
+    "verdict": "accepted"
+  }
+}

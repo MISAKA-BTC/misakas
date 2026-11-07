@@ -1,0 +1,38 @@
+{
+  "repository": "zai-org/glm-edge-1.5b-chat",
+  "revision": "7b201d3c160c25beda4cf0d107617ad975cd1ca8",
+  "source_files": [
+    {
+      "path": "model.safetensors",
+      "bytes": 3186882328,
+      "sha256": "b556690579356fbdec0e34c435b298f4ea9229dddffe7dac5832c7e5464b7799",
+      "pin_origin": "saved_revision_api_lfs_oid"
+    },
+    {
+      "path": "config.json",
+      "bytes": 680,
+      "sha256": "cac06b36fc4fdcee4e40687a4a4550184f7c6367191f1e0988b6d993352d8b14",
+      "pin_origin": "local_predeclared_bytes"
+    },
+    {
+      "path": "tokenizer.json",
+      "bytes": 6834426,
+      "sha256": "f78a0fcf4b6ef0e462557283a53ebf71cd91a41f41dc581fb870b724e6edb9bf",
+      "pin_origin": "local_predeclared_bytes"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "bytes": 3501,
+      "sha256": "95f8b86ea1b7c11ac49acf7f0b9ec7b90b629c14cebfd12c395e32ee17da8f2a",
+      "pin_origin": "local_predeclared_bytes"
+    },
+    {
+      "path": "generation_config.json",
+      "bytes": 156,
+      "sha256": "2e3bc626d3b012b9200c2634756d4fb17f2ceec2d3d5fcf0cf38e7ddaddfac93",
+      "pin_origin": "local_predeclared_bytes"
+    }
+  ],
+  "schema": "misaka.rfc02.pinned-source-manifest.v1",
+  "source_revision_authentication": "saved_api_assertion_only; independent publisher authentication not established"
+}

@@ -1,0 +1,351 @@
+{
+  "scope": "static snapshot inspection and conditional arithmetic only; no Rust test, benchmark or node execution",
+  "repo_path_at_run": "/mnt/data/rfc-consistency-audit-20261019/source/misakas-pre",
+  "numbered_rfc_inventory": [
+    {
+      "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "lines": 431,
+      "bytes": 49564,
+      "sha256": "cf5d0a773fa10221d09ec0e4f5f28cbede209fdfda1c97e4e993ed4bfa941486"
+    },
+    {
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "lines": 4748,
+      "bytes": 383102,
+      "sha256": "146a6db24530aa8a5440e9b6904a3f3bf7f643fe21c4d63325be6c7eb6d78d87"
+    },
+    {
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "lines": 2621,
+      "bytes": 210123,
+      "sha256": "2e6c459f7c1f2aceb4233f4c9b71364486d78f625e948aacf6e4c4fa1fe951b5"
+    },
+    {
+      "path": "docs/rfc/0004-palw-model-improvement.md",
+      "lines": 1155,
+      "bytes": 95917,
+      "sha256": "6abaa2eba4f2ef5aa97774b93154858365f116370cec0b7a64465240252deb42"
+    },
+    {
+      "path": "docs/rfc/0005-palw-ml-vm.md",
+      "lines": 15,
+      "bytes": 2996,
+      "sha256": "cc096f4afa7bc81205e50f8123553a81d1b4ece4ed7ea6084cf6118aaa41676f"
+    },
+    {
+      "path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "lines": 1328,
+      "bytes": 96980,
+      "sha256": "06ae27140abd9812a80678750240b9e84785ecbd3871fc48fd64483af029f50c"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "lines": 1497,
+      "bytes": 143742,
+      "sha256": "eadad4e17cc30e8acf0b0f882d664fa1bedb871af9e6e63fb7bd1c00d924c07b"
+    },
+    {
+      "path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "lines": 356,
+      "bytes": 51395,
+      "sha256": "5e6df30068ead9de1eb85c4d3bb14d10f4df49314a105f443c4d68f188591b31"
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "lines": 326,
+      "bytes": 45686,
+      "sha256": "6e7e1d57b99d00df635a86c475c6d917714d18640ab3bc885e9efa421810d2ff"
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "lines": 246,
+      "bytes": 40975,
+      "sha256": "de4435a333e023fe870f0e5dd218a9a7e53e2488e1662436f7a0ba15c1364004"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "lines": 746,
+      "bytes": 124418,
+      "sha256": "7b90b55124990629f5b00ab4b14ac189edb3bb2a22416ee493bf7ca6e229b083"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "lines": 607,
+      "bytes": 57041,
+      "sha256": "95a70735174361d070ca69e17f44907f70bb8ee30f25a9ea77e8c7e5c728b9f9"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "lines": 394,
+      "bytes": 36800,
+      "sha256": "8c9c2a6e3b5cb2b1c95d62da8a60670d826b5ecd27e56c661819a171102c2df0"
+    },
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "lines": 1027,
+      "bytes": 86867,
+      "sha256": "458d6b61eeaaedf943508a960215a02e10127e41f4efefd03b2026c877dd21f9"
+    },
+    {
+      "path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "lines": 966,
+      "bytes": 81639,
+      "sha256": "ed63475109cd6edd721ea85ac96dcd9687d9108ea9253b8dc2201941ed1a1112"
+    },
+    {
+      "path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "lines": 672,
+      "bytes": 60599,
+      "sha256": "22623ac1bd4581c372daf78d13755c8b1305f69233edc0ceff50306c180201d0"
+    },
+    {
+      "path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "lines": 45,
+      "bytes": 5080,
+      "sha256": "9928a16fd00c9de212cc78a9b85b4d0f82933d32c8cd89cf74149da8e264fda8"
+    },
+    {
+      "path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "lines": 429,
+      "bytes": 56280,
+      "sha256": "3672c8774d690749527351c5276e622f19a623798a16e29386c2265392b28390"
+    },
+    {
+      "path": "docs/rfc/0019-annual-model-upgrade.md",
+      "lines": 446,
+      "bytes": 60831,
+      "sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e"
+    },
+    {
+      "path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "lines": 187,
+      "bytes": 22702,
+      "sha256": "9ea21859e194f85dedd83868df1c397b982df9f65f30e34de281fa2a355f6fce"
+    },
+    {
+      "path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "lines": 23,
+      "bytes": 1628,
+      "sha256": "1d780be260b557208bf4bdf3310e09bb3b1b7f463d1dbc13cfe6a0f81b68183a"
+    },
+    {
+      "path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "lines": 28,
+      "bytes": 2195,
+      "sha256": "753f83e076fc1228ddf8b29ae0520c9a61457ff66842da20d3fd31e773df4717"
+    },
+    {
+      "path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "lines": 65,
+      "bytes": 8202,
+      "sha256": "b7733389cb0462db4d3ce99def2c95d819c78178d61be0d3daaf6daf02449ab3"
+    },
+    {
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "lines": 593,
+      "bytes": 50698,
+      "sha256": "6f59e3c4e2c44b7ad3613d6326e5c0cae80764a6708a957dd9765d95bafe9a30"
+    },
+    {
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "lines": 698,
+      "bytes": 56510,
+      "sha256": "df986f6fc4fc70781f9fb71149a0ec638511d8f1d8682b5db3c2d59a716b99ad"
+    }
+  ],
+  "numbered_rfc_count": 25,
+  "numbered_rfc_lines": 19649,
+  "numbered_rfc_bytes": 1831970,
+  "signature_size": 4627,
+  "rounds_and_signature_lower_bounds": [
+    {
+      "context": 32768,
+      "tile": 16,
+      "arity": 4,
+      "tile_count_path": [
+        2048,
+        512,
+        128,
+        32,
+        8,
+        2,
+        1
+      ],
+      "history_round_trips": 6,
+      "signed_root_and_history_moves_only": 13,
+      "signature_only_bytes": 60151,
+      "signature_only_KiB": 58.7412109375,
+      "SC64_candidate_bytes": 65536,
+      "SC64_remaining_after_signatures": 5385,
+      "condition": "all history rounds occur; existing per-move ML-DSA-87 signatures; no batching or new codec; excludes filing, body, final proof and outer framing"
+    },
+    {
+      "context": 2097152,
+      "tile": 16,
+      "arity": 4,
+      "tile_count_path": [
+        131072,
+        32768,
+        8192,
+        2048,
+        512,
+        128,
+        32,
+        8,
+        2,
+        1
+      ],
+      "history_round_trips": 9,
+      "signed_root_and_history_moves_only": 19,
+      "signature_only_bytes": 87913,
+      "signature_only_KiB": 85.8525390625,
+      "SC64_candidate_bytes": 65536,
+      "SC64_remaining_after_signatures": -22377,
+      "condition": "all history rounds occur; existing per-move ML-DSA-87 signatures; no batching or new codec; excludes filing, body, final proof and outer framing"
+    },
+    {
+      "context": 32768,
+      "tile": 16,
+      "arity": 16,
+      "tile_count_path": [
+        2048,
+        128,
+        8,
+        1
+      ],
+      "history_round_trips": 3,
+      "signed_root_and_history_moves_only": 7,
+      "signature_only_bytes": 32389,
+      "signature_only_KiB": 31.6298828125,
+      "SC64_candidate_bytes": 65536,
+      "SC64_remaining_after_signatures": 33147,
+      "condition": "all history rounds occur; existing per-move ML-DSA-87 signatures; no batching or new codec; excludes filing, body, final proof and outer framing"
+    },
+    {
+      "context": 2097152,
+      "tile": 16,
+      "arity": 16,
+      "tile_count_path": [
+        131072,
+        8192,
+        512,
+        32,
+        2,
+        1
+      ],
+      "history_round_trips": 5,
+      "signed_root_and_history_moves_only": 11,
+      "signature_only_bytes": 50897,
+      "signature_only_KiB": 49.7041015625,
+      "SC64_candidate_bytes": 65536,
+      "SC64_remaining_after_signatures": 14639,
+      "condition": "all history rounds occur; existing per-move ML-DSA-87 signatures; no batching or new codec; excludes filing, body, final proof and outer framing"
+    }
+  ],
+  "conditional_bandwidth_lower_bounds": [
+    {
+      "courts": 10000,
+      "assumed_total_bytes_per_court": 65536,
+      "assumed_court_bandwidth_B_per_DAA": 25000,
+      "wire_only_DAA_lower_bound": 26215,
+      "note": "hypothetical lower bound; no waiting, CPU, control, reorg or recovery"
+    },
+    {
+      "courts": 10000,
+      "assumed_total_bytes_per_court": 32768,
+      "assumed_court_bandwidth_B_per_DAA": 12500,
+      "wire_only_DAA_lower_bound": 26215,
+      "note": "hypothetical lower bound; no waiting, CPU, control, reorg or recovery"
+    },
+    {
+      "courts": 1000,
+      "assumed_total_bytes_per_court": 65536,
+      "assumed_court_bandwidth_B_per_DAA": 25000,
+      "wire_only_DAA_lower_bound": 2622,
+      "note": "hypothetical lower bound; no waiting, CPU, control, reorg or recovery"
+    }
+  ],
+  "remaining_window_DAA": 6880,
+  "capacity_module_paths_in_this_snapshot": [],
+  "capacity_module_RFC_mentions": [
+    {
+      "path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "line": 994,
+      "text": "- 予約帯域は、mempool の優先順位だけでは足りない。ブロック作成者が無視してよい優先順位では、悪意ある作成者の検閲を防げない。合意規則による容量予約、収録義務、または検証可能な収録機会の仕組みまで設計する(Ethereum の inclusion list の研究と同じ方向)。既存の `palw_court_capacity_v1`(休眠、値は仮)の court 専用 block 予算・予約枠・期限順の割当・新規 claim の受付制限を土台にする。"
+    },
+    {
+      "path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "line": 573,
+      "text": "- 単発の door だけでなく、同時に N 件の court が走るときの `max_i door_i(2M, N) ≤ 3,120` を受入条件とする。court の容量は `palw_court_capacity_v1` が扱う(court 専用の block 予算、予約枠、期限順の割当、新規 claim の受付制限)。ただし値は仮で、step block の搬送がその予算に計上されているかは未確認。"
+    },
+    {
+      "path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "line": 8,
+      "text": "- **関連する既存実装:** `consensus/core/src/palw_court_capacity_v1.rs`(休眠。court 専用の block 予算・予約枠・期限順の割当・新規 claim の受付制限・囮の価格・未裁定は無報酬。値は仮)。本 RFC の §5〜§7 はこれを一般化・強化する位置づけで、統合時に対応を照合する(§15 段階 0)。"
+    }
+  ],
+  "not_linked_from_indexes": {
+    "INDEX.md": [
+      "0024-court-door-3200-to-ctx-2m.md",
+      "0025-scalable-objective-court-many-models-mass-disputes.md"
+    ],
+    "TOPICS.md": [
+      "0024-court-door-3200-to-ctx-2m.md",
+      "0025-scalable-objective-court-many-models-mass-disputes.md"
+    ],
+    "README.md": [
+      "0001-palw-inference-surface-gaps.md",
+      "0002-palw-tensor-ir.md",
+      "0005-palw-ml-vm.md",
+      "0006-palw-layer-sharded-panels.md",
+      "0007-palw-verification-certificates-and-algebraic-checks.md",
+      "0008-palw-claim-backed-consensus-blocks.md",
+      "0009-palw-remote-miner.md",
+      "0010-permissionless-palw-panel-and-claim-completion.md",
+      "0011-permissionless-model-and-long-context-onboarding.md",
+      "0012-palw-only-consensus-and-native-evm-settlement.md",
+      "0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "0014-panel-independent-fraud-prosecution.md",
+      "0015-panel-free-permissionless-verification.md"
+    ]
+  },
+  "source_markers": {
+    "consensus/core/tests/review_heldnode_arity.rs": {
+      "needle": "assert_eq!(held_aware, Ok(4)",
+      "found": true
+    },
+    "consensus/core/src/palw_court_v2.rs": {
+      "needle": "PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT",
+      "found": true
+    },
+    "docs/spec/palw/04b-tensor-ir.md": {
+      "needle": "The executor signs the root claim and every round",
+      "found": true
+    }
+  },
+  "toy_fold_countermodel": {
+    "claimed_parent": 100,
+    "correct_children": [
+      40,
+      50
+    ],
+    "all_child_hashes_match_committed_values": true,
+    "arithmetic_fold_valid": false,
+    "scope": "toy counterexample to hash-membership implying sum correctness; not an attack on the implemented fold checker"
+  },
+  "arithmetic_and_source_marker_checks": {
+    "numbered_RFC_count_25": true,
+    "32K_k4_rounds_6": true,
+    "2M_k4_rounds_9": true,
+    "32K_k16_rounds_3": true,
+    "2M_k16_rounds_5": true,
+    "signature_bytes_4627": true,
+    "2M_k4_signature_floor_87913": true,
+    "2M_k4_floor_exceeds_64KiB": true,
+    "remaining_window_6880": true,
+    "burst_example_26215": true,
+    "hash_does_not_imply_fold": true,
+    "expected_signature_and_arity_source_markers": true
+  },
+  "all_arithmetic_and_source_marker_checks_pass": true
+}

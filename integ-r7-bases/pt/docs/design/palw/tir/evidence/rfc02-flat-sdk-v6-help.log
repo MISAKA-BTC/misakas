@@ -1,0 +1,16 @@
+palw-class flat-v6 — prepare protected native candidates offline
+
+All commands: --network ID [--drill-salt HEX] --key-file SEED --bond TXID:INDEX --out PATH
+    post   --class HEX --binding HEX --post FLAT_V3_BODY
+    seal   --vector HEX --proof FLAT_V5_FAULT --secret-out PRIVATE_PATH
+    reveal --secret PRIVATE_PATH --row NATIVE_SEAL_ROW --height DAA
+    expire --vector HEX --actor HEX
+
+seal writes only the public seal to --out. It creates --secret-out with a fresh OS-random
+salt and the exact proof, network and signing bond, with mode 0600 on Unix. Keep it private.
+reveal checks the supplied row and height before writing a public proof. Supplied rows are
+UNVERIFIED_REMOTE_STATE; the node authenticates its own row and clocks at acceptance.
+Outputs are never overwritten. Large objects have .chunkN parts beside --out, using the
+existing generic carriage; timely inclusion and retention are not established by this tool.
+Submit the listed carriers with `misaka palw submit-object --object PATH`. Review them first.
+Preparation grants no activation, admission, fidelity, reward eligibility or execution Final.

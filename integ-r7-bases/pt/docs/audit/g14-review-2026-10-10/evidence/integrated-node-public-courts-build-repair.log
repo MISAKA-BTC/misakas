@@ -1,0 +1,802 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `checkpoint_v1` and `restore_checkpoint_v1` are never used
+   --> consensus/core/src/palw_prefix_state_stream_v1.rs:197:19
+    |
+ 40 | impl PalwPrefixStateStreamV1 {
+    | ---------------------------- methods in this implementation
+...
+197 |     pub(crate) fn checkpoint_v1(&self) -> PalwPrefixStreamCheckpointV1 {
+    |                   ^^^^^^^^^^^^^
+...
+206 |     pub(crate) fn restore_checkpoint_v1(&mut self, cp: &PalwPrefixStreamCheckpointV1) -> Result<(), String> {
+    |                   ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused `Result` that must be used
+   --> consensus/core/src/palw_staged_court_fold_v1.rs:232:13
+    |
+232 |             b.da_rekey_v1(seed.claim, until, ctx.daa_score);
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+    |
+232 |             let _ = b.da_rekey_v1(seed.claim, until, ctx.daa_score);
+    |             +++++++
+
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/notify)
+warning: `kaspa-consensus-core` (lib) generated 3 warnings (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/mining/errors)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/client)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/protocol/p2p)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspa-evm)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/core)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/connectionmanager)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/mining)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/utxoindex)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspa-pq-validator-core)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/grpc/core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-exec)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/service)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-base0)
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/backend.rs:323:13
+    |
+323 |         let ctx_hash = job.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/backend.rs:1306:9
+     |
+1306 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2008:9
+     |
+2008 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2186:9
+     |
+2186 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2425:13
+     |
+2425 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2456:9
+     |
+2456 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2905:13
+     |
+2905 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3107:9
+     |
+3107 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3282:9
+     |
+3282 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3558:9
+     |
+3558 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4310:9
+     |
+4310 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4353:9
+     |
+4353 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4473:17
+     |
+4473 |             let ctx_hash = binding.job_context.context_hash();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4561:9
+     |
+4561 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4640:9
+     |
+4640 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:199:13
+    |
+199 |         let ctx_hash = ctx.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:437:9
+    |
+437 |     let ctx_hash = ctx.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/legs.rs:2056:9
+     |
+2056 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1043:9
+     |
+1043 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1351:9
+     |
+1351 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1734:9
+     |
+1734 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2078:14
+     |
+2078 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2215:14
+     |
+2215 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4336:13
+     |
+4336 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4386:9
+     |
+4386 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2917:13
+     |
+2917 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2967:9
+     |
+2967 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/segment_opening.rs:618:9
+    |
+618 |     let ctx_hash = job.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-lower)
+warning: value assigned to `out_node` is never read
+   --> misaka-palw-tir-lower/src/lower/cross.rs:194:24
+    |
+194 |     let mut out_node = None;
+    |                        ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-base0` (lib) generated 28 warnings (run `cargo fix --lib -p misaka-palw-base0` to apply 28 suggestions)
+   Compiling kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/grpc/client)
+   Compiling kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/wrpc/server)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-sdk)
+warning: unused doc comment
+   --> misaka-palw-sdk/src/tir_layout.rs:147:1
+    |
+147 | / /// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+148 | | /// has dropped any whose close is estimated past the carriage); for each, the history tile from
+149 | | /// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+150 | | /// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+...   |
+153 | | /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+154 | | /// the one an operator acts on.
+    | |_-------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `routed_ok` is assigned to, but never used
+   --> misaka-palw-sdk/src/preflight/model.rs:337:9
+    |
+337 |     let mut routed_ok = false;
+    |         ^^^^^^^^^^^^^
+    |
+    = note: consider using `_routed_ok` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:407:13
+    |
+407 |             routed_ok = false;
+    |             ^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:346:13
+    |
+346 |             routed_ok = true;
+    |             ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `misaka-palw-tir-lower` (lib) generated 1 warning
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus)
+warning: unused variable: `court`
+     --> consensus/src/pipeline/virtual_processor/processor.rs:14169:25
+      |
+14169 |                     let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+      |                         ^^^^^ help: if this is intentional, prefix it with an underscore: `_court`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `court`
+     --> consensus/src/pipeline/virtual_processor/processor.rs:14185:25
+      |
+14185 |                     let court = self.palw_court_params_v2.as_ref().ok_or("staged court needs V2 carrier parameters")?;
+      |                         ^^^^^ help: if this is intentional, prefix it with an underscore: `_court`
+
+warning: `misaka-palw-sdk` (lib) generated 4 warnings
+   Compiling kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/grpc/server)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-sketch)
+   Compiling kaspa-index-processor v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/processor)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-remote)
+warning: unused imports: `PalwClassAdmissionCarriageV2` and `PalwPwuRuleV2`
+  --> misaka-palw-remote/src/bundle.rs:43:103
+   |
+43 |     PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2,
+   |                                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     PalwConsensusObjectV2, PalwPwuRuleV2, palw_class_registration_message_v2,
+   |                            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-remote` (lib) generated 1 warning (run `cargo fix --lib -p misaka-palw-remote` to apply 1 suggestion)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-endpoints)
+   Compiling misaka-palw-constraint v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-constraint)
+   Compiling kaspa-eth-rpc v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/eth)
+   Compiling misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw)
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:5736:14
+     |
+5736 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:6173:21
+     |
+6173 |                 let ctx_hash = binding.job_context.context_hash();
+     |                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:8477:13
+     |
+8477 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-base0` (lib test) generated 31 warnings (28 duplicates) (run `cargo fix --lib -p misaka-palw-base0 --tests` to apply 3 suggestions)
+warning: `kaspa-consensus` (lib) generated 2 warnings (run `cargo fix --lib -p kaspa-consensus` to apply 2 suggestions)
+   Compiling kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspad)
+warning: unnecessary parentheses around closure body
+     --> kaspad/src/palw_panel.rs:16313:77
+      |
+16313 |                     let Ok((returned, checked)) = offload(backend, move |b| (b.verify_prefix_state_v1(&job, &ids))).await else {
+      |                                                                             ^                                    ^
+      |
+      = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+      |
+16313 -                     let Ok((returned, checked)) = offload(backend, move |b| (b.verify_prefix_state_v1(&job, &ids))).await else {
+16313 +                     let Ok((returned, checked)) = offload(backend, move |b| b.verify_prefix_state_v1(&job, &ids)).await else {
+      |
+
+warning: unused imports: `PALW_ATTEMPT_V2_VERSION` and `challenge_v2`
+  --> kaspad/src/palw_producer.rs:46:38
+   |
+46 |     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2,
+   |                                      ^^^^^^^^^^^^^^^^^^^^^^^
+47 |     PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2, class_ticket_v3,
+   |                                           ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `network_domain`
+   --> kaspad/src/palw_panel/gen_court.rs:273:9
+    |
+273 |         network_domain: Hash64,
+    |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_network_domain`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: type `PalwImproveTamperV1` is more private than the item `palw_panel::PalwPanelConfig::improve_tamper`
+    --> kaspad/src/palw_panel.rs:4041:5
+     |
+4041 |     pub improve_tamper: Option<crate::palw_improve_watch::PalwImproveTamperV1>,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ field `palw_panel::PalwPanelConfig::improve_tamper` is reachable at visibility `pub`
+     |
+note: but type `PalwImproveTamperV1` is only usable at visibility `pub(crate)`
+    --> kaspad/src/palw_improve_watch.rs:321:1
+     |
+ 321 | pub(crate) struct PalwImproveTamperV1 {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: `#[warn(private_interfaces)]` on by default
+
+warning: field `0` is never read
+   --> kaspad/src/palw_fraud_filer.rs:218:13
+    |
+218 |     Settled(PalwFilerPhaseV1),
+    |     ------- ^^^^^^^^^^^^^^^^
+    |     |
+    |     field in this variant
+    |
+    = note: `PalwFraudFilerVerdictV1` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+help: consider changing the field to be of unit type to suppress this warning while preserving the field numbering, or remove the field
+    |
+218 -     Settled(PalwFilerPhaseV1),
+218 +     Settled(()),
+    |
+
+warning: method `last_sealed_round` is never used
+   --> kaspad/src/palw_panel/vertex.rs:115:19
+    |
+109 | impl PalwVertexBookV1 {
+    | --------------------- method in this implementation
+...
+115 |     pub(crate) fn last_sealed_round(&self) -> Option<u64> {
+    |                   ^^^^^^^^^^^^^^^^^
+
+warning: method `totals_v1` is never used
+   --> kaspad/src/palw_panel/sketch.rs:172:19
+    |
+141 | impl PalwSketchServiceV1 {
+    | ------------------------ method in this implementation
+...
+172 |     pub(crate) fn totals_v1(&self) -> TirMirrorTotalsV1 {
+    |                   ^^^^^^^^^
+
+warning: field `claim` is never read
+  --> kaspad/src/palw_panel/held_chunks.rs:58:9
+   |
+57 | pub(super) struct PalwHeldChunksV1 {
+   |                   ---------------- field in this struct
+58 |     pub claim: Hash64,
+   |         ^^^^^
+   |
+   = note: `PalwHeldChunksV1` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis
+
+error: linking with `cc` failed: exit status: 1
+  |
+  = note:  "cc" "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/rustcqxh7eA/symbols.o" "<17 object files omitted>" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libmisaka_endpoints-85771266cdcb55ed.rlib" "<sysroot>/lib/rustlib/aarch64-apple-darwin/lib/{libtest-*,libgetopts-*,librustc_std_workspace_std-*}.rlib" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/{libmisaka_palw_tir_sketch-392ded24cf9819d2,libmisaka_palw_remote-a88bbcae532c8036,libmisaka_palw_sdk-935f17c5603b19ca,libmisaka_palw_tir_ref2-6c0885d303b18937,libkaspa_pq_validator_core-633fce11f847b55a,libmisaka_palw_tir_lower-915a0ba5141dd324,libmisaka_palw_tir_exec-f205ac3427b91ac9,libmisaka_palw-95e85d3bca20af26,libmisaka_palw_host_security-ffb2189eed94af3f,libkaspa_eth_rpc-afaca14a2bc202d8,libkaspa_index_processor-2f5c78623f217224,libkaspa_consensus-d981a44d112e3fdd,libmisaka_palw_base0-400b54e04df29775,libmisaka_palw_tir_artifact-8e0ff4d41a1946d3,libunicode_properties-5854d12b2b51a36e,libunicode_normalization-3a28a636fbc275fd,libtinyvec-e6a0ec1fc68fd58a,libtinyvec_macros-8dadce42943dc051,libcrossbeam_channel-c60481e8fb8ff554,libkaspa_grpc_server-93a60dac5b4fe909,libtoml-6eb36f78a0aa10ce,libtoml_edit-94200f6758a1b841,libserde_spanned-275f04677a5ef1f8,libwinnow-6a383ea90e9a1c73,libtoml_datetime-c9972809a89d5161,libserde_with-173a3aff25eebecd,libkaspa_wrpc_server,libkaspa_rpc_service-a0544ed4032c3b7f,libkaspa_utxoindex-a257c171771b0007,libkaspa_perf_monitor-f5a3fe92d2f9a1cd,libportable_atomic-3f113301caaf9014,libworkflow_perf_monitor-a1426ceaa1f70e9d,libmach-398ef086967b97cd,libkaspa_p2p_flows-62b19d2db58def47,libkaspa_pow-2cab161f344f4a94,libkaspa_p2p_mining-724ee956d0c11045,libkaspa_connectionmanager-6c69371b0f11341e,libduration_string-d6d2e2e39120eb81,libkaspa_addressmanager-a5bc4938b6e375ec,liblocal_ip_address-5568af5f72020d8a,libkaspa_database-7f90988bbfbb1ee2,libbincode-87432d3673ebeb16,libtempfile-8aaa15647545d460,librocksdb-21e2941298c3bddd,liblibrocksdb_sys-dc9410e6960b5e89,libzstd_sys-25406b78a9b75815,liblz4_sys-73d1a0a72a7f3692,liblibz_sys-5fff69435f1de7f6,libbzip2_sys-43b944f6c9db193e,libigd_next-630a78984aec2dc2,libattohttpc-8ea3b4f6c2702d06,libxmltree-016f322d17f2d7cd,libxml-bfe20270fe903c41,liburl-df02b88a78753951,libidna-b3ddecc53252bfc8,libutf8_iter-61ca497e0d5f4ddc,libidna_adapter-818a1fdf0ee9da3d,libicu_properties-c819a04335851bf5,libicu_properties_data-c2ec432d2e8702dc,libicu_normalizer-ae95f3316df985a0,libicu_normalizer_data-b2485254ea7ba4b3,libicu_collections-dfa9a6aec9158798,libpotential_utf-d79c937cab3cc013,libicu_provider-c608c3b98222481d,libicu_locale_core-47dcd91d8958ae40,libtinystr-4f967e885e3338bb,liblitemap-64419988672ee6c6,libwriteable-6d0b6a6ed4fbe8f6,libzerovec-1e2203d0d8f1f3a6,libzerotrie-08158aac843591b9,libyoke-ba2686312291e01a,libstable_deref_trait-7bdcf383451ba1cc,libzerofrom-a9797287ba7e93b0,libform_urlencoded-13373603e99abbf2,libkaspa_p2p_lib-0493306220170549,libseqlock-52ab68ea39bad361,libkaspa_mining-bcc04463323383ed,libkaspa_evm-9eb4acc2b392a651,liballoy_consensus-c9bcdd41399ace70,liballoy_eips-3e443a27f543d95a,liballoy_serde-7b535c86c053f7b7,liballoy_eip7702-7a92d8ca2b58a1d1,liballoy_trie-83a73b3402874c24,libderive_more-fd10699832eaa5fb,libnybbles-e0a3333bfcac9629,librevm-a80cd766a957642b,librevm_interpreter-554b35094abc79f8,librevm_precompile-43fd10cfe7994fcc,libripemd-5c67f477eb56d5a2,libaurora_engine_modexp-951c56d29470bc1f,libsubstrate_bn-d8de6b4bab2ebd4a,librevm_primitives-5bb46829368e455c,liballoy_eip2930-a22f83915df2fca3,liballoy_eip7702-e3a31f63c7af51c7,liballoy_primitives-d78c95f7653a6dc2,libhashbrown-ff406f807855648f,libfoldhash-7de957408075b926,libconst_hex-e6c57314c4f01cf2,libk256-c10099ead9ff7ad8,libecdsa-9d815e7d09c00426,librfc6979-1a7ae8f24da823d3,libhmac-ceaf4ec10d070724,libspki-7c76e0e3a75f69c0,libsignature-318eca700d9dad33,libelliptic_curve-6f31bad2fc79ba8a,libsec1-47302f1b8dfbab8e,libder-0d1b7297a1e0d6dc,libcrypto_bigint-dc537aaa4ad1c592,libbase16ct-7393854b9fa86cc3,libgroup-2d33051bd2fb9c4a,libff-bdce6d17adfa992c,libruint-1964bbdefbad1e5e,liballoy_rlp-cfcea7f38a8cdf90,libtiny_keccak-342e63ee8ed3bc58,libcrunchy-d7dee5cee8754f3e,libbitvec-df860ed877300f8b,libwyz-c591363f3230272c,libtap-ab26845938aaa3ca,libradium-5b6f9c94ee36b902,libfunty-320d8806562c8e68,libdyn_clone-bb1fecdf0df307e2,libsweep_bptree-da9f8434a974d3b8,libkaspa_consensusmanager-cb4448f34a9e031b,libworkflow_rpc-f06770688a751a55,libworkflow_websocket-53d2be03457c158c,libworkflow_task-e28cac6cd79a6719,libtokio_tungstenite-51927793f5be6489,libwebpki_roots-306a432472dd3ab4,libtungstenite-2770fa1e471baa0c,libdata_encoding-59ac5a06912731c9,libutf8-3f72e3e0f9d11233,libsha1-6c95fdd2810e0307,libdowncast_rs-47d00b6385fdc0b1,libkaspa_grpc_client-1e3d470063dbd140,libasync_stream-95c58514784c7e93,libregex-2b2fe1dab9184d85,libregex_automata-fd32fffe223340e8,libaho_corasick-28a3cb5169f6c3e2,libregex_syntax-524a9e008abd2d58,libkaspa_utils_tower-a2ebe809f3ef4edb,libtower_http-d72727b0a81337dd,libkaspa_grpc_core-130bf222c7bf6437,libtonic_prost-f6b460f618b9dc70,libprost-39722d601a3c3948,libtonic-41ba8933174a29b2,libwebpki_roots-a11993d3cdc0d2b7,libhyper_timeout-bf20d6a6f56ecf23,libtokio_rustls-d3f2a550b4bd1ce4,librustls-ff8f3d18178d663a,libwebpki-076eb27cd0e5fb94,libring-9c92ace76de11e1e,libuntrusted-6b0354ff3edb18c4,librustls_pki_types-d8a07c76ca46109f,libhyper_util-20fa287b7d232351,libsocket2-1fe7186456dd8185,libhyper-e28a5a2e874f031d,libwant-61468987996f7597,libtry_lock-fa7b885c3fa3804d,libhttparse-6466fd00b45d2367,libh2-11ddfe5350a0ce4c,libhttpdate-d3d938d9ce7cacee,libaxum-a0685c90483e70ac,libpercent_encoding-d36577d6fdcfeba6,libmatchit-693777f91030e802,libaxum_core-701a2314816e3444,libmime-3f125be09f584992,libtower-49112f8f0286a290,libtokio_util-dcfe3041b13fca83,libtower_layer-bf470bb9a123643c,libbase64-5d57c3489a1b1f3f,libpin_project-beb8f9ab49f2a4a3,libsync_wrapper-df997bd092657a4f,libtower_service-4cdd26a04149612e,libtokio_stream-a47530c9d322ea97,libhttp_body_util-f5359024a18dad87,libhttp_body-e76bf9049a519da4,libhttp-e276417282b57255,libkaspa_rpc_core-ec5ef992c60154cd,libkaspa_mining_errors-b8895e8c105c391d,libkaspa_consensus_client-5b080aeb1733ace0,libhex-0761a2a80366b716,libkaspa_index_core-331000b128274a6c,libkaspa_consensus_notify-4cf89549b2f5214e,libkaspa_notify-8a1e5e7b9c31f989,libkaspa_txscript-f8729880b23d7f9e,libkaspa_consensus_core-a493ac670f106111,libargon2-4e8cf12bf89b0522,libblake2-68aa64f736eb5e7a,libpassword_hash-bd8e5c9aabc01e3f,libbase64ct-c6c216deed9341a0,libkaspa_core-def134700155d2f6,libctrlc-e15dfe2d7649a408,libnix-6c2cca1e96e82667,liblog4rs-f2349bae9cfa3184,liblog_mdc-39d2de55e6b4bd7a,libthread_id-c27354b6583592fa,libhumantime-930540a17a3c694b,libserde_yaml-3510b2155abdd5f7,libindexmap-f07bf69441f2525a,libequivalent-408a986d0f40cbbe,libhashbrown-97eba766c5bbcf38,libunsafe_libyaml-776ecd58e5cb60ef,libunicode_segmentation-967e0a79ae1d5dcd,libtypemap_ors-ac5725b760f0d059,libunsafe_any_ors-3d5de0a3441a9e75,libdestructure_traitobject-65a6f30df2d64225,libflate2-7dd090b92cbe2b35,libminiz_oxide-1c701c567389f4d6,libadler2-45f1fb0e57a9542e,libcrc32fast-fde4a4ae289738d8,libanyhow-6f280c5f7b47f341,libderive_more-3192e6b6a73b3807,libserde_value-62e8b0751e49fa61,libordered_float-5531917d6dac29dd,libfnv-7c1a0ae1a9224d7c,liblibcrux_ml_dsa-0b2424abe2d920a7,liblibcrux_platform-cfcfcd703df6a4de,liblibcrux_sha3-c1d83aa71e840430,liblibcrux_traits-4256ce1cc4847f4f,librand-fdfccde3444a55c3,libgetrandom-5107a1e3f07ffb68,libchacha20-2a5970586575e52c,librand_core-d1e5e9082f5127ba,liblibcrux_secrets-76927a11264ca96e,libhax_lib-33b0312fa9122995,liblibcrux_intrinsics-fc9cc91e78693513,libmisaka_palw_kernel-e7c6d4a21dfc9e49,libmisaka_palw_gen-118507edd6ce628e,libmisaka_palw_tir-29a16fe4f66762ae,libsha3-8a01ef3baf34f808,libkaspa_txscript_errors-438006ea1c03a907,libkaspa_addresses-f16fc4082c54ea1c,libthiserror-54c2bdc73e90d3b7,libkaspa_math-4d8e04aac3ceca91,libmalachite_nz-290e9fa939925fb0,libmalachite_base-72978760fe391895,libryu-19dda382689b4383,liblibm-895db2ca8f6205fc,libitertools-1b03c6f8dcf222a6,libhashbrown-6487256f70c227d8,libworkflow_serializer-423155ae33eae74a,libahash-dcb9aa5addc140ad,libkaspa_muhash-e4ec4524d37c077e,libmisaka_palw_panel-46884c91be3b2bc1,libmisaka_palw_challenge-5c8d5f89e71adec9,libkaspa_hashes-192b24253d4580bf,libkeccak-3f2de81d14d3b06c,libcpufeatures-8c3f20d266c99dc2,libblake2b_simd-d6fff89b5268a89e,libconstant_time_eq-24a747636627aab0,libarrayvec-ee4fda8a7c7eeaf7,libarrayref-f47ad303a7d03610,libworkflow_wasm-beabd09dd30a28d7,libworkflow_panic_hook-2b9c23dd9a882ea1,libworkflow_core-849060dea3b7e964,libdirs-114c4b4a7afd0706,libdirs_sys-2d0f0f0804362041,liboption_ext-97d4bf1338b842f3,libserde_wasm_bindgen-eac19e05dba99d86,librand-012a8bce667d5a20,librand_chacha-c740abf13ab16a86,librand_core-a6f4560392285f1d,libgetrandom-41a6020fb50cd385,libbs58-5d215a294c1e4887,libchrono-adb0aefe6140c178,libnum_traits-762099db4d8ca8ad,libiana_time_zone-f1a06442ee8e1c75,libworkflow_log-17fe0d7e895496a9,libhexplay-5f4113a3313b3ba0,libtermcolor-2a85bfdaaadb29c9,libatty-9fcb0803e743830a,libdowncast-1541dc24efd1fef9,libconsole-1025b83050ae27c2,libunicode_width-701a1137cd9ec3dd,liblazy_static-da4da5457daaa969,libspin-d10219f8f38c057b,libtokio-d06aba818ef61c3a,libsignal_hook_registry-e665fecda978d158,libsocket2-83482201abc046fc,libbytes-d4e047ce00a81cef,libmio-17aa6da73b171ce5,libasync_std-4786df055dff5589,libasync_global_executor-35d926521ee975ee,libblocking-ae557ef7142755ae,libpiper-dcb71f1df0c39aa4,libatomic_waker-b00b8c6ed7a28185,libasync_executor-4ad04d521fbdad2f,libasync_task-cbc489d380b2a1d6,libasync_io-beff1eafbbd2ab20,libpolling-5f2b671b3e01f3d8,libtracing-931096ac11aa17e4,libtracing_core-f220b690e9992e47,librustix-0e925f6ffdf0f5f2,liberrno-b3966c3d8a493cc3,libfutures_lite-9c5692a96f679c5a,libfastrand-721b09d8565ad12d,libasync_channel-43498cb8ef19e374,libasync_lock-70a7e8e84c3a1f66,libkv_log_macro-16cb639da36515f7,liblog-6c18d700842fc47f,libvalue_bag-c4bd87efe50c6654,libweb_sys-e03adac669ff1401,libinstant-8e6421ca1cbb18ba,libfutures-69abac0995ef33fe,libfutures_executor-c032b6ff82fe97d4,libfutures_util-2da33db80a1c8485,libfutures_io-38236d61b778aa8c,libslab-6e4339ec1178ba48,libfutures_channel-e86a71e2ef0a31bb,libfutures_sink-18b0577532018ae5,libfutures_task-7f00f04fdb6d6354,libpin_utils-5acf1026789e9a52,libjs_sys-caad3a30e585cc54,libkaspa_utils-ce13a4968ebcaa2a,libmac_address-58caa167c1360494,libnix-9e7dd232bcf5d273,libmemoffset-fdc4410c955f4636,libbitflags-aa4c44d965e2e44d,libnum_cpus-3613865ec2a576ba,libsysinfo-2d3bf99449c8a530,libcore_foundation_sys-16810fe41fbf79a0,librayon-bdaa6f2ea790d334,librayon_core-4fecad03ac595216,libcrossbeam_deque-d7f93aff2c654a40,libcrossbeam_epoch-80276909582574fd,librlimit-199106358ffc4578,libfaster_hex-f88da46346f289a2,libsha2-92b4b13c352815bb,libdigest-4ea56fbb101a32a4,libsubtle-f369c5835628e310,libconst_oid-eb16f867bbc7373d,libblock_buffer-7d7c899dd4d3d08e,libcrypto_common-51b136aad0d61e01,libgeneric_array-21b9d1e4453da1cd,libtypenum-5141b7aa405d6672,libzeroize-2bd303ccbf5712ad,libthiserror-4f4f064853cd7160,libtriggered-59c56f68b5a280d3,libevent_listener-e1a5cd757363b332,libwasm_bindgen-c729f65cfee9f414,libserde_json-8a3ba0fe7fdf3b03,libmemchr-4783d14dd8e34994,libzmij-219fa6ad04f553e8,libitoa-0213e1dbecfc2670,libonce_cell-5a540eb45790a9ca,libuuid-5088184f178304f5,librand-bc6be474bb131d7e,librand_chacha-054be41ad9204f5a,libppv_lite86-a7ab18843c0e6d1a,libzerocopy-d4e4ae220c77e121,libbyteorder-dd2c0bf6c60dee13,librand_core-cc0de6a3b122fa6a,libgetrandom-9918ea3272f6b78c,libipnet-c7cdadce880337e0,libparking_lot-8c67790f0062d9bf,libparking_lot_core-75ddf54a773aaa76,liblibc-71504236d8c425e1,libcfg_if-dc312db76e4a5beb,liblock_api-1322133c45617cf0,libscopeguard-a4b16b7bab0b8d05,libitertools-61e21bfbd0b3f88d,libeither-eee1782781165914,libsmallvec-a57484b29529cb23,libarc_swap-251a691c4c034a53,libasync_channel-6a30ec1bb9297a36,libfutures_core-0de3b64028182eaa,libevent_listener_strategy-addc25ed3a72866e,libevent_listener-67caef43eee2ce99,libparking-9dba4cbdd8c9b13b,libpin_project_lite-e8752846174cfbe1,libconcurrent_queue-1e904bfa3b3e119e,libcrossbeam_utils-9ab9b3ab08423e9d,libborsh-e82fef55f5aafded,libserde-f41472660e5a361e,libserde_core-2fd935272251db83,libclap-4231402993dbff06,libclap_builder-387f668bfb8907b6,libstrsim-a076c49d32a61f1e,libanstream-f502b86b918d6dff,libanstyle_query-3aab2fb0dceaea36,libis_terminal_polyfill-f8138b7d71e5f41d,libcolorchoice-9fba19c172c1119d,libanstyle_parse-65293dac6ec90ffc,libutf8parse-e3564df468e33e85,libclap_lex-8b3b3b58c625c455,libanstyle-ecfd131255ba0c89}.rlib" "<sysroot>/lib/rustlib/aarch64-apple-darwin/lib/{libstd-*,libpanic_unwind-*,libobject-*,libmemchr-*,libaddr2line-*,libgimli-*,libcfg_if-*,librustc_demangle-*,libstd_detect-*,libhashbrown-*,librustc_std_workspace_alloc-*,libminiz_oxide-*,libadler2-*,libunwind-*,liblibc-*,librustc_std_workspace_core-*,liballoc-*,libcore-*,libcompiler_builtins-*}.rlib" "-lc++" "-framework" "CoreFoundation" "-lobjc" "-framework" "IOKit" "-framework" "CoreFoundation" "-liconv" "-lSystem" "-lc" "-lm" "-arch" "arm64" "-mmacosx-version-min=11.0.0" "-L" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/build/librocksdb-sys-08f40f417ec4d783/out" "-L" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/build/bzip2-sys-0d3bfd2b3cf822a7/out/lib" "-L" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/build/libz-sys-692be7e06e95a99a/out/lib" "-L" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/build/lz4-sys-9c63dfd0cb5750ae/out" "-L" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/build/zstd-sys-9828d46c0a14aa19/out" "-L" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/build/libmimalloc-sys-4bc66ddc38acad02/out" "-L" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/build/ring-91f5f7558cdeaf2c/out" "-o" "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspad_lib-1bdcc9845a9fb2d3" "-Wl,-dead_strip" "-nodefaultlibs"
+  = note: some arguments are omitted. use `--verbose` to show all linker arguments
+  = note: ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[4](40a8ecc0aa07be2f-cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[5](40a8ecc0aa07be2f-cache_entry_roles.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[6](40a8ecc0aa07be2f-cache_key.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[7](40a8ecc0aa07be2f-cache_helpers.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[8](40a8ecc0aa07be2f-cache_reservation_manager.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[9](40a8ecc0aa07be2f-charged_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[10](40a8ecc0aa07be2f-clock_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[11](40a8ecc0aa07be2f-lru_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[12](40a8ecc0aa07be2f-compressed_secondary_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[14](40a8ecc0aa07be2f-secondary_cache_adapter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[15](40a8ecc0aa07be2f-sharded_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[16](40a8ecc0aa07be2f-tiered_secondary_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[17](3ac6d140080a8125-arena_wrapped_db_iter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[18](3ac6d140080a8125-attribute_group_iterator_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[19](644b6a24ae2ff5c1-blob_contents.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[20](644b6a24ae2ff5c1-blob_fetcher.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[21](644b6a24ae2ff5c1-blob_file_addition.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[22](644b6a24ae2ff5c1-blob_file_builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[23](644b6a24ae2ff5c1-blob_file_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[24](644b6a24ae2ff5c1-blob_file_garbage.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[25](644b6a24ae2ff5c1-blob_file_meta.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[26](644b6a24ae2ff5c1-blob_file_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[27](644b6a24ae2ff5c1-blob_garbage_meter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[28](644b6a24ae2ff5c1-blob_log_format.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[30](644b6a24ae2ff5c1-blob_log_writer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[31](644b6a24ae2ff5c1-blob_source.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[32](644b6a24ae2ff5c1-prefetch_buffer_collection.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[33](3ac6d140080a8125-builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[34](3ac6d140080a8125-c.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[35](3ac6d140080a8125-coalescing_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[36](3ac6d140080a8125-column_family.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[37](d2c62978fd411bee-compaction.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[38](d2c62978fd411bee-compaction_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[39](d2c62978fd411bee-compaction_job.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[40](d2c62978fd411bee-compaction_picker.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[41](d2c62978fd411bee-compaction_picker_fifo.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[42](d2c62978fd411bee-compaction_picker_level.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[43](d2c62978fd411bee-compaction_picker_universal.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[44](d2c62978fd411bee-compaction_service_job.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[45](d2c62978fd411bee-compaction_state.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[46](d2c62978fd411bee-compaction_outputs.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[47](d2c62978fd411bee-sst_partitioner.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[48](d2c62978fd411bee-subcompaction_state.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[49](3ac6d140080a8125-convenience.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[50](3ac6d140080a8125-db_filesnapshot.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[51](fb8935d9b2e862b1-compacted_db_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[52](fb8935d9b2e862b1-db_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[53](fb8935d9b2e862b1-db_impl_compaction_flush.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[55](fb8935d9b2e862b1-db_impl_experimental.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[56](fb8935d9b2e862b1-db_impl_files.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[58](fb8935d9b2e862b1-db_impl_open.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[59](fb8935d9b2e862b1-db_impl_readonly.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[60](fb8935d9b2e862b1-db_impl_secondary.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[61](fb8935d9b2e862b1-db_impl_write.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[62](3ac6d140080a8125-db_info_dumper.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[63](3ac6d140080a8125-db_iter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[64](3ac6d140080a8125-dbformat.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[65](3ac6d140080a8125-error_handler.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[66](3ac6d140080a8125-event_helpers.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[67](3ac6d140080a8125-experimental.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[68](3ac6d140080a8125-external_sst_file_ingestion_job.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[69](3ac6d140080a8125-file_indexer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[70](3ac6d140080a8125-flush_job.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[71](3ac6d140080a8125-flush_scheduler.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[72](3ac6d140080a8125-forward_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[73](3ac6d140080a8125-import_column_family_job.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[74](3ac6d140080a8125-internal_stats.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[75](3ac6d140080a8125-logs_with_prep_tracker.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[76](3ac6d140080a8125-log_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[77](3ac6d140080a8125-log_writer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[78](3ac6d140080a8125-malloc_stats.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[79](3ac6d140080a8125-manifest_ops.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[80](3ac6d140080a8125-memtable.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[81](3ac6d140080a8125-memtable_list.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[82](3ac6d140080a8125-merge_helper.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[83](3ac6d140080a8125-merge_operator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[84](3ac6d140080a8125-output_validator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[85](3ac6d140080a8125-periodic_task_scheduler.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[86](3ac6d140080a8125-range_del_aggregator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[87](3ac6d140080a8125-range_tombstone_fragmenter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[88](3ac6d140080a8125-repair.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[89](3ac6d140080a8125-seqno_to_time_mapping.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[90](3ac6d140080a8125-snapshot_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[91](3ac6d140080a8125-table_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[92](3ac6d140080a8125-table_properties_collector.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[93](3ac6d140080a8125-transaction_log_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[94](3ac6d140080a8125-trim_history_scheduler.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[95](3ac6d140080a8125-version_builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[96](3ac6d140080a8125-version_edit.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[97](3ac6d140080a8125-version_edit_handler.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[98](3ac6d140080a8125-version_set.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[99](3ac6d140080a8125-wal_edit.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[100](3ac6d140080a8125-wal_manager.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[101](fe29f3d3b3c15862-wide_column_serialization.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[102](fe29f3d3b3c15862-wide_columns.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[103](fe29f3d3b3c15862-wide_columns_helper.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[104](3ac6d140080a8125-write_batch.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[105](3ac6d140080a8125-write_batch_base.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[106](3ac6d140080a8125-write_controller.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[107](3ac6d140080a8125-write_stall_stats.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[108](3ac6d140080a8125-write_thread.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[109](676314c7dcdc695c-composite_env.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[110](676314c7dcdc695c-env.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[111](676314c7dcdc695c-env_chroot.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[112](676314c7dcdc695c-env_encryption.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[113](676314c7dcdc695c-env_posix.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[114](676314c7dcdc695c-file_system.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[116](676314c7dcdc695c-fs_posix.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[117](676314c7dcdc695c-fs_remap.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[118](676314c7dcdc695c-file_system_tracer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[119](676314c7dcdc695c-io_posix.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[120](676314c7dcdc695c-mock_env.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[121](676314c7dcdc695c-unique_id_gen.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[122](da3ab92499883738-delete_scheduler.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[123](da3ab92499883738-file_prefetch_buffer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[124](da3ab92499883738-file_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[125](da3ab92499883738-filename.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[126](da3ab92499883738-line_file_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[127](da3ab92499883738-random_access_file_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[128](da3ab92499883738-read_write_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[130](da3ab92499883738-sequence_file_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[131](da3ab92499883738-sst_file_manager_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[132](da3ab92499883738-writable_file_writer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[133](70011f31bdb5bbb8-auto_roll_logger.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[134](70011f31bdb5bbb8-event_logger.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[135](70011f31bdb5bbb8-log_buffer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[136](3f656f9377396f29-arena.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[137](3f656f9377396f29-concurrent_arena.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[138](3f656f9377396f29-jemalloc_nodump_allocator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[141](9b96b3b3b98b387b-alloc_tracker.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[142](9b96b3b3b98b387b-hash_linklist_rep.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[143](9b96b3b3b98b387b-hash_skiplist_rep.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[144](9b96b3b3b98b387b-skiplistrep.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[145](9b96b3b3b98b387b-vectorrep.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[146](9b96b3b3b98b387b-wbwi_memtable.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[147](9b96b3b3b98b387b-write_buffer_manager.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[148](8d9638b5dd27dacb-histogram.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[150](8d9638b5dd27dacb-in_memory_stats_history.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[151](8d9638b5dd27dacb-instrumented_mutex.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[152](8d9638b5dd27dacb-iostats_context.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[153](8d9638b5dd27dacb-perf_context.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[154](8d9638b5dd27dacb-perf_level.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[155](8d9638b5dd27dacb-persistent_stats_history.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[156](8d9638b5dd27dacb-statistics.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[158](8d9638b5dd27dacb-thread_status_updater.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[160](8d9638b5dd27dacb-thread_status_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[162](94ad6eef41e52848-cf_options.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[163](94ad6eef41e52848-configurable.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[164](94ad6eef41e52848-customizable.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[165](94ad6eef41e52848-db_options.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[166](94ad6eef41e52848-offpeak_time_info.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[167](94ad6eef41e52848-options.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[168](94ad6eef41e52848-options_helper.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[169](94ad6eef41e52848-options_parser.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[170](1938569c7fa5575d-mmap.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[171](1938569c7fa5575d-port_posix.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[174](053adb4869b9269c-binary_search_index_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[175](053adb4869b9269c-block.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[176](053adb4869b9269c-block_based_table_builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[177](053adb4869b9269c-block_based_table_factory.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[178](053adb4869b9269c-block_based_table_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[179](053adb4869b9269c-block_based_table_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[180](053adb4869b9269c-block_builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[181](053adb4869b9269c-block_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[182](053adb4869b9269c-block_prefetcher.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[183](053adb4869b9269c-block_prefix_index.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[184](053adb4869b9269c-data_block_hash_index.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[185](053adb4869b9269c-data_block_footer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[186](053adb4869b9269c-filter_block_reader_common.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[187](053adb4869b9269c-filter_policy.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[188](053adb4869b9269c-flush_block_policy.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[189](053adb4869b9269c-full_filter_block.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[190](053adb4869b9269c-hash_index_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[191](053adb4869b9269c-index_builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[192](053adb4869b9269c-index_reader_common.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[193](053adb4869b9269c-parsed_full_filter_block.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[194](053adb4869b9269c-partitioned_filter_block.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[195](053adb4869b9269c-partitioned_index_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[196](053adb4869b9269c-partitioned_index_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[197](053adb4869b9269c-reader_common.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[198](053adb4869b9269c-uncompression_dict_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[199](de3a59d2b327cf3e-block_fetcher.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[200](c86869a0439ab749-cuckoo_table_builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[201](c86869a0439ab749-cuckoo_table_factory.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[202](c86869a0439ab749-cuckoo_table_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[204](de3a59d2b327cf3e-format.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[205](de3a59d2b327cf3e-get_context.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[206](de3a59d2b327cf3e-iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[207](de3a59d2b327cf3e-merging_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[208](de3a59d2b327cf3e-compaction_merging_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[209](de3a59d2b327cf3e-meta_blocks.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[210](de3a59d2b327cf3e-persistent_cache_helper.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[211](96179ac854910877-plain_table_bloom.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[212](96179ac854910877-plain_table_builder.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[213](96179ac854910877-plain_table_factory.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[214](96179ac854910877-plain_table_index.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[215](96179ac854910877-plain_table_key_coding.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[216](96179ac854910877-plain_table_reader.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[217](de3a59d2b327cf3e-sst_file_dumper.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[219](de3a59d2b327cf3e-sst_file_writer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[220](de3a59d2b327cf3e-table_factory.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[221](de3a59d2b327cf3e-table_properties.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[222](de3a59d2b327cf3e-two_level_iterator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[223](de3a59d2b327cf3e-unique_id.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[228](6c7cb00c5af69c91-trace_record_handler.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[229](6c7cb00c5af69c91-trace_record_result.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[230](6c7cb00c5af69c91-trace_record.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[231](6c7cb00c5af69c91-trace_replay.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[232](6c7cb00c5af69c91-block_cache_tracer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[233](6c7cb00c5af69c91-io_tracer.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[235](3b2529d97c048fcf-cleanable.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[236](3b2529d97c048fcf-coding.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[237](3b2529d97c048fcf-compaction_job_stats_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[238](3b2529d97c048fcf-comparator.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[239](3b2529d97c048fcf-compression.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[241](3b2529d97c048fcf-compression_context_cache.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[242](3b2529d97c048fcf-concurrent_task_limiter_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[243](3b2529d97c048fcf-crc32c.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[244](3b2529d97c048fcf-crc32c_arm64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[245](3b2529d97c048fcf-data_structure.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[246](3b2529d97c048fcf-dynamic_bloom.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[247](3b2529d97c048fcf-hash.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[248](3b2529d97c048fcf-murmurhash.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[249](3b2529d97c048fcf-random.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[250](3b2529d97c048fcf-rate_limiter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[251](3b2529d97c048fcf-ribbon_config.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[252](3b2529d97c048fcf-slice.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[253](3b2529d97c048fcf-file_checksum_helper.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[255](3b2529d97c048fcf-status.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[256](3b2529d97c048fcf-stderr_logger.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[257](3b2529d97c048fcf-string_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[258](3b2529d97c048fcf-thread_local.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[259](3b2529d97c048fcf-threadpool_imp.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[260](3b2529d97c048fcf-udt_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[261](3b2529d97c048fcf-write_batch_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[262](3b2529d97c048fcf-xxhash.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[264](680ea5bfcda36bad-backup_engine.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[275](bfe5d317b023d6cf-checkpoint_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[276](2a4ad7c17d803644-compaction_filters.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[277](e6fb36093b6c7f9c-remove_emptyvalue_compactionfilter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[279](2a4ad7c17d803644-counted_fs.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[282](2a4ad7c17d803644-env_timed.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[287](d11b32dac0d420e2-memory_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[288](2a4ad7c17d803644-merge_operators.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[289](95142990c9f32b11-max.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[290](95142990c9f32b11-put.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[291](95142990c9f32b11-sortlist.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[292](295e51bc886f8746-stringappend.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[293](295e51bc886f8746-stringappend2.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[294](95142990c9f32b11-uint64add.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[295](95142990c9f32b11-bytesxor.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[296](2a4ad7c17d803644-object_registry.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[298](344b77162fb042a9-options_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[308](00f98e2cfb02dfa2-compact_for_tiering_collector.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[309](00f98e2cfb02dfa2-compact_on_deletion_collector.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[311](1be370c996a69411-replayer_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[312](81b322a025988031-lock_manager.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[313](43e3cfe3ab3ed8dd-point_lock_tracker.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[314](43e3cfe3ab3ed8dd-point_lock_manager.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[315](de7823aa5b770310-optimistic_transaction.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[316](de7823aa5b770310-optimistic_transaction_db_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[317](de7823aa5b770310-pessimistic_transaction.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[318](de7823aa5b770310-pessimistic_transaction_db.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[319](de7823aa5b770310-snapshot_checker.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[320](de7823aa5b770310-transaction_base.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[321](de7823aa5b770310-transaction_db_mutex_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[322](de7823aa5b770310-transaction_util.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[323](de7823aa5b770310-write_prepared_txn.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[324](de7823aa5b770310-write_prepared_txn_db.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[325](de7823aa5b770310-write_unprepared_txn.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[326](de7823aa5b770310-write_unprepared_txn_db.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[327](24bbbf8ebb94fff2-db_ttl_impl.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[329](2a4ad7c17d803644-wal_filter.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[330](b37e6271521afe11-write_batch_with_index.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[331](b37e6271521afe11-write_batch_with_index_internal.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[332](a1edd97dd51cd48d-build_version.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[333](f7d414e3d26e1ee6-snappy.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibrocksdb_sys-dc9410e6960b5e89.rlib[334](f7d414e3d26e1ee6-snappy-sinksource.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[5](44ff4c55aa9e5133-entropy_common.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[6](44ff4c55aa9e5133-error_private.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[7](44ff4c55aa9e5133-fse_decompress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[8](44ff4c55aa9e5133-pool.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[10](44ff4c55aa9e5133-zstd_common.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[11](fb80479a5fb81f6a-fse_compress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[12](fb80479a5fb81f6a-hist.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[13](fb80479a5fb81f6a-huf_compress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[14](fb80479a5fb81f6a-zstd_compress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[15](fb80479a5fb81f6a-zstd_compress_literals.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[16](fb80479a5fb81f6a-zstd_compress_sequences.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[17](fb80479a5fb81f6a-zstd_compress_superblock.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[18](fb80479a5fb81f6a-zstd_double_fast.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[19](fb80479a5fb81f6a-zstd_fast.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[20](fb80479a5fb81f6a-zstd_lazy.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[21](fb80479a5fb81f6a-zstd_ldm.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[22](fb80479a5fb81f6a-zstd_opt.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[24](88f362f13b0528ed-huf_decompress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[25](88f362f13b0528ed-zstd_ddict.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[26](88f362f13b0528ed-zstd_decompress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[27](88f362f13b0528ed-zstd_decompress_block.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[28](a6c81c75fc82913a-cover.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[29](a6c81c75fc82913a-divsufsort.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[30](a6c81c75fc82913a-fastcover.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[31](a6c81c75fc82913a-zdict.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[32](3f451b2306bc13c8-zstd_v01.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[33](3f451b2306bc13c8-zstd_v02.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[34](3f451b2306bc13c8-zstd_v03.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[35](3f451b2306bc13c8-zstd_v04.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[36](3f451b2306bc13c8-zstd_v05.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[37](3f451b2306bc13c8-zstd_v06.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libzstd_sys-25406b78a9b75815.rlib[38](3f451b2306bc13c8-zstd_v07.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblz4_sys-73d1a0a72a7f3692.rlib[4](efce31824dbf3730-lz4.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblz4_sys-73d1a0a72a7f3692.rlib[6](efce31824dbf3730-lz4hc.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[4](f0389296f42960e9-adler32.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[6](f0389296f42960e9-crc32.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[7](f0389296f42960e9-deflate.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[9](f0389296f42960e9-inffast.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[10](f0389296f42960e9-inflate.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[11](f0389296f42960e9-inftrees.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[12](f0389296f42960e9-trees.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/liblibz_sys-5fff69435f1de7f6.rlib[14](f0389296f42960e9-zutil.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libbzip2_sys-43b944f6c9db193e.rlib[4](a9dc8ba631b1466a-blocksort.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libbzip2_sys-43b944f6c9db193e.rlib[5](a9dc8ba631b1466a-huffman.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libbzip2_sys-43b944f6c9db193e.rlib[6](a9dc8ba631b1466a-crctable.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libbzip2_sys-43b944f6c9db193e.rlib[7](a9dc8ba631b1466a-randtable.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libbzip2_sys-43b944f6c9db193e.rlib[8](a9dc8ba631b1466a-compress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libbzip2_sys-43b944f6c9db193e.rlib[9](a9dc8ba631b1466a-decompress.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libbzip2_sys-43b944f6c9db193e.rlib[10](a9dc8ba631b1466a-bzlib.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[19](25ac62e5b3c53843-curve25519.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[20](0bbbd18bda93c05b-aes_nohw.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[21](00c879ee3285a50d-montgomery.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[22](00c879ee3285a50d-montgomery_inv.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[23](a0330e891e733f4e-ecp_nistz.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[25](a0330e891e733f4e-gfp_p384.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[27](aaa1ba3e455ee2e1-limbs.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[28](a4019cc0736b0423-mem.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[29](d5a9841f3dc6e253-poly1305.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[30](a0330e891e733f4e-p256-nistz.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[31](c322a0bcc369f531-chacha-armv8-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[32](c322a0bcc369f531-chacha20_poly1305_armv8-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[33](c322a0bcc369f531-aesv8-armx-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[34](c322a0bcc369f531-aesv8-gcm-armv8-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[35](c322a0bcc369f531-ghash-neon-armv8-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[36](c322a0bcc369f531-ghashv8-armx-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[37](c322a0bcc369f531-vpaes-armv8-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[38](c322a0bcc369f531-armv8-mont-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[39](c322a0bcc369f531-p256-armv8-asm-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[40](c322a0bcc369f531-sha512-armv8-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: object file (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libring-9c92ace76de11e1e.rlib[41](c322a0bcc369f531-sha256-armv8-ios64.o)) was built for newer 'macOS' version (26.4) than being linked (11.0)
+          ld: warning: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+          ld: write() failed, errno=28 (No space left on device)
+          clang: error: linker command failed with exit code 1 (use -v to see invocation)
+          
+
+warning: `kaspad` (lib test) generated 8 warnings
+error: could not compile `kaspad` (lib test) due to 1 previous error; 8 warnings emitted

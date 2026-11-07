@@ -1,0 +1,12 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "youtu",
+  "doc": "Youtu-LLM (Tencent): DeepSeek-V3's multi-head latent attention with a plain gated MLP in EVERY layer (no experts); embedding_initializer_range is training-only. Third-party adapter (lane H): data only, extends the built-in deepseek-v3.",
+  "extends": ["deepseek-v3"],
+  "match": {"architectures": ["YoutuForCausalLM"], "model_types": ["youtu"]},
+  "config": {"inert": ["embedding_initializer_range"], "defaults": {"tie_word_embeddings": true}},
+  "vars": [
+    {"name": "first_dense", "value": {"$var": "n"}},
+    {"name": "model_type", "value": "youtu"}
+  ]
+}

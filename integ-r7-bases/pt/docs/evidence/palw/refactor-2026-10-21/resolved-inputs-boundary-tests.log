@@ -1,0 +1,16 @@
+
+running 1 test
+test the_snapshot_keeps_its_point_values_and_legacy_diagnostics ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+{
+  "positive_snapshot_test": 1,
+  "readonly_assignment_compile_refusal": {
+    "exit_code": 1,
+    "diagnostic": "E0594 / DerefMut missing"
+  },
+  "scope": "Actual new production wrapper declaration extracted verbatim; fixture constructor added inside its module. Linked against the recorded unchanged core input types. Native source/compile-fail harness, not a full consensus-crate test run.",
+  "core_library": "/Users/wata/.codex/worktrees/rfc14-g14-integration-candidate/MISAKA-testnet/target/release/deps/libkaspa_consensus_core-307e14f11070efe4.rlib",
+  "core_library_sha256": "461b43233b91ae404e504d71f1af8824e4af11667ecf07b069687a4dc224fb4f"
+}

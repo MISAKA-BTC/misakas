@@ -1,0 +1,36 @@
+{
+  "01-small-grid.json": {
+    "artifact_bytes": 504,
+    "artifact_hash": "7aed7b1a7dd6728db940a3ba7ab5c5a34e05250dfb8db57f155087480da23435b507533c2bb5f2567caa9a3fa3dfe154fbe804bfc1142c1abff9178bb74bcd4c",
+    "dsl_hash": "7bbe5f068b94a8be9d81bced22d86ccc0518cf812c5deeabe8133a7ad936d34753e6c30d30b9dd7b28917840fb0d27162a0d312a74d2f5a5e7ace2ecffdafa52"
+  },
+  "02-graph-and-attributes.json": {
+    "artifact_bytes": 1240,
+    "artifact_hash": "18d7f0ea079f38a42fe843c6c3dcd431da654160c190ba59894d99d628ea9b5642e70d42946061f11555e048be6ae5ee0ad679e2e26bcefd8d9e1f21e8754970",
+    "dsl_hash": "db5c8a8d3746f2d574c653392df913d5c6cd86f51d49d1807f8062f6fc82b14c3a6559f7e1c5498426f2eed8b24e267dbb781fe7d02bd6a5fd77761b99b4a509"
+  },
+  "03-order-forward.json": {
+    "artifact_bytes": 540,
+    "artifact_hash": "e26959290abff46ccad40ac7560d0e999fdd165d4306294f476911ab1f855f18e6df9cd220f6f6a5a8cb7664e6c587e68035f38620f8ba838584a3f2894f0f8b",
+    "dsl_hash": "1af786fff8ace6bbe07fff69750b7cdd709ffe59afa7cabec1a087c483978532432e6b5e214443aa5ecaf6a351d9a20f34202e713c4f34b4d8f29aed35cef185"
+  },
+  "04-order-shuffled.json": {
+    "artifact_bytes": 540,
+    "artifact_hash": "e26959290abff46ccad40ac7560d0e999fdd165d4306294f476911ab1f855f18e6df9cd220f6f6a5a8cb7664e6c587e68035f38620f8ba838584a3f2894f0f8b",
+    "dsl_hash": "1af786fff8ace6bbe07fff69750b7cdd709ffe59afa7cabec1a087c483978532432e6b5e214443aa5ecaf6a351d9a20f34202e713c4f34b4d8f29aed35cef185"
+  },
+  "05-large-dungeon.json": {
+    "artifact_bytes": 124544,
+    "artifact_hash": "c86243dd787e9056452626f1c1acabd24b645d76f2e648833a8e919dd79029cd2f99d6775dc24d6f9429bb4550c046d5b022e13109e12d58362550739c84238c",
+    "dsl_hash": "53011c91b461ac414325d4a43613c498c4e0f0c35fccd0189026eb672f0ae8e02e3ee97d35aa3b116a2e295f70c43c042dae4675f660e39cb89e3abb88bf9812"
+  },
+  "90-refused-overlapping-runs.json": {
+    "refused": "grammar: the run at (0, 1) of length 4 overlaps the run at (3, 1)"
+  },
+  "91-refused-beyond-the-ceilings.json": {
+    "refused": "grammar: 1024x1024 is 1048576 cells; the grammar admits 262144"
+  },
+  "92-refused-dsl-too-large.json": {
+    "refused": "grammar: a DSL of 4194305 bytes exceeds the 4194304-byte ceiling this transformer declares (ADR-0078 SA-2)"
+  }
+}

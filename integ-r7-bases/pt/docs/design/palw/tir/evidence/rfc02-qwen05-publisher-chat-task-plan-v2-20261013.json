@@ -1,0 +1,19 @@
+{
+  "schema": "misaka.rfc02.publisher-chat-first-EOS-v2-plan.v1",
+  "original_three_task_protocol_sha256": "4336f7660c1bff144711983084aba8b64b91314c495df876fccf0bed432cc191",
+  "original_tasks_thresholds_and_fixed32_failures_unchanged": true,
+  "new_chat8_protocol_sha256": "d4eb309a3836cb0966c887ba9a22802ab6c389aa9caafce76d5934e2c3dbc859",
+  "new_chat16_protocol_sha256": "d1b8facdd93dff67019f46ad3f184c9af75189caabad5a10fc1d13c78398cc66",
+  "shared_source_integer_prompt_tokens": true,
+  "publisher_template_default_system_included": true,
+  "original_source_integer_prompt_token_equality": true,
+  "original_input_differs_from_publisher_template_default": true,
+  "original_same_input_integer_fidelity_observation_retained": true,
+  "new_decode_contract": "greedy-first-EOS-no-padding.v2",
+  "new_comparison": "all actual terminated outputs positional; denominator is sum max(source length,integer length) per job; missing positions fail; no padded credit",
+  "requested_max_tokens_per_job": 32,
+  "actual_output_lengths_to_be_reported": true,
+  "source_sampling_defaults_override": "explicit deterministic greedy diagnostic, no repetition penalty/sampling; original generation_config pinned as provenance and EOS list",
+  "source_quality_failures_remain_independent": true,
+  "fullcontext_sourcefidelity_nativeFinal_or_A6_A8_established": false
+}

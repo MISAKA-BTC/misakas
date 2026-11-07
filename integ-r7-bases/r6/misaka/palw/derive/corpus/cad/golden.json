@@ -1,0 +1,46 @@
+{
+  "01-extrude-l-bracket.json": {
+    "artifact_bytes": 1084,
+    "artifact_hash": "8b6c0d4389cb20cb040a4586ce469d373892f051dd5da5536592bd648caa5a4b27852c327569e607c5470c53c73feda9bcc2325aac7a16f339bec48187aa6e10",
+    "dsl_hash": "c5b0ac6865fc88d2fa57f74656bfb25ba4044b85e24554c09795c9e0f59c284254ffc9f88c6b25435a75ae48d103cb540007e543e57d3c2e503d1b1844bc1018"
+  },
+  "02-extrude-collinear-vertex.json": {
+    "artifact_bytes": 1084,
+    "artifact_hash": "a3dfd8aceb38450fe9591c90ef8563f42861b40d001613acd66982c96074c7e1af0417be1c461c74a7ad33e585ef1765fb83cf670a51501214636d93430767fd",
+    "dsl_hash": "567c368b527ca1664af4c599df5f132969be3891da27402820ce3f26c26ccf9ec707d35b682c122d2a39302454ee7dea0c12e7de81444f31ee93d0e652d078b4"
+  },
+  "03-revolve-quarter-turns.json": {
+    "artifact_bytes": 1684,
+    "artifact_hash": "98619a8cf3f4c516b1c3fb161e84bd1c6f1c359368e442492ff8bd9098aacaae76a645cd0c266da13dbbfb3130a933e518e689b556685640715067c61214c9b8",
+    "dsl_hash": "c8b362fc34b333e0319e0ba2373077413172fe8dca323341f5264cfb748e29a1dc7a54a8af32472151aed148135bdf56285325f4c214a7460bd830f4c9e90bfa"
+  },
+  "04-revolve-twelve-rational-directions.json": {
+    "artifact_bytes": 4884,
+    "artifact_hash": "ef3f92725da723addf52e245e77759a98bd9f78c4a2378452cfc4d82b0d66680074e3a45790ed6f20a12db44cce2360fdd8359b488ab9130f0805f59f8a922c9",
+    "dsl_hash": "5a081e95bd9e637e2c24d6016aafa7f936c88c3e25c44ba132ba1d182184621d1bbd55ef9d296c0536cde65e4cc1854657853f36364942fa2a479e5ab8ee8cb9"
+  },
+  "05-boolean-box-with-a-notch.json": {
+    "artifact_bytes": 4684,
+    "artifact_hash": "9014c8c60d0a3c8fa3bc7cbf6ec71ed260877d7b429807ae3c10effb575ba77b6b842077482f68bd1084ef72150246e209312fee8c5db729b9df37ed346bc304",
+    "dsl_hash": "5565f116d1627f5d840a8d5c6892cf9d076aaed39327b0108730715c57868ece90b1fe7b20e1ec0588a7fad068aa567918a59524fbeb6393e45010c3bb32d094"
+  },
+  "06-boolean-union-of-an-intersection.json": {
+    "artifact_bytes": 7284,
+    "artifact_hash": "bfbb77932558c8605fe8477a707b46f55ccf8b21db2e8923d06b4951f893bfc8e9a87005b88c611aa367660783e638012708fd011eb1d3d0e20cc30108cdab88",
+    "dsl_hash": "442450c1e2a9ef1b21d648183bef1e5af05988db9850f908a7d0b9ddc2e9a5ab3aad2b1519785a3ae89d6c19e3480b1a6c890cfa3a2ecd92a4505eb4e468e719"
+  },
+  "07-box.json": {
+    "artifact_bytes": 684,
+    "artifact_hash": "c6b27254e3f0969003dc0e82e6993743730f0a2a290f822d650fb5555cd67f3cde1764416f8d896b1c216b0dff297fbd4551ecc6d7f99b203778208ca43a9dc6",
+    "dsl_hash": "25643f0b345eb499cc91f10a901ce1188367ef4f8ca55e08f3e5132b4e19de853a20a40efd8513ff2347381b7087aecf66160e53af8d3ba6f70886abda5a0240"
+  },
+  "90-over-max-dsl-bytes.json": {
+    "refused": "grammar: the answer is 70105 bytes; at most 65536 (ADR-0078 SA-2)"
+  },
+  "91-over-max-steps.json": {
+    "refused": "transformer: the model needs at most 8040800 exact predicates to build; the step budget is 4000000 (ADR-0078 SA-2). A sketch's triangulation costs the cube of its point count, so this is a smaller sketch, not a bigger budget"
+  },
+  "92-over-max-artifact-bytes.json": {
+    "refused": "transformer: the model builds at most 32768 triangles, which is 1638484 bytes of binary STL; the artifact ceiling is 1048576 (ADR-0078 SA-2)"
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "parent": "7de51563d",
+  "method": "byte comparison of existing generator function bodies; does not claim complete runtime equivalence on its own",
+  "functions": [
+    {
+      "file": "consensus/core/src/palw_tir_court_v1.rs",
+      "function": "tiny_execution",
+      "body_unchanged": true,
+      "sha256": "8220c4dc27bcf5b394ddcfb9ae3afbd28ce28c4760c0c23505dd8b222b6dc5d9"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_court_v1.rs",
+      "function": "tiny_execution_wide",
+      "body_unchanged": true,
+      "sha256": "e7315d482759ae3920415ff28b54bcd1c080d8fa7de38cb1e55235231894e125"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_court_v1.rs",
+      "function": "tiny_execution_selecting_wide_in",
+      "body_unchanged": true,
+      "sha256": "80f45021a12b7cf5f00373c7b7c47a68227e3986d05637a3c2151736409e5fa2"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_court_v1.rs",
+      "function": "tiny_execution_selecting_in_vocab",
+      "body_unchanged": true,
+      "sha256": "96fbd4287ad73f09dd1ca5ae15805fee5cd4cea53b5788066ba2e6c8129f07a5"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "function": "history_frame",
+      "body_unchanged": true,
+      "sha256": "58453cbbfc9b359c489c03a861ddf8b03daf007cd4ce8e6b86fa6ac7bc19cccb"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "function": "fixture_with_vocab",
+      "body_unchanged": true,
+      "sha256": "f445d40e1930a6748061a76972b91f6aea296b495c75d7cb88f90616878067df"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "function": "frame_from_execution",
+      "body_unchanged": true,
+      "sha256": "271a0565b79242bdf81da2836be747c859c14c96baec069ca336522f98f8b3df"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "function": "palw_tir_public_frame_fixture_wide_v1",
+      "body_unchanged": true,
+      "sha256": "da332160f54609cdb8e7d2198899697cd6bdc1d66f8766a000a226f552855e77"
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "sources": {
+    "consensus/src/model/stores/overlay_absent_cache.rs": "fb196b26070b33e9a507cf03504c102d9b8eee8d63ef38f5637cd6378a65468c",
+    "consensus/src/model/stores/rewarded_epochs.rs": "e5434c1000f352febdbefd548b975c08461549ad9352d64fc3fa24f1699cedd8",
+    "database/src/access.rs": "4575721e0f6ad05f1e7969979268965893bc2d0ca1584cbff216d02673569309",
+    "database/src/db/rocksdb_preset.rs": "e8104fe24200d04c8af716e194cb46f0d7fc475d545845a244e7495117d98fd9"
+  },
+  "dependencies": {
+    "rocksdb": "/tmp/misaka-rfc67812-node-target/debug/deps/librocksdb-1051681b1c647835.rlib",
+    "parking_lot": "/tmp/misaka-rfc67812-node-target/debug/deps/libparking_lot-8de9406302607524.rlib",
+    "kaspa_utils": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_utils-1359c7195c3b2bc5.rlib",
+    "indexmap": "/tmp/misaka-rfc67812-node-target/debug/deps/libindexmap-3eb036414c6ce2e3.rlib",
+    "kaspa_hashes": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_hashes-3fc5d0c1255d8f6c.rlib",
+    "kaspa_consensus_core": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_consensus_core-6bbd04bb0b7b74a6.rlib",
+    "kaspa_database": "/tmp/misaka-rfc67812-node-target/debug/deps/libkaspa_database-73c0e2813b89ae91.rlib"
+  },
+  "compileExit": 0,
+  "exit": 0,
+  "deadlineSeconds": 60,
+  "seconds": 17.250732,
+  "giantValueBytes": 167772160,
+  "cacheBytes": 268435456,
+  "shardBits": 1,
+  "readsPerRound": 12,
+  "rounds": 3,
+  "legacyMicros": [
+    5306484,
+    4912598,
+    4917974
+  ],
+  "cachedMicros": [
+    532302,
+    1,
+    1
+  ],
+  "maximumResidentSetSizeBytes": 691978240,
+  "ownedDbBytesBeforeCleanup": 167821131,
+  "ownedDbCleaned": true,
+  "native100kAccepted": false,
+  "realP2pAccepted": false,
+  "sustainedPerformanceAccepted": false
+}

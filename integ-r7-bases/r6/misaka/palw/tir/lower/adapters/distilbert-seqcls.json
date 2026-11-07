@@ -1,0 +1,56 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "distilbert-seqcls",
+  "doc": "DistilBertForSequenceClassification: DistilBERT's encoder, then `pre_classifier` + ReLU on the [CLS] row and `classifier` to num_labels logits (OUTPUT_CLASSIFY_V1).",
+  "extends": [
+    "distilbert",
+    "mixin-seqcls-encoder"
+  ],
+  "match": {
+    "architectures": [
+      "DistilBertForSequenceClassification"
+    ],
+    "model_types": [
+      "distilbert"
+    ]
+  },
+  "vars": [
+    {
+      "name": "names",
+      "value": {
+        "embed": "embeddings.word_embeddings",
+        "pos_embed": "embeddings.position_embeddings",
+        "embed_norm": "embeddings.LayerNorm",
+        "attn.q": "transformer.layer.{L}.attention.q_lin",
+        "attn.k": "transformer.layer.{L}.attention.k_lin",
+        "attn.v": "transformer.layer.{L}.attention.v_lin",
+        "attn.o": "transformer.layer.{L}.attention.out_lin",
+        "norm.mix": "transformer.layer.{L}.sa_layer_norm",
+        "mlp.up": "transformer.layer.{L}.ffn.lin1",
+        "mlp.down": "transformer.layer.{L}.ffn.lin2",
+        "norm.ffn": "transformer.layer.{L}.output_layer_norm",
+        "cls_pre": "pre_classifier",
+        "cls_out": "classifier"
+      }
+    },
+    {
+      "name": "cls_act",
+      "value": "Relu"
+    },
+    {
+      "name": "cls_pre_on",
+      "value": true
+    },
+    {
+      "name": "ignored_prefixes",
+      "value": [
+        "pooler.",
+        "cls.",
+        "lm_head.",
+        "vocab_transform.",
+        "vocab_layer_norm.",
+        "vocab_projector."
+      ]
+    }
+  ]
+}

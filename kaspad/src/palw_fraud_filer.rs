@@ -608,6 +608,9 @@ pub(super) struct PalwFraudFilerCaseV1 {
     staged_tokenizer: Option<Arc<std::sync::Mutex<Option<tokenizer_scheduler::TokenizerSchedulerV1>>>>,
     staged_constraint: Option<Arc<std::sync::Mutex<Option<constraint_scheduler::ConstraintSchedulerV1>>>>,
     constraint_stage_pending: bool,
+    // A restarted paid Constraint stage may need an own replay to nominate its
+    // neutral row. Paid authority itself never establishes arithmetic agreement.
+    constraint_replay_requested: bool,
     staged_bundle_pending: bool,
     staged_tokenizer_sent: Option<(Hash64, u64, u8)>,
     prefix_budget: u64,
@@ -677,6 +680,7 @@ impl PalwFraudFilerCaseV1 {
             staged_tokenizer: None,
             staged_constraint: None,
             constraint_stage_pending: false,
+            constraint_replay_requested: false,
             staged_bundle_pending: false,
             staged_tokenizer_sent: None,
             prefix_budget: 0,
@@ -931,6 +935,19 @@ impl PalwFraudFilerCaseV1 {
             && !self.constraint_stage_pending
             && !self.staged_bundle_pending
             && matches!(self.verdict, PalwFraudFilerVerdictV1::SemanticPending)
+    }
+
+    fn request_constraint_replay_v1(&mut self) {
+        if !self.arithmetic_matched && !matches!(&self.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some()) {
+            self.constraint_replay_requested = true;
+        }
+    }
+
+    fn may_probe_v1(&self) -> bool {
+        matches!(self.verdict, PalwFraudFilerVerdictV1::Pending | PalwFraudFilerVerdictV1::DeferredMismatch)
+            || (matches!(self.verdict, PalwFraudFilerVerdictV1::SemanticPending)
+                && self.constraint_replay_requested && !self.arithmetic_matched
+                && self.replay_failures < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1)
     }
 
     /// A neutral stage still requires a completed own selection replay. Missing material
@@ -1453,7 +1470,7 @@ impl PalwFraudFilerBookV1 {
         self.cases
             .values()
             .filter(|case| {
-                matches!(case.verdict, PalwFraudFilerVerdictV1::Pending | PalwFraudFilerVerdictV1::DeferredMismatch)
+                case.may_probe_v1()
                     && case.fp_bootstrap.as_ref().is_none_or(|input| {
                         input.ready()
                             || input.payload.job().prompt_mode
@@ -1482,7 +1499,7 @@ impl PalwFraudFilerBookV1 {
             return;
         }
         let waiting = self.cases.values().any(|case| {
-            matches!(case.verdict, PalwFraudFilerVerdictV1::Pending | PalwFraudFilerVerdictV1::DeferredMismatch)
+            case.may_probe_v1()
                 && !case.candidate.seat
                 && current_daa >= case.input_retry_at
                 // Reprobing an unavailable job uses no replica. Its public DA pursuit
@@ -5707,6 +5724,10 @@ impl PalwPanelService {
             palw_selected_event_source_v1::{PalwSelectedEventBindingV1, PalwSelectedEventCoordinateV1},
         };
         use selected_event_scheduler::SelectedEventScheduleV1;
+        // Paid-cursor recovery can put a fresh case in SemanticPending before
+        // it has any own arithmetic result. Allow the bounded replay scheduler
+        // to supply that result; do not silently mark a neutral row honest.
+        book.cases.get_mut(&claim).ok_or("selected pursuit disappeared")?.request_constraint_replay_v1();
         let bytes = progress
             .bundle
             .as_ref()
@@ -8659,6 +8680,34 @@ pub(super) mod tests {
         assert!(book.pursued().is_empty(), "a future reservation cannot authorize continuation");
         book.observe_paid_authority_v1(c.claim_id, &authority, 301);
         assert!(book.pursued().contains(&c.claim_id), "an earlier local DA-default settle does not erase accepted paid authority");
+    }
+
+    #[test]
+    fn restarted_paid_fp_constraint_can_request_bounded_own_replay_without_certifying_arithmetic() {
+        use kaspa_consensus_core::{
+            palw_rendering_resources_v1::{PalwRenderingClaimTermsV1, PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1},
+            palw_staged_court_state_v1::PalwStagedPaidAuthorityV1,
+        };
+        let mut c = candidate(24, 300, false);
+        c.job.free_prompt = true;
+        let mut book = PalwFraudFilerBookV1::default();
+        book.refresh(vec![c.clone()], 300);
+        book.cases.get_mut(&c.claim_id).unwrap().registered_preflight = true;
+        let plan = PalwRenderingResourcePlanV1::derive(0, 1, PalwStagedPublicCourtConfigV1::network_v1().prices).unwrap();
+        let terms = PalwRenderingClaimTermsV1::derive(300, plan, 100, 100, 10).unwrap();
+        let authority = PalwStagedPaidAuthorityV1 { reserved_daa: 300, seed_id: Hash64::from_u64_word(9), terms };
+        book.observe_paid_authority_v1(c.claim_id, &authority, 301);
+        assert_eq!(book.next_replay_at(301), None, "a paid cursor alone requires no replay");
+        book.cases.get_mut(&c.claim_id).unwrap().request_constraint_replay_v1();
+        book.observe_paid_authority_v1(c.claim_id, &authority, 301);
+        assert_eq!(book.next_replay_at(301), Some(c.claim_id), "the specific Constraint dependency is schedulable after restart");
+        for attempt in 1..=PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1 {
+            book.judge(c.claim_id, Err("host cannot execute this replay".into()));
+            let case = &book.cases[&c.claim_id];
+            assert!(!case.may_finish_semantics_v1(true));
+            assert!(case.neutral_constraint_plan_v1(&[1]).is_none(), "a refused replay never supplies a neutral completion");
+            assert_eq!(book.next_replay_at(301).is_some(), attempt < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1, "host retries retain their existing bound");
+        }
     }
 
     fn material_budget_binding() -> PalwStepBindingV2 {

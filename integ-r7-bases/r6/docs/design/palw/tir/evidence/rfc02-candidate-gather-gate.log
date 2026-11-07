@@ -1,0 +1,31 @@
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--test', 'k2_real_scale', 'k2s_the_gate_rederives_the_plan_and_prices_decoded_working_memory_and_all_progress', '--', '--exact', '--nocapture', '--test-threads=1']
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.17s
+     Running tests/k2_real_scale.rs (target/debug/deps/k2_real_scale-cefa5ee20d4c5c8f)
+
+running 1 test
+test k2s_the_gate_rederives_the_plan_and_prices_decoded_working_memory_and_all_progress ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.01s
+
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--test', 'k2_real_scale', 'k2s_small_model_values_are_never_served_and_a_model_holder_convicts_from_commitments', '--', '--exact', '--nocapture', '--test-threads=1']
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running tests/k2_real_scale.rs (target/debug/deps/k2_real_scale-cefa5ee20d4c5c8f)
+
+running 1 test
+test k2s_small_model_values_are_never_served_and_a_model_holder_convicts_from_commitments ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 1.19s
+
+
+Command: ['cargo', 'test', '--locked', '-p', 'misaka-palw-kernel', '--test', 'court_scope', 'f_c4r4_17_class_serves_no_clear_activation_of_a_weight_relation', '--', '--exact', '--nocapture', '--test-threads=1']
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.52s
+     Running tests/court_scope.rs (target/debug/deps/court_scope-98920eea43543a16)
+
+running 1 test
+test f_c4r4_17_class_serves_no_clear_activation_of_a_weight_relation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

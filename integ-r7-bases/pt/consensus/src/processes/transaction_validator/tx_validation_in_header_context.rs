@@ -1,0 +1,409 @@
+//! Groups transaction validations that depend on the containing header and/or
+//! its past headers (but do not depend on UTXO state or other transactions in
+//! the containing block)
+
+use super::{
+    TransactionValidator,
+    errors::{TxResult, TxRuleError},
+};
+use crate::constants::LOCK_TIME_THRESHOLD;
+use kaspa_consensus_core::tx::Transaction;
+
+pub(crate) enum LockTimeType {
+    Finalized,
+    DaaScore,
+    Time,
+}
+
+pub(crate) enum LockTimeArg {
+    Finalized,
+    DaaScore(u64),
+    MedianTime(u64),
+}
+
+impl TransactionValidator {
+    pub(crate) fn validate_tx_in_header_context_with_args(
+        &self,
+        tx: &Transaction,
+        ctx_daa_score: u64,
+        ctx_block_time: u64,
+    ) -> TxResult<()> {
+        self.validate_tx_in_header_context(
+            tx,
+            match Self::get_lock_time_type(tx) {
+                LockTimeType::Finalized => LockTimeArg::Finalized,
+                LockTimeType::DaaScore => LockTimeArg::DaaScore(ctx_daa_score),
+                LockTimeType::Time => LockTimeArg::MedianTime(ctx_block_time),
+            },
+            ctx_daa_score,
+        )
+    }
+
+    /// `ctx_daa_score` is the containing block's own DAA score, ALWAYS — independently of the
+    /// lock-time arm, which is `Finalized` for most transactions and carries no score. ADR-0087
+    /// Decision 6 is a height rule and needs the height whatever the lock time says.
+    pub(crate) fn validate_tx_in_header_context(
+        &self,
+        tx: &Transaction,
+        lock_time_arg: LockTimeArg,
+        ctx_daa_score: u64,
+    ) -> TxResult<()> {
+        self.check_dns_retirement(tx, ctx_daa_score)?;
+        self.check_tx_is_finalized(tx, lock_time_arg)?;
+        self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
+        self.check_model_sink_binding_in_context(tx, ctx_daa_score)?;
+        self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
+        self.check_improvement_sink_outputs_in_context(tx, ctx_daa_score)?;
+        // Only FP-specific inner doors see the original payload. Lock time,
+        // outputs, transaction identity, fees and mass remain those of the outer TX.
+        let original_inner = if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            && tx.payload.starts_with(kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAGIC_V1)
+        {
+            if !self.palw_tir_public_conviction_fence.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
+                return Err(TxRuleError::InvalidPalwFpPayload(
+                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
+                ));
+            }
+            let envelope = kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(&tx.payload)
+                .map_err(|_| {
+                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
+                })?;
+            let mut inner = tx.clone();
+            inner.payload = envelope.original_payload;
+            Some(inner)
+        } else if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            && tx.payload.starts_with(kaspa_consensus_core::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAGIC_V1)
+        {
+            if !self.palw_staged_public_court_fence.is_some_and(|fence| fence.is_active(ctx_daa_score)) {
+                return Err(TxRuleError::InvalidPalwFpPayload(
+                    kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable,
+                ));
+            }
+            let envelope =
+                kaspa_consensus_core::palw_history_custody_v1::PalwHistoryFpEnvelopeV1::decode_v1(&tx.payload).map_err(|_| {
+                    TxRuleError::InvalidPalwFpPayload(kaspa_consensus_core::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)
+                })?;
+            let mut inner = tx.clone();
+            inner.payload = envelope.original_payload;
+            Some(inner)
+        } else {
+            None
+        };
+        let tx = original_inner.as_ref().unwrap_or(tx);
+        self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_job_version_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_evaluation_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_gen_claim_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_prefix_state_in_context(tx, ctx_daa_score)?;
+        self.check_palw_fp_constraint_in_context(tx, ctx_daa_score)?;
+        self.check_palw_lifecycle_kind_in_context(tx, ctx_daa_score)
+    }
+
+    /// **A-2 uniformity, the height-indexed half of the lifecycle door.** Isolation judges a lifecycle kind the live testnet-12 build
+    /// cannot decode as that build judges its bytes (tolerated where the ruleset declares the audit fence, refused as undecodable
+    /// where it does not), because it holds no height. Here, at the containing block's DAA, such a kind whose owning fence is in force
+    /// meets its own stateless rule (its may-ride arm: a signature, a size bound, an envelope's contents) and a refusal is the
+    /// block's; below the fence nothing is asked, so a block the live build accepts is accepted here. Inert on every shipped preset:
+    /// no owning fence is armed anywhere.
+    fn check_palw_lifecycle_kind_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+            return Ok(());
+        }
+        kaspa_consensus_core::palw_lifecycle_objects_v2::validate_palw_lifecycle_tx_in_context_v1(
+            &tx.payload,
+            &self.palw_lifecycle_kind_fences,
+            ctx_daa_score,
+        )
+        .map_err(TxRuleError::InvalidPalwLifecyclePayload)
+    }
+
+    /// **RFC-0004 A6, the height-indexed half of the evaluation door.** Isolation admits an evaluation
+    /// claim (FP job version 9: the FP payload's bytes, then the claim's tail) wherever the ruleset
+    /// carries `Params::palw_improvement_v1`, because it holds no height; here, at the containing
+    /// block's DAA, one below the fence, below the V4 decode rules its job carries, or past the
+    /// structural work cap below the held regime is refused by name — the FP lane's own height rules,
+    /// which read an FP payload and so never see this one. With the isolation door's height-free answer
+    /// this makes a build that schedules the fence and one that does not agree on every transaction
+    /// below it: the other refuses the claim's bytes at isolation, as undecodable. Inert on every
+    /// preset without the fence: returns on its first line.
+    fn check_palw_fp_evaluation_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        use kaspa_consensus_core::palw_improve_eval_v1::PalwFpEvalHeightRefusalV1;
+        let Some(fence) = self.palw_improvement_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        let decode_rules = kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(
+            self.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+            ctx_daa_score,
+        );
+        let held_active = self.palw_held_context_fence.is_some_and(|fence| fence.is_active(ctx_daa_score));
+        match kaspa_consensus_core::palw_improve_eval_v1::palw_fp_eval_refusal_at_v1(
+            &tx.payload,
+            fence.is_active(ctx_daa_score),
+            matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
+            held_active,
+        ) {
+            Some(PalwFpEvalHeightRefusalV1::WorkLeavesBeforeHeld(leaves)) => {
+                Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(leaves, ctx_daa_score))
+            }
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **RFC-0001 §2.6 stage 2, the height-indexed half of the prefix-state claim's door.** Isolation admits a version-11
+    /// commitment's stateless rules wherever the ruleset carries `Params::palw_fp_prefix_state` at all, because it holds no
+    /// height; here, at the containing block's DAA, one below the fence — or below the V4 decode rules its job carries — is
+    /// refused by name. So a build that schedules the fence and one that does not agree on every transaction below it. Inert
+    /// on every preset without the fence: returns on its first line.
+    fn check_palw_fp_prefix_state_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_prefix_state_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        let decode_rules = kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(
+            self.palw_fp_decode_rules_fence.map(|fence| fence.daa_score()),
+            ctx_daa_score,
+        );
+        match kaspa_consensus_core::palw_fp_prefix_v1::palw_fp_prefix_refusal_at_v1(
+            &tx.payload,
+            fence.is_active(ctx_daa_score),
+            matches!(decode_rules, kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::Active),
+            self.palw_fp_prefix_inherit_fence.is_some_and(|f| f.is_active(ctx_daa_score)),
+        ) {
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **ADR-0096 Decision 8, the height-indexed half of the constrained claim's door.** Isolation admits a version-6
+    /// commitment's stateless rules wherever the ruleset carries `Params::palw_fp_decode_constraint` at all; here, at the
+    /// containing block's DAA, one below the fence — or one carrying a second-form constraint below
+    /// `Params::palw_fp_constraint_v2` — is refused by name. Inert on every preset without the fence.
+    fn check_palw_fp_constraint_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_decode_constraint_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_refusal_at_v1(
+            &tx.payload,
+            fence.is_active(ctx_daa_score),
+            self.palw_fp_constraint_v2_fence.is_some_and(|f| f.is_active(ctx_daa_score)),
+        ) {
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why.why(), ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **RFC-0003 §I.4.4, the height-indexed half of the tensor claim's door.** Isolation admits a
+    /// version-10 commitment's stateless rules wherever the ruleset carries `Params::palw_fp_job_v5`
+    /// at all, because it holds no height; here, at the containing block's DAA, one below the fence is
+    /// refused. So a build that schedules the fence and one that does not agree on every transaction
+    /// below it: the one refuses the claim here, the other at its isolation door. Inert on every preset
+    /// without the fence: isolation refused every version-10 payload already, and this returns on its
+    /// first line.
+    fn check_palw_fp_gen_claim_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_job_v5_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        if let Some(why) =
+            kaspa_consensus_core::palw_gen_claim_v1::palw_fp_gen_refusal_at_v1(&tx.payload, fence.is_active(ctx_daa_score))
+        {
+            return Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score));
+        }
+        // The task-head profile: a `Head` job below `palw_task_heads_v1` — bytes the int-12 build refuses at its isolation door.
+        let heads_active = self.palw_task_heads_fence.is_some_and(|f| f.is_active(ctx_daa_score));
+        match kaspa_consensus_core::palw_task_heads_v1::palw_fp_head_job_refusal_at_v1(&tx.payload, heads_active) {
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **RFC-0001 §A.4, the height-indexed half of the decode-rules door.** Isolation admits a V4
+    /// job's shape wherever the ruleset carries `Params::palw_fp_decode_rules` at all, because it
+    /// holds no height; here, at the containing block's DAA, a V4 commitment below the fence and a
+    /// new V3 commitment at or past it are refused. So a build that schedules the fence and one
+    /// that does not agree on every transaction below it, and from it only V4 jobs are admitted.
+    /// Inert on every preset without the fence: isolation refused every V4 shape already, and
+    /// this returns on its first line.
+    fn check_palw_fp_job_version_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_fp_decode_rules_fence else {
+            return Ok(());
+        };
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        let rules = kaspa_consensus_core::palw_freeprompt_v3::PalwFpDecodeRulesV1::at(Some(fence.daa_score()), ctx_daa_score);
+        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_job_version_refusal_v1(&tx.payload, rules) {
+            Some(why) => Err(TxRuleError::PalwFpJobVersionAtHeight(why, ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **ADR-0119 Decision 6, the height-indexed half of the free-prompt door.** Isolation admits a
+    /// commitment up to the held regime's `2^40` leaves on a ruleset that declares the regime at all,
+    /// because it holds no height; below the fence this refuses one past the structural `2^32` —
+    /// the cap every build applies — so a build that schedules the regime and one that does not
+    /// carry it agree on every transaction before the activation, and nothing is committed on the
+    /// strength of the permissive answer. Inert on every preset without the regime: isolation's cap
+    /// there is the structural one and this returns on its first line.
+    fn check_palw_fp_work_leaves_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_held_context_fence else {
+            return Ok(());
+        };
+        if fence.is_active(ctx_daa_score) || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_fp_objects_v3::palw_fp_work_leaves_before_the_regime_v1(&tx.payload) {
+            Some(leaves) => Err(TxRuleError::PalwFpWorkLeavesBeforeHeldActivation(leaves, ctx_daa_score)),
+            None => Ok(()),
+        }
+    }
+
+    /// **ADR-0087 Decision 6, the height-indexed half of the sink carve-out** (mainnet audit
+    /// 2026-09-06, M-9).
+    ///
+    /// Decision 6: "below the activation the objects are refused and no market exists". The
+    /// isolation door (`check_transaction_pq_output_classes`) is context-free and can only ask
+    /// whether this ruleset declares the market AT ALL, so on a build that schedules the fence for
+    /// a future score it let a sink output through from genesis — a consensus transaction rule
+    /// relaxed H blocks before the market exists, and a one-directional validity disagreement with
+    /// every peer that has not scheduled it (`flow_context.rs` keeps such a peer, with a warning).
+    ///
+    /// This is the same remedy `check_transaction_pq_output_classes`' own M-06 note names for a
+    /// non-genesis PQ activation: thread the activation score into a context-bearing check.
+    ///
+    /// Order matters and is deliberate: isolation stays PERMISSIVE (it must, or no sink could ever
+    /// be valid), and this refuses before the transaction reaches the UTXO walk, so nothing is
+    /// committed on the strength of the permissive answer.
+    ///
+    /// Inert on every shipped preset: with the fence `None`, `model_sink_outputs_allowed` is
+    /// `false`, isolation has already refused the output, and this returns on its first line.
+    fn check_model_sink_outputs_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        if !self.model_sink_outputs_allowed {
+            // The ruleset does not declare the market: isolation refused the form already, and
+            // this walk would be a per-transaction cost that buys nothing.
+            return Ok(());
+        }
+        if matches!(self.palw_model_market_fence, Some(fence) if fence.is_active(ctx_daa_score)) {
+            return Ok(());
+        }
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some() {
+                return Err(TxRuleError::ModelSinkBeforeMarketActivation(i, ctx_daa_score));
+            }
+        }
+        Ok(())
+    }
+
+    /// **Lane sink (the 2026-09-25 Position review's #1, post-launch): a model sink is block-valid only
+    /// bound, past `Params::palw_model_sink_bound`.** At or past the fence's height (the containing
+    /// block's own DAA score; the virtual's for the mempool and the template) every model sink must
+    /// be the output its lifecycle carrier's `ModelBuy` or `ModelSeed` names, with the line and the
+    /// value it declares, on a carrier that pays a P2PKH-ML-DSA-87 output a refusal can be paid back
+    /// to ([`kaspa_consensus_core::palw_model_market_v1::palw_model_sink_binding_refusal_v1`]). Below
+    /// it the extraction walk's object → output binding is the only check, exactly as testnet-12
+    /// launched: a sink no object names is a valid output whose MSK leaves circulation unrecorded.
+    ///
+    /// Asked after the market's own height rule above, so below the market a sink is refused as
+    /// `ModelSinkBeforeMarketActivation` whatever this fence says. Inert where the fence is not armed
+    /// (every shipped preset): returns on its first line.
+    fn check_model_sink_binding_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_model_sink_bound_fence else {
+            return Ok(());
+        };
+        if !fence.is_active(ctx_daa_score) {
+            return Ok(());
+        }
+        match kaspa_consensus_core::palw_model_market_v1::palw_model_sink_binding_refusal_v1(tx) {
+            Some((index, why)) => Err(TxRuleError::ModelSinkUnbound(index, why)),
+            None => Ok(()),
+        }
+    }
+
+    /// **ADR-0152-adjacent (Activation Pool): the height-indexed half of the activation sink** — the
+    /// model sink's M-9 pair, for the same reason: isolation admits the form wherever the ruleset
+    /// declares the pool, and this refuses it below the fence's height, so a build that schedules the
+    /// pool and one that does not agree on every transaction before it. Genesis-only by
+    /// `validate_palw_v2`, so on testnet-12 this never fires; it is the door for any other ruleset.
+    fn check_activation_sink_outputs_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_activation_pool_fence else {
+            return Ok(());
+        };
+        if fence.is_active(ctx_daa_score) {
+            return Ok(());
+        }
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&output.script_public_key).is_some() {
+                return Err(TxRuleError::ActivationSinkBeforePoolActivation(i, ctx_daa_score));
+            }
+        }
+        Ok(())
+    }
+
+    /// **RFC-0004 (spec 17 §17.11.1): the height-indexed half of the improvement sink** — refused below
+    /// `palw_improvement_v1`, so a build that schedules the fence and one that does not agree on every
+    /// transaction before it.
+    fn check_improvement_sink_outputs_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_improvement_fence else {
+            return Ok(());
+        };
+        if fence.is_active(ctx_daa_score) {
+            return Ok(());
+        }
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if kaspa_consensus_core::palw_improve_pool_v1::palw_improvement_sink_line_v1(&output.script_public_key).is_some() {
+                return Err(TxRuleError::ImprovementSinkBeforeActivation(i, ctx_daa_score));
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn get_lock_time_type(tx: &Transaction) -> LockTimeType {
+        match tx.lock_time {
+            // Lock time of zero means the transaction is finalized.
+            0 => LockTimeType::Finalized,
+
+            // The lock time field of a transaction is either a block DAA score at
+            // which the transaction is finalized or a timestamp depending on if the
+            // value is before the LOCK_TIME_THRESHOLD. When it is under the
+            // threshold it is a DAA score
+            t if t < LOCK_TIME_THRESHOLD => LockTimeType::DaaScore,
+
+            // ..and when equal or above the threshold it represents time
+            _t => LockTimeType::Time,
+        }
+    }
+
+    fn check_tx_is_finalized(&self, tx: &Transaction, lock_time_arg: LockTimeArg) -> TxResult<()> {
+        let block_time_or_daa_score = match lock_time_arg {
+            LockTimeArg::Finalized => return Ok(()),
+            LockTimeArg::DaaScore(ctx_daa_score) => ctx_daa_score,
+            LockTimeArg::MedianTime(ctx_block_time) => ctx_block_time,
+        };
+
+        if tx.lock_time < block_time_or_daa_score {
+            return Ok(());
+        }
+
+        // At this point, the transaction's lock time hasn't occurred yet, but
+        // the transaction might still be finalized if the sequence number
+        // for all transaction inputs is maxed out.
+        for (i, input) in tx.inputs.iter().enumerate() {
+            if input.sequence != u64::MAX {
+                return Err(TxRuleError::NotFinalized(i));
+            }
+        }
+
+        Ok(())
+    }
+}

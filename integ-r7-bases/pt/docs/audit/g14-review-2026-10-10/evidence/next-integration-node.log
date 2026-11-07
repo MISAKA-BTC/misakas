@@ -1,0 +1,506 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-kernel)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/txscript)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-exec)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/mining/errors)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/notify)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspa-pq-validator-core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/client)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-remote)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `PalwClassAdmissionCarriageV2` and `PalwPwuRuleV2`
+  --> misaka-palw-remote/src/bundle.rs:43:103
+   |
+43 |     PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2,
+   |                                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     PalwConsensusObjectV2, PalwPwuRuleV2, palw_class_registration_message_v2,
+   |                            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-base0)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/wasm)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-lower)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-sketch)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/core)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/consensusmanager)
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/backend.rs:323:13
+    |
+323 |         let ctx_hash = job.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/backend.rs:1256:9
+     |
+1256 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2008:9
+     |
+2008 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2186:9
+     |
+2186 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2425:13
+     |
+2425 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2456:9
+     |
+2456 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2905:13
+     |
+2905 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3107:9
+     |
+3107 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3282:9
+     |
+3282 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3558:9
+     |
+3558 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4310:9
+     |
+4310 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4353:9
+     |
+4353 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4473:17
+     |
+4473 |             let ctx_hash = binding.job_context.context_hash();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4561:9
+     |
+4561 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4640:9
+     |
+4640 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-remote` (lib) generated 1 warning (run `cargo fix --lib -p misaka-palw-remote` to apply 1 suggestion)
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:199:13
+    |
+199 |         let ctx_hash = ctx.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:437:9
+    |
+437 |     let ctx_hash = ctx.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/legs.rs:2056:9
+     |
+2056 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1043:9
+     |
+1043 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1351:9
+     |
+1351 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1734:9
+     |
+1734 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2078:14
+     |
+2078 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2215:14
+     |
+2215 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4336:13
+     |
+4336 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4386:9
+     |
+4386 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2885:13
+     |
+2885 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2935:9
+     |
+2935 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/segment_opening.rs:618:9
+    |
+618 |     let ctx_hash = job.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: value assigned to `out_node` is never read
+   --> misaka-palw-tir-lower/src/lower/cross.rs:194:24
+    |
+194 |     let mut out_node = None;
+    |                        ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-sdk)
+warning: `misaka-palw-base0` (lib) generated 28 warnings (run `cargo fix --lib -p misaka-palw-base0` to apply 28 suggestions)
+warning: unused doc comment
+   --> misaka-palw-sdk/src/tir_layout.rs:147:1
+    |
+147 | / /// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+148 | | /// has dropped any whose close is estimated past the carriage); for each, the history tile from
+149 | | /// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+150 | | /// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+...   |
+153 | | /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+154 | | /// the one an operator acts on.
+    | |_-------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `routed_ok` is assigned to, but never used
+   --> misaka-palw-sdk/src/preflight/model.rs:284:9
+    |
+284 |     let mut routed_ok = false;
+    |         ^^^^^^^^^^^^^
+    |
+    = note: consider using `_routed_ok` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:345:13
+    |
+345 |             routed_ok = false;
+    |             ^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:293:13
+    |
+293 |             routed_ok = true;
+    |             ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `misaka-palw-tir-lower` (lib) generated 1 warning
+warning: `misaka-palw-sdk` (lib) generated 4 warnings
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus)
+warning: unused imports: `PALW_FP_V3_VERSION` and `PalwReceiptSpendUnsignedV3`
+     --> consensus/src/pipeline/virtual_processor/tests.rs:14510:52
+      |
+14510 |     use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, fp_quantum_ticket_v3};
+      |                                                    ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+      |
+      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PalwVertexEquivocationV1`
+    --> consensus/src/pipeline/virtual_processor/tests/t12_capacity_verify.rs:1931:90
+     |
+1931 |     use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexEquivocationV1, PalwVertexLeafV1};
+     |                                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:1349:9
+     |
+1349 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:1807:9
+     |
+1807 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:2148:9
+     |
+2148 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:2441:9
+     |
+2441 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: value assigned to `total` is never read
+   --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical.rs:347:24
+    |
+347 |         let (mut seen, mut total, mut pages) = (0u64, None, 0u32);
+    |                        ^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `len` and `clear` are never used
+  --> consensus/src/pipeline/virtual_processor/native_settlement.rs:75:19
+   |
+73 | impl NativeRowCache {
+   | ------------------- methods in this implementation
+74 |     #[cfg(test)]
+75 |     pub(super) fn len(&self) -> usize {
+   |                   ^^^
+...
+79 |     pub(super) fn clear(&mut self) {
+   |                   ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `sealed` is never read
+  --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/opv_bootstrap.rs:82:5
+   |
+73 | struct Onb {
+   |        --- field in this struct
+...
+82 |     sealed: bool,
+   |     ^^^^^^
+
+warning: `kaspa-consensus` (lib test) generated 9 warnings (run `cargo fix --lib -p kaspa-consensus --tests` to apply 6 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 21s
+     Running unittests src/lib.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus-4774c60947c1131d)
+
+running 137 tests
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_a_routing_and_history_class_is_refused_by_the_node_carrier_fit_until_element_courts ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_an_envelope_in_flight_must_not_split_builds_that_differ_only_in_a_future_fence ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_a_release_that_schedules_an_unrelated_fence_keeps_the_route_folding ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_control_a_chunked_proof_convicts_when_the_chunk_lane_is_free ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_mandatory_3_a_relayed_lie_covered_by_every_seat_is_convicted_by_an_outsider ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_opv_a_self_inflicted_default_must_not_erase_a_provable_fraud ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_gap_r7_a_lifted_proof_pays_its_earliest_sealer_not_the_copyist ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_a_self_inflicted_default_must_not_erase_a_provable_fraud ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_opv_two_bonds_must_not_be_able_to_hold_the_whole_opv_lane ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_self_consistent_garbage_trace_is_convicted_against_the_registered_weights ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_quantization_lie_is_convicted_by_the_participant ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_borrowed_trace_of_another_prompt_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_copied_claim_is_refused_and_the_job_paid_once ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_fabricated_segment_boundary_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_substituted_token_is_convicted_by_the_decode_court ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_withheld_material_is_a_demand_from_an_ibd_node_then_a_default ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_mandatory_3_opv_relayed_lies_are_convicted_before_and_after_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_copied_claim_is_refused_and_the_job_paid_once ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_borrowed_trace_of_another_prompt_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_post_genesis_bond_on_a_pruned_import_node_convicts_a_lie_before_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_fabricated_segment_boundary_is_refused_at_inclusion ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_post_genesis_bond_on_an_ibd_node_convicts_a_lie_after_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::c4r4::a2_tag113::g14_c4r4_a2_a_tag_113_carrier_below_its_fence_is_judged_as_undecodable_bytes ... ignored, FAIL C4R4 A-2: tag 113's may-ride arm refuses at isolation what int-12 tolerates (A2U's central rule needs a 113 row)
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_quantization_lie_every_seat_covered_is_convicted_by_the_participant ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_wrong_challenge_of_an_honest_claim_from_a_pruned_import_node_is_dismissed_and_it_finalizes ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_substituted_token_every_seat_covered_is_convicted_by_the_decode_court ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_opv_a_peer_refusing_the_model_changes_no_verdict_reward_weight_or_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_self_consistent_garbage_trace_every_seat_covered_is_convicted_against_the_registered_weights ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_conformance_evidence_is_dropped_by_name_without_the_fence ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_post_genesis_bond_on_a_pruned_import_node_convicts_a_covered_lie_after_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_withheld_material_is_a_demand_from_a_pruned_import_node_then_a_default ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_post_genesis_bond_on_an_ibd_node_convicts_a_covered_lie_before_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_peer_refusing_the_model_changes_no_verdict_reward_weight_or_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_panel_a_wrong_challenge_of_an_honest_claim_from_an_ibd_node_is_dismissed_and_it_finalizes ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_rewards_a_class_that_never_began_onboarding_never_activates ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_rewards_a_legacy_panel_route_class_keeps_the_old_route_and_never_earns_opv_without_the_gate ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_conformance_a_forged_outcome_list_fails_the_attempt ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::c4r4::g14_c4r4_junk_conformance_refutations_must_not_spend_the_runs_reserved_for_proofs ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_canonical_ops_231_and_212_served_by_an_ibd_node_rebuild_the_conformance_verdict ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_false_binding_is_refuted_from_the_verifiers_own_bytes_and_the_binders_published_tree ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_false_computation_on_a_transferred_claim_still_convicts_the_miner ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_common_mode_provider_outage_voids_the_claim_without_a_miner_slash ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::c4r4::g14_c4r4_free_junk_refutations_must_not_carry_forged_evidence_through_its_window ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_reorg_takes_the_transfer_back_and_the_producer_is_liable_again ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_rewards_on_the_release_terms_a_sampled_conformance_earns_nothing ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_transfer_needs_two_operators_through_the_bound_reserving_at_least_the_claim ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_conformance_evidence_against_another_beacon_policy_scope_or_commitment_is_refused_and_stale_evidence_is_invalid ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_model_availability_never_gates_a_binding_and_the_artifact_subject_is_refused ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_below_the_fence_court_objects_are_dropped_and_an_older_claim_stays_its_producers ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::c4r4::g14_c4r4_adr0177_refusing_to_serve_a_models_bytes_triggers_no_precondition_slash_or_hold ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_a_covered_lie_is_convicted_by_an_outsider_through_the_real_path ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::da16::da16_a_transferred_claims_unanswered_demand_charges_every_provider_never_the_producer ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_rewards_a_v2_claim_of_a_kernel_bound_class_never_earns_the_new_reward ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_a_duplicate_proof_after_a_replay_changes_nothing ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_a_served_position_completes_the_check_and_convicts ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_a_covered_lie_is_convicted_after_final_within_the_liability_horizon ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_replay_and_reorg_reach_the_same_roots ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_malformed_wrong_root_and_fake_opening_responses_are_rejected_then_the_producer_defaults ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_hostile_objects_are_dropped_or_dismissed_and_never_stop_the_chain ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::g14_canonical_no_producer_disclosures_pre_and_post_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_a_chunked_object_is_signature_checked_at_the_completing_chunk ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_simultaneous_challengers_one_conviction_one_duplicate_and_one_slash ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_final_waits_the_proof_grace_so_a_late_served_lie_is_convicted_before_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_conformance_hostile_evidence_is_dismissed_or_failed_spends_budget_and_never_stops_the_chain ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_the_block_adjudication_budget_bounds_the_block_not_each_object ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_survives_a_pruned_import ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_spam_demands_never_preempt_a_direct_proof_and_settle_moot ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_the_read_model_serves_a_claim_and_rows_that_rebuild_the_committed_root ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_onboarding_a_binding_over_the_wrong_set_of_tensors_is_refuted_without_any_opening ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_survives_a_node_restart_over_the_same_database ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_onboarding_a_signed_registration_envelope_expires_and_binds_its_ruleset ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_spam_demands_cannot_hold_final_past_window_end_plus_court_deadline_plus_proof_grace ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_a_claim_commits_only_over_its_salted_seal_and_its_salt_is_kept ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_conformance_evidence_passes_only_after_an_unrefuted_window_and_the_class_activates ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escrow_across_reorg_replay_and_redemption ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_a_lie_that_finalized_is_convicted_within_liability_and_its_fact_is_withdrawn ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_onboarding_refusals_leave_the_rows_untouched ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_the_routes_own_chunk_lane_is_per_bond_deposit_backed_and_bounded_by_its_target ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_replay_and_reorg_reach_the_same_roots ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_registration_is_dropped_without_the_fence_the_admission_or_the_right_tag_and_the_legacy_route_coexists ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_an_honest_claim_finalizes_with_no_panel_and_exports_a_panel_independent_beacon_fact ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_survives_a_node_restart_and_finalizes_after_it ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_a_lying_claim_is_convicted_by_a_fresh_outsider_before_final ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_conformance_rows_survive_reorg_restart_and_pruned_import ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_a_bond_with_liability_cannot_exit_until_the_horizon_releases_it ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_withheld_material_defaults_the_producer_burns_a_share_and_frees_the_job ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_spam_demands_cannot_hold_final_past_the_hard_deadline ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_class_that_cannot_be_checked_whole_is_refused_the_complete_check ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_the_deny_list_takes_eligibility_away_and_never_grants_it ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_canonical_a_fresh_node_reverifies_complete_checks_from_rpc_reads_and_its_own_artifact ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::opv_bootstrap_a_stateless_small_class_qualifies_and_a_class_with_history_never_does ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::opv_bootstrap_the_complete_check_passes_the_truth_and_fails_every_lie ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::opv_test_eligibility_hook_is_test_only ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_block_of_hostile_complete_checks_spends_budget_and_never_stops_the_chain ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_a_demanded_position_served_on_chain_is_checked_from_the_blocks_and_convicted ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_a_lie_in_one_segment_is_localized_and_convicted_with_bounded_bytes ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_opv_the_salted_seal_rows_roll_back_and_reapply_identically_across_a_reorg ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_onboarding_a_class_is_bound_attested_registered_and_released_by_the_gate ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_withheld_v3_seal_vetoes_the_attempt_and_is_counted ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_a_reorg_across_live_tiled_job_and_progress_rows_restores_them_exactly ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::conformance::g14_conformance_forged_evidence_is_refuted_withheld_evidence_defaults_and_attempts_are_exhausted ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_a_withheld_segment_is_demanded_and_defaults_never_a_conviction ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_a_withheld_position_is_a_demand_then_a_default_never_a_conviction ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_the_mempool_runs_the_kernel_acceptance_gate ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_a_lie_is_convicted_after_final_within_the_liability_horizon ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_survives_a_node_restart_with_live_tiled_job_and_progress_rows ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_survives_a_pruned_import_with_live_tiled_job_and_progress_rows ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_without_a_complete_check_class_the_beacon_never_comes_and_the_chain_lives ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_a_model_alias_is_a_free_claim_on_an_active_class ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_duplicate_registrations ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_spam_demands_never_preempt_a_proof_and_simultaneous_filers_get_one_conviction ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_fence_height_is_the_same_for_gate_and_chain ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_parity_corpus_classes_real_inventory_roots ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_adversarial_registrations_gate_and_chain_agree ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_a_tiled_prompt_past_4096_ids_commits_as_a_multi_segment_claim_on_the_real_node ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_a_dissected_class_registered_past_the_int13_court_window_commits_the_network_window ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_onboarding_a_false_artifact_binding_is_refuted_by_two_disagreeing_openings ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_refused_registrations_cost_a_fee_and_write_nothing ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_registration_mined_below_the_fence_is_dropped_by_name_then_accepted_past_it ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_registration_mined_end_to_end_on_the_real_node_path ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_the_producer_and_every_other_bond_collude_and_one_outside_bond_convicts_through_the_real_path ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_registration_replay_on_a_second_node_and_across_a_reorg ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_a_sealed_source_v3_beacon_locks_on_salted_seals_and_the_class_passes ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_same_weights_under_another_class_id_are_accepted_by_chain_and_gate ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_two_registrations_in_one_block_one_is_folded ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_registration_survives_a_node_restart_over_the_same_database ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_registration_survives_a_pruned_import ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_eligibility_is_lost_when_the_artifact_binding_is_refuted ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_input_borrowed_and_garbage_traces_are_convicted_on_the_node ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::opv_bootstrap::g14_opv_bootstrap_from_zero_finals_a_complete_check_seeds_the_beacon_and_a_sampled_class_becomes_eligible ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_real_checkpoints_at_32783_positions_mined_under_the_whole_release ... ok
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::real_scale::g14_k2s_v5_an_encoder_class_on_the_node_convicts_its_lies_and_finalizes_an_honest_claim ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_program_mutation_differential ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_gate_and_chain_agree_across_the_shipped_fence_schedule has been running for over 60 seconds
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_real_checkpoint_class_at_its_widest_context_across_the_shipped_schedule has been running for over 60 seconds
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_real_checkpoint_classes_parity_and_mined has been running for over 60 seconds
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_real_checkpoint_classes_parity_and_mined ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_gate_and_chain_agree_across_the_shipped_fence_schedule ... ok
+test pipeline::virtual_processor::tests::g14_registration_e2e::g14_real_checkpoint_class_at_its_widest_context_across_the_shipped_schedule ... ok
+
+test result: ok. 136 passed; 0 failed; 1 ignored; 0 measured; 637 filtered out; finished in 357.90s
+

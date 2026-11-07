@@ -1,0 +1,65 @@
+{
+  "scope": "Independent Python calculation; illustrative N=1000, not a genesis model measurement",
+  "assumptions": [
+    "fixed detectably bad set",
+    "uniform distinct sampling",
+    "one honest checker actually checks this claim"
+  ],
+  "excluded": [
+    "Rust execution",
+    "claim-check coverage",
+    "adaptive/grinding attacks",
+    "proof localisation/inclusion",
+    "court capacity",
+    "collateral collection"
+  ],
+  "self_tests": {
+    "exhaustive_probability_cases_passed": 505,
+    "ported_golden_vector": [
+      645,
+      20,
+      372,
+      227
+    ],
+    "identical_input_repetitions": 100,
+    "distinct_draw_sets_in_identical_repetitions": 1,
+    "rust_tests_executed": false
+  },
+  "illustrative_cases": [
+    {
+      "total_intervals": 1000,
+      "detectably_bad_intervals": 1000,
+      "detection_percent_at_k4": 100.0,
+      "minimum_k_for_90_percent": 1,
+      "minimum_k_for_99_percent": 1
+    },
+    {
+      "total_intervals": 1000,
+      "detectably_bad_intervals": 500,
+      "detection_percent_at_k4": 93.78751871229304,
+      "minimum_k_for_90_percent": 4,
+      "minimum_k_for_99_percent": 7
+    },
+    {
+      "total_intervals": 1000,
+      "detectably_bad_intervals": 100,
+      "detection_percent_at_k4": 34.433833374683985,
+      "minimum_k_for_90_percent": 22,
+      "minimum_k_for_99_percent": 43
+    },
+    {
+      "total_intervals": 1000,
+      "detectably_bad_intervals": 10,
+      "detection_percent_at_k4": 3.9462343049296296,
+      "minimum_k_for_90_percent": 205,
+      "minimum_k_for_99_percent": 368
+    },
+    {
+      "total_intervals": 1000,
+      "detectably_bad_intervals": 1,
+      "detection_percent_at_k4": 0.4,
+      "minimum_k_for_90_percent": 900,
+      "minimum_k_for_99_percent": 990
+    }
+  ]
+}

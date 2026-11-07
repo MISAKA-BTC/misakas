@@ -1,0 +1,4 @@
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+Loading weights:   0%|          | 0/290 [00:00<?, ?it/s]Loading weights:   0%|          | 1/290 [00:01<07:16,  1.51s/it]Loading weights: 100%|██████████| 290/290 [00:01<00:00, 191.14it/s]
+source sequence 1/1: 21 positions
+{"positions": 21, "elapsed_seconds": 18.1595927500166, "max_rss_bytes": 3316432896, "logits_sha256": "572fc10e86fce414967bf26af2a6c542e4330c6e67b028e51da179962cfdf782"}

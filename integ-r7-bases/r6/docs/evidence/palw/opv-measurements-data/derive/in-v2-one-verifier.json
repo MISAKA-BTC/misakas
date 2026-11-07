@@ -1,0 +1,1404 @@
+{
+ "s_per_daa": 120,
+ "economics": {
+  "participation_q": 1.0,
+  "verifiers_n": 1,
+  "model_holders_n": 1,
+  "eps_enf": 0.0,
+  "collection_rate": 1.0,
+  "reporter_return_permille": 490,
+  "bond_bili": 13000
+ },
+ "labels": {
+  "s_per_daa": {
+   "kind": "derived",
+   "src": "120 s: target_time_per_block of the 2-minute network, a lower bound (rfc-0012-policy-proposal.md); 125-150 is cited, not measured (F1)"
+  },
+  "reporter_return_permille": {
+   "kind": "derived",
+   "src": "ADR-0032 amendment 2026-10-10: PALW reporter share 4,900 bps; a self-reporter recovers it, the net loss is 51 % of the collected slash"
+  },
+  "participation_q": {
+   "kind": "assumed",
+   "src": "NOT measured: the probability that a verifier is present and checks (F8)"
+  },
+  "verifiers_n": {
+   "kind": "assumed",
+   "src": "NOT measured: how many independent verifiers exist (F8)"
+  },
+  "model_holders_n": {
+   "kind": "assumed",
+   "src": "NOT measured and NOT guaranteed by the chain (ADR-0177 D7): how many of them hold the registered model; 0 for a closed model"
+  },
+  "eps_enf": {
+   "kind": "assumed",
+   "src": "0: no enforcement failure is assumed; NOT measured"
+  },
+  "collection_rate": {
+   "kind": "assumed",
+   "src": "1: ledger.rs convict() slashes min(reserved, bond collateral); a bond slashed elsewhere collects less; NOT measured"
+  },
+  "bond_bili": {
+   "kind": "derived",
+   "src": "13,000 BILI: the t12 producer minimum bond (t12-bond-reuse-audit-2026-10-10.md, a code reading, not a fleet observation)"
+  },
+  "liability_horizon_daa": {
+   "kind": "derived",
+   "src": "interim: window 50 + post-Final liability 200 = 250 DAA (palw_kernel_route_policy_v1, PalwPanelFreeFenceV1::interim_v1); not a production value"
+  },
+  "gain": {
+   "kind": "derived",
+   "src": "interim OPV terms: Final reward 5 + work credit 5 + external bound 10 = 20 BILI (policy, not measured)"
+  }
+ },
+ "p_dc_values": [
+  1.0,
+  0.5,
+  0.1,
+  0.01,
+  0.001,
+  0.0009765625,
+  0.0001,
+  0.0
+ ],
+ "classes": [
+  {
+   "name": "qwen25-0.5b P=3 no-link",
+   "positions": 3,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "measured",
+     "src": "claim size run (P=16 is the largest of the first matrix)"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position, 59.6-59.8 MB at P=3/8/16"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=16 no-link",
+   "positions": 16,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "measured",
+     "src": "claim size run (P=16 is the largest of the first matrix)"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position, 59.6-59.8 MB at P=3/8/16"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=64 no-link",
+   "positions": 64,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; P <= 16 were run (P=64 in results3 when it finished), larger P is an extrapolation of the fit"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "assumed",
+     "src": "59.8 MB carried to a larger P; it grows with the position index"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=256 no-link",
+   "positions": 256,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; P <= 16 were run (P=64 in results3 when it finished), larger P is an extrapolation of the fit"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "assumed",
+     "src": "59.8 MB carried to a larger P; it grows with the position index"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=256 auth-once no-link",
+   "positions": 256,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": true,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; P <= 16 were run (P=64 in results3 when it finished), larger P is an extrapolation of the fit"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "assumed",
+     "src": "59.8 MB carried to a larger P; it grows with the position index"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "assumed",
+     "src": "ASSUMED implementation property (a verifier that authenticates its copy once at acquisition); the reference verifier does not"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=1024 no-link",
+   "positions": 1024,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; P <= 16 were run (P=64 in results3 when it finished), larger P is an extrapolation of the fit"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "assumed",
+     "src": "59.8 MB carried to a larger P; it grows with the position index"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=8192 no-link",
+   "positions": 8192,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; P <= 16 were run (P=64 in results3 when it finished), larger P is an extrapolation of the fit"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "assumed",
+     "src": "59.8 MB carried to a larger P; it grows with the position index"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=8192 auth-once no-link",
+   "positions": 8192,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": true,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; P <= 16 were run (P=64 in results3 when it finished), larger P is an extrapolation of the fit"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "assumed",
+     "src": "59.8 MB carried to a larger P; it grows with the position index"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "assumed",
+     "src": "ASSUMED implementation property (a verifier that authenticates its copy once at acquisition); the reference verifier does not"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen25-0.5b P=8192 1Gbps(assumed link)",
+   "positions": 8192,
+   "artifact_bytes": 660666048,
+   "position_bytes": 59800000.0,
+   "bandwidth_bps": 125000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 95.4,
+   "check_per_position_s": 17.5,
+   "check_speedup": 1.0,
+   "model_auth_s": 41.2,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; P <= 16 were run (P=64 in results3 when it finished), larger P is an extrapolation of the fit"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "assumed",
+     "src": "59.8 MB carried to a larger P; it grows with the position index"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "1 Gbps = 125 MB/s link between provider and verifier; NOT measured (fleet plan F3)"
+    },
+    "check_fixed_s": {
+     "kind": "derived",
+     "src": "least squares over P=3/8/16 check_salted CPU: intercept 95.4 s (max residual 16.3 s)"
+    },
+    "check_per_position_s": {
+     "kind": "derived",
+     "src": "same fit: 17.5 s per position"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "weights pass, commit x2 as the verifier does: 41.2 s (82 ns/param)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "measured",
+     "src": "upper bound: 'late' lie check-to-verdict minus the honest check, +23.5 s (noise +-16 s); the model recompute of the failing row is 1.6-2.3 s"
+    },
+    "file_s": {
+     "kind": "measured",
+     "src": "assembly + encode + strict decode + court: milliseconds (<= 0.7 s for a 272 MB filing)"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "median wall/CPU = 1.35 under the host load of the samples"
+    },
+    "latency_s": {
+     "kind": "assumed",
+     "src": "0: no link was measured"
+    }
+   }
+  },
+  {
+   "name": "qwen35-0.8b P=3 (estimates, none verified) no-link",
+   "positions": 3,
+   "artifact_bytes": 1052511616.0,
+   "position_bytes": 522089457.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 163.44141008263955,
+   "check_per_position_s": 152.89531981272282,
+   "check_speedup": 1.0,
+   "model_auth_s": 70.5062120000002,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "qwen35-0.8b P=64 (estimates, none verified) no-link",
+   "positions": 64,
+   "artifact_bytes": 1052511616.0,
+   "position_bytes": 522089457.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 163.44141008263955,
+   "check_per_position_s": 152.89531981272282,
+   "check_speedup": 1.0,
+   "model_auth_s": 70.5062120000002,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "llama32-1b P=3 (estimates, none verified) no-link",
+   "positions": 3,
+   "artifact_bytes": 1533096320.0,
+   "position_bytes": 70498155.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 289.98021315748764,
+   "check_per_position_s": 20.645576750139018,
+   "check_speedup": 1.0,
+   "model_auth_s": 125.09318399999992,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "llama32-1b P=64 (estimates, none verified) no-link",
+   "positions": 64,
+   "artifact_bytes": 1533096320.0,
+   "position_bytes": 70498155.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 289.98021315748764,
+   "check_per_position_s": 20.645576750139018,
+   "check_speedup": 1.0,
+   "model_auth_s": 125.09318399999992,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "smollm2-1.7b P=3 (estimates, none verified) no-link",
+   "positions": 3,
+   "artifact_bytes": 1866690944.0,
+   "position_bytes": 106399851.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 352.89230529829763,
+   "check_per_position_s": 31.15948623086456,
+   "check_speedup": 1.0,
+   "model_auth_s": 152.23253200000013,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "smollm2-1.7b P=64 (estimates, none verified) no-link",
+   "positions": 64,
+   "artifact_bytes": 1866690944.0,
+   "position_bytes": 106399851.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 352.89230529829763,
+   "check_per_position_s": 31.15948623086456,
+   "check_speedup": 1.0,
+   "model_auth_s": 152.23253200000013,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "glm-edge-1.5b P=3 (estimates, none verified) no-link",
+   "positions": 3,
+   "artifact_bytes": 1642067712.0,
+   "position_bytes": 96767739.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 310.1041098152983,
+   "check_per_position_s": 28.338695990865585,
+   "check_speedup": 1.0,
+   "model_auth_s": 133.77433599999972,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "glm-edge-1.5b P=64 (estimates, none verified) no-link",
+   "positions": 64,
+   "artifact_bytes": 1642067712.0,
+   "position_bytes": 96767739.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 310.1041098152983,
+   "check_per_position_s": 28.338695990865585,
+   "check_speedup": 1.0,
+   "model_auth_s": 133.77433599999972,
+   "model_auth_once": false,
+   "localize_s": 23.5,
+   "file_s": 0.1,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "assumed",
+     "src": "the claim size under study; no claim of this class was verified"
+    },
+    "artifact_bytes": {
+     "kind": "measured",
+     "src": "opv-meas static: container bytes (H1 artifact)"
+    },
+    "position_bytes": {
+     "kind": "measured",
+     "src": "build-world: public material per position at P=3 (small history; grows with the position index)"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link at all: a CPU-only lower bound"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "(0.5B intercept / 0.5B weight-pass model) x this class's measured weight-pass model: ASSUMPTION, no check of this class ran (the reference verifier needs >= 16 B/param of RAM)"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "the 0.5B cost per public-material byte x this class's measured bytes per position: ASSUMPTION"
+    },
+    "model_auth_s": {
+     "kind": "derived",
+     "src": "this class's weights pass, commit x2 (measured streaming pass)"
+    },
+    "model_auth_once": {
+     "kind": "measured",
+     "src": "reference verifier re-authenticates on every check"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "23.5 s: the 0.5B upper bound carried; this class's failing row was not recomputed"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "0.1 s carried from the 0.5B class"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B median wall/CPU carried"
+    }
+   }
+  },
+  {
+   "name": "9B-8k reference no-link",
+   "positions": 8192,
+   "artifact_bytes": 11700000000.0,
+   "position_bytes": 1540000000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 1710.0,
+   "check_per_position_s": 451.0,
+   "check_speedup": 1.0,
+   "model_auth_s": 810.0,
+   "model_auth_once": false,
+   "localize_s": 17.0,
+   "file_s": 1.0,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "derived",
+     "src": "SOUND SG-06: 9B-8k = 8,192 positions"
+    },
+    "artifact_bytes": {
+     "kind": "assumed",
+     "src": "1.3 B/param x 9.0 B params; the five real containers are 1.08-1.37 B/param (H1's 9B pack is not built)"
+    },
+    "position_bytes": {
+     "kind": "derived",
+     "src": "K2S / coverage-p1p2-record.md shape-level probe: 12.6 TB per claim / 8,192 positions = 1.54 GB"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "190 ns/param x 9 B: the 0.5B ratio carried to 9B"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "0.29 us/byte x 1.54 GB: the 0.5B rate carried to another architecture"
+    },
+    "model_auth_s": {
+     "kind": "assumed",
+     "src": "90 ns/param x 9 B (the 0.5B and GLM-1.5B weight pass is 82-90 ns/param)"
+    },
+    "check_speedup": {
+     "kind": "assumed",
+     "src": "1 = the reference verifier; 10 = a sensitivity, not an implementation"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "row recompute at 9B scale, carried from the 0.5B model"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "carried"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B measurement carried"
+    }
+   }
+  },
+  {
+   "name": "9B-8k reference 1Gbps",
+   "positions": 8192,
+   "artifact_bytes": 11700000000.0,
+   "position_bytes": 1540000000.0,
+   "bandwidth_bps": 125000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 1710.0,
+   "check_per_position_s": 451.0,
+   "check_speedup": 1.0,
+   "model_auth_s": 810.0,
+   "model_auth_once": false,
+   "localize_s": 17.0,
+   "file_s": 1.0,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "derived",
+     "src": "SOUND SG-06: 9B-8k = 8,192 positions"
+    },
+    "artifact_bytes": {
+     "kind": "assumed",
+     "src": "1.3 B/param x 9.0 B params; the five real containers are 1.08-1.37 B/param (H1's 9B pack is not built)"
+    },
+    "position_bytes": {
+     "kind": "derived",
+     "src": "K2S / coverage-p1p2-record.md shape-level probe: 12.6 TB per claim / 8,192 positions = 1.54 GB"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "1 Gbps link; NOT measured"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "190 ns/param x 9 B: the 0.5B ratio carried to 9B"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "0.29 us/byte x 1.54 GB: the 0.5B rate carried to another architecture"
+    },
+    "model_auth_s": {
+     "kind": "assumed",
+     "src": "90 ns/param x 9 B (the 0.5B and GLM-1.5B weight pass is 82-90 ns/param)"
+    },
+    "check_speedup": {
+     "kind": "assumed",
+     "src": "1 = the reference verifier; 10 = a sensitivity, not an implementation"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "row recompute at 9B scale, carried from the 0.5B model"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "carried"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B measurement carried"
+    }
+   }
+  },
+  {
+   "name": "9B-8k 10x faster no-link",
+   "positions": 8192,
+   "artifact_bytes": 11700000000.0,
+   "position_bytes": 1540000000.0,
+   "bandwidth_bps": 1000000000000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 1710.0,
+   "check_per_position_s": 451.0,
+   "check_speedup": 10.0,
+   "model_auth_s": 810.0,
+   "model_auth_once": false,
+   "localize_s": 17.0,
+   "file_s": 1.0,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "derived",
+     "src": "SOUND SG-06: 9B-8k = 8,192 positions"
+    },
+    "artifact_bytes": {
+     "kind": "assumed",
+     "src": "1.3 B/param x 9.0 B params; the five real containers are 1.08-1.37 B/param (H1's 9B pack is not built)"
+    },
+    "position_bytes": {
+     "kind": "derived",
+     "src": "K2S / coverage-p1p2-record.md shape-level probe: 12.6 TB per claim / 8,192 positions = 1.54 GB"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "no link"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "190 ns/param x 9 B: the 0.5B ratio carried to 9B"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "0.29 us/byte x 1.54 GB: the 0.5B rate carried to another architecture"
+    },
+    "model_auth_s": {
+     "kind": "assumed",
+     "src": "90 ns/param x 9 B (the 0.5B and GLM-1.5B weight pass is 82-90 ns/param)"
+    },
+    "check_speedup": {
+     "kind": "assumed",
+     "src": "1 = the reference verifier; 10 = a sensitivity, not an implementation"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "row recompute at 9B scale, carried from the 0.5B model"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "carried"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B measurement carried"
+    }
+   }
+  },
+  {
+   "name": "9B-8k 10x faster 1Gbps",
+   "positions": 8192,
+   "artifact_bytes": 11700000000.0,
+   "position_bytes": 1540000000.0,
+   "bandwidth_bps": 125000000.0,
+   "latency_s": 0.0,
+   "check_fixed_s": 1710.0,
+   "check_per_position_s": 451.0,
+   "check_speedup": 10.0,
+   "model_auth_s": 810.0,
+   "model_auth_once": false,
+   "localize_s": 17.0,
+   "file_s": 1.0,
+   "margin_frac": 0.35,
+   "labels": {
+    "positions": {
+     "kind": "derived",
+     "src": "SOUND SG-06: 9B-8k = 8,192 positions"
+    },
+    "artifact_bytes": {
+     "kind": "assumed",
+     "src": "1.3 B/param x 9.0 B params; the five real containers are 1.08-1.37 B/param (H1's 9B pack is not built)"
+    },
+    "position_bytes": {
+     "kind": "derived",
+     "src": "K2S / coverage-p1p2-record.md shape-level probe: 12.6 TB per claim / 8,192 positions = 1.54 GB"
+    },
+    "bandwidth_bps": {
+     "kind": "assumed",
+     "src": "1 Gbps link; NOT measured"
+    },
+    "check_fixed_s": {
+     "kind": "assumed",
+     "src": "190 ns/param x 9 B: the 0.5B ratio carried to 9B"
+    },
+    "check_per_position_s": {
+     "kind": "assumed",
+     "src": "0.29 us/byte x 1.54 GB: the 0.5B rate carried to another architecture"
+    },
+    "model_auth_s": {
+     "kind": "assumed",
+     "src": "90 ns/param x 9 B (the 0.5B and GLM-1.5B weight pass is 82-90 ns/param)"
+    },
+    "check_speedup": {
+     "kind": "assumed",
+     "src": "1 = the reference verifier; 10 = a sensitivity, not an implementation"
+    },
+    "localize_s": {
+     "kind": "assumed",
+     "src": "row recompute at 9B scale, carried from the 0.5B model"
+    },
+    "file_s": {
+     "kind": "assumed",
+     "src": "carried"
+    },
+    "margin_frac": {
+     "kind": "measured",
+     "src": "0.5B measurement carried"
+    }
+   }
+  }
+ ]
+}

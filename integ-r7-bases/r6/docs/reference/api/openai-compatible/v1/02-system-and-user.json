@@ -1,0 +1,18 @@
+{
+  "request": {
+    "messages": [
+      {
+        "role": "system",
+        "content": "You are a concise assistant."
+      },
+      {
+        "role": "user",
+        "content": "Name three primary colours."
+      }
+    ],
+    "max_tokens": 48
+  },
+  "expect": {
+    "verdict": "accepted"
+  }
+}

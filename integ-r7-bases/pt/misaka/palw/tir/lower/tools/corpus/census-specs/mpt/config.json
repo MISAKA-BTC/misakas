@@ -1,0 +1,42 @@
+{
+  "architectures": [
+    "MptForCausalLM"
+  ],
+  "attn_config": {
+    "alibi": true,
+    "alibi_bias_max": 8,
+    "attn_impl": "torch",
+    "attn_pdrop": 0,
+    "attn_type": "multihead_attention",
+    "attn_uses_sequence_id": false,
+    "clip_qkv": null,
+    "model_type": "",
+    "prefix_lm": false,
+    "qk_ln": false,
+    "softmax_scale": null
+  },
+  "bos_token_id": null,
+  "d_model": 32,
+  "dtype": "bfloat16",
+  "emb_pdrop": 0.0,
+  "embedding_fraction": 1.0,
+  "eos_token_id": null,
+  "expansion_ratio": 4,
+  "init_device": "cpu",
+  "initializer_range": 0.02,
+  "layer_norm_epsilon": 1e-05,
+  "learned_pos_emb": true,
+  "logit_scale": null,
+  "max_seq_len": 2048,
+  "model_type": "mpt",
+  "n_heads": 4,
+  "n_layers": 2,
+  "no_bias": true,
+  "norm_type": "low_precision_layernorm",
+  "pad_token_id": null,
+  "resid_pdrop": 0.0,
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_cache": false,
+  "vocab_size": 64
+}

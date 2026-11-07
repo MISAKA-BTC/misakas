@@ -1,0 +1,21 @@
+{
+  "base_commit": "bb828e4205c57cc8a3587e2f96c29183a9be7f5d",
+  "source_sha256": {
+    "kaspad/src/palw_fraud_filer.rs": "acac09b1cb87de8f0564cfaaa6428ef8f3e9794258da4346421e623d6fe03c29",
+    "kaspad/src/palw_service_public_e2e.rs": "147c5a9b817bcdb233347cd90d0b3bef8d27ac6ce573372e6133a017359a7870",
+    "consensus/core/src/palw_state_v2.rs": "a5445bca953f0912fb7ec34b9138060111c805ef1719bed10e0212113e69afe1",
+    "consensus/core/src/palw_legacy_answer_chunks_fold_v2.rs": "a9b132a672a60a45c61f3cf72735d0ddffdb79f9aae2256e5041400e1058b80c",
+    "consensus/core/src/palw_fp_constraint_job_v1.rs": "75c8ea54561d693152343d4634340404f0c77320105e5a93719121102062a9a3"
+  },
+  "binary_sha256": {
+    "kaspad_lib-a562e45711087c1e": "653e2399c87755f60226c280ed7725e2b564148a38dc57fec7fce5fdcaf1fea7"
+  },
+  "commands": [
+    "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo test -p kaspad --lib --locked --no-run",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspad_lib-a562e45711087c1e palw_fraud_filer --nocapture",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspad_lib-a562e45711087c1e large_constraint_job --test-threads=2 --nocapture",
+    "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=2 cargo check -p kaspad --lib --locked"
+  ],
+  "scope": "29 unique PASS: 27 filer/input regressions and 2 actual service tests (625.71 s). Descriptor 112291 bytes, ordinary transaction transient mass 499184/500000. Replay/release DAA 1163; withheld-job objective default DAA 2307 after deadline 2299. Not full G14. No fresh shipping-pin run for this node-only change.",
+  "normal_check_provenance": "Production helper unchanged between successful normal library check and final source. Subsequent changes are test fixtures/assertions. Initial failed builds/zero selections/service trial are excluded from successful verification."
+}

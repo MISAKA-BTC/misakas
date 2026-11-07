@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc06-native-four-100k-opt3-measurement",
+  "timeoutSeconds": 900,
+  "binary": "/tmp/misaka-rfc67812-node-target/debug/deps/kaspa_consensus-bdd9082aecb2b1ea",
+  "binarySha256": "3fedcd830b7806969ab91c4ee09417030a38d1d7b25a45a79e52900c9508d809",
+  "testName": "pipeline::virtual_processor::tests::t12_permissionless_panel_e2e::complete_population::rfc06_complete_population_native_100k_four_retained_seals_and_fifth_refusal",
+  "profile": "test default opt0; libcrux-ml-dsa and blake2b_simd opt3; debug assertions retained",
+  "fundingScope": "generated keys and canonical ordinary txid descriptors; genesis fixture UTXO authority, no mined funding inference",
+  "nativeAuthority": "real native transition and carriage restore; reference beacon/eligibility seams, no real P2P",
+  "legacyCanonicalByteCap": 402653184,
+  "experimental107DecodedByteCap": 536870912,
+  "experimental107WireByteCap": 402653184,
+  "maximumRssApproved": false,
+  "wholeFleetApproval": false,
+  "fullSecurityApproval": false,
+  "output": "/tmp/misaka-rfc67812-runtime/native-four-100k-opt3-canonical.borsh"
+}

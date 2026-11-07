@@ -1,0 +1,99 @@
+syntax = "proto3";
+package protowire;
+
+option go_package = "github.com/kaspanet/kaspad/protowire";
+
+import "p2p.proto";
+
+message KaspadMessage {
+  uint32 response_id = 101;
+  uint32 request_id = 102;
+  oneof payload {
+    AddressesMessage addresses = 1;
+    BlockMessage block = 2;
+    TransactionMessage transaction = 3;
+    BlockLocatorMessage blockLocator = 5;
+    RequestAddressesMessage requestAddresses = 6;
+    RequestRelayBlocksMessage requestRelayBlocks = 10;
+    RequestTransactionsMessage requestTransactions = 12;
+    BlockMessage ibdBlock = 13;
+    InvRelayBlockMessage invRelayBlock = 14;
+    InvTransactionsMessage invTransactions = 15;
+    PingMessage ping = 16;
+    PongMessage pong = 17;
+    VerackMessage verack = 19;
+    VersionMessage version = 20;
+    TransactionNotFoundMessage transactionNotFound = 21;
+    RejectMessage reject = 22;
+    PruningPointUtxoSetChunkMessage pruningPointUtxoSetChunk = 25;
+    RequestIBDBlocksMessage requestIBDBlocks = 26;
+    UnexpectedPruningPointMessage unexpectedPruningPoint = 27;
+    IbdBlockLocatorMessage ibdBlockLocator = 30;
+    IbdBlockLocatorHighestHashMessage ibdBlockLocatorHighestHash = 31;
+    RequestNextPruningPointUtxoSetChunkMessage requestNextPruningPointUtxoSetChunk = 33;
+    DonePruningPointUtxoSetChunksMessage donePruningPointUtxoSetChunks = 34;
+    IbdBlockLocatorHighestHashNotFoundMessage ibdBlockLocatorHighestHashNotFound = 35;
+    BlockWithTrustedDataMessage blockWithTrustedData = 36;
+    DoneBlocksWithTrustedDataMessage doneBlocksWithTrustedData = 37;
+    RequestPruningPointAndItsAnticoneMessage requestPruningPointAndItsAnticone = 40;
+    BlockHeadersMessage blockHeaders = 41;
+    RequestNextHeadersMessage requestNextHeaders = 42;
+    DoneHeadersMessage DoneHeaders = 43;
+    RequestPruningPointUTXOSetMessage requestPruningPointUTXOSet = 44;
+    RequestHeadersMessage requestHeaders = 45;
+    RequestBlockLocatorMessage requestBlockLocator = 46;
+    PruningPointsMessage pruningPoints = 47;
+    RequestPruningPointProofMessage requestPruningPointProof = 48;
+    PruningPointProofMessage pruningPointProof = 49;
+    ReadyMessage ready = 50;
+    BlockWithTrustedDataV4Message blockWithTrustedDataV4 = 51;
+    TrustedDataMessage trustedData = 52;
+    RequestIBDChainBlockLocatorMessage requestIBDChainBlockLocator = 53;
+    IbdChainBlockLocatorMessage ibdChainBlockLocator = 54;
+    RequestAntipastMessage requestAntipast = 55;
+    RequestNextPruningPointAndItsAnticoneBlocksMessage requestNextPruningPointAndItsAnticoneBlocks = 56;
+    BlockBodyMessage blockBody = 57;
+    RequestBlockBodiesMessage requestBlockBodies = 58;
+    InvEvmTransactionsMessage invEvmTransactions = 59;
+    RequestEvmTransactionsMessage requestEvmTransactions = 60;
+    EvmTransactionMessage evmTransaction = 61;
+    EvmTransactionNotFoundMessage evmTransactionNotFound = 62;
+    // kaspa-pq ADR-0022: pruned-IBD EVM + DNS/PoS-v2 overlay snapshot transfer.
+    RequestPruningPointEvmStateMessage requestPruningPointEvmState = 63;
+    PruningPointEvmStateMessage pruningPointEvmState = 64;
+    RequestPruningPointOverlaySnapshotMessage requestPruningPointOverlaySnapshot = 65;
+    PruningPointOverlaySnapshotMessage pruningPointOverlaySnapshot = 66;
+    // kaspa-pq EVM Lane v0.4 (§14.2): pending EVM deposit-claim relay (protocol ≥ 101).
+    InvEvmDepositClaimsMessage invEvmDepositClaims = 67;
+    RequestEvmDepositClaimsMessage requestEvmDepositClaims = 68;
+    EvmDepositClaimMessage evmDepositClaim = 69;
+    EvmDepositClaimNotFoundMessage evmDepositClaimNotFound = 70;
+    // kaspa-pq: chain-candidate summaries (protocol >= 103). Deliberately tiny and
+    // separate from block relay so a node can learn WHAT a peer is offering during an
+    // IBD without fetching blocks — fetching blocks mid-IBD is the DoS the relay guard
+    // exists to prevent, and it is why competing chains used to be discarded unseen.
+    RequestIbdCandidateSummaryMessage requestIbdCandidateSummary = 71;
+    IbdCandidateSummaryMessage ibdCandidateSummary = 72;
+    // PALW ADR-0042: pruned-IBD PALW V2 chain-state transfer. Without it a node joining after the
+    // pruning point leaves genesis has no PALW state at all, and absent state used to be read as
+    // "no policy" — silently disabling every PALW consensus rule.
+    RequestPruningPointPalwStateMessage requestPruningPointPalwState = 73;
+    PruningPointPalwStateMessage pruningPointPalwState = 74;
+    PalwTraceMaterialBroadcastMessage palwTraceMaterialBroadcast = 75;
+    PalwSeatReceiptBroadcastMessage palwSeatReceiptBroadcast = 76;
+    PalwMaterialRequestMessage palwMaterialRequest = 77;
+    // ADR-0077 Decision 8 (protocol >= 105): a free-prompt seat asks the executor for ONE
+    // checkpoint interval's opening and is answered directly. Neither message is relayed, and
+    // both directions are gated — the answer is a new type too, so it can only reach a peer that
+    // can route it.
+    PalwIntervalOpeningRequestMessage palwIntervalOpeningRequest = 78;
+    PalwIntervalOpeningMessage palwIntervalOpening = 79;
+    // Bounded public accepted-history pull. Responses are addressed to the asker only.
+    PalwPrefixHistoryRequestMessage palwPrefixHistoryRequest = 80;
+    PalwPrefixHistoryRecordMessage palwPrefixHistoryRecord = 81;
+  }
+}
+
+service P2P {
+  rpc MessageStream (stream KaspadMessage) returns (stream KaspadMessage) {}
+}

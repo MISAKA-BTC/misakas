@@ -1,0 +1,161 @@
+{
+ "order": 6,
+ "id": "qwen15-moe-a2.7b",
+ "family": "qwen2-moe",
+ "repo": "Qwen/Qwen1.5-MoE-A2.7B-Chat",
+ "revision": "ec052fda178e241c7c443468d2fa1db6618996be",
+ "task": "text-generation",
+ "context": 512,
+ "local": null,
+ "full": "header-only",
+ "bytes": 28632144944,
+ "source": {
+  "schema": "misaka.h1.source.v1",
+  "repo": "Qwen/Qwen1.5-MoE-A2.7B-Chat",
+  "revision": "ec052fda178e241c7c443468d2fa1db6618996be",
+  "resolved_sha": "ec052fda178e241c7c443468d2fa1db6618996be",
+  "gated": false,
+  "private": false,
+  "architectures": [
+   "Qwen2MoeForCausalLM"
+  ],
+  "model_type": "qwen2_moe",
+  "pipeline_tag": "text-generation",
+  "files": [
+   {
+    "path": ".gitattributes",
+    "size": 1519,
+    "git_oid": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "LICENSE",
+    "size": 6897,
+    "git_oid": "e1d93ee92bb67a804fdddbfe397ad2c1dffdb62e",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "README.md",
+    "size": 2798,
+    "git_oid": "cadb72590bf5a68d187648ab5fda4f866131dfc8",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "config.json",
+    "size": 920,
+    "git_oid": "24dd49de4140249c8fceaaaee7777960db19006b",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "configuration.json",
+    "size": 38,
+    "git_oid": "24ff93c212d3d254a77730c1e0c94eb7123c2a77",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "generation_config.json",
+    "size": 248,
+    "git_oid": "281213f5a09f1391720f4cf9be97e8c6ea17d83a",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "merges.txt",
+    "size": 1671839,
+    "git_oid": "20024bfe7c83998e9aeaf98a0cd6a2ce6306c2f0",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "model-00001-of-00008.safetensors",
+    "size": 3999614664,
+    "git_oid": "8824fdda1e2d6f46735bc2ffb32fa87cbb4cb4b5",
+    "sha256": "a51a84c031e0f6c8808bc284106c488ab3db6069a3f6f5a231be1e963206d020",
+    "lfs": true
+   },
+   {
+    "path": "model-00002-of-00008.safetensors",
+    "size": 3999385424,
+    "git_oid": "9484104da1548326f8cff6beb4deca5c4933d7f0",
+    "sha256": "02a9f530c526ac09e5d26cdece113d62b030ebc6f137ea69cd2754bea1287121",
+    "lfs": true
+   },
+   {
+    "path": "model-00003-of-00008.safetensors",
+    "size": 3988628968,
+    "git_oid": "2529aab1d6bd8e8b38a0b5b30ca752de4b4e202a",
+    "sha256": "200116fdf90ea17c2dae53594a87b9efbbe199e4c4e487fb25aba9c65e674112",
+    "lfs": true
+   },
+   {
+    "path": "model-00004-of-00008.safetensors",
+    "size": 3999386088,
+    "git_oid": "d3d84424327470e8bad65dbbf20aaeb76062f6f2",
+    "sha256": "41296f5c77188a4182c87f9bc5958222897ed5fe1bde6912755df050f1222b8d",
+    "lfs": true
+   },
+   {
+    "path": "model-00005-of-00008.safetensors",
+    "size": 3988629648,
+    "git_oid": "277c1cec3f0feda974062b1bd04f4abc908495b4",
+    "sha256": "a613a2c68f18630beb1eb681627d34110cec36a615a35c4d7f35f72e0df5b2e4",
+    "lfs": true
+   },
+   {
+    "path": "model-00006-of-00008.safetensors",
+    "size": 3999386104,
+    "git_oid": "15d136c9f75b4de1c69cccf5dfe4715b202bd742",
+    "sha256": "44de056d0f2c4375685ec7545a987c20d59cd8ee75c1802e04a11e7dcd7a84f1",
+    "lfs": true
+   },
+   {
+    "path": "model-00007-of-00008.safetensors",
+    "size": 3988629648,
+    "git_oid": "8e14b6205aeafad64e5a946819a3128c2d22021c",
+    "sha256": "fbc95c8fc0842c425168c21e933629cde22fc156ef9b4af927ad2787fe4d33a1",
+    "lfs": true
+   },
+   {
+    "path": "model-00008-of-00008.safetensors",
+    "size": 668484400,
+    "git_oid": "2e513b7095bdd646b8868cac8289b04ca501e47b",
+    "sha256": "9a5e51c0a101292c249032382f20d912677e1c0c4b5b0c78e951450fedb820ee",
+    "lfs": true
+   },
+   {
+    "path": "model.safetensors.index.json",
+    "size": 416452,
+    "git_oid": "8058add31525101e7da55a6e62fcb6dae493114d",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer.json",
+    "size": 7028015,
+    "git_oid": "33ea6c72ebb92a237fa2bdf26c5ff16592efcdae",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "tokenizer_config.json",
+    "size": 1289,
+    "git_oid": "fa84582187a90af2895fab14e47bf3b8a3bbb9c5",
+    "sha256": null,
+    "lfs": false
+   },
+   {
+    "path": "vocab.json",
+    "size": 2776833,
+    "git_oid": "4783fe10ac3adce15ac8f358ef5462739852c569",
+    "sha256": null,
+    "lfs": false
+   }
+  ],
+  "weights_bytes": 28632144944
+ }
+}

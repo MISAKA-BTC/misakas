@@ -1,0 +1,12 @@
+{
+  "schema": "misaka.rfc02.original-artifact-exact-reconstruction.v2",
+  "original_base_digest_matches": true,
+  "metadata_lossless_reconstruction": "historical base lexical logits_scale preserved when declaring; old palw-class parser rounded it one ULP while reserializing metadata",
+  "program_sha256": "462899c98ec4aa7885a7afa99338e9972c1e16428cfa1ff1783a8f1c2443f731",
+  "class_id": "55b32ae12c8fa0031ea8d78b826f75632a6863585f2d3b5efc906c856460324a640591f69bc1ed1cb9160f878f64fd62bfa98b3ad577fb626b36d24ba787cb1c",
+  "expected_sha256": "9af80e4e459cc2334519295fb100c58291382e3e4b4a5ee3e7098e7d1d8a17b6",
+  "actual_sha256": "9af80e4e459cc2334519295fb100c58291382e3e4b4a5ee3e7098e7d1d8a17b6",
+  "exact_original_declared_artifact_restored": true,
+  "no_program_layout_tensor_bytes_or_old_identity_substitution": true,
+  "new_fidelity_final_or_coverage_credit": false
+}

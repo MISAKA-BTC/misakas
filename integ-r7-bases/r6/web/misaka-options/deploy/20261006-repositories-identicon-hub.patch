@@ -1,0 +1,132 @@
+--- a/web/misaka-options/app.buy6.js
++++ b/web/misaka-options/app.buy6.js
+@@ -3476,7 +3476,7 @@
+   const gen = pageState.gen, alive = () => gen === pageState.gen;
+   const main = $('#main');
+   main.innerHTML = '<div class="empty" role="status">Opening memberships…</div>';
+-  const { wrapAccountWorkspace } = await import('./profiles/me.js?v=20261005-profile2');
++  const { wrapAccountWorkspace } = await import('./profiles/me.js?v=20261006-repositories3');
+   if (!alive()) return;
+   const view = { positions: null, balance: null, settlements: null, err: null };
+   const orderCtx = { changing: null, rerender: () => render() };
+@@ -3918,7 +3918,7 @@
+   const gen = pageState.gen, alive = () => gen === pageState.gen;
+   const main = $('#main');
+   main.innerHTML = '<div class="empty" role="status">Opening developer dashboard…</div>';
+-  const { wrapAccountWorkspace } = await import('./profiles/me.js?v=20261005-profile2');
++  const { wrapAccountWorkspace } = await import('./profiles/me.js?v=20261006-repositories3');
+   if (!alive()) return;
+   const dev = {
+     ids: store.get('dev:ids', []).map(parseDevId).filter(Boolean),
+@@ -4286,11 +4286,13 @@
+   const id = normId(arg);
+   return hubEntries().find((e) => (id ? e.rec.lineId === id : e.slug.toLowerCase() === arg.toLowerCase())) || null;
+ }
+-function hubAvatar(owner, size) {
+-  let x = 0; for (const ch of owner) x = (x * 31 + ch.charCodeAt(0)) >>> 0;
+-  const hues = [262, 200, 150, 28, 330, 45, 180];
++let hubAvatarSvg;
++async function loadHubIdenticons() {
++  if (!hubAvatarSvg) ({ avatarSvg: hubAvatarSvg } = await import('./profiles/avatar.js?v=20261006-identicon1'));
++}
++function hubAvatar(lineId, size) {
+   const s = size || 20;
+-  return h`<span class="avatar hub-av" style="--h:${hues[x % hues.length]};width:${s}px;height:${s}px;font-size:${Math.round(s * 0.55)}px" aria-hidden="true">${owner.slice(0, 1).toUpperCase()}</span>`;
++  return raw('<span class="avatar hub-av hub-identicon" style="width:' + s + 'px;height:' + s + 'px" aria-hidden="true">' + hubAvatarSvg(lineId, { namespace: 'model-line' }) + '</span>');
+ }
+ function taskWord(t) { return TASK_WORDS[t] || t; }
+ function fmtDot(f) { return h`<span class="hub-dot" style="background:${FORMAT_COLORS[f] || '#8b949e'}"></span>`; }
+@@ -4381,6 +4383,8 @@
+ async function pageModels(arg) {
+   if (arg) return pageHubModel(arg);
+   const gen = pageState.gen, alive = () => gen === pageState.gen;
++  await loadHubIdenticons();
++  if (!alive()) return;
+   const main = $('#main');
+   const view = { q: '', sort: store.get('hub:sort', 'used'), task: null, fmt: null, dl: false };
+   main.innerHTML = hubShell(h`<div class="container-xl px-3 px-md-4 px-lg-5 py-4">
+@@ -4417,7 +4421,7 @@
+     list.sort((a, b) => view.sort === 'name' ? a.slug.localeCompare(b.slug) : view.sort === 'members' ? held(b) - held(a) : (b.bundles.length - a.bundles.length) || (used(b) - used(a)));
+     $('#hubCount').textContent = list.length;
+     $('#hubList').innerHTML = list.length ? list.map((e) => h`<div class="Box-row d-flex flex-items-start">
+-        <div class="mr-3 mt-1">${hubAvatar(e.owner, 32)}</div>
++        <div class="mr-3 mt-1">${hubAvatar(e.rec.lineId, 32)}</div>
+         <div class="flex-auto min-width-0">
+           <h3 class="f4 text-normal mb-1 wb-break-word"><a class="Link--primary" href="#/models/${e.slug}"><span class="color-fg-muted">${e.owner} / </span><span class="text-bold">${e.name}</span></a> <span class="Label Label--secondary v-align-middle ml-1">${e.bundles.length ? 'Downloadable' : 'Chain only'}</span></h3>
+           <p class="color-fg-muted mb-2 pr-4">${hubDescription(e)}</p>
+@@ -4473,6 +4477,8 @@
+ }
+ async function pageHubModel(arg) {
+   const gen = pageState.gen, alive = () => gen === pageState.gen;
++  await loadHubIdenticons();
++  if (!alive()) return;
+   const main = $('#main');
+   const [slugPart, ...tabParts] = arg.split('/tree/');
+   const tabPart = tabParts.join('/');
+@@ -4542,7 +4548,7 @@
+           <span class="flex-auto"></span><a class="btn btn-sm" href="${base}/tree/upload">Upload files</a>
+         </div>
+         <div class="Box">
+-          <div class="Box-header d-flex flex-items-center py-2">${hubAvatar(e.owner, 20)}<span class="ml-2 text-bold">${e.owner}</span><span class="ml-2 color-fg-muted f6 css-truncate css-truncate-target hub-trunc">Bundle v${b.version || 1} · commitment ${b.bundle_commitment.slice(0, 12)}…</span><span class="flex-auto"></span><span class="f6 color-fg-muted"><span class="text-mono">${b.btv2_infohash.slice(0, 7)}</span> · ${b.created || ''}</span></div>
++          <div class="Box-header d-flex flex-items-center py-2">${hubAvatar(e.rec.lineId, 20)}<span class="ml-2 text-bold">${e.owner}</span><span class="ml-2 color-fg-muted f6 css-truncate css-truncate-target hub-trunc">Bundle v${b.version || 1} · commitment ${b.bundle_commitment.slice(0, 12)}…</span><span class="flex-auto"></span><span class="f6 color-fg-muted"><span class="text-mono">${b.btv2_infohash.slice(0, 7)}</span> · ${b.created || ''}</span></div>
+           ${raw(files.map((f) => h`<div class="Box-row Box-row--hover-gray py-2 d-flex flex-items-center">
+             <span class="mr-3 flex-shrink-0">${fileIcon(f)}</span>
+             <span class="flex-auto min-width-0 css-truncate css-truncate-target hub-fname" title="${f.path}">${f.path}</span>
+@@ -4750,9 +4756,25 @@
+   const gen = pageState.gen, alive = () => gen === pageState.gen;
+   const main = $('#main');
+   main.innerHTML = '<div class="empty" role="status">Opening your profile…</div>';
+-  const { renderMyProfile } = await import('./profiles/me.js?v=20261005-profile2');
++  const { renderMyProfile } = await import('./profiles/me.js?v=20261006-repositories3');
+   if (!alive()) return;
+   const tab = String(arg || '').split('/')[0] || 'overview';
++  if (tab === 'new' || tab === 'repositories') {
++    const { renderRepositoryWorkspace } = await import('./profiles/repository-create.js?v=20261006-repositories4');
++    if (!alive()) return;
++    let workspaceRequest = 0;
++    const loadWorkspace = () => {
++      const request = ++workspaceRequest, account = wallet.account;
++      return renderRepositoryWorkspace({ main, account, path: String(arg || ''), alive: () => alive() && request === workspaceRequest });
++    };
++    // Freeze the form's displayed owner while editing. Membership polls must not replace it.
++    if (tab !== 'new') {
++      const onWorkspaceWallet = () => { renderNav(); loadWorkspace(); };
++      wallet.listeners.add(onWorkspaceWallet); onCleanup(() => wallet.listeners.delete(onWorkspaceWallet));
++    }
++    await loadWorkspace();
++    return;
++  }
+   let request = 0;
+   async function load() {
+     const current = ++request, account = wallet.account;
+@@ -4972,7 +4994,7 @@
+   const publicHandle = !PAGES[first.name] && /^[A-Za-z0-9-]{1,39}$/.test(first.name);
+   const frontFirst = first.name !== 'trade' && !publicHandle && (PAGES[first.name] || pageStore) === pageStore && !normId(first.arg.split('/')[0]);
+   // These routes have useful content before wallet or chain RPC is ready.
+-  const independentFirst = frontFirst || first.name === 'download' || first.name === 'portfolio';
++  const independentFirst = frontFirst || first.name === 'download' || first.name === 'portfolio' || first.name === 'me' || first.name === 'profile';
+   const initialRouteGeneration = pageState.gen || 0;
+   if (independentFirst) void route();
+   if (MOCK) await new Promise((resolve) => { const s = document.createElement('script'); s.src = 'mock.js'; s.onload = resolve; s.onerror = () => { toast('mock.js failed to load', 'bad'); resolve(); }; document.head.appendChild(s); });
+--- a/web/misaka-options/index.html
++++ b/web/misaka-options/index.html
+@@ -19,7 +19,9 @@
+ <link rel="stylesheet" href="buy-layout6.css?v=20261005-unified">
+ <link rel="stylesheet" href="lines-compact.css?v=20261005-list3">
+ <link rel="stylesheet" href="profiles/profile.css?v=20261005-profile1">
+-<link rel="stylesheet" href="profiles/me.css?v=20261005-profile2">
++<link rel="stylesheet" href="profiles/me.css?v=20261006-repositories3">
++<link rel="stylesheet" href="profiles/repository-create.css?v=20261006-repositories4">
++<link rel="stylesheet" href="profiles/identicon.css?v=20261006-identicon1">
+ <link rel="stylesheet" href="profiles/github-layout.css?v=20261005-profile1">
+ <link rel="stylesheet" href="profiles/light-profile.css?v=20261005-profile1">
+ <link rel="stylesheet" href="light-site.css?v=20261005-white2">
+@@ -74,7 +76,7 @@
+ <script src="model-publish.js?v=20261006-ownerpc1"></script>
+ <script src="model-link.js?v=20261006-link1"></script>
+ <script src="model-readiness.js?v=20261006-ready1"></script>
+-<script src="app.buy6.js?v=20261006-upload1"></script>
++<script src="app.buy6.js?v=20261006-repositories4"></script>
+ <script src="lines-mobile.buy1.js"></script>
+ </body>
+ </html>

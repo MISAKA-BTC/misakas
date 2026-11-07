@@ -1,0 +1,32 @@
+<think>
+Thinking Process:
+
+1.  **Analyze the Request:**
+    *   Input: A JSON string `{"v":1,"frac_bits":2,"sketches":{},"solid":{"op":"box","min":[-6,-6,-6],"max":[6,6,6]}}`.
+    *   Task: Copy this JSON exactly.
+    *   Constraint: Output nothing else (no markdown code blocks, no explanations, no extra whitespace beyond the JSON itself).
+
+2.  **Verify the Content:**
+    *   The input is a valid JSON object.
+    *   Keys: "v", "frac_bits", "sketches", "solid".
+    *   Values:
+        *   "v": 1
+        *   "frac_bits": 2
+        *   "sketches": {}
+        *   "solid": { "op": "box", "min": [-6, -6, -6], "max": [6, 6, 6] }
+
+3.  **Check Constraints:**
+    *   "Copy this JSON exactly": I need to preserve the string content, including quotes, colons, brackets, and spacing (though JSON formatting usually implies standard spacing, I should try to match the input string as closely as possible, but standard JSON output usually doesn't require trailing spaces).
+    *   "Output nothing else": No markdown fences (````json ... ````), no introductory text, no concluding text.
+
+4.  **Drafting the Output:**
+    *   Raw string: `{"v":1,"frac_bits":2,"sketches":{},"solid":{"op":"box","min":[-6,-6,-6],"max":[6,6,6]}}`
+
+5.  **Final Review:**
+    *   Does it match the input? Yes.
+    *   Is there any extra text? No.
+
+6.  **Execution:** Output the JSON string directly.
+
+    *Wait, one detail:* The input string provided in the prompt is:
+    `{"v":1,"frac_bits":2,"sketches":{},"solid

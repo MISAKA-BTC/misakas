@@ -1,0 +1,66 @@
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+error[E0282]: type annotations needed
+    --> consensus/core/src/palw_step_refute.rs:7960:17
+     |
+7960 |                 Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
+     |                 ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+     |
+help: consider specifying the generic arguments
+     |
+7960 |                 Ok::<i32, E>(lanes[lane % PALW_LOGITS_TILE_LANES])
+     |                   ++++++++++
+
+error[E0283]: type annotations needed
+    --> consensus/core/src/palw_step_refute.rs:7960:17
+     |
+7960 |                 Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
+     |                 ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+7961 |             };
+7962 |             Ok((open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed)?,
+     |                                                                                        - type must be known at this point
+     |
+note: multiple `impl`s satisfying `PalwStepRefuteError: From<_>` found
+    --> consensus/core/src/palw_step_refute.rs:2538:1
+     |
+2538 | impl From<crate::palw_step_leg::PalwStepLegError> for PalwStepRefuteError {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: and another `impl` found in the `core` crate: `impl<T> From<T> for T;`
+help: consider specifying the generic arguments
+     |
+7960 |                 Ok::<i32, E>(lanes[lane % PALW_LOGITS_TILE_LANES])
+     |                   ++++++++++
+
+error[E0283]: type annotations needed
+    --> consensus/core/src/palw_step_refute.rs:7960:17
+     |
+7960 |                 Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
+     |                 ^^ cannot infer type of the type parameter `E` declared on the enum `Result`
+...
+7963 |                 open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?))
+     |                                                                              - type must be known at this point
+     |
+note: multiple `impl`s satisfying `PalwStepRefuteError: From<_>` found
+    --> consensus/core/src/palw_step_refute.rs:2538:1
+     |
+2538 | impl From<crate::palw_step_leg::PalwStepLegError> for PalwStepRefuteError {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     = note: and another `impl` found in the `core` crate: `impl<T> From<T> for T;`
+help: consider specifying the generic arguments
+     |
+7960 |                 Ok::<i32, E>(lanes[lane % PALW_LOGITS_TILE_LANES])
+     |                   ++++++++++
+
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0282, E0283.
+For more information about an error, try `rustc --explain E0282`.
+warning: `kaspa-consensus-core` (lib) generated 1 warning
+error: could not compile `kaspa-consensus-core` (lib) due to 3 previous errors; 1 warning emitted

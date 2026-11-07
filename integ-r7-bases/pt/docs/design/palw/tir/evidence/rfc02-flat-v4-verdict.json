@@ -1,0 +1,141 @@
+{
+  "baseline": "bc558a3cf8c9eaf7a147973e38b7fdd044f55d75",
+  "goal_complete": false,
+  "shipping_activation_changed": false,
+  "tests_passed": 40,
+  "tests_ignored": 1,
+  "logs": {
+    "final": {
+      "path": "docs/design/palw/tir/evidence/rfc02-flat-v4-final.log",
+      "sha256": "edbc23837f515f3451bbb99a4850d36e467bbcf154cf17c1d3baefac785ea8b0",
+      "tests_passed": 6,
+      "tests_ignored": 0
+    },
+    "legacy": {
+      "path": "docs/design/palw/tir/evidence/rfc02-flat-v4-legacy.log",
+      "sha256": "575592bf08dd7045492dbb8e819787059c7381fcfcb710cc25dc359566c82d90",
+      "tests_passed": 34,
+      "tests_ignored": 1
+    }
+  },
+  "test_names": [
+    "element::tests::a_lie_in_any_value_is_found_and_convicted_and_no_honest_element_is",
+    "element::tests::a_malformed_value_a_forged_decode_and_tampered_openings_are_judged_objectively",
+    "element::tests::allocation_free_leaf_pricing_matches_index_vector_oracle_on_real_weight_shapes",
+    "element::tests::allocation_free_pricing_preserves_the_exact_actual_32_position_plan_root",
+    "element::tests::element_courts_are_priced_by_the_tile_not_the_tensor",
+    "element::tests::every_filing_is_within_its_priced_bound",
+    "element::tests::flat_gather_preserves_results_and_dependency_reads_for_all_dtypes_and_ranks",
+    "element::tests::flat_gather_refuses_invalid_indices_before_table_reads_and_preserves_missing_operands",
+    "element::tests::leaf_openings_file_their_values_at_the_dtype_width",
+    "element::tests::nonflat_gather_axes_and_batches_still_match_the_independent_reference",
+    "element::tests::the_element_evaluator_agrees_with_the_reference_on_every_element_of_every_value",
+    "element::tests::the_streamed_trace_is_the_trace",
+    "element::tests::vocabulary_sized_flat_lookup_roots_match_the_frozen_coordinate_evaluator",
+    "element::tests::vocabulary_sized_lookup_whole_court_dismisses_honest_convicts_lie_and_refuses_missing_or_substituted_inputs",
+    "merkle3::tests::a_wire_shape_that_overflows_is_malformed_never_a_panic",
+    "merkle3::tests::buffered_leaf_hashes_preserve_every_dtype_and_update_boundary",
+    "merkle3::tests::direct_row_and_column_hashing_preserves_original_roots_and_openings",
+    "merkle3::tests::every_leaf_of_both_trees_opens_and_holds_its_elements",
+    "merkle3::tests::every_row_range_proves_against_the_commitment",
+    "merkle3::tests::leaf_element_counts_match_enumeration_at_both_axis_boundaries_without_allocation",
+    "merkle3_stream::tests::bounds_overflow_and_reader_failure_are_refusals_before_large_allocation_or_partial_success",
+    "merkle3_stream::tests::simultaneous_row_and_column_tile_boundaries_keep_the_canonical_leaf_order",
+    "merkle3_stream::tests::streamed_raw_commitments_match_decoded_roots_and_authenticate_existing_openings",
+    "merkle4::tests::flat_layout_merges_every_short_tail_and_covers_ranks_without_small_leaves",
+    "merkle4::tests::flat_material_prices_exact_retention_leaf_carriers_and_streaming_scratch",
+    "merkle4::tests::flat_openings_refuse_borrowed_metadata_values_coordinates_and_extra_paths",
+    "merkle4::tests::flat_public_descent_finds_every_divergent_leaf_within_the_derived_reply_bound",
+    "merkle4::tests::flat_streaming_tree_and_independent_oracle_match_all_dtypes_tails_and_odd_trees",
+    "merkle4::tests::flat_wire_bounds_counts_before_allocation_and_preserves_exact_borsh",
+    "route::tests::every_declared_discriminant_is_the_variants_borsh_byte_and_has_a_ceiling",
+    "route::tests::malformed_and_oversized_encodings_are_refused_with_their_kind",
+    "route::tests::the_salted_reveal_is_kind_20_carries_its_commits_own_tag_and_opens_only_its_v2_seal",
+    "route::tests::the_wire_form_is_version_discriminant_then_the_fields",
+    "scope::tests::a_state_written_from_model_bytes_is_model_bytes_at_the_next_position",
+    "scope::tests::the_budget_stays_below_every_relation_and_never_refuses",
+    "scope::tests::the_exposure_names_the_one_position_and_the_k_position_relations",
+    "scope::tests::the_node_materials_separate_weights_copies_and_activations",
+    "scope::tests::the_per_requester_tally_bounds_each_requester_and_never_another",
+    "seg_scope::tests::candidate_gather_price_bounds_actual_dependency_leaves_at_all_ranks",
+    "seg_scope::tests::flat_lookup_price_changes_only_element_work_and_keeps_conservative_disclosure"
+  ],
+  "source_sha256": {
+    "misaka-palw-kernel/src/lib.rs": "4cabdcd87965b12d67f95f42a055fb76cc31934bc5f8d9a93729a13c8a2dc4b0",
+    "misaka-palw-kernel/src/merkle4.rs": "13b144145615ffa0e8ffabb387cfce513e91307a9d6896d13c4c9f20c8f5374d",
+    "misaka-palw-kernel/src/merkle3.rs": "383b069a41deb8ddde8c19dbc86d639af83dd582c19ae62eeaeafde88b3c5be0",
+    "misaka-palw-kernel/src/merkle3_stream.rs": "0d8a0a71166250297727a568ddd10835902c0bb668d420fa85635b349561f9b4",
+    "misaka-palw-kernel/src/element.rs": "cb10b1483dbc55c9fd6e7eadf9387303ff88d76c2e081d8e7f10602da3fb75a0",
+    "misaka-palw-kernel/src/seg_scope.rs": "971a06fc8825cc83413300f694d0de2feb7e8c721faf430a5096fe0adb8f5d08",
+    "misaka-palw-kernel/src/scope.rs": "918d472c7ef0c37418c6895b8f834cf51a1ebcad12d06aa52f7fa677b6d567a4",
+    "misaka-palw-kernel/src/route.rs": "01797ec5c38245ec2f6b8ed4b3cf29d6cccd0ee2e7b60372fb18caedcf77e996"
+  },
+  "binaries": {
+    "final": {
+      "path": "target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746",
+      "sha256": "49e0851c1e5c5bccac1aa6a5f238052bd79778957d3b11235a1376bf43811284"
+    },
+    "legacy": {
+      "path": "target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746",
+      "sha256": "772d7a66b1fd693d403577da38e6b95a82f3c7edb811bd8b46b5b894363b2442",
+      "recorded_before_final_flat_only_rank_bound_correction": true
+    }
+  },
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "rust": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "profile": "default unoptimized test"
+  },
+  "selection_audit": {
+    "rust_reference_paths": [
+      "misaka-palw-kernel/src/lib.rs",
+      "misaka-palw-kernel/src/merkle4.rs"
+    ],
+    "legacy_production_sources_unchanged": [
+      "misaka-palw-kernel/src/merkle3.rs",
+      "misaka-palw-kernel/src/merkle3_stream.rs",
+      "misaka-palw-kernel/src/element.rs",
+      "misaka-palw-kernel/src/seg_scope.rs",
+      "misaka-palw-kernel/src/scope.rs",
+      "misaka-palw-kernel/src/route.rs"
+    ],
+    "new_descriptor": false,
+    "new_route_selection": false,
+    "new_reward_source": false
+  },
+  "verified": [
+    "All lengths 64 through 8193 have 64..127-element leaves and no short final leaf; rank/line boundaries do not change flat spans.",
+    "Streamed raw-width stack roots and cached trees match an independent one-buffer/recursive oracle for committable dtypes, odd trees and tails.",
+    "Public replies authenticate before root descent; every tested divergent leaf is found within depth+1 replies without cycles.",
+    "Borrowed dtype/shape/index/root, substituted values and missing/extra paths fail authentication.",
+    "Bounded codecs reject invalid rank/product/count/path, truncated data and surplus bytes without unbounded allocations.",
+    "Retained bounds include vector capacities/metadata and derive rank from the validated layout; caller limits refuse before tree allocation/hash; root-only hashing uses fixed scratch.",
+    "Existing v3/streaming, element court, scope and route-wire regressions pass."
+  ],
+  "verification_timing": [
+    "Initial flat runs before retention/capacity/rank corrections are not included in final evidence.",
+    "Legacy regressions ran before the final v4-only frozen-width/rank-field correction; all legacy production sources are unchanged.",
+    "Six final flat tests ran after the correction.",
+    "producer_hash_cost_against_original_scalar_updates is an ignored manual hardware timing benchmark and is not counted as passing.",
+    "Logs normalize trailing whitespace; the legacy log contains only legacy command sections."
+  ],
+  "derived_example_not_a_real_model_benchmark": {
+    "elements": 1048577,
+    "dtype": "I8",
+    "leaves": 16384,
+    "last_leaf_elements": 65,
+    "maximum_localization_replies": 15,
+    "hash_opening_bytes_bound": 977,
+    "value_opening_bytes_bound": 1046,
+    "retained_tree_bytes_bound": 2097576,
+    "streaming_scratch_bytes_bound": 8192
+  },
+  "remaining": [
+    "Versioned profile selection and source/masked-node binding; existing commitments and candidate v2 are not reinterpreted.",
+    "Primitive dependency-leaf terminal courts and worst court/work/RAM/retention/aggregate bounds, including 127-element merged tails.",
+    "Actual-node authenticated DA/default, verifier descent/prosecution and independent Final/redemption.",
+    "Entropy/predictable-value and cumulative-disclosure safety; minimum encoded width is not cryptographic privacy.",
+    "Checkpoint/task/context/fidelity/common-feature coverage, runtime independence, network resources/liveness/economics and every other RFC02 II.14 requirement."
+  ]
+}

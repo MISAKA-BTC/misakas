@@ -1,0 +1,142 @@
+[package]
+name = "kaspad"
+default-run = "kaspad"
+description = "Kaspa full node daemon"
+keywords = ["kaspa", "blockdag"]
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Offline private fixture tooling is built only with the explicit construction
+# feature. It adds no activation flag to the ordinary kaspad executable.
+[[bin]]
+name = "misaka-private-paid-work-export"
+path = "src/bin/misaka-private-paid-work-export.rs"
+required-features = ["private-integration-config"]
+
+[[bin]]
+name = "misaka-rfc12-private-node"
+path = "src/bin/misaka-rfc12-private-node.rs"
+required-features = ["private-integration-config"]
+
+[lib]
+name = "kaspad_lib"
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+kaspa-wrpc-client = { workspace = true, optional = true }
+kaspa-alloc.workspace = true # This changes the global allocator for all of the next dependencies so should be kept first
+
+kaspa-addresses.workspace = true
+kaspa-addressmanager.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-pow.workspace = true
+kaspa-consensus-notify.workspace = true
+misaka-endpoints.workspace = true
+kaspa-consensus.workspace = true
+kaspa-consensusmanager.workspace = true
+kaspa-core.workspace = true
+kaspa-database.workspace = true
+# Ethereum JSON-RPC adapter — only linked under the `evm` feature (keeps the
+# default node secp-free; the adapter itself pulls no revm). kaspa-evm provides
+# the read-only eth_call/estimateGas simulation behind the adapter.
+kaspa-eth-rpc = { workspace = true, optional = true }
+kaspa-evm = { workspace = true, optional = true }
+kaspa-grpc-server.workspace = true
+kaspa-hashes.workspace = true
+kaspa-index-processor.workspace = true
+kaspa-mining.workspace = true
+kaspa-notify.workspace = true
+kaspa-p2p-flows.workspace = true
+kaspa-p2p-lib.workspace = true
+kaspa-p2p-mining.workspace = true
+kaspa-perf-monitor.workspace = true
+kaspa-pq-validator-core.workspace = true
+misaka-palw-base0.workspace = true
+# RFC-0009 stage B: any-provider evidence fetch (a directory provider), the manifest and its checks.
+misaka-palw-remote.workspace = true
+# Lane G14-K: the kernel route's public verifier re-executes kernel claims (the ledger, the replay, the segmented search).
+misaka-palw-kernel.workspace = true
+misaka-palw-sdk.workspace = true
+# RFC-0007 Part II: the seat-local algebraic checker, its mirror check beside the replay, and the IR it reads.
+misaka-palw-tir.workspace = true
+misaka-palw-tir-exec = { path = "../misaka/palw/tir/exec", features = ["node"] }
+misaka-palw-tir-sketch = { path = "../misaka/palw/tir/sketch" }
+misaka-palw-tir-artifact = { path = "../misaka/palw/tir/artifact", optional = true }
+kaspa-rpc-core.workspace = true
+kaspa-rpc-service.workspace = true
+kaspa-txscript.workspace = true
+kaspa-utils.workspace = true
+kaspa-utils-tower.workspace = true
+kaspa-utxoindex.workspace = true
+kaspa-wrpc-server.workspace = true
+misaka-palw.workspace = true
+
+async-channel.workspace = true
+async-trait.workspace = true
+blake2b_simd.workspace = true
+borsh.workspace = true
+cfg-if.workspace = true
+clap = { workspace = true, features = ["env"]}
+dhat = { workspace = true, optional = true }
+dirs.workspace = true
+faster-hex.workspace = true
+futures-util.workspace = true
+itertools.workspace = true
+libc.workspace = true
+libcrux-ml-dsa.workspace = true
+log.workspace = true
+num_cpus.workspace = true
+rand.workspace = true
+rayon.workspace = true
+rocksdb.workspace = true
+serde.workspace = true
+sysinfo.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+workflow-log.workspace = true
+serde_json.workspace = true
+
+toml = "0.8.10"
+serde_with = "3.7.0"
+
+[features]
+# Library construction boundary used only by the unpublished private integration
+# helper. No public Args flag selects it; ordinary kaspad always uses its presets.
+private-integration-config = ["kaspa-consensus/private-integration-config", "dep:misaka-palw-tir-artifact", "dep:kaspa-wrpc-client", "misaka-palw-sdk/native-rpc"]
+# Only private acceptance artifacts opt in to environment-armed OS-kill rendezvous.
+rfc12-import-failpoints = ["private-integration-config", "kaspa-consensus/rfc12-import-failpoints"]
+# The EVM lane is part of the node, not a bolt-on (user decision 2026-08-21). testnet-11 and
+# testnet-12 activate the lane at DAA 0, so a binary built without it refuses to start there
+# (`EvmLaneRequiresEvmBuild`) — which turned "forgot the flag" into a fleet-wide operational trap.
+# A plain `cargo build -p kaspad` now yields the binary those networks require; mainnet keeps the
+# lane inert by params (`evm_activation_daa_score: u64::MAX`), not by the build. The cost is that
+# the DEFAULT artifact now links secp256k1 via revm's ecrecover — the consensus rules stay PQ-only,
+# but a secp-free artifact needs an explicit `--no-default-features` build.
+default = ["evm"]
+heap = ["dhat", "kaspa-alloc/heap"]
+devnet-prealloc = ["kaspa-consensus/devnet-prealloc"]
+semaphore-trace = ["kaspa-utils/semaphore-trace"]
+# kaspa-pq Selected-Parent EVM Lane (ADR-0020). Default since 2026-08-21 (see `default` above);
+# the revm executor runs IN this process — there is no separate EVM daemon.
+evm = ["kaspa-consensus/evm", "kaspa-mining/evm", "kaspa-p2p-flows/evm", "dep:kaspa-eth-rpc", "dep:kaspa-evm"]
+
+# RFC-0002 Phase G F-6: the Metal backend of the fused kernels (macOS), switched on by `--palw-tir-metal`.
+palw-tir-metal = ["misaka-palw-sdk/metal"]
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+kaspa-grpc-client.workspace = true
+kaspa-muhash.workspace = true
+# RFC-0002 Phase F (F6): the IR class e2e writes a PALWTIR1 container from a golden program vector.
+misaka-palw-tir.workspace = true
+misaka-palw-tir-artifact = { path = "../misaka/palw/tir/artifact" }
+# The operator path's e2e: a tiny Hugging Face fixture lowered to a PALWTIR1 artifact.
+misaka-palw-tir-lower = { path = "../misaka/palw/tir/lower" }

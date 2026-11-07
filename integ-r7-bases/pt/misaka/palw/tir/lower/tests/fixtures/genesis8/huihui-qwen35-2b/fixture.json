@@ -1,0 +1,16 @@
+{
+ "schema": "misaka.cov-p1p2.header-fixture.v1",
+ "repo": "huihui-ai/Huihui-Qwen3.5-2B-abliterated",
+ "revision": "b2e291a65f29a9b148981fa5299caea5d35bd4c8",
+ "license": "apache-2.0",
+ "weights_read": false,
+ "shards": {
+  "model.safetensors-00001-of-00001.safetensors": {
+   "header_sha256": "3f5f3992f63a74aac124edb0a5a3bab55b6e03356a8b9fa572d88da33c50727d",
+   "file_bytes": 4548221488,
+   "lfs_sha256": "568f9529262f887dfab700a2b7de1f9607bbf3d88a797748351ed6480fe3d24c"
+  }
+ },
+ "total_file_bytes": 4548221488,
+ "note": "each shard file is its 8-byte length and JSON header only, cut after the header (source::read_safetensors_header is lenient about the data region); fetched by HTTP range from the pinned revision by scripts/genesis/genesis_header_fixtures.py"
+}

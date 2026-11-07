@@ -1,0 +1,27 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "bart",
+  "kind": "encdec",
+  "extends": [
+    "mixin-bart-lineage"
+  ],
+  "doc": "BART: post-norm, learned positions at pos + 2, layernorm_embedding, no embedding scale unless scale_embedding, tied head plus final_logits_bias.",
+  "match": {
+    "architectures": [
+      "BartForConditionalGeneration"
+    ],
+    "model_types": [
+      "bart"
+    ]
+  },
+  "vars": [
+    {
+      "name": "learned_positions",
+      "value": true
+    },
+    {
+      "name": "pre_norm_stack",
+      "value": false
+    }
+  ]
+}

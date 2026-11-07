@@ -1,0 +1,84 @@
+{
+ "schema": "misaka.h1.registration.v1",
+ "party": "client U (no node, no seat, own key/funds/bond)",
+ "rpc": "node B",
+ "one_command_ux": {
+  "model add hf://": {
+   "json": "{\n  \"finding\": {\n    \"code\": \"E-MODEL-UNKNOWN\",\n    \"current\": [],\n    \"docs\": null,\n    \"exit\": 34,\n    \"fix\": [\n      \"an HF model registers as an IR class: convert repo@rev to a .palwtir and its runtime pack (the HF onboarding pipeline), then `misaka model add --artifact <file.palwtir> --pack <dir> --quote | --export-bundle <file> --payer-address <addr>`\"\n    ],\n    \"reason\": \"\",\n    \"required\": \"\",\n    \"severity\": \"error\",\n    \"title\": \"this build's catalog has no model matching 'hf://huihui-ai/Huihui-Qwen3.5-9B-abliterated@05b9e7c9b978ba29bdb8f50a49c30e4b91183339'\"\n  },\n  \"schema\": \"misaka.model.add.v1\",\n  \"state\": \"blocked\",\n  \"steps\": []\n}\n",
+   "stderr": "MISAKA model add \u00b7 testnet-12\n  Each step reads what the chain already holds, so running this again resumes where it stopped.\n\n  \u25d0 catalog       building this build's class table (it drills each family once, a few seconds)\u2026\n\n\u2717 this build's catalog has no model matching 'hf://huihui-ai/Huihui-Qwen3.5-9B-abliterated@05b9e7c9b978ba29bdb8f50a49c30e4b91183339'   [E-MODEL-UNKNOWN]\n  Fix       an HF model registers as an IR class: convert repo@rev to a .palwtir and its runtime pack (the HF onboarding pipeline), then `misaka model add --artifact <file.palwtir> --pack <dir> --quote | --export-bundle <file> --payer-address <addr>`\n"
+  },
+  "model add --artifact": {
+   "json": "{\n  \"class_id\": \"8e90e27fea9e22e00270b85cc7ad2c28f1204534e8b1e886f24733b86355db0f78b49c6d0c07135fbe5ee10a78156ac841475fce93239703cefd8236fffb6491\",\n  \"finding\": {\n    \"code\": \"E-IDENT-NO-BOND\",\n    \"current\": [],\n    \"docs\": null,\n    \"exit\": 32,\n    \"fix\": [\n      \"misaka bond register-export \u2026 (node-less), or --bond <txid>:<index>\"\n    ],\n    \"reason\": \"\",\n    \"required\": \"\",\n    \"severity\": \"error\",\n    \"title\": \"No bond to register the class under\"\n  },\n  \"kind\": \"ClassRegisteredTirV1\",\n  \"model_id\": \"huihui-qwen35-9b\",\n  \"schema\": \"misaka.model.add.v1\",\n  \"state\": \"blocked\",\n  \"steps\": [\n    {\n      \"state\": \"ok\",\n      \"step\": \"model\",\n      \"value\": \"huihui-qwen35-9b \u00b7 IR class 8e90e27fea9e22e0\u2026 \u00b7 root 96415a29ca74f93c\u2026 \u00b7 from /Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/huihui-qwen35-9b/9e958ff3d4e06f49/class.palwtir.testnet-12.palwtir\"\n    }\n  ]\n}\n",
+   "stderr": "rce             no --model: the source files are not hashed\n  SKIPPED frontend           no --model: the frontend is not run\n  PASS    artifact           the artifact declared for testnet-12 (class 8e90e27fea9e22e0): file f92121bc474d9257 \u00b7 inventory root 96415a29ca74f93c\n  PASS    declared           testnet-12: exact class 8e90e27fea9e22e0 (context 8192, interval 298); identity verification, not live admission\n  PASS    conformance        streamed: 1 vector(s), 2 positions, equal on reference, typed-backend, independent (largest decoded parameter: reference 15520.0 MiB, independent 15520.0 MiB; not process RSS)\n  PASS    hf-reference       streamed: slope 0.9985, corr 0.99933, top-1 0.969, KL 0.00388 over 32 positions\nNOT FULLY VERIFIED (nothing failed; some checks were skipped)\n2 check(s) of the pack were skipped; give --pack-source <the model's directory or GGUF> to check the source and the frontend as well\nMISAKA model add \u00b7 testnet-12\n  Each step reads what the chain already holds, so running this again resumes where it stopped.\n\n  \u25d0 catalog       building this build's class table (it drills each family once, a few seconds)\u2026\n  \u2713 model         huihui-qwen35-9b \u00b7 IR class 8e90e27fea9e22e0\u2026 \u00b7 root 96415a29ca74f93c\u2026 \u00b7 from /Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/cache/huihui-qwen35-9b/9e958ff3d4e06f49/class.palwtir.testnet-12.palwtir\n\n\u2717 No bond to register the class under   [E-IDENT-NO-BOND]\n  Fix       misaka bond register-export \u2026 (node-less), or --bond <txid>:<index>\n"
+  }
+ },
+ "path_used": "detached: misaka palw tir-registration (pack gate on) + misaka palw submit-object",
+ "owner_bond_creation": {
+  "method": "WORKAROUND: transient registrar \u2014 U ran kaspad --palw-register-bond once with its own datadir and key, stopped after the bond printed; NOT node-less (NODELESS_BOND_REGISTRATION_ABSENT, C1r2)"
+ },
+ "class_id": "8e90e27fea9e22e00270b85cc7ad2c28f1204534e8b1e886f24733b86355db0f78b49c6d0c07135fbe5ee10a78156ac841475fce93239703cefd8236fffb6491",
+ "artifact_root": "96415a29ca74f93c0bdfcdb8500f95074b423e7d404cdbceb531977d816bb03d696193f6719f457343b863c0e25d30285451d5ef35b67820706553f1eed13cda",
+ "owner_bond": "73bfd1314dfb52fcc493020e716c47770a266a3e6c1d39471bab3b1a3bb78d8fdb54918b1ee973634d75ffe359ac1c61f08a157d01d3a7e258f565511bb424ee:0",
+ "payer_address": "misakatest:q2p9papx6evt3qehrsejjvuz9n807ah2saq3rcylpaydytvkz0wvygvzja6c5yq86ptr6y8p2a8u0gndjfr3p58aswgp7l62yarxdy3tlk8g6hgp",
+ "carrier_txid": "14b26942fb10228129f1032faff6448f65a59b7ecffc7fbd0df44d0fd53fc59632b0e979c89d686a12ce97e9581e8f43a1b5d4512f029fcd127b97aed1654e8e",
+ "tir_registration": {
+  "artifact_root": "96415a29ca74f93c0bdfcdb8500f95074b423e7d404cdbceb531977d816bb03d696193f6719f457343b863c0e25d30285451d5ef35b67820706553f1eed13cda",
+  "bytes": 38559,
+  "class_id": "8e90e27fea9e22e00270b85cc7ad2c28f1204534e8b1e886f24733b86355db0f78b49c6d0c07135fbe5ee10a78156ac841475fce93239703cefd8236fffb6491",
+  "model_id": "huihui-qwen35-9b",
+  "out": "/Users/wata/Downloads/MISAKA-wt-b/wh-h1-run/runs/20261011-huihui-qwen35-9b-r2/register/registration.obj",
+  "pack": "verified",
+  "registrant_bond": "73bfd1314dfb52fcc493020e716c47770a266a3e6c1d39471bab3b1a3bb78d8fdb54918b1ee973634d75ffe359ac1c61f08a157d01d3a7e258f565511bb424ee:0",
+  "schema": "misaka.palw.tir-registration.v1"
+ },
+ "live_gate_preflight": {
+  "available": true,
+  "tipDaa": 107,
+  "classId": "8e90e27fea9e22e00270b85cc7ad2c28f1204534e8b1e886f24733b86355db0f78b49c6d0c07135fbe5ee10a78156ac841475fce93239703cefd8236fffb6491",
+  "artifactRoot": "96415a29ca74f93c0bdfcdb8500f95074b423e7d404cdbceb531977d816bb03d696193f6719f457343b863c0e25d30285451d5ef35b67820706553f1eed13cda",
+  "nCtx": 8192,
+  "layerCount": 32,
+  "admissible": true,
+  "processorVerdict": "ADMISSION_OK",
+  "rejectCode": "",
+  "checks": [
+   {
+    "code": "TIR_ADMISSION_V10",
+    "ok": true,
+    "message": "admission v10 admits the IR class at the tip"
+   }
+  ]
+ },
+ "status_at_fold": {
+  "available": true,
+  "tipDaa": 108,
+  "found": true,
+  "registration": {
+   "objectId": "8e90e27fea9e22e00270b85cc7ad2c28f1204534e8b1e886f24733b86355db0f78b49c6d0c07135fbe5ee10a78156ac841475fce93239703cefd8236fffb6491",
+   "classId": "8e90e27fea9e22e00270b85cc7ad2c28f1204534e8b1e886f24733b86355db0f78b49c6d0c07135fbe5ee10a78156ac841475fce93239703cefd8236fffb6491",
+   "constructed": true,
+   "submitted": true,
+   "accepted": true,
+   "included": true,
+   "folded": true,
+   "submissionState": "folded",
+   "processorVerdict": "ADMISSION_OK",
+   "rejectCode": "",
+   "mempoolAccepted": false,
+   "includedBlock": "",
+   "includedDaa": 107,
+   "registryState": "Candidate",
+   "transactionId": "8e90e27fea9e22e00270b85cc7ad2c28f1204534e8b1e886f24733b86355db0f78b49c6d0c07135fbe5ee10a78156ac841475fce93239703cefd8236fffb6491",
+   "dropReason": ""
+  }
+ },
+ "u_balance_sompi": {
+  "before": 199999999580063,
+  "after": 199999998870538,
+  "spent": 709525
+ },
+ "daa": {
+  "submitted_after": 99,
+  "folded_by": 108
+ }
+}

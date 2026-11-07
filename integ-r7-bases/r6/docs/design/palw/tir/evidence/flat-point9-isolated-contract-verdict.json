@@ -1,0 +1,37 @@
+{
+  "schema": "misaka.rfc02.flat-point9-isolated-contract-verdict.v1",
+  "source_sha256": {
+    "misaka-palw-kernel/src/flat_point9.rs": "9b0602d66a1036820688768066397e9312d55acd0f64dcd583773f3e2b408bcd",
+    "misaka-palw-kernel/src/flat_scope9.rs": "d73a57113ed6112d6f51d3f5c9f2d392305436203ff427f15f5d85e7747663f0",
+    "misaka-palw-kernel/tests/flat_point9.rs": "2ff1b9c61ce0ea352d887945a4b59fc7b62f7f65025c7b8e7cb830e3997b26fa",
+    "misaka-palw-sdk/examples/check-flat-checkpoint-admission9.rs": "9323797fa7e871442dfe4b0060c4d477e0a40647a2e3600c9867ebbcf964ff4a"
+  },
+  "test_command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-kernel --test flat_point9",
+  "test_exit": 0,
+  "tests_passed": 6,
+  "test_seconds": 54.64,
+  "semantic_tags": "all 24 ordinary frozen TIR25 primitives, excluding separately bound TopK",
+  "dtype_count": 6,
+  "history_positions_tested": 128,
+  "metadata_program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+  "metadata_scope_relations": 7658,
+  "metadata_scope_root": "291df64dcc44dfdb28e4bec75bd30456dc1ea12e5a2635820e99a6ee6a7a7defd109e0ccb837b829061d1b9a10f9a83e7ba09b948c6b891be9d1cec4cd18ddd8",
+  "metadata_executable_sha256": "fbe21cfc88bec6f1c7937bd7a0c17ebeb983b462b3b6533dc952537994eb5eff",
+  "unchanged_frozen_caps": {
+    "filing_bytes": 1048576,
+    "work": 1073741824,
+    "scratch_bytes": 33554432,
+    "leaves": 1024
+  },
+  "v7_ordinary_scope_still_refuses_actual_qwen": true,
+  "isolated_scope9_passed": true,
+  "mixed_court9_api_and_full_replay_verified": false,
+  "actual_weight_point_proof_verified": false,
+  "native_execution_or_final_or_cohort_credit": false,
+  "full_rfc02_complete": false,
+  "limits": [
+    "Qwen result is canonical program/parameter commitment metadata only, without authenticating raw source weights.",
+    "Standalone point-price root is coordinate/cost-bound; consumers must bind full program/scope/root and registered model.",
+    "Full mixed wrapper, locator/replay, typed DA, registration/native eligibility and honest independent Final still require integration and validation."
+  ]
+}

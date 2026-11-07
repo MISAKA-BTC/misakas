@@ -1,0 +1,3541 @@
+{
+  "artifact": "/private/tmp/claude-501/-Users-wata-Downloads-MISAKA-testnet--claude-worktrees-14-lane-restart-builds-c00813/7adc9332-ba5a-4def-b8fd-2d73c009e942/scratchpad/tir/huihui2b.class.palwtir",
+  "max_sampled_bytes": 41944082,
+  "max_sampled_bytes_per_kind": {
+    "Add": 256,
+    "Clamp": 32768,
+    "Compare": 128,
+    "Concat": 256,
+    "Gather(data param)": 4194304,
+    "Gather(data)": 24576,
+    "HistAppend": 1280,
+    "HistAppend(row)": 39680,
+    "HistAppend(tile)": 41902080,
+    "MatMul": 1048576,
+    "Mul": 57344,
+    "Reshape": 85440,
+    "Slice": 33792,
+    "State(checkpoint)": 32768
+  },
+  "max_sampled_seed": "occ 24 block 2 node 236 tile 0",
+  "position": 32767,
+  "record": "misaka-palw/tir-closure-sampled/v1",
+  "samples": [
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.001397167,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000552667,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000552333,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 42,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010715833,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 42,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010168459,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 42,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010197125,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 1088,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        }
+      },
+      "bytes": 148544,
+      "leaves": 164,
+      "node": 59,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010213416,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 1088,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        }
+      },
+      "bytes": 148544,
+      "leaves": 164,
+      "node": 59,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010199,
+      "tile": 4,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 1088,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        }
+      },
+      "bytes": 148544,
+      "leaves": 164,
+      "node": 59,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010235,
+      "tile": 7,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 1088,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        }
+      },
+      "bytes": 148544,
+      "leaves": 164,
+      "node": 76,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.01015875,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 1088,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        }
+      },
+      "bytes": 148544,
+      "leaves": 164,
+      "node": 76,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010216125,
+      "tile": 4,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 1088,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        }
+      },
+      "bytes": 148544,
+      "leaves": 164,
+      "node": 76,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010223833,
+      "tile": 7,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 93,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.01021025,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 93,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010201,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 93,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010190333,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 19464,
+      "leaves": 7,
+      "node": 121,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.00013675,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 19464,
+      "leaves": 7,
+      "node": 121,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000132292,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 19464,
+      "leaves": 7,
+      "node": 121,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000135416,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 520,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 5640,
+      "leaves": 7,
+      "node": 149,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000129791,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 520,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 5640,
+      "leaves": 7,
+      "node": 149,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000130667,
+      "tile": 4,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 520,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 4096,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 5640,
+      "leaves": 7,
+      "node": 149,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000132625,
+      "tile": 7,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Gather(data param)": {
+          "bytes": 262144,
+          "leaves": 8
+        },
+        "Reshape": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 262400,
+      "leaves": 9,
+      "node": 185,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.00018025,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Gather(data param)": {
+          "bytes": 262144,
+          "leaves": 8
+        },
+        "Reshape": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 262400,
+      "leaves": 9,
+      "node": 185,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000146333,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Reshape": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 256,
+      "leaves": 1,
+      "node": 185,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000029125,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Gather(data param)": {
+          "bytes": 262144,
+          "leaves": 8
+        },
+        "Reshape": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 262400,
+      "leaves": 9,
+      "node": 203,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000139584,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Gather(data param)": {
+          "bytes": 262144,
+          "leaves": 8
+        },
+        "Reshape": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 262400,
+      "leaves": 9,
+      "node": 203,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000139167,
+      "tile": 4,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Reshape": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 256,
+      "leaves": 1,
+      "node": 203,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000028958,
+      "tile": 7,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2,
+          "leaves": 2
+        },
+        "HistAppend": {
+          "bytes": 1280,
+          "leaves": 5
+        },
+        "HistAppend(row)": {
+          "bytes": 39680,
+          "leaves": 155
+        },
+        "HistAppend(tile)": {
+          "bytes": 41902080,
+          "leaves": 5115
+        },
+        "Mul": {
+          "bytes": 16,
+          "leaves": 2
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 41944082,
+      "leaves": 5283,
+      "node": 236,
+      "occurrence": 24,
+      "param_exact": 4,
+      "seconds": 2.774416208,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2,
+          "leaves": 2
+        },
+        "HistAppend": {
+          "bytes": 1280,
+          "leaves": 5
+        },
+        "HistAppend(row)": {
+          "bytes": 39680,
+          "leaves": 155
+        },
+        "HistAppend(tile)": {
+          "bytes": 41902080,
+          "leaves": 5115
+        },
+        "Mul": {
+          "bytes": 16,
+          "leaves": 2
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 41944082,
+      "leaves": 5283,
+      "node": 236,
+      "occurrence": 24,
+      "param_exact": 4,
+      "seconds": 2.756137417,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2,
+          "leaves": 2
+        },
+        "HistAppend": {
+          "bytes": 1280,
+          "leaves": 5
+        },
+        "HistAppend(row)": {
+          "bytes": 39680,
+          "leaves": 155
+        },
+        "HistAppend(tile)": {
+          "bytes": 41902080,
+          "leaves": 5115
+        },
+        "Mul": {
+          "bytes": 16,
+          "leaves": 2
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 41944082,
+      "leaves": 5283,
+      "node": 236,
+      "occurrence": 24,
+      "param_exact": 4,
+      "seconds": 2.8481689169999997,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 238,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000038666,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 238,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000029459,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 238,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000028709,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2048,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 16896,
+          "leaves": 3
+        }
+      },
+      "bytes": 18944,
+      "leaves": 4,
+      "node": 244,
+      "occurrence": 24,
+      "param_exact": 2,
+      "seconds": 0.000053375,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2048,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 16896,
+          "leaves": 3
+        }
+      },
+      "bytes": 18944,
+      "leaves": 4,
+      "node": 244,
+      "occurrence": 24,
+      "param_exact": 2,
+      "seconds": 0.00005125,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2048,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 16896,
+          "leaves": 3
+        }
+      },
+      "bytes": 18944,
+      "leaves": 4,
+      "node": 244,
+      "occurrence": 24,
+      "param_exact": 2,
+      "seconds": 0.000054542,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 164160,
+      "leaves": 165,
+      "node": 263,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010368916,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 164160,
+      "leaves": 165,
+      "node": 263,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010383542,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 164160,
+      "leaves": 165,
+      "node": 263,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010391292,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 289,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000541167,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 289,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.0005375,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 289,
+      "occurrence": 24,
+      "param_exact": 3,
+      "seconds": 0.000552292,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 306,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.01035925,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 306,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010410708,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 172096,
+      "leaves": 164,
+      "node": 306,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010371375,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 323,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010372375,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 323,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010377125,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 172096,
+      "leaves": 164,
+      "node": 323,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.010422292,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 325,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000031542,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 325,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.0000295,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 325,
+      "occurrence": 24,
+      "param_exact": 0,
+      "seconds": 0.000028791,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 33280,
+          "leaves": 3
+        }
+      },
+      "bytes": 39424,
+      "leaves": 4,
+      "node": 331,
+      "occurrence": 24,
+      "param_exact": 2,
+      "seconds": 0.000051875,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 33280,
+          "leaves": 3
+        }
+      },
+      "bytes": 39424,
+      "leaves": 4,
+      "node": 331,
+      "occurrence": 24,
+      "param_exact": 2,
+      "seconds": 0.000051375,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 16896,
+          "leaves": 3
+        }
+      },
+      "bytes": 23040,
+      "leaves": 4,
+      "node": 331,
+      "occurrence": 24,
+      "param_exact": 2,
+      "seconds": 0.000056333,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 24576,
+          "leaves": 96
+        },
+        "MatMul": {
+          "bytes": 397312,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 442688,
+      "leaves": 229,
+      "node": 350,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.033280792,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 24576,
+          "leaves": 96
+        },
+        "MatMul": {
+          "bytes": 397312,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 442688,
+      "leaves": 229,
+      "node": 350,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.032308208,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 2,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 24576,
+          "leaves": 96
+        },
+        "MatMul": {
+          "bytes": 397312,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 442688,
+      "leaves": 229,
+      "node": 350,
+      "occurrence": 24,
+      "param_exact": 132,
+      "seconds": 0.032279333,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000547875,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000544041,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000541334,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 42,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010869,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 42,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010886542,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 42,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010915542,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 59,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010854334,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 59,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010891334,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 59,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010867792,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 76,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010946083,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 76,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010929375,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 76,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010881,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 93,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010922333,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 93,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010855416,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 163904,
+      "leaves": 164,
+      "node": 93,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.010869125,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Concat": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 256,
+      "leaves": 1,
+      "node": 128,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000020583,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Concat": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 256,
+      "leaves": 1,
+      "node": 128,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.00001825,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Concat": {
+          "bytes": 256,
+          "leaves": 1
+        }
+      },
+      "bytes": 256,
+      "leaves": 1,
+      "node": 128,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000019709,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 57344,
+          "leaves": 5
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 4258816,
+      "leaves": 138,
+      "node": 142,
+      "occurrence": 23,
+      "param_exact": 6,
+      "seconds": 0.000322792,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 57344,
+          "leaves": 5
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 4258816,
+      "leaves": 138,
+      "node": 142,
+      "occurrence": 23,
+      "param_exact": 6,
+      "seconds": 0.000314583,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 40960,
+          "leaves": 5
+        },
+        "Reshape": {
+          "bytes": 1024,
+          "leaves": 4
+        }
+      },
+      "bytes": 4242432,
+      "leaves": 138,
+      "node": 142,
+      "occurrence": 23,
+      "param_exact": 6,
+      "seconds": 0.000319834,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Slice": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 512,
+      "leaves": 2,
+      "node": 164,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000082167,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Slice": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 512,
+      "leaves": 2,
+      "node": 164,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000078291,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Slice": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 512,
+      "leaves": 2,
+      "node": 164,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000078458,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Slice": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 512,
+      "leaves": 2,
+      "node": 183,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000078667,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Slice": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 512,
+      "leaves": 2,
+      "node": 183,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000080667,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Slice": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 512,
+      "leaves": 2,
+      "node": 183,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000077792,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 64,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 96,
+          "leaves": 3
+        },
+        "Compare": {
+          "bytes": 128,
+          "leaves": 1
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 33792,
+          "leaves": 32
+        },
+        "Mul": {
+          "bytes": 128,
+          "leaves": 1
+        }
+      },
+      "bytes": 42400,
+      "leaves": 70,
+      "node": 219,
+      "occurrence": 23,
+      "param_exact": 38,
+      "seconds": 0.004996208,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 64,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 96,
+          "leaves": 3
+        },
+        "Compare": {
+          "bytes": 128,
+          "leaves": 1
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 33792,
+          "leaves": 32
+        },
+        "Mul": {
+          "bytes": 128,
+          "leaves": 1
+        }
+      },
+      "bytes": 42400,
+      "leaves": 70,
+      "node": 219,
+      "occurrence": 23,
+      "param_exact": 38,
+      "seconds": 0.004945083,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 64,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 96,
+          "leaves": 3
+        },
+        "Compare": {
+          "bytes": 128,
+          "leaves": 1
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 33792,
+          "leaves": 32
+        },
+        "Mul": {
+          "bytes": 128,
+          "leaves": 1
+        }
+      },
+      "bytes": 42400,
+      "leaves": 70,
+      "node": 219,
+      "occurrence": 23,
+      "param_exact": 38,
+      "seconds": 0.00494375,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 96,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 33792,
+          "leaves": 32
+        },
+        "Mul": {
+          "bytes": 128,
+          "leaves": 1
+        }
+      },
+      "bytes": 42208,
+      "leaves": 68,
+      "node": 231,
+      "occurrence": 23,
+      "param_exact": 36,
+      "seconds": 0.004961959,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 96,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 33792,
+          "leaves": 32
+        },
+        "Mul": {
+          "bytes": 128,
+          "leaves": 1
+        }
+      },
+      "bytes": 42208,
+      "leaves": 68,
+      "node": 231,
+      "occurrence": 23,
+      "param_exact": 36,
+      "seconds": 0.00495325,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 96,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 33792,
+          "leaves": 32
+        },
+        "Mul": {
+          "bytes": 128,
+          "leaves": 1
+        }
+      },
+      "bytes": 42208,
+      "leaves": 68,
+      "node": 231,
+      "occurrence": 23,
+      "param_exact": 36,
+      "seconds": 0.00498575,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 48,
+          "leaves": 3
+        },
+        "Reshape": {
+          "bytes": 85440,
+          "leaves": 534
+        },
+        "Slice": {
+          "bytes": 33792,
+          "leaves": 132
+        },
+        "State(checkpoint)": {
+          "bytes": 32768,
+          "leaves": 128
+        }
+      },
+      "bytes": 152048,
+      "leaves": 797,
+      "node": 298,
+      "occurrence": 23,
+      "param_exact": 7,
+      "seconds": 1.5658979579999999,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 48,
+          "leaves": 3
+        },
+        "Reshape": {
+          "bytes": 85440,
+          "leaves": 534
+        },
+        "Slice": {
+          "bytes": 33792,
+          "leaves": 132
+        },
+        "State(checkpoint)": {
+          "bytes": 32768,
+          "leaves": 128
+        }
+      },
+      "bytes": 152048,
+      "leaves": 797,
+      "node": 298,
+      "occurrence": 23,
+      "param_exact": 7,
+      "seconds": 1.564138875,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 48,
+          "leaves": 3
+        },
+        "Reshape": {
+          "bytes": 85440,
+          "leaves": 534
+        },
+        "Slice": {
+          "bytes": 33792,
+          "leaves": 132
+        },
+        "State(checkpoint)": {
+          "bytes": 32768,
+          "leaves": 128
+        }
+      },
+      "bytes": 152048,
+      "leaves": 797,
+      "node": 298,
+      "occurrence": 23,
+      "param_exact": 7,
+      "seconds": 1.564383292,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 323,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000051792,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 323,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000030125,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 323,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.00002975,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 16640,
+          "leaves": 2
+        },
+        "Reshape": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 19208,
+      "leaves": 6,
+      "node": 329,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000117417,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 16640,
+          "leaves": 2
+        },
+        "Reshape": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 19208,
+      "leaves": 6,
+      "node": 329,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000119042,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 16640,
+          "leaves": 2
+        },
+        "Reshape": {
+          "bytes": 512,
+          "leaves": 2
+        }
+      },
+      "bytes": 19208,
+      "leaves": 6,
+      "node": 329,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000113,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 164160,
+      "leaves": 165,
+      "node": 348,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.011125709,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 164160,
+      "leaves": 165,
+      "node": 348,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.01110425,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 164160,
+      "leaves": 165,
+      "node": 348,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.011090792,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 374,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000539083,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 374,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000537166,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 374,
+      "occurrence": 23,
+      "param_exact": 3,
+      "seconds": 0.000532625,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 391,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.011108625,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 391,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.011129542,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 172096,
+      "leaves": 164,
+      "node": 391,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.011526166,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 408,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.01116575,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        }
+      },
+      "bytes": 188480,
+      "leaves": 164,
+      "node": 408,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.011165542,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 12352,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 8192,
+          "leaves": 32
+        },
+        "MatMul": {
+          "bytes": 135168,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 172096,
+      "leaves": 164,
+      "node": 408,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.011109584,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 410,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000032167,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 410,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000030083,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Gather(data param)": {
+          "bytes": 4194304,
+          "leaves": 128
+        }
+      },
+      "bytes": 4194560,
+      "leaves": 129,
+      "node": 410,
+      "occurrence": 23,
+      "param_exact": 0,
+      "seconds": 0.000030458,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 33280,
+          "leaves": 3
+        }
+      },
+      "bytes": 39424,
+      "leaves": 4,
+      "node": 416,
+      "occurrence": 23,
+      "param_exact": 2,
+      "seconds": 0.000054291,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 33280,
+          "leaves": 3
+        }
+      },
+      "bytes": 39424,
+      "leaves": 4,
+      "node": 416,
+      "occurrence": 23,
+      "param_exact": 2,
+      "seconds": 0.000054708,
+      "tile": 48,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 6144,
+          "leaves": 1
+        },
+        "Mul": {
+          "bytes": 16896,
+          "leaves": 3
+        }
+      },
+      "bytes": 23040,
+      "leaves": 4,
+      "node": 416,
+      "occurrence": 23,
+      "param_exact": 2,
+      "seconds": 0.000052958,
+      "tile": 95,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 24576,
+          "leaves": 96
+        },
+        "MatMul": {
+          "bytes": 397312,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 442688,
+      "leaves": 229,
+      "node": 435,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.034215291,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 24576,
+          "leaves": 96
+        },
+        "MatMul": {
+          "bytes": 397312,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 442688,
+      "leaves": 229,
+      "node": 435,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.034609917,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 1,
+      "by_kind": {
+        "Add": {
+          "bytes": 256,
+          "leaves": 1
+        },
+        "Clamp": {
+          "bytes": 4160,
+          "leaves": 3
+        },
+        "Gather(data)": {
+          "bytes": 24576,
+          "leaves": 96
+        },
+        "MatMul": {
+          "bytes": 397312,
+          "leaves": 128
+        },
+        "Mul": {
+          "bytes": 16384,
+          "leaves": 1
+        }
+      },
+      "bytes": 442688,
+      "leaves": 229,
+      "node": 435,
+      "occurrence": 23,
+      "param_exact": 132,
+      "seconds": 0.03424575,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 3,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 25,
+      "param_exact": 3,
+      "seconds": 0.000554792,
+      "tile": 0,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 3,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 25,
+      "param_exact": 3,
+      "seconds": 0.00054425,
+      "tile": 16,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 3,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 2056,
+          "leaves": 2
+        },
+        "Mul": {
+          "bytes": 24576,
+          "leaves": 33
+        }
+      },
+      "bytes": 26632,
+      "leaves": 35,
+      "node": 25,
+      "occurrence": 25,
+      "param_exact": 3,
+      "seconds": 0.000541875,
+      "tile": 31,
+      "tile_len": 64,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 3,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 32768,
+          "leaves": 1
+        },
+        "MatMul": {
+          "bytes": 1048576,
+          "leaves": 256
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 8192,
+          "leaves": 32
+        }
+      },
+      "bytes": 1122304,
+      "leaves": 290,
+      "node": 33,
+      "occurrence": 25,
+      "param_exact": 258,
+      "seconds": 0.02701025,
+      "tile": 0,
+      "tile_len": 256,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 3,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 32768,
+          "leaves": 1
+        },
+        "MatMul": {
+          "bytes": 1048576,
+          "leaves": 256
+        },
+        "Mul": {
+          "bytes": 32768,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 8192,
+          "leaves": 32
+        }
+      },
+      "bytes": 1122304,
+      "leaves": 290,
+      "node": 33,
+      "occurrence": 25,
+      "param_exact": 258,
+      "seconds": 0.026529875,
+      "tile": 485,
+      "tile_len": 256,
+      "tokens": 0,
+      "uncovered": []
+    },
+    {
+      "block": 3,
+      "by_kind": {
+        "Clamp": {
+          "bytes": 18944,
+          "leaves": 1
+        },
+        "MatMul": {
+          "bytes": 1048576,
+          "leaves": 256
+        },
+        "Mul": {
+          "bytes": 20480,
+          "leaves": 1
+        },
+        "Reshape": {
+          "bytes": 8192,
+          "leaves": 32
+        }
+      },
+      "bytes": 1096192,
+      "leaves": 290,
+      "node": 33,
+      "occurrence": 25,
+      "param_exact": 258,
+      "seconds": 0.026667417,
+      "tile": 969,
+      "tile_len": 256,
+      "tokens": 0,
+      "uncovered": []
+    }
+  ],
+  "seeds": 126,
+  "wall_seconds": 16.140413875
+}

@@ -1,0 +1,46 @@
+{
+  "actual_positions": 1,
+  "admitted_metadata_max_positions": 32,
+  "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+  "canonical_program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+  "conviction": "Ordinary { position: 0, occurrence: 1, node: 27, element: 0 }",
+  "court_bounds": {
+    "filing_bytes": 23284,
+    "operand_leaves": [
+      1,
+      24
+    ],
+    "scratch_bytes": 21316001,
+    "work": 151708672
+  },
+  "detected_element": 0,
+  "full_parameter_map_source_continuity_this_run": false,
+  "full_rfc02_complete": false,
+  "independent_detected_node": 27,
+  "independent_detected_occurrence": 1,
+  "independent_prior_node_matches": 35,
+  "independent_replay_nodes": 7658,
+  "job_tokens": [
+    4498
+  ],
+  "missing_source_material_dismissed": true,
+  "native_registration_or_execution_final_or_a6_a8_credit": false,
+  "own_reference_tensor_payload_bytes": 224231504,
+  "parameter_map_sha256": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1",
+  "parameter_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729",
+  "producer_elapsed_ms": 4138,
+  "producer_nodes": 7658,
+  "proof_sha256": "2b8025218c43c4f118320d8519d2e788861eef8d00cd9365b63359210d8600db",
+  "raw_source_float_fidelity_this_run": false,
+  "schema": "misaka.rfc02.actual-checkpoint-ordinary9-local-trial.v1",
+  "scope_root": "291df64dcc44dfdb28e4bec75bd30456dc1ea12e5a2635820e99a6ee6a7a7defd109e0ccb837b829061d1b9a10f9a83e7ba09b948c6b891be9d1cec4cd18ddd8",
+  "selected_parameter_instances_independently_authenticated": [
+    [
+      7,
+      0
+    ]
+  ],
+  "source_artifact_sha256_before_after_match": true,
+  "total_elapsed_ms": 12236,
+  "wire_bytes": 17944
+}

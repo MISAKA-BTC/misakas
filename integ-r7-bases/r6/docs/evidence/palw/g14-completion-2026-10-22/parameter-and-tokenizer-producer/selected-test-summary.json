@@ -1,0 +1,132 @@
+{
+  "unique_selected": 47,
+  "runs": [
+    {
+      "log": "core-selection-0.log",
+      "tests": [
+        "palw_tir_public_source_v1::parameter_cover_v1::native_owner_tests::native_original_parameter_cover_preserves_actual_all_root_relation"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4754 filtered out; finished in 0.69s"
+      ]
+    },
+    {
+      "log": "core-selection-1.log",
+      "tests": [
+        "palw_tokenizer_table_stream_v1::tests::incomplete_corrupt_or_foreign_table_leaf_never_exposes_digest",
+        "palw_tokenizer_table_stream_v1::tests::original_table_leaf_and_rendering_digest_match_at_restart_boundaries",
+        "palw_tokenizer_table_stream_v1::tests::production_key_material_owner_refuses_before_construction_holds_quota_and_releases",
+        "palw_tokenizer_table_stream_v1::tests::production_key_material_obeys_actual_overrun_duplicate_and_eof_authentication",
+        "palw_tokenizer_table_stream_v1::tests::raw_json_and_original_table_authenticate_before_honest_mismatch_duplicate_or_overrun",
+        "palw_tokenizer_table_stream_v1::tests::production_key_material_is_data_identical_across_native_contexts_and_rechecks",
+        "palw_tokenizer_table_stream_v1::tests::canonical_material_replay_matches_distinct_legal_packetizations",
+        "palw_tokenizer_table_stream_v1::tests::private_tokenizer_canonical_builder_consumes_real_ordered_proofs_and_authenticates_operands"
+      ],
+      "summaries": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 4747 filtered out; finished in 1.92s"
+      ]
+    },
+    {
+      "log": "core-selection-2.log",
+      "tests": [
+        "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_material"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4754 filtered out; finished in 0.23s"
+      ]
+    },
+    {
+      "log": "core-selection-3.log",
+      "tests": [
+        "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_constraint_material_builder_reconstructs_real_native_original_and_rechecks"
+      ],
+      "summaries": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 4754 filtered out; finished in 0.04s"
+      ]
+    },
+    {
+      "log": "core-selection-4.log",
+      "tests": [
+        "palw_json_key_set_v1::tests::changed_key_path_depth_or_sibling_cannot_insert_and_full_width_is_used",
+        "palw_json_key_set_v1::tests::duplicate_key_and_foreign_namespace_proofs_refuse_without_mutation_and_restore",
+        "palw_json_key_set_v1::tests::compact_proofs_are_full_width_canonical_and_differentially_identical"
+      ],
+      "summaries": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 4752 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "log": "core-selection-5.log",
+      "tests": [
+        "palw_tokenizer_json_stream_v1::tests::understated_work_bound_only_convicts_after_the_original_exact_raw_hash",
+        "palw_tokenizer_json_stream_v1::tests::exact_eof_inside_vocab_number_seals_invalid_without_an_unreachable_new_proof",
+        "palw_tokenizer_json_stream_v1::tests::observer_digest_events_are_tentative_and_do_not_change_serialized_parser_state",
+        "palw_tokenizer_json_stream_v1::tests::unknown_large_strings_keep_the_serialized_parser_bounded_and_false_raw_hash_never_verdicts",
+        "palw_tokenizer_json_stream_v1::tests::decimal_overflow_boundary_and_integer_ids_are_feature_independent",
+        "palw_tokenizer_json_stream_v1::tests::normative_container_depth_and_malformed_delimiters_are_exact",
+        "palw_tokenizer_json_stream_v1::tests::required_schema_and_merge_types_match_the_whole_file_rule",
+        "palw_tokenizer_json_stream_v1::tests::authenticated_byte_bound_covers_key_events_at_every_parser_pause",
+        "palw_tokenizer_json_stream_v1::tests::exact_json_grammar_and_renderer_agree_across_every_cursor_boundary_and_restart"
+      ],
+      "summaries": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 4746 filtered out; finished in 1.80s"
+      ]
+    },
+    {
+      "log": "palw_activation_pool_is_t12_only.log",
+      "tests": [
+        "the_pool_carries_its_fork_id_name",
+        "the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit",
+        "the_pool_and_its_terms_move_testnet12s_fingerprint",
+        "testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool",
+        "the_activation_pool_is_armed_on_testnet12_only"
+      ],
+      "summaries": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      ]
+    },
+    {
+      "log": "palw_the_release_did_not_move.log",
+      "tests": [
+        "the_objective_offence_fence_is_past_the_clock",
+        "p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it",
+        "the_daa_clock_fence_is_past_the_stalled_tip",
+        "the_execution_quanta_fence_is_past_the_clock",
+        "the_verification_s3_and_s2_fences_are_past_s1_and_the_lock_ledger",
+        "every_fence_the_reward_work_added_is_dormant_everywhere",
+        "the_shipped_release_fingerprint_did_not_move",
+        "arming_one_fence_of_the_bundle_on_the_release_is_refused",
+        "the_work_price_denominator_cannot_reach_the_payer_past_the_bundle"
+      ],
+      "summaries": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "log": "palw_tir_original_parameter_cover.log",
+      "tests": [
+        "parameter_free_original_keeps_all_roots_but_has_no_model_byte_dependencies",
+        "every_original_budget_is_global_and_refuses_without_partial_success",
+        "substituted_registration_layout_or_header_does_not_authorize_an_original_quote",
+        "whole_original_relation_equals_every_native_named_cover_and_its_union"
+      ],
+      "summaries": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s"
+      ]
+    },
+    {
+      "log": "palw_tir_parameter_cover.log",
+      "tests": [
+        "gather_and_select_single_execution_read_sets_are_not_a_potential_cover",
+        "fixed_replay_adds_the_actual_writer_parameter_only_before_the_checkpoint",
+        "adversarial_dynamic_roots_and_every_terminal_path_stay_inside_the_cover",
+        "derived_dynamic_cover_has_both_branches_every_row_and_no_unrelated_piece",
+        "parameter_free_dissection_has_empty_cover_and_per_layer_scopes_remain_separate",
+        "potential_cover_contains_every_sampled_native_finalize_parameter"
+      ],
+      "summaries": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.06s"
+      ]
+    }
+  ]
+}

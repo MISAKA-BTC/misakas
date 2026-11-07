@@ -1,0 +1,118 @@
+[
+  {
+    "path": "docs/adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/A_floor_small.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/C_8k_13k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/D_8k_20k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/E_8k_26k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/F_8k_100k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/G_8k_split_13k_13k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/H_8k_100k_100k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/I_8k_13k_quorum3.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/J_floor_13k_quorum3.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/K_floor_big.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L1_floor_13k_live.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L2_8k_100k_live.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/L3_8k_13k_live.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/M_8k_21k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/N_8k_22k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/S2_8k_100k.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/S2_8k_100k_200.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/instant2.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/claim-capacity-map-2026-09-26/runs/study.json",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/measurements/opv-measurements.md",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/measurements/palw-claim-capacity-map-2026-09-26.md",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/opv-measurements-data/gap07-verify.jsonl",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl",
+    "status": "match"
+  },
+  {
+    "path": "docs/evidence/palw/opv-measurements-data/qwen25-sweep.jsonl",
+    "status": "match"
+  },
+  {
+    "path": "docs/rfc/0026-court-policy-master-contract.md",
+    "status": "differs"
+  },
+  {
+    "path": "scripts/drills/adr0176_stage1_measure.py",
+    "status": "match"
+  },
+  {
+    "path": "tools/opv-meas/src/util.rs",
+    "status": "match"
+  },
+  {
+    "path": "tools/opv-meas/src/verify.rs",
+    "status": "match"
+  }
+]

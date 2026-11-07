@@ -1,0 +1,106 @@
+
+================ R1  the four shipped classes, re-derived independently ================
+class                   n_ctx  canonical    pwu(leaves)      canonical CCU           DRAW CCU leaves/GMACeq
+BASE-0 floor               12      (8,4)           7708           30504896           21657728     355900.7
+Qwen3.6-35B-A3B             8      (7,2)        2685360        21070759296        18055200736     148730.6
+Qwen2.5-A16 gv5@512       512     (63,2)        6630544        84653733376        83102171136      79787.9
+Qwen3.8-27B                 8      (7,2)        9000776       198712432640       172919123392      52051.9
+
+================ R2  the DECODE lever — priced leaves vs the job a draw actually runs (prefill_draw ARMED at DAA 4,000) ================
+  a class's pwu_per_inference counts the FULL canonical job; palw_attempt_job_v1 executes (prefill, 1).
+  probe row: Qwen2.5-A16 gv5@512 (n_ctx 512)
+  declared worst_case_step_leaf_count = 52778128   (ladder 67108864)
+
+     canonical     pwu (leaves)  DRAW CCU (MAC-eq)    leaves/GMACeq   vs shipped
+        (63,2)          6630544        83102171136          79787.9         1.0x  footprint   64 fits     counted<=worst yes
+      (63,128)         22005568        83102171136         264801.4         3.3x  footprint  190 fits     counted<=worst yes
+      (63,370)         51535376        83102171136         620144.8         7.8x  footprint  432 fits     counted<=worst yes
+       (1,128)         15619072         1546037392       10102648.3       126.6x  footprint  128 fits     counted<=worst yes
+       (1,256)         31238144         1546037392       20205296.6       253.2x  footprint  256 fits     counted<=worst yes
+       (1,432)         52714368         1546037392       34096437.9       427.3x  footprint  432 fits     counted<=worst yes
+       (1,450)         54910800         1546037392       35517122.9       445.1x  footprint  450 fits     counted<=worst NO
+
+================ R3  the TILE lever — is the ADR-0131 cost model really blind to tile_len? ================
+  Qwen2.5-A16 gv5@512 canonical (63,2); base CCU 84653733376 MAC-eq
+    tile_len     pwu (leaves)        canonical CCU     CCU moved?   kernels=
+       65536            43146          84653733376             NO       same
+        4096            64720          84653733376             NO       same
+         512           280542          84653733376             NO       same
+         128          1089910          84653733376             NO       same
+          64          2179820          84653733376             NO       same
+          32          4359640          84653733376             NO       same
+          16          8719280          84653733376             NO       same
+           8         17438560          84653733376             NO       same
+           4         34877120          84653733376             NO       same
+
+================ R4  CLOSING A1's OPEN LEAD — is `worst_case_step_leaf_count_capped_v1` the worst case? ================
+  the admission gate stores it as `max_step_leaf_count` and refuses `counted > worst`.
+  it enumerates n_ctx-1 prefill positions + exactly ONE decode call.
+
+  class                  declared worst      deepest job              job      over? over ladder?
+  BASE-0 floor                     8352             8592           (1,12)      +2.9%           no
+  Qwen3.6-35B-A3B               2685360          2871648            (1,8)      +6.9%           no
+  Qwen2.5-A16 gv5@512          52778128         62476288          (1,512)     +18.4%           no
+  Qwen3.8-27B                   9000776          9373376            (1,8)      +4.1%           no
+
+================ R5  the POST-7,101 configuration: ADR-0132 Upgrade C pays on CCU, ADR-0137 draws on CCU — ================
+     but `claim.pwu` (FORK-CHOICE WEIGHT) is still expected_attempts x LEAVES.
+  escrow(72% carve) = 320084640000 sompi = 3200.85 MSK ; rate = 9 MSK/G
+  W0 = palw_work_floor_v1(escrow, rate) = 355649600000 MAC-eq = 355.65 G
+
+  class / variant                  DRAW CCU    E[attempts]    attempted CCU claim.pwu = WEIGHT     payout MSK   weight/MSK
+  BASE-0 floor                     21657728          16421     355641551488          126573068        3200.77      3.954e4
+  Qwen3.6-35B-A3B               18055200736             19     343048813984           51021840        3087.44      1.653e4
+  Qwen2.5-A16 gv5@512           83102171136              4     332408684544           26522176        2991.68      8.865e3
+  Qwen3.8-27B                  172919123392              2     345838246784           18001552        3112.54      5.784e3
+  A16 gv5 re-declared (1,432)       1546037392            230     355588600160        12124304640        3200.30      3.788e6
+  A16 gv5 re-tiled @32          83102171136              4     332408684544           17438560        2991.68      5.829e3
+
+  weight bought per MSK paid, normalised to the BASE-0 floor:
+    BASE-0 floor                         1.00x
+    Qwen3.6-35B-A3B                      0.42x
+    Qwen2.5-A16 gv5@512                  0.22x
+    Qwen3.8-27B                          0.15x
+    A16 gv5 re-declared (1,432)         95.80x
+    A16 gv5 re-tiled @32                 0.15x
+
+================ R6  COUNTEREXAMPLE TABLE — the four families the operator asked for ================
+  reward basis A = ADR-0124 Decision 6 leaf price: escrow x own_pwu / unit_pwu   (fence palw_work_priced_reward @ DAA 7,101)
+  reward basis B = ADR-0132 Upgrade C: min(escrow, attempted_ccu x rate)         (same height)
+  WEIGHT         = claim.pwu = expected_attempts x pwu_per_inference             (NO FENCE, live today)
+
+  unit_pwu over the shipped weight-bearing model classes = 9000776
+
+  free-prompt quantum for the dense row = canonical_leaves/8 = 828818 leaves; cap 64 quanta/receipt
+
+    (d) fp prompt    8 tok ->       965104 work_leaves,  1 quanta, claim.pwu       828818 | honest   12.28 G, prefix-cached    3.09 G, saving     4.0x
+    (d) fp prompt   63 tok ->      6630544 work_leaves,  8 quanta, claim.pwu      6630544 | honest   84.65 G, prefix-cached    3.09 G, saving    27.4x
+    (d) fp prompt  200 tok ->     20742640 work_leaves, 25 quanta, claim.pwu     20720450 | honest  266.07 G, prefix-cached    3.09 G, saving    86.0x
+    (d) fp prompt  500 tok ->     51645040 work_leaves, 62 quanta, claim.pwu     51386716 | honest  669.09 G, prefix-cached    3.09 G, saving   216.4x
+
+  family                       class / variant              in tok  out tok   pwu (leaves)         DRAW CCU   basis A MSK   basis B MSK A-MSK/GMACeq
+  (c) same task, diff model    BASE-0 floor                      8        1           7708         21657728          2.74       3200.77       126.57
+  (c) same task, diff model    Qwen3.6-35B-A3B                   7        1        2685360      18055200736        954.96       3087.44        52.89
+  (c) same task, diff model    Qwen2.5-A16 gv5@512              63        1        6630544      83102171136       2357.95       2991.68        28.37
+  (c) same task, diff model    Qwen3.8-27B                       7        1        9000776     172919123392       3200.85       3112.54        18.51
+  (b) same cost, diff reward   A16 gv5 canonical (63,2)         63        1        6630544      83102171136       2357.95       2991.68        28.37
+  (b) same cost, diff reward   A16 gv5 canonical (63,128)       63        1       22005568      83102171136       3200.85       2991.68        38.52
+  (b) same cost, diff reward   A16 gv5 canonical (63,370)       63        1       51535376      83102171136       3200.85       2991.68        38.52
+  (a) same leaves, diff cost   A16 gv5 re-tiled @512            63        1         280542      83102171136         99.77       2991.68         1.20
+  (a) same leaves, diff cost   Qwen3.6-35B-A3B                   7        1        2685360      18055200736        954.96       3087.44        52.89
+
+================ R7  the DILUTION channel: does one registration reprice the incumbents? ================
+  work_price_unit() = max pwu_per_inference over Active weight-bearing MODEL classes
+  BUT palw_state_v2.rs:10019 takes `Some(snapshot) => snapshot.priced_reward(..)` FIRST,
+  and the snapshot exists for every class the registry holds work for.
+
+  unit_pwu now                        = 9000776
+  unit_pwu after ONE (1,432) register = 52714368  (5.9x)
+
+  class                         basis A now    basis A after    change
+  Qwen3.6-35B-A3B                    954.96           163.06     17.1%
+  Qwen2.5-A16 gv5@512               2357.95           402.61     17.1%
+  Qwen3.8-27B                       3200.85           546.53     17.1%
+
+  ...but under basis B (which arms at the SAME height) none of those numbers is read.
+  the dilution only bites a class with NO registry work row. See the write-up.

@@ -1,0 +1,16 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "bitnet",
+  "doc": "BitNet b1.58 (BitNetForCausalLM; the bf16-master checkpoints, e.g. microsoft/bitnet-b1.58-2B-4T-bf16): Llama's pre-norm decoder with a ReLU-squared gated MLP and two sub-layer norms — an RMSNorm over the attention output (the heads' concatenation, hidden wide) before o_proj and one over the gated product (intermediate wide) before down_proj (SUBLAYER_NORMS_V1). The released 1.58-bit checkpoint stores packed ternary weights (uint8, with a weight_scale) and quantises activations per token to int8: that is a quantised-storage format, not read here, so those tensors fail to bind by name. Features: ATTN_GQA_V1, ROPE_DEFAULT_V1, NORM_RMS_V1, SUBLAYER_NORMS_V1, MLP_DENSE_GATED_V1.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["BitNetForCausalLM"], "model_types": ["bitnet"]},
+  "config": {"defaults": {"vocab_size": 128256, "hidden_size": 2560, "intermediate_size": 6912, "num_hidden_layers": 30, "num_attention_heads": 20, "num_key_value_heads": 5, "hidden_act": "relu2", "max_position_embeddings": 2048, "rms_norm_eps": 1e-05}},
+  "vars": [
+    {"name": "mbias", "value": {"$let": ["_", {"$forbid": ["mlp_bias", "BitNetMLP has no biases"]}, false]}},
+    {"name": "rope_theta", "value": 500000.0},
+    {"name": "attn_extra", "value": {"o_norm": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "W", "bias": false}}},
+    {"name": "l_ffn", "layer": true, "value": {"Mlp": {"intermediate": {"$var": "inter"}, "act": {"$var": "act"}, "gated": true, "up_bias": false, "down_bias": false, "inner_norm": {"kind": "Rms", "eps": {"$var": "eps"}, "gain": "W", "bias": false}}}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"attn.sub_norm": "{p}layers.{L}.self_attn.attn_sub_norm", "mlp.sub_norm": "{p}layers.{L}.mlp.ffn_sub_norm"}]}},
+    {"name": "model_type", "value": "bitnet"}
+  ]
+}

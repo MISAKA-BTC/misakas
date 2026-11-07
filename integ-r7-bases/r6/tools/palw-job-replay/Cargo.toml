@@ -1,0 +1,15 @@
+[package]
+name = "misaka-palw-job-replay"
+description = "Re-execute one LLM-class job from its anchor, on this machine, and print every commitment — the cross-device determinism check, runnable anywhere the artifact is"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+misaka-palw-base0.workspace = true
+misaka-palw-sdk.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

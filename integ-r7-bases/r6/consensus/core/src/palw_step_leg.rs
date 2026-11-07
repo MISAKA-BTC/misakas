@@ -1,0 +1,4237 @@
+//! PALW execution-commitment v2 — the step leg (ADR-0030 §3).
+//!
+//! A **new scheme family** (`misaka-palw/execution-commitment/v2`), never a field bolted onto
+//! v1: v1's domains, goldens and meaning do not move, and which commitment form a class
+//! produces stays a registration fact. The v2 composite binds the frozen v2 logits root, the
+//! v1 activation leg **unchanged**, a **chunked** checkpoint leg (per-semantic-unit state
+//! chunks, so a mid-interval GDN step opens one 64 KiB head slice, not a ~26 MiB blob), and
+//! the **step leg**: node-output tiles at the `palw_step` coordinates plus the KV aux-chunk
+//! series that makes full-context reductions openable in ~10 chunks.
+//!
+//! Same discipline as `palw_legs`: producer code is fail-closed (an honest executor aborts
+//! rather than commit a refutable byte — non-finite values, out-of-order arrival, wrong tile
+//! lengths are all construction failures, not commitments), adjudication is model-free, and
+//! `NoFaultFound` is the verdict that costs a challenger their bond. Consensus-inert.
+//!
+//! The tree functions here mirror `palw_legs`' generalized Merkle exactly (leaf-index-bound
+//! leaves, domain-separated nodes, odd promote) with one difference: the step tree is up to
+//! `1 << 22` leaves, past the v1 opening-sibling cap — so the functions are reimplemented
+//! and **cross-frozen against the v1 implementation by equivalence tests** on shared shapes
+//! rather than by call reuse.
+
+use borsh::{BorshDeserialize, BorshSerialize};
+use kaspa_hashes::Hash64;
+use thiserror::Error;
+
+use crate::palw_legs::PalwCheckpointProfileV1;
+use crate::palw_slash::{PalwSlashError, check_job_context_shape};
+use crate::palw_step::{
+    PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepError, canonical_step_leaf_index, kv_aux_leaf_count,
+};
+use crate::palw_v2::PalwJobContextV2;
+
+// ---------------------------------------------------------------------------------------------
+// Versions, domains, caps
+// ---------------------------------------------------------------------------------------------
+
+pub const PALW_STEP_LEG_OBJECT_VERSION_V1: u16 = 1;
+
+/// The composite scheme name; [`execution_commitment_scheme_id_v2`] is its identity.
+pub const PALW_EXECUTION_COMMITMENT_SCHEME_NAME_V2: &str = "misaka-palw/execution-commitment/v2";
+
+pub const PALW_STEP_LEG_DOMAIN_SCHEME_ID: &[u8] = b"misaka-palw/execution-commitment-scheme-id/v2";
+pub const PALW_STEP_LEG_DOMAIN_TILE_LEAF: &[u8] = b"misaka-palw/step-tile-leaf/v1";
+pub const PALW_STEP_LEG_DOMAIN_KV_CHUNK_LEAF: &[u8] = b"misaka-palw/step-kv-chunk-leaf/v1";
+pub const PALW_STEP_LEG_DOMAIN_MERKLE_LEAF: &[u8] = b"misaka-palw/step-merkle-leaf/v1";
+pub const PALW_STEP_LEG_DOMAIN_MERKLE_NODE: &[u8] = b"misaka-palw/step-merkle-node/v1";
+pub const PALW_STEP_LEG_DOMAIN_LEG: &[u8] = b"misaka-palw/step-leg/v1";
+pub const PALW_STEP_LEG_DOMAIN_CHECKPOINT_LEAF_V2: &[u8] = b"misaka-palw/checkpoint-leaf/v2";
+pub const PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF: &[u8] = b"misaka-palw/state-chunk-leaf/v1";
+pub const PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE: &[u8] = b"misaka-palw/state-chunk-node/v1";
+pub const PALW_STEP_LEG_DOMAIN_CHECKPOINT_GENESIS_V2: &[u8] = b"misaka-palw/checkpoint-genesis/v2";
+pub const PALW_STEP_LEG_DOMAIN_CHECKPOINT_EMPTY_V2: &[u8] = b"misaka-palw/checkpoint-empty/v2";
+pub const PALW_STEP_LEG_DOMAIN_CHECKPOINT_LEG_V2: &[u8] = b"misaka-palw/checkpoint-leg/v2";
+pub const PALW_STEP_LEG_DOMAIN_EXECUTION_COMMITMENT_V2: &[u8] = b"misaka-palw/execution-commitment/v2";
+pub const PALW_STEP_LEG_DOMAIN_EVIDENCE_ID: &[u8] = b"misaka-palw/step-refutation-evidence-id/v1";
+
+pub const PALW_STEP_LEG_ALL_DOMAINS: &[&[u8]] = &[
+    PALW_STEP_LEG_DOMAIN_SCHEME_ID,
+    PALW_STEP_LEG_DOMAIN_TILE_LEAF,
+    PALW_STEP_LEG_DOMAIN_KV_CHUNK_LEAF,
+    PALW_STEP_LEG_DOMAIN_MERKLE_LEAF,
+    PALW_STEP_LEG_DOMAIN_MERKLE_NODE,
+    PALW_STEP_LEG_DOMAIN_LEG,
+    PALW_STEP_LEG_DOMAIN_CHECKPOINT_LEAF_V2,
+    PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF,
+    PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE,
+    PALW_STEP_LEG_DOMAIN_CHECKPOINT_GENESIS_V2,
+    PALW_STEP_LEG_DOMAIN_CHECKPOINT_EMPTY_V2,
+    PALW_STEP_LEG_DOMAIN_CHECKPOINT_LEG_V2,
+    PALW_STEP_LEG_DOMAIN_EXECUTION_COMMITMENT_V2,
+    PALW_STEP_LEG_DOMAIN_EVIDENCE_ID,
+    PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF_V4,
+    PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4,
+    PALW_STEP_LEG_DOMAIN_STATE_TOP_LEAF_V4,
+    PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4,
+];
+
+/// Step-tree leaf cap — **the DEFAULT ladder top, not the rule.**
+///
+/// The rule is `PalwCourtParamsV2::max_step_leaf_count`: the number a network actually froze into
+/// `palw_ruleset_id_v2`, which every shipped preset froze at this constant. The `_capped_v1` entry
+/// points below take that number; the un-capped names pass this one, so a caller with no ruleset
+/// in scope keeps exactly the behaviour it had.
+pub const PALW_STEP_LEG_MAX_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
+
+/// **The deepest opening a ladder of `max_step_leaf_count` leaves can need: `ceil(log2(n))`.**
+///
+/// This was the literal `22`, under a doc line that already called it `ceil(log2(MAX_LEAVES))` —
+/// a derived quantity spelled as a constant, and therefore one that does not move when the thing
+/// it derives from does. A ruleset that freezes a `2^32` ladder needs 32 siblings per opening and
+/// the leg refused at 22, so on that ladder EVERY honest opening was refused by the very court
+/// that asked for it. That, and not the ladder constant, is why "arm the deeper ladder" was never
+/// a one-line change. The derivation lives here now, and the caps are the ruleset's.
+///
+/// It is `PalwCourtParamsV2::bisection_rounds` reached by another route, and the two must agree:
+/// the court budgets one bisection round per level and the leg carries one sibling per level, so a
+/// leg cap below the court's round count is a dispute the court can schedule and the leg cannot
+/// close. The agreement is asserted over a sweep in this module's tests.
+pub const fn step_leg_max_opening_siblings_v1(max_step_leaf_count: u64) -> usize {
+    // A zero- or one-leaf tree is its own root: no level, and so no sibling.
+    if max_step_leaf_count <= 1 {
+        return 0;
+    }
+    // `ceil(log2(n)) = floor(log2(n - 1)) + 1` for `n >= 2`. Written this way rather than through
+    // `next_power_of_two`, which overflows above `2^63` instead of answering 64.
+    (max_step_leaf_count - 1).ilog2() as usize + 1
+}
+
+/// The deepest opening on the DEFAULT ladder: [`step_leg_max_opening_siblings_v1`] of
+/// [`PALW_STEP_LEG_MAX_LEAVES`] — 22, and 22 for as long as every preset freezes `2^22`.
+pub const PALW_STEP_LEG_MAX_OPENING_SIBLINGS: usize = step_leg_max_opening_siblings_v1(PALW_STEP_LEG_MAX_LEAVES);
+/// Cap on one carried tile (bytes): `4 × MAX_TILE_LEN`.
+pub const PALW_STEP_LEG_MAX_TILE_BYTES: usize = 4 * crate::palw_step::PALW_STEP_MAX_TILE_LEN as usize;
+/// Cap on one carried KV chunk (bytes).
+pub const PALW_STEP_LEG_MAX_KV_CHUNK_BYTES: usize = 1 << 20;
+/// Cap on state chunks per checkpoint and on one carried state chunk (bytes).
+pub const PALW_STEP_LEG_MAX_STATE_CHUNKS: usize = 1 << 16;
+pub const PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES: usize = 1 << 20;
+
+pub fn execution_commitment_scheme_id_v2() -> Hash64 {
+    keyed64(PALW_STEP_LEG_DOMAIN_SCHEME_ID, &[PALW_EXECUTION_COMMITMENT_SCHEME_NAME_V2.as_bytes()])
+}
+
+fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
+    for p in parts {
+        h.update(p);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+struct Writer(Vec<u8>);
+impl Writer {
+    fn new() -> Self {
+        Self(Vec::with_capacity(256))
+    }
+    fn u8(&mut self, v: u8) {
+        self.0.push(v);
+    }
+    fn u16(&mut self, v: u16) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn u32(&mut self, v: u32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn u64(&mut self, v: u64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn hash64(&mut self, v: &Hash64) {
+        self.0.extend_from_slice(v.as_byte_slice());
+    }
+    fn bytes(&mut self, v: &[u8]) {
+        self.u32(v.len() as u32);
+        self.0.extend_from_slice(v);
+    }
+    fn keyed64(self, domain: &[u8]) -> Hash64 {
+        keyed64(domain, &[&self.0])
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------------------------
+
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum PalwStepLegError {
+    #[error("unsupported step-leg object version {got} (expected {expected})")]
+    UnsupportedVersion { got: u16, expected: u16 },
+    #[error("job context is malformed: {0}")]
+    Context(PalwSlashError),
+    #[error("the binding's shape profile ({got}) is not the one the job context declares ({declared})")]
+    ShapeProfileNotTheDeclaredOne { declared: Hash64, got: Hash64 },
+    #[error("the binding's state chunk map ({carried}) is not the one its shape profile registers ({registered})")]
+    StateChunkMapNotTheRegisteredOne { registered: Hash64, carried: Hash64 },
+    #[error("step space error: {0}")]
+    Step(PalwStepError),
+    #[error("leaf count {got} is outside 1..={max}")]
+    LeafCountOutOfRange { got: u64, max: u64 },
+    #[error("leaf index {index} is not below leaf count {count}")]
+    LeafIndexOutOfRange { index: u64, count: u64 },
+    #[error("opening carries {got} siblings, exceeding the {max}-level cap")]
+    OpeningTooDeep { got: usize, max: usize },
+    #[error("opening path ended short of the root")]
+    OpeningPathTooShort,
+    #[error("opening path carries {extra} sibling(s) past the root")]
+    OpeningPathTooLong { extra: usize },
+    #[error("carried binding does not recompute the committed execution commitment root")]
+    CommittedRootMismatch,
+    #[error("carried {leaf} preimage does not hash to the opened leaf hash")]
+    LeafPreimageMismatch { leaf: &'static str },
+    #[error("carried payload exceeds its byte cap (got {got}, max {max})")]
+    PayloadTooLarge { got: usize, max: usize },
+    #[error("the addressed material is honest under every pinned rule — refutation rejected")]
+    NoFaultFound,
+
+    // Producer-side: the errors an honest executor hits INSTEAD of emitting a commitment.
+    #[error("step tile arrived out of canonical order (expected leaf {expected}, got {got})")]
+    TilesOutOfOrder { expected: u64, got: u64 },
+    #[error("step tile coordinates are not canonical for this (profile, context)")]
+    TileCoordinatesNotCanonical,
+    #[error("step tile carries {got} values but the canonical tile length is {expected}")]
+    TileLengthNotCanonical { got: u32, expected: u32 },
+    #[error("step value {value_index} of leaf {leaf_index} is non-finite — execution is invalid, emit no receipt")]
+    NonFiniteStepValue { leaf_index: u64, value_index: u32 },
+    #[error("kv chunk value {value_index} of leaf {leaf_index} is non-finite — execution is invalid, emit no receipt")]
+    NonFiniteKvValue { leaf_index: u64, value_index: u32 },
+    #[error("kv chunk arrived out of the canonical aux order")]
+    KvChunksOutOfOrder,
+    #[error("the {what} leg holds {got} of the {expected} entries the job mandates")]
+    LegIncomplete { what: &'static str, got: u64, expected: u64 },
+    #[error("checkpoint {index} covers decode call {got}, but the interval mandates {expected}")]
+    CheckpointNotCanonical { index: u32, got: u32, expected: u32 },
+    #[error("state chunk count {got} exceeds the {max} cap")]
+    StateChunksOutOfRange { got: usize, max: usize },
+    /// ADR-0093 Decision 7: a prefix the challenger holds is not the accused's committed prefix —
+    /// a left sibling on the accused's own path disagrees with the prefix's node at `level`.
+    #[error("the prefix is not the committed one: the accused's path disagrees with it at level {level}")]
+    PrefixIsNotTheCommittedOne { level: u32 },
+    /// ADR-0103 Decision 3: a v4 state proof deeper than the held map's bound.
+    #[error("a v4 state proof is {depth} levels deep and the held map admits {max}")]
+    StateTreeTooDeep { depth: u32, max: u32 },
+    /// ADR-0103 Decision 3: the class's held layout could not be derived at this position count.
+    #[error("the held state layout is not derivable: {0}")]
+    HeldLayout(String),
+}
+
+impl From<PalwStepError> for PalwStepLegError {
+    fn from(e: PalwStepError) -> Self {
+        PalwStepLegError::Step(e)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The step tree (leaf-index-bound leaves, domain-separated nodes, odd promote) — the v1
+// generalization at step depth. Cross-frozen against `palw_legs` by equivalence tests.
+// ---------------------------------------------------------------------------------------------
+
+/// Membership proof of one leaf in the step tree (u64 index space).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStepOpeningV1 {
+    pub leaf_index: u64,
+    pub leaf_hash: Hash64,
+    pub siblings: Vec<Hash64>,
+}
+
+/// **`H(domain ‖ index_le ‖ leaf)` — the step tree's leaf, index-bound so a leaf cannot be moved.**
+///
+/// Public because an executor that folds the same tree sparsely (`misaka-palw-base0`'s
+/// `Base0SparseStepAccumulatorV1`, ADR-0077's Decision 8 openings) has to produce byte-identical
+/// nodes, and the only two ways to arrange that are to export this or to restate it. It was
+/// restated, and a restatement is a second spelling of a consensus hash: a root the court
+/// recomputes differently is an honest producer who can neither be convicted nor paid. So the
+/// spelling lives here, once, and the engine crate calls it.
+pub fn step_merkle_leaf_v1(index: u64, leaf_hash: &Hash64) -> Hash64 {
+    step_merkle_leaf(index, leaf_hash)
+}
+
+/// **The step tree's interior node**, `H(domain ‖ left ‖ right)` — [`step_merkle_leaf_v1`]'s
+/// companion, exported for the same reason and with the same rule: one spelling, in the crate that
+/// owns the domain constants.
+pub fn step_merkle_node_v1(left: &Hash64, right: &Hash64) -> Hash64 {
+    keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), right.as_byte_slice()])
+}
+
+fn step_merkle_leaf(index: u64, leaf_hash: &Hash64) -> Hash64 {
+    let mut w = Writer::new();
+    w.u64(index);
+    w.hash64(leaf_hash);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_LEAF)
+}
+
+/// Root of the step tree over ordered leaf hashes.
+pub fn step_merkle_root_v1(ordered_leaf_hashes: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    step_merkle_root_capped_v1(ordered_leaf_hashes, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_merkle_root_v1`] against the ladder top the RULESET froze — `max_step_leaf_count`.
+///
+/// Nothing about the tree changes with the cap: the cap decides which trees this function will
+/// build, never how it folds one, so a caller that passes [`PALW_STEP_LEG_MAX_LEAVES`] gets the
+/// byte-identical root it got before the split.
+pub fn step_merkle_root_capped_v1(ordered_leaf_hashes: &[Hash64], max_step_leaf_count: u64) -> Result<Hash64, PalwStepLegError> {
+    let count = ordered_leaf_hashes.len() as u64;
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
+    }
+    let mut level: Vec<Hash64> = ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(i as u64, leaf)).collect();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        level = next;
+    }
+    Ok(level[0])
+}
+
+/// **The sibling path for one leaf of the tree [`step_merkle_root_v1`] builds** — the producing
+/// side of the opening [`step_opening_root_v1`] verifies.
+///
+/// Exported beside the root builder rather than reimplemented by each carrier, because the
+/// promote-odd shape lives in exactly two loops today and a third copy in a challenger is the
+/// "second name-to-bytes mapping" class of defect: it fails silently as an opening nobody can
+/// verify, or worse, verifies against the wrong tree.
+pub fn step_merkle_path_v1(ordered_leaf_hashes: &[Hash64], index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    step_merkle_path_capped_v1(ordered_leaf_hashes, index, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_merkle_path_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_merkle_path_capped_v1(
+    ordered_leaf_hashes: &[Hash64],
+    mut index: usize,
+    max_step_leaf_count: u64,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
+    let count = ordered_leaf_hashes.len() as u64;
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
+    }
+    if index as u64 >= count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count });
+    }
+    let mut level: Vec<Hash64> = ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(i as u64, leaf)).collect();
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+        if !promoted {
+            let sibling = if index.is_multiple_of(2) { index + 1 } else { index - 1 };
+            path.push(level[sibling]);
+        }
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        index /= 2;
+        level = next;
+    }
+    Ok(path)
+}
+
+/// **The step tree built once, for a party that opens many leaves** (ADR-0093 as built).
+///
+/// The same fold as [`step_merkle_root_capped_v1`] — the same leaf domain, the same node hash, the
+/// same promote-odd shape — with its levels KEPT, so each opening is a walk up the levels instead
+/// of the whole-tree rebuild [`step_merkle_path_capped_v1`] performs per call. A dissection's
+/// bottom and its cache rows open about a thousand leaves of a multi-million-leaf tree; rebuilding
+/// per path is billions of hashes, keeping the levels is one build. Pinned path-for-path against
+/// [`step_merkle_path_v1`] so the two cannot describe different trees.
+#[derive(Clone, Debug)]
+pub struct PalwStepMerkleTreeV1 {
+    levels: Vec<Vec<Hash64>>,
+}
+
+impl PalwStepMerkleTreeV1 {
+    pub fn build_capped_v1(ordered_leaf_hashes: &[Hash64], max_step_leaf_count: u64) -> Result<Self, PalwStepLegError> {
+        let count = ordered_leaf_hashes.len() as u64;
+        if count == 0 || count > max_step_leaf_count {
+            return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
+        }
+        let mut levels: Vec<Vec<Hash64>> =
+            vec![ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(i as u64, leaf)).collect()];
+        while levels.last().expect("at least the leaf level").len() > 1 {
+            let level = levels.last().expect("at least the leaf level");
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut chunks = level.chunks_exact(2);
+            for pair in &mut chunks {
+                next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+            }
+            if let [odd] = chunks.remainder() {
+                next.push(*odd);
+            }
+            levels.push(next);
+        }
+        Ok(Self { levels })
+    }
+
+    pub fn root(&self) -> Hash64 {
+        self.levels.last().and_then(|top| top.first().copied()).expect("a built tree has a root")
+    }
+
+    pub fn leaf_count(&self) -> u64 {
+        self.levels.first().map_or(0, |leaves| leaves.len() as u64)
+    }
+
+    /// The sibling path of leaf `index`, exactly as [`step_merkle_path_v1`] returns it.
+    pub fn path_v1(&self, mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+        let count = self.leaf_count();
+        if index as u64 >= count {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count });
+        }
+        let mut path = Vec::new();
+        for level in &self.levels[..self.levels.len() - 1] {
+            let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+            if !promoted {
+                let sibling = if index.is_multiple_of(2) { index + 1 } else { index - 1 };
+                path.push(level[sibling]);
+            }
+            index /= 2;
+        }
+        Ok(path)
+    }
+}
+
+/// **The ACCUSED's step tree over the prefix `[0, i]`, from what a challenger holds without the
+/// accused** (ADR-0093 Decision 7).
+///
+/// A court that narrowed to leaf `i` by the first child the challenger could not reproduce has
+/// established that the accused's leaves before `i` ARE the challenger's own — and the accused's
+/// OWN opening of `i` is on chain (the root claim carries the committed output tile, opened). That
+/// is enough to open every leaf `j ≤ i` against the accused's root, with no row served by the
+/// accused: a node wholly inside the prefix is built from the prefix's leaves, the node just right
+/// of the prefix at each level is the right sibling on `i`'s own path, and nothing else is on the
+/// path of any `j ≤ i`. The leaves after `i` — which a fold does not keep and a forger need not
+/// reveal — are never needed.
+///
+/// Every LEFT sibling on `i`'s path is compared with the prefix's own node as the tree is built,
+/// and the caller compares [`Self::root`] with the committed root: a prefix that is not the
+/// accused's is refused, never opened.
+#[derive(Clone, Debug)]
+pub struct PalwStepPrefixTreeV1 {
+    leaf_count: u64,
+    leaf_hashes: Vec<Hash64>,
+    /// `levels[ℓ]` is the accused tree's nodes `0..=(i >> ℓ)` at level `ℓ`.
+    levels: Vec<Vec<Hash64>>,
+    /// The accused's node just right of the prefix at level `ℓ`, where the prefix's last node
+    /// pairs with one — the right siblings of `i`'s path.
+    right: Vec<Option<Hash64>>,
+}
+
+impl PalwStepPrefixTreeV1 {
+    /// `prefix_leaf_hashes` are leaves `0..=i` (the last is the accused's `i`), `last` the accused's
+    /// opening of `i` in a tree of `leaf_count` leaves.
+    pub fn build_capped_v1(
+        leaf_count: u64,
+        prefix_leaf_hashes: &[Hash64],
+        last: &PalwStepOpeningV1,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, PalwStepLegError> {
+        if leaf_count == 0 || leaf_count > max_step_leaf_count {
+            return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+        }
+        let k = prefix_leaf_hashes.len() as u64;
+        if k == 0 || k > leaf_count {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: k.saturating_sub(1), count: leaf_count });
+        }
+        let i = k - 1;
+        if last.leaf_index != i || last.leaf_hash != prefix_leaf_hashes[i as usize] {
+            return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "prefix's last" });
+        }
+        let cap = step_leg_max_opening_siblings_v1(max_step_leaf_count);
+        if last.siblings.len() > cap {
+            return Err(PalwStepLegError::OpeningTooDeep { got: last.siblings.len(), max: cap });
+        }
+        let mut levels: Vec<Vec<Hash64>> =
+            vec![prefix_leaf_hashes.iter().enumerate().map(|(j, leaf)| step_merkle_leaf(j as u64, leaf)).collect()];
+        let mut right = Vec::new();
+        let (mut at, mut width) = (i, leaf_count);
+        let mut path = last.siblings.iter();
+        while width > 1 {
+            let level = levels.last().expect("at least the leaf level");
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            let mut outside = None;
+            if !promoted {
+                let sibling = *path.next().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+                if at.is_multiple_of(2) {
+                    outside = Some(sibling);
+                } else if level[(at - 1) as usize] != sibling {
+                    return Err(PalwStepLegError::PrefixIsNotTheCommittedOne { level: right.len() as u32 });
+                }
+            }
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut chunks = level.chunks_exact(2);
+            for pair in &mut chunks {
+                next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+            }
+            if let [odd] = chunks.remainder() {
+                next.push(match outside {
+                    Some(sibling) => keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[odd.as_byte_slice(), sibling.as_byte_slice()]),
+                    None => *odd,
+                });
+            }
+            right.push(outside);
+            levels.push(next);
+            at /= 2;
+            width = width.div_ceil(2);
+        }
+        if path.next().is_some() {
+            return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+        }
+        Ok(Self { leaf_count, leaf_hashes: prefix_leaf_hashes.to_vec(), levels, right })
+    }
+
+    /// The root this prefix and the accused's path imply — the caller's to compare with the
+    /// committed one.
+    pub fn root(&self) -> Hash64 {
+        self.levels.last().and_then(|top| top.first().copied()).expect("a built tree has a root")
+    }
+
+    /// The accused's opening of leaf `j ≤ i`, exactly as [`step_opening_v1`] over the accused's
+    /// whole leaf vector would build it.
+    pub fn opening_v1(&self, j: u64) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+        let leaf_hash =
+            *self.leaf_hashes.get(j as usize).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: j, count: self.leaf_count })?;
+        let (mut at, mut width) = (j, self.leaf_count);
+        let mut siblings = Vec::new();
+        for (depth, level) in self.levels[..self.levels.len() - 1].iter().enumerate() {
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            if !promoted {
+                let partner = at ^ 1;
+                siblings.push(match level.get(partner as usize) {
+                    Some(node) => *node,
+                    None => self.right[depth].ok_or(PalwStepLegError::OpeningPathTooShort)?,
+                });
+            }
+            at /= 2;
+            width = width.div_ceil(2);
+        }
+        Ok(PalwStepOpeningV1 { leaf_index: j, leaf_hash, siblings })
+    }
+}
+
+/// **ADR-0152 §4-ter N2: the accused's openings of leaves before `i`, from a STREAM of the prefix.**
+///
+/// [`PalwStepPrefixTreeV1`] builds these by holding every node of the prefix `[0, i]` — at an 8k
+/// held job's fused leaf that is ~10^8 leaves, 6.7 GB. This builds the same openings, and the same
+/// root, holding one frontier node per level and the few nodes a wanted path needs: the leaves
+/// `0..i` are pushed in order, each complete node at or before the prefix is formed exactly once,
+/// and only the nodes some wanted leaf's path — or the left half of `i`'s own path, checked against
+/// the accused's filed siblings — reads are kept. What is right of the prefix is `i`'s own filed
+/// path, as in the tree it replaces.
+///
+/// Every node a stream forms is a complete aligned node of the committed tree: a promoted (odd
+/// tail) node contains the tree's LAST leaf, which is never before `i`. [`Self::finish`] returns
+/// the root the prefix and the accused's path imply — the caller compares it with the committed
+/// one — and each wanted opening, exactly as [`step_opening_v1`] over the accused's whole leaf
+/// vector would build it.
+#[derive(Clone, Debug)]
+pub struct PalwStepPrefixStreamV1 {
+    leaf_count: u64,
+    last: PalwStepOpeningV1,
+    wanted: Vec<u64>,
+    /// `frontier[ℓ]`: the complete node at level `ℓ` still waiting for its right partner.
+    frontier: Vec<Option<Hash64>>,
+    /// The `(level, index)` nodes some path reads, and the ones formed so far.
+    need: std::collections::BTreeSet<(u32, u64)>,
+    kept: std::collections::BTreeMap<(u32, u64), Hash64>,
+    /// The wanted leaves' own hashes.
+    leaves: std::collections::BTreeMap<u64, Hash64>,
+    next: u64,
+}
+
+impl PalwStepPrefixStreamV1 {
+    /// A stream over the prefix before `last.leaf_index` of a tree of `leaf_count` leaves, that will
+    /// open every leaf of `wanted` (each before `last.leaf_index`).
+    pub fn new_capped_v1(
+        leaf_count: u64,
+        last: &PalwStepOpeningV1,
+        wanted: &[u64],
+        max_step_leaf_count: u64,
+    ) -> Result<Self, PalwStepLegError> {
+        if leaf_count == 0 || leaf_count > max_step_leaf_count {
+            return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+        }
+        let i = last.leaf_index;
+        if i >= leaf_count {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: i, count: leaf_count });
+        }
+        let cap = step_leg_max_opening_siblings_v1(max_step_leaf_count);
+        if last.siblings.len() > cap {
+            return Err(PalwStepLegError::OpeningTooDeep { got: last.siblings.len(), max: cap });
+        }
+        let mut need = std::collections::BTreeSet::new();
+        // The left half of `i`'s path: every left sibling the accused filed is checked against the
+        // prefix's own node.
+        let (mut at, mut width, mut level) = (i, leaf_count, 0u32);
+        while width > 1 {
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            if !promoted && !at.is_multiple_of(2) {
+                need.insert((level, at - 1));
+            }
+            at /= 2;
+            width = width.div_ceil(2);
+            level += 1;
+        }
+        for &q in wanted {
+            if q >= i {
+                return Err(PalwStepLegError::LeafIndexOutOfRange { index: q, count: i });
+            }
+            let (mut at, mut width, mut level) = (q, leaf_count, 0u32);
+            while width > 1 {
+                let promoted = !width.is_multiple_of(2) && at == width - 1;
+                if !promoted {
+                    let partner = at ^ 1;
+                    // A partner whose leaves all precede `i` is formed by the stream; one that holds
+                    // `i` or lies past it is `i`'s ancestor or `i`'s filed right sibling.
+                    if partner.saturating_add(1).saturating_mul(1u64 << level) <= i {
+                        need.insert((level, partner));
+                    }
+                }
+                at /= 2;
+                width = width.div_ceil(2);
+                level += 1;
+            }
+        }
+        Ok(Self {
+            leaf_count,
+            last: last.clone(),
+            wanted: wanted.to_vec(),
+            frontier: Vec::new(),
+            need,
+            kept: std::collections::BTreeMap::new(),
+            leaves: std::collections::BTreeMap::new(),
+            next: 0,
+        })
+    }
+
+    /// **What the stream holds**, in hashes: the frontier, the kept nodes and the wanted leaves —
+    /// `O(depth × (wanted + 1))`, never the prefix's length.
+    pub fn held_hashes_v1(&self) -> usize {
+        self.frontier.len() + self.kept.len() + self.leaves.len()
+    }
+
+    /// Push the next leaf's hash (leaves `0, 1, …` in order, up to but not including `i`).
+    pub fn push(&mut self, leaf_hash: Hash64) -> Result<(), PalwStepLegError> {
+        let index = self.next;
+        if index >= self.last.leaf_index {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index, count: self.last.leaf_index });
+        }
+        if self.wanted.contains(&index) {
+            self.leaves.insert(index, leaf_hash);
+        }
+        self.next += 1;
+        let (mut node, mut at, mut level) = (step_merkle_leaf(index, &leaf_hash), index, 0u32);
+        loop {
+            if self.need.contains(&(level, at)) {
+                self.kept.insert((level, at), node);
+            }
+            if self.frontier.len() <= level as usize {
+                self.frontier.resize(level as usize + 1, None);
+            }
+            if at.is_multiple_of(2) {
+                self.frontier[level as usize] = Some(node);
+                return Ok(());
+            }
+            let left = self.frontier[level as usize].take().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+            node = keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), node.as_byte_slice()]);
+            at /= 2;
+            level += 1;
+        }
+    }
+
+    /// **The root the prefix and the accused's path imply, and the wanted openings.** Refused when
+    /// the prefix is not exactly `0..i`, when a left sibling the accused filed is not the prefix's
+    /// own node, or when the path is not the tree's shape.
+    pub fn finish(self) -> Result<(Hash64, Vec<PalwStepOpeningV1>), PalwStepLegError> {
+        let i = self.last.leaf_index;
+        if self.next != i {
+            return Err(PalwStepLegError::LeafIndexOutOfRange { index: self.next, count: i });
+        }
+        // `i`'s ancestors, bottom-up, and the accused's right siblings along the way.
+        let mut ancestors = Vec::new();
+        let mut outside: Vec<Option<Hash64>> = Vec::new();
+        let mut node = step_merkle_leaf(i, &self.last.leaf_hash);
+        let (mut at, mut width, mut level) = (i, self.leaf_count, 0u32);
+        let mut path = self.last.siblings.iter();
+        while width > 1 {
+            ancestors.push(node);
+            let promoted = !width.is_multiple_of(2) && at == width - 1;
+            let mut right = None;
+            if !promoted {
+                let sibling = *path.next().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+                if at.is_multiple_of(2) {
+                    right = Some(sibling);
+                    node = keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[node.as_byte_slice(), sibling.as_byte_slice()]);
+                } else {
+                    if self.kept.get(&(level, at - 1)) != Some(&sibling) {
+                        return Err(PalwStepLegError::PrefixIsNotTheCommittedOne { level });
+                    }
+                    node = keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[sibling.as_byte_slice(), node.as_byte_slice()]);
+                }
+            }
+            outside.push(right);
+            at /= 2;
+            width = width.div_ceil(2);
+            level += 1;
+        }
+        if path.next().is_some() {
+            return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+        }
+        let root = node;
+        let mut openings = Vec::with_capacity(self.wanted.len());
+        for &q in &self.wanted {
+            let leaf_hash = *self.leaves.get(&q).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: q, count: i })?;
+            let mut siblings = Vec::new();
+            let (mut at, mut width, mut level) = (q, self.leaf_count, 0u32);
+            while width > 1 {
+                let promoted = !width.is_multiple_of(2) && at == width - 1;
+                if !promoted {
+                    let partner = at ^ 1;
+                    let i_at = i >> level;
+                    let sibling = if let Some(kept) = self.kept.get(&(level, partner)) {
+                        *kept
+                    } else if partner == i_at {
+                        ancestors[level as usize]
+                    } else if at == i_at {
+                        outside[level as usize].ok_or(PalwStepLegError::OpeningPathTooShort)?
+                    } else {
+                        return Err(PalwStepLegError::OpeningPathTooShort);
+                    };
+                    siblings.push(sibling);
+                }
+                at /= 2;
+                width = width.div_ceil(2);
+                level += 1;
+            }
+            openings.push(PalwStepOpeningV1 { leaf_index: q, leaf_hash, siblings });
+        }
+        Ok((root, openings))
+    }
+}
+
+/// **A contiguous RANGE of leaves, opened as one subtree** — the carrier form that makes a court
+/// evidence row cost one path instead of one path per leaf.
+///
+/// The canonical input set opens rows of consecutive tiles (the leaf enumeration puts a node's
+/// tiles at consecutive indices), and the per-leaf opening charged each of them a full
+/// `depth × 64` bytes of siblings: a 2,048-lane row at tile 8 paid 256 paths — 327 KiB — to
+/// authenticate 8 KiB of lanes. A range needs at most two siblings per level while it is wider
+/// than one node and one after, so the whole row rides `≲ (depth + log₂ k) × 64`.
+///
+/// The walk mirrors [`step_merkle_root_v1`]'s promote-odd shape exactly: per level, a left
+/// sibling is consumed when the range starts on an odd node, then a right sibling when it ends
+/// before an even boundary that is not the promoted odd tail. Sibling ORDER is part of the form:
+/// left-then-right within a level, levels bottom-up.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStepRangeOpeningV1 {
+    pub first_leaf_index: u64,
+    pub leaf_hashes: Vec<Hash64>,
+    pub siblings: Vec<Hash64>,
+}
+
+/// Recomputes the root a valid range opening implies; the caller compares to the committed root.
+/// Rejection means the evidence is about some other commitment, never a verdict.
+pub fn step_range_opening_root_v1(leaf_count: u64, opening: &PalwStepRangeOpeningV1) -> Result<Hash64, PalwStepLegError> {
+    step_range_opening_root_capped_v1(leaf_count, opening, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_range_opening_root_v1`] against the ruleset's `max_step_leaf_count`. The range form
+/// spends at most two siblings a level, so its depth cap is twice the single-leaf one — derived
+/// from the same [`step_leg_max_opening_siblings_v1`], never restated.
+pub fn step_range_opening_root_capped_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<Hash64, PalwStepLegError> {
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+    }
+    let k = opening.leaf_hashes.len() as u64;
+    if k == 0 || opening.first_leaf_index.checked_add(k).is_none_or(|end| end > leaf_count) {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.first_leaf_index, count: leaf_count });
+    }
+    let sibling_cap = 2 * step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if opening.siblings.len() > sibling_cap {
+        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: sibling_cap });
+    }
+    let mut nodes: Vec<Hash64> =
+        opening.leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(opening.first_leaf_index + i as u64, leaf)).collect();
+    let (mut a, mut b) = (opening.first_leaf_index, opening.first_leaf_index + k);
+    let mut width = leaf_count;
+    let mut siblings = opening.siblings.iter();
+    let mut next = || siblings.next().copied().ok_or(PalwStepLegError::OpeningPathTooShort);
+    while width > 1 {
+        let mut level = Vec::with_capacity(nodes.len() / 2 + 2);
+        // The left edge: an odd start pairs with a carried left sibling.
+        let mut i = 0usize;
+        if !a.is_multiple_of(2) {
+            let left = next()?;
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), nodes[0].as_byte_slice()]));
+            i = 1;
+        }
+        // The interior pairs.
+        while i + 1 < nodes.len() {
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), nodes[i + 1].as_byte_slice()]));
+            i += 2;
+        }
+        // The right edge: a lone last node either takes a right sibling, or promotes when it is
+        // the level's odd tail — the same rule the builder applies.
+        if i < nodes.len() {
+            let promoted = !width.is_multiple_of(2) && b == width;
+            if promoted {
+                level.push(nodes[i]);
+            } else {
+                let right = next()?;
+                level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), right.as_byte_slice()]));
+            }
+        }
+        nodes = level;
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    if siblings.next().is_some() {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+    }
+    Ok(nodes[0])
+}
+
+/// The challenger side: the sibling set [`step_range_opening_root_v1`] consumes for
+/// `[start, start + count)` of `ordered_leaf_hashes` — the same one-implementation rule
+/// [`step_merkle_path_v1`] follows.
+pub fn step_merkle_range_siblings_v1(
+    ordered_leaf_hashes: &[Hash64],
+    start: usize,
+    count: usize,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
+    step_merkle_range_siblings_capped_v1(ordered_leaf_hashes, start, count, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_merkle_range_siblings_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_merkle_range_siblings_capped_v1(
+    ordered_leaf_hashes: &[Hash64],
+    start: usize,
+    count: usize,
+    max_step_leaf_count: u64,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
+    let total = ordered_leaf_hashes.len() as u64;
+    if total == 0 || total > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: total, max: max_step_leaf_count });
+    }
+    if count == 0 || start + count > ordered_leaf_hashes.len() {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: start as u64, count: total });
+    }
+    let mut level: Vec<Hash64> = ordered_leaf_hashes.iter().enumerate().map(|(i, l)| step_merkle_leaf(i as u64, l)).collect();
+    let (mut a, mut b) = (start, start + count);
+    let mut out = Vec::new();
+    while level.len() > 1 {
+        if !a.is_multiple_of(2) {
+            out.push(level[a - 1]);
+        }
+        if !b.is_multiple_of(2) {
+            let promoted = !level.len().is_multiple_of(2) && b == level.len();
+            if !promoted {
+                out.push(level[b]);
+            }
+        }
+        let mut parent = Vec::with_capacity(level.len().div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            parent.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+        }
+        if let [odd] = chunks.remainder() {
+            parent.push(*odd);
+        }
+        level = parent;
+        a /= 2;
+        b = b.div_ceil(2);
+    }
+    Ok(out)
+}
+
+/// Derive a contiguous range's canonical outer siblings from its two boundary
+/// single-leaf openings. Both boundaries must authenticate to the same expected
+/// root. No full tree or interior leaf list is fetched; this authenticates data
+/// identity only. The caller admits the bounded output allocation and hash work.
+pub fn step_range_siblings_from_edges_capped_v1(
+    leaf_count: u64, first: &PalwStepOpeningV1, last: &PalwStepOpeningV1,
+    expected_root: Hash64, max_step_leaf_count: u64,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
+    if first.leaf_index > last.leaf_index {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: first.leaf_index, count: leaf_count });
+    }
+    for edge in [first, last] {
+        if step_opening_root_capped_v1(leaf_count, edge, max_step_leaf_count)? != expected_root {
+            return Err(PalwStepLegError::CommittedRootMismatch);
+        }
+    }
+    // Successful root checks establish last < leaf_count and no u64 overflow.
+    let (mut a, mut b, mut width) = (first.leaf_index, last.leaf_index + 1, leaf_count);
+    let (mut left, mut right) = (first.siblings.iter(), last.siblings.iter());
+    let mut out = Vec::new();
+    while width > 1 {
+        let l = if width % 2 == 1 && a == width - 1 { None } else { left.next().copied() };
+        let r = if width % 2 == 1 && b == width { None } else { right.next().copied() };
+        if a % 2 == 1 { out.push(l.ok_or(PalwStepLegError::OpeningPathTooShort)?); }
+        if b % 2 == 1 && b < width { out.push(r.ok_or(PalwStepLegError::OpeningPathTooShort)?); }
+        a /= 2; b = b.div_ceil(2); width = width.div_ceil(2);
+    }
+    Ok(out)
+}
+
+/// **A single leaf's opening, derived from a RANGE opening that contains it** (ADR-0085
+/// Decision 2). A challenger holding an interval opening — the accused's committed leaf hashes for
+/// `[first, first + k)` and the range's siblings — needs, for the court's refutation, the ordinary
+/// membership proof of one leaf inside that range ([`PalwStepOpeningV1`]) against the same root.
+/// Every hash that proof needs is either a leaf of the range, a subtree the range's own leaves
+/// build, or one of the range's carried siblings, so it is derived here rather than fetched: the
+/// walk is [`step_range_opening_root_capped_v1`]'s, level by level, remembering where the target
+/// sits and taking its sibling from whichever of the three the level has — and skipping the
+/// level exactly when [`step_opening_capped_v1`] would (the promoted odd tail), so the two
+/// openings are byte-identical and verify under the one checker. Pinned by the mirror test below
+/// over every leaf of every range of every leaf count up to a small bound.
+pub fn step_opening_from_range_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    leaf_index: u64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    step_opening_from_range_capped_v1(leaf_count, opening, leaf_index, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_opening_from_range_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_opening_from_range_capped_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    leaf_index: u64,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+    }
+    let k = opening.leaf_hashes.len() as u64;
+    if k == 0 || opening.first_leaf_index.checked_add(k).is_none_or(|end| end > leaf_count) {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.first_leaf_index, count: leaf_count });
+    }
+    if leaf_index < opening.first_leaf_index || leaf_index >= opening.first_leaf_index + k {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: leaf_index, count: leaf_count });
+    }
+    let sibling_cap = 2 * step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if opening.siblings.len() > sibling_cap {
+        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: sibling_cap });
+    }
+    let leaf_hash = opening.leaf_hashes[(leaf_index - opening.first_leaf_index) as usize];
+    let mut nodes: Vec<Hash64> =
+        opening.leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(opening.first_leaf_index + i as u64, leaf)).collect();
+    // The target's absolute index at the current level, and the level's bounds — the same three
+    // numbers the root walk keeps.
+    let (mut a, mut b) = (opening.first_leaf_index, opening.first_leaf_index + k);
+    let mut target = leaf_index;
+    let mut width = leaf_count;
+    let mut siblings = opening.siblings.iter();
+    let mut next = || siblings.next().copied().ok_or(PalwStepLegError::OpeningPathTooShort);
+    let mut out = Vec::new();
+    while width > 1 {
+        // The node the target occupies at this level, relative to the range's own nodes.
+        let rel = (target - a) as usize;
+        let promoted = !width.is_multiple_of(2) && target == width - 1;
+        // Its sibling: inside the range's nodes when the pair partner is inside, else the carried
+        // edge sibling — the left one only when the range starts odd, the right one only when it
+        // ends odd and is not the promoted tail.
+        let mut level = Vec::with_capacity(nodes.len() / 2 + 2);
+        let mut i = 0usize;
+        let mut left_sibling: Option<Hash64> = None;
+        if !a.is_multiple_of(2) {
+            let left = next()?;
+            left_sibling = Some(left);
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), nodes[0].as_byte_slice()]));
+            i = 1;
+        }
+        while i + 1 < nodes.len() {
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), nodes[i + 1].as_byte_slice()]));
+            i += 2;
+        }
+        let mut right_sibling: Option<Hash64> = None;
+        if i < nodes.len() {
+            let tail_promoted = !width.is_multiple_of(2) && b == width;
+            if tail_promoted {
+                level.push(nodes[i]);
+            } else {
+                let right = next()?;
+                right_sibling = Some(right);
+                level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), right.as_byte_slice()]));
+            }
+        }
+        if !promoted {
+            let partner = target ^ 1;
+            let sibling = if partner >= a && partner < b {
+                nodes[(partner - a) as usize]
+            } else if partner < a {
+                left_sibling.ok_or(PalwStepLegError::OpeningPathTooShort)?
+            } else {
+                right_sibling.ok_or(PalwStepLegError::OpeningPathTooShort)?
+            };
+            out.push(sibling);
+        }
+        debug_assert!(rel < nodes.len());
+        nodes = level;
+        a /= 2;
+        b = b.div_ceil(2);
+        target /= 2;
+        width = width.div_ceil(2);
+    }
+    if siblings.next().is_some() {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+    }
+    Ok(PalwStepOpeningV1 { leaf_index, leaf_hash, siblings: out })
+}
+
+/// **The range siblings of a SUB-range, derived from an enclosing range opening** (ADR-0085
+/// Decision 2). A refutation's input rows carry one sibling set per contiguous run of leaves
+/// (`PalwStepInputRowV1::run_siblings`, consumed by `step_range_opening_root_v1`); a challenger
+/// holding the interval's range opening derives each run's set the way [`step_opening_from_range_v1`]
+/// derives one leaf's path — walking the levels as the root walk does and taking, at each level,
+/// the inner range's left and right edge siblings from the outer range's own nodes or its carried
+/// siblings, skipping exactly the edges the builder skips (an even edge, a promoted odd tail).
+/// Pinned by the mirror test against [`step_merkle_range_siblings_v1`] over every sub-range of
+/// every range of every leaf count up to a small bound.
+pub fn step_range_siblings_from_range_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    inner_first: u64,
+    inner_count: u64,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
+    step_range_siblings_from_range_capped_v1(leaf_count, opening, inner_first, inner_count, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_range_siblings_from_range_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_range_siblings_from_range_capped_v1(
+    leaf_count: u64,
+    opening: &PalwStepRangeOpeningV1,
+    inner_first: u64,
+    inner_count: u64,
+    max_step_leaf_count: u64,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+    }
+    let k = opening.leaf_hashes.len() as u64;
+    if k == 0 || opening.first_leaf_index.checked_add(k).is_none_or(|end| end > leaf_count) {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.first_leaf_index, count: leaf_count });
+    }
+    let inner_end =
+        inner_first.checked_add(inner_count).ok_or(PalwStepLegError::LeafIndexOutOfRange { index: inner_first, count: leaf_count })?;
+    if inner_count == 0 || inner_first < opening.first_leaf_index || inner_end > opening.first_leaf_index + k {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: inner_first, count: leaf_count });
+    }
+    let sibling_cap = 2 * step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if opening.siblings.len() > sibling_cap {
+        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: sibling_cap });
+    }
+    let mut nodes: Vec<Hash64> =
+        opening.leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(opening.first_leaf_index + i as u64, leaf)).collect();
+    let (mut a, mut b) = (opening.first_leaf_index, opening.first_leaf_index + k);
+    let (mut ia, mut ib) = (inner_first, inner_end);
+    let mut width = leaf_count;
+    let mut siblings = opening.siblings.iter();
+    let mut next = || siblings.next().copied().ok_or(PalwStepLegError::OpeningPathTooShort);
+    let mut out = Vec::new();
+    while width > 1 {
+        // The outer range's edge siblings at this level, consumed in the root walk's order (left
+        // edge, then right edge), and its next level built from them.
+        let mut level = Vec::with_capacity(nodes.len() / 2 + 2);
+        let mut i = 0usize;
+        let mut left_sibling: Option<Hash64> = None;
+        if !a.is_multiple_of(2) {
+            let left = next()?;
+            left_sibling = Some(left);
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), nodes[0].as_byte_slice()]));
+            i = 1;
+        }
+        while i + 1 < nodes.len() {
+            level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), nodes[i + 1].as_byte_slice()]));
+            i += 2;
+        }
+        let mut right_sibling: Option<Hash64> = None;
+        if i < nodes.len() {
+            let tail_promoted = !width.is_multiple_of(2) && b == width;
+            if tail_promoted {
+                level.push(nodes[i]);
+            } else {
+                let right = next()?;
+                right_sibling = Some(right);
+                level.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[nodes[i].as_byte_slice(), right.as_byte_slice()]));
+            }
+        }
+        // The inner range's siblings at this level, in the builder's order: the left edge when it
+        // is odd, then the right edge when it is odd and not the promoted tail. A node at absolute
+        // index `x` at this level is `nodes[x - a]` when inside the outer range.
+        let at = |x: u64, left_sibling: Option<Hash64>, right_sibling: Option<Hash64>| -> Result<Hash64, PalwStepLegError> {
+            if x >= a && x < b {
+                Ok(nodes[(x - a) as usize])
+            } else if x + 1 == a {
+                left_sibling.ok_or(PalwStepLegError::OpeningPathTooShort)
+            } else if x == b {
+                right_sibling.ok_or(PalwStepLegError::OpeningPathTooShort)
+            } else {
+                Err(PalwStepLegError::OpeningPathTooShort)
+            }
+        };
+        if !ia.is_multiple_of(2) {
+            out.push(at(ia - 1, left_sibling, right_sibling)?);
+        }
+        if !ib.is_multiple_of(2) {
+            let promoted = !width.is_multiple_of(2) && ib == width;
+            if !promoted {
+                out.push(at(ib, left_sibling, right_sibling)?);
+            }
+        }
+        nodes = level;
+        a /= 2;
+        b = b.div_ceil(2);
+        ia /= 2;
+        ib = ib.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    if siblings.next().is_some() {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra: 1 });
+    }
+    Ok(out)
+}
+
+/// The sibling COUNT the range form needs, computable without the tree — the cost bound's side
+/// of the one implementation (a bound that guessed would drift from the walk above).
+pub fn step_range_sibling_count_v1(leaf_count: u64, first: u64, k: u64) -> u64 {
+    let (mut a, mut b, mut width, mut n) = (first, first + k, leaf_count, 0u64);
+    while width > 1 {
+        if !a.is_multiple_of(2) {
+            n += 1;
+        }
+        if !b.is_multiple_of(2) && (b != width || width.is_multiple_of(2)) {
+            n += 1;
+        }
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    n
+}
+
+/// Recomputes the root a valid opening implies (the caller compares to the committed root).
+/// Promote levels are derived from `(leaf_index, leaf_count)` and consume nothing.
+pub fn step_opening_root_v1(leaf_count: u64, opening: &PalwStepOpeningV1) -> Result<Hash64, PalwStepLegError> {
+    step_opening_root_capped_v1(leaf_count, opening, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_opening_root_v1`] against the ruleset's `max_step_leaf_count` — **the refusal that made
+/// the deeper ladder unusable.** The sibling cap is `ceil(log2(max_step_leaf_count))`, so a court
+/// running a `2^25` ladder accepts the 25-sibling path its own bisection asked for.
+pub fn step_opening_root_capped_v1(
+    leaf_count: u64,
+    opening: &PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<Hash64, PalwStepLegError> {
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+    }
+    if opening.leaf_index >= leaf_count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: opening.leaf_index, count: leaf_count });
+    }
+    let sibling_cap = step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if opening.siblings.len() > sibling_cap {
+        return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: sibling_cap });
+    }
+    let mut current = step_merkle_leaf(opening.leaf_index, &opening.leaf_hash);
+    let mut position = opening.leaf_index;
+    let mut width = leaf_count;
+    let mut siblings = opening.siblings.iter();
+    while width > 1 {
+        let promoted = !width.is_multiple_of(2) && position == width - 1;
+        if !promoted {
+            let Some(sibling) = siblings.next() else {
+                return Err(PalwStepLegError::OpeningPathTooShort);
+            };
+            current = if position.is_multiple_of(2) {
+                keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[current.as_byte_slice(), sibling.as_byte_slice()])
+            } else {
+                keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[sibling.as_byte_slice(), current.as_byte_slice()])
+            };
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    let leftover = siblings.count();
+    if leftover != 0 {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra: leftover });
+    }
+    Ok(current)
+}
+
+/// Produces the membership proof of `leaf_index` from the same ordered leaf hashes the root
+/// was built over. Commit / open / adjudicate are held together by the mirror test.
+/// Builds one exact opening from a repeatable leaf source with O(log(count)) auxiliary RAM.
+/// Odd nodes retain the existing promotion rule. No all-leaves/tree buffer is allocated.
+pub fn step_opening_from_leaf_source_capped_v1(
+    count: u64,
+    leaf_index: u64,
+    max_step_leaf_count: u64,
+    leaf: impl Fn(u64) -> Hash64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
+    }
+    if leaf_index >= count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: leaf_index, count });
+    }
+    fn subtree(count: u64, height: u32, index: u64, leaf: &impl Fn(u64) -> Hash64) -> Hash64 {
+        if height == 0 {
+            return step_merkle_leaf(index, &leaf(index));
+        }
+        let left = subtree(count, height - 1, index * 2, leaf);
+        let right_index = index * 2 + 1;
+        if right_index >= count.div_ceil(1u64 << (height - 1)) {
+            return left;
+        }
+        let right = subtree(count, height - 1, right_index, leaf);
+        keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), right.as_byte_slice()])
+    }
+    let mut width = count;
+    let mut position = leaf_index;
+    let mut height = 0;
+    let mut siblings = Vec::new();
+    while width > 1 {
+        if (position ^ 1) < width {
+            siblings.push(subtree(count, height, position ^ 1, &leaf));
+        }
+        width = width.div_ceil(2);
+        position /= 2;
+        height += 1;
+    }
+    Ok(PalwStepOpeningV1 { leaf_index, leaf_hash: leaf(leaf_index), siblings })
+}
+
+pub fn step_opening_v1(ordered_leaf_hashes: &[Hash64], leaf_index: u64) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    step_opening_capped_v1(ordered_leaf_hashes, leaf_index, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// [`step_opening_v1`] against the ruleset's `max_step_leaf_count`.
+pub fn step_opening_capped_v1(
+    ordered_leaf_hashes: &[Hash64],
+    leaf_index: u64,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepOpeningV1, PalwStepLegError> {
+    let count = ordered_leaf_hashes.len() as u64;
+    if count == 0 || count > max_step_leaf_count {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: max_step_leaf_count });
+    }
+    if leaf_index >= count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: leaf_index, count });
+    }
+    let leaf_hash = ordered_leaf_hashes[leaf_index as usize];
+    let mut level: Vec<Hash64> = ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(i as u64, leaf)).collect();
+    let mut position = leaf_index as usize;
+    let mut siblings = Vec::new();
+    while level.len() > 1 {
+        let width = level.len();
+        let promoted = !width.is_multiple_of(2) && position == width - 1;
+        if !promoted {
+            siblings.push(level[position ^ 1]);
+        }
+        let mut next = Vec::with_capacity(width.div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        position /= 2;
+        level = next;
+    }
+    Ok(PalwStepOpeningV1 { leaf_index, leaf_hash, siblings })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Leaf preimages
+// ---------------------------------------------------------------------------------------------
+
+/// One committed node-output tile: exact canonical f32-LE bytes at pinned coordinates.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStepTileLeafV1 {
+    pub version: u16,
+    pub coord: PalwStepCoordinateV1,
+    pub value_count: u32,
+    /// `4 × value_count` little-endian f32 bytes.
+    pub values_le: Vec<u8>,
+}
+
+/// **The step tile leaf, bound to the context its COORDINATE belongs to** (RFC-0001 §2.6 stage 2b): the prefix context for a
+/// prefill position below an inherited prefix, the job context for everything else — and for every version-2 context exactly
+/// [`step_tile_leaf_hash_v1`] over the job context, so no existing leaf moves. Every site that hashes a step tile from a context
+/// calls this and not the bare function.
+pub fn step_tile_leaf_hash_ctx_v1(ctx: &PalwJobContextV2, shape_profile_hash: &Hash64, leaf: &PalwStepTileLeafV1) -> Hash64 {
+    step_tile_leaf_hash_v1(&ctx.leaf_context_hash_v1(leaf.coord.call_index, leaf.coord.position), shape_profile_hash, leaf)
+}
+
+pub fn step_tile_leaf_hash_v1(job_context_hash: &Hash64, shape_profile_hash: &Hash64, leaf: &PalwStepTileLeafV1) -> Hash64 {
+    let mut w = Writer::new();
+    w.u16(leaf.version);
+    w.hash64(job_context_hash);
+    w.hash64(shape_profile_hash);
+    w.u32(leaf.coord.call_index);
+    w.u32(leaf.coord.node_slot);
+    w.u32(leaf.coord.position);
+    w.u32(leaf.coord.tile_index);
+    w.u32(leaf.value_count);
+    w.bytes(&leaf.values_le);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_TILE_LEAF)
+}
+
+/// One committed KV aux chunk: the F16-LE cache rows of `position_count` consecutive
+/// positions for one (attention layer, kv head, K|V) — ADR-0030 §3's openability series.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwKvChunkLeafV1 {
+    pub version: u16,
+    pub attn_layer: u16,
+    pub kv_head: u16,
+    /// 0 = K, 1 = V.
+    pub is_v: u8,
+    pub chunk_index: u32,
+    pub position_count: u32,
+    /// `2 × head_dim × position_count` little-endian f16 bytes.
+    pub values_f16_le: Vec<u8>,
+}
+
+pub fn kv_chunk_leaf_hash_v1(job_context_hash: &Hash64, shape_profile_hash: &Hash64, leaf: &PalwKvChunkLeafV1) -> Hash64 {
+    let mut w = Writer::new();
+    w.u16(leaf.version);
+    w.hash64(job_context_hash);
+    w.hash64(shape_profile_hash);
+    w.u16(leaf.attn_layer);
+    w.u16(leaf.kv_head);
+    w.u8(leaf.is_v);
+    w.u32(leaf.chunk_index);
+    w.u32(leaf.position_count);
+    w.bytes(&leaf.values_f16_le);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_KV_CHUNK_LEAF)
+}
+
+/// One state chunk of a v2 checkpoint (per-semantic-unit slice of the serialized replay
+/// state). Bound to the measured chunk-map identity so the same bytes under two different
+/// map claims are two different leaves.
+pub fn state_chunk_leaf_hash_v1(state_chunk_map_id: &Hash64, chunk_index: u32, chunk_bytes: &[u8]) -> Hash64 {
+    let mut w = Writer::new();
+    w.hash64(state_chunk_map_id);
+    w.u32(chunk_index);
+    w.bytes(chunk_bytes);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF)
+}
+
+/// **The leaf [`state_chunks_root_v1`] folds for chunk `index`**: its chunk hash, index-bound
+/// under the same domain.
+///
+/// Exported for the reason [`step_merkle_leaf_v1`] is: a per-chunk OPENING has to hash the same
+/// leaf the root builder hashes, and the only two ways to arrange that are to export this or to
+/// restate it. It was about to be restated (ADR-0082 Decision 4's bottom), and a restatement is a
+/// second spelling of a consensus hash.
+pub fn state_chunk_tree_leaf_v1(chunk_index: u32, chunk_hash: &Hash64) -> Hash64 {
+    let mut w = Writer::new();
+    w.u32(chunk_index);
+    w.hash64(chunk_hash);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF)
+}
+
+/// **The sibling path proving ONE chunk is in [`state_chunks_root_v1`]** — the producing side of
+/// [`state_chunk_opening_root_v1`], and the primitive ADR-0082 Decision 4's bottom needs.
+///
+/// Without it the only evidence about a checkpoint's state is `PalwCheckpointKvOperandsV1`, which
+/// carries `chunks: Vec<Vec<u8>>` — EVERY chunk of the checkpoint. Under the graph-v4 tiled map a
+/// chunk is a sixteen-position tile, so a court that wanted one tile still had to be handed the
+/// whole history: tiling the map made the chunk small and left it unopenable. This is the missing
+/// half.
+///
+/// Promote-odd, left to right, exactly as [`state_chunks_root_v1`] folds — the same loop, and the
+/// pin that says so is `a_state_chunk_opening_is_the_root_the_builder_builds`.
+pub fn state_chunk_path_v1(chunk_hashes: &[Hash64], mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    if chunk_hashes.is_empty() || chunk_hashes.len() > PALW_STEP_LEG_MAX_STATE_CHUNKS {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: chunk_hashes.len(), max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    if index >= chunk_hashes.len() {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count: chunk_hashes.len() as u64 });
+    }
+    let mut level: Vec<Hash64> = chunk_hashes.iter().enumerate().map(|(i, h)| state_chunk_tree_leaf_v1(i as u32, h)).collect();
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+        if !promoted {
+            let sibling = if index.is_multiple_of(2) { index + 1 } else { index - 1 };
+            path.push(level[sibling]);
+        }
+        level = state_chunk_fold_level_v1(&level);
+        index /= 2;
+    }
+    Ok(path)
+}
+
+/// **Recompute [`state_chunks_root_v1`] from ONE chunk and its path.** The caller compares the
+/// answer with the checkpoint leaf's `state_chunks_root`; a mismatch is "this chunk is not in that
+/// checkpoint", which is the only question a tile-addressed opening asks.
+///
+/// Promote levels are derived from `(chunk_index, chunk_count)` and consume no sibling — the same
+/// discipline [`step_opening_root_capped_v1`] states, and the reason a path can be checked without
+/// the tree.
+pub fn state_chunk_opening_root_v1(
+    chunk_count: usize,
+    chunk_index: u32,
+    chunk_hash: &Hash64,
+    siblings: &[Hash64],
+) -> Result<Hash64, PalwStepLegError> {
+    if chunk_count == 0 || chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: chunk_count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    if chunk_index as usize >= chunk_count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: chunk_index as u64, count: chunk_count as u64 });
+    }
+    let mut current = state_chunk_tree_leaf_v1(chunk_index, chunk_hash);
+    let mut position = chunk_index as usize;
+    let mut width = chunk_count;
+    let mut siblings = siblings.iter();
+    while width > 1 {
+        let promoted = !width.is_multiple_of(2) && position == width - 1;
+        if !promoted {
+            let Some(sibling) = siblings.next() else {
+                return Err(PalwStepLegError::OpeningPathTooShort);
+            };
+            current = if position.is_multiple_of(2) {
+                keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE, &[current.as_byte_slice(), sibling.as_byte_slice()])
+            } else {
+                keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE, &[sibling.as_byte_slice(), current.as_byte_slice()])
+            };
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    let leftover = siblings.count();
+    if leftover != 0 {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra: leftover });
+    }
+    Ok(current)
+}
+
+/// One level of the state-chunk tree's fold: pair left to right, promote a lone odd tail. The one
+/// loop [`state_chunks_root_v1`] and [`state_chunk_path_v1`] share, so a change to the shape moves
+/// both or neither.
+fn state_chunk_fold_level_v1(level: &[Hash64]) -> Vec<Hash64> {
+    let mut next = Vec::with_capacity(level.len().div_ceil(2));
+    let mut chunks = level.chunks_exact(2);
+    for pair in &mut chunks {
+        next.push(keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+    }
+    if let [odd] = chunks.remainder() {
+        next.push(*odd);
+    }
+    next
+}
+
+/// Root over a checkpoint's state chunk hashes (small tree; the v1 leg discipline at its own
+/// domains, via the step-tree functions on a u64-capped width).
+pub fn state_chunks_root_v1(chunk_hashes: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    if chunk_hashes.is_empty() || chunk_hashes.len() > PALW_STEP_LEG_MAX_STATE_CHUNKS {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: chunk_hashes.len(), max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    let mut level: Vec<Hash64> = chunk_hashes.iter().enumerate().map(|(i, h)| state_chunk_tree_leaf_v1(i as u32, h)).collect();
+    while level.len() > 1 {
+        level = state_chunk_fold_level_v1(&level);
+    }
+    Ok(level[0])
+}
+// ---------------------------------------------------------------------------------------------
+// ADR-0103 Decision 3 — the held state tree (map v4)
+// ---------------------------------------------------------------------------------------------
+//
+// **The same chunks, in the same order, under a tree whose index does not move.**
+//
+// [`state_chunk_leaf_hash_v1`] binds a chunk's FLAT index, and the tiled map (v3) numbers its
+// chunks `(kind · layers + layer) · chunks_per_slice + block`. `chunks_per_slice` grows by one
+// every sixteen positions, so at every tile boundary every later chunk's index moves and a chunk
+// whose bytes did not change is a different leaf: ADR-0082 §10.3 measured the re-serialisation at
+// 696,516,608 bytes a job at `n_ctx` 512 — a term quadratic in the context, and the one thing §10.3
+// said only a different index scheme could remove.
+//
+// v4 is that scheme. A leaf binds `(map, slice, block)` — a slice is one `(kind, layer)` series of
+// the cache, or one recurrence `(kind, layer)` whose blocks are its heads — so a block's hash is
+// fixed the moment its sixteenth row is written. Each slice's sub-root is a promote-odd tree over
+// its blocks, maintained by the executor as a frontier ([`PalwStateSliceFrontierV4`]): appending a
+// block merges `O(1)` amortised nodes, replacing the open (last, part-filled) block re-folds
+// `O(log blocks)`. The checkpoint's `state_chunks_root` is a promote-odd tree over the slices'
+// top leaves, each binding `(slice, block_count, sub_root)`. One chunk opens with `log(blocks) +
+// log(slices)` siblings, which is the same order as v3's `log(chunks)`.
+//
+// The flat enumeration a v3 reader walks is unchanged — chunk `i` of a v4 checkpoint is the same
+// bytes as chunk `i` of a v3 one — so every opening form that carries a flat `chunk_index` keeps
+// its wire shape; the map id decides which tree the index is read into.
+
+pub const PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF_V4: &[u8] = b"misaka-palw/state-chunk-leaf/v4";
+pub const PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4: &[u8] = b"misaka-palw/state-slice-node/v4";
+pub const PALW_STEP_LEG_DOMAIN_STATE_TOP_LEAF_V4: &[u8] = b"misaka-palw/state-top-leaf/v4";
+pub const PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4: &[u8] = b"misaka-palw/state-top-node/v4";
+
+/// **The v4 map's bound, in the unit the tree is read in: siblings, not chunks.** A context of
+/// `2^32` positions at a 16-position tile is `2^28` blocks, and `2 × 1024` attention slices is
+/// `2^11` slices — 39 levels. 48 leaves room for a hybrid's recurrence slices and caps a proof at
+/// 3 KiB of path, which is what replaces `PALW_STEP_LEG_MAX_STATE_CHUNKS` (a COUNT, and therefore a
+/// wall linear in the context) for a class under the held map.
+pub const PALW_STEP_LEG_MAX_STATE_DEPTH_V4: u32 = 48;
+
+/// One v4 chunk's leaf: the map, the slice, the block — never a flat index.
+pub fn state_chunk_leaf_hash_v4(state_chunk_map_id: &Hash64, slice: u32, block: u32, chunk_bytes: &[u8]) -> Hash64 {
+    let mut w = Writer::new();
+    w.hash64(state_chunk_map_id);
+    w.u32(slice);
+    w.u32(block);
+    w.bytes(chunk_bytes);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_CHUNK_LEAF_V4)
+}
+
+/// The top tree's leaf for one slice: its index, how many blocks it holds, and its sub-root. The
+/// count is inside the leaf so a prover cannot open a block of a slice it has declared shorter.
+pub fn state_top_leaf_v4(slice: u32, block_count: u32, sub_root: &Hash64) -> Hash64 {
+    let mut w = Writer::new();
+    w.u32(slice);
+    w.u32(block_count);
+    w.hash64(sub_root);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_STATE_TOP_LEAF_V4)
+}
+
+fn v4_node(domain: &[u8], left: &Hash64, right: &Hash64) -> Hash64 {
+    keyed64(domain, &[left.as_byte_slice(), right.as_byte_slice()])
+}
+
+/// One level of a promote-odd fold under `domain` — [`state_chunk_fold_level_v1`]'s shape.
+fn v4_fold_level(domain: &[u8], level: &[Hash64]) -> Vec<Hash64> {
+    let mut next = Vec::with_capacity(level.len().div_ceil(2));
+    let mut pairs = level.chunks_exact(2);
+    for pair in &mut pairs {
+        next.push(v4_node(domain, &pair[0], &pair[1]));
+    }
+    if let [odd] = pairs.remainder() {
+        next.push(*odd);
+    }
+    next
+}
+
+fn v4_root(domain: &[u8], leaves: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    if leaves.is_empty() {
+        return Err(PalwStepLegError::StateChunksOutOfRange { got: 0, max: usize::MAX });
+    }
+    let mut level = leaves.to_vec();
+    while level.len() > 1 {
+        level = v4_fold_level(domain, &level);
+    }
+    Ok(level[0])
+}
+
+fn v4_path(domain: &[u8], leaves: &[Hash64], mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    if index >= leaves.len() {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count: leaves.len() as u64 });
+    }
+    let mut level = leaves.to_vec();
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+        if !promoted {
+            path.push(level[if index.is_multiple_of(2) { index + 1 } else { index - 1 }]);
+        }
+        level = v4_fold_level(domain, &level);
+        index /= 2;
+    }
+    Ok(path)
+}
+
+/// **How many siblings a promote-odd path has** at `index` of `width` leaves — derived, so a
+/// verifier can split one carried sibling list into its two trees without the prover saying where.
+pub fn state_v4_path_len(width: u64, index: u64) -> u32 {
+    let (mut width, mut position, mut len) = (width, index, 0u32);
+    while width > 1 {
+        if !(width % 2 == 1 && position == width - 1) {
+            len += 1;
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    len
+}
+
+fn v4_root_from_path(domain: &[u8], width: u64, index: u64, leaf: Hash64, siblings: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    if width == 0 || index >= width {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index, count: width });
+    }
+    let (mut current, mut position, mut width) = (leaf, index, width);
+    let mut siblings = siblings.iter();
+    while width > 1 {
+        let promoted = width % 2 == 1 && position == width - 1;
+        if !promoted {
+            let sibling = siblings.next().ok_or(PalwStepLegError::OpeningPathTooShort)?;
+            current = if position % 2 == 0 { v4_node(domain, &current, sibling) } else { v4_node(domain, sibling, &current) };
+        }
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    let extra = siblings.count();
+    if extra != 0 {
+        return Err(PalwStepLegError::OpeningPathTooLong { extra });
+    }
+    Ok(current)
+}
+
+/// A slice's sub-root: a promote-odd tree over its block leaves (each already binding its own
+/// `(slice, block)`).
+pub fn state_slice_root_v4(block_hashes: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    v4_root(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, block_hashes)
+}
+
+/// The path proving block `block` inside its slice's sub-root.
+pub fn state_slice_path_v4(block_hashes: &[Hash64], block: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    v4_path(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, block_hashes, block)
+}
+
+/// A v4 checkpoint's `state_chunks_root`: a promote-odd tree over the slices' top leaves, in
+/// slice order.
+pub fn state_top_root_v4(top_leaves: &[Hash64]) -> Result<Hash64, PalwStepLegError> {
+    v4_root(PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4, top_leaves)
+}
+
+/// The path proving slice `slice`'s top leaf inside the checkpoint's root.
+pub fn state_top_path_v4(top_leaves: &[Hash64], slice: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    v4_path(PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4, top_leaves, slice)
+}
+
+/// **One chunk's membership in a v4 state root** — the block path folded to the slice's sub-root,
+/// the slice's top leaf, and the top path folded to the root. `siblings` is the block path then
+/// the top path; where one ends is derived from `(block, block_count)`. The caller supplies the
+/// counts from the class's own geometry at the checkpoint's position count and compares the
+/// answer with the checkpoint leaf's `state_chunks_root`.
+pub fn state_chunk_opening_root_v4(
+    slice_count: u32,
+    slice: u32,
+    block_count: u32,
+    block: u32,
+    chunk_hash: &Hash64,
+    siblings: &[Hash64],
+) -> Result<Hash64, PalwStepLegError> {
+    let depth =
+        state_v4_path_len(u64::from(block_count), u64::from(block)) + state_v4_path_len(u64::from(slice_count), u64::from(slice));
+    if depth > PALW_STEP_LEG_MAX_STATE_DEPTH_V4 || siblings.len() > PALW_STEP_LEG_MAX_STATE_DEPTH_V4 as usize {
+        return Err(PalwStepLegError::StateTreeTooDeep {
+            depth: depth.max(siblings.len() as u32),
+            max: PALW_STEP_LEG_MAX_STATE_DEPTH_V4,
+        });
+    }
+    let split = state_v4_path_len(u64::from(block_count), u64::from(block)) as usize;
+    if siblings.len() < split {
+        return Err(PalwStepLegError::OpeningPathTooShort);
+    }
+    let (block_path, top_path) = siblings.split_at(split);
+    let sub_root = v4_root_from_path(
+        PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4,
+        u64::from(block_count),
+        u64::from(block),
+        *chunk_hash,
+        block_path,
+    )?;
+    v4_root_from_path(
+        PALW_STEP_LEG_DOMAIN_STATE_TOP_NODE_V4,
+        u64::from(slice_count),
+        u64::from(slice),
+        state_top_leaf_v4(slice, block_count, &sub_root),
+        top_path,
+    )
+}
+
+/// **One slice's append-only frontier** — what the executor keeps instead of re-hashing the cache.
+///
+/// `closed` holds the perfect subtrees of the closed blocks, largest first (the binary
+/// decomposition of their count); `open` is the last block while it is still filling. The root is
+/// the right-to-left fold of `closed ‖ open`, which is the promote-odd root over the same leaves —
+/// `the_frontier_is_the_promote_odd_root_at_every_width` pins that for every width to 257.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwStateSliceFrontierV4 {
+    closed: Vec<(u32, Hash64)>,
+    closed_count: u64,
+    open: Option<Hash64>,
+}
+
+impl PalwStateSliceFrontierV4 {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Nodes this frontier holds — its closed peaks and the open one — for the capture that keeps
+    /// one of these per slice to account for what it retains.
+    pub fn retained_nodes(&self) -> usize {
+        self.closed.len() + usize::from(self.open.is_some())
+    }
+
+    /// Blocks in the slice, the open one included.
+    pub fn block_count(&self) -> u64 {
+        self.closed_count + u64::from(self.open.is_some())
+    }
+
+    /// A block that will never change again joins the frontier: `O(1)` amortised node hashes.
+    /// Clears the open block — a closing block is the open block's final value.
+    pub fn push_closed(&mut self, leaf: Hash64) {
+        self.open = None;
+        self.closed.push((0, leaf));
+        self.closed_count += 1;
+        while self.closed.len() >= 2 && self.closed[self.closed.len() - 1].0 == self.closed[self.closed.len() - 2].0 {
+            let (height, right) = self.closed.pop().expect("two entries");
+            let (_, left) = self.closed.pop().expect("two entries");
+            self.closed.push((height + 1, v4_node(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, &left, &right)));
+        }
+    }
+
+    /// The last block, still filling: replaced at every position until it closes.
+    pub fn set_open(&mut self, leaf: Hash64) {
+        self.open = Some(leaf);
+    }
+
+    /// The slice's sub-root, or `None` for a slice with no block.
+    pub fn root(&self) -> Option<Hash64> {
+        let mut acc = self.open;
+        for (_, node) in self.closed.iter().rev() {
+            acc = Some(match acc {
+                None => *node,
+                Some(right) => v4_node(PALW_STEP_LEG_DOMAIN_STATE_SLICE_NODE_V4, node, &right),
+            });
+        }
+        acc
+    }
+}
+
+/// A v2 checkpoint leaf: the v1 chain discipline with the flat state root replaced by the
+/// chunked one.
+///
+/// # `covered_decode_call` counts what the CLASS's map says it counts (ADR-0082 Decision 4)
+///
+/// There is no v3 leaf and there does not need to be one. Under
+/// [`crate::palw_context_ladder::PalwCheckpointCadenceV1::PerDecodeCall`] — every shipped class —
+/// the field is decode calls, `(index + 1) × interval`. Under `PerPosition`, which a class
+/// registering the tiled attention map runs at, it is POSITIONS of the cache, `index + 1`, prefill
+/// positions included.
+///
+/// The two are told apart without a second field because [`checkpoint_leaf_hash_v2`] already binds
+/// `state_chunk_map_id` into the preimage beside the counter, and the map id is what chooses the
+/// cadence: the same numbers under two maps are two different leaf hashes. A version field would
+/// be a second name for a fact the first one already fixes, and two names for one fact is how a
+/// producer commits at one cadence and a court judges at another.
+///
+/// The wire form is byte-for-byte the shipped one, so every shipped row's checkpoint leg is the
+/// leg it files today — `the_shipped_cadence_is_per_call_and_its_leaves_do_not_move`.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwCheckpointLeafV2 {
+    pub version: u16,
+    pub checkpoint_index: u32,
+    /// Decode calls covered, or — for a class whose map addresses history tiles — POSITIONS
+    /// covered. [`crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1`] is the rule.
+    pub covered_decode_call: u32,
+    pub prev_checkpoint_leaf_hash: Hash64,
+    pub state_chunk_count: u32,
+    pub state_chunks_root: Hash64,
+}
+
+pub fn checkpoint_leaf_hash_v2(
+    job_context_hash: &Hash64,
+    checkpoint_profile_hash: &Hash64,
+    state_chunk_map_id: &Hash64,
+    leaf: &PalwCheckpointLeafV2,
+) -> Hash64 {
+    let mut w = Writer::new();
+    w.u16(leaf.version);
+    w.hash64(job_context_hash);
+    w.hash64(checkpoint_profile_hash);
+    w.hash64(state_chunk_map_id);
+    w.u32(leaf.checkpoint_index);
+    w.u32(leaf.covered_decode_call);
+    w.hash64(&leaf.prev_checkpoint_leaf_hash);
+    w.u32(leaf.state_chunk_count);
+    w.hash64(&leaf.state_chunks_root);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_CHECKPOINT_LEAF_V2)
+}
+
+/// Job-bound chain genesis (v2 domain — a v1 chain cannot be grafted here).
+pub fn checkpoint_genesis_prev_v2(job_context_hash: &Hash64) -> Hash64 {
+    keyed64(PALW_STEP_LEG_DOMAIN_CHECKPOINT_GENESIS_V2, &[job_context_hash.as_byte_slice()])
+}
+
+/// The empty-leg sentinel: `count == 0 ⟺ merkle_root == this` is the canonical-form rule.
+pub fn checkpoint_empty_root_v2(job_context_hash: &Hash64) -> Hash64 {
+    keyed64(PALW_STEP_LEG_DOMAIN_CHECKPOINT_EMPTY_V2, &[job_context_hash.as_byte_slice()])
+}
+
+// ---------------------------------------------------------------------------------------------
+// Leg roots and the composite
+// ---------------------------------------------------------------------------------------------
+
+/// Outer hash of the step leg: context, the FULL shape-profile identity, the canonical count,
+/// and the tree.
+pub fn step_leg_root_v1(job_context_hash: &Hash64, shape_profile_hash: &Hash64, leaf_count: u64, merkle_root: &Hash64) -> Hash64 {
+    let mut w = Writer::new();
+    w.u16(PALW_STEP_LEG_OBJECT_VERSION_V1);
+    w.hash64(job_context_hash);
+    w.hash64(shape_profile_hash);
+    w.u64(leaf_count);
+    w.hash64(merkle_root);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_LEG)
+}
+
+/// Outer hash of the v2 checkpoint leg (chunked state).
+pub fn checkpoint_leg_root_v2(
+    job_context_hash: &Hash64,
+    checkpoint_profile_hash: &Hash64,
+    state_chunk_map_id: &Hash64,
+    decode_calls: u32,
+    checkpoint_count: u32,
+    merkle_root: &Hash64,
+) -> Hash64 {
+    let mut w = Writer::new();
+    w.u16(PALW_STEP_LEG_OBJECT_VERSION_V1);
+    w.hash64(job_context_hash);
+    w.hash64(checkpoint_profile_hash);
+    w.hash64(state_chunk_map_id);
+    w.u32(decode_calls);
+    w.u32(checkpoint_count);
+    w.hash64(merkle_root);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_CHECKPOINT_LEG_V2)
+}
+
+/// The v2 composite: the frozen v2 logits root, the v1 activation leg root **as computed by
+/// the frozen v1 code**, the chunked checkpoint leg, and the step leg — context-bound.
+/// Profile hashes live inside their leg roots (the dual-source rule).
+pub fn execution_commitment_root_v2(
+    job_context_hash: &Hash64,
+    full_logits_trace_root: &Hash64,
+    activation_leg_root: &Hash64,
+    checkpoint_leg_root: &Hash64,
+    step_leg_root: &Hash64,
+) -> Hash64 {
+    let mut w = Writer::new();
+    w.u16(PALW_STEP_LEG_OBJECT_VERSION_V1);
+    w.hash64(job_context_hash);
+    w.hash64(full_logits_trace_root);
+    w.hash64(activation_leg_root);
+    w.hash64(checkpoint_leg_root);
+    w.hash64(step_leg_root);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_EXECUTION_COMMITMENT_V2)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Producer: the fail-closed step-leg builder
+// ---------------------------------------------------------------------------------------------
+
+#[inline]
+fn f32_is_finite_bits(bits: u32) -> bool {
+    (bits & 0x7F80_0000) != 0x7F80_0000
+}
+
+#[inline]
+fn f16_is_finite_bits(bits: u16) -> bool {
+    (bits & 0x7C00) != 0x7C00
+}
+
+/// Streaming builder for the step tree. Tiles must arrive in canonical leaf order with
+/// canonical lengths and finite values; KV chunks follow in the canonical aux order. Every
+/// violation is a construction failure — the fifteen v1 faults' step-side counterparts are
+/// unbuildable, not carried.
+pub struct PalwStepLegBuilderV1 {
+    context_hash: Hash64,
+    profile_hash: Hash64,
+    profile: PalwShapeProfileV3,
+    context: PalwJobContextV2,
+    expected_total: u64,
+    expected_aux: u64,
+    leaf_hashes: Vec<Hash64>,
+}
+
+impl PalwStepLegBuilderV1 {
+    /// **The DEFAULT ladder, for a builder with no ruleset in scope** — see
+    /// [`PALW_STEP_LEG_MAX_LEAVES`]. A producer that knows which network it serves calls
+    /// [`Self::new_capped_v1`] with `PalwCourtParamsV2::max_step_leaf_count`; building at the
+    /// executor's constant on a `2^26` network refuses the class's own honest job.
+    pub fn new(context: PalwJobContextV2, profile: PalwShapeProfileV3) -> Result<Self, PalwStepLegError> {
+        Self::new_capped_v1(context, profile, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::new`] against the ladder the RULESET froze (ADR-0080 W1b, ADR-0082 Decision 1).
+    ///
+    /// The count this sizes the tree with is the same enumeration the court's shape pass
+    /// recomputes, so a leg built at one ladder and judged at another is a leg whose honest
+    /// producer is convicted for a number nobody disagreed with.
+    pub fn new_capped_v1(
+        context: PalwJobContextV2,
+        profile: PalwShapeProfileV3,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, PalwStepLegError> {
+        check_job_context_shape(&context).map_err(PalwStepLegError::Context)?;
+        profile.validate_shape()?;
+        let expected_total = crate::palw_step::step_leaf_count_capped_v1(&profile, &context, max_step_leaf_count)?;
+        let expected_aux = kv_aux_leaf_count(&profile, &context);
+        Ok(Self {
+            context_hash: context.context_hash(),
+            profile_hash: profile.shape_profile_id(),
+            profile,
+            context,
+            expected_total,
+            expected_aux,
+            leaf_hashes: Vec::new(),
+        })
+    }
+
+    pub fn expected_main_leaves(&self) -> u64 {
+        self.expected_total - self.expected_aux
+    }
+
+    pub fn expected_total_leaves(&self) -> u64 {
+        self.expected_total
+    }
+
+    /// Canonical tile length at `coord`: the node's `tile_len` except a ragged last tile.
+    fn canonical_tile_values(&self, coord: &PalwStepCoordinateV1) -> Option<u32> {
+        let (node, _layer) = self.profile.resolve_node_slot(coord.node_slot)?;
+        let kv_len = if coord.call_index == 0 {
+            coord.position as u64 + 1
+        } else {
+            self.context.declared_prefill_tokens as u64 + coord.call_index as u64
+        };
+        let len = match node.out_len {
+            crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+            crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
+        };
+        let tiles = len.div_ceil(node.tile_len as u64);
+        if (coord.tile_index as u64) >= tiles {
+            return None;
+        }
+        let start = coord.tile_index as u64 * node.tile_len as u64;
+        Some((len - start).min(node.tile_len as u64) as u32)
+    }
+
+    /// Push the next node-output tile (canonical order enforced).
+    pub fn push_step_tile(&mut self, coord: PalwStepCoordinateV1, value_bits: &[u32]) -> Result<u64, PalwStepLegError> {
+        let next = self.leaf_hashes.len() as u64;
+        if next >= self.expected_main_leaves() {
+            return Err(PalwStepLegError::TilesOutOfOrder { expected: self.expected_main_leaves(), got: next });
+        }
+        let canonical =
+            canonical_step_leaf_index(&self.profile, &self.context, &coord).ok_or(PalwStepLegError::TileCoordinatesNotCanonical)?;
+        if canonical != next {
+            return Err(PalwStepLegError::TilesOutOfOrder { expected: next, got: canonical });
+        }
+        let expected_values = self.canonical_tile_values(&coord).ok_or(PalwStepLegError::TileCoordinatesNotCanonical)?;
+        if value_bits.len() as u32 != expected_values {
+            return Err(PalwStepLegError::TileLengthNotCanonical { got: value_bits.len() as u32, expected: expected_values });
+        }
+        let mut values_le = Vec::with_capacity(value_bits.len() * 4);
+        // The finiteness rule belongs to FLOAT lanes only. On an integer class every bit pattern
+        // is a legal value, and applying the float rule there rejected every activation in
+        // `[-8_388_608, -1]` — the all-ones-exponent range — which is essentially every negative
+        // BASE-0 code. The RC's liveness floor could not commit a leg at all.
+        let check_finite = self.profile.lane == crate::palw_step::PalwStepLaneV1::Float32;
+        for (i, bits) in value_bits.iter().enumerate() {
+            if check_finite && !f32_is_finite_bits(*bits) {
+                return Err(PalwStepLegError::NonFiniteStepValue { leaf_index: next, value_index: i as u32 });
+            }
+            values_le.extend_from_slice(&bits.to_le_bytes());
+        }
+        let leaf = PalwStepTileLeafV1 { version: PALW_STEP_LEG_OBJECT_VERSION_V1, coord, value_count: expected_values, values_le };
+        self.leaf_hashes.push(step_tile_leaf_hash_ctx_v1(&self.context, &self.profile_hash, &leaf));
+        Ok(next)
+    }
+
+    /// Push the next KV aux chunk (canonical aux order: attention layer ↑, kv head ↑, K then
+    /// V, chunk ↑ — enforced by rank).
+    pub fn push_kv_chunk(&mut self, leaf: &PalwKvChunkLeafV1) -> Result<u64, PalwStepLegError> {
+        let next = self.leaf_hashes.len() as u64;
+        let main = self.expected_main_leaves();
+        if next < main || next >= self.expected_total {
+            return Err(PalwStepLegError::KvChunksOutOfOrder);
+        }
+        if leaf.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
+            return Err(PalwStepLegError::UnsupportedVersion { got: leaf.version, expected: PALW_STEP_LEG_OBJECT_VERSION_V1 });
+        }
+        let rank = self.kv_chunk_rank(leaf).ok_or(PalwStepLegError::KvChunksOutOfOrder)?;
+        if main + rank != next {
+            return Err(PalwStepLegError::KvChunksOutOfOrder);
+        }
+        if leaf.values_f16_le.len() > PALW_STEP_LEG_MAX_KV_CHUNK_BYTES {
+            return Err(PalwStepLegError::PayloadTooLarge { got: leaf.values_f16_le.len(), max: PALW_STEP_LEG_MAX_KV_CHUNK_BYTES });
+        }
+        if leaf.values_f16_le.len() != 2 * leaf.position_count as usize * self.profile.attn_head_dim as usize
+            || !leaf.values_f16_le.len().is_multiple_of(2)
+        {
+            return Err(PalwStepLegError::KvChunksOutOfOrder);
+        }
+        for (i, pair) in leaf.values_f16_le.chunks_exact(2).enumerate() {
+            let bits = u16::from_le_bytes([pair[0], pair[1]]);
+            if !f16_is_finite_bits(bits) {
+                return Err(PalwStepLegError::NonFiniteKvValue { leaf_index: next, value_index: i as u32 });
+            }
+        }
+        self.leaf_hashes.push(kv_chunk_leaf_hash_v1(&self.context_hash, &self.profile_hash, leaf));
+        Ok(next)
+    }
+
+    /// Rank of a KV chunk in the canonical aux order, with canonical `position_count`
+    /// (full chunks except a ragged last).
+    fn kv_chunk_rank(&self, leaf: &PalwKvChunkLeafV1) -> Option<u64> {
+        if self.profile.kv_chunk_calls == 0 || leaf.is_v > 1 {
+            return None;
+        }
+        let attn_layers: Vec<u16> =
+            (0..self.profile.layer_count).filter(|&l| self.profile.layer_kind(l) == PalwLayerKindV1::Attention).collect();
+        let layer_ordinal = attn_layers.iter().position(|&l| l == leaf.attn_layer)? as u64;
+        if leaf.kv_head >= self.profile.attn_kv_heads {
+            return None;
+        }
+        let positions = self.context.declared_prefill_tokens as u64 + self.context.exact_decode_tokens.saturating_sub(1) as u64;
+        let chunks = positions.div_ceil(self.profile.kv_chunk_calls as u64);
+        if (leaf.chunk_index as u64) >= chunks {
+            return None;
+        }
+        let start = leaf.chunk_index as u64 * self.profile.kv_chunk_calls as u64;
+        let canonical_count = (positions - start).min(self.profile.kv_chunk_calls as u64) as u32;
+        if leaf.position_count != canonical_count {
+            return None;
+        }
+        let per_layer = self.profile.attn_kv_heads as u64 * 2 * chunks;
+        Some(layer_ordinal * per_layer + (leaf.kv_head as u64 * 2 + leaf.is_v as u64) * chunks + leaf.chunk_index as u64)
+    }
+
+    /// Finishes the tree: every mandated leaf must have arrived.
+    pub fn finish(self) -> Result<PalwStepLegMaterialV1, PalwStepLegError> {
+        let got = self.leaf_hashes.len() as u64;
+        if got != self.expected_total {
+            return Err(PalwStepLegError::LegIncomplete { what: "step", got, expected: self.expected_total });
+        }
+        let merkle_root = step_merkle_root_v1(&self.leaf_hashes)?;
+        let leg_root = step_leg_root_v1(&self.context_hash, &self.profile_hash, got, &merkle_root);
+        Ok(PalwStepLegMaterialV1 { leaf_hashes: self.leaf_hashes, merkle_root, leg_root, leaf_count: got })
+    }
+}
+
+/// The finished step leg plus the tree material an answering executor retains.
+pub struct PalwStepLegMaterialV1 {
+    pub leaf_hashes: Vec<Hash64>,
+    pub merkle_root: Hash64,
+    pub leg_root: Hash64,
+    pub leaf_count: u64,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Adjudication: binding + structural faults
+// ---------------------------------------------------------------------------------------------
+
+/// The pinned rule a step-leg refutation proves broken. Discriminants wire-frozen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwStepFaultV1 {
+    ShapeProfileNotCanonical = 0,
+    StepLeafCountNotCanonical = 1,
+    StepCoordinatesNotCanonical = 2,
+    StepLeafIndexNotCanonical = 3,
+    StepBytesNotFourPerValue = 4,
+    StepValueCountNotCanonical = 5,
+    StepNonFinite {
+        value_index: u32,
+    } = 6,
+    KvChunkNotCanonical = 7,
+    KvChunkBytesNotCanonical = 8,
+    KvChunkNonFinite {
+        value_index: u32,
+    } = 9,
+    CheckpointCountNotCanonical = 10,
+    CheckpointIndexNotCanonical = 11,
+    CheckpointCoveredCallNotCanonical = 12,
+    CheckpointGenesisPrevMismatch = 13,
+    CheckpointChainBroken = 14,
+    /// ADR-0027 §1's arithmetic verdict: the step's committed output tile differs from the
+    /// canonical recomputation at `value_index` (added same-session with the step-refutation
+    /// increment; discriminants 0-14 unmoved).
+    ComputationMismatch {
+        value_index: u32,
+    } = 15,
+    /// ADR-0049 Decision E's verdict: the committed decode token at `position` is not what the
+    /// pinned selection rule (`base0_decode_token_select_v1`) produces from that position's own
+    /// committed logits row (discriminants 0-15 unmoved).
+    DecodeTokenMismatch {
+        position: u32,
+    } = 16,
+    /// The binding's checkpoint profile is not the family's canonical one — a free interval let a
+    /// producer file zero checkpoints, and made two honest parties compute different execution
+    /// roots for the same job (discriminants 0-16 unmoved).
+    CheckpointProfileNotCanonical = 17,
+    /// **The committed job exceeds the class's registered context.** The class's every court cost
+    /// is derived over `profile.n_ctx`; a job whose footprint — `prefill + exact_decode − 1`
+    /// cached positions, the enumeration's own count from `step_leaf_count` — exceeds it is work
+    /// the ceilings were never derived over, and a close against it could exceed the carrier
+    /// while the claim stood unprosecutable. So the OVERSIZED COMMITMENT ITSELF is the fault,
+    /// convictable from the binding alone: the profile is authenticated against the committed
+    /// root, the job context is too, and the comparison is two integers (discriminants 0-17
+    /// unmoved).
+    JobExceedsClassContext = 18,
+    /// **PALW-TIR-33** (RFC-0002 Phase F): a committed lane of an IR execution lies outside the
+    /// interval the class's program proves for it — a value no execution can produce, committed by
+    /// the executor whichever leaf was disputed (discriminants 0-18 unmoved).
+    TirValueOutsideProvenInterval {
+        value_index: u32,
+    } = 19,
+    /// An IR execution's two commitments to one logits row — the logits node's step tile and the
+    /// trace's tile of the same row — differ at `value_index` (discriminants 0-19 unmoved).
+    TirLogitsTraceMismatch {
+        value_index: u32,
+    } = 20,
+    /// **PALW-OUT-4** (RFC-0003): a generative claim's two commitments to one output lane — the output
+    /// node's step tile and the output tile of the claim's `output_root` — differ at `value_index`
+    /// (discriminants 0-20 unmoved; 21 is RFC-0003's in Phase F's allocation).
+    TirOutputDigestMismatch {
+        value_index: u32,
+    } = 21,
+}
+
+impl PalwStepFaultV1 {
+    fn evidence_words(self) -> (u8, u32) {
+        match self {
+            PalwStepFaultV1::ShapeProfileNotCanonical => (0, 0),
+            PalwStepFaultV1::StepLeafCountNotCanonical => (1, 0),
+            PalwStepFaultV1::CheckpointProfileNotCanonical => (17, 0),
+            PalwStepFaultV1::StepCoordinatesNotCanonical => (2, 0),
+            PalwStepFaultV1::StepLeafIndexNotCanonical => (3, 0),
+            PalwStepFaultV1::StepBytesNotFourPerValue => (4, 0),
+            PalwStepFaultV1::StepValueCountNotCanonical => (5, 0),
+            PalwStepFaultV1::StepNonFinite { value_index } => (6, value_index),
+            PalwStepFaultV1::KvChunkNotCanonical => (7, 0),
+            PalwStepFaultV1::KvChunkBytesNotCanonical => (8, 0),
+            PalwStepFaultV1::KvChunkNonFinite { value_index } => (9, value_index),
+            PalwStepFaultV1::CheckpointCountNotCanonical => (10, 0),
+            PalwStepFaultV1::CheckpointIndexNotCanonical => (11, 0),
+            PalwStepFaultV1::CheckpointCoveredCallNotCanonical => (12, 0),
+            PalwStepFaultV1::CheckpointGenesisPrevMismatch => (13, 0),
+            PalwStepFaultV1::CheckpointChainBroken => (14, 0),
+            PalwStepFaultV1::ComputationMismatch { value_index } => (15, value_index),
+            PalwStepFaultV1::DecodeTokenMismatch { position } => (16, position),
+            PalwStepFaultV1::JobExceedsClassContext => (18, 0),
+            PalwStepFaultV1::TirValueOutsideProvenInterval { value_index } => (19, value_index),
+            PalwStepFaultV1::TirLogitsTraceMismatch { value_index } => (20, value_index),
+            PalwStepFaultV1::TirOutputDigestMismatch { value_index } => (21, value_index),
+        }
+    }
+}
+
+/// The transparent preimage of a committed v2 execution commitment: everything needed to
+/// recompute [`execution_commitment_root_v2`] from parts. The activation leg rides opaquely
+/// as its v1 leg root (its own refutations live in `palw_legs`).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStepBindingV2 {
+    pub version: u16,
+    pub job_context: PalwJobContextV2,
+    /// Carried in full: adjudication needs the node tables, and the id is recomputed, never
+    /// trusted.
+    pub shape_profile: PalwShapeProfileV3,
+    pub checkpoint_profile: PalwCheckpointProfileV1,
+    pub state_chunk_map_id: Hash64,
+    pub full_logits_trace_root: Hash64,
+    pub activation_leg_root: Hash64,
+    pub step_leaf_count: u64,
+    pub step_merkle_root: Hash64,
+    pub checkpoint_count: u32,
+    pub checkpoint_merkle_root: Hash64,
+    pub committed_execution_root: Hash64,
+}
+
+/// The variable half: which committed object is refuted, with openings. Checkpoint openings
+/// ride the step-side tree functions (the v2 checkpoint tree uses the SAME generalized
+/// discipline at its own width, kept small: one leaf per checkpoint).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwStepEvidenceV1 {
+    /// No opening needed: decidable from the binding alone.
+    Shape = 0,
+    /// One opened step-tree leaf claimed to be a node-output tile.
+    StepTile { opening: PalwStepOpeningV1, preimage: PalwStepTileLeafV1 } = 1,
+    /// One opened step-tree leaf claimed to be a KV aux chunk.
+    KvChunk { opening: PalwStepOpeningV1, preimage: PalwKvChunkLeafV1 } = 2,
+    /// One opened checkpoint leaf.
+    Checkpoint { opening: PalwStepOpeningV1, preimage: PalwCheckpointLeafV2 } = 3,
+    /// Two adjacent opened checkpoints; convicts iff their hashes do not chain.
+    CheckpointChain {
+        earlier_opening: PalwStepOpeningV1,
+        earlier_preimage: PalwCheckpointLeafV2,
+        later_opening: PalwStepOpeningV1,
+        later_preimage: PalwCheckpointLeafV2,
+    } = 4,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PalwStepRefutationV1 {
+    pub binding: PalwStepBindingV2,
+    pub evidence: PalwStepEvidenceV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwStepRefutationVerdictV1 {
+    pub fault: PalwStepFaultV1,
+    pub evidence_id: Hash64,
+}
+
+/// The §24.1 dedup key of a step-family refutation — public so the arithmetic checker
+/// (`palw_step_refute`) mints ids in the same namespace (evidence kind 5).
+pub fn step_refutation_evidence_id(committed_root: &Hash64, evidence_kind: u8, leaf_index: u64, fault: PalwStepFaultV1) -> Hash64 {
+    evidence_id(committed_root, evidence_kind, leaf_index, fault)
+}
+
+fn evidence_id(committed_root: &Hash64, evidence_kind: u8, leaf_index: u64, fault: PalwStepFaultV1) -> Hash64 {
+    let (code, argument) = fault.evidence_words();
+    let mut w = Writer::new();
+    w.hash64(committed_root);
+    w.u8(evidence_kind);
+    w.u64(leaf_index);
+    w.u8(code);
+    w.u32(argument);
+    w.keyed64(PALW_STEP_LEG_DOMAIN_EVIDENCE_ID)
+}
+
+/// Recomputes the committed root from the binding; returns (context hash, profile hash,
+/// checkpoint profile hash). Rejection here means the evidence is about some other
+/// commitment — never that the commitment is honest. A malformed shape PROFILE, by contrast,
+/// is itself the fault (checked by the caller against the recomputed root first).
+/// [`verify_binding`], public: the decode-token adjudication (ADR-0049 Decision E) pins a
+/// binding to a claim's `execution_root` and then needs exactly this recomputation — the same
+/// one every structural and arithmetic arm runs — without carrying a leaf to open.
+pub fn verify_binding_v1(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64), PalwStepLegError> {
+    verify_binding(binding)
+}
+
+/// **The execution root a binding's parts commit to** — the value [`verify_binding_v1`] recomputes
+/// and compares with `committed_execution_root`, spelled once so a prover that re-commits a
+/// binding (a drill, a fixture, a filer assembling evidence) derives it exactly as the check does.
+pub fn binding_commitment_root_v1(binding: &PalwStepBindingV2) -> Hash64 {
+    let context_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
+    let step_root = step_leg_root_v1(&context_hash, &profile_hash, binding.step_leaf_count, &binding.step_merkle_root);
+    let checkpoint_root = checkpoint_leg_root_v2(
+        &context_hash,
+        &binding.checkpoint_profile.profile_hash(),
+        &binding.state_chunk_map_id,
+        decode_calls,
+        binding.checkpoint_count,
+        &binding.checkpoint_merkle_root,
+    );
+    execution_commitment_root_v2(
+        &context_hash,
+        &binding.full_logits_trace_root,
+        &binding.activation_leg_root,
+        &checkpoint_root,
+        &step_root,
+    )
+}
+
+fn verify_binding(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64), PalwStepLegError> {
+    if binding.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
+        return Err(PalwStepLegError::UnsupportedVersion { got: binding.version, expected: PALW_STEP_LEG_OBJECT_VERSION_V1 });
+    }
+    check_job_context_shape(&binding.job_context).map_err(PalwStepLegError::Context)?;
+    let context_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    // The binding must carry the SAME profile the job declared. Without this the adjudicator
+    // recomputed a step under whatever profile the binding happened to include — different
+    // geometry, different epsilons, different kernel ids — and convicted the producer for not
+    // matching arithmetic its job never claimed (re-audit §3.3). The context already names the
+    // profile; it was simply never compared.
+    if profile_hash != binding.job_context.shape_profile_id {
+        return Err(PalwStepLegError::ShapeProfileNotTheDeclaredOne {
+            declared: binding.job_context.shape_profile_id,
+            got: profile_hash,
+        });
+    }
+    // **The same defect one field over.** The binding carries `state_chunk_map_id` beside a
+    // profile that already registers one, and every checkpoint hash below is computed FROM the
+    // carried copy — `checkpoint_leaf_hash_v2` and `checkpoint_leg_root_v2` both take it as an
+    // argument. So a filer could carry any map id it liked and build a checkpoint leg that
+    // verifies against itself perfectly, under a layout the class never registered; the court
+    // would then read state bytes through the accuser's geometry.
+    //
+    // It has been invisible because every shipped class registers `Hash64::default()` and every
+    // honest filer copies it, so the two sources have never disagreed. Registering a real map is
+    // exactly what would end that, which is why this lands before the registration and not after.
+    if binding.state_chunk_map_id != binding.shape_profile.state_chunk_map_id {
+        return Err(PalwStepLegError::StateChunkMapNotTheRegisteredOne {
+            registered: binding.shape_profile.state_chunk_map_id,
+            carried: binding.state_chunk_map_id,
+        });
+    }
+    let checkpoint_profile_hash = binding.checkpoint_profile.profile_hash();
+    let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
+    let step_root = step_leg_root_v1(&context_hash, &profile_hash, binding.step_leaf_count, &binding.step_merkle_root);
+    let checkpoint_root = checkpoint_leg_root_v2(
+        &context_hash,
+        &checkpoint_profile_hash,
+        &binding.state_chunk_map_id,
+        decode_calls,
+        binding.checkpoint_count,
+        &binding.checkpoint_merkle_root,
+    );
+    let recomputed = execution_commitment_root_v2(
+        &context_hash,
+        &binding.full_logits_trace_root,
+        &binding.activation_leg_root,
+        &checkpoint_root,
+        &step_root,
+    );
+    if recomputed != binding.committed_execution_root {
+        return Err(PalwStepLegError::CommittedRootMismatch);
+    }
+    Ok((context_hash, profile_hash, checkpoint_profile_hash))
+}
+
+/// Model-free adjudication of a structural step-leg refutation. Honest material yields
+/// `NoFaultFound` on every arm (the challenger-loses verdict); arithmetic recomputation
+/// (`ExecutionStepRefutationV1`) is the separate, catalog-bound increment.
+///
+/// The DEFAULT-ladder form: every opening is walked against [`PALW_STEP_LEG_MAX_LEAVES`]. The court
+/// calls [`check_step_refutation_capped_v1`] with the ladder the ruleset froze — see that function.
+pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
+    check_step_refutation_capped_v1(refutation, PALW_STEP_LEG_MAX_LEAVES)
+}
+
+/// **The same adjudication at a NAMED step ladder** (ADR-0084 U-08).
+///
+/// `max_step_leaf_count` bounds only the two Merkle walks (`open_against`); the shape pass is
+/// already an equality at the accusation's own claim and needs no ladder. The uncapped name is
+/// this function at [`PALW_STEP_LEG_MAX_LEAVES`], which is what every caller outside the court
+/// wants; the court passes the ruleset's ladder past `Params::palw_court_ladder` and `2^22`
+/// before it, so a close proof against a graph-v5 class is refused by name
+/// (`LeafCountOutOfRange`) rather than acquitted or convicted, until the fence says otherwise.
+pub fn check_step_refutation_capped_v1(
+    refutation: &PalwStepRefutationV1,
+    max_step_leaf_count: u64,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
+    check_step_refutation_closure_capped_v1(refutation, max_step_leaf_count, false)
+}
+
+/// **[`check_step_refutation_capped_v1`] under RFC-0006 R6-CELL round 4's coverage closure** (`palw_cell_coverage_closure_v1`,
+/// REQ-CELL-2). `cell_closure` is the caller's: the closure is in force and the claim was accepted at or past it. With it:
+///
+/// * the shape pass convicts a binding whose (already valid) profile the cell coverage checker does not cover end to end — an
+///   unknown state chunk map id or an uncovered kind — as `ShapeProfileNotCanonical`: under the closure's ruleset such a profile is
+///   not a canonical class, and the verdict is decided from the binding alone, so it is never `NoFaultFound`;
+/// * a checkpoint whose mapped count the code cannot derive is a fault (`CheckpointIndexNotCanonical`), never the "court's own
+///   missing arithmetic" acquittal (unreachable past the shape pass, kept as the second lock). No map (the long form) stays as it was.
+///
+/// Without it (`false`): byte for byte [`check_step_refutation_capped_v1`].
+pub fn check_step_refutation_closure_capped_v1<'m>(
+    refutation: &PalwStepRefutationV1,
+    max_step_leaf_count: u64,
+    // `bool` is the round-4 closure (`From<bool>`); RFC-0006 consumer v2's mode re-reads the profile and checkpoint counts
+    // through what that consumer reaches, with the claim's router binding row (RFC06-4: the claim gate's and the court's predicate).
+    cell_closure: impl Into<crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'m>>,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepLegError> {
+    let cell_closure = cell_closure.into();
+    let binding = &refutation.binding;
+    let (context_hash, profile_hash, checkpoint_profile_hash) = verify_binding(binding)?;
+    let committed = &binding.committed_execution_root;
+
+    // Shape-level rules first: a profile that fails its own validation, or counts that are
+    // not the canonical function of (profile, context), convict from the binding alone.
+    let shape_fault = (|| {
+        if binding.shape_profile.validate_shape().is_err() {
+            return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
+        }
+        if binding.checkpoint_profile.validate_shape().is_err() {
+            return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
+        }
+        // R6-CELL round 4 (REQ-CELL-2): past the closure an uncoverable profile is not a canonical class.
+        if cell_closure.refuses_profile(&binding.shape_profile) {
+            return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
+        }
+        // The class-context bound, in the enumeration's own form — AFTER the profile's own
+        // validation (an ill-formed profile is its own fault and its n_ctx means nothing), BEFORE
+        // the counting walks the enumeration the bound exists to cap, so an oversized job
+        // convicts as WHAT IT IS rather than as whatever its leaf count happens to disagree with.
+        let footprint = (binding.job_context.declared_prefill_tokens as u64)
+            .saturating_add(binding.job_context.exact_decode_tokens.max(1) as u64)
+            .saturating_sub(1);
+        if footprint > binding.shape_profile.n_ctx as u64 {
+            return Some(PalwStepFaultV1::JobExceedsClassContext);
+        }
+        // **The cap is the ACCUSATION's own claim, not the executor's constant** (ADR-0082
+        // Decision 1: "the ruleset's is read from the bundle, never typed").
+        //
+        // The rule on this line is an EQUALITY — the committed count must be the canonical
+        // function of `(profile, context)` — and the cap was only ever the enumeration's own
+        // bound. Spelling it `PALW_STEP_MAX_LEAVES` made the shape pass answer
+        // `StepLeafCountNotCanonical` for every binding above `2^22`, which on a `2^26` ruleset is
+        // a CONVICTION of the honest producer of a class the admission gate accepted: the graph-v5
+        // dense 512 row's canonical job counts 6,630,544 leaves, so its every refutation — the
+        // honest one included — convicted, and the family could not certify (`HonestRunConvicted`)
+        // let alone be prosecuted.
+        //
+        // `binding.step_leaf_count` is the exact cap this comparison needs and it needs no
+        // ruleset: the walk returns `Ok(n)` iff the true count is at most the claim, so
+        // `Ok(n) && n == claim` is the same predicate at every ladder, and a claim the enumeration
+        // overruns still convicts by the same name. `step_leaf_count_capped_v1` is a closed form
+        // (at most 256 node visits, plus `⌈log₂⌉` evaluations to locate an overrun), so a
+        // stranger's inflated claim buys no walk.
+        match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {
+            Ok(count) if count == binding.step_leaf_count => {}
+            _ => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
+        }
+        // **The state layout is the family's, not the filer's.**
+        //
+        // The checkpoint profile is hashed into `committed_execution_root` and nothing checked any
+        // of it. `state_layout_id` is the half that has a canonical answer — one layout for the
+        // whole deterministic-integer family, which is exactly why
+        // `integer_kv_state_layout_id_v1` exists ("before this there was no canonical
+        // `state_layout_id` to file at all, so every producer would have invented one and every
+        // one of them would have been a different class of checkpoint"). An invented layout makes
+        // an honest execution unreproducible by anyone else, which is a conviction waiting for a
+        // challenger to run the same job and get a different root.
+        //
+        // **The INTERVAL is still the filer's, and that is the residual.** A producer that names
+        // an interval past its own decode count files zero checkpoints and opts out of the leg.
+        // Pinning it here would be wrong rather than merely expensive: the right interval is a
+        // property of the CLASS — a long-context class checkpointing every call pays for evidence
+        // nobody needs — so it belongs in the catalog entry beside the geometry, which moves the
+        // catalog root and the class id. Recorded rather than half-done.
+        if binding.shape_profile.lane == crate::palw_step::PalwStepLaneV1::Int32
+            && binding.checkpoint_profile.state_layout_id != crate::palw_state_chunk_map::integer_kv_state_layout_id_v1()
+        {
+            return Some(PalwStepFaultV1::CheckpointProfileNotCanonical);
+        }
+        // **How many checkpoints this job canonically has, at the cadence its map runs**
+        // (ADR-0082 Decision 4). `decode_calls / interval` for every shipped class; `prefill +
+        // decode_calls` for a class whose map addresses history tiles, which is every position the
+        // cache ever holds. A leg short of that is a producer that opted out of the positions it
+        // did not commit, which is the whole reason this count is recomputed rather than trusted.
+        let canonical_ckpts = crate::palw_context_ladder::palw_checkpoint_count_v1(
+            &binding.shape_profile,
+            &binding.job_context,
+            binding.checkpoint_profile.checkpoint_interval,
+        );
+        if binding.checkpoint_count != canonical_ckpts {
+            return Some(PalwStepFaultV1::CheckpointCountNotCanonical);
+        }
+        let empty = checkpoint_empty_root_v2(&context_hash);
+        if (binding.checkpoint_count == 0) != (binding.checkpoint_merkle_root == empty) {
+            return Some(PalwStepFaultV1::CheckpointCountNotCanonical);
+        }
+        None
+    })();
+    if let Some(fault) = shape_fault {
+        return Ok(PalwStepRefutationVerdictV1 { fault, evidence_id: evidence_id(committed, 0, 0, fault) });
+    }
+    if matches!(refutation.evidence, PalwStepEvidenceV1::Shape) {
+        return Err(PalwStepLegError::NoFaultFound);
+    }
+
+    match &refutation.evidence {
+        PalwStepEvidenceV1::Shape => unreachable!("handled above"),
+        PalwStepEvidenceV1::StepTile { opening, preimage } => {
+            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening, max_step_leaf_count)?;
+            if step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, preimage) != opening.leaf_hash {
+                return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "step tile" });
+            }
+            let fault = step_tile_fault(binding, opening, preimage);
+            match fault {
+                Some(fault) => {
+                    Ok(PalwStepRefutationVerdictV1 { fault, evidence_id: evidence_id(committed, 1, opening.leaf_index, fault) })
+                }
+                None => Err(PalwStepLegError::NoFaultFound),
+            }
+        }
+        PalwStepEvidenceV1::KvChunk { opening, preimage } => {
+            open_against(binding.step_leaf_count, &binding.step_merkle_root, opening, max_step_leaf_count)?;
+            if kv_chunk_leaf_hash_v1(&context_hash, &profile_hash, preimage) != opening.leaf_hash {
+                return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "kv chunk" });
+            }
+            let fault = kv_chunk_fault(binding, opening, preimage);
+            match fault {
+                Some(fault) => {
+                    Ok(PalwStepRefutationVerdictV1 { fault, evidence_id: evidence_id(committed, 2, opening.leaf_index, fault) })
+                }
+                None => Err(PalwStepLegError::NoFaultFound),
+            }
+        }
+        PalwStepEvidenceV1::Checkpoint { opening, preimage } => {
+            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, opening, preimage, max_step_leaf_count)?;
+            let fault = checkpoint_fault(binding, &context_hash, opening, preimage, cell_closure);
+            match fault {
+                Some(fault) => {
+                    Ok(PalwStepRefutationVerdictV1 { fault, evidence_id: evidence_id(committed, 3, opening.leaf_index, fault) })
+                }
+                None => Err(PalwStepLegError::NoFaultFound),
+            }
+        }
+        PalwStepEvidenceV1::CheckpointChain { earlier_opening, earlier_preimage, later_opening, later_preimage } => {
+            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, earlier_opening, earlier_preimage, max_step_leaf_count)?;
+            open_checkpoint(binding, &context_hash, &checkpoint_profile_hash, later_opening, later_preimage, max_step_leaf_count)?;
+            if later_opening.leaf_index != earlier_opening.leaf_index + 1 {
+                return Err(PalwStepLegError::Step(PalwStepError::CoordinatesNotCanonical));
+            }
+            if later_preimage.prev_checkpoint_leaf_hash != earlier_opening.leaf_hash {
+                let fault = PalwStepFaultV1::CheckpointChainBroken;
+                return Ok(PalwStepRefutationVerdictV1 {
+                    fault,
+                    evidence_id: evidence_id(committed, 4, later_opening.leaf_index, fault),
+                });
+            }
+            Err(PalwStepLegError::NoFaultFound)
+        }
+    }
+}
+
+fn open_against(
+    leaf_count: u64,
+    committed_root: &Hash64,
+    opening: &PalwStepOpeningV1,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepLegError> {
+    let implied = step_opening_root_capped_v1(leaf_count, opening, max_step_leaf_count)?;
+    if implied != *committed_root {
+        return Err(PalwStepLegError::CommittedRootMismatch);
+    }
+    Ok(())
+}
+
+fn open_checkpoint(
+    binding: &PalwStepBindingV2,
+    context_hash: &Hash64,
+    checkpoint_profile_hash: &Hash64,
+    opening: &PalwStepOpeningV1,
+    preimage: &PalwCheckpointLeafV2,
+    max_step_leaf_count: u64,
+) -> Result<(), PalwStepLegError> {
+    let implied = step_opening_root_capped_v1(binding.checkpoint_count as u64, opening, max_step_leaf_count)?;
+    if implied != binding.checkpoint_merkle_root {
+        return Err(PalwStepLegError::CommittedRootMismatch);
+    }
+    if checkpoint_leaf_hash_v2(context_hash, checkpoint_profile_hash, &binding.state_chunk_map_id, preimage) != opening.leaf_hash {
+        return Err(PalwStepLegError::LeafPreimageMismatch { leaf: "checkpoint" });
+    }
+    Ok(())
+}
+
+fn step_tile_fault(
+    binding: &PalwStepBindingV2,
+    opening: &PalwStepOpeningV1,
+    preimage: &PalwStepTileLeafV1,
+) -> Option<PalwStepFaultV1> {
+    if preimage.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
+        return Some(PalwStepFaultV1::StepCoordinatesNotCanonical);
+    }
+    let Some(canonical_index) = canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &preimage.coord) else {
+        return Some(PalwStepFaultV1::StepCoordinatesNotCanonical);
+    };
+    if canonical_index != opening.leaf_index {
+        return Some(PalwStepFaultV1::StepLeafIndexNotCanonical);
+    }
+    if preimage.values_le.len() != 4 * preimage.value_count as usize {
+        return Some(PalwStepFaultV1::StepBytesNotFourPerValue);
+    }
+    // The canonical tile length at these (already canonical) coordinates.
+    let expected = expected_tile_values(&binding.shape_profile, &binding.job_context, &preimage.coord);
+    if Some(preimage.value_count) != expected {
+        return Some(PalwStepFaultV1::StepValueCountNotCanonical);
+    }
+    // Float lanes only, for the reason `PalwStepLaneV1` gives: on an integer class this rule
+    // convicts every negative activation of being "non-finite", which would have made BASE-0 — the
+    // RC's own liveness floor — a class where every honest step is a provable fault.
+    if binding.shape_profile.lane == crate::palw_step::PalwStepLaneV1::Float32 {
+        for (i, quad) in preimage.values_le.chunks_exact(4).enumerate() {
+            let bits = u32::from_le_bytes([quad[0], quad[1], quad[2], quad[3]]);
+            if !f32_is_finite_bits(bits) {
+                return Some(PalwStepFaultV1::StepNonFinite { value_index: i as u32 });
+            }
+        }
+    }
+    None
+}
+
+/// **The canonical value count of the tile at `coord`** (`None` past the node's tiles) — the rule `step_tile_fault` holds a
+/// committed tile to, public for the legacy leaf recompute (LG14-B, tag 159), which builds the canonical tile itself.
+pub fn palw_expected_tile_values_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+) -> Option<u32> {
+    expected_tile_values(profile, context, coord)
+}
+
+fn expected_tile_values(profile: &PalwShapeProfileV3, context: &PalwJobContextV2, coord: &PalwStepCoordinateV1) -> Option<u32> {
+    let (node, _layer) = profile.resolve_node_slot(coord.node_slot)?;
+    let kv_len = if coord.call_index == 0 {
+        coord.position as u64 + 1
+    } else {
+        context.declared_prefill_tokens as u64 + coord.call_index as u64
+    };
+    let len = match node.out_len {
+        crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+        crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
+    };
+    let tiles = len.div_ceil(node.tile_len as u64);
+    if (coord.tile_index as u64) >= tiles {
+        return None;
+    }
+    let start = coord.tile_index as u64 * node.tile_len as u64;
+    Some((len - start).min(node.tile_len as u64) as u32)
+}
+
+fn kv_chunk_fault(binding: &PalwStepBindingV2, opening: &PalwStepOpeningV1, preimage: &PalwKvChunkLeafV1) -> Option<PalwStepFaultV1> {
+    if preimage.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
+        return Some(PalwStepFaultV1::KvChunkNotCanonical);
+    }
+    // Reuse the builder's rank derivation via a throwaway view: canonical rank must equal
+    // (leaf_index − main leaves).
+    // Same cap, same reason as the shape pass above: the binding's own claim, never the executor's
+    // constant. This runs only AFTER `shape_fault` has established `count == step_leaf_count`, so
+    // the cap is exact here and the `Err` arm is unreachable through `check_step_refutation_v1`;
+    // it stays fail-closed for any other caller.
+    let main = match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count)
+    {
+        Ok(total) => total - kv_aux_leaf_count(&binding.shape_profile, &binding.job_context),
+        Err(_) => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
+    };
+    if opening.leaf_index < main {
+        return Some(PalwStepFaultV1::KvChunkNotCanonical);
+    }
+    let rank = kv_chunk_rank_standalone(&binding.shape_profile, &binding.job_context, preimage);
+    match rank {
+        Some(r) if main + r == opening.leaf_index => {}
+        _ => return Some(PalwStepFaultV1::KvChunkNotCanonical),
+    }
+    if preimage.values_f16_le.len() != 2 * preimage.position_count as usize * binding.shape_profile.attn_head_dim as usize {
+        return Some(PalwStepFaultV1::KvChunkBytesNotCanonical);
+    }
+    for (i, pair) in preimage.values_f16_le.chunks_exact(2).enumerate() {
+        let bits = u16::from_le_bytes([pair[0], pair[1]]);
+        if !f16_is_finite_bits(bits) {
+            return Some(PalwStepFaultV1::KvChunkNonFinite { value_index: i as u32 });
+        }
+    }
+    None
+}
+
+fn kv_chunk_rank_standalone(profile: &PalwShapeProfileV3, context: &PalwJobContextV2, leaf: &PalwKvChunkLeafV1) -> Option<u64> {
+    if profile.kv_chunk_calls == 0 || leaf.is_v > 1 {
+        return None;
+    }
+    let attn_layers: Vec<u16> = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::Attention).collect();
+    let layer_ordinal = attn_layers.iter().position(|&l| l == leaf.attn_layer)? as u64;
+    if leaf.kv_head >= profile.attn_kv_heads {
+        return None;
+    }
+    let positions = context.declared_prefill_tokens as u64 + context.exact_decode_tokens.saturating_sub(1) as u64;
+    let chunks = positions.div_ceil(profile.kv_chunk_calls as u64);
+    if (leaf.chunk_index as u64) >= chunks {
+        return None;
+    }
+    let start = leaf.chunk_index as u64 * profile.kv_chunk_calls as u64;
+    let canonical_count = (positions - start).min(profile.kv_chunk_calls as u64) as u32;
+    if leaf.position_count != canonical_count {
+        return None;
+    }
+    let per_layer = profile.attn_kv_heads as u64 * 2 * chunks;
+    Some(layer_ordinal * per_layer + (leaf.kv_head as u64 * 2 + leaf.is_v as u64) * chunks + leaf.chunk_index as u64)
+}
+
+fn checkpoint_fault(
+    binding: &PalwStepBindingV2,
+    context_hash: &Hash64,
+    opening: &PalwStepOpeningV1,
+    preimage: &PalwCheckpointLeafV2,
+    // R6-CELL round 4: the coverage closure governs this claim (see `check_step_refutation_closure_capped_v1`).
+    cell_closure: crate::palw_cell_coverage_closure_v1::PalwCellClosureModeV1<'_>,
+) -> Option<PalwStepFaultV1> {
+    if preimage.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
+        return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+    }
+    if preimage.checkpoint_index as u64 != opening.leaf_index {
+        return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+    }
+    // **The counter's canonical value at this index, at the cadence the CLASS's map runs**
+    // (ADR-0082 Decision 4). On every shipped class this is `(index + 1) × interval` verbatim.
+    let interval = binding.checkpoint_profile.checkpoint_interval;
+    let canonical =
+        crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1(&binding.shape_profile, preimage.checkpoint_index, interval);
+    if canonical != Some(preimage.covered_decode_call) {
+        return Some(PalwStepFaultV1::CheckpointCoveredCallNotCanonical);
+    }
+    if preimage.checkpoint_index == 0 && preimage.prev_checkpoint_leaf_hash != checkpoint_genesis_prev_v2(context_hash) {
+        return Some(PalwStepFaultV1::CheckpointGenesisPrevMismatch);
+    }
+    // ADR-0103 Decision 3: the held map's count has no cap of its own — its bound is the proof's
+    // depth, and the equality with the map's canonical count below is what binds it.
+    let held =
+        crate::palw_state_chunk_map::palw_map_is_held_for_version_v1(&binding.state_chunk_map_id, binding.shape_profile.version);
+    if preimage.state_chunk_count == 0 || (!held && preimage.state_chunk_count as usize > PALW_STEP_LEG_MAX_STATE_CHUNKS) {
+        return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+    }
+    // **And the count must be the CLASS's map's for this state** (audit B, M-4). The range check
+    // above admits any count in `[1, 2^16]`, so a leg whose leaves declare one chunk per
+    // checkpoint — the whole cache as a blob — passed the shape pass and then made every anchor
+    // built on it `Unadjudicable`: a leg that advertises a route it cannot serve, which on a
+    // per-position class leaves the attention site with no route at all, because the cache-write
+    // route is refused there too.
+    //
+    // **The fault is `CheckpointIndexNotCanonical` and not a new discriminant**: `PalwStepFaultV1`
+    // is borsh-serialised with `use_discriminant = true` and its discriminants are wire-frozen, so
+    // a new arm is a consensus object change; the existing arm already carries the other
+    // `state_chunk_count` refusal two lines above, which is the same rule.
+    //
+    // `None` from the map is "this crate cannot enumerate that map" (the standalone recurrence
+    // maps, whose geometry lives in the executor crate) and is not a fault: refusing a leg for the
+    // court's own missing arithmetic would convict an honest class.
+    let positions = crate::palw_context_ladder::palw_checkpoint_positions_at_v1(
+        &binding.shape_profile,
+        &binding.job_context,
+        preimage.covered_decode_call,
+    );
+    match crate::palw_state_chunk_map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions) {
+        Some(canonical_chunks) if preimage.state_chunk_count as u64 != canonical_chunks => {
+            return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+        }
+        // A held map is one this crate enumerates, so "not derivable" is a leg it cannot have
+        // committed honestly — not the court's missing arithmetic.
+        None if held => return Some(PalwStepFaultV1::CheckpointIndexNotCanonical),
+        // **R6-CELL round 4 (`palw_cell_coverage_closure_v1`)**: past the closure a mapped class the court cannot count is not a
+        // class at all (it is refused at registration and convicted by the shape pass), so `None` is never read as no fault. The
+        // unmapped long form keeps its `None`.
+        // RFC-0006 consumer v2: a solo gdn v1/v2 or composed hybrid checkpoint's count IS derivable past that consumer's fence
+        // (`memory_v2::gdn_checkpoint_chunk_count_v2`), so it is checked rather than read as a fault.
+        None if cell_closure.is_memory_routing_v2()
+            && crate::palw_step_refute::memory_v2::gdn_checkpoint_chunk_count_v2(&binding.shape_profile, positions).is_some() =>
+        {
+            let canonical =
+                crate::palw_step_refute::memory_v2::gdn_checkpoint_chunk_count_v2(&binding.shape_profile, positions).unwrap_or(0);
+            if preimage.state_chunk_count as u64 != canonical {
+                return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+            }
+        }
+        None if cell_closure.in_force() && binding.state_chunk_map_id != Hash64::default() => {
+            return Some(PalwStepFaultV1::CheckpointIndexNotCanonical);
+        }
+        _ => {}
+    }
+    None
+}
+
+// =============================================================================================
+// Tests
+// =============================================================================================
+
+#[cfg(test)]
+pub(crate) mod tests {
+    #[test]
+    fn bounded_leaf_source_opens_ragged_trees_without_a_whole_tree_buffer() {
+        for count in [1usize, 2, 3, 5, 8, 13, 31, 64, 100] {
+            let leaves: Vec<Hash64> = (0..count as u64).map(|i| Hash64::from_u64_word(0xA0 + i)).collect();
+            let root = step_merkle_root_v1(&leaves).unwrap();
+            for i in 0..count as u64 {
+                let actual =
+                    step_opening_from_leaf_source_capped_v1(count as u64, i, PALW_STEP_LEG_MAX_LEAVES, |j| leaves[j as usize])
+                        .unwrap();
+                assert_eq!(actual, step_opening_v1(&leaves, i).unwrap());
+                assert_eq!(step_opening_root_v1(count as u64, &actual).unwrap(), root);
+            }
+        }
+        assert!(step_opening_from_leaf_source_capped_v1(0, 0, 100, |_| unreachable!()).is_err());
+        assert!(step_opening_from_leaf_source_capped_v1(101, 0, 100, |_| unreachable!()).is_err());
+        assert!(step_opening_from_leaf_source_capped_v1(2, 2, 100, |_| unreachable!()).is_err());
+    }
+
+    /// **The kept-levels tree is the rebuilt tree, path for path** — every leaf of trees whose
+    /// sizes exercise the promote-odd shape at every level, and the root.
+    #[test]
+    fn the_kept_levels_tree_opens_every_leaf_as_the_rebuilt_tree_does() {
+        for n in [1usize, 2, 3, 5, 8, 13, 31, 64, 100] {
+            let leaves: Vec<Hash64> = (0..n as u64).map(|i| Hash64::from_u64_word(0xA0 + i)).collect();
+            let tree = PalwStepMerkleTreeV1::build_capped_v1(&leaves, PALW_STEP_LEG_MAX_LEAVES).expect("builds");
+            assert_eq!(tree.root(), step_merkle_root_v1(&leaves).expect("the rebuilt root"), "n = {n}");
+            for i in 0..n {
+                assert_eq!(
+                    tree.path_v1(i).expect("a path"),
+                    step_merkle_path_v1(&leaves, i).expect("the rebuilt path"),
+                    "n = {n}, i = {i}"
+                );
+            }
+            assert!(tree.path_v1(n).is_err());
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // ADR-0103 Decision 3 — the held state tree
+    // ---------------------------------------------------------------------------------------------
+
+    /// **The frontier IS the promote-odd root, at every width** — closed blocks only, and closed
+    /// blocks with an open one on the end, from one block to 257. This is the property that lets an
+    /// executor keep `O(log blocks)` state per slice instead of the slice.
+    #[test]
+    fn the_frontier_is_the_promote_odd_root_at_every_width() {
+        let leaf = |i: u64| Hash64::from_u64_word(0x5A00 + i);
+        for width in 1u64..=257 {
+            let leaves: Vec<Hash64> = (0..width).map(leaf).collect();
+            let want = state_slice_root_v4(&leaves).expect("a root");
+            let mut all_closed = PalwStateSliceFrontierV4::new();
+            for l in &leaves {
+                all_closed.push_closed(*l);
+            }
+            assert_eq!(all_closed.root(), Some(want), "all closed at width {width}");
+            assert_eq!(all_closed.block_count(), width);
+            let mut last_open = PalwStateSliceFrontierV4::new();
+            for l in &leaves[..leaves.len() - 1] {
+                last_open.push_closed(*l);
+            }
+            // The open block is replaced at every position before it closes; only its final value
+            // is the leaf, and a stale one must not survive the replacement.
+            last_open.set_open(Hash64::from_u64_word(0xDEAD));
+            last_open.set_open(leaves[leaves.len() - 1]);
+            assert_eq!(last_open.root(), Some(want), "the last block open at width {width}");
+            assert_eq!(last_open.block_count(), width);
+        }
+        assert_eq!(PalwStateSliceFrontierV4::new().root(), None, "a slice with no block has no root");
+    }
+
+    /// **Every chunk of a v4 tree opens to its root, and nothing else does.** Several slices of
+    /// uneven widths; each block's two-level proof folds to the root; a changed byte, a wrong block,
+    /// a wrong slice, a short path and a long path are each refused or fold elsewhere.
+    #[test]
+    fn a_v4_chunk_opens_to_its_root_and_a_tampered_one_does_not() {
+        let map = Hash64::from_u64_word(0x4444);
+        let widths = [1u32, 2, 3, 5, 8, 13, 1];
+        let bytes = |s: u32, b: u32| vec![(s * 31 + b) as u8; 5 + (b % 3) as usize];
+        let slices: Vec<Vec<Hash64>> = widths
+            .iter()
+            .enumerate()
+            .map(|(s, &w)| (0..w).map(|b| state_chunk_leaf_hash_v4(&map, s as u32, b, &bytes(s as u32, b))).collect())
+            .collect();
+        let top: Vec<Hash64> = slices
+            .iter()
+            .enumerate()
+            .map(|(s, leaves)| state_top_leaf_v4(s as u32, leaves.len() as u32, &state_slice_root_v4(leaves).expect("a sub-root")))
+            .collect();
+        let root = state_top_root_v4(&top).expect("the root");
+        let slice_count = widths.len() as u32;
+        for (s, leaves) in slices.iter().enumerate() {
+            for b in 0..leaves.len() {
+                let mut path = state_slice_path_v4(leaves, b).expect("a block path");
+                path.extend(state_top_path_v4(&top, s).expect("a top path"));
+                let (s32, b32, w) = (s as u32, b as u32, widths[s]);
+                assert_eq!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &path), Ok(root), "slice {s} block {b}");
+                let forged = state_chunk_leaf_hash_v4(&map, s32, b32, &[0xFF]);
+                assert_ne!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &forged, &path), Ok(root), "a changed byte");
+                // The same bytes under another address are another leaf.
+                assert_ne!(state_chunk_leaf_hash_v4(&map, s32, b32 + 1, &bytes(s32, b32)), leaves[b]);
+                assert_ne!(state_chunk_leaf_hash_v4(&map, s32 + 1, b32, &bytes(s32, b32)), leaves[b]);
+                if !path.is_empty() {
+                    assert!(
+                        state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &path[..path.len() - 1]).is_err(),
+                        "short"
+                    );
+                }
+                let mut long = path.clone();
+                long.push(Hash64::from_u64_word(1));
+                assert!(state_chunk_opening_root_v4(slice_count, s32, w, b32, &leaves[b], &long).is_err(), "long");
+            }
+        }
+        // A slice's declared block count is inside its top leaf: claiming a wider slice folds
+        // somewhere else.
+        let leaves = &slices[4];
+        let mut path = state_slice_path_v4(leaves, 0).expect("a path");
+        path.extend(state_top_path_v4(&top, 4).expect("a path"));
+        assert_ne!(state_chunk_opening_root_v4(slice_count, 4, widths[4] + 1, 0, &leaves[0], &path), Ok(root));
+    }
+
+    /// **A closed block's leaf never moves** — the property the v3 index did not have (ADR-0082
+    /// §10.3). Under v4 the leaf of `(slice, block)` is a function of its bytes alone, so the same
+    /// bytes at a later checkpoint (more blocks in every slice) are the same leaf; under v3 the flat
+    /// index of every slice past the first moves when `chunks_per_slice` grows, and so does its leaf.
+    #[test]
+    fn a_closed_blocks_leaf_never_moves_under_v4_and_does_under_v3() {
+        let map = Hash64::from_u64_word(0x4444);
+        let bytes = vec![7u8; 64];
+        // Slice 1 block 0 at a checkpoint with 2 blocks a slice, and again with 3.
+        let v4_before = state_chunk_leaf_hash_v4(&map, 1, 0, &bytes);
+        let v4_after = state_chunk_leaf_hash_v4(&map, 1, 0, &bytes);
+        assert_eq!(v4_before, v4_after);
+        let v3_before = state_chunk_leaf_hash_v1(&map, 2, &bytes); // flat index 1·2 + 0
+        let v3_after = state_chunk_leaf_hash_v1(&map, 3, &bytes); // flat index 1·3 + 0
+        assert_ne!(v3_before, v3_after, "v3 re-hashes an unchanged chunk at every tile boundary");
+        assert_eq!(state_v4_path_len(1, 0), 0);
+        assert_eq!(state_v4_path_len(2, 1), 1);
+        assert_eq!(state_v4_path_len(5, 4), 1, "the promoted tail skips two levels");
+        assert_eq!(state_v4_path_len(1 << 17, 12345), 17);
+    }
+
+    use super::*;
+    use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
+    use crate::palw_legs::{PALW_LEGS_ALL_DOMAINS, PalwLegOpeningV1, leg_opening_root_v1, leg_opening_v1};
+    use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
+    use crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS;
+    use crate::palw_slash::PALW_S_ALL_DOMAINS;
+    use crate::palw_step::{
+        PALW_STEP_ALL_DOMAINS, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_coordinates,
+    };
+    use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PALW_V2_ALL_DOMAINS};
+
+    fn h64(fill: u8) -> Hash64 {
+        Hash64::from_bytes([fill; 64])
+    }
+
+    /// **The two exported node rules ARE the tree's own**, checked against a real root rather
+    /// than against a second copy of the same expression.
+    ///
+    /// A two-leaf tree is exactly `node(leaf(0), leaf(1))`, so this pins both exports at once: if
+    /// either drifted from what `step_merkle_root_v1` folds, the equality fails here rather than
+    /// in an executor whose captured root nobody can open.
+    #[test]
+    fn the_exported_merkle_rules_are_the_step_trees_own() {
+        let (a, b) = (h64(0x21), h64(0x22));
+        assert_eq!(step_merkle_leaf_v1(0, &a), step_merkle_leaf(0, &a));
+        assert_ne!(step_merkle_leaf_v1(0, &a), step_merkle_leaf_v1(1, &a), "the leaf is index-bound");
+        assert_eq!(
+            step_merkle_root_v1(&[a, b]).expect("a two-leaf root"),
+            step_merkle_node_v1(&step_merkle_leaf_v1(0, &a), &step_merkle_leaf_v1(1, &b)),
+            "the exported rules do not fold the tree the leg folds"
+        );
+        assert_ne!(step_merkle_node_v1(&a, &b), step_merkle_node_v1(&b, &a), "the node is ordered");
+    }
+
+    fn node(kind: PalwStepOpKindV1, out: PalwStepOutLenV1, tile: u32) -> PalwStepNodeV1 {
+        PalwStepNodeV1 {
+            op_kind: kind,
+            role: PalwStepNodeRoleV1::Plain,
+            weight_name: String::new(),
+            weight_dtypes: Vec::new(),
+            out_len: out,
+            tile_len: tile,
+            kernel_semantics_id: h64(0x11),
+            input_refs: vec![crate::palw_step::PALW_STEP_INPUT_LAYER_IN],
+        }
+    }
+
+    fn profile() -> PalwShapeProfileV3 {
+        PalwShapeProfileV3 {
+            version: crate::palw_step::PALW_STEP_OBJECT_VERSION_V1,
+            lane: crate::palw_step::PalwStepLaneV1::Float32,
+            layer_count: 2,
+            full_attention_interval: 2,
+            hidden_dim: 8,
+            ffn_dim: 16,
+            attn_heads: 2,
+            attn_kv_heads: 1,
+            attn_head_dim: 4,
+            rope_dims: 2,
+            rope_sections: [1, 1, 0, 0],
+            rope_freq_base_bits: 0x4CBE_BC20,
+            rms_eps_bits: 0x358637BD,
+            base0_rms_eps_q: 1 << 8,
+            logits_scheme_id: crate::palw_step_refute::flat_logits_scheme_id_v1(),
+            l2_eps_bits: 0x358637BD,
+            gdn_heads: 2,
+            gdn_head_k_dim: 4,
+            gdn_head_v_dim: 4,
+            gdn_conv_kernel: 4,
+            vocab_size: 40,
+            repack_on: 1,
+            llamafile_on: 1,
+            flash_attn_disabled: 1,
+            fused_gdn_on: 1,
+            use_ref_off: 1,
+            kv_cache_f16: 1,
+            n_ctx: 64,
+            n_batch: 64,
+            n_ubatch: 64,
+            n_seq: 1,
+            n_threads: 4,
+            pre_nodes: vec![node(PalwStepOpKindV1::EmbedLookup, PalwStepOutLenV1::Fixed { elements: 8 }, 16)],
+            gdn_nodes: vec![
+                node(PalwStepOpKindV1::RmsNorm, PalwStepOutLenV1::Fixed { elements: 8 }, 16),
+                node(PalwStepOpKindV1::GatedDeltaNet, PalwStepOutLenV1::Fixed { elements: 24 }, 16),
+            ],
+            attn_nodes: vec![
+                node(PalwStepOpKindV1::MatMulF16, PalwStepOutLenV1::KvScaled { multiplier: 2 }, 16),
+                node(PalwStepOpKindV1::SoftMax, PalwStepOutLenV1::KvScaled { multiplier: 2 }, 16),
+            ],
+            post_nodes: vec![node(PalwStepOpKindV1::MatMulQuant, PalwStepOutLenV1::Fixed { elements: 40 }, 16)],
+            reference_ruleset_id: h64(0x22),
+            transcendental_bindings: vec![],
+            contraction_facts: vec![],
+            kv_chunk_calls: 3,
+            state_chunk_map_id: h64(0x44),
+        }
+    }
+
+    fn context() -> PalwJobContextV2 {
+        PalwJobContextV2 {
+            version: PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"step-leg-test".to_vec(),
+            job_id: h64(1),
+            job_nullifier: h64(2),
+            assignment_id: h64(3),
+            execution_seed: [7; 32],
+            model_profile_id: h64(4),
+            runtime_manifest_hash: h64(5),
+            runtime_class_id: h64(6),
+            // Placeholder; the fixtures below overwrite it with the profile they actually carry,
+            // because honest material declares the profile it was produced under.
+            shape_profile_id: h64(7),
+            trace_scheme_id: h64(8),
+            cu_ruleset_id: h64(9),
+            tokenizer_id: h64(10),
+            prompt_token_ids_hash: h64(11),
+            declared_prefill_tokens: 2,
+            exact_decode_tokens: 3,
+            max_context_tokens: 64,
+        }
+        .with_real_scheme_id()
+    }
+
+    trait WithScheme {
+        fn with_real_scheme_id(self) -> Self;
+    }
+    impl WithScheme for PalwJobContextV2 {
+        fn with_real_scheme_id(mut self) -> Self {
+            self.trace_scheme_id = crate::palw_v2::trace_scheme_id_v2();
+            self
+        }
+    }
+
+    /// Builds the honest full commitment for the tiny job, returning everything a test needs.
+    pub(crate) fn honest() -> (PalwStepBindingV2, PalwStepLegMaterialV1, Vec<Hash64>, Vec<PalwCheckpointLeafV2>) {
+        let p = profile();
+        // Honest material declares the profile it was produced under — the equality the verifier
+        // now enforces. A fixture that leaves them inconsistent is not honest material.
+        let mut ctx = context();
+        ctx.shape_profile_id = p.shape_profile_id();
+        let mut b = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
+        let main = b.expected_main_leaves();
+        for i in 0..main {
+            let coord = canonical_step_coordinates(&p, &ctx, i).unwrap();
+            let n = expected_tile_values(&p, &ctx, &coord).unwrap();
+            let vals: Vec<u32> = (0..n).map(|k| 0x3F80_0000 + k).collect(); // 1.0 + k ulps
+            b.push_step_tile(coord, &vals).unwrap();
+        }
+        // Aux chunks in canonical order: 1 attn layer (layer 1), 1 kv head, K then V,
+        // ceil(4 positions / 3) = 2 chunks each.
+        let positions = 4u32;
+        let chunk_calls = p.kv_chunk_calls;
+        for is_v in 0..2u8 {
+            for chunk_index in 0..positions.div_ceil(chunk_calls) {
+                let start = chunk_index * chunk_calls;
+                let count = (positions - start).min(chunk_calls);
+                let vals = [0x3C, 0x00].repeat(count as usize * p.attn_head_dim as usize); // f16 1.0
+                b.push_kv_chunk(&PalwKvChunkLeafV1 {
+                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                    attn_layer: 1,
+                    kv_head: 0,
+                    is_v,
+                    chunk_index,
+                    position_count: count,
+                    values_f16_le: vals,
+                })
+                .unwrap();
+            }
+        }
+        let material = b.finish().unwrap();
+
+        // Checkpoints: interval 1 over decode_calls 2 → 2 checkpoints, chained from genesis.
+        let ctx_hash = ctx.context_hash();
+        let ckpt_profile = PalwCheckpointProfileV1 {
+            version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: 1,
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+        };
+        let map_id = h64(0x44);
+        let chunk0 = state_chunk_leaf_hash_v1(&map_id, 0, b"state-a");
+        let chunk1 = state_chunk_leaf_hash_v1(&map_id, 1, b"state-b");
+        let ckpt_profile_hash = ckpt_profile.profile_hash();
+        let mut leaves = Vec::new();
+        let mut hashes = Vec::new();
+        let mut prev = checkpoint_genesis_prev_v2(&ctx_hash);
+        for i in 0..2u32 {
+            let leaf = PalwCheckpointLeafV2 {
+                version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                checkpoint_index: i,
+                covered_decode_call: i + 1,
+                prev_checkpoint_leaf_hash: prev,
+                state_chunk_count: 2,
+                state_chunks_root: state_chunks_root_v1(&[chunk0, chunk1]).unwrap(),
+            };
+            let h = checkpoint_leaf_hash_v2(&ctx_hash, &ckpt_profile_hash, &map_id, &leaf);
+            prev = h;
+            hashes.push(h);
+            leaves.push(leaf);
+        }
+        let ckpt_merkle = step_merkle_root_v1(&hashes).unwrap();
+        let profile_hash = p.shape_profile_id();
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
+        let ckpt_root = checkpoint_leg_root_v2(&ctx_hash, &ckpt_profile_hash, &map_id, 2, 2, &ckpt_merkle);
+        let committed = execution_commitment_root_v2(&ctx_hash, &h64(0xAA), &h64(0xBB), &ckpt_root, &step_root);
+        let binding = PalwStepBindingV2 {
+            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+            job_context: ctx,
+            shape_profile: p,
+            checkpoint_profile: ckpt_profile,
+            state_chunk_map_id: map_id,
+            full_logits_trace_root: h64(0xAA),
+            activation_leg_root: h64(0xBB),
+            step_leaf_count: material.leaf_count,
+            step_merkle_root: material.merkle_root,
+            checkpoint_count: 2,
+            checkpoint_merkle_root: ckpt_merkle,
+            committed_execution_root: committed,
+        };
+        (binding, material, hashes, leaves)
+    }
+
+    #[test]
+    fn step_leg_domains_are_unique_across_all_palw_modules() {
+        let mut seen = std::collections::HashSet::new();
+        for d in PALW_STEP_LEG_ALL_DOMAINS {
+            assert!(seen.insert(*d), "duplicate step-leg domain");
+            assert!(d.len() <= 64, "blake2b key cap exceeded");
+        }
+        for d in PALW_V2_ALL_DOMAINS
+            .iter()
+            .chain(PALW_S_ALL_DOMAINS.iter())
+            .chain(PALW_LEGS_ALL_DOMAINS.iter())
+            .chain(PALW_REFERENCE_ALL_DOMAINS.iter())
+            .chain(PALW_SCHEDULE_ALL_DOMAINS.iter())
+            .chain(PALW_CARRIAGE_ALL_DOMAINS.iter())
+            .chain(PALW_STEP_ALL_DOMAINS.iter())
+        {
+            assert!(!seen.contains(d), "step-leg module reuses a foreign domain: {}", String::from_utf8_lossy(d));
+        }
+    }
+
+    /// **§3.3: a step is adjudicated under the profile its job DECLARED.**
+    ///
+    /// The context has always named a `shape_profile_id`; nothing compared it to the profile the
+    /// binding carried. So a binding could hand the court a different profile — different geometry,
+    /// different epsilons, different kernel ids — and the producer was judged against arithmetic its
+    /// job never claimed. The mismatch is refused, and it is refused by NAME so an operator can see
+    /// which two ids disagreed.
+    #[test]
+    fn a_binding_must_carry_the_profile_its_context_declares() {
+        let (binding, _material, _, _) = honest();
+        // Honest material passes: the fixture now declares what it carries.
+        assert!(verify_binding(&binding).is_ok());
+
+        // Swap in a profile the context does not name. Everything else is untouched.
+        let mut swapped = binding.clone();
+        let mut other = profile();
+        other.base0_rms_eps_q = binding.shape_profile.base0_rms_eps_q + 1;
+        let declared = swapped.job_context.shape_profile_id;
+        let got = other.shape_profile_id();
+        assert_ne!(declared, got, "the fixture must actually change the profile");
+        swapped.shape_profile = other;
+        assert_eq!(
+            verify_binding(&swapped),
+            Err(PalwStepLegError::ShapeProfileNotTheDeclaredOne { declared, got }),
+            "a profile the job never declared must be refused, by name"
+        );
+    }
+
+    /// **The same defect one field over: the carried state chunk map.**
+    ///
+    /// Every checkpoint hash is computed FROM `binding.state_chunk_map_id`, so a filer carrying an
+    /// id its class never registered builds a checkpoint leg that verifies against itself and
+    /// describes state under a layout of its own choosing. Two sources for one fact, and the
+    /// second one is the accuser's.
+    #[test]
+    fn a_binding_must_carry_the_state_chunk_map_its_profile_registers() {
+        let (binding, _material, _, _) = honest();
+        assert!(verify_binding(&binding).is_ok());
+
+        // The profile keeps its registered map; only the free copy beside it moves. Nothing else
+        // in the binding is touched, which is exactly the shape of the attack.
+        let mut forged = binding.clone();
+        forged.state_chunk_map_id = h64(0xAD);
+        assert_ne!(forged.state_chunk_map_id, forged.shape_profile.state_chunk_map_id);
+        assert_eq!(
+            verify_binding(&forged),
+            Err(PalwStepLegError::StateChunkMapNotTheRegisteredOne {
+                registered: binding.shape_profile.state_chunk_map_id,
+                carried: h64(0xAD),
+            }),
+            "a state chunk map the class never registered must be refused, by name"
+        );
+    }
+
+    #[test]
+    fn scheme_id_and_composite_root_golden_vectors() {
+        // Frozen 2026-08-16 — layout changes are a new scheme version, never an edit.
+        assert_eq!(
+            execution_commitment_scheme_id_v2().to_string(),
+            "832da58ebfd0926ae7b0564d2dd457ed6a15f4f653506d20884925544e1f48d3\
+             bce85627058b36727092bcafae9f1cc8d0b13378ca007f4a526352b8102e9eec"
+        );
+        let (binding, ..) = honest();
+        assert_eq!(
+            binding.committed_execution_root.to_string(),
+            // Re-frozen 2026-08-17, twice: the profile gained `base0_rms_eps_q` (see `palw_step`'s
+            // golden), and the fixture's job context now DECLARES the profile it carries, which the
+            // verifier began enforcing. The second move is the interesting one — the fixture had
+            // been incoherent (a context naming `h64(7)` while carrying a real profile) for as long
+            // as nothing compared them.
+            //
+            // Re-frozen 2026-08-20: it descends from the shape profile id, which moved when
+            // `weight_dtype` became a per-layer list. See `palw_step`'s golden for why the single
+            // byte could not describe the pinned model.
+            // …and again for `lane` (see `palw_step`'s golden).
+            //
+            // Re-frozen 2026-08-26: the profile gained `logits_scheme_id` — the class's logits
+            // commitment became part of its identity, so every id downstream of the profile moved
+            // with it. Deliberate and network-wide (the RC re-mint the ADR-0053 state bump already
+            // forces); a class that could change its commitment scheme without changing identity
+            // was the fail-open the field exists to close.
+            "5466a0a2a7a5342232aeb1e96d4ba9aaae20bdc7b13c84348f470f8b980a7148\
+             6e65dcf218166ad0d166bae68f32948ecd51236cc46cdc26a39348ee7ba91bda" // Re-derived once more at the MERGE with `fix/audit-batch-1` (2026-08-27), which moved
+                                                                               // it from its own side: the checkpoint profile joined the binding and the fault table
+                                                                               // gained a variant. One value over both lines, not two values summed.
+        );
+    }
+
+    /// The step tree must be byte-equivalent to the frozen v1 generalized tree run at the step
+    /// domains, for every shape both implementations accept, and openings must cross-verify.
+    #[test]
+    fn step_tree_is_the_v1_tree_at_step_domains() {
+        let leaves: Vec<Hash64> = (0u8..17).map(h64).collect();
+        for width in 1..=17usize {
+            let slice = &leaves[..width];
+            let ours = step_merkle_root_v1(slice).unwrap();
+            for index in 0..width as u64 {
+                let opening = step_opening_v1(slice, index).unwrap();
+                assert_eq!(step_opening_root_v1(width as u64, &opening).unwrap(), ours, "w={width} i={index}");
+                // Tampered leaf hash must not verify.
+                let mut bad = opening.clone();
+                bad.leaf_hash = h64(0xEE);
+                assert_ne!(step_opening_root_v1(width as u64, &bad).unwrap(), ours);
+                // The v1 verifier with the same domains must agree wherever index layouts
+                // coincide (u32 vs u64 leaf-index prefix differ — asserted different below).
+                let v1_opening =
+                    leg_opening_v1(PALW_STEP_LEG_DOMAIN_MERKLE_LEAF, PALW_STEP_LEG_DOMAIN_MERKLE_NODE, slice, index as u32, 1 << 17)
+                        .unwrap();
+                let v1_root = leg_opening_root_v1(
+                    PALW_STEP_LEG_DOMAIN_MERKLE_LEAF,
+                    PALW_STEP_LEG_DOMAIN_MERKLE_NODE,
+                    width as u32,
+                    &PalwLegOpeningV1 { leaf_index: index as u32, leaf_hash: v1_opening.leaf_hash, siblings: v1_opening.siblings },
+                    1 << 17,
+                )
+                .unwrap();
+                // Same discipline, DIFFERENT index width in the leaf preimage (u64 here, u32
+                // in v1) — the trees must NOT collide, or the domains would be a bridge.
+                assert_ne!(v1_root, ours, "u32/u64 index widths must separate the trees");
+            }
+        }
+    }
+
+    #[test]
+    fn builder_is_fail_closed() {
+        let p = profile();
+        let ctx = context();
+        // Out-of-order tile.
+        let mut b = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
+        let c1 = canonical_step_coordinates(&p, &ctx, 1).unwrap();
+        assert!(matches!(
+            b.push_step_tile(c1, &vec![0x3F80_0000; expected_tile_values(&p, &ctx, &c1).unwrap() as usize]),
+            Err(PalwStepLegError::TilesOutOfOrder { .. })
+        ));
+        // Wrong length.
+        let c0 = canonical_step_coordinates(&p, &ctx, 0).unwrap();
+        assert!(matches!(b.push_step_tile(c0, &[0x3F80_0000]), Err(PalwStepLegError::TileLengthNotCanonical { .. })));
+        // Non-finite value.
+        let n0 = expected_tile_values(&p, &ctx, &c0).unwrap() as usize;
+        let mut vals = vec![0x3F80_0000u32; n0];
+        vals[n0 - 1] = 0x7F80_0000; // +Inf
+        assert!(matches!(b.push_step_tile(c0, &vals), Err(PalwStepLegError::NonFiniteStepValue { .. })));
+        // Incomplete finish.
+        let b2 = PalwStepLegBuilderV1::new(ctx.clone(), p.clone()).unwrap();
+        assert!(matches!(b2.finish(), Err(PalwStepLegError::LegIncomplete { .. })));
+        // Aux before main is refused.
+        let mut b3 = PalwStepLegBuilderV1::new(ctx, p).unwrap();
+        let chunk = PalwKvChunkLeafV1 {
+            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+            attn_layer: 1,
+            kv_head: 0,
+            is_v: 0,
+            chunk_index: 0,
+            position_count: 3,
+            values_f16_le: [0x00, 0x3C].repeat(12),
+        };
+        assert!(matches!(b3.push_kv_chunk(&chunk), Err(PalwStepLegError::KvChunksOutOfOrder)));
+    }
+
+    #[test]
+    fn honest_material_yields_no_fault_on_every_arm() {
+        let (binding, material, ckpt_hashes, ckpt_leaves) = honest();
+        // Shape arm.
+        let r = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::Shape };
+        assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound));
+        // Every step-tile arm.
+        let main = material.leaf_count - kv_aux_leaf_count(&binding.shape_profile, &binding.job_context);
+        for i in [0, 1, main - 1] {
+            let opening = step_opening_v1(&material.leaf_hashes, i).unwrap();
+            let coord = canonical_step_coordinates(&binding.shape_profile, &binding.job_context, i).unwrap();
+            let n = expected_tile_values(&binding.shape_profile, &binding.job_context, &coord).unwrap();
+            let vals: Vec<u8> = (0..n).flat_map(|k| (0x3F80_0000u32 + k).to_le_bytes()).collect();
+            let preimage = PalwStepTileLeafV1 { version: PALW_STEP_LEG_OBJECT_VERSION_V1, coord, value_count: n, values_le: vals };
+            let r = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::StepTile { opening, preimage } };
+            assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound), "tile {i}");
+        }
+        // A KV chunk arm.
+        let aux_first = main;
+        let opening = step_opening_v1(&material.leaf_hashes, aux_first).unwrap();
+        let preimage = PalwKvChunkLeafV1 {
+            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+            attn_layer: 1,
+            kv_head: 0,
+            is_v: 0,
+            chunk_index: 0,
+            position_count: 3,
+            values_f16_le: [0x3C, 0x00].repeat(3 * binding.shape_profile.attn_head_dim as usize),
+        };
+        let r = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::KvChunk { opening, preimage } };
+        assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound));
+        // Checkpoint + chain arms.
+        let o0 = step_opening_v1(&ckpt_hashes, 0).unwrap();
+        let o1 = step_opening_v1(&ckpt_hashes, 1).unwrap();
+        let r = PalwStepRefutationV1 {
+            binding: binding.clone(),
+            evidence: PalwStepEvidenceV1::Checkpoint { opening: o0.clone(), preimage: ckpt_leaves[0].clone() },
+        };
+        assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound));
+        let r = PalwStepRefutationV1 {
+            binding,
+            evidence: PalwStepEvidenceV1::CheckpointChain {
+                earlier_opening: o0,
+                earlier_preimage: ckpt_leaves[0].clone(),
+                later_opening: o1,
+                later_preimage: ckpt_leaves[1].clone(),
+            },
+        };
+        assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound));
+    }
+
+    #[test]
+    fn tampered_material_convicts_with_the_right_fault() {
+        let (binding, material, _ckpt_hashes, _ckpt_leaves) = honest();
+        // A non-finite value smuggled into a leaf the tree actually committed: rebuild a
+        // dishonest tree around one bad leaf (the builder refuses, so hash by hand).
+        let p = binding.shape_profile.clone();
+        let ctx = binding.job_context.clone();
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = p.shape_profile_id();
+        let main = material.leaf_count - kv_aux_leaf_count(&p, &ctx);
+        let mut hashes = material.leaf_hashes.clone();
+        let bad_i = 1u64;
+        let coord = canonical_step_coordinates(&p, &ctx, bad_i).unwrap();
+        let n = expected_tile_values(&p, &ctx, &coord).unwrap();
+        let mut vals: Vec<u8> = (0..n).flat_map(|k| (0x3F80_0000u32 + k).to_le_bytes()).collect();
+        vals[0..4].copy_from_slice(&0x7FC0_0000u32.to_le_bytes()); // NaN in value 0
+        let bad_leaf = PalwStepTileLeafV1 { version: PALW_STEP_LEG_OBJECT_VERSION_V1, coord, value_count: n, values_le: vals };
+        hashes[bad_i as usize] = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &bad_leaf);
+        let merkle = step_merkle_root_v1(&hashes).unwrap();
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &merkle);
+        let ckpt_profile_hash = binding.checkpoint_profile.profile_hash();
+        let ckpt_root = checkpoint_leg_root_v2(
+            &ctx_hash,
+            &ckpt_profile_hash,
+            &binding.state_chunk_map_id,
+            2,
+            binding.checkpoint_count,
+            &binding.checkpoint_merkle_root,
+        );
+        let committed = execution_commitment_root_v2(
+            &ctx_hash,
+            &binding.full_logits_trace_root,
+            &binding.activation_leg_root,
+            &ckpt_root,
+            &step_root,
+        );
+        let mut dishonest = binding.clone();
+        dishonest.step_merkle_root = merkle;
+        dishonest.committed_execution_root = committed;
+        let opening = step_opening_v1(&hashes, bad_i).unwrap();
+        let r = PalwStepRefutationV1 {
+            binding: dishonest.clone(),
+            evidence: PalwStepEvidenceV1::StepTile { opening, preimage: bad_leaf },
+        };
+        let verdict = check_step_refutation_v1(&r).unwrap();
+        assert_eq!(verdict.fault, PalwStepFaultV1::StepNonFinite { value_index: 0 });
+        let _ = main;
+
+        // A wrong leaf-count binding convicts from the binding alone.
+        let mut wrong_count = binding.clone();
+        wrong_count.step_leaf_count += 1;
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, wrong_count.step_leaf_count, &wrong_count.step_merkle_root);
+        wrong_count.committed_execution_root = execution_commitment_root_v2(
+            &ctx_hash,
+            &wrong_count.full_logits_trace_root,
+            &wrong_count.activation_leg_root,
+            &ckpt_root,
+            &step_root,
+        );
+        let r = PalwStepRefutationV1 { binding: wrong_count, evidence: PalwStepEvidenceV1::Shape };
+        assert_eq!(check_step_refutation_v1(&r).unwrap().fault, PalwStepFaultV1::StepLeafCountNotCanonical);
+
+        // A binding that does not recompute the committed root is about some other commitment.
+        let mut alien = binding.clone();
+        alien.committed_execution_root = h64(0xDD);
+        let r = PalwStepRefutationV1 { binding: alien, evidence: PalwStepEvidenceV1::Shape };
+        assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::CommittedRootMismatch));
+    }
+
+    /// **An oversized committed job convicts from the binding alone.** The producer commits a
+    /// job whose footprint exceeds the class's registered context, self-consistently — the
+    /// binding recomputes its own root — and the court's answer is the fault BY NAME, before any
+    /// enumeration of the oversized space runs. An honest binding at the class's own bound stays
+    /// honest, so the rule separates rather than merely refuses.
+    #[test]
+    fn a_job_past_the_registered_context_convicts_by_name() {
+        let (binding, _m, _h, _l) = honest();
+        // The honest fixture is inside its bound and clears the shape sweep.
+        let r = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::Shape };
+        assert!(
+            matches!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound)),
+            "the honest job is inside the class's context"
+        );
+
+        // A producer commits — self-consistently — a job past the class's bound. The profile is
+        // untouched (it is the CLASS's, authenticated by id); the JOB is the lie.
+        let mut oversized = binding.clone();
+        oversized.job_context.declared_prefill_tokens = oversized.shape_profile.n_ctx + 5;
+        // The job's OWN budget field is producer-declared, so the liar declares a bigger one —
+        // which is exactly the leak: nothing bound `max_context_tokens` to the class until now.
+        oversized.job_context.max_context_tokens = oversized.shape_profile.n_ctx * 4;
+        // Its committed root is recomputed over the lying context, exactly as a fraudulent
+        // producer would commit it — the fault is inside the commitment, not beside it.
+        let ctx_hash = oversized.job_context.context_hash();
+        let profile_hash = oversized.shape_profile.shape_profile_id();
+        let decode_calls = oversized.job_context.exact_decode_tokens.saturating_sub(1);
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, oversized.step_leaf_count, &oversized.step_merkle_root);
+        let ckpt_root = checkpoint_leg_root_v2(
+            &ctx_hash,
+            &oversized.checkpoint_profile.profile_hash(),
+            &oversized.state_chunk_map_id,
+            decode_calls,
+            oversized.checkpoint_count,
+            &oversized.checkpoint_merkle_root,
+        );
+        oversized.committed_execution_root = execution_commitment_root_v2(
+            &ctx_hash,
+            &oversized.full_logits_trace_root,
+            &oversized.activation_leg_root,
+            &ckpt_root,
+            &step_root,
+        );
+        let r = PalwStepRefutationV1 { binding: oversized, evidence: PalwStepEvidenceV1::Shape };
+        assert_eq!(
+            check_step_refutation_v1(&r).expect("the oversized commitment is the fault").fault,
+            PalwStepFaultV1::JobExceedsClassContext,
+            "convicted as WHAT IT IS, not as whatever its leaf count disagrees with"
+        );
+    }
+
+    /// **The range form and the per-leaf form agree on every root** — swept over tree widths
+    /// covering the promote-odd shapes and every (start, count) inside them, with the builder's
+    /// sibling set, the verifier's walk and the counter's arithmetic checked against each other.
+    /// One wrong promote rule in any of the three shows up here as a root mismatch or a count
+    /// mismatch, not at a challenger's first real close.
+    #[test]
+    fn a_range_opening_reaches_the_same_root_as_the_leaves() {
+        for width in [1usize, 2, 3, 5, 8, 11, 16, 21, 33] {
+            let leaves: Vec<Hash64> = (0..width).map(|i| Hash64::from_u64_word(0x9000 + i as u64)).collect();
+            let root = step_merkle_root_v1(&leaves).expect("well-formed");
+            for start in 0..width {
+                for count in 1..=(width - start) {
+                    let siblings = step_merkle_range_siblings_v1(&leaves, start, count).expect("buildable");
+                    assert_eq!(
+                        siblings.len() as u64,
+                        step_range_sibling_count_v1(width as u64, start as u64, count as u64),
+                        "the counter must price exactly what the builder emits (width {width}, {start}+{count})"
+                    );
+                    let opening = PalwStepRangeOpeningV1 {
+                        first_leaf_index: start as u64,
+                        leaf_hashes: leaves[start..start + count].to_vec(),
+                        siblings,
+                    };
+                    assert_eq!(
+                        step_range_opening_root_v1(width as u64, &opening).expect("verifiable"),
+                        root,
+                        "range root (width {width}, {start}+{count})"
+                    );
+                    // And a bent leaf inside the range moves the root — the range authenticates
+                    // its members, not just its span.
+                    let mut bent = opening.clone();
+                    bent.leaf_hashes[count - 1] = Hash64::from_u64_word(0xBEEF);
+                    let bent_root = step_range_opening_root_v1(width as u64, &bent).expect("still walks");
+                    assert_ne!(bent_root, root, "a bent member must not reach the root");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn broken_checkpoint_chain_convicts() {
+        let (binding, _material, _hashes, mut leaves) = honest();
+        // Rebuild the checkpoint tree with leaf 1's prev pointing somewhere else.
+        let ctx_hash = binding.job_context.context_hash();
+        let ckpt_profile_hash = binding.checkpoint_profile.profile_hash();
+        leaves[1].prev_checkpoint_leaf_hash = h64(0xEF);
+        let h0 = checkpoint_leaf_hash_v2(&ctx_hash, &ckpt_profile_hash, &binding.state_chunk_map_id, &leaves[0]);
+        let h1 = checkpoint_leaf_hash_v2(&ctx_hash, &ckpt_profile_hash, &binding.state_chunk_map_id, &leaves[1]);
+        let merkle = step_merkle_root_v1(&[h0, h1]).unwrap();
+        let profile_hash = binding.shape_profile.shape_profile_id();
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, binding.step_leaf_count, &binding.step_merkle_root);
+        let ckpt_root = checkpoint_leg_root_v2(&ctx_hash, &ckpt_profile_hash, &binding.state_chunk_map_id, 2, 2, &merkle);
+        let committed = execution_commitment_root_v2(
+            &ctx_hash,
+            &binding.full_logits_trace_root,
+            &binding.activation_leg_root,
+            &ckpt_root,
+            &step_root,
+        );
+        let mut dishonest = binding.clone();
+        dishonest.checkpoint_merkle_root = merkle;
+        dishonest.committed_execution_root = committed;
+        let o0 = step_opening_v1(&[h0, h1], 0).unwrap();
+        let o1 = step_opening_v1(&[h0, h1], 1).unwrap();
+        let r = PalwStepRefutationV1 {
+            binding: dishonest,
+            evidence: PalwStepEvidenceV1::CheckpointChain {
+                earlier_opening: o0,
+                earlier_preimage: leaves[0].clone(),
+                later_opening: o1,
+                later_preimage: leaves[1].clone(),
+            },
+        };
+        assert_eq!(check_step_refutation_v1(&r).unwrap().fault, PalwStepFaultV1::CheckpointChainBroken);
+    }
+
+    #[test]
+    fn state_chunk_leaves_bind_the_map_identity() {
+        let a = state_chunk_leaf_hash_v1(&h64(1), 0, b"bytes");
+        let b = state_chunk_leaf_hash_v1(&h64(2), 0, b"bytes");
+        assert_ne!(a, b, "the same bytes under two map claims must be two leaves");
+        assert_ne!(state_chunks_root_v1(&[a]).unwrap(), state_chunks_root_v1(&[b]).unwrap());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The step leg's caps are the RULESET's, not this module's literals.
+    // -----------------------------------------------------------------------------------------
+
+    /// The leaf a virtual tree puts at `index` — cheap, and a pure function of the index so the
+    /// tree is reproducible without being stored.
+    fn virtual_leaf(index: u64) -> Hash64 {
+        Hash64::from_u64_word(index ^ 0x5A5A_0000_0000_0001)
+    }
+
+    /// **A perfect `2^height` tree, walked instead of stored.**
+    ///
+    /// `step_merkle_root_v1` takes a slice, and a slice of `2^25` `Hash64` is 2 GiB — a test that
+    /// allocates it is a test nobody runs, so the acceptance case would go unwritten, which is how
+    /// the 22 survived. This recursion holds one node per LEVEL and calls the module's own
+    /// exported [`step_merkle_leaf_v1`] / [`step_merkle_node_v1`]: it is a second shape, never a
+    /// second hash rule, and [`the_virtual_tree_is_the_shipped_tree`] proves the shape against the
+    /// shipped builder before anything below leans on it.
+    ///
+    /// `target` rides down only the side that contains it; each frame pushes the sibling of that
+    /// side after both children return, so the deepest frame pushes first and `path` comes back
+    /// bottom-up — the order [`step_opening_root_v1`] consumes.
+    fn virtual_subtree(first: u64, height: u32, target: Option<u64>, path: &mut Vec<Hash64>) -> Hash64 {
+        if height == 0 {
+            return step_merkle_leaf_v1(first, &virtual_leaf(first));
+        }
+        let half = 1u64 << (height - 1);
+        let mid = first + half;
+        let left = virtual_subtree(first, height - 1, target.filter(|t| *t < mid), path);
+        let right = virtual_subtree(mid, height - 1, target.filter(|t| *t >= mid), path);
+        if let Some(t) = target {
+            path.push(if t < mid { right } else { left });
+        }
+        step_merkle_node_v1(&left, &right)
+    }
+
+    fn virtual_root_and_path(height: u32, target: u64) -> (Hash64, Vec<Hash64>) {
+        let mut path = Vec::with_capacity(height as usize);
+        let root = virtual_subtree(0, height, Some(target), &mut path);
+        (root, path)
+    }
+
+    /// The walked tree IS the folded tree, at every perfect height the folded one can afford.
+    #[test]
+    fn the_virtual_tree_is_the_shipped_tree() {
+        for height in 0..=10u32 {
+            let width = 1usize << height;
+            let leaves: Vec<Hash64> = (0..width as u64).map(virtual_leaf).collect();
+            let shipped_root = step_merkle_root_v1(&leaves).expect("a shipped root");
+            for target in [0u64, 1, (width as u64) / 3, width as u64 - 1].into_iter().filter(|t| *t < width as u64) {
+                let (root, path) = virtual_root_and_path(height, target);
+                assert_eq!(root, shipped_root, "height {height}: the walk and the fold disagree");
+                let shipped = step_opening_v1(&leaves, target).expect("a shipped opening");
+                assert_eq!(path, shipped.siblings, "height {height} target {target}: sibling path");
+                assert_eq!(path.len(), height as usize, "a perfect 2^{height} tree opens {height} siblings");
+            }
+        }
+    }
+
+    /// **The leg's opening depth IS the court's bisection depth.** Two derivations of
+    /// `ceil(log2(max_step_leaf_count))` that could drift are one dispute the court schedules and
+    /// the leg cannot close, so they are checked against each other rather than against a literal.
+    #[test]
+    fn the_legs_opening_depth_is_the_courts_bisection_depth() {
+        // Not `u64::MAX`: `PalwCourtParamsV2::bisection_rounds` reaches it through
+        // `next_power_of_two`, which overflows above `2^63` rather than answering 64. That is the
+        // court's own edge and is left exactly as it is here; the leg's derivation does answer 64,
+        // asserted below.
+        for n in [2u64, 3, 4, 5, 7, 8, 9, 1023, 1024, 1025, 1 << 22, (1 << 22) + 1, 1 << 25, 1 << 32, 1 << 62] {
+            let court = crate::palw_mode_v2::PalwCourtParamsV2::new(n, 4, 2).expect("a well-formed court");
+            assert_eq!(
+                step_leg_max_opening_siblings_v1(n),
+                court.bisection_rounds() as usize,
+                "the leg and the court must count the same levels for a {n}-leaf ladder"
+            );
+        }
+        // Degenerate ladders have no level, and the top of the u64 range answers 64 rather than
+        // overflowing a `next_power_of_two`.
+        assert_eq!(step_leg_max_opening_siblings_v1(0), 0);
+        assert_eq!(step_leg_max_opening_siblings_v1(1), 0);
+        assert_eq!(step_leg_max_opening_siblings_v1(u64::MAX), 64);
+        // And the derived depth is exactly the path a real tree of that many leaves produces.
+        for width in 1..=40usize {
+            let leaves: Vec<Hash64> = (0..width as u64).map(virtual_leaf).collect();
+            let longest = (0..width as u64)
+                .map(|i| step_opening_v1(&leaves, i).expect("an opening").siblings.len())
+                .max()
+                .expect("a non-empty tree");
+            assert_eq!(
+                longest,
+                step_leg_max_opening_siblings_v1(width as u64),
+                "width {width}: the derived cap must be the deepest real path"
+            );
+        }
+    }
+
+    /// **The shipped default is unchanged, at every site, byte for byte.**
+    ///
+    /// Nothing may move while the fence is dormant, so every `_capped_v1` entry point called with
+    /// [`PALW_STEP_LEG_MAX_LEAVES`] must return exactly what the un-capped name returns — and the
+    /// two constants must still read 2^22 and 22.
+    #[test]
+    fn the_dormant_default_is_byte_identical_at_every_site() {
+        assert_eq!(PALW_STEP_LEG_MAX_LEAVES, 1 << 22, "the shipped ladder moved without a fence");
+        assert_eq!(PALW_STEP_LEG_MAX_OPENING_SIBLINGS, 22, "the shipped opening depth moved without a fence");
+        assert_eq!(PALW_STEP_LEG_MAX_OPENING_SIBLINGS, step_leg_max_opening_siblings_v1(PALW_STEP_LEG_MAX_LEAVES));
+
+        const CAP: u64 = PALW_STEP_LEG_MAX_LEAVES;
+        for width in 1..=33usize {
+            let leaves: Vec<Hash64> = (0..width as u64).map(virtual_leaf).collect();
+            assert_eq!(step_merkle_root_v1(&leaves), step_merkle_root_capped_v1(&leaves, CAP), "root, width {width}");
+            let root = step_merkle_root_v1(&leaves).expect("rooted");
+            for index in 0..width {
+                assert_eq!(
+                    step_merkle_path_v1(&leaves, index),
+                    step_merkle_path_capped_v1(&leaves, index, CAP),
+                    "path, width {width} index {index}"
+                );
+                let opening = step_opening_v1(&leaves, index as u64).expect("an opening");
+                assert_eq!(Ok(opening.clone()), step_opening_capped_v1(&leaves, index as u64, CAP), "opening, {width}/{index}");
+                assert_eq!(
+                    step_opening_root_v1(width as u64, &opening),
+                    step_opening_root_capped_v1(width as u64, &opening, CAP),
+                    "verify, {width}/{index}"
+                );
+                assert_eq!(step_opening_root_v1(width as u64, &opening), Ok(root), "the default still verifies");
+                for count in 1..=(width - index) {
+                    let siblings = step_merkle_range_siblings_v1(&leaves, index, count).expect("a range");
+                    assert_eq!(
+                        Ok(siblings.clone()),
+                        step_merkle_range_siblings_capped_v1(&leaves, index, count, CAP),
+                        "range siblings, {width}/{index}+{count}"
+                    );
+                    let range = PalwStepRangeOpeningV1 {
+                        first_leaf_index: index as u64,
+                        leaf_hashes: leaves[index..index + count].to_vec(),
+                        siblings,
+                    };
+                    assert_eq!(
+                        step_range_opening_root_v1(width as u64, &range),
+                        step_range_opening_root_capped_v1(width as u64, &range, CAP),
+                        "range verify, {width}/{index}+{count}"
+                    );
+                    assert_eq!(step_range_opening_root_v1(width as u64, &range), Ok(root));
+                }
+            }
+        }
+        // A leaf count one past the default is refused by the default entry points and by the
+        // capped ones called AT the default — the cap is a parameter, not a second rule.
+        let over = CAP + 1;
+        let opening = PalwStepOpeningV1 { leaf_index: 0, leaf_hash: virtual_leaf(0), siblings: vec![h64(0x11); 23] };
+        assert_eq!(step_opening_root_v1(over, &opening), Err(PalwStepLegError::LeafCountOutOfRange { got: over, max: CAP }));
+        assert_eq!(step_opening_root_v1(over, &opening), step_opening_root_capped_v1(over, &opening, CAP));
+    }
+
+    /// **The three sites a ladder past `2^22` is refused at today, each named.**
+    ///
+    /// A tree of `2^22 + 1` leaves is the smallest one the shipped literals refuse, and it is
+    /// refused three separate times on the way through commit → open → verify. A partial fix
+    /// cannot look green here because each refusal is asserted by NAME and by the site that
+    /// produced it, and the fourth assertion — the opening-depth cap, the literal 22 itself — is
+    /// reached with a leaf count the default admits, so it is not masked by the count guard.
+    #[test]
+    fn a_ladder_past_the_default_is_refused_at_three_named_sites_and_the_ruleset_cap_clears_them() {
+        const LADDER: u64 = PALW_STEP_LEG_MAX_LEAVES + 1;
+        let leaves: Vec<Hash64> = (0..LADDER).map(virtual_leaf).collect();
+
+        // SITE 1 — the root builder (`step_merkle_root_v1`): an honest executor cannot commit.
+        assert_eq!(
+            step_merkle_root_v1(&leaves),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "site 1: the root builder refuses the deeper ladder"
+        );
+        // SITE 2 — the opening builder (`step_opening_v1`): the prover cannot answer the court.
+        assert_eq!(
+            step_opening_v1(&leaves, 0),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "site 2: the opening builder refuses the deeper ladder"
+        );
+
+        // Now the same three calls against the RULESET's ladder top. All three clear.
+        let root = step_merkle_root_capped_v1(&leaves, LADDER).expect("site 1 clears under the ruleset cap");
+        let opening = step_opening_capped_v1(&leaves, 0, LADDER).expect("site 2 clears under the ruleset cap");
+        assert_eq!(opening.siblings.len(), 23, "a 2^22+1 ladder opens 23 siblings, past the literal 22");
+        assert_eq!(
+            step_opening_root_capped_v1(LADDER, &opening, LADDER),
+            Ok(root),
+            "the round trip closes once the caps are the ruleset's"
+        );
+
+        // SITE 3 — the verifier's leaf-count cap (`step_opening_root_v1`): the court cannot check
+        // the answer even if it were handed one.
+        assert_eq!(
+            step_opening_root_v1(LADDER, &opening),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "site 3: the verifier's leaf-count cap refuses the deeper ladder"
+        );
+        // SITE 4 — the verifier's opening-DEPTH cap, the literal this item exists to delete.
+        // Reached with a leaf count the default admits, so the count guard cannot mask it: the
+        // refusal here is about the 23 siblings alone.
+        assert_eq!(
+            step_opening_root_v1(PALW_STEP_LEG_MAX_LEAVES, &opening),
+            Err(PalwStepLegError::OpeningTooDeep { got: 23, max: 22 }),
+            "site 4: the opening-depth cap refuses 23 siblings at a leaf count it admits"
+        );
+        // Under a ruleset that froze the deeper ladder the depth cap steps aside, and what is left
+        // is the honest shape refusal — this opening is not an opening of a 2^22 tree — which is a
+        // different answer and must stay a different answer.
+        assert_eq!(
+            step_opening_root_capped_v1(PALW_STEP_LEG_MAX_LEAVES, &opening, LADDER),
+            Err(PalwStepLegError::OpeningPathTooLong { extra: 1 }),
+            "a cap refusal and a shape refusal are not the same verdict"
+        );
+        // And the depth cap is still a real bound under the deeper ruleset: one sibling past the
+        // ladder's own depth is refused, with the DERIVED maximum in the error.
+        let mut too_deep = opening.clone();
+        too_deep.siblings.push(h64(0x77));
+        assert_eq!(
+            step_opening_root_capped_v1(LADDER, &too_deep, LADDER),
+            Err(PalwStepLegError::OpeningTooDeep { got: 24, max: 23 }),
+            "the derived cap still bounds the carried path"
+        );
+    }
+
+    /// **The acceptance case: a `2^25` ladder, a 25-sibling path, verified.**
+    ///
+    /// This is what ADR-0077's Phase B fence would arm, and it is the thing the shipped tree could
+    /// not demonstrate. The tree is walked rather than stored (see [`virtual_subtree`]) because
+    /// `2^25` leaf hashes are 2 GiB.
+    #[test]
+    fn a_2_25_ladder_opens_25_siblings_and_verifies_under_its_own_ruleset() {
+        const HEIGHT: u32 = 25;
+        const LADDER: u64 = 1 << HEIGHT;
+        // An index with mixed parity all the way up, so the walk exercises both node orders.
+        const TARGET: u64 = 0x0155_5555;
+
+        let (root, siblings) = virtual_root_and_path(HEIGHT, TARGET);
+        assert_eq!(siblings.len(), 25, "a 2^25 ladder needs 25 siblings and the leg refused at 22");
+        assert_eq!(step_leg_max_opening_siblings_v1(LADDER), 25);
+        let opening = PalwStepOpeningV1 { leaf_index: TARGET, leaf_hash: virtual_leaf(TARGET), siblings };
+
+        // Today, with the module constant: refused before it is even walked.
+        assert_eq!(
+            step_opening_root_v1(LADDER, &opening),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "the default ladder still refuses 2^25 — nothing here arms anything"
+        );
+        // Under a ruleset that froze `max_step_leaf_count = 2^25`: it verifies.
+        assert_eq!(step_opening_root_capped_v1(LADDER, &opening, LADDER), Ok(root), "a 25-sibling opening must reach the 2^25 root");
+        // A bent sibling must not, and an over-long path is still refused at the DERIVED depth.
+        let mut bent = opening.clone();
+        bent.siblings[7] = h64(0xEE);
+        assert_ne!(step_opening_root_capped_v1(LADDER, &bent, LADDER), Ok(root), "a bent path must not reach the root");
+        let mut long = opening.clone();
+        long.siblings.push(h64(0xEE));
+        assert_eq!(step_opening_root_capped_v1(LADDER, &long, LADDER), Err(PalwStepLegError::OpeningTooDeep { got: 26, max: 25 }));
+        // A ruleset one rung shallower refuses the ladder itself, by leaf count.
+        assert_eq!(
+            step_opening_root_capped_v1(LADDER, &opening, LADDER / 2),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: LADDER, max: LADDER / 2 })
+        );
+    }
+
+    /// **The shipped ruleset admits a row that the refutation walkers cannot open** — ADR-0084
+    /// §7's U-08, pinned here as arithmetic rather than left as a sentence in an ADR (mainnet
+    /// audit, 2026-09-05).
+    ///
+    /// The two tests above prove the CAPPED entry points clear a deeper ladder and the uncapped
+    /// ones refuse it. This one proves the shipped network is on the wrong side of that line: the
+    /// RC ruleset freezes `max_step_leaf_count = 2^26`, its genesis registers ADR-0082's dense
+    /// graph-v5@512 row at 52,778,128 worst-case leaves, and the refutation path calls the
+    /// UNCAPPED names at six production sites, every one of which stops at `2^22`:
+    ///
+    /// * `palw_step_refute::check_execution_step_refutation_opened_v1` — `step_range_opening_root_v1(binding.step_leaf_count, …)`
+    /// * `palw_step_refute::check_tiled_decode_token_refutation_v2` — two `step_opening_root_v1` calls
+    /// * `palw_step_refute::verify_kv_anchor` — `step_opening_root_v1(binding.checkpoint_count, …)`
+    /// * `palw_step_leg::open_against` and `open_checkpoint` — the legs every arithmetic close walks
+    ///
+    /// So a dispute of that class ends `LeafCountOutOfRange` whatever the evidence says: a
+    /// producer that fakes execution on the widest class the chain registers cannot be convicted,
+    /// which is the one thing the court exists to prevent and the price weight is charged for
+    /// (ADR-0069). It is not a defect of the leg — the capped entry points are right there — but
+    /// of the WIRING: `adjudicate_close_proof_v2` already holds `court: &PalwCourtParamsV2` and
+    /// passes the constant instead of `court.max_step_leaf_count()`.
+    ///
+    /// Rewiring it changes which closes are valid, so it is an activation, not a patch. **Landed
+    /// the same day, behind `Params::palw_context_ladder`** — the fence ADR-0077 Phase B reserved
+    /// for exactly this: the court now calls the `_capped_v1` walkers with the ladder
+    /// `palw_refutation_leaf_cap_v2` resolves at the block, which is the ruleset's past the fence
+    /// and this constant before it. The default-ladder names below still refuse, by design (they
+    /// are the dormant court), so this test keeps standing as the alarm: it fails the day either
+    /// number moves, and the resolver's test in `config::params` holds the fence side.
+    #[test]
+    fn the_shipped_court_admits_a_row_no_refutation_walker_can_open() {
+        use crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;
+
+        assert!(
+            PALW_RC_COURT_MAX_STEP_LEAF_COUNT > PALW_STEP_LEG_MAX_LEAVES,
+            "the premise: the ruleset's ladder is above the walkers' constant"
+        );
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v1(512).expect("the registered dense row projects");
+        let worst = crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, PALW_RC_COURT_MAX_STEP_LEAF_COUNT)
+            .expect("inside the ruleset's ladder");
+        assert!(worst > PALW_STEP_LEG_MAX_LEAVES, "the registered row is past the walkers' constant ({worst} leaves)");
+        assert!(worst <= PALW_RC_COURT_MAX_STEP_LEAF_COUNT, "…and inside the ruleset that admitted it");
+
+        // And the refusal itself, at the leaf count that row commits: the walker stops before it
+        // looks at any evidence, so no opening of this class can ever reach a verdict.
+        let opening = PalwStepRangeOpeningV1 { first_leaf_index: 0, leaf_hashes: vec![h64(1)], siblings: vec![] };
+        assert_eq!(
+            step_range_opening_root_v1(worst, &opening),
+            Err(PalwStepLegError::LeafCountOutOfRange { got: worst, max: PALW_STEP_LEG_MAX_LEAVES }),
+            "the uncapped walker the court actually calls refuses the class the chain registered"
+        );
+        // The same call under the ruleset the class was admitted at gets as far as the evidence.
+        assert!(
+            !matches!(
+                step_range_opening_root_capped_v1(worst, &opening, PALW_RC_COURT_MAX_STEP_LEAF_COUNT),
+                Err(PalwStepLegError::LeafCountOutOfRange { .. })
+            ),
+            "the fix is a wiring change, not a new bound: the capped walker admits the same row"
+        );
+    }
+
+    /// **REQ-CELL-2 / REQ-CELL-3 (RFC-0006 R6-CELL round 4, `palw_cell_coverage_closure_v1`)**: the honest fixture registers a map no
+    /// court knows (`h64(0x44)`). Below the closure the shape and checkpoint arms acquit it exactly as `check_step_refutation_v1`
+    /// does (the old fail-open, kept for old claims); under the closure the same refutations convict from the binding alone —
+    /// never `NoFaultFound`. Unverified source (2026-10-15): written, not run.
+    #[test]
+    fn req_cell_2_an_unknown_map_is_never_no_fault_under_the_closure() {
+        let (binding, _material, ckpt_hashes, ckpt_leaves) = honest();
+        assert!(
+            crate::palw_cell_coverage_closure_v1::palw_cell_closure_legacy_refusal_v1(&binding.shape_profile).is_some(),
+            "the fixture's map is outside every known map"
+        );
+        let shape = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::Shape };
+        let checkpoint = PalwStepRefutationV1 {
+            binding,
+            evidence: PalwStepEvidenceV1::Checkpoint {
+                opening: step_opening_v1(&ckpt_hashes, 0).unwrap(),
+                preimage: ckpt_leaves[0].clone(),
+            },
+        };
+        for r in [&shape, &checkpoint] {
+            // REQ-CELL-3: below the fence, byte for byte the live court.
+            assert_eq!(check_step_refutation_closure_capped_v1(r, PALW_STEP_LEG_MAX_LEAVES, false), check_step_refutation_v1(r));
+            assert_eq!(check_step_refutation_v1(r), Err(PalwStepLegError::NoFaultFound));
+            // REQ-CELL-2: past it, decisive and objective.
+            let verdict = check_step_refutation_closure_capped_v1(r, PALW_STEP_LEG_MAX_LEAVES, true)
+                .expect("an uncoverable class is convicted, never acquitted");
+            assert_eq!(verdict.fault, PalwStepFaultV1::ShapeProfileNotCanonical);
+            assert_eq!(
+                verdict.evidence_id,
+                step_refutation_evidence_id(&r.binding.committed_execution_root, 0, 0, PalwStepFaultV1::ShapeProfileNotCanonical),
+                "the shape pass answered (kind 0, leaf 0)"
+            );
+        }
+    }
+}
+
+// =============================================================================================
+// Tests — ADR-0082 Decision 4: a state chunk is individually openable
+// =============================================================================================
+
+#[cfg(test)]
+mod state_chunk_opening_tests {
+    use super::*;
+
+    fn chunk_hashes(n: usize) -> Vec<Hash64> {
+        (0..n).map(|i| Hash64::from_bytes([(i % 251) as u8 + 3; 64])).collect()
+    }
+
+    /// **A chunk opening recomputes the root the builder builds** — at every chunk count, every
+    /// index, and every odd width where the promote-odd rule is the only thing that could make an
+    /// opening and a root disagree.
+    ///
+    /// This is the pin ADR-0082 Decision 4 rests on: the bottom of a dissection opens ONE tile of
+    /// the checkpoint, and it can only do that if a chunk's membership is provable without the
+    /// other chunks.
+    #[test]
+    fn a_state_chunk_opening_is_the_root_the_builder_builds() {
+        for count in [1usize, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 64, 100, 1_000] {
+            let hashes = chunk_hashes(count);
+            let root = state_chunks_root_v1(&hashes).expect("a root");
+            for index in 0..count {
+                let path = state_chunk_path_v1(&hashes, index).expect("a path for a chunk in the tree");
+                assert_eq!(
+                    state_chunk_opening_root_v1(count, index as u32, &hashes[index], &path).expect("an opening"),
+                    root,
+                    "count {count}, index {index}: the opening does not rebuild the root"
+                );
+                // A path is at most the tree's depth, and the promoted tail spends fewer.
+                assert!(path.len() <= count.next_power_of_two().trailing_zeros() as usize, "count {count}, index {index}");
+            }
+        }
+    }
+
+    /// **What a chunk opening may not be**: another chunk's hash, another index, a path of the
+    /// wrong length, an index past the map, an empty or oversized map — each refused by name.
+    #[test]
+    fn a_state_chunk_opening_refuses_what_is_not_in_the_tree() {
+        let count = 13usize;
+        let hashes = chunk_hashes(count);
+        let root = state_chunks_root_v1(&hashes).expect("a root");
+        let path = state_chunk_path_v1(&hashes, 5).expect("a path");
+        assert_eq!(state_chunk_opening_root_v1(count, 5, &hashes[5], &path).expect("honest"), root);
+        // A different chunk's bytes under the same index rebuild a different root — the refusal
+        // the CALLER makes, and the reason this function returns a root rather than a bool.
+        assert_ne!(state_chunk_opening_root_v1(count, 5, &hashes[6], &path).expect("still a root"), root);
+        // The same chunk claimed at another index likewise.
+        assert_ne!(state_chunk_opening_root_v1(count, 4, &hashes[5], &path).expect("still a root"), root);
+        // Structural refusals.
+        assert_eq!(
+            state_chunk_opening_root_v1(count, 13, &hashes[5], &path),
+            Err(PalwStepLegError::LeafIndexOutOfRange { index: 13, count: 13 })
+        );
+        assert_eq!(
+            state_chunk_opening_root_v1(0, 0, &hashes[0], &[]),
+            Err(PalwStepLegError::StateChunksOutOfRange { got: 0, max: PALW_STEP_LEG_MAX_STATE_CHUNKS })
+        );
+        assert_eq!(state_chunk_opening_root_v1(count, 5, &hashes[5], &path[..1]), Err(PalwStepLegError::OpeningPathTooShort));
+        let mut long = path.clone();
+        long.push(Hash64::from_bytes([9; 64]));
+        assert_eq!(state_chunk_opening_root_v1(count, 5, &hashes[5], &long), Err(PalwStepLegError::OpeningPathTooLong { extra: 1 }));
+        assert_eq!(state_chunk_path_v1(&hashes, 13), Err(PalwStepLegError::LeafIndexOutOfRange { index: 13, count: 13 }));
+        assert_eq!(
+            state_chunk_path_v1(&[], 0),
+            Err(PalwStepLegError::StateChunksOutOfRange { got: 0, max: PALW_STEP_LEG_MAX_STATE_CHUNKS })
+        );
+    }
+
+    /// **The exported leaf is the leaf the root builder uses.** A one-chunk map's root IS that
+    /// leaf, which is the cheapest possible witness that the two spellings are one.
+    #[test]
+    fn the_exported_state_chunk_leaf_is_the_builders_own() {
+        let h = Hash64::from_bytes([7; 64]);
+        assert_eq!(state_chunks_root_v1(&[h]).expect("a one-chunk root"), state_chunk_tree_leaf_v1(0, &h));
+        // And the leaf is bound to BOTH the index and the chunk hash.
+        assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(1, &h));
+        assert_ne!(state_chunk_tree_leaf_v1(0, &h), state_chunk_tree_leaf_v1(0, &Hash64::from_bytes([8; 64])));
+    }
+}
+
+#[cfg(test)]
+mod prefix_tree_tests {
+    use super::*;
+
+    fn leaf(tag: u64, j: u64) -> Hash64 {
+        Hash64::from_u64_word(tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ j)
+    }
+
+    /// **ADR-0093 Decision 7: the accused's tree over `[0, i]` is rebuilt from an honest prefix and
+    /// the accused's own opening of `i` — whatever the accused committed after `i`.** Every leaf
+    /// count to 40, every `i`, a suffix unlike the honest one: the root is the accused's, and every
+    /// `j ≤ i` opens exactly as the accused's whole tree opens it, verifying under the one checker.
+    #[test]
+    fn the_prefix_and_the_last_leafs_path_open_every_leaf_before_it_against_the_accused_root() {
+        for n in 1..=40u64 {
+            for i in 0..n {
+                let accused: Vec<Hash64> = (0..n).map(|j| if j <= i { leaf(1, j) } else { leaf(2, j) }).collect();
+                let root = step_merkle_root_v1(&accused).expect("a tree");
+                let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                let tree = PalwStepPrefixTreeV1::build_capped_v1(n, &accused[..=i as usize], &last, PALW_STEP_LEG_MAX_LEAVES)
+                    .unwrap_or_else(|e| panic!("n {n}, i {i}: {e}"));
+                assert_eq!(tree.root(), root, "n {n}, i {i}");
+                for j in 0..=i {
+                    let opening = tree.opening_v1(j).expect("opens");
+                    assert_eq!(opening, step_opening_v1(&accused, j).expect("the whole tree's"), "n {n}, i {i}, j {j}");
+                    assert_eq!(step_opening_root_v1(n, &opening).expect("verifies"), root);
+                }
+                assert!(tree.opening_v1(i + 1).is_err(), "nothing past the prefix opens");
+            }
+        }
+    }
+
+    /// **A prefix that is not the accused's never yields the accused's root.** One leaf before `i`
+    /// differs: the build refuses by name where a left sibling disagrees, and where it cannot see
+    /// the difference (a leaf that only enters through the right siblings), the root differs.
+    #[test]
+    fn a_prefix_that_is_not_the_committed_one_is_refused_or_roots_elsewhere() {
+        for n in 2..=24u64 {
+            for i in 1..n {
+                for m in 0..i {
+                    let accused: Vec<Hash64> = (0..n).map(|j| leaf(3, j)).collect();
+                    let root = step_merkle_root_v1(&accused).expect("a tree");
+                    let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                    let mut ours = accused[..=i as usize].to_vec();
+                    ours[m as usize] = leaf(4, m);
+                    match PalwStepPrefixTreeV1::build_capped_v1(n, &ours, &last, PALW_STEP_LEG_MAX_LEAVES) {
+                        Err(PalwStepLegError::PrefixIsNotTheCommittedOne { .. }) => {}
+                        Err(other) => panic!("n {n}, i {i}, m {m}: refused for the wrong reason: {other}"),
+                        Ok(tree) => assert_ne!(
+                            tree.root(),
+                            root,
+                            "n {n}, i {i}, m {m}: a different prefix must not root to the accused's tree"
+                        ),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod prefix_stream_tests {
+    use super::*;
+
+    fn leaf(tag: u64, j: u64) -> Hash64 {
+        Hash64::from_u64_word(tag.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ j)
+    }
+
+    /// **ADR-0152 §4-ter N2: the stream is the prefix tree, holding a frontier.** Every leaf count to
+    /// 48, every `i`, wanted sets of every leaf before `i` one at a time and all at once: the root is
+    /// the accused's, every opening is the whole tree's, and what the stream held never grew with
+    /// the prefix.
+    #[test]
+    fn the_prefix_stream_roots_and_opens_exactly_as_the_prefix_tree() {
+        for n in 1..=48u64 {
+            for i in 0..n {
+                let accused: Vec<Hash64> = (0..n).map(|j| if j <= i { leaf(1, j) } else { leaf(2, j) }).collect();
+                let root = step_merkle_root_v1(&accused).expect("a tree");
+                let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                let depth = 64 - (n - 1).leading_zeros() as usize;
+                let everything: Vec<u64> = (0..i).collect();
+                let mut sets: Vec<Vec<u64>> = (0..i).map(|j| vec![j]).collect();
+                sets.push(everything);
+                sets.push(Vec::new());
+                for wanted in sets {
+                    let mut stream = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &wanted, PALW_STEP_LEG_MAX_LEAVES)
+                        .unwrap_or_else(|e| panic!("n {n}, i {i}: {e}"));
+                    let mut most = 0;
+                    for j in 0..i {
+                        stream.push(accused[j as usize]).expect("pushes");
+                        most = most.max(stream.held_hashes_v1());
+                    }
+                    assert!(most <= (depth + 1) * (wanted.len() + 2) + depth + 1, "n {n}, i {i}: held {most}");
+                    let (streamed_root, openings) = stream.finish().unwrap_or_else(|e| panic!("n {n}, i {i}: {e}"));
+                    assert_eq!(streamed_root, root, "n {n}, i {i}");
+                    for (q, opening) in wanted.iter().zip(&openings) {
+                        assert_eq!(opening, &step_opening_v1(&accused, *q).expect("the whole tree's"), "n {n}, i {i}, q {q}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// **A stream of a prefix that is not the accused's never yields the accused's root**, and one
+    /// pushed short, long, or asked for a leaf at or past `i` is refused.
+    #[test]
+    fn a_prefix_stream_that_is_not_the_committed_prefix_is_refused_or_roots_elsewhere() {
+        for n in 2..=24u64 {
+            for i in 1..n {
+                let accused: Vec<Hash64> = (0..n).map(|j| leaf(3, j)).collect();
+                let root = step_merkle_root_v1(&accused).expect("a tree");
+                let last = step_opening_v1(&accused, i).expect("the accused's opening of i");
+                for m in 0..i {
+                    let mut stream = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[], PALW_STEP_LEG_MAX_LEAVES).expect("opens");
+                    for j in 0..i {
+                        stream.push(if j == m { leaf(4, m) } else { accused[j as usize] }).expect("pushes");
+                    }
+                    match stream.finish() {
+                        Err(PalwStepLegError::PrefixIsNotTheCommittedOne { .. }) => {}
+                        Err(other) => panic!("n {n}, i {i}, m {m}: refused for the wrong reason: {other}"),
+                        Ok((other, _)) => assert_ne!(other, root, "n {n}, i {i}, m {m}"),
+                    }
+                }
+                let short = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[], PALW_STEP_LEG_MAX_LEAVES).expect("opens");
+                assert!(short.finish().is_err(), "n {n}, i {i}: a prefix pushed short is refused");
+                let mut long = PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[], PALW_STEP_LEG_MAX_LEAVES).expect("opens");
+                for j in 0..i {
+                    long.push(accused[j as usize]).expect("pushes");
+                }
+                assert!(long.push(accused[i as usize]).is_err(), "n {n}, i {i}: the disputed leaf is the accused's, never pushed");
+                assert!(PalwStepPrefixStreamV1::new_capped_v1(n, &last, &[i], PALW_STEP_LEG_MAX_LEAVES).is_err(), "i is not before i");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod opening_from_range_tests {
+    use super::*;
+
+    /// **ADR-0085 Decision 2: an opening derived from a range opening is byte-identical to the
+    /// opening built from the whole leaf list**, for every leaf of every range of every leaf count
+    /// up to a bound that covers every odd-tail shape — and it verifies under the one checker.
+    #[test]
+    fn an_opening_derived_from_a_range_is_the_opening_built_from_the_leaves() {
+        for leaf_count in 1u64..=24 {
+            let leaves: Vec<Hash64> = (0..leaf_count).map(|i| Hash64::from_u64_word(0x1000 + i)).collect();
+            let root = step_merkle_root_v1(&leaves).unwrap();
+            for first in 0..leaf_count {
+                for k in 1..=(leaf_count - first) {
+                    let range = PalwStepRangeOpeningV1 {
+                        first_leaf_index: first,
+                        leaf_hashes: leaves[first as usize..(first + k) as usize].to_vec(),
+                        siblings: step_merkle_range_siblings_v1(&leaves, first as usize, k as usize).unwrap(),
+                    };
+                    assert_eq!(step_range_opening_root_v1(leaf_count, &range).unwrap(), root);
+                    for leaf in first..first + k {
+                        let derived = step_opening_from_range_v1(leaf_count, &range, leaf).unwrap();
+                        let built = step_opening_v1(&leaves, leaf).unwrap();
+                        assert_eq!(derived, built, "leaf_count {leaf_count} range [{first}, {}) leaf {leaf}", first + k);
+                        assert_eq!(step_opening_root_v1(leaf_count, &derived).unwrap(), root);
+                    }
+                    // A leaf outside the range is refused by name, never guessed.
+                    if first > 0 {
+                        assert!(step_opening_from_range_v1(leaf_count, &range, first - 1).is_err());
+                    }
+                    assert!(step_opening_from_range_v1(leaf_count, &range, first + k).is_err());
+                }
+            }
+        }
+    }
+
+    /// **And a sub-range's sibling set derived from the enclosing range equals the one built from
+    /// the leaves**, verifying to the same root through the range checker — every sub-range of
+    /// every range of every leaf count up to the bound.
+    #[test]
+    fn a_sub_ranges_siblings_derived_from_a_range_are_the_ones_built_from_the_leaves() {
+        for leaf_count in 1u64..=20 {
+            let leaves: Vec<Hash64> = (0..leaf_count).map(|i| Hash64::from_u64_word(0x2000 + i)).collect();
+            let root = step_merkle_root_v1(&leaves).unwrap();
+            for first in 0..leaf_count {
+                for k in 1..=(leaf_count - first) {
+                    let range = PalwStepRangeOpeningV1 {
+                        first_leaf_index: first,
+                        leaf_hashes: leaves[first as usize..(first + k) as usize].to_vec(),
+                        siblings: step_merkle_range_siblings_v1(&leaves, first as usize, k as usize).unwrap(),
+                    };
+                    for inner_first in first..first + k {
+                        for inner_count in 1..=(first + k - inner_first) {
+                            let derived = step_range_siblings_from_range_v1(leaf_count, &range, inner_first, inner_count).unwrap();
+                            let built = step_merkle_range_siblings_v1(&leaves, inner_first as usize, inner_count as usize).unwrap();
+                            assert_eq!(
+                                derived,
+                                built,
+                                "leaf_count {leaf_count} range [{first}, {}) inner [{inner_first}, {})",
+                                first + k,
+                                inner_first + inner_count
+                            );
+                            let inner = PalwStepRangeOpeningV1 {
+                                first_leaf_index: inner_first,
+                                leaf_hashes: leaves[inner_first as usize..(inner_first + inner_count) as usize].to_vec(),
+                                siblings: derived,
+                            };
+                            assert_eq!(step_range_opening_root_v1(leaf_count, &inner).unwrap(), root);
+                        }
+                    }
+                    assert!(step_range_siblings_from_range_v1(leaf_count, &range, first, k + 1).is_err(), "outside the range");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod range_from_edges_tests {
+    use super::*;
+    #[test]
+    fn boundary_openings_reconstruct_every_ragged_range() {
+        for n in 1..=33usize {
+            let leaves: Vec<_> = (0..n).map(|i| Hash64::from_bytes([i as u8;64])).collect();
+            let root = step_merkle_root_capped_v1(&leaves,n as u64).unwrap();
+            for a in 0..n { for b in a+1..=n {
+                let first = step_opening_capped_v1(&leaves,a as u64,n as u64).unwrap();
+                let last = step_opening_capped_v1(&leaves,(b-1) as u64,n as u64).unwrap();
+                let siblings = step_range_siblings_from_edges_capped_v1(n as u64,&first,&last,root,n as u64).unwrap();
+                assert_eq!(siblings,step_merkle_range_siblings_capped_v1(&leaves,a,b-a,n as u64).unwrap());
+                let range=PalwStepRangeOpeningV1 {first_leaf_index:a as u64,leaf_hashes:leaves[a..b].to_vec(),siblings};
+                assert_eq!(step_range_opening_root_capped_v1(n as u64,&range,n as u64).unwrap(),root);
+            }}
+        }
+    }
+    #[test]
+    fn mixed_roots_invalid_boundaries_and_bad_paths_refuse() {
+        let leaves: Vec<_> = (0..5).map(|i| Hash64::from_bytes([i;64])).collect();
+        let root=step_merkle_root_v1(&leaves).unwrap();
+        let first=step_opening_capped_v1(&leaves,0,5).unwrap();let last=step_opening_capped_v1(&leaves,4,5).unwrap();
+        assert!(step_range_siblings_from_edges_capped_v1(5,&last,&first,root,5).is_err());
+        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&last,root,4).is_err());
+        let mut bent=last.clone();bent.leaf_hash=Hash64::default();
+        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&bent,root,5).is_err());
+        let mut missing=first.clone();missing.siblings.pop();
+        assert!(step_range_siblings_from_edges_capped_v1(5,&missing,&last,root,5).is_err());
+        let mut extra=last;extra.siblings.push(Hash64::default());
+        assert!(step_range_siblings_from_edges_capped_v1(5,&first,&extra,root,5).is_err());
+    }
+}

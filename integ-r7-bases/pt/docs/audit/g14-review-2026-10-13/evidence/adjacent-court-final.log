@@ -1,0 +1,32 @@
+
+running 24 tests
+prefix batch signed envelope exact_bytes=4839 signature_bytes=4627
+test palw_constraint_stream_carriage_v1::tests::flat_prefix_batch_has_measured_signed_headroom_and_independent_body_action_bounds ... ok
+test palw_constraint_stream_carriage_v1::tests::prefix_typed_carrier_binds_family_transition_and_bounds_hostile_body ... ok
+test palw_constraint_stream_carriage_v1::tests::public_prefix_answer_signer_is_typed_and_every_literal_identity_is_signed ... ok
+test palw_constraint_stream_carriage_v1::tests::signed_move_binds_literal_owner_claim_reservation_phase_offset_and_bytes ... ok
+test palw_constraint_stream_court_v1::tests::ordered_public_stream_matches_direct_court_fault_and_honest_refusal ... ok
+G14 full profile=102541 seed(job=None)=109424 carrier=90000
+G14 referenced profile seed=11016 original_profile=102541
+test palw_constraint_stream_carriage_v1::tests::registered_graph_variable_metadata_can_exceed_a_single_seed_carrier ... ok
+test palw_constraint_stream_owned_v1::tests::admission_requires_entire_capital_and_retention_contract_before_owned_work ... ok
+test palw_constraint_stream_court_v1::tests::wrong_seed_root_skip_corrupt_prefix_and_incomplete_leaf_never_convict ... ok
+test palw_constraint_stream_owned_v1::tests::foreign_owner_and_over_budget_moves_cannot_mutate_or_poison_continuation ... ok
+test palw_constraint_stream_owned_v1::tests::small_mutable_checkpoint_reverts_and_restores_without_grammar_or_prior_bytes ... ok
+test palw_legacy_answer_chunks_v2::tests::a_large_answer_is_exposed_only_after_all_authenticated_parts_arrive ... ok
+test palw_legacy_answer_chunks_v2::tests::foreign_truncated_tampered_and_unbounded_parts_cannot_complete_an_answer ... ok
+test palw_legacy_answer_chunks_v2::tests::input_and_job_admission_count_the_signed_envelope_and_every_carrier_in_the_existing_window ... ok
+test palw_legacy_answer_chunks_v2::tests::the_full_32_part_transport_fits_each_carrier_and_refuses_one_byte_less_before_signing ... ok
+test palw_rendering_resources_v1::claim_terms_tests::long_stream_contract_refuses_any_shorter_liability_or_material_clock_and_overflow ... ok
+test palw_rendering_resources_v1::claim_terms_tests::paid_extension_preserves_first_opening_clock_and_monotonic_future_work ... ok
+test palw_rendering_resources_v1::tests::maximum_active_format_produces_quantitative_work_deadline_and_capital ... ok
+test palw_rendering_resources_v1::tests::plan_is_monotone_checked_and_cannot_certify_owner_asserted_small_sizes ... ok
+test palw_rendering_resources_v1::tokenizer_resource_tests::raw_flat_hash_is_not_assigned_an_invented_file_cap_and_all_key_carriers_are_priced ... ok
+test palw_rendering_resources_v1::tokenizer_resource_tests::signed_event_bound_prices_complete_honest_or_authenticated_overrun_route ... ok
+test palw_constraint_stream_owned_v1::tests::compact_registered_profile_reaches_same_constraint_verdict_with_original_signed_identity ... ok
+test palw_tokenizer_owned_court_v1::tests::actual_operand_eof_convicts_false_signed_length_without_trusting_the_operand_length ... ok
+test palw_tokenizer_owned_court_v1::tests::compact_registered_profile_preserves_signed_tokenizer_seed_to_authenticated_eof ... ok
+test palw_tokenizer_owned_court_v1::tests::owned_public_tokenizer_contract_refuses_false_identity_and_completes_only_after_both_original_hashes ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 3896 filtered out; finished in 2.95s
+

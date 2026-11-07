@@ -1,0 +1,41 @@
+{
+  "architectures": [
+    "RecurrentGemmaForCausalLM"
+  ],
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_window_size": 2048,
+  "block_types": [
+    "recurrent",
+    "recurrent",
+    "attention"
+  ],
+  "bos_token_id": 2,
+  "conv1d_width": 4,
+  "dtype": "bfloat16",
+  "eos_token_id": 1,
+  "final_w_init_variance_scale": 0.6666666666666666,
+  "head_dim": 8,
+  "hidden_activation": "gelu_pytorch_tanh",
+  "hidden_size": 32,
+  "intermediate_size": 64,
+  "logits_soft_cap": 30.0,
+  "lru_width": 32,
+  "model_type": "recurrent_gemma",
+  "num_attention_heads": 4,
+  "num_hidden_layers": 3,
+  "num_key_value_heads": 2,
+  "pad_token_id": 0,
+  "partial_rotary_factor": 0.5,
+  "rms_norm_eps": 1e-06,
+  "rope_parameters": {
+    "partial_rotary_factor": 0.5,
+    "rope_theta": 10000.0,
+    "rope_type": "default"
+  },
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64,
+  "w_init_variance_scale": 0.01
+}

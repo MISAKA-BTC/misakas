@@ -1,0 +1,166 @@
+diff --git a/consensus/core/src/palw_court_archive_verify_v1.rs b/consensus/core/src/palw_court_archive_verify_v1.rs
+index b5a525199..a9c88ce5e 100644
+--- a/consensus/core/src/palw_court_archive_verify_v1.rs
++++ b/consensus/core/src/palw_court_archive_verify_v1.rs
+@@ -67,19 +67,15 @@ impl TransitionBuilder<'_> {
+             {return Err(refusal("archive completion chunk digest/size mismatch"));}
+             total=total.checked_add(bytes.len() as u64).ok_or_else(||refusal("archive completion length overflow"))?;
+         }
+-        let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {
+-            Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>return Err(refusal("original signed native close receipt missing")),
+-        };
+-        // Admit scratch, copies and BTree memberships before signature-message
+-        // construction, assembly, or restoring the local inspection view.
++        if !matches!(self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)),Some(Row::CourtCloseReceipt(_))) {
++            return Err(refusal("original signed native close receipt missing"));
++        }
++        // Admit retained output and scratch before signature-message
++        // construction, assembly, and decoding. Session/phase are borrowed.
+         if self.native_writers_tracking_v1(){
+             let mut q=native_writers::NativeWriteQuoteV1::new("archive complete signed v5 replay before buffers");
+-            q.copy(candidate)?.exact::<PalwCourtCloseGroupV2>(1)?.copy(&receipt.session)?
+-                .member::<Hash64,PalwCourtSessionStateV2>(1)?
++            q.copy(candidate)?.exact::<PalwCourtCloseGroupV2>(1)?
+                 .exact::<Hash64>(2*u64::from(candidate.count))?.exact::<u8>(256)?.exact::<u8>(total)?;
+-            if let Some(phase)=&receipt.tir_phase {
+-                q.copy(phase)?.member::<Hash64,Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>(1)?;
+-            }
+             self.admit_native_write_v1(q)?;
+         }
+         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
+@@ -106,15 +102,11 @@ impl TransitionBuilder<'_> {
+             || (proof.is_constrained_decode_v1() && !rules.constraint_active)
+             || (crate::palw_task_heads_v1::palw_object_needs_task_heads_v1(&close) && !rules.task_heads_active)
+         {return Err(refusal("archive proof family was dormant in its retained native context"));}
+-        // The checkpoint owner admits the actual complete state copy. This view
+-        // is local inspection scratch: it is not a valid new chain state and is
+-        // never journalled, committed, or used to mint credit or settle money.
+-        let (mut view,_)=self.try_checkpoint()?;
++        // Borrow authenticated retained records directly. No global state copy,
++        // temporary active row, derived-index changes, or inspection-state writes.
+         let receipt=match self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id,side)) {Some(Row::CourtCloseReceipt(r))=>r.as_ref(),_=>unreachable!()};
+-        view.court_sessions.insert(id,receipt.session.clone());
+-        if let Some(phase)=&receipt.tir_phase {view.tir_dissections.insert(id,phase.clone());}
+         let prompt=if rules.prompt_ids_merkle {crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1}else{crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat};
+-        let derived=crate::palw_court_v2::adjudicate_court_close_v5(&view,&id,proof,&rules.court,rules.step_ladder,prompt,
++        let derived=crate::palw_court_v2::adjudicate_court_close_borrowed_v5(&self.state,&id,&receipt.session,receipt.tir_phase.as_deref(),proof,&rules.court,rules.step_ladder,prompt,
+             rules.held_regime,rules.decode_close_convicts_only,rules.fp_decode_from_daa,rules.cell_closure_from_daa,rules.memory_routing_from_daa)
+             .map_err(|e|refusal(format!("archived v5 close does not adjudicate: {e}")))?;
+         if derived!=*verdict {return Err(refusal("archived v5 result differs from the signed declaration"));}
+diff --git a/consensus/core/src/palw_court_v2.rs b/consensus/core/src/palw_court_v2.rs
+index 7e72d69c0..f66005392 100644
+--- a/consensus/core/src/palw_court_v2.rs
++++ b/consensus/core/src/palw_court_v2.rs
+@@ -1435,6 +1435,62 @@ pub fn adjudicate_court_close_v5(
+     // the ceiling, and that is the right answer — the object was inadmissible on its face.
+     check_close_cost_v2(proof, court)?;
+     let (session, claim) = resolve_court_session_v2(state, session_id)?;
++    let tir_phase = match proof {
++        PalwCourtVerdictProofV2::TirDissection { .. } | PalwCourtVerdictProofV2::GenDissection { .. }
++        | PalwCourtVerdictProofV2::EvalDissection { .. } => state.tir_dissection_v1(session_id),
++        _ => None,
++    };
++    adjudicate_court_close_resolved_v5(state,session_id,session,claim,tir_phase,proof,court,step_ladder,prompt_ids_form,
++        held_regime,decode_close_convicts_only,fp_decode_rules_from_daa,cell_closure_from_daa,memory_routing_from_daa)
++}
++
++/// Private retained-record entry. The caller authenticates the rooted session
++/// and its phase; this computes the same v5 kernel without cloning or modifying
++/// chain state. It does not authenticate admission, credit or financial release.
++#[allow(clippy::too_many_arguments)]
++pub(crate) fn adjudicate_court_close_borrowed_v5(
++    state:&PalwChainStateV2,
++    session_id:&Hash64,
++    session:&crate::palw_state_v2::PalwCourtSessionStateV2,
++    tir_phase:Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>,
++    proof:&PalwCourtVerdictProofV2,
++    court:&crate::palw_mode_v2::PalwCourtParamsV2,
++    step_ladder:u64,
++    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
++    held_regime:bool,
++    decode_close_convicts_only:bool,
++    fp_decode_rules_from_daa:Option<u64>,
++    cell_closure_from_daa:Option<u64>,
++    memory_routing_from_daa:Option<u64>,
++)->Result<PalwCourtVerdictV2,PalwCourtV2Error>{
++    check_close_cost_v2(proof,court)?;
++    if session.ladder.session_id()!=*session_id || tir_phase.is_some_and(|p|p.session_id()!=*session_id) {
++        return Err(PalwCourtV2Error::BindingInvalid("borrowed court session/phase scope mismatch".into()));
++    }
++    let claim=state.claim(&session.claim).ok_or(PalwCourtV2Error::MissingClaim(session.claim))?;
++    adjudicate_court_close_resolved_v5(state,session_id,session,claim,tir_phase,proof,court,step_ladder,prompt_ids_form,
++        held_regime,decode_close_convicts_only,fp_decode_rules_from_daa,cell_closure_from_daa,memory_routing_from_daa)
++}
++
++/// One v5 algorithm for native active sessions and authenticated retained
++/// records. The entry points run the cost gate before reading chain state.
++#[allow(clippy::too_many_arguments)]
++fn adjudicate_court_close_resolved_v5(
++    state:&PalwChainStateV2,
++    session_id:&Hash64,
++    session:&crate::palw_state_v2::PalwCourtSessionStateV2,
++    claim:&crate::palw_state_v2::PalwClaimStateV2,
++    tir_phase:Option<&crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>,
++    proof:&PalwCourtVerdictProofV2,
++    court:&crate::palw_mode_v2::PalwCourtParamsV2,
++    step_ladder:u64,
++    prompt_ids_form:crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
++    held_regime:bool,
++    decode_close_convicts_only:bool,
++    fp_decode_rules_from_daa:Option<u64>,
++    cell_closure_from_daa:Option<u64>,
++    memory_routing_from_daa:Option<u64>,
++)->Result<PalwCourtVerdictV2,PalwCourtV2Error>{
+     if matches!(proof, PalwCourtVerdictProofV2::DecodeToken { .. } | PalwCourtVerdictProofV2::DecodeTokenTiled { .. }) {
+         palw_decode_close_admits_claim_v1(
+             session.claim,
+@@ -1563,7 +1619,7 @@ pub fn adjudicate_court_close_v5(
+         // phase exists only because the k-ary court was armed when its root claim was admitted, so,
+         // as there, the fence is read off the session and not resolved again.
+         PalwCourtVerdictProofV2::TirDissection { bottom } => {
+-            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
++            let phase = tir_phase.ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+             let mut bottom = bottom.as_ref().clone();
+             bottom.binding = tir_binding_filled_v1(state, claim, &bottom.binding)?;
+             check_tir_binding_is_the_claims_v1(state, claim, &bottom.binding)?;
+@@ -1595,7 +1651,7 @@ pub fn adjudicate_court_close_v5(
+         }
+         // **RFC-0004 A6: the evaluation dissection's bottom, graded against F7's phase**, as the generative one is.
+         PalwCourtVerdictProofV2::EvalDissection { bottom } => {
+-            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
++            let phase = tir_phase.ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+             let facts = state
+                 .improvement_eval_claim_facts_v1(claim, &bottom.binding)
+                 .map_err(|why| PalwCourtV2Error::DoesNotAdjudicate(why.into()))?;
+@@ -1619,7 +1675,7 @@ pub fn adjudicate_court_close_v5(
+         // may open, the claim it is compared with and the totals the other reductions are supplied
+         // from are the phase's facts.
+         PalwCourtVerdictProofV2::GenDissection { bottom } => {
+-            let phase = state.tir_dissection_v1(session_id).ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
++            let phase = tir_phase.ok_or(PalwCourtV2Error::NoDissection(*session_id))?;
+             let row = state.gen_class_v1(&claim.class_id).ok_or_else(|| {
+                 PalwCourtV2Error::DoesNotAdjudicate(format!("claim {}'s class is not a generative class", claim.class_id))
+             })?;
+diff --git a/consensus/core/src/palw_tir_public_fold_v1.rs b/consensus/core/src/palw_tir_public_fold_v1.rs
+index 1f3b1e83e..d1e54a439 100644
+--- a/consensus/core/src/palw_tir_public_fold_v1.rs
++++ b/consensus/core/src/palw_tir_public_fold_v1.rs
+@@ -3433,6 +3433,18 @@ mod conviction_e2e_tests {
+             let actual=crate::palw_court_v2::adjudicate_court_close_v5(&b.state,&id,&proof,&rules.court,rules.step_ladder,
+                 crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,held,true,None,None,None).unwrap();
+             assert_eq!(actual,if forged {PalwCourtVerdictV2::ExecutorGuilty}else{PalwCourtVerdictV2::ChallengerDefeated});
++            let session=b.state.court_session(&id).unwrap();
++            let judge_borrowed=|sid:&Hash64,court:&crate::palw_mode_v2::PalwCourtParamsV2| {
++                crate::palw_court_v2::adjudicate_court_close_borrowed_v5(&b.state,sid,session,b.state.tir_dissection_v1(&id),
++                    &proof,court,rules.step_ladder,crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,held,true,None,None,None)
++            };
++            assert_eq!(judge_borrowed(&id,&rules.court).unwrap(),actual);
++            let other=h(0x882);assert_ne!(other,id);
++            assert!(matches!(judge_borrowed(&other,&rules.court),Err(crate::palw_court_v2::PalwCourtV2Error::BindingInvalid(_))));
++            let small=crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(rules.court.max_step_leaf_count(),
++                rules.court.turn_deadline_daa(),rules.court.terminal_rounds(),1,rules.court.max_terminal_macs(),rules.court.max_operand_count()).unwrap();
++            assert!(matches!(judge_borrowed(&other,&small),Err(crate::palw_court_v2::PalwCourtV2Error::CloseTooLarge {..})),
++                "cost refusal precedes even borrowed scope/state inspection");
+             let stated=if wrong_verdict {if forged {PalwCourtVerdictV2::ChallengerDefeated}else{PalwCourtVerdictV2::ExecutorGuilty}}else{actual};
+             let correct=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:actual,proof:*proof.clone()};
+             let committed=PalwConsensusObjectV2::CourtClosed {session_id:id,verdict:stated,proof:*proof};

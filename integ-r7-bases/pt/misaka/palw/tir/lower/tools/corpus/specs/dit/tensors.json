@@ -1,0 +1,291 @@
+{
+ "pos_embed.proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "pos_embed.proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   4,
+   2,
+   2
+  ]
+ },
+ "proj_out_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   32
+  ]
+ },
+ "proj_out_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   32,
+   16
+  ]
+ },
+ "proj_out_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "proj_out_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_k.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_out.0.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_out.0.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_q.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_q.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_v.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.attn1.to_v.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.ff.net.0.proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "transformer_blocks.0.ff.net.0.proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "transformer_blocks.0.ff.net.2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.ff.net.2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   64
+  ]
+ },
+ "transformer_blocks.0.norm1.emb.class_embedder.embedding_table.weight": {
+  "dtype": "F32",
+  "shape": [
+   11,
+   16
+  ]
+ },
+ "transformer_blocks.0.norm1.emb.timestep_embedder.linear_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.norm1.emb.timestep_embedder.linear_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   256
+  ]
+ },
+ "transformer_blocks.0.norm1.emb.timestep_embedder.linear_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.0.norm1.emb.timestep_embedder.linear_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.0.norm1.linear.bias": {
+  "dtype": "F32",
+  "shape": [
+   96
+  ]
+ },
+ "transformer_blocks.0.norm1.linear.weight": {
+  "dtype": "F32",
+  "shape": [
+   96,
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_k.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_k.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_out.0.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_out.0.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_q.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_q.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_v.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.1.attn1.to_v.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.1.ff.net.0.proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   64
+  ]
+ },
+ "transformer_blocks.1.ff.net.0.proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   64,
+   16
+  ]
+ },
+ "transformer_blocks.1.ff.net.2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.1.ff.net.2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   64
+  ]
+ },
+ "transformer_blocks.1.norm1.emb.class_embedder.embedding_table.weight": {
+  "dtype": "F32",
+  "shape": [
+   11,
+   16
+  ]
+ },
+ "transformer_blocks.1.norm1.emb.timestep_embedder.linear_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.1.norm1.emb.timestep_embedder.linear_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   256
+  ]
+ },
+ "transformer_blocks.1.norm1.emb.timestep_embedder.linear_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   16
+  ]
+ },
+ "transformer_blocks.1.norm1.emb.timestep_embedder.linear_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   16,
+   16
+  ]
+ },
+ "transformer_blocks.1.norm1.linear.bias": {
+  "dtype": "F32",
+  "shape": [
+   96
+  ]
+ },
+ "transformer_blocks.1.norm1.linear.weight": {
+  "dtype": "F32",
+  "shape": [
+   96,
+   16
+  ]
+ }
+}

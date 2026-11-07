@@ -1,0 +1,47 @@
+{
+  "base_commit": "4f1120d9e80d289702af67acd7177ce311674164",
+  "source_sha256": {
+    "consensus/core/src/palw_false_valid_filing_v1.rs": "18186cde3205eefd5e5d2415efead59d00d1d572b84a9b8a585d08f928fbc1f6",
+    "consensus/src/pipeline/virtual_processor/processor.rs": "d459ea72bf805676d399b57d6a6819051ac28807c416d1f92fd8c5368e15895a",
+    "kaspad/src/palw_fraud_filer.rs": "7d96090e28f94a63f29dfd0aa4849539462bc06eb0f28ac4f44ce1f0d105394f",
+    "kaspad/src/palw_fraud_filer_constraint.rs": "b872b9a81380a8f70449b40de7e7ef0d6c7b902b486cfcc44f68452fafa9505f",
+    "kaspad/src/palw_legacy_held_e2e.rs": "1fad5539ee04e13df630b2445cc1b3822ccd0312cd004613683ec75c06877ea7"
+  },
+  "node_binary_sha256": "7da7355aac3f90d330a3e2968527bc6b07b0277c65c93269fa83c0cfeb7e972a",
+  "validation": {
+    "filer": 30,
+    "held": 16,
+    "false_valid": 12,
+    "history": 1,
+    "node_check": "PASS 38.57 s; precedes test-only cache fixture extension",
+    "constraint_service": "PASS 3 tests, 444.71 s, exit 0. Forbidden / premature stop / beaten token each convicts producer and all 5 Valid signers, positive collection, reporter commit/offence/reveal included, reservation released, service exit joined.",
+    "core_build": "PASS 7m 38s, exit 0; only core test debug symbols reduced; assertions/optimization/test semantics unchanged",
+    "unique_node_pass": 62,
+    "core_filing": 5,
+    "core_attribution": 19,
+    "core_constraint": 19,
+    "unique_core_pass": 43,
+    "unique_current_round_pass": 105
+  },
+  "failures_preserved": {
+    "pagination_service": "0 PASS / 3 FAIL; producer conviction reached, all Panel pursuit failed; 680.67 s exit 101",
+    "initial_compile": "Missing new own_output_ids field in old held fixture; exit 101",
+    "cache_fixture": "Input bootstrap wrongly used for post-replay tile learning; 1 FAIL exit 101; final fixture repaired",
+    "core_default_debug": "rustc-LLVM IO failure: No space left on device; exit 101; no core tests executed by this attempt"
+  },
+  "service_provenance": "Service session 59165 used the node binary from g14-tiled-public-build.log, before a test-only cache-fixture extension/rebuild. Service test source and all production source are unchanged. SHA256 of that earlier service executable was not captured before replacement; no equality with final node binary SHA256 is asserted.",
+  "core_retry_command": "CARGO_TARGET_DIR=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 cargo test -p kaspa-consensus-core --lib --locked --no-run --config 'profile.test.package.kaspa-consensus-core.debug=0'",
+  "core_binary_sha256": "1ebc500d52c04ca9fd5fc0b515dfd10591ca05c35544f44ca5cd1faf0a5a73a8",
+  "core_test_commands": [
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-132bef1963aa6e76 palw_false_valid_filing_v1 --test-threads=1",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-132bef1963aa6e76 palw_offence_attribution_v1::tests --test-threads=1",
+    "/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus_core-132bef1963aa6e76 palw_decode_constraint_v1::tests --test-threads=1"
+  ],
+  "node_test_filters": {
+    "g14-tiled-public-filer-final-tests.log": "palw_fraud_filer",
+    "g14-tiled-public-held-regressions.log": "lg14b_",
+    "g14-public-rule-false-valid-final-tests.log": "palw_filer_false_valid",
+    "g14-public-rule-history-final-tests.log": "false_valid_receipt_history_backfills_plateaus_and_retries_missing_suffixes_and_reorgs",
+    "g14-constraint-service-session-rule-tests.log": "fresh_public_bond_service_convicts_a_constraint_"
+  }
+}

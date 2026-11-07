@@ -1,0 +1,10 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 9m 45s
+     Running unittests src/lib.rs (target/debug/deps/kaspa_consensus_core-6e27a7db9d28a156)
+
+running 2 tests
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock ... ok
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 3918 filtered out; finished in 2.62s
+

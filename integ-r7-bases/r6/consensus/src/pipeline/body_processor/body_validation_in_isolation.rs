@@ -1,0 +1,846 @@
+use std::{collections::HashSet, sync::Arc};
+
+use super::BlockBodyProcessor;
+use crate::errors::{BlockProcessResult, RuleError};
+use kaspa_consensus_core::{
+    block::Block,
+    constants::EVM_HEADER_VERSION,
+    evm::{MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK},
+    mass::{ContextualMasses, Mass, NonContextualMasses},
+    merkle::calc_hash_merkle_root,
+    tx::TransactionOutpoint,
+};
+
+impl BlockBodyProcessor {
+    pub fn validate_body_in_isolation(self: &Arc<Self>, block: &Block) -> BlockProcessResult<Mass> {
+        Self::check_has_transactions(block)?;
+        Self::check_hash_merkle_root(block)?;
+        Self::check_only_one_coinbase(block)?;
+        Self::check_evm_payload(block)?;
+        self.check_round_block_carries_no_evm_payload(block)?;
+        self.check_exec_v2_shape(block)?;
+        self.check_transactions_in_isolation(block)?;
+        let mass = self.check_block_mass(block)?;
+        self.check_duplicate_transactions(block)?;
+        self.check_block_double_spends(block)?;
+        self.check_no_chained_transactions(block)?;
+        Ok(mass)
+    }
+
+    fn check_has_transactions(block: &Block) -> BlockProcessResult<()> {
+        // We expect the outer flow to not queue blocks with no transactions for body validation,
+        // but we still check it in case the outer flow changes.
+        if block.transactions.is_empty() {
+            return Err(RuleError::NoTransactions);
+        }
+        Ok(())
+    }
+
+    fn check_hash_merkle_root(block: &Block) -> BlockProcessResult<()> {
+        let calculated = calc_hash_merkle_root(block.transactions.iter());
+        if calculated != block.header.hash_merkle_root {
+            return Err(RuleError::BadMerkleRoot(block.header.hash_merkle_root, calculated));
+        }
+        Ok(())
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §4.1/§6/§7).
+    /// Isolation rules, all context-free (no DAA/params; the header version is
+    /// itself gated against activation by header validation, so on a net where
+    /// the EVM lane is inactive no v2 header is ever admitted):
+    ///
+    /// - pre-EVM header (`version < EVM_HEADER_VERSION`) ⇒ empty `evm_payload`;
+    /// - v2+ header ⇒ `evm_payload_hash` matches the body payload (the DATA
+    ///   commitment, §4.1 — pure keyed BLAKE2b, verified on every build);
+    /// - the D4 inclusion-side cap: serialized payload bytes ≤
+    ///   `MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK` (§7);
+    /// - bounded producer-selected system ops (§9.2);
+    /// - class-1 tx admission (§6.1): a syntactically inadmissible payload tx
+    ///   invalidates the PAYLOAD block itself (the producer chose its own
+    ///   payload). Tx decoding needs the `evm` build; the non-evm seam admits
+    ///   everything (the lane is `u64::MAX`-inert on every default net).
+    fn check_evm_payload(block: &Block) -> BlockProcessResult<()> {
+        if block.header.version < EVM_HEADER_VERSION {
+            if !block.evm_payload.is_empty() {
+                return Err(RuleError::NonEmptyEvmPayloadBeforeActivation);
+            }
+            // audit #6: the two EVM header commitments are excluded from the v0/v1
+            // header preimage (hashing/header.rs), so they do not bind to the block
+            // id. Force them zero on pre-activation headers — otherwise a peer could
+            // mint distinct serialized headers with the same hash (malleability) and
+            // a future migration could trip over stray non-zero fields.
+            let zero = kaspa_hashes::Hash64::default();
+            if block.header.evm_payload_hash != zero || block.header.evm_commitment_root != zero {
+                return Err(RuleError::NonZeroEvmHeaderFieldsBeforeActivation);
+            }
+            return Ok(());
+        }
+        let bytes = block.evm_payload.payload_bytes();
+        // Bridge audit BR-1 (node-only): the commitment is checked BEFORE the size cap. A payload
+        // that does not hash to the header's commitment is a bad delivery (`EvmPayloadHashMismatch`,
+        // which the body processor never persists as `StatusInvalid`); only a payload the block id
+        // really commits to can be judged too large — and then the block itself is invalid. Every
+        // (header, payload) pair gets the same accept/reject as before; only the error of a pair
+        // that fails both changes. Hashing an over-cap payload is bounded: P2P decoding refuses
+        // bytes over the cap, and RPC is bounded by its message limit.
+        if block.header.evm_payload_hash != kaspa_consensus_core::evm::payload_hash_of_bytes(&bytes) {
+            return Err(RuleError::EvmPayloadHashMismatch);
+        }
+        if bytes.len() > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK {
+            return Err(RuleError::EvmPayloadTooLarge(bytes.len(), MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK));
+        }
+        // ADR-0089: deposit claims and market settlements are two budgets — each op kind is
+        // counted against its own cap, so a settlement never spends a claim's slot or vice versa.
+        let claims = block
+            .evm_payload
+            .system_ops
+            .iter()
+            .filter(|op| matches!(op, kaspa_consensus_core::evm::EvmSystemOp::DepositClaim(_)))
+            .count();
+        if claims > MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK {
+            return Err(RuleError::TooManyEvmSystemOps(claims, MAX_DEPOSIT_CLAIMS_PER_EVM_BLOCK));
+        }
+        let settlements = block.evm_payload.system_ops.len() - claims;
+        if settlements > kaspa_consensus_core::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK {
+            return Err(RuleError::TooManyEvmSystemOps(
+                settlements,
+                kaspa_consensus_core::evm::model_market::MAX_MARKET_ACTIONS_PER_EVM_BLOCK,
+            ));
+        }
+        crate::processes::evm::admit_evm_payload_txs(&block.evm_payload)
+            .map_err(|(i, reason)| RuleError::EvmPayloadTxInadmissible(i, reason))?;
+        Ok(())
+    }
+
+    /// **Lane accept-order (post-launch): from `palw_lane_accept_parents_first`, keyed on the round
+    /// block's own DAA score, a round block carries no EVM payload.**
+    ///
+    /// A merging block executes every mergeset block's payload (`AcceptedEvmTxs`), and nothing on the
+    /// EVM side asks a round block for its permit: a round block is valid at the header with any bond's
+    /// signature, and an unpermitted one — whose transactions the UTXO side never accepts — still had its
+    /// payload executed, in an order its producer could grind by hash within a tied lane, against the
+    /// merging block's gas budget. The node's own round template has always carried an empty payload
+    /// (`round_adapt_block_template`); past the fence the rule says so. After `check_evm_payload`, so a
+    /// payload the id does not commit to is still a bad delivery (never persisted invalid), and only a
+    /// committed one poisons the block.
+    fn check_round_block_carries_no_evm_payload(&self, block: &Block) -> BlockProcessResult<()> {
+        let daa_score = block.header.daa_score;
+        let round = block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+            && self.palw_round_lane.is_some_and(|fence| fence.is_active(daa_score));
+        if round
+            && self.palw_lane_accept_parents_first.is_some_and(|fence| fence.is_active(daa_score))
+            && !block.evm_payload.is_empty()
+        {
+            return Err(RuleError::RoundBlockCarriesEvmPayload);
+        }
+        Ok(())
+    }
+
+    /// **RFC-0008 v2: the anchor trailer's shape and the slice body's, from the block alone.** Past the fence a coinbase payload that
+    /// ends in the trailer magic must carry a well-formed trailer, a lane block's must carry none (only a chain block anchors the
+    /// lane), and an `EXEC_SLICE` block carries nothing beside its coinbase. Nothing is read on a network that has not armed the
+    /// fence, and below it the bytes are the miner's own.
+    fn check_exec_v2_shape(&self, block: &Block) -> BlockProcessResult<()> {
+        let Some(fence) = self.palw_exec_v2 else { return Ok(()) };
+        if !fence.is_active(block.header.daa_score) {
+            return Ok(());
+        }
+        let anchor = kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(&block.transactions[0].payload)
+            .map_err(RuleError::BadExecAnchor)?
+            .1;
+        let is_lane = block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1;
+        if anchor.is_some() && is_lane {
+            return Err(RuleError::BadExecAnchor(
+                kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1::LaneBlockAnchors,
+            ));
+        }
+        if is_lane
+            && kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope::decode(&block.header.palw_commitment)
+                .is_ok_and(|envelope| envelope.subtype == kaspa_consensus_core::palw_exec_v2::PalwExecSubtypeV2::Slice)
+            && block.transactions.len() != 1
+        {
+            return Err(RuleError::ExecSliceCarriesTransactions(block.transactions.len() - 1));
+        }
+        Ok(())
+    }
+
+    fn check_only_one_coinbase(block: &Block) -> BlockProcessResult<()> {
+        if !block.transactions[0].is_coinbase() {
+            return Err(RuleError::FirstTxNotCoinbase);
+        }
+
+        if let Some(i) = block.transactions[1..].iter().position(|tx| tx.is_coinbase()) {
+            return Err(RuleError::MultipleCoinbases(i));
+        }
+
+        Ok(())
+    }
+
+    fn check_transactions_in_isolation(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
+        for tx in block.transactions.iter() {
+            if let Err(e) = self.transaction_validator.validate_tx_in_isolation(tx) {
+                return Err(RuleError::TxInIsolationValidationFailed(tx.id(), e));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_block_mass(self: &Arc<Self>, block: &Block) -> BlockProcessResult<Mass> {
+        let mut total_compute_mass: u64 = 0;
+        let mut total_transient_mass: u64 = 0;
+        let mut total_storage_mass: u64 = 0;
+        for tx in block.transactions.iter() {
+            // Calculate the non-contextual masses
+            let NonContextualMasses { compute_mass, transient_mass } = self.mass_calculator.calc_non_contextual_masses(tx);
+
+            // Read the storage mass commitment. This value cannot be computed here w/o UTXO context
+            // so we use the commitment. Later on, when the transaction is verified in context, we use
+            // the context to calculate the expected storage mass and verify it matches this commitment
+            let storage_mass_commitment = tx.mass();
+
+            // Sum over the various masses separately
+            total_compute_mass = total_compute_mass.saturating_add(compute_mass);
+            total_transient_mass = total_transient_mass.saturating_add(transient_mass);
+            total_storage_mass = total_storage_mass.saturating_add(storage_mass_commitment);
+
+            // Verify all limits
+            if total_compute_mass > self.max_block_mass {
+                return Err(RuleError::ExceedsComputeMassLimit(total_compute_mass, self.max_block_mass));
+            }
+            if total_transient_mass > self.max_block_mass {
+                return Err(RuleError::ExceedsTransientMassLimit(total_transient_mass, self.max_block_mass));
+            }
+            if total_storage_mass > self.max_block_mass {
+                return Err(RuleError::ExceedsStorageMassLimit(total_storage_mass, self.max_block_mass));
+            }
+        }
+        Ok((NonContextualMasses::new(total_compute_mass, total_transient_mass), ContextualMasses::new(total_storage_mass)))
+    }
+
+    fn check_block_double_spends(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
+        let mut existing = HashSet::new();
+        for input in block.transactions.iter().flat_map(|tx| &tx.inputs) {
+            if !existing.insert(input.previous_outpoint) {
+                return Err(RuleError::DoubleSpendInSameBlock(input.previous_outpoint));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_no_chained_transactions(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
+        let mut block_created_outpoints = HashSet::new();
+        for tx in block.transactions.iter() {
+            for index in 0..tx.outputs.len() {
+                block_created_outpoints.insert(TransactionOutpoint { transaction_id: tx.id(), index: index as u32 });
+            }
+        }
+
+        for input in block.transactions.iter().flat_map(|tx| &tx.inputs) {
+            if block_created_outpoints.contains(&input.previous_outpoint) {
+                return Err(RuleError::ChainedTransaction(input.previous_outpoint));
+            }
+        }
+        Ok(())
+    }
+
+    fn check_duplicate_transactions(self: &Arc<Self>, block: &Block) -> BlockProcessResult<()> {
+        let mut ids = HashSet::new();
+        for tx in block.transactions.iter() {
+            if !ids.insert(tx.id()) {
+                return Err(RuleError::DuplicateTransactions(tx.id()));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        config::{Config, ConfigBuilder},
+        consensus::test_consensus::TestConsensus,
+        errors::RuleError,
+        params::MAINNET_PARAMS,
+    };
+    use kaspa_consensus_core::config::params::PqEnforcementMode;
+    use kaspa_consensus_core::{
+        BlockHash,
+        api::{BlockValidationFutures, ConsensusApi},
+        block::MutableBlock,
+        header::Header,
+        merkle::calc_hash_merkle_root,
+        subnets::{SUBNETWORK_ID_COINBASE, SUBNETWORK_ID_NATIVE},
+        tx::{ScriptPublicKey, Transaction, TransactionId, TransactionInput, TransactionOutpoint, TransactionOutput, scriptvec},
+    };
+    use kaspa_core::assert_match;
+
+    // kaspa-pq Phase 9: re-enabled with 128-char (64-byte Hash64) block/tx
+    // identities per ADR-0008. Parent hashes / spent-outpoint ids are widened
+    // to Hash64 and the header's hash_merkle_root is computed from the block's
+    // transactions (rather than a pinned literal) so it stays correct-by-
+    // construction.
+    #[test]
+    fn validate_body_in_isolation_test() {
+        // kaspa-pq: this test exercises body-level isolation mechanics (merkle
+        // root, compute-mass limit, duplicate txs, coinbase position, double
+        // spend) using legacy upstream secp256k1 transaction fixtures. Run it
+        // with PQ enforcement Disabled so the §7 ML-DSA-only output-class rule
+        // (PR-19-S2) does not reject those legacy-shaped outputs — that rule has
+        // dedicated coverage in `pq_output_class_enforcement_tests`. (ADR-0019:
+        // Disabled = upstream-compatible.)
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+
+        let body_processor = consensus.block_body_processor();
+        let txs = vec![
+            Transaction::new(
+                0,
+                vec![],
+                vec![TransactionOutput {
+                    value: 0x12a05f200,
+                    script_public_key: ScriptPublicKey::new(
+                        0,
+                        scriptvec!(
+                            0xa9, 0x14, 0xda, 0x17, 0x45, 0xe9, 0xb5, 0x49, 0xbd, 0x0b, 0xfa, 0x1a, 0x56, 0x99, 0x71, 0xc7, 0x7e,
+                            0xba, 0x30, 0xcd, 0x5a, 0x4b, 0x87
+                        ),
+                    ),
+                }],
+                0,
+                SUBNETWORK_ID_COINBASE,
+                0,
+                vec![9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            ),
+            Transaction::new(
+                0,
+                vec![
+                    TransactionInput {
+                        previous_outpoint: TransactionOutpoint {
+                            transaction_id: TransactionId::from_slice(&[
+                                0x16, 0x5e, 0x38, 0xe8, 0xb3, 0x91, 0x45, 0x95, 0xd9, 0xc6, 0x41, 0xf3, 0xb8, 0xee, 0xc2, 0xf3, 0x46,
+                                0x11, 0x89, 0x6b, 0x82, 0x1a, 0x68, 0x3b, 0x7a, 0x4e, 0xde, 0xfe, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            ]),
+                            index: 0xffffffff,
+                        },
+                        signature_script: vec![],
+                        sequence: u64::MAX,
+                        sig_op_count: 0,
+                    },
+                    TransactionInput {
+                        previous_outpoint: TransactionOutpoint {
+                            transaction_id: TransactionId::from_slice(&[
+                                0x4b, 0xb0, 0x75, 0x35, 0xdf, 0xd5, 0x8e, 0x0b, 0x3c, 0xd6, 0x4f, 0xd7, 0x15, 0x52, 0x80, 0x87, 0x2a,
+                                0x04, 0x71, 0xbc, 0xf8, 0x30, 0x95, 0x52, 0x6a, 0xce, 0x0e, 0x38, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            ]),
+                            index: 0xffffffff,
+                        },
+                        signature_script: vec![],
+                        sequence: u64::MAX,
+                        sig_op_count: 0,
+                    },
+                ],
+                vec![],
+                0,
+                SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            ),
+            Transaction::new(
+                0,
+                vec![TransactionInput {
+                    previous_outpoint: TransactionOutpoint {
+                        transaction_id: TransactionId::from_slice(&[
+                            0x03, 0x2e, 0x38, 0xe9, 0xc0, 0xa8, 0x4c, 0x60, 0x46, 0xd6, 0x87, 0xd1, 0x05, 0x56, 0xdc, 0xac, 0xc4,
+                            0x1d, 0x27, 0x5e, 0xc5, 0x5f, 0xc0, 0x07, 0x79, 0xac, 0x88, 0xfd, 0xf3, 0x57, 0xa1, 0x87, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        ]),
+                        index: 0,
+                    },
+                    signature_script: vec![
+                        0x49, // OP_DATA_73
+                        0x30, 0x46, 0x02, 0x21, 0x00, 0xc3, 0x52, 0xd3, 0xdd, 0x99, 0x3a, 0x98, 0x1b, 0xeb, 0xa4, 0xa6, 0x3a, 0xd1,
+                        0x5c, 0x20, 0x92, 0x75, 0xca, 0x94, 0x70, 0xab, 0xfc, 0xd5, 0x7d, 0xa9, 0x3b, 0x58, 0xe4, 0xeb, 0x5d, 0xce,
+                        0x82, 0x02, 0x21, 0x00, 0x84, 0x07, 0x92, 0xbc, 0x1f, 0x45, 0x60, 0x62, 0x81, 0x9f, 0x15, 0xd3, 0x3e, 0xe7,
+                        0x05, 0x5c, 0xf7, 0xb5, 0xee, 0x1a, 0xf1, 0xeb, 0xcc, 0x60, 0x28, 0xd9, 0xcd, 0xb1, 0xc3, 0xaf, 0x77, 0x48,
+                        0x01, // 73-byte signature
+                        0x41, // OP_DATA_65
+                        0x04, 0xf4, 0x6d, 0xb5, 0xe9, 0xd6, 0x1a, 0x9d, 0xc2, 0x7b, 0x8d, 0x64, 0xad, 0x23, 0xe7, 0x38, 0x3a, 0x4e,
+                        0x6c, 0xa1, 0x64, 0x59, 0x3c, 0x25, 0x27, 0xc0, 0x38, 0xc0, 0x85, 0x7e, 0xb6, 0x7e, 0xe8, 0xe8, 0x25, 0xdc,
+                        0xa6, 0x50, 0x46, 0xb8, 0x2c, 0x93, 0x31, 0x58, 0x6c, 0x82, 0xe0, 0xfd, 0x1f, 0x63, 0x3f, 0x25, 0xf8, 0x7c,
+                        0x16, 0x1b, 0xc6, 0xf8, 0xa6, 0x30, 0x12, 0x1d, 0xf2, 0xb3, 0xd3, // 65-byte pubkey
+                    ],
+                    sequence: u64::MAX,
+                    sig_op_count: 0,
+                }],
+                vec![
+                    TransactionOutput {
+                        value: 0x2123e300,
+                        script_public_key: ScriptPublicKey::new(
+                            0,
+                            scriptvec!(
+                                0x76, // OP_DUP
+                                0xa9, // OP_HASH160
+                                0x14, // OP_DATA_20
+                                0xc3, 0x98, 0xef, 0xa9, 0xc3, 0x92, 0xba, 0x60, 0x13, 0xc5, 0xe0, 0x4e, 0xe7, 0x29, 0x75, 0x5e, 0xf7,
+                                0xf5, 0x8b, 0x32, 0x88, // OP_EQUALVERIFY
+                                0xac  // OP_CHECKSIG
+                            ),
+                        ),
+                    },
+                    TransactionOutput {
+                        value: 0x108e20f00,
+                        script_public_key: ScriptPublicKey::new(
+                            0,
+                            scriptvec!(
+                                0x76, // OP_DUP
+                                0xa9, // OP_HASH160
+                                0x14, // OP_DATA_20
+                                0x94, 0x8c, 0x76, 0x5a, 0x69, 0x14, 0xd4, 0x3f, 0x2a, 0x7a, 0xc1, 0x77, 0xda, 0x2c, 0x2f, 0x6b, 0x52,
+                                0xde, 0x3d, 0x7c, 0x88, // OP_EQUALVERIFY
+                                0xac  // OP_CHECKSIG
+                            ),
+                        ),
+                    },
+                ],
+                0,
+                SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            ),
+            Transaction::new(
+                0,
+                vec![TransactionInput {
+                    previous_outpoint: TransactionOutpoint {
+                        transaction_id: TransactionId::from_slice(&[
+                            0xc3, 0x3e, 0xbf, 0xf2, 0xa7, 0x09, 0xf1, 0x3d, 0x9f, 0x9a, 0x75, 0x69, 0xab, 0x16, 0xa3, 0x27, 0x86,
+                            0xaf, 0x7d, 0x7e, 0x2d, 0xe0, 0x92, 0x65, 0xe4, 0x1c, 0x61, 0xd0, 0x78, 0x29, 0x4e, 0xcf, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        ]),
+                        index: 1,
+                    },
+                    signature_script: vec![
+                        0x47, // OP_DATA_71
+                        0x30, 0x44, 0x02, 0x20, 0x03, 0x2d, 0x30, 0xdf, 0x5e, 0xe6, 0xf5, 0x7f, 0xa4, 0x6c, 0xdd, 0xb5, 0xeb, 0x8d,
+                        0x0d, 0x9f, 0xe8, 0xde, 0x6b, 0x34, 0x2d, 0x27, 0x94, 0x2a, 0xe9, 0x0a, 0x32, 0x31, 0xe0, 0xba, 0x33, 0x3e,
+                        0x02, 0x20, 0x3d, 0xee, 0xe8, 0x06, 0x0f, 0xdc, 0x70, 0x23, 0x0a, 0x7f, 0x5b, 0x4a, 0xd7, 0xd7, 0xbc, 0x3e,
+                        0x62, 0x8c, 0xbe, 0x21, 0x9a, 0x88, 0x6b, 0x84, 0x26, 0x9e, 0xae, 0xb8, 0x1e, 0x26, 0xb4, 0xfe, 0x01,
+                        0x41, // OP_DATA_65
+                        0x04, 0xae, 0x31, 0xc3, 0x1b, 0xf9, 0x12, 0x78, 0xd9, 0x9b, 0x83, 0x77, 0xa3, 0x5b, 0xbc, 0xe5, 0xb2, 0x7d,
+                        0x9f, 0xff, 0x15, 0x45, 0x68, 0x39, 0xe9, 0x19, 0x45, 0x3f, 0xc7, 0xb3, 0xf7, 0x21, 0xf0, 0xba, 0x40, 0x3f,
+                        0xf9, 0x6c, 0x9d, 0xee, 0xb6, 0x80, 0xe5, 0xfd, 0x34, 0x1c, 0x0f, 0xc3, 0xa7, 0xb9, 0x0d, 0xa4, 0x63, 0x1e,
+                        0xe3, 0x95, 0x60, 0x63, 0x9d, 0xb4, 0x62, 0xe9, 0xcb, 0x85, 0x0f, // 65-byte pubkey
+                    ],
+                    sequence: u64::MAX,
+                    sig_op_count: 0,
+                }],
+                vec![
+                    TransactionOutput {
+                        value: 0xf4240,
+                        script_public_key: ScriptPublicKey::new(
+                            0,
+                            scriptvec!(
+                                0x76, // OP_DUP
+                                0xa9, // OP_HASH160
+                                0x14, // OP_DATA_20
+                                0xb0, 0xdc, 0xbf, 0x97, 0xea, 0xbf, 0x44, 0x04, 0xe3, 0x1d, 0x95, 0x24, 0x77, 0xce, 0x82, 0x2d, 0xad,
+                                0xbe, 0x7e, 0x10, 0x88, // OP_EQUALVERIFY
+                                0xac  // OP_CHECKSIG
+                            ),
+                        ),
+                    },
+                    TransactionOutput {
+                        value: 0x11d260c0,
+                        script_public_key: ScriptPublicKey::new(
+                            0,
+                            scriptvec!(
+                                0x76, // OP_DUP
+                                0xa9, // OP_HASH160
+                                0x14, // OP_DATA_20
+                                0x6b, 0x12, 0x81, 0xee, 0xc2, 0x5a, 0xb4, 0xe1, 0xe0, 0x79, 0x3f, 0xf4, 0xe0, 0x8a, 0xb1, 0xab, 0xb3,
+                                0x40, 0x9c, 0xd9, 0x88, // OP_EQUALVERIFY
+                                0xac  // OP_CHECKSIG
+                            ),
+                        ),
+                    },
+                ],
+                0,
+                SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            ),
+            Transaction::new(
+                0,
+                vec![TransactionInput {
+                    previous_outpoint: TransactionOutpoint {
+                        transaction_id: TransactionId::from_slice(&[
+                            0x0b, 0x60, 0x72, 0xb3, 0x86, 0xd4, 0xa7, 0x73, 0x23, 0x52, 0x37, 0xf6, 0x4c, 0x11, 0x26, 0xac, 0x3b,
+                            0x24, 0x0c, 0x84, 0xb9, 0x17, 0xa3, 0x90, 0x9b, 0xa1, 0xc4, 0x3d, 0xed, 0x5f, 0x51, 0xf4, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        ]),
+                        index: 0,
+                    },
+                    signature_script: vec![
+                        0x49, // OP_DATA_73
+                        0x30, 0x46, 0x02, 0x21, 0x00, 0xbb, 0x1a, 0xd2, 0x6d, 0xf9, 0x30, 0xa5, 0x1c, 0xce, 0x11, 0x0c, 0xf4, 0x4f,
+                        0x7a, 0x48, 0xc3, 0xc5, 0x61, 0xfd, 0x97, 0x75, 0x00, 0xb1, 0xae, 0x5d, 0x6b, 0x6f, 0xd1, 0x3d, 0x0b, 0x3f,
+                        0x4a, 0x02, 0x21, 0x00, 0xc5, 0xb4, 0x29, 0x51, 0xac, 0xed, 0xff, 0x14, 0xab, 0xba, 0x27, 0x36, 0xfd, 0x57,
+                        0x4b, 0xdb, 0x46, 0x5f, 0x3e, 0x6f, 0x8d, 0xa1, 0x2e, 0x2c, 0x53, 0x03, 0x95, 0x4a, 0xca, 0x7f, 0x78, 0xf3,
+                        0x01, // 73-byte signature
+                        0x41, // OP_DATA_65
+                        0x04, 0xa7, 0x13, 0x5b, 0xfe, 0x82, 0x4c, 0x97, 0xec, 0xc0, 0x1e, 0xc7, 0xd7, 0xe3, 0x36, 0x18, 0x5c, 0x81,
+                        0xe2, 0xaa, 0x2c, 0x41, 0xab, 0x17, 0x54, 0x07, 0xc0, 0x94, 0x84, 0xce, 0x96, 0x94, 0xb4, 0x49, 0x53, 0xfc,
+                        0xb7, 0x51, 0x20, 0x65, 0x64, 0xa9, 0xc2, 0x4d, 0xd0, 0x94, 0xd4, 0x2f, 0xdb, 0xfd, 0xd5, 0xaa, 0xd3, 0xe0,
+                        0x63, 0xce, 0x6a, 0xf4, 0xcf, 0xaa, 0xea, 0x4e, 0xa1, 0x4f, 0xbb, // 65-byte pubkey
+                    ],
+                    sequence: u64::MAX,
+                    sig_op_count: 0,
+                }],
+                vec![TransactionOutput {
+                    value: 0xf4240,
+                    script_public_key: ScriptPublicKey::new(
+                        0,
+                        scriptvec!(
+                            0x76, // OP_DUP
+                            0xa9, // OP_HASH160
+                            0x14, // OP_DATA_20
+                            0x39, 0xaa, 0x3d, 0x56, 0x9e, 0x06, 0xa1, 0xd7, 0x92, 0x6d, 0xc4, 0xbe, 0x11, 0x93, 0xc9, 0x9b, 0xf2,
+                            0xeb, 0x9e, 0xe0, 0x88, // OP_EQUALVERIFY
+                            0xac  // OP_CHECKSIG
+                        ),
+                    ),
+                }],
+                0,
+                SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            ),
+        ];
+
+        // Compute the merkle root from the block transactions so the header
+        // commitment is correct-by-construction (Hash64).
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let example_block = MutableBlock::new(
+            Header::new_finalized(
+                0,
+                vec![vec![
+                    BlockHash::from_slice(&[
+                        0x16, 0x5e, 0x38, 0xe8, 0xb3, 0x91, 0x45, 0x95, 0xd9, 0xc6, 0x41, 0xf3, 0xb8, 0xee, 0xc2, 0xf3, 0x46, 0x11,
+                        0x89, 0x6b, 0x82, 0x1a, 0x68, 0x3b, 0x7a, 0x4e, 0xde, 0xfe, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    ]),
+                    BlockHash::from_slice(&[
+                        0x4b, 0xb0, 0x75, 0x35, 0xdf, 0xd5, 0x8e, 0x0b, 0x3c, 0xd6, 0x4f, 0xd7, 0x15, 0x52, 0x80, 0x87, 0x2a, 0x04,
+                        0x71, 0xbc, 0xf8, 0x30, 0x95, 0x52, 0x6a, 0xce, 0x0e, 0x38, 0xc6, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    ]),
+                ]]
+                .try_into()
+                .unwrap(),
+                hash_merkle_root,
+                Default::default(),
+                Default::default(),
+                0x17305aa654a,
+                0x207fffff,
+                1,
+                // PR-9.5d: pow_algo_id (Phase 1 kHeavyHash).
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                0,
+                0.into(),
+                9,
+                Default::default(),
+            ),
+            txs,
+        );
+
+        body_processor.validate_body_in_isolation(&example_block.clone().to_immutable()).unwrap();
+
+        let mut block = example_block.clone();
+        let txs = &mut block.transactions;
+        txs[1].version += 1;
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::BadMerkleRoot(_, _)));
+
+        let mut block = example_block.clone();
+        let txs = &mut block.transactions;
+        txs[1].inputs[0].sig_op_count = 255;
+        txs[1].inputs[1].sig_op_count = 255;
+        block.header.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::ExceedsComputeMassLimit(_, _)));
+
+        let mut block = example_block.clone();
+        let txs = &mut block.transactions;
+        txs.push(txs[1].clone());
+        block.header.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::DuplicateTransactions(_)));
+
+        let mut block = example_block.clone();
+        let txs = &mut block.transactions;
+        txs[1].subnetwork_id = SUBNETWORK_ID_COINBASE;
+        block.header.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::MultipleCoinbases(_)));
+
+        let mut block = example_block.clone();
+        let txs = &mut block.transactions;
+        txs[2].inputs[0].previous_outpoint = txs[1].inputs[0].previous_outpoint;
+        block.header.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::DoubleSpendInSameBlock(_)));
+
+        let mut block = example_block.clone();
+        let txs = &mut block.transactions;
+        txs[0].subnetwork_id = SUBNETWORK_ID_NATIVE;
+        block.header.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::FirstTxNotCoinbase));
+
+        let mut block = example_block.clone();
+        let txs = &mut block.transactions;
+        txs[1].inputs = vec![];
+        block.header.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        assert_match!(
+            body_processor.validate_body_in_isolation(&block.to_immutable()),
+            Err(RuleError::TxInIsolationValidationFailed(_, _))
+        );
+
+        let mut block = example_block;
+        let txs = &mut block.transactions;
+        txs[3].inputs[0].previous_outpoint = TransactionOutpoint { transaction_id: txs[2].id(), index: 0 };
+        block.header.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::ChainedTransaction(_)));
+
+        consensus.shutdown(wait_handles);
+    }
+
+    #[tokio::test]
+    async fn merkle_root_missing_parents_known_invalid_test() {
+        let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+        let consensus = TestConsensus::new(&config);
+        let wait_handles = consensus.init();
+
+        let mut block = consensus.build_block_with_parents_and_transactions(1.into(), vec![config.genesis.hash], vec![]);
+        block.transactions[0].version += 1;
+
+        let BlockValidationFutures { block_task, virtual_state_task } =
+            consensus.validate_and_insert_block(block.clone().to_immutable());
+
+        assert_match!(block_task.await, Err(RuleError::BadMerkleRoot(_, _)));
+        // Assert that both tasks return the same error
+        assert_match!(virtual_state_task.await, Err(RuleError::BadMerkleRoot(_, _)));
+
+        // BadMerkleRoot shouldn't mark the block as known invalid
+        assert_match!(
+            consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await,
+            Err(RuleError::BadMerkleRoot(_, _))
+        );
+
+        let mut block = consensus.build_block_with_parents_and_transactions(1.into(), vec![config.genesis.hash], vec![]);
+        block.header.parents_by_level.set_direct_parents(vec![0.into()]);
+
+        assert_match!(
+            consensus.validate_and_insert_block(block.clone().to_immutable()).virtual_state_task.await,
+            Err(RuleError::MissingParents(_))
+        );
+
+        // MissingParents shouldn't mark the block as known invalid
+        assert_match!(
+            consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await,
+            Err(RuleError::MissingParents(_))
+        );
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): a non-empty `evm_payload` on
+    /// a pre-EVM (v0/v1) header is rejected by body validation.
+    #[test]
+    fn evm_payload_rejected_before_activation() {
+        use kaspa_consensus_core::evm::EvmExecutionPayload;
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        // Minimal block reaching `check_evm_payload`: one coinbase tx + correct merkle root.
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let header = Header::new_finalized(
+            0, // pre-EVM header version (< EVM_HEADER_VERSION)
+            vec![vec![1.into()]].try_into().unwrap(),
+            hash_merkle_root,
+            Default::default(),
+            Default::default(),
+            1,
+            0x207fffff,
+            1,
+            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            0,
+            0.into(),
+            0,
+            Default::default(),
+        );
+        let mut block = MutableBlock::new(header, txs);
+        block.evm_payload = EvmExecutionPayload { transactions: vec![vec![1, 2, 3]], ..Default::default() };
+        assert_match!(
+            body_processor.validate_body_in_isolation(&block.to_immutable()),
+            Err(RuleError::NonEmptyEvmPayloadBeforeActivation)
+        );
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq EVM Lane v0.4 §4.1/§6.1: on a v2+ header the body payload must
+    /// match `evm_payload_hash` (the DATA commitment — checked on every build),
+    /// and (`evm` builds) a syntactically inadmissible payload tx is a class-1
+    /// fault of the payload block itself.
+    #[test]
+    fn evm_payload_hash_and_class1_admission_enforced_on_v2() {
+        use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+        use kaspa_consensus_core::evm::{DepositClaim, EvmAddress, EvmExecutionPayload, EvmSystemOp};
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let mk_header = || {
+            Header::new_finalized(
+                EVM_HEADER_VERSION,
+                vec![vec![1.into()]].try_into().unwrap(),
+                hash_merkle_root,
+                Default::default(),
+                Default::default(),
+                1,
+                0x207fffff,
+                1,
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+        // A tx-free payload, so the check below is feature-independent (class-1
+        // tx admission only decodes under the `evm` build).
+        let payload = EvmExecutionPayload {
+            system_ops: vec![EvmSystemOp::DepositClaim(DepositClaim {
+                deposit_outpoint: Default::default(),
+                evm_address: EvmAddress::from_bytes([0xCC; 20]),
+                amount_sompi: 1,
+                claim_tip_sompi: 0,
+            })],
+            ..Default::default()
+        };
+
+        // Header commits to the zero payload hash but the body carries data ⇒ mismatch.
+        let mut block = MutableBlock::new(mk_header(), txs.clone());
+        block.evm_payload = payload.clone();
+        assert_match!(body_processor.validate_body_in_isolation(&block.to_immutable()), Err(RuleError::EvmPayloadHashMismatch));
+
+        // Correct data commitment ⇒ the payload rules pass.
+        let mut block = MutableBlock::new(mk_header().with_evm_payload_hash(payload.payload_hash()), txs.clone());
+        block.evm_payload = payload;
+        body_processor.validate_body_in_isolation(&block.to_immutable()).unwrap();
+
+        // Class-1 admission (evm builds): an undecodable payload tx invalidates
+        // the payload block itself (v0.4 §6.1 class 1).
+        #[cfg(feature = "evm")]
+        {
+            let bad_payload = EvmExecutionPayload { transactions: vec![vec![0xde, 0xad]], ..Default::default() };
+            let mut block = MutableBlock::new(mk_header().with_evm_payload_hash(bad_payload.payload_hash()), txs.clone());
+            block.evm_payload = bad_payload;
+            assert_match!(
+                body_processor.validate_body_in_isolation(&block.to_immutable()),
+                Err(RuleError::EvmPayloadTxInadmissible(0, _))
+            );
+        }
+
+        consensus.shutdown(wait_handles);
+    }
+
+    /// kaspa-pq EVM Lane v0.4 §14.1 — Y9 budget independence (audit K-10): the
+    /// EVM payload byte budget never enters the UTXO mass budget. A payload
+    /// filled to just under `MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK` contributes
+    /// ZERO block mass (the in-isolation mass result is identical with and
+    /// without it), and the byte cap trips on payload bytes alone, regardless
+    /// of how much mass headroom the block has.
+    #[test]
+    #[cfg(feature = "evm")]
+    fn evm_y9_payload_byte_budget_independent_of_utxo_mass_budget() {
+        use kaspa_consensus_core::constants::EVM_HEADER_VERSION;
+        use kaspa_consensus_core::evm::{EvmExecutionPayload, MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK};
+        let mut params = MAINNET_PARAMS.clone();
+        params.pq_enforcement = PqEnforcementMode::Disabled;
+        let consensus = TestConsensus::new(&Config::new(params));
+        let wait_handles = consensus.init();
+        let body_processor = consensus.block_body_processor();
+
+        // The §16 e2e fixture: a class-1-VALID signed EIP-1559 transfer.
+        // Class-1 admission is per-tx and duplication is an ACCEPTANCE-side
+        // skip (never a body fault), so repeating it legally fills the payload
+        // to the byte cap.
+        const FIXTURE_TX_NONCE0: &str = "02f86b834d534b8080843b9aca008252089400000000000000000000000000000000000000228201f480c001a03244f5d74a96a52bd1c42fa1b9c336f4d3ae5509190ed9a526f17971c7fd743ca07f58e09399b50636b84f0ae4a7634c60a11c6f32427b613ebf6f4a638d6c68c1";
+        let mut raw = vec![0u8; FIXTURE_TX_NONCE0.len() / 2];
+        faster_hex::hex_decode(FIXTURE_TX_NONCE0.as_bytes(), &mut raw).unwrap();
+
+        let base = EvmExecutionPayload::default().payload_bytes().len();
+        let per_tx = 4 + raw.len(); // borsh: 4-byte length prefix + raw bytes
+        let n = (MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - base) / per_tx;
+        let full_payload = EvmExecutionPayload { transactions: vec![raw.clone(); n], ..Default::default() };
+        let full_len = full_payload.payload_bytes().len();
+        assert!(full_len <= MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK, "filled payload is within the cap");
+        assert!(full_len > MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK - per_tx, "filled payload is NEAR the cap");
+
+        let coinbase = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_COINBASE, 0, vec![0u8; 19]);
+        let txs = vec![coinbase];
+        let hash_merkle_root = calc_hash_merkle_root(txs.iter());
+        let mk_header = || {
+            Header::new_finalized(
+                EVM_HEADER_VERSION,
+                vec![vec![1.into()]].try_into().unwrap(),
+                hash_merkle_root,
+                Default::default(),
+                Default::default(),
+                1,
+                0x207fffff,
+                1,
+                kaspa_consensus_core::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+                0,
+                0.into(),
+                0,
+                Default::default(),
+            )
+        };
+
+        // Identical UTXO content, empty vs near-cap payload: bit-identical mass.
+        let empty_payload = EvmExecutionPayload::default();
+        let block_empty = MutableBlock::new(mk_header().with_evm_payload_hash(empty_payload.payload_hash()), txs.clone());
+        let mass_empty = body_processor.validate_body_in_isolation(&block_empty.to_immutable()).unwrap();
+        let mut block_full = MutableBlock::new(mk_header().with_evm_payload_hash(full_payload.payload_hash()), txs.clone());
+        block_full.evm_payload = full_payload;
+        let mass_full = body_processor.validate_body_in_isolation(&block_full.to_immutable()).unwrap();
+        assert_eq!(mass_empty, mass_full, "a near-cap EVM payload contributes ZERO mass to the UTXO budget (§14.1)");
+
+        // One tx over the cap: the BYTE budget trips on its own — the block's
+        // huge remaining mass headroom is irrelevant.
+        let over_payload = EvmExecutionPayload { transactions: vec![raw; n + 1], ..Default::default() };
+        let mut block_over = MutableBlock::new(mk_header().with_evm_payload_hash(over_payload.payload_hash()), txs.clone());
+        block_over.evm_payload = over_payload;
+        assert_match!(body_processor.validate_body_in_isolation(&block_over.to_immutable()), Err(RuleError::EvmPayloadTooLarge(_, _)));
+
+        consensus.shutdown(wait_handles);
+    }
+}

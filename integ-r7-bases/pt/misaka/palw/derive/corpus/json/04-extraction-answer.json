@@ -1,0 +1,9 @@
+{
+  "name": "Misaka Mikoto",
+  "age": 14,
+  "tags": ["electromaster", "level 5"],
+  "address": { "city": "Academy City", "district": 7 },
+  "active": true,
+  "score": 0.75,
+  "notes": null
+}

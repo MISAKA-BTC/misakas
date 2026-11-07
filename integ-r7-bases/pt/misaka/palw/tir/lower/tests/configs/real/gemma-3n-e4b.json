@@ -1,0 +1,6 @@
+{
+  "architectures": [
+    "Gemma3nForConditionalGeneration"
+  ],
+  "model_type": "gemma3n"
+}

@@ -1,0 +1,20 @@
+{
+  "parent": "49892b675f82df1768ddb459d9c28211fa81519e",
+  "grouped_source_loop_byte_identical": true,
+  "grouped_loop_sha256": "6f659ee6553df0395f29d09d9e378d22f82134bc7794a8ecfe06a6dc38527b87",
+  "unchanged_schema_and_codec_sha256": {
+    "consensus/core/src/palw_staged_court_state_v1.rs": "a151f2006e52f7ff5d3ac325f79dd9b67fc0428f18f667a21e416a178bf37406",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "e96f78aa8d00ceac643b2efc4bb52129a39142c6fb25d29aeff3ddc68ed1e0d0",
+    "consensus/core/src/palw_court_shared_tir_stream_v1.rs": "0ce1888181e3ec1ba171758538db36f65cf4b667d8ce3d530356bd43d42df75d",
+    "consensus/core/src/palw_court_shared_tir_response_v1.rs": "54b73ed6a16e126c3aad16d165c08a8b790c902e4393c5be7ecd461313fba2f0"
+  },
+  "limits": "Source audit, not physical calibration, full-profile admission or signature-duty certification.",
+  "unaccounted_data_read_path": {
+    "observation": "authenticate_body and read_shared_data_v1 retain/recheck the complete IDs whenever its row exists, including StepNode/StepLeaf/StepRun. The matching native source authentication branches do not call the rows-root/IDs closure. Source-level cost observation only; no measured overhead or optimization claim.",
+    "paths": {
+      "consensus/core/src/palw_court_shared_tir_state_v1.rs": "a17943ef905e9dcea54cbb068a0aecb698577afe4b25475a5c4ee553f4655730",
+      "consensus/core/src/palw_tir_public_source_v1.rs": "118e541b64c7edee00aa08578fdc84d7fc0b04472e1edd5973eb359604c2885f"
+    },
+    "next": "Separate necessary trace/ID anchoring from step-only data validation, keep loaded-row integrity checks, and account the remaining work before a complete funded profile."
+  }
+}

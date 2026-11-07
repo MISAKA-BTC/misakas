@@ -1,0 +1,16 @@
+[Unit]
+Description=PALW node liveness watcher (stalled log + CLOSE-WAIT on the P2P port)
+Documentation=file:///root/t12/palw-rc-t12-seat-deadlock-2026-08-22.md
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/palw-liveness-watch
+Restart=always
+RestartSec=15
+# Capturing a backtrace of another process needs to attach to it.
+AmbientCapabilities=CAP_SYS_PTRACE
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

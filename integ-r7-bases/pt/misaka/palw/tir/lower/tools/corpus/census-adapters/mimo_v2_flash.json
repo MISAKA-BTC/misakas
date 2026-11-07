@@ -1,0 +1,489 @@
+{
+ "format": "misaka.palw.model-adapter.v1",
+ "id": "mimo_v2_flash",
+ "doc": "MiMo-V2-Flash (Xiaomi): a pre-norm decoder with the dense/sparse pattern per layer (mlp_layer_types), attention types per layer (layer_types) - the sliding layers use TWICE the kv heads, carry per-head attention sinks (hub name attention_sink_bias) and a window, and every layer a rotary base and partial-rotary factor keyed by layer type (0.334) - a distinct value head width v_head_dim, and a DeepSeek-style sigmoid router (selection bias, groups, renormalise, routed_scaling_factor) with NO shared expert. attention_value_scale (values times 0.707) is `AttnSpec.v_scale` (ATTN_VALUE_SCALE_V1, FR-31). PENDING VALIDATION (written during the quiet window). Third-party adapter (lane H): data only.",
+ "extends": [
+  "decoder-core"
+ ],
+ "match": {
+  "architectures": [
+   "MiMoV2FlashForCausalLM"
+  ],
+  "model_types": [
+   "mimo_v2_flash"
+  ]
+ },
+ "config": {
+  "defaults": {
+   "sliding_window": 128,
+   "tie_word_embeddings": false,
+   "n_group": 1,
+   "topk_group": 1,
+   "routed_scaling_factor": 1.0,
+   "norm_topk_prob": true
+  },
+  "inert": [
+   "output_router_logits"
+  ]
+ },
+ "vars": [
+  {
+   "name": "vscale",
+   "value": {
+    "$cfg?": "attention_value_scale"
+   }
+  },
+  {
+   "name": "vd",
+   "value": {
+    "$cfg": "v_head_dim"
+   }
+  },
+  {
+   "name": "sw",
+   "value": {
+    "$cfgn": [
+     "sliding_window",
+     128
+    ]
+   }
+  },
+  {
+   "name": "types",
+   "value": {
+    "$layer_types": {
+     "n": {
+      "$var": "n"
+     },
+     "allowed": [
+      "full_attention",
+      "sliding_attention"
+     ],
+     "each": "full_attention"
+    }
+   }
+  },
+  {
+   "name": "mlt",
+   "value": {
+    "$cfg?": "mlp_layer_types"
+   }
+  },
+  {
+   "name": "rp",
+   "value": {
+    "$cfg?": "rope_parameters"
+   }
+  },
+  {
+   "name": "rope",
+   "value": {
+    "$rope": {
+     "dim": {
+      "$floor": {
+       "$mul": [
+        {
+         "$var": "hd"
+        },
+        {
+         "$get": [
+          {
+           "$get": [
+            {
+             "$var": "rp"
+            },
+            "full_attention",
+            {}
+           ]
+          },
+          "partial_rotary_factor",
+          1.0
+         ]
+        }
+       ]
+      }
+     },
+     "theta": 5000000.0,
+     "partial": {
+      "$get": [
+       {
+        "$get": [
+         {
+          "$var": "rp"
+         },
+         "full_attention",
+         {}
+        ]
+       },
+       "partial_rotary_factor",
+       1.0
+      ]
+     },
+     "layer_type": "full_attention",
+     "max_pos": {
+      "$var": "max_pos"
+     }
+    }
+   }
+  },
+  {
+   "name": "is_sw",
+   "layer": true,
+   "value": {
+    "$eq": [
+     {
+      "$index": [
+       {
+        "$var": "types"
+       },
+       {
+        "$var": "i"
+       }
+      ]
+     },
+     "sliding_attention"
+    ]
+   }
+  },
+  {
+   "name": "l_position",
+   "layer": true,
+   "value": {
+    "Rope": {
+     "$if": [
+      {
+       "$var": "is_sw"
+      },
+      {
+       "$rope": {
+        "dim": {
+         "$floor": {
+          "$mul": [
+           {
+            "$var": "hd"
+           },
+           {
+            "$get": [
+             {
+              "$get": [
+               {
+                "$var": "rp"
+               },
+               "sliding_attention",
+               {}
+              ]
+             },
+             "partial_rotary_factor",
+             1.0
+            ]
+           }
+          ]
+         }
+        },
+        "theta": 10000.0,
+        "partial": {
+         "$get": [
+          {
+           "$get": [
+            {
+             "$var": "rp"
+            },
+            "sliding_attention",
+            {}
+           ]
+          },
+          "partial_rotary_factor",
+          1.0
+         ]
+        },
+        "layer_type": "sliding_attention",
+        "max_pos": {
+         "$var": "max_pos"
+        }
+       }
+      },
+      {
+       "$var": "rope"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "l_mixer",
+   "layer": true,
+   "value": {
+    "Attention": {
+     "heads": {
+      "$var": "heads"
+     },
+     "kv_heads": {
+      "$if": [
+       {
+        "$var": "is_sw"
+       },
+       {
+        "$mul": [
+         {
+          "$var": "kv"
+         },
+         2
+        ]
+       },
+       {
+        "$var": "kv"
+       }
+      ]
+     },
+     "head_dim": {
+      "$var": "hd"
+     },
+     "v_head_dim": {
+      "$var": "vd"
+     },
+     "q_bias": {
+      "$var": "qkv_bias"
+     },
+     "k_bias": {
+      "$var": "qkv_bias"
+     },
+     "v_bias": {
+      "$var": "qkv_bias"
+     },
+     "o_bias": false,
+     "qk_norm": null,
+     "position": {
+      "$var": "l_position"
+     },
+     "scale": {
+      "$var": "attn_scale"
+     },
+     "window": {
+      "$if": [
+       {
+        "$var": "is_sw"
+       },
+       {
+        "$var": "sw"
+       },
+       null
+      ]
+     },
+     "sinks": {
+      "$var": "is_sw"
+     },
+     "q_temperature": null,
+     "param_prefix": {
+      "$if": [
+       {
+        "$var": "is_sw"
+       },
+       "attn_sw",
+       null
+      ]
+     },
+     "v_scale": {
+      "$if": [
+       {
+        "$ne": [
+         {
+          "$var": "vscale"
+         },
+         null
+        ]
+       },
+       {
+        "$var": "vscale"
+       },
+       1.0
+      ]
+     }
+    }
+   }
+  },
+  {
+   "name": "e",
+   "value": {
+    "$alias": [
+     [
+      "n_routed_experts",
+      "num_local_experts",
+      "num_experts"
+     ],
+     256
+    ]
+   }
+  },
+  {
+   "name": "k",
+   "value": {
+    "$cfg": "num_experts_per_tok"
+   }
+  },
+  {
+   "name": "topk_ok",
+   "value": {
+    "$bad": [
+     {
+      "$and": [
+       {
+        "$gt": [
+         {
+          "$var": "k"
+         },
+         0
+        ]
+       },
+       {
+        "$le": [
+         {
+          "$var": "k"
+         },
+         {
+          "$var": "e"
+         }
+        ]
+       }
+      ]
+     },
+     "top-k out of range"
+    ]
+   }
+  },
+  {
+   "name": "moe_inter",
+   "value": {
+    "$cfg": "moe_intermediate_size"
+   }
+  },
+  {
+   "name": "router",
+   "value": {
+    "scoring": "Sigmoid",
+    "linear_bias": false,
+    "selection_bias": true,
+    "groups": {
+     "n_group": {
+      "$cfg": "n_group"
+     },
+     "topk_group": {
+      "$cfg": "topk_group"
+     },
+     "score": "Top2Sum"
+    },
+    "normalize": {
+     "$cfg": "norm_topk_prob"
+    },
+    "norm_eps": 1e-20,
+    "scale": {
+     "$cfg": "routed_scaling_factor"
+    },
+    "jitter_eps": 0.0,
+    "per_expert_scale": false
+   }
+  },
+  {
+   "name": "l_ffn",
+   "layer": true,
+   "value": {
+    "$if": [
+     {
+      "$ne": [
+       {
+        "$var": "mlt"
+       },
+       null
+      ]
+     },
+     {
+      "$if": [
+       {
+        "$eq": [
+         {
+          "$index": [
+           {
+            "$var": "mlt"
+           },
+           {
+            "$var": "i"
+           }
+          ]
+         },
+         "sparse"
+        ]
+       },
+       {
+        "Moe": {
+         "experts": {
+          "$var": "e"
+         },
+         "top_k": {
+          "$var": "k"
+         },
+         "intermediate": {
+          "$var": "moe_inter"
+         },
+         "act": {
+          "$var": "act"
+         },
+         "router": {
+          "$var": "router"
+         },
+         "shared": null
+        }
+       },
+       {
+        "Mlp": {
+         "intermediate": {
+          "$var": "inter"
+         },
+         "act": {
+          "$var": "act"
+         },
+         "gated": true,
+         "up_bias": false,
+         "down_bias": false
+        }
+       }
+      ]
+     },
+     {
+      "Mlp": {
+       "intermediate": {
+        "$var": "inter"
+       },
+       "act": {
+        "$var": "act"
+       },
+       "gated": true,
+       "up_bias": false,
+       "down_bias": false
+      }
+     }
+    ]
+   }
+  },
+  {
+   "name": "names",
+   "value": {
+    "$merge": [
+     {
+      "$var": "names_base"
+     },
+     {
+      "attn.sinks": "{p}layers.{L}.self_attn.attention_sink_bias",
+      "moe.router": "{p}layers.{L}.mlp.gate",
+      "moe.sel_bias": "{p}layers.{L}.mlp.gate.e_score_correction_bias",
+      "moe.gate": "{p}layers.{L}.mlp.experts.{E}.gate_proj",
+      "moe.up": "{p}layers.{L}.mlp.experts.{E}.up_proj",
+      "moe.down": "{p}layers.{L}.mlp.experts.{E}.down_proj"
+     }
+    ]
+   }
+  },
+  {
+   "name": "model_type",
+   "value": "mimo_v2_flash"
+  }
+ ]
+}

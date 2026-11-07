@@ -1,0 +1,220 @@
+
+running 36 tests
+[lg14a] card 0's lying attempt won its lottery on try 5: claim dc753cf0347a4a8f56859804d802af7622e9eef0a16909b3a88a3477eaae67d88a0cb960d978f7c5d24f66f8ce4ef2f400207886d5e2a846001fb9fe5716c259
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 24: claim e63e09c1d66059ac88a0bc8f0b6552c26107f97e754b3f2f3e98aad6e8e565a312ffd3c29d86aa4d5145b4a58b7b1a4eca9ad1b40570eeb6db6f42fd99f325cc
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[g14-accept F-1] reserved at DAA 140 (floor 143)
+2026-10-21 04:39:25.377+09:00 [WARN ] PALW: block 04fe8ebcf0f79785b77a28c2c833c76e03fbe5c0f58258f03a06af06d1903c02f7635e7f59d3a0827aee31196e62fa8c3e61f6e2b498b46d6158c66d3102f298 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_f_the_same_conviction_from_final_minus_one ... ok
+[lg14a] card 0's honest attempt won its lottery on try 111: claim 3b45a52fcafe06e2fc6791cb252608e75bf515e0ce94c36bcd270538fc65f714a445636dd255cfefeff39b3c142b29bf929713e2e175a4c3514887cf6a9d2c59
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[g14-accept D impl] the mistaken accusation: Ok(())
+[lg14a] card 0's honest attempt won its lottery on try 142: claim 2fae20df03b763c408ef33a6dc373b65b0e66e79fa4f3861099f37477e0a57c0379158c5bb9653a1719ce41fbc128be0410d464f87652af98b06f5092b3c6c0d
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 70: claim de31d1bbf182c5fe9da26b4f3f28f78fab58d8ee04eafd23a33b07b60b272a81493a475a5cabac04d8bad4ba22ffa2a547dd54d00d19f96a0780c4a16effbf27
+[g14-accept D false] the false accusation: Ok(())
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_d_a_verifier_implementation_difference_is_not_producer_fraud ... ok
+2026-10-21 04:39:28.364+09:00 [WARN ] PALW: block 7a6542982d0555b1debde0b8cd6cd6ad59b3950a1db531fa09f08925c7f00942b31c9e54aa064b4eefabaeb73981350ac211a423ee3ba17c5c5cb73ee9856a69 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+2026-10-21 04:39:28.560+09:00 [WARN ] PALW: block 7a6542982d0555b1debde0b8cd6cd6ad59b3950a1db531fa09f08925c7f00942b31c9e54aa064b4eefabaeb73981350ac211a423ee3ba17c5c5cb73ee9856a69 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::d2_the_pursuit_survives_a_restart ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_d_a_false_accusation_of_an_honest_claim_is_refused ... ok
+[lg14a] card 0's lying attempt won its lottery on try 153: claim 15077ecdf8a9416a12e3d98cf8b80f6acafc2df092856040bb1607c3d69f39938d48f9442e1efc04e8bd5f1385411e8b57711b748d36513ddf0a8ad82c132fb2
+[lg14a] card 0's lying attempt won its lottery on try 154: claim f35805c0d9f36af1290df67b5495f38ae195f2ea316100dddc41ffeb410acfa6a08b5d1a133475a8d637815c0fe2b5f9838ed9ab57c745bb47565afb55d970d5
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+[g14-accept F exit] the locked seat's exit: Ok(()), retiring false
+[g14-accept F exit] the producer's exit: Ok(()), retiring true
+2026-10-21 04:39:34.136+09:00 [WARN ] PALW: block 8dc33d2f3dda67335065fbf36ae979541303fac16c81a12dcb6b5d94269043bde2384ea8b7b712c27079a7bcd204506462a012640df9d372223f40c26e8a4f2b voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+2026-10-21 04:39:34.253+09:00 [WARN ] PALW: block f5530066ad0ac9ae1227e359080052e78aaf8cbbeb9e08658e6694d75bd5ed4fd98b9ce3201722a15fd63ae3e94eb430540933bf124206550eda18b4b9e45f70 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_f_a_bond_exit_raced_against_the_pursuit_escapes_nothing ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::d2_a_reorg_undoes_and_returns_the_reservation_exactly ... ok
+[lg14a] card 0's lying attempt won its lottery on try 228: claim 5cb9d34f06b390059dd4af7d4044240853008a8284ffe7bf430a4b5e0d286965c51a44dd84b2905d8ac8b14c2c73a248cf14fe1abd7e1e8bb72498914d4bddca
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[g14-accept F after-final] phase Some(Voided { voided_daa: 163, reason: CourtFraud })
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_f_the_same_conviction_after_final_inside_the_liability ... ok
+[lg14a] card 0's lying attempt won its lottery on try 282: claim 9a7b732074cce81b7c3e7234850957c834246ad98ab782bb474ee80ef9ad5d395ac1c6abe9c4902756b550ee85e8034d9c3857e99644148ec7a6e83d7b42eeaf
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+2026-10-21 04:39:43.172+09:00 [WARN ] PALW: block 888b688b93be5ef3ab330957f1f1f522435b36a1e3a368a883d96feb3a41304b5e0dd7a9ebe42c8787383999ef4b5f1eba22b4841b92171d08196dc5108cc23b voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[g14-accept E] offences [(302c5f512050839092100cd9fb8ab46e0c6291c1387ced5d5dae81e7123d380456a345af011ccfd5cb8497cf7dd3fba8503c4055089d083e5d688121d37f7677, TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 7 }, 976297750034), (36e907bd90b58ac72be0c982afdcb4fbf97a59288cc7c44d98cdd76943d2f3d6ccd95120cfdbe577fd65cc114d336dc776d78be3fa28b52d7a657c47bda1cde4, TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 5 }, 976297750034), (4435d30116fd7af9bd60606e029cbb83e18ac994a1d20325eee92e551587e67f406d06c764fe046d5425ce2c2b9770d83586a0e9afd0f85089f635ba8ddc14e5, TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 6 }, 976297750034), (82800a925e0320e0886954a200421bfcc61ed80124b96339dd3fde45c89db76cfe0abd6b7b2bbd5067197d64e97f4b3c7794e7bdc5fc01e7d4ed389c57bac5db, TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 1 }, 976297750034), (c7330e60160a16b056ebf81cd34a3a0006f5c7b544bd38a649073f03c603ff98427829bbe8cacd8d7217267658cd943d743e7edca1fcca41feaff25f1725cca1, TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 2 }, 976297750034), (fe63aa5989380235391c667c3ad8b2558b1b5ca61bda0c85f0fe53cb2570815b4882425ad05921f6e489c524b9ab98c4ec29cb96f56fbcd4fb6be8e26ce95bac, TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 0 }, 1280384610960)]
+[g14-accept E] card 0: collateral fell 1280384610960, its offences collected 1280384610960
+[g14-accept E] card 1: collateral fell 976297750034, its offences collected 976297750034
+[g14-accept E] card 2: collateral fell 976297750034, its offences collected 976297750034
+[g14-accept E] card 5: collateral fell 976297750034, its offences collected 976297750034
+[g14-accept E] card 6: collateral fell 976297750034, its offences collected 976297750034
+[g14-accept E] card 7: collateral fell 976297750034, its offences collected 976297750034
+[g14-accept E] step 0 (DAA 43): reporter credit 616185377336 of 6161873361130 collected
+[g14-accept E] step 1 (DAA 43): reporter credit 616185377336 of 6161873361130 collected
+[g14-accept E] step 2 (DAA 46): reporter credit 616185377336 of 6161873361130 collected
+[g14-accept E] step 3 (DAA 52): reporter credit 616185377336 of 6161873361130 collected
+[g14-accept E] step 4 (DAA 60): reporter credit 616185377336 of 6161873361130 collected
+[lg14a] card 0's honest attempt won its lottery on try 461: claim 8a47d955fd3d0c27b5a09e165047e7d227e0959e56ff3495cd86050ef01598778b39cb639a38b749d12e16542103ee4c9a682152adbd0b75d898605f256f0a9d
+[g14-accept G] honest claim 8a47d955fd3d0c27b5a09e165047e7d227e0959e56ff3495cd86050ef01598778b39cb639a38b749d12e16542103ee4c9a682152adbd0b75d898605f256f0a9d accepted at DAA 39 (wanted 39)
+[g14-accept E] step 5 (DAA 70): reporter credit 616185377336 of 6161873361130 collected
+[g14-accept E] the accusation again: Err("mempool: an H-1 lifecycle carrier the fold would refuse: claim 9a7b732074cce81b7c3e7234850957c834246ad98ab782bb474ee80ef9ad5d395ac1c6abe9c4902756b550ee85e8034d9c3857e99644148ec7a6e83d7b42eeaf is in the wrong phase for ShardCourtAccused")
+[g14-accept E] a kind-3 filing again: Err("mempool: an H-1 lifecycle carrier the fold would refuse: bond PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 1 })'s false Valid on claim 9a7b732074cce81b7c3e7234850957c834246ad98ab782bb474ee80ef9ad5d395ac1c6abe9c4902756b550ee85e8034d9c3857e99644148ec7a6e83d7b42eeaf is already convicted: one offence per seat and claim")
+[g14-accept E] a kind-3 filing again: Err("mempool: an H-1 lifecycle carrier the fold would refuse: bond PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 5 })'s false Valid on claim 9a7b732074cce81b7c3e7234850957c834246ad98ab782bb474ee80ef9ad5d395ac1c6abe9c4902756b550ee85e8034d9c3857e99644148ec7a6e83d7b42eeaf is already convicted: one offence per seat and claim")
+[g14-accept E] a kind-3 filing again: Err("mempool: an H-1 lifecycle carrier the fold would refuse: bond PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 7 })'s false Valid on claim 9a7b732074cce81b7c3e7234850957c834246ad98ab782bb474ee80ef9ad5d395ac1c6abe9c4902756b550ee85e8034d9c3857e99644148ec7a6e83d7b42eeaf is already convicted: one offence per seat and claim")
+[g14-accept E] a kind-3 filing again: Err("mempool: an H-1 lifecycle carrier the fold would refuse: bond PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 2 })'s false Valid on claim 9a7b732074cce81b7c3e7234850957c834246ad98ab782bb474ee80ef9ad5d395ac1c6abe9c4902756b550ee85e8034d9c3857e99644148ec7a6e83d7b42eeaf is already convicted: one offence per seat and claim")
+[g14-accept E] a kind-3 filing again: Err("mempool: an H-1 lifecycle carrier the fold would refuse: bond PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 6 })'s false Valid on claim 9a7b732074cce81b7c3e7234850957c834246ad98ab782bb474ee80ef9ad5d395ac1c6abe9c4902756b550ee85e8034d9c3857e99644148ec7a6e83d7b42eeaf is already convicted: one offence per seat and claim")
+[g14-accept E] producer frozen after the conviction: false
+2026-10-21 04:39:46.619+09:00 [WARN ] PALW: block 888b688b93be5ef3ab330957f1f1f522435b36a1e3a368a883d96feb3a41304b5e0dd7a9ebe42c8787383999ef4b5f1eba22b4841b92171d08196dc5108cc23b voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] card 0's honest attempt won its lottery on try 272: claim 44b0086ba86fc55578e84320e1bb5af22ea43d4c2b6e026c66fc4f5eaa62cc8701b19b1586f53e1ea68ebd5a360242f04edfd416d00e0210e5f022fe2e1b6cbd
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_e_collected_once_reporter_from_collected_and_rights_void ... ok
+[lg14a] card 0's honest attempt won its lottery on try 189: claim 963c6df74480138748c1c2e1086d4fe9e651c51c4dcf5b90b659afc59f2dd38ce73d15709b93b9b27f4cbd50c31aea4c5246ac76a06269aa49ba01dc3bd6536e
+[g14-accept G] honest claim 963c6df74480138748c1c2e1086d4fe9e651c51c4dcf5b90b659afc59f2dd38ce73d15709b93b9b27f4cbd50c31aea4c5246ac76a06269aa49ba01dc3bd6536e accepted at DAA 40 (wanted 40)
+[lg14a] card 0's honest attempt won its lottery on try 25: claim 5b263b28bd8fd618b0f78916af6cddfdcd983e7fbfa4ca1d83d5aef3b57e09b4b9d97f20ef4342cefc269c5f33593aba83b625b8f6121aeb3c65414cf1a5fd2d
+[g14-accept G] honest claim 5b263b28bd8fd618b0f78916af6cddfdcd983e7fbfa4ca1d83d5aef3b57e09b4b9d97f20ef4342cefc269c5f33593aba83b625b8f6121aeb3c65414cf1a5fd2d accepted at DAA 41 (wanted 41)
+[t12-e2e] the claim's anchor slot: reached after 36 heartbeats (DAA 41 -> 59)
+[t12-e2e] the claim's anchor slot: reached after 0 heartbeats (DAA 60 -> 60)
+[t12-e2e] the claim's anchor slot: reached after 0 heartbeats (DAA 61 -> 61)
+[g14-accept G] DAA 39: Final, escrowed 320084650080 sompi, producer leg 256067720064 sompi
+[g14-accept G] DAA 40: Final, escrowed 320084650080 sompi, producer leg 256067720064 sompi
+[g14-accept G] DAA 41: Final, escrowed 320084650080 sompi, producer leg 256067720064 sompi
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_g_honest_claims_before_at_and_after_the_fence_settle ... ok
+2026-10-21 04:39:55.986+09:00 [WARN ] PALW: block 843e6ce135f6e380a24e9e3dcdf11836ddcbe1063a26e61c91de3053d29bcd98b41164423043dd191c42cd7484bf2b1b8128f5a182b7e09e659f660f8bbda271 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] card 0's lying attempt won its lottery on try 499: claim e753be39ce27fd487fe4b018aabe48d8cec0ffa0e97255520c03f35d74a8df14f098eb8600ea3c3d3d7490794f3fc976a770e0f15f7ddc6cc4183badbacb12c8
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+2026-10-21 04:39:58.508+09:00 [WARN ] PALW: block a5f977f0368fc0242fe6654aa6dc49d6bd46754e9b005c07945882bf207f8bbf0eb490ecee67002344a3bec7dc346b857e315cb648af5080af10ba5aa791474f voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] verdict Convicted after 5 demands; lie at leaf Some(2780); claim Voided { voided_daa: 160, reason: CourtFraud }; licensed at 23, now 160
+[lg14a] card 0's lying attempt won its lottery on try 489: claim 852ae94dab7ffcdd976578ab666825c67fcfc07328d7d83985dac88bfc36d1d86837f0133fb7e5b338d2001433366ad35a2e6e7b8837540ce1acd259e9ebaade
+[lg14a] card 0's lying attempt won its lottery on try 442: claim cb12644b2da2c831d9c7b5e9dbe3d45e96a8c9294c440b443f1ee9e983e0b95af121804b512a2beb5a1a21b6b456ceabace65771c64c91f0b917789d0c97ddaa
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+2026-10-21 04:39:59.498+09:00 [WARN ] PALW: block a5f977f0368fc0242fe6654aa6dc49d6bd46754e9b005c07945882bf207f8bbf0eb490ecee67002344a3bec7dc346b857e315cb648af5080af10ba5aa791474f voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::d2_a_full_collusion_on_a_new_claim_is_convicted_before_final_on_the_node ... ok
+[court-op timing] one-move verdict (floor class, real rows): 35669 B object, 1 rows; ns min 133167 median 135458 max 144542 — macos-aarch64 release build, NOT a measured record
+2026-10-21 04:40:00.291+09:00 [WARN ] PALW: block 00920d9665118a8e00aca738fd0305c9220ae35952183396a046bdb776082f0060df807fc005d7a845e480907b55c4ee0f913696a6e348b2ac4210c039e0a86b voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[g14-close] 4 demands; lie at 2780; phase Voided { voided_daa: 162, reason: CourtFraud }
+[g14-close] card 5: liable (full attestation true)
+[g14-close] card 3: liable (full attestation true)
+[g14-close] card 7: liable (full attestation true)
+[g14-close] card 4: liable (full attestation true)
+[g14-close] card 1: liable (full attestation true)
+[g14-close] 5 seats, 5 liable and slashed, 5 full receipts
+2026-10-21 04:40:01.390+09:00 [WARN ] PALW: block 00920d9665118a8e00aca738fd0305c9220ae35952183396a046bdb776082f0060df807fc005d7a845e480907b55c4ee0f913696a6e348b2ac4210c039e0a86b voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::legacy_v2_attempt_full_collusion_outside_bond_convicts_with_court_capacity ... ok
+[lg14a] card 0's lying attempt won its lottery on try 153: claim cd62765bb47374596e45f1a60264cd9ffbb76e4cb13cc1cd007711b46f39ed35c7cc6afbdefa4909eecc6fb0d3abd4b792c4735ff39827205853afdafb3d9b0a
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 328: claim 1fb33b596da0ac451462b87c54cb1607b57123ef1e5afa0b43a9a13cf13507426e696a4fa87086e6d32f2f65365b70f1434381f3565f2c673e03db503895fe7a
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-21 04:40:03.241+09:00 [WARN ] PALW: block 37de95174e9e0e14aadfd57baf49e224bf70d2cdc48c1c16ffff9abcee9d3f05a082e9367da58fefe7a84a1d4aac0ccc9f6cc691d7ca9bd93f214d439abad597 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14r_resume::g14r_lg14a_an_ibd_node_started_mid_descent_carries_the_pursuit_to_the_conviction ... ok
+2026-10-21 04:40:03.814+09:00 [WARN ] PALW: block 724f543a6b904ec5ecef9e181d5142ce2a1ea3c1d9745dbb9678c4b334f85c12367837dbffd5f859523f7717c3ae08ca21b5c7c6bac5c3caf96880f7c5f7b075 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14r_resume::g14r_lg14a_a_pruned_import_after_the_reservation_and_binding_carries_the_pursuit_to_the_conviction ... ok
+[lg14a] card 0's lying attempt won its lottery on try 65: claim 9048e15cfbf72c20e98d1c76a1de7b99e4f744fd3eb4b3f96001663169e2410e976eb24825ad36d32045785d1546c4a3b056be67395971fd3b9ed7e5097289be
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+Routing wrpc://127.0.0.1:65290 -> grpc://127.0.0.1:65288
+Routing wrpc://127.0.0.1:65292 -> grpc://127.0.0.1:65288
+[lg14a] card 0's lying attempt won its lottery on try 243: claim 099100ad018c1f504f9f75f6c770ab859ba811e2ef86822561dcca7b625f4935386e46c2221bded4e55096f13e94e75e0b23e162ec821d46261cb5f885c71e92
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-21 04:40:04.773+09:00 [WARN ] PALW: block b7035a3f9b6c485b2e18ed7f8d0a5870c392d03bd12f7bf6117bd4e9762406d8ff998da2e2bd1cca1d06b65f8802e0ab50f372c7d572c6b042b04e9a8d71c36f voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+2026-10-21 04:40:04.777+09:00 [WARN ] PALW V2 state tip stood at b7035a3f9b6c485b2e18ed7f8d0a5870c392d03bd12f7bf6117bd4e9762406d8ff998da2e2bd1cca1d06b65f8802e0ab50f372c7d572c6b042b04e9a8d71c36f while the template selected parent is 9ef2e6c0e90b9aad66cbd7ed2ea787e6ce3797717a5c6003ce14515b86c6987b6ecefb77657e3068eff123afce406b0c87914570bbe3f11a7144f9de257b6101; re-derived the parent state over 1 reverted and 0 applied deltas so the committed root matches the validating walk
+Routing wrpc://127.0.0.1:65296 -> grpc://127.0.0.1:65294
+2026-10-21 04:40:04.884+09:00 [WARN ] GRPC, Stopped the connection handler forcefully
+2026-10-21 04:40:05.000+09:00 [WARN ] GRPC, Stopped the connection handler forcefully
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14r_resume::g14r_lg14a_the_dispute_reads_over_a_real_socket_follow_the_pursuit_across_a_disconnect_and_a_node_swap ... ok
+[lg14a] card 0's lying attempt won its lottery on try 462: claim 401493379a17b8f3df9dd63eecc26aacd865ce7306f6a0cc23e6de32d6307fad6a93b6b77e089f1471875103bfb411fa7d4638a10b37af5e15ed63505046ae0e
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-21 04:40:05.489+09:00 [WARN ] PALW: block 68f6d95e0160628abdd322acccaa2cf4ba1c3a165b8e44c3388572ad321b1f3447300ca53d6185550f07cf4d5403e0805679fdbe640445c6446104de6a8931ec voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] card 0's lying attempt won its lottery on try 45: claim 1b04574997acedbb448c92dd8a9b28dab5be06e9cd1dbf87d3352046fe22aa47fdb938a088888abd40d790e281d2e6a0b8516151cc8c9af4b33e02a278f49f3e
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+[g14r] Z's chain blocks carry 1 reservation(s) of the newcomer (A's rides a merged block)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14r_resume::g14r_lg14a_a_reorg_removes_the_reservation_and_a_new_verifier_re_derives_and_convicts_on_the_new_branch ... ok
+2026-10-21 04:40:08.311+09:00 [WARN ] PALW: block 23475807e5dad2d1c980f394e314e108c8ccb40e7f8e38333890c81d522cc7db90afbdfe87119cc9409298a8b09b9cbf958907b364be9a7cb029764bd4e04c29 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] verdict Convicted after 5 demands; lie at leaf Some(2780); claim Voided { voided_daa: 161, reason: CourtFraud }; licensed at 23, now 161
+[lg14a] card 0's lying attempt won its lottery on try 112: claim d54065e05694f4c78d6501f8a4a6a352459322f5bc81523db106dbc06cfb7647b0e187aa1ffa954c5b4765c0db724f25bca9b214e3293cdd7ae775a8ee7cc55b
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-21 04:40:09.230+09:00 [WARN ] PALW: block 23475807e5dad2d1c980f394e314e108c8ccb40e7f8e38333890c81d522cc7db90afbdfe87119cc9409298a8b09b9cbf958907b364be9a7cb029764bd4e04c29 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_lie_is_convicted_after_final ... ok
+2026-10-21 04:40:11.485+09:00 [WARN ] PALW: block 8adb081bd560ccd081d9b11475885182a4302f1cceb8a068a44c892f28aadbf2fcbbc1d674f9aee39f253d0ccc67849a84e3da64759b7fcbd7da66687e76c2b3 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] card 0's lying attempt won its lottery on try 651: claim fc1373c8593490e3bf4d9b97e0c1bcce891c181243a921195b089be3d1a04e17e27253230c596c6c7059a1c18b9863d1e9290bd7192e1ee597062b00b0ed6281
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 93: claim a9029a41313e2473ea83a250677c2c1af85d4daef96a4109ebfb52cbf8e6cf052964fc68179be7e913093cf7d77ad20f0ad86052e52356779dadd90260880167
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[court-op timing] one-move verdict (floor class, real rows): 35669 B object, 1 rows; ns min 135750 median 137750 max 145291 — macos-aarch64 release build, NOT a measured record
+2026-10-21 04:40:14.226+09:00 [WARN ] PALW: block 8529ee95a385f445383c3be8c23bb26059aa77256bf287a1142c5fcde19a8972972c216155801876d14bcb45c35c8c893298d465c6e13e7ac5624cb34e793371 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[g14-close] 4 demands; lie at 2780; phase Voided { voided_daa: 162, reason: CourtFraud }
+[g14-close] card 1: liable (full attestation true)
+[g14-close] card 3: liable (full attestation true)
+[g14-close] card 7: liable (full attestation true)
+[g14-close] card 4: liable (full attestation true)
+[g14-close] card 5: liable (full attestation true)
+[g14-close] 5 seats, 5 liable and slashed, 5 full receipts
+2026-10-21 04:40:14.298+09:00 [WARN ] PALW: block 79bc3e52da1a1ae3b7288a6652b532c2b9850d27dcbbc53955893c12823e153ac0303cad4327de2e133a157460a02d629594329402cd858bf4369a9e7f754b4e voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_sybil_reservation_and_sessions_pre_empt_nothing ... ok
+2026-10-21 04:40:15.212+09:00 [WARN ] PALW: block 8529ee95a385f445383c3be8c23bb26059aa77256bf287a1142c5fcde19a8972972c216155801876d14bcb45c35c8c893298d465c6e13e7ac5624cb34e793371 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::legacy_v2_attempt_full_collusion_outside_bond_convicts ... ok
+[lg14a] card 0's honest attempt won its lottery on try 189: claim 04dd30f3ebab9998afc39bc341b7496b8a69b06a312461f646c2f55334e88c295ce98a0714c793264d9380d58ef1691e71f6dea78e91ac475803a94a9e99e0df
+[lg14a] card 0's honest attempt won its lottery on try 417: claim 5b78a08c3f67c113f9abe1a20fca1c424163cb2d1e4368876d53fc50226e9dd0f6e28361b7f8f4425898c72c0b1806a2b2bb3b230f1d27c5a12371edb5e41792
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_newcomer_funds_and_relays_another_bonds_signed_answer ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_an_honest_claims_challenge_is_dismissed ... ok
+[lg14a] card 0's lying attempt won its lottery on try 82: claim 7ef60084c24b03b7f34f53bcb0078c8662c25118f9d151c20fa5b0a89c9505000589709e7aa8f05ca04f4d28a96d9f232a12bdd35eabdc59f0687d20cf4cacd9
+2026-10-21 04:40:20.819+09:00 [WARN ] PALW: block 718c37e2aef10f0f55a5aabbb6aa3cd32edee029bf2188979c3ffbb235448799f78985eed73606f2247c61beed91414f547bf720d7dcc439100b32c1daac2b91 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[g14-close held DA] phase Voided { voided_daa: 1228, reason: ProducerWithholding }, licensed 23, now 1229
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::legacy_v2_attempt_held_da_withholding_ends_in_da_default ... ok
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 258: claim 8fb229a334f9b5886da96ef912e16c150e837323067684f468312452cbccb642c29087bf9f37402ec4fa557197f6cffad9ac120c17d5b5f263ab7c231f93f4ee
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_unarmed_the_reservation_is_dropped_by_name_and_the_bystander_is_outrun ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_f_the_pursuit_window_and_the_payout_never_overlap has been running for over 60 seconds
+[g14-accept F horizon] past the DAA expiry 3144 (now 3146): claim row None, vesting (final, expiry, settled, matured) Some((144, 3144, 1, None))
+[g14-accept F horizon] a reservation carrier past the window: Ok(())
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_f_the_pursuit_window_and_the_payout_never_overlap ... ok
+[lg14a] card 0's lying attempt won its lottery on try 209: claim bbb5333b6179662c78fdc2310bad9dc527eaa716c6d8351ba0a7390bfff6204a917860dc7b6675ace7c4769324241ed9e18bef9b170b5d6a97b9a25f8d64de3a
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's honest attempt won its lottery on try 254: claim 9f5631caea3b08b8476623a47c823e0dbc9e9157fd65ad710492120a38883fe210fc02f7daa174be95671a7afe478644748658a41adf696028437afea3adcc12
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_req_1_2_3_the_hard_deadline_is_fixed_at_acceptance_on_the_node ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_f_under_g15_an_unpaid_reward_past_its_expiry_is_still_prosecuted has been running for over 60 seconds
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_reorg_undoes_and_returns_the_reservation_exactly ... ok
+[lg14a] card 0's honest attempt won its lottery on try 53: claim ef0d75980bc0f104bd303f9ad33833ae8cc08a023f138903427c466643a532ee80585dd4c50ee93fb944464a9080c997c00d8d1595d0fb9647b65cf6c1d90028
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 67: claim 49c22b55da0ded902de79987f9ba4e97adc8be8a2d1595674f7e5767b4a2a18cd339eed2caadfb99e411a4f3aaceaeff59481d6cf097d77b54a633c51b57b20f
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_the_fixed_deadline_survives_a_restart_and_replays ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_req_5c_a_reorg_moves_the_open_session_hold_exactly_with_the_branch ... ok
+2026-10-21 04:40:29.554+09:00 [WARN ] PALW: block 326e7552e7e5bf6ab5d5db0cc016fe70fbd31a5b908311cd63fdf12fc68660fe02cea974dc4f47d99045685988f8636907edc84af8a34b212f46f245751594c3 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+2026-10-21 04:40:34.954+09:00 [WARN ] PALW: block bbf1643ad92eb5491fb8ecfe3c7570f1c8ef69a94d6cf8f6f4de9dc39bebc5da17b71ed516b9ac6d5772098949c2855767cd14e782947ac6f253764b045a98b7 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_withheld_unit_defaults ... ok
+[lg14a] card 0's lying attempt won its lottery on try 155: claim 4f9d327e4d0eb08d4844f41654482c6c581648bcaf592c07fe64b8ef3bf878d30f44e143a25d3f17c4e745a1d97bc1d49f63782607e68a4adafe29fa231d7be4
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 270: claim 1ffde94306231ee451d79a1245840d48264801c8d6fecc06f1f7e985b5baf4aedb67cf3d152fa0f899fbb05a321447c59d94957efaa4602ea3a79f11de798d1a
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_req_5d_a_reorg_moves_the_reservation_exactly_with_the_branch ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_req_4_a_pursuit_starts_only_inside_its_budget_on_the_node ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14 has been running for over 60 seconds
+[g14-accept F G-15] past the DAA expiry 3144 (now 3169): claim row Some(Final { final_daa: 144 }), vesting matured Some(None)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::g14_acceptance::g14_accept_f_under_g15_an_unpaid_reward_past_its_expiry_is_still_prosecuted ... ok
+[lg14a] card 0's honest attempt won its lottery on try 648: claim 7b0e769a8b32d5ec8937313cc58195a9502c37c66f55107830509fba0b644622fd482a494d9a28cf8fb38b355c4769927ba4c70d530997b09852ada9dbc907af
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2144 -> 2164)
+2026-10-21 04:40:45.226+09:00 [WARN ] PALW: block fd51613da70c49125b7dab782d9aa333353d599617f42a97d00da0dec57bf9f170c444d5dac994ab6282a73c988071f5a0e5a38d3857c518e1afa472dabd1f7c voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] card 0's lying attempt won its lottery on try 491: claim 093cf3578765d8b4f9bb1c36e8a05a6c796587b5f804eed4cdd753e99843f5649ce81f112fb708e6243e47ec45c44a9ed7476f15ce855bb8b178f4f79947f0e4
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-21 04:40:46.781+09:00 [WARN ] PALW: block 5c17ee88572cef5ea31b276ea51008f7eca21d6bc0ab1204418e2fed5744d5805d68e4c909690d648d0ff4225116d45bb744a4812c669f02ebe0f3a1844bcb7c voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_the_pursuit_survives_a_node_restart ... ok
+[lg14a] card 0's lying attempt won its lottery on try 436: claim 9df44135646aace75107d5eb8305f28251a070ad35c4f7248422e08a640eeb55301e7ba06a65f7e4e16e5792a28f86788ccbe67496c9db96449db02627be464d
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+2026-10-21 04:40:52.079+09:00 [WARN ] PALW: block 6143786acd4b2e8c3d4d359f08131fdf2d3391fce78a2d523887a7a803b66f82452e4f206913a38b87c906b79b99235edcc3879b260e354ae105bd46138c7892 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+2026-10-21 04:40:56.449+09:00 [WARN ] PALW: block 7f5f728c44857e59f044378991761742fe3bb6320a71e2de0f6c605611d7bd0e641c073d60c2934b81a6058623aaa6e9c17a4e8823bab880caa1535bc4802d63 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_req_5_reaching_the_deadline_alone_never_finals_an_unresolved_claim_on_the_node ... ok
+[lg14a] card 0's honest attempt won its lottery on try 633: claim ed816ab49084e11bb47fcc77f596072f5c83be900faa7f1f10de76c7ae70d90b52c998a063629d060357648e51bc91f9976ffb02631ada027c3b16fc33c18e71
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 4165 -> 4185)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_req_5b_a_reservation_without_a_session_finals_at_its_effective_deadline has been running for over 60 seconds
+2026-10-21 04:41:23.638+09:00 [WARN ] PALW: block e804a7dd099c779ba3fd6da7b55aac0f513ee12e2e8eeff0a0853509eef39ea302a4c18a64a4b586169c35e18a239071ffe0f21872352545be426f0510e8d2e9 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] card 0's lying attempt won its lottery on try 1178: claim af531103746b5732fd097cbac07b6ca3cbcd3468333542e9f8b1d062a8c3156d55a9f04ae0c3fa207bca38da1db212d8e506327d0792b3b838ae6d68c525b0a5
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+2026-10-21 04:41:38.983+09:00 [WARN ] PALW: block a0864034e54e1c11b668804005b81e9f5b6f0e13031cb17d3055c7cf3bf1190144280978a432c7edf89a5eb468d3cd0a66bc73d8da804cde0bc9d609c97d7e64 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] card 0's honest attempt won its lottery on try 244: claim f23e8802a4790d858c472d5920b9c2113f356eb4af3c2c36d845b1d655d3e7bb53cebe9a53cd5852dcb3a713810b4e5e1327ad3fb9f214e8b09c52f67bc72ddd
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 6186 -> 6206)
+2026-10-21 04:41:54.496+09:00 [WARN ] PALW: block cb3c1ec4f164804d70ccb26c8c796606d91c9b272dab0314d3a94dcd09fea781dae95743fb7286c8e9feb6715e6ca20062c4aebe1d7d59c86cb112000729082e voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::x3_req_5b_a_reservation_without_a_session_finals_at_its_effective_deadline ... ok
+[g14-full] honest claim 44b0086ba86fc55578e84320e1bb5af22ea43d4c2b6e026c66fc4f5eaa62cc8701b19b1586f53e1ea68ebd5a360242f04edfd416d00e0210e5f022fe2e1b6cbd: licensed 23, Final 144, held to 3144 (F + 3000), matured at Some(9144), producer leg 256067720064 sompi minted at 9144; 5 seats
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::g14_close_legacy::legacy_v2_attempt_honest_claim_is_final_and_paid_under_full_g14 ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 1028 filtered out; finished in 223.91s
+

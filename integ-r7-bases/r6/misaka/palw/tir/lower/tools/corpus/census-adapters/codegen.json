@@ -1,0 +1,116 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "codegen",
+  "doc": "CodeGen (Salesforce): GPT-J's block (one LayerNorm feeding a parallel attention + MLP, interleaved rotary on the first rotary_dim lanes, biased MLP and head) with ONE fused qkv_proj stored in mp_num = 4 partitions, each partition [q | v | k] of hidden/4 rows (note v before k): the three projections are `spec.hf.weights` strided takes (FR-01, landed on tir/generic). The built-in refusal of the class (by name) is overridden (FR-25). Third-party adapter (lane H): data only, extends the built-in gptj.",
+  "extends": [
+    "gptj"
+  ],
+  "match": {
+    "architectures": [
+      "CodeGenForCausalLM"
+    ],
+    "model_types": [
+      "codegen"
+    ]
+  },
+  "config": {
+    "inert": [
+      "n_ctx"
+    ]
+  },
+  "vars": [
+    {
+      "name": "local",
+      "value": {
+        "$idiv": [
+          {
+            "$var": "hidden"
+          },
+          4
+        ]
+      }
+    },
+    {
+      "name": "model_type",
+      "value": "codegen"
+    }
+  ],
+  "spec": {
+    "hf": {
+      "weights": {
+        "attn.q.w": [
+          "{p}h.{L}.attn.qkv_proj.weight",
+          {
+            "take": {
+              "axis": 0,
+              "block": {
+                "$mul": [
+                  3,
+                  {
+                    "$var": "local"
+                  }
+                ]
+              },
+              "offset": 0,
+              "len": {
+                "$var": "local"
+              },
+              "groups": 4
+            }
+          }
+        ],
+        "attn.v.w": [
+          "{p}h.{L}.attn.qkv_proj.weight",
+          {
+            "take": {
+              "axis": 0,
+              "block": {
+                "$mul": [
+                  3,
+                  {
+                    "$var": "local"
+                  }
+                ]
+              },
+              "offset": {
+                "$var": "local"
+              },
+              "len": {
+                "$var": "local"
+              },
+              "groups": 4
+            }
+          }
+        ],
+        "attn.k.w": [
+          "{p}h.{L}.attn.qkv_proj.weight",
+          {
+            "take": {
+              "axis": 0,
+              "block": {
+                "$mul": [
+                  3,
+                  {
+                    "$var": "local"
+                  }
+                ]
+              },
+              "offset": {
+                "$mul": [
+                  2,
+                  {
+                    "$var": "local"
+                  }
+                ]
+              },
+              "len": {
+                "$var": "local"
+              },
+              "groups": 4
+            }
+          }
+        ]
+      }
+    }
+  }
+}

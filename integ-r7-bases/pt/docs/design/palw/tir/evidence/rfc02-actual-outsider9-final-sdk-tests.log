@@ -1,0 +1,17 @@
+
+running 12 tests
+test actual_qwen_inventory_quotation_is_geometry_only_and_bounded ... ok
+test authenticated_prefix_reuses_exact_subject_but_job_inputs_still_authenticate ... ok
+test complete_model_inventory_root_and_every_quota_precede_execution ... ok
+test independent_mapped_ordinary_unknown_leaf_and_missing_typed_values ... ok
+test missing_borrowed_reply_and_retry_charge_never_grant_clean ... ok
+test model_inventory_quotation_prices_split_rows_and_odd_tree ... ok
+test ordinary_clean_uses_complete_own_commitments_without_public_callback ... ok
+test public_binding_substitution_is_refused_before_any_model_file ... ok
+test refusal_precedes_missing_file_and_public_callback ... ok
+test source_preparation_and_public_wire_quota_are_paid_before_callback ... ok
+test subject_swap_is_refused_before_callback_and_source_identity_is_checked ... ok
+test topk_and_decode_are_special_courts_with_owned_reference_material ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

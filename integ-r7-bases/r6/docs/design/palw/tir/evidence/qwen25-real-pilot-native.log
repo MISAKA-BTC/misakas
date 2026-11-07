@@ -1,0 +1,22 @@
+[    0.0s] Qwen2ForCausalLM — TIR program v1: 3 blocks, 28 layers, 314 nodes, 70 params, 11 consts (3428 B), 2 states, 14011 bytes encoded
+[    0.0s] calibrating on 4 sequences, 121 positions
+[    4.0s]   calibration 8/30
+[    8.1s]   calibration 16/30
+[   12.8s]   calibration 24/30
+[   18.2s]   calibration 30/30
+[   18.2s] materialising the integer artifact
+[   19.1s]   materialise 8/30
+[   19.7s]   materialise 16/30
+[   20.2s]   materialise 24/30
+[   21.0s]   materialise 30/30
+[   21.0s] artifact: 1636 tensors, 1750.5 MiB; residual scale 1.271e-5, logit scale 5.960e-8
+[   21.0s] float reference on 4 sequences
+[   25.7s]   float 8/30
+[   30.4s]   float 16/30
+[   34.6s]   float 24/30
+[   37.0s] integer program on the typed backend (misaka-palw-tir-exec)
+[   39.4s]   integer seq 0: 30/30
+[   41.4s]   integer seq 1: 31/31
+[   43.4s]   integer seq 2: 32/32
+[   45.3s]   integer seq 3: 30/30
+[   45.3s] top-1 0.9675  KL mean 0.00137 max 0.0401  ppl float 82.089 int 81.732 (Δ -0.43%)

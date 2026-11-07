@@ -1,0 +1,86 @@
+{
+  "architectures": [
+    "Llama4ForConditionalGeneration"
+  ],
+  "boi_token_index": 61,
+  "dtype": "bfloat16",
+  "eoi_token_index": 62,
+  "image_token_index": 60,
+  "model_type": "llama4",
+  "text_config": {
+    "attention_bias": false,
+    "attention_chunk_size": 4,
+    "attention_dropout": 0.0,
+    "attn_scale": 0.5,
+    "attn_temperature_tuning": true,
+    "bos_token_id": 1,
+    "eos_token_id": 2,
+    "floor_scale": 3,
+    "head_dim": 8,
+    "hidden_act": "silu",
+    "hidden_size": 32,
+    "initializer_range": 0.02,
+    "interleave_moe_layer_step": 2,
+    "intermediate_size": 16,
+    "intermediate_size_mlp": 48,
+    "layer_types": [
+      "chunked_attention",
+      "full_attention"
+    ],
+    "max_position_embeddings": 128,
+    "model_type": "llama4_text",
+    "moe_layers": [
+      1
+    ],
+    "no_rope_layer_interval": 2,
+    "no_rope_layers": [
+      1,
+      0
+    ],
+    "num_attention_heads": 4,
+    "num_experts_per_tok": 1,
+    "num_hidden_layers": 2,
+    "num_key_value_heads": 2,
+    "num_local_experts": 4,
+    "output_router_logits": false,
+    "pad_token_id": null,
+    "rms_norm_eps": 1e-05,
+    "rope_parameters": {
+      "rope_theta": 500000.0,
+      "rope_type": "default"
+    },
+    "router_aux_loss_coef": 0.001,
+    "router_jitter_noise": 0.0,
+    "tie_word_embeddings": false,
+    "use_cache": true,
+    "use_qk_norm": true,
+    "vocab_size": 64
+  },
+  "tie_word_embeddings": false,
+  "transformers_version": "5.17.0",
+  "vision_config": {
+    "attention_dropout": 0.0,
+    "hidden_act": "gelu",
+    "hidden_size": 16,
+    "image_size": 28,
+    "initializer_range": 0.02,
+    "intermediate_size": 32,
+    "model_type": "llama4_vision_model",
+    "multi_modal_projector_bias": false,
+    "norm_eps": 1e-05,
+    "num_attention_heads": 2,
+    "num_channels": 3,
+    "num_hidden_layers": 1,
+    "patch_size": 14,
+    "pixel_shuffle_ratio": 0.5,
+    "projector_dropout": 0.0,
+    "projector_input_dim": 32,
+    "projector_output_dim": 32,
+    "rope_parameters": {
+      "rope_theta": 10000.0,
+      "rope_type": "default"
+    },
+    "vision_feature_select_strategy": "default",
+    "vision_output_dim": 32
+  }
+}

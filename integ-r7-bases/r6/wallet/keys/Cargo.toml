@@ -1,0 +1,65 @@
+[package]
+name = "kaspa-wallet-keys"
+description = "Kaspa wallet key primitives"
+keywords = ["kaspa", "wallet"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): `pq-only` (default) builds kaspa-wallet-keys
+# with only the ML-DSA (`kaspa_pq`) keygen/signing path; the classical secp256k1
+# key types (publickey/privatekey/keypair/xprv/xpub/derivation) are gated out and
+# secp256k1 is not linked. `legacy-secp256k1` re-enables them for the classical
+# wallet; `wasm32-sdk` pulls it in so the browser SDK keeps the classical signer.
+default = ["pq-only"]
+pq-only = []
+legacy-secp256k1 = ["dep:secp256k1", "kaspa-bip32/legacy-secp256k1"]
+wasm32-sdk = ["legacy-secp256k1"]
+# Exposes the wasm-binding helper modules (e.g. `kaspa_pq_wasm`) to *native*
+# (non-wasm32) test builds of downstream crates such as kaspa-wallet-core, which
+# cannot see this crate's own `#[cfg(test)]` gate. See ADR-0019 §13 (PR-19-S5e).
+test-utils = []
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+async-trait.workspace = true
+blake2b_simd.workspace = true
+borsh.workspace = true
+downcast.workspace = true
+faster-hex.workspace = true
+hmac.workspace = true
+js-sys.workspace = true
+kaspa-addresses.workspace = true
+kaspa-bip32.workspace = true
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-txscript-errors.workspace = true
+kaspa-txscript.workspace = true
+kaspa-utils.workspace = true
+libcrux-ml-dsa.workspace = true
+kaspa-wasm-core.workspace = true
+rand.workspace = true
+ripemd.workspace = true
+secp256k1 = { workspace = true, optional = true }
+serde_json.workspace = true
+serde-wasm-bindgen.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+wasm-bindgen-futures.workspace = true
+wasm-bindgen.workspace = true
+workflow-core.workspace = true
+workflow-wasm.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

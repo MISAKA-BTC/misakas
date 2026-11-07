@@ -1,0 +1,81 @@
+
+running 42 tests
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_one_outside_bond_reaches_the_preparation_default_with_no_panel_signature ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_an_outsider_detects_a_fault_and_its_filed_finding_convicts_and_slashes ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_full_collusion_one_outside_verifier_convicts_slashes_and_refuses_the_claims_standing ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::court_relay_presigned_custody_response_uses_literal_signer_not_carrier_inputs ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_an_honest_custodian_answers_in_time_and_is_not_slashed ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_conviction_asserts_each_valid_seat_lock ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_honest_twin_is_not_convicted_and_a_holding_predicate_certifies_nothing ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_output_identity_convicts_from_the_complete_authenticated_ids_only ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_fresh_node_import_continues_the_original_frame_identically ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_convicts_with_the_fence_at_genesis_and_no_legacy_history ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_replays_without_derived_work_prompt_ids ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_without_tfp1_earns_nothing_past_the_fence ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_owner_slots_cannot_be_preempted_by_idle_owners ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_staged_witness_assembles_in_order_and_convicts_once ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_seat_finding_reaches_the_filer_queue ... ok
+[G14 r2 TIR] open_at 4393, open_until 8493, collect_until 1368945, maximum_turns 74
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_response_duty_reads_original_state_and_never_erases_expired_obligations ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_duty_clock_records_actual_stages_and_survives_native_restore ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_duty_clock_demand_and_latest_parts_keep_the_original_deadline ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_fulfilled_close_keeps_raw_material_without_pending_charge ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_complete_malformed_side_is_settled_once ... ok
+original numerical inventory: original_leaves=633 eligible_roots=144 arity_disclosures_terminals=[(2, 792, 936), (4, 444, 936), (8, 372, 936), (16, 132, 936), (32, 132, 936), (64, 132, 936)]
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::original_wide_numerical_inventory_covers_every_native_eligible_leaf ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_uncaptured_removal_retains_nominal_court_stake ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_close_receipt_preserves_signed_native_inputs ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_native_verdict_preserves_other_side ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_court_sweeps_skip_held_without_starving_cleanup ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_guard_denies_default_and_native_undo_restores_legacy ... ok
+[G14 r2 TIR] 8 colluders yielded at the tenure; queue position 0 of 9
+[G14 r2 TIR] newcomer arrived at +4395, admitted at +4672, convicted at +4676 (open_until +8493, collect_until +1368945)
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_hold_retains_final_collateral_and_material_past_hard ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_streamed_fraud_keeps_complete_evidence ... ok
+X3 owner fixture geometry (not runtime/network measurement): accepted=100, preparation_until=4493, owner_interval=4496..4506, hard=10100
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_repair_journals_without_releasing_holds ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::service_stage_eligibility_is_not_recoverable_from_current_tir_cursor_alone ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_hold_does_not_block_streamed_fraud_conviction ... ok
+[tir-fold-measure] {"action_ns":{"begin":100084,"demand":94834,"filing":95750,"finish":108916,"open":114041,"part":[105000],"preparation_debit_and_ready_incl_state_clone":138958},"answer_body_bytes":391,"charged_parser_steps_per_owner_action":64640000,"credited_seats":5,"filing_control_bytes":7101,"frame_bytes":63125,"full_frame_pass_ns":{"borsh_encode":4959,"check_structure":50667,"deep_clone":2833},"upper":6}
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::transport_budget_counts_signed_native_parts_and_preserves_old_claims ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_query_and_signed_streams_work_with_all_native_owner_slots_occupied_and_reload ... ok
+test palw_state_v2::palw_tir_public_fold_v1::tests::new_original_frame_cannot_license_an_unqualified_valid_or_reinterpret_typed_receipt ... ok
+test palw_state_v2::palw_tir_public_fold_v1::tests::owner_fee_and_deposit_are_a_separate_component_without_new_absolute_clocks ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_wide_leaf_stream_crosses_part_boundary_and_reloads ... ok
+[tir-fold-measure] {"action_ns":{"begin":98792,"demand":98167,"filing":151167,"finish":109625,"open":304167,"part":[101959],"preparation_debit_and_ready_incl_state_clone":114625},"answer_body_bytes":391,"charged_parser_steps_per_owner_action":355137536,"credited_seats":32,"filing_control_bytes":7101,"frame_bytes":346814,"full_frame_pass_ns":{"borsh_encode":20792,"check_structure":230584,"deep_clone":15125},"upper":33}
+[tir-fold-measure] {"action_ns":{"begin":308542,"demand":314333,"filing":1251459,"finish":324333,"open":1927125,"part":[311833],"preparation_debit_and_ready_incl_state_clone":325792},"answer_body_bytes":391,"charged_parser_steps_per_owner_action":2765191168,"credited_seats":256,"filing_control_bytes":7101,"frame_bytes":2700382,"full_frame_pass_ns":{"borsh_encode":132084,"check_structure":1693417,"deep_clone":117083},"upper":257}
+[tir-fold-measure] derived {"action_parser_steps":10257539,"action_parser_steps_per_custodian":43795,"frame_passes_per_check":2,"parser_steps_per_ns":51.02831966373315,"slowest_read_action_ns":324333}
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::tir_frame_accepting_actions_are_measured_across_custodian_uppers ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_decode_token_and_stop_rule_filing_convicts ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_archive_v5_replays_signed_bytes_without_state_or_money_changes ... ok
+numerical root transport: bytes=15061 parts=1
+numerical bottom transport: bytes=12982 parts=1
+numerical bottom transport: bytes=13714 parts=1
+numerical bottom transport: bytes=13330 parts=1
+numerical bottom transport: bytes=13330 parts=1
+numerical bottom transport: bytes=13587 parts=1
+numerical bottom transport: bytes=13203 parts=1
+numerical bottom transport: bytes=13459 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=12982 parts=1
+numerical bottom transport: bytes=13714 parts=1
+numerical bottom transport: bytes=13330 parts=1
+numerical bottom transport: bytes=13330 parts=1
+numerical bottom transport: bytes=13587 parts=1
+numerical bottom transport: bytes=13203 parts=1
+numerical bottom transport: bytes=13459 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+numerical bottom transport: bytes=13331 parts=1
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::shared_history_root_binds_public_original_policy_and_literal_producer_signature ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 4649 filtered out; finished in 4.95s
+

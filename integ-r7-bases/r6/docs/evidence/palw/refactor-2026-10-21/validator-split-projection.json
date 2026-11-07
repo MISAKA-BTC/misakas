@@ -1,0 +1,96 @@
+{
+  "base": "50d64cf58",
+  "families": 10,
+  "original_arms_projected": 133,
+  "unique_variants_routed": 141,
+  "old_object_loop_continues_to_helper_success": 16,
+  "old_explicit_returns_all_error": 232,
+  "shared_entry_precheck": "normalized unchanged; remains before dispatch for every object",
+  "handler_inputs": [
+    {
+      "family": "panel",
+      "inputs": [
+        "state",
+        "state_params",
+        "point",
+        "panel_params"
+      ],
+      "arms": 17
+    },
+    {
+      "family": "execution",
+      "inputs": [
+        "state",
+        "state_params",
+        "point"
+      ],
+      "arms": 5
+    },
+    {
+      "family": "reporting",
+      "inputs": [
+        "state",
+        "state_params",
+        "point"
+      ],
+      "arms": 3
+    },
+    {
+      "family": "court",
+      "inputs": [
+        "state",
+        "state_params",
+        "point"
+      ],
+      "arms": 43
+    },
+    {
+      "family": "model_market",
+      "inputs": [
+        "state",
+        "point"
+      ],
+      "arms": 15
+    },
+    {
+      "family": "class_registration",
+      "inputs": [
+        "state",
+        "state_params",
+        "point"
+      ],
+      "arms": 12
+    },
+    {
+      "family": "bond_readiness",
+      "inputs": [
+        "state",
+        "point"
+      ],
+      "arms": 9
+    },
+    {
+      "family": "kernel_material",
+      "inputs": [
+        "state",
+        "state_params",
+        "point"
+      ],
+      "arms": 16
+    },
+    {
+      "family": "improvement",
+      "inputs": [
+        "state",
+        "point"
+      ],
+      "arms": 11
+    },
+    {
+      "family": "structural",
+      "inputs": [],
+      "arms": 2
+    }
+  ],
+  "limits": "Exact normalized arm projection except the 16 outer-loop continues now return helper success; not exhaustive runtime equivalence. Group fallback reachability is checked against exhaustive parent variant routing and compilation."
+}

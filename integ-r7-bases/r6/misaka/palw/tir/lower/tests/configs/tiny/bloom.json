@@ -1,0 +1,24 @@
+{
+  "apply_residual_connection_post_layernorm": false,
+  "architectures": [
+    "BloomForCausalLM"
+  ],
+  "attention_dropout": 0.0,
+  "bos_token_id": 1,
+  "dtype": "bfloat16",
+  "eos_token_id": 2,
+  "hidden_dropout": 0.0,
+  "hidden_size": 32,
+  "initializer_range": 0.02,
+  "layer_norm_epsilon": 1e-05,
+  "model_type": "bloom",
+  "n_head": 4,
+  "n_layer": 2,
+  "pad_token_id": null,
+  "pretraining_tp": 1,
+  "slow_but_exact": false,
+  "tie_word_embeddings": true,
+  "transformers_version": "5.17.0",
+  "use_cache": true,
+  "vocab_size": 64
+}

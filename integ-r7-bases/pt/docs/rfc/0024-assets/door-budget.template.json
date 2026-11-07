@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "target_daa": 3200,
+  "note": "All null values are UNKNOWN, not zero. Target approval and formal source bound are external.",
+  "accounting_contract": "Each term is a disjoint conservative duration bound. Work/queue/permit/transfer already inside another term must not be double-counted. Do not subtract speculative off-chain cache savings. Enumerate hidden subpaths and use each category's worst case.",
+  "pin_inputs": {
+    "source_commit": null,
+    "binary_sha256": null,
+    "cost_record_sha256": null
+  },
+  "profiles": [
+    {
+      "profile_id": "32k",
+      "history_positions": 32768,
+      "paths": [
+        {
+          "path_id": "honest_cold_verifier",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "latest_legal_responses",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "withholding_at_last_obligation",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "restart_within_envelope",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "reorg_reacquire_within_envelope",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "admitted_load_and_owner_contention",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "other_covered_fault_routes",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        }
+      ]
+    },
+    {
+      "profile_id": "2m",
+      "history_positions": 2097152,
+      "paths": [
+        {
+          "path_id": "honest_cold_verifier",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "latest_legal_responses",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "withholding_at_last_obligation",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "restart_within_envelope",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "reorg_reacquire_within_envelope",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "admitted_load_and_owner_contention",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        },
+        {
+          "path_id": "other_covered_fault_routes",
+          "terms": {
+            "preparation_daa": null,
+            "open_and_initial_localization_daa": null,
+            "history_bundle_disclosure_and_choice_daa": null,
+            "forced_material_acquisition_daa": null,
+            "verifier_replay_and_unallocated_work_daa": null,
+            "terminal_evaluation_and_inclusion_daa": null,
+            "additional_recovery_daa": null,
+            "unallocated_queue_and_safety_margin_daa": null
+          },
+          "observed_max_daa": null,
+          "evidence_refs": []
+        }
+      ]
+    }
+  ]
+}

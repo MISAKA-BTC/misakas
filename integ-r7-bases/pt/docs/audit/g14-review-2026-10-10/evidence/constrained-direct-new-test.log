@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_offence_attribution_v1::tests::constrained_public_direct_proof_convicts_only_authenticated_faults_and_keeps_both_fences ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3628 filtered out; finished in 0.07s
+

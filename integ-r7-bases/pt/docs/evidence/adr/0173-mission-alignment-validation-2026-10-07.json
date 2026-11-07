@@ -1,0 +1,359 @@
+{
+  "date": "2026-10-07",
+  "status": "PASS",
+  "kind": "documentation consistency only",
+  "checks": {
+    "all_baseline_paths_have_disposition": {
+      "pass": true
+    },
+    "baseline_output_hashes_match": {
+      "pass": true,
+      "details": []
+    },
+    "history_preserved_except_recorded_rfc_corrections": {
+      "pass": true,
+      "details": []
+    },
+    "numbered_amendment_counts": {
+      "pass": true,
+      "details": {
+        "rfc": 15,
+        "adr": 91
+      }
+    },
+    "changed_and_new_markdown_fences_closed": {
+      "pass": true,
+      "details": []
+    },
+    "new_local_markdown_links_resolve": {
+      "pass": true,
+      "details": {
+        "checked_occurrences": 539,
+        "broken": []
+      }
+    },
+    "rfc_index_1_through_15_unique_next_16": {
+      "pass": true
+    },
+    "adr173_registered": {
+      "pass": true
+    },
+    "new_rfc_design_controls": {
+      "pass": true
+    },
+    "completion_and_activation_not_asserted": {
+      "pass": true
+    },
+    "accurate_document_counts": {
+      "pass": true
+    }
+  },
+  "errors": [],
+  "inherited_missing_local_links": [
+    {
+      "path": "docs/adr/0003-lthash-utxo-accumulator.md",
+      "target": "../../crypto/muhash/src/lib.rs"
+    },
+    {
+      "path": "docs/adr/0004-utxo-commitment64.md",
+      "target": "../../crypto/muhash/src/lib.rs"
+    },
+    {
+      "path": "docs/adr/0004-utxo-commitment64.md",
+      "target": "../../rpc/core/src/model/kaspa_pq.rs"
+    },
+    {
+      "path": "docs/adr/0004-utxo-commitment64.md",
+      "target": "../../consensus/core/src/utxo_commitment.rs"
+    },
+    {
+      "path": "docs/adr/0005-mass-policy.md",
+      "target": "../../consensus/core/src/config/params.rs"
+    },
+    {
+      "path": "docs/adr/0006-rpc-wasm-sdk-types.md",
+      "target": "../kaspa-pq-spec.md"
+    },
+    {
+      "path": "docs/adr/0007-layered-pow.md",
+      "target": "../../crypto/hashes/src/hashers.rs"
+    },
+    {
+      "path": "docs/adr/0012-mainnet-validator-sortition-commit-reveal.md",
+      "target": "../../consensus/core/src/dns_finality.rs"
+    },
+    {
+      "path": "docs/adr/0013-validator-reward-distribution.md",
+      "target": "../../consensus/core/src/dns_finality.rs"
+    },
+    {
+      "path": "docs/adr/0020-selected-parent-evm-lane.md",
+      "target": "../misaka-evm-design-v0.4.md"
+    },
+    {
+      "path": "docs/adr/0021-palw-llm-pow.md",
+      "target": "../palw-full-logits-trace-v2-design.md"
+    },
+    {
+      "path": "docs/adr/0023-base-three-lane-execution.md",
+      "target": "../misaka-base-3lane-execution-design-v0.1.md"
+    },
+    {
+      "path": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "target": "../palw-full-logits-trace-v2-design.md"
+    },
+    {
+      "path": "docs/adr/0026-palw-v2-runtime-separated-verification.md",
+      "target": "../ambient-pol-binary-audit-2026-08-15.md"
+    },
+    {
+      "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "target": "../palw-full-logits-trace-v2-design.md"
+    },
+    {
+      "path": "docs/adr/0027-palw-slash-unilateral-fraud-proofs.md",
+      "target": "../misaka-palw-slash-protocol-design-v0.1.md"
+    },
+    {
+      "path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "target": "../palw-full-logits-trace-v2-design.md"
+    },
+    {
+      "path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "target": "../palw-legs-capture-measurement-2026-08-15.md"
+    },
+    {
+      "path": "docs/adr/0028-palw-challenge-sampling-protocol.md",
+      "target": "../misaka-palw-slash-protocol-design-v0.1.md"
+    },
+    {
+      "path": "docs/adr/0105-a-heartbeat-never-turns-a-bonded-block-red.md",
+      "target": "../testnet11-node-operator.md"
+    },
+    {
+      "path": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "target": "../palw-extension-envelope.md"
+    },
+    {
+      "path": "docs/adr/0108-an-extension-is-a-manifest-the-verifier-recomputes-and-a-receipt-is-evidence-not-a-vote.md",
+      "target": "../extension-manifests/"
+    },
+    {
+      "path": "docs/adr/0112-a-classs-weights-are-read-within-a-budget-the-operator-states-and-the-budget-is-a-fifth-of-the-artifact.md",
+      "target": "0067-a-registered-class-is-served-by-any-node-that-holds-its-artifact.md"
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "target": "0072-the-attempt-is-a-function-of-the-execution.md"
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "target": "0098-a-panels-coverage-of-one-claim-is-a-number.md"
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "target": "0071-hash-coupling-and-the-remainder.md"
+    },
+    {
+      "path": "docs/adr/0132-what-a-model-is-actually-paid-per-forward-it-ran-and-why-the-gap-is-liveness-before-it-is-price.md",
+      "target": "0107-share-growth-is-counted-at-final.md"
+    },
+    {
+      "path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "target": "0112-the-weight-residency-budget.md"
+    },
+    {
+      "path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "target": "0098-a-panels-coverage-of-one-claim-is-a-number.md"
+    },
+    {
+      "path": "docs/adr/0133-verification-is-its-own-clock-a-class-verifies-over-spans-and-a-starved-class-stops-only-itself.md",
+      "target": "0071-hash-coupling-and-the-remainder.md"
+    },
+    {
+      "path": "docs/adr/0138-the-daa-score-is-the-anchors-clock.md",
+      "target": "../palw-daa-clock-audit-2026-09-18.md"
+    },
+    {
+      "path": "docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md",
+      "target": "../design/palw/rfc-0008-implementation-spec.md"
+    },
+    {
+      "path": "docs/adr/README.md",
+      "target": "../architecture/overview.md"
+    },
+    {
+      "path": "docs/rfc/0002-palw-tensor-ir.md",
+      "target": "../design/palw/tir/runtime-residency.md"
+    },
+    {
+      "path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "target": "../spec/palw/04b-tensor-ir.md"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "target": "../../kaspad/src/palw_panel/sketch.rs"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "target": "../../consensus/core/src/palw_panel_v2.rs"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "target": "../../consensus/core/src/palw_verification_v2.rs"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "target": "../../consensus/core/src/palw_verification_profile_v1.rs"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "target": "../spec/palw/18-verification-certificates.md"
+    },
+    {
+      "path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "target": "../../misaka-palw-tir-sketch/src/lib.rs"
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "target": "../testnet11-free-prompt-mining.md"
+    },
+    {
+      "path": "docs/rfc/0009-palw-remote-miner.md",
+      "target": "../../consensus/core/src/palw_fp_admission_v3.rs"
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "target": "../../consensus/core/src/palw_operator_anchor_v1.rs"
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "target": "../t12-panel-seed-2026-09-25.md"
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "target": "../../consensus/core/src/config/params.rs"
+    },
+    {
+      "path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "target": "../../consensus/src/pipeline/virtual_processor/processor.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-sdk/src/preflight/chain.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../consensus/core/src/palw_tir_close_size_v1.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-tir-lower/src/fidelity.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../consensus/core/src/palw_tir_v1.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../consensus/core/src/palw_class_admission_v2.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-sdk/src/preflight/mod.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../consensus/core/src/palw_state_v2.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-tir/src/program.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-sdk/src/tir_registration.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../consensus/core/src/palw_tir_court_v1.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../consensus/core/src/palw_tir_admission_v1.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-sdk/tests/corpus_preflight.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-sdk/src/tir_layout.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../design/palw/tir/hf-coverage.md"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-tir-lower/tests/corpus_v2.rs"
+    },
+    {
+      "path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "target": "../../misaka-palw-tir-lower/src/convert.rs"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "target": "../../consensus/core/src/dns_finality.rs"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "target": "../../consensus/src/processes/evm/mod.rs"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "target": "../../consensus/src/pipeline/virtual_processor/dns_bft.rs"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "target": "../../consensus/src/pipeline/virtual_processor/processor.rs"
+    },
+    {
+      "path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "target": "../../consensus/core/src/palw_fork_choice.rs"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "target": "../../misaka-cli/src/pack_gate.rs"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "target": "../../consensus/core/src/config/params.rs"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "target": "../../misaka-palw-sdk/src/runtime_pack/manifest.rs"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "target": "../../misaka-palw-sdk/src/tir_layout.rs"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "target": "../../misaka-palw-sdk/src/runtime_pack/verify.rs"
+    },
+    {
+      "path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "target": "../../consensus/core/src/palw_tir_admission_v1.rs"
+    },
+    {
+      "path": "docs/rfc/README.md",
+      "target": "../INDEX.md"
+    }
+  ],
+  "runtime_tests_run": false,
+  "rfc14_completion_established": false,
+  "panel_zero_activation_authorized": false,
+  "scope": "Frozen workspace policy-alignment validation before RFC14 transport extension and latest-main reconciliation; see main publication validation.",
+  "publication_validation": "0173-main-publication-validation-2026-10-07.json"
+}

@@ -1,0 +1,56 @@
+EXECUTABLE /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/settlement_conservation-01780cfa2bf01bbd --test-threads=1
+
+running 6 tests
+test each_accumulated_total_overflow_refuses_before_any_bond_or_map_mutation ... ok
+test failed_receipt_batch_is_atomic_for_instruction_and_final_balance_refusals ... ok
+test inconsistent_synced_collateral_is_refused_and_release_then_withdraw_returns_exact_owner_capital ... ok
+test original_collateral_is_shared_by_all_reservations_and_all_routes_conserve ... ok
+test unfunded_payout_burn_or_final_reward_cannot_create_original_capital ... ok
+test valid_u64_boundary_receipt_is_exact_and_duplicate_or_overdrawn_batch_is_refused ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+EXIT 0
+EXECUTABLE /Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/k2_ledger_route-2c94b50c1beae975 --test-threads=1
+
+running 22 tests
+test a_claim_seal_is_bonded_kept_on_the_claim_row_and_forfeited_when_withheld ... ok
+test a_claims_challenge_subject_feeds_the_single_contracts_seed_and_the_ledger_stores_no_beacon ... ok
+test a_class_registers_commitments_only_over_an_attested_artifact_and_never_twice ... ok
+test a_direct_proof_inside_the_grace_pre_empts_final_whether_sessions_are_settled_or_still_open ... ok
+test a_final_reward_is_paid_once_out_of_the_posters_escrow_and_nothing_is_ever_issued ... ok
+test a_proof_resubmitted_after_a_restart_or_an_ibd_replay_is_a_duplicate ... ok
+test a_seal_on_a_job_another_claim_took_is_forfeited_at_its_expiry ... ok
+test aggregate_claim_work_stops_at_the_proof_reserve_and_a_fresh_outsider_still_convicts ... ok
+test an_object_is_applied_only_if_signed_by_the_actor_it_names_and_a_refusal_changes_nothing ... ok
+test an_outsider_authenticates_the_public_artifact_against_the_registered_commitments ... ok
+test an_over_budget_object_is_refused_without_a_fee_and_a_later_block_still_convicts ... ok
+test each_collection_has_its_own_root_and_the_root_covers_the_state_and_nothing_else ... ok
+test every_money_decision_is_an_explicit_settlement_instruction_and_nothing_is_minted_internally ... ok
+test invalid_challenge_spam_is_priced_by_free_collateral_and_bounded_by_the_block_budget ... ok
+test malformed_and_oversized_objects_are_refused_transactionally_through_the_strict_codec ... FAILED
+test malformed_claims_spend_admission_work_but_class_oversize_is_refused_before_trace_copy ... ok
+test registration_refuses_an_unusable_admission_budget_and_work_addition_never_wraps ... ok
+test simultaneous_public_challengers_convict_once_and_the_second_is_a_duplicate_with_no_second_slash ... ok
+test the_court_work_budget_bounds_what_one_block_can_make_the_network_run ... ok
+test the_panels_coverage_is_derived_by_the_consumer_never_submitted_and_silence_never_passes ... ok
+test the_root_does_not_depend_on_the_order_the_binary_lists_its_kernels ... ok
+test the_state_root_is_versioned_canonical_and_pinned_by_a_golden_vector ... ok
+
+failures:
+
+---- malformed_and_oversized_objects_are_refused_transactionally_through_the_strict_codec stdout ----
+
+thread 'malformed_and_oversized_objects_are_refused_transactionally_through_the_strict_codec' (4054244) panicked at misaka-palw-kernel/tests/k2_ledger_route.rs:361:13:
+assertion `left == right` failed: tag 30
+  left: Rule
+ right: Malformed
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    malformed_and_oversized_objects_are_refused_transactionally_through_the_strict_codec
+
+test result: FAILED. 21 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.37s
+
+EXIT 101

@@ -1,0 +1,22 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "exaone",
+  "doc": "EXAONE 3.x (remote code): Llama math under GPT-2-style names; RMS norm with layer_norm_epsilon; num_layers.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["ExaoneForCausalLM"], "model_types": ["exaone"]},
+  "remote_code": ["modeling_exaone.ExaoneForCausalLM"],
+  "remote_code_required": true,
+  "config": {"defaults": {"intermediate_size": {"$unset": true}, "vocab_size": 102400, "hidden_size": 2048, "num_layers": 32, "num_attention_heads": 32, "activation_function": "silu", "layer_norm_epsilon": 1e-05, "tie_word_embeddings": true}, "inert": ["embed_dropout"]},
+  "vars": [
+    {"name": "n", "value": {"$cfg": "num_layers"}},
+    {"name": "inter", "value": {"$cfg": ["intermediate_size", {"$mul": [{"$var": "hidden"}, 4]}]}},
+    {"name": "act", "value": {"$act": {"$cfg": "activation_function"}}},
+    {"name": "eps", "value": {"$cfg": "layer_norm_epsilon"}},
+    {"name": "abias", "value": false},
+    {"name": "mbias", "value": false},
+    {"name": "names", "value": {"embed": "transformer.wte", "final_norm": "transformer.ln_f", "lm_head": {"$if": [{"$var": "tied"}, "transformer.wte", "lm_head"]}, "norm.mix": "transformer.h.{L}.ln_1", "norm.ffn": "transformer.h.{L}.ln_2", "attn.q": "transformer.h.{L}.attn.attention.q_proj", "attn.k": "transformer.h.{L}.attn.attention.k_proj", "attn.v": "transformer.h.{L}.attn.attention.v_proj", "attn.o": "transformer.h.{L}.attn.attention.out_proj", "mlp.gate": "transformer.h.{L}.mlp.c_fc_0", "mlp.up": "transformer.h.{L}.mlp.c_fc_1", "mlp.down": "transformer.h.{L}.mlp.c_proj"}},
+    {"name": "families", "value": ["C1", "C2"]},
+    {"name": "model_type", "value": "exaone"}
+  ],
+  "spec": {"confidence": {"Unsure": ["EXAONE-3 tensor names and RMSNorm from modeling_exaone.py as recalled"]}}
+}

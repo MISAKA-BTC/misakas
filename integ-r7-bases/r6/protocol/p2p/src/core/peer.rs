@@ -1,0 +1,103 @@
+use kaspa_consensus_core::subnets::SubnetworkId;
+use kaspa_utils::networking::{IpAddress, PeerId};
+use std::{fmt::Display, net::SocketAddr, sync::Arc, time::Instant};
+
+#[derive(Debug, Clone, Default)]
+pub struct PeerProperties {
+    pub user_agent: String,
+    // TODO: add services
+    pub advertised_protocol_version: u32,
+    pub protocol_version: u32,
+    pub disable_relay_tx: bool,
+    pub subnetwork_id: Option<SubnetworkId>,
+    pub time_offset: i64,
+    /// The fork id the peer advertised at the handshake (ADR-0072 SA-2): its fired-fence digest
+    /// (empty from a build predating the field) and the next fence it expects to cross.
+    pub fork_id_fired: Vec<u8>,
+    pub fork_id_next: u64,
+    /// The local DAA score from which this node's gate refuses that fork id
+    /// (`fork_id_refusal_height_v1`), `None` if it never does. A peer kept on a warning below the
+    /// disputed height is judged again when the node reaches it.
+    pub fork_id_refusal_height: Option<u64>,
+    /// The local DAA score this node stood at when it judged that fork id (the handshake's). A connection judged below a
+    /// gate fence this node has since crossed is judged again (`fork_id_crossing_rejudge_v1`).
+    pub fork_id_judged_at_daa: u64,
+}
+
+#[derive(Debug)]
+pub struct Peer {
+    identity: PeerId,
+    net_address: SocketAddr,
+    is_outbound: bool,
+    connection_started: Instant,
+    properties: Arc<PeerProperties>,
+    last_ping_duration: u64,
+}
+
+impl Peer {
+    pub fn new(
+        identity: PeerId,
+        net_address: SocketAddr,
+        is_outbound: bool,
+        connection_started: Instant,
+        properties: Arc<PeerProperties>,
+        last_ping_duration: u64,
+    ) -> Self {
+        Self { identity, net_address, is_outbound, connection_started, properties, last_ping_duration }
+    }
+
+    /// Internal identity of this peer
+    pub fn identity(&self) -> PeerId {
+        self.identity
+    }
+
+    /// The socket address of this peer
+    pub fn net_address(&self) -> SocketAddr {
+        self.net_address
+    }
+
+    pub fn key(&self) -> PeerKey {
+        self.into()
+    }
+
+    /// Indicates whether this connection is an outbound connection
+    pub fn is_outbound(&self) -> bool {
+        self.is_outbound
+    }
+
+    pub fn time_connected(&self) -> u64 {
+        Instant::now().duration_since(self.connection_started).as_millis() as u64
+    }
+
+    pub fn properties(&self) -> Arc<PeerProperties> {
+        self.properties.clone()
+    }
+
+    pub fn last_ping_duration(&self) -> u64 {
+        self.last_ping_duration
+    }
+}
+
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub struct PeerKey {
+    identity: PeerId,
+    ip: IpAddress,
+}
+
+impl PeerKey {
+    pub fn new(identity: PeerId, ip: IpAddress) -> Self {
+        Self { identity, ip }
+    }
+}
+
+impl From<&Peer> for PeerKey {
+    fn from(value: &Peer) -> Self {
+        Self::new(value.identity, value.net_address.ip().into())
+    }
+}
+
+impl Display for PeerKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}+{}", self.identity, self.ip)
+    }
+}

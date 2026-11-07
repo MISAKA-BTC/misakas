@@ -1,0 +1,20 @@
+[package]
+name = "misaka-endpoints"
+description = "Local endpoint registry (~/.misaka/<network-id>/endpoints.json): kaspad writes the loopback RPC endpoints it bound; the miner / validator / unified CLI read it so operators never type a port. A hint only — callers re-verify the node network-id after connecting (design §7)."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+dirs.workspace = true
+
+[lints]
+workspace = true

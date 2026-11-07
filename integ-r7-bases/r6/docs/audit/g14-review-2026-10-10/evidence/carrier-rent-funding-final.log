@@ -1,0 +1,19 @@
+
+running 14 tests
+test palw_panel::p2_6_da_accusation_policy::t34_an_unavailable_accuses_inside_its_landing_margin_on_every_class ... ok
+test palw_panel::p2_6_da_accusation_policy::the_accusation_queue_key_is_the_claim_on_the_accusing_side ... ok
+test palw_panel::p2_6_da_accusation_policy::the_chains_answer_files_settles_or_waits_for_room ... ok
+test palw_panel::p2_6_da_accusation_policy::the_licence_collector_rests_a_claim_whose_candidates_came_to_nothing_and_a_tick_has_a_budget ... ok
+test palw_panel::p2_6_da_accusation_policy::the_priority_lane_goes_first_and_licences_are_still_carried ... ok
+test palw_panel::p2_6_da_accusation_policy::a_seat_served_after_its_first_tick_accuses_nobody_when_the_licence_lands ... ok
+test palw_panel::p2_6_da_accusation_policy::the_book_files_each_claim_once_and_the_chain_ends_it ... ok
+test palw_panel::p2_6_da_accusation_policy::the_funder_asks_the_one_rule_of_every_candidate ... ok
+test palw_panel::p2_6_da_accusation_policy::t52_the_fee_funder_takes_a_600_daa_old_coinbase_and_never_a_held_output ... ok
+test palw_panel::p2_6_da_accusation_policy::the_tick_runs_every_carrier_site_through_the_one_scheduler_in_tick_order ... ok
+test palw_panel::p2_6_da_accusation_policy::the_tick_accuses_after_the_unavailable_and_before_the_carriers ... ok
+test palw_panel::p2_6_da_accusation_policy::f13_a_drained_residue_is_left_for_a_mature_coinbase ... ok
+test palw_panel::p2_6_da_accusation_policy::the_tick_records_service_where_it_sees_it ... ok
+test palw_panel::p2_6_da_accusation_policy::a_panel_tick_is_recorded_with_its_slowest_phase_on_every_way_out_of_the_iteration ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 590 filtered out; finished in 0.13s
+

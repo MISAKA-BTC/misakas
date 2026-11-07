@@ -1,0 +1,1389 @@
+{
+ "provenance": {
+  "branch": "palw-base0-depth",
+  "base_commit": "8db458f2",
+  "agents": 36,
+  "date": "2026-08-21",
+  "note": "Clipped from the workflow journal. Full untruncated output was session-scoped and is gone; the file:line claims are reproduced in palw-rc-launch-blockers-2026-08-21.md."
+ },
+ "audit_findings": [
+  {
+   "id": "M-02",
+   "verdict": "OPEN",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "ADR-0043 §2 preimage (docs/adr/0043-palw-v2-state-root-ordering.md:53-58) lists exactly 15 items: version_le, root(bonds), root(reserved_exposure), root(classes), root(class_targets), root(capabilities), root(claims), root(panels), root(court_sessions), root(epoch_counters), safe_weight(16), bounded_immature(16), safe_frontier_blue_score(8), safe_frontier(64), last_point_tag(1)[+borsh].",
+    "Code preimage, consensus/core/src/palw_state_v2.rs:1443-1481, hashes 20 items: version(1445), bonds(1446), reserved_exposure(1447), classes(1448), class_targets(1449), class_shares(1450), epoch_budgets as 1-byte tag + raw borsh and NOT a collection_root (1451-1459), receipt_targets(1460), capabilities(1461), claims(1462), pending_payouts(1463), panels(1464), court_sessions(1465), epoch_counters(14 …[clipped]",
+    "DELTA = 5 collections absent from ADR-0043: class_shares, epoch_budgets, receipt_targets, pending_payouts, receipt_epoch_counters. The audit named 4 of the 5; receipt_epoch_counters (palw_state_v2.rs:1467) is a sixth surface neither the audit nor Appendix A mentions.",
+    "Of those 5, only 2 are documented in ANY ADR: docs/adr/0045-palw-class-economy-on-chain.md:124 and :154-156 add class_shares and epoch_budgets. `rg -n 'receipt_epoch|pending_payout' docs/adr/*.md` returns ZERO hits. ADR-0044 mentions receipt_target[class] only as a rule concept (docs/adr/0044-palw-free-prompt-receipts.md:238, :294) and never touches the root; ADR-0042 Decision 10 (docs/adr/0042-pa …[clipped]"
+   ],
+   "what_remains": "It reproduces on this branch and is WIDER than reported: the code preimage has 5 items ADR-0043 lacks (class_shares, epoch_budgets, receipt_targets, pending_payouts, receipt_epoch_counters — the audit named 4; receipt_epoch_counters is a sixth surface nobody listed), and only class_shares/epoch_budgets are documented in any ADR at all. On top of the audit's claim there is a version mismatch: the ADR trail's last word is 'bumps 1 -> 2' while the constant hashed into the preimage is 4, with versions 3 and 4 justified only in a Rust doc comment. But it is documentation debt, not a launch blocker. …[clipped]"
+  },
+  {
+   "id": "H-03",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "consensus/core/src/palw_carriage_v2.rs does NOT exist on this branch. `ls consensus/core/src/ | grep -i carriage` returns only `palw_carriage.rs`, which is the Stage-1 0x40-0x45 band (a different lane), not the lifecycle/court object path. The equivalent path is: admission at consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:330-337 -> consensus/core/src/palw_lifecycle_ob …[clipped]",
+    "ANSWER TO (a) = YES, bounded where it is spent. consensus/core/src/palw_court_v2.rs:355-378 `check_close_cost_v2` is a pure function of the object: `operand_openings.len()` vs `court.max_operand_count()` (:361-364) and opened bytes + 64/path-element vs `court.max_opening_bytes()` (:369-374).",
+    "It is called FIRST inside `adjudicate_court_close_v2` at consensus/core/src/palw_court_v2.rs:331, before `resolve_court_session_v2` (:332) and before any Merkle walk (`PalwProvenOperandsV1::from_openings_v1` at :339). So an oversized close is refused without a lookup, a decode of chain state, or a hash.",
+    "The pipeline actually passes the ruleset's court params: consensus/src/pipeline/virtual_processor/processor.rs:3834-3840 pulls `self.palw_court_params_v2` and hands it to `adjudicate_court_close_v2`, which runs at processor.rs:3839 inside `palw_v2_validate_objects`, which the chain walk calls at processor.rs:1214 BEFORE `apply_palw_transition_v3` at :1273."
+   ],
+   "what_remains": "Nothing that blocks launch for the finding as written. Two optional hardenings: (1) mirror `check_close_cost_v2` into `validate_palw_lifecycle_tx` so an over-ceiling close is refused at admission instead of at adjudication — today it is admitted, relayed and mined before being refused; (2) `max_terminal_macs` is still checked only against a CLASS graph at admission (consensus/core/src/palw_class_admission_v2.rs:287-289), never against the arriving object. That is defensible because the refutation's shape profile is pinned to the claim's committed execution root (consensus/core/src/palw_step_le …[clipped]"
+  },
+  {
+   "id": "M-01",
+   "verdict": "OPEN",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "The cited palw_carriage_v2.rs:351-370 is absent. On the equivalent 0x4b path the substance is not merely unfixed — it is worse than the finding described, in two opposite directions at once.",
+    "ANSWER TO (b), PART 1 — most lifecycle objects carry NO signature at all, and no acceptance check runs on them. `palw_v2_validate_objects` (consensus/src/pipeline/virtual_processor/processor.rs:3737-3891) has arms only for PanelBound (:3750), CourtOpened (:3767), CourtDisclosed (:3794), CourtVerdictPosted (:3808), CourtClosed (:3820), ClassRegistered (:3845) — and a catch-all `_ => {}` at processo …[clipped]",
+    "MONEY LOSS, one unauthenticated transaction: `ProducerDefaulted { claim, receipts: [] }` is accepted and folded at consensus/core/src/palw_state_v2.rs:3130-3145, which calls `slash_silent_seats` (charges EVERY panel seat `claim.reserved`; consensus/core/src/palw_state_v2.rs:2061-2078) and then `void_and_slash` -> `slash_bond(claim.bond, claim.reserved)` (consensus/core/src/palw_state_v2.rs:2018-20 …[clipped]",
+    "The signed form never reaches consensus: the object carries `PalwSeatVerdictV2 { seat_bond, served }` with no signature field (consensus/core/src/palw_state_v2.rs:824-830), while the signed `PalwSeatReceiptV2` (consensus/core/src/palw_panel_v2.rs:310-319) and its verifier `validate_receipt_quorum_v2` (consensus/core/src/palw_panel_v2.rs:361-430, which does check seat membership, ML-DSA-87 signatur …[clipped]"
+   ],
+   "what_remains": "Three separate things, all on the 0x4b lane. (1) Authorization: ReceiptLicensed and ProducerDefaulted must carry the signed `PalwSeatReceiptV2` set and the acceptance layer must call `validate_receipt_quorum_v2` (consensus/core/src/palw_panel_v2.rs:361) — the function is written, tested, and simply not wired; until it is, one anonymous transaction slashes a producer's bond and every panel seat. BondRetireRequested needs an owner signature over the bond key; ClassFrozen needs `adjudicate_class_contradiction_v1` wired into `palw_v2_validate_objects` the way it already is into palw_carriage.rs:95 …[clipped]"
+  },
+  {
+   "id": "C-08",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "ADR requirement text (the audit calls this ADR-0046; on this branch it is ADR-0045 carriage): docs/adr/0045-palw-v2-consensus-object-carriage.md:99-106 — 'the bond outpoint is unspendable while its record is not fully retired; once retired, the release transaction may pay the owner at most remaining = collateral - slashed, and must carry one output of exactly the slashed total to the canonical PAL …[clipped]",
+    "LEG 1 (unspendable until retirement) — IMPLEMENTED. Predicate: consensus/core/src/palw_state_v2.rs:563-573 palw_bond_collateral_is_locked_v2 (Active => always locked; Retiring => locked while now_daa < since_daa + withdrawal_delay; checked_add overflow => locked, the safe direction).",
+    "Lock set resolved once per block from the SELECTED PARENT's V2 state: consensus/src/pipeline/virtual_processor/processor.rs:3625-3644 palw_v2_locked_bond_outpoints, wired on the chain walk at processor.rs:1120-1122 and on the virtual recompute at processor.rs:2247-2256 (virtual is filtered to the tip that really equals virtual's selected parent).",
+    "Enforcement: consensus/src/pipeline/virtual_processor/utxo_validation.rs:234-248 BondSpendFilter::locks, consumed at utxo_validation.rs:1923-1927 returning TxRuleError::SpendsNonReleasableBond, i.e. the tx is SKIPPED at mergeset acceptance and the bond UTXO stays locked. Filter is built whenever either bond model is non-empty: utxo_validation.rs:345-352."
+   ],
+   "what_remains": "The three legs themselves are in much better shape than the audit's status column says: leg 1 (unspendable-until-retirement) and leg 3 (not returned to the miner as fee) are genuinely implemented and wired on both the chain-walk and virtual paths, and the fee-pool question the task asked me to settle comes out on the right side — utxo_validation.rs:386-387 removes `owed` from block_fee, which is the only number the coinbase reads, so the slashed sompi are destroyed by don't-mint rather than redirected. Leg 2 deviates from ADR-0045:99-106 (no PALW_V2_BOND_BURN_SPK exists; there is no burn-scrip …[clipped]"
+  },
+  {
+   "id": "C-07",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "Five of the six sub-claims in the original C-07 impact list are closed in code on this branch; the sixth (IBD) is closed only for the from-genesis path.",
+    "All three appendix-A blockers are individually closed: current_attempt (consensus/src/pipeline/virtual_processor/processor.rs:1266-1272), 0x4a/0x4b routing (consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:317-339), NetworkId mapping (consensus/core/src/config/params.rs:1265).",
+    "The residual is NOT the ones the appendix named: it is that every V2 gate degrades silently to blue-work when the node has no PALW tip, and the pruning-point IBD path never gives a joiner one (consensus/src/pipeline/virtual_processor/processor.rs:9237-9315; protocol/flows/src/ibd/flow.rs:2076-2096).",
+    "Second residual: the shipped preset is still bundle-free because the genesis-card constants are placeholders (consensus/core/src/config/params.rs:2375-2378, 2389-2412) — an operator step, not a code gap."
+   ],
+   "what_remains": "Two things. (1) A PALW state sidecar for the pruning-point IBD import, or an explicit refusal to run a ConsensusV2 network without a V2 tip — see finding C-07c. (2) Fill the genesis card (three constants) so testnet-12 actually maps to a ConsensusV2 network — see finding C-07e. Everything else the original C-07 listed is now real code with real call sites."
+  },
+  {
+   "id": "C-07a-header-commitment",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "The field is real and typed: consensus/core/src/header.rs:234 `pub palw_state_root: Hash64`, builder at header.rs:348-350.",
+    "It is inside the PRE-POW preimage, so a miner cannot move it after solving: consensus/core/src/hashing/header.rs:99-101 `if is_palw_v2_algo_id(header.pow_algo_id) && header.palw_state_root != ZERO_HASH64 { hasher.update(header.palw_state_root) }`.",
+    "It is ENFORCED at virtual-chain validation, and the block (not the node) loses: consensus/src/pipeline/virtual_processor/processor.rs:1187-1196 compares `header.palw_state_root != parent_root` (parent_root = `state.state_root()` of the walked state) and sets StatusDisqualifiedFromChain + `continue`.",
+    "The check runs BEFORE the transition, so the commitment is to the state the block's transition starts from — processor.rs:1180-1187."
+   ],
+   "what_remains": "Nothing for a V2 network. One cosmetic gap: there is no rule forcing `palw_state_root == 0` on NON-V2-algo headers (mainnet/t10/t11), where the field is hash-invisible — the analogous guards exist for the EVM fields (consensus/src/pipeline/header_processor/pre_ghostdag_validation.rs:69-74, RuleError::NonZeroEvmHeaderFieldsBeforeActivation) and for palw_commitment (pow_layer0::check_palw_commitment_shape). Nothing consumes the field on those networks, so it cannot split consensus; it only means two nodes can hold different header bytes for one block hash. Low."
+  },
+  {
+   "id": "C-07b-fork-choice-consumes-weight",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "The rule is a value, and a ConsensusV2 network gets the PALW rule unconditionally: consensus/core/src/config/params.rs:744-755 `palw_tip_order_v1()` returns `PalwTipOrderV1::PalwWeighted` for `PalwConsensusMode::ConsensusV2(_)`.",
+    "It reaches the sink search: consensus/src/pipeline/virtual_processor/processor.rs:8034-8042 builds the heap as `RankedTip { block, palw: self.palw_tip_weights_v1(...), rule: tip_order }`, and again for pushed parents at 8162-8166.",
+    "`RankedTip::Ord` really consults it: processor.rs:9846-9851 calls `order_tips_v1(self.rule, (self.palw.as_ref(), &self.block), ...)`, and `order_tips_v1` under `PalwWeighted` compares `compare_tips_v1(safe, live)` FIRST and only then the SortableBlock (blue_work, hash) tie-break — consensus/core/src/palw_chain_weight.rs:201-214, 157-159.",
+    "The weights are CANDIDATE-scoped, not the node's sink: processor.rs:3516-3531 `palw_candidate_order_v2` walks `calculate_chain_path(tip_block, candidate)` and folds via `palw_state_walk::walk_chain_path` before reading `safe_weight()` / `bounded_immature()`; processor.rs:7893-7899 feeds that into `palw_tip_weights_v1`."
+   ],
+   "what_remains": "Two accuracy problems, neither money-losing. (1) The tip site drops the FIRST key of the shared comparator: `palw_tip_weights_v1` (processor.rs:7893-7898) projects `PalwCandidateOrderV1` down to `{safe, live}`, discarding `safe_frontier_blue_score`, which `compare_palw_candidates_v1` (consensus/core/src/palw_fork_choice.rs:72-78) orders by before safe_weight. So tip selection ranks by (safe, live, blue_work, hash) while IBD-commit and the deep-reorg gate rank by (frontier, safe, live, hash). A candidate with a deeper frontier but smaller safe_weight is ordered differently by the two — the sink …[clipped]"
+  },
+  {
+   "id": "C-07c-ibd-pruning-deep-reorg",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "All three call sites exist and are real. IBD commit: protocol/flows/src/ibd/flow.rs:1799-1818 `validate_staging_palw_order` calls `decide_ibd_commit_v2(&incumbent, &challenger)` and returns a ProtocolError on KeepIncumbent; it is invoked on the headers-proof path at flow.rs:1782.",
+    "Pruning ceiling: consensus/src/pipeline/pruning_processor/processor.rs:223-228 refuses to advance the pruning point when `!palw_pruning_point_allowed_v2(new_pruning_point)`, backed by consensus/src/pipeline/virtual_processor/processor.rs:3539-3548 comparing the candidate's blue_score against `state.safe_frontier()`.",
+    "Deep reorg: consensus/src/pipeline/virtual_processor/processor.rs:7529-7554 — inside `dns_reorg_outcome`, scoped to actual reorgs (`!is_chain_ancestor_of(prev_sink, candidate)`), calling `decide_deep_reorg_v2` and mapping Refuse to DominanceViolation.",
+    "BUT all three are FAIL-OPEN when this node has no V2 tip. processor.rs:3541-3542 `let Some((_, state)) = store.load_tip(...) else { return true }` (pruning allowed); processor.rs:3517-3519 returns None (so the deep-reorg arm at 7546 is skipped and the tip weights at 7893 fall through); flow.rs:1806-1808 `let (Some(incumbent), Some(challenger)) = ... else { return Ok(()) }` (IBD commits)."
+   ],
+   "what_remains": "A node that joins a public testnet-12 more than ~38 h after launch ends up with palw_state = None and then: never checks `palw_state_root`, applies no PALW transition, orders tips by blue work alone, allows any pruning point, skips the deep-reorg comparator, and accepts any staged chain at IBD. It does not fork (it is strictly more permissive), so nothing warns anyone — it silently follows the blue-work-heaviest chain, which is exactly the fabricated pile the frontier-first ordering exists to refuse, and it would accept a slash-free reorg that a from-genesis node rejects. Two acceptable fixes: …[clipped]"
+  },
+  {
+   "id": "C-07d-live-caller-restart-and-reorg",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "Restart: the state resumes from disk root-verified — consensus/src/pipeline/virtual_processor/processor.rs:992-1000, `load_tip(params)` with the comment that it runs the full `into_state` rebuild, and `.expect(\"a stored V2 tip must load under its own committed root\")`.",
+    "Reorg retreat: processor.rs:1030-1037 walks the PALW state backwards in lockstep with the UTXO diff via `revert_delta_v2`, keyed off `delta_of(current)`.",
+    "Reorg advance over already-validated blocks: processor.rs:1078-1088 replays the committed delta with `apply_delta_v2` rather than recomputing the transition ('a second chance to disagree with what the chain already committed to').",
+    "First validation runs the real transition and stages it atomically with the block's UTXO batch: processor.rs:1266-1289 (`apply_palw_transition_v3`) and processor.rs:2077-2081 inside `commit_utxo_state` (`insert_delta_batch` in the same WriteBatch)."
+   ],
+   "what_remains": "Cosmetic only: `consensus/src/processes/palw_state_v2_sync.rs` (422 lines) is dead code — it is declared at consensus/src/processes/mod.rs:8 and has no caller anywhere in the tree, and its own module doc at lines 8-13 still says 'Dormant... Nothing constructs this on any preset. It lands before its caller'. The job it describes is done inline in the virtual processor instead. Delete it or wire it, but it reaches no execution path and is not a blocker. Note also that its doc's stated precondition — 'the stateful admission check must run at block validation before this walk can be called on a li …[clipped]"
+  },
+  {
+   "id": "C-07e-consensusv2-testnet-preset",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "The preset function exists, is fallible-by-construction, and is fully gated: consensus/core/src/config/params.rs:2299-2345 `palw_rc_params_from_artifacts` derives eight of the nine bundle facts and runs `verify_palw_genesis_v2` against the network's OWN genesis UTXO set; `palw_rc_params` at 2477-2510 installs the bundle and calls `validate_palw_v2()`.",
+    "The NetworkId mapping exists — this is appendix blocker 3, and it is closed: consensus/core/src/config/params.rs:1265 `Some(12) => palw_rc_shipped_params()`. Test `the_palw_rc_network_id_builds_params_instead_of_aborting` passes.",
+    "The RC has its own genesis block (consensus/core/src/config/genesis.rs:342 `PALW_RC_GENESIS`), its own premine (consensus/core/src/config/premine.rs:165, 406-408), the frozen 120 s cadence and no V1 PALW PoW (params.rs:2438-2474).",
+    "BUT the shipped binary does not carry a ConsensusV2 network. consensus/core/src/config/params.rs:2375-2378: `PALW_RC_GENESIS_BOND_PUBKEY: &[u8] = &[]`, `PALW_RC_GENESIS_OPERATOR_PUBKEY: &[u8] = &[]`, `PALW_RC_GENESIS_PAYOUT_PAYLOAD = [0u8; 64]`. `palw_rc_genesis_card_is_set()` (2383-2387) is therefore false and `palw_rc_shipped_params()` (2389-2412) returns `palw_rc_base_params()` — the bundle-FRE …[clipped]"
+   ],
+   "what_remains": "As shipped, `Params::from(testnet-12)` is a plain blue-work testnet with the RC genesis — palw_consensus_mode is not ConsensusV2, so nothing in C-07a/b/c/d is active on it. Closing this is an operator step, not a code change: generate an ML-DSA-87 key with misaka-cli, run `misaka-palw-base0/src/bin/palw-rc-genesis.rs` (which prints exactly these four constants, lines 202-240), paste them at params.rs:2375-2378, rebuild. `palw_rc_shipped_params` then panics at startup rather than silently degrading if the pasted card does not assemble (params.rs:2409-2412). Two operational items sit beside it a …[clipped]"
+  },
+  {
+   "id": "C-07-appendix-1-current-attempt",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "The appendix's `current_attempt` hardwired to None is gone. consensus/src/pipeline/virtual_processor/processor.rs:1266-1272 builds the work value from the two admission results: `match (attempt.as_ref(), receipt_spend.as_ref()) { (Some(e), _) => PalwBlockWorkV3::Attempt(e), (None, Some(s)) => PalwBlockWorkV3::ReceiptSpend(&s.spend), (None, None) => PalwBlockWorkV3::None }` and passes it into `appl …[clipped]",
+    "The two admission checks that produce those values are real and disqualifying: `palw_v2_check_attempt_admission` at processor.rs:1220-1231 and `palw_v2_check_receipt_spend` at 1232-1243; both set StatusDisqualifiedFromChain on error.",
+    "The match is written total rather than asserted, so a crossed pair cannot panic a node remotely (comment at processor.rs:1262-1265).",
+    "Claims now exist as a consequence — the RC end-to-end test asserts `reserved_exposure > 0` after one produced block (consensus/src/pipeline/virtual_processor/tests.rs:1000), which is only reachable if `apply_attempt` ran."
+   ],
+   "what_remains": "Nothing."
+  },
+  {
+   "id": "C-07-appendix-2-subnetwork-routing",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "Both ids now have a door at tx validation in isolation: consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:317-329 routes SUBNETWORK_ID_PALW_FP_COMMITMENT (0x4a) to `validate_palw_fp_commitment_tx`, and 330-339 routes SUBNETWORK_ID_PALW_LIFECYCLE (0x4b) to `validate_palw_lifecycle_tx`. Previously both fell through to the blanket `Err(TxRuleError::SubnetworksDisabled)` at l …[clipped]",
+    "Ids are defined at consensus/core/src/subnets.rs:308 (0x4a) and 321 (0x4b), pinned by test at 393-394.",
+    "The mempool does not gate on subnetwork id (mining/src/mempool/check_transaction_standard.rs references only SUBNETWORK_ID_NATIVE for its own fee/size rules), so nothing else blocks relay of these carriers.",
+    "The lifecycle arm refuses the kinds that may not ride it using the same table the extraction walk applies, so admission and extraction give one answer (comment at tx_validation_in_isolation.rs:331-335)."
+   ],
+   "what_remains": "Nothing. Note the deployment property the comment states is real: admitting these ids is a flag day — to a node without this dispatch they are `SubnetworksDisabled`, so a block carrying one splits an unupgraded fleet. That is a release-coordination item, and on a brand-new testnet-12 it is moot."
+  },
+  {
+   "id": "C-07-extra-receipt-lane-unreachable",
+   "verdict": "OPEN",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "Found while verifying C-07, not part of the original finding. On a ConsensusV2 network the header gate demands ONE algo id exclusively: consensus/core/src/pow_layer0.rs:608-615 `required_algo_id_for_mode` returns `mode_required` when Some, and 621-633 `check_algo_id_for_mode` requires exact equality; `mode_required` is `Some(bundle.algorithm_id)` (consensus/core/src/palw_mode_v2.rs:713-718).",
+    "The RC bundle's `algorithm_id` is the attempt id only: consensus/core/src/palw_fp_devnet_v3.rs:219 `POW_ALGO_ID_PALW_COMMITTED_V2`, and palw_mode_v2.rs:399-401 refuses any other value.",
+    "So a header declaring POW_ALGO_ID_PALW_RECEIPT_V3 (7) is rejected by `n_id` at consensus/src/pipeline/header_processor/pre_ghostdag_validation.rs:100-110 before it can reach the receipt-spend admission at consensus/src/pipeline/virtual_processor/processor.rs:4015.",
+    "The two-id acceptance function exists but has NO non-test caller: consensus/core/src/palw_mode_v2.rs:548-550 `accepts_algo_id`, and its own doc at 542-547 says so ('the wired seam still demands the attempt id exclusively'). Callers are only palw_mode_v2.rs:832-835 and palw_fp_devnet_v3.rs:351-353, both tests."
+   ],
+   "what_remains": "The ADR-0044 free-prompt receipt lane is inert on any ConsensusV2 network: the `PalwBlockWorkV3::ReceiptSpend` arm at processor.rs:1269-1271, the whole of `palw_v2_check_receipt_spend`, and the quantum-burn path in palw_state_v2.rs are dead until the FP-08 seam swap replaces `check_algo_id_for_mode`'s single-id demand with `bundle.accepts_algo_id`. Not money-losing and not a launch blocker — but any documentation or runbook that describes testnet-12 as carrying two block kinds is wrong today, and the dead arm should be either wired or fenced so nobody reads it as live."
+  },
+  {
+   "id": "H-01",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "consensus/core/src/palw_lifecycle_objects_v2.rs:113-116 — the blanket refusal is gone: `ClassRegistered { admission: Some(_) }` => Ok(()); `admission: None` => Err(\"...must carry its shape profile and canonical job\"). At baseline e5d7a69c the same function returned Err for every ClassRegistered (`git show e5d7a69c:consensus/core/src/palw_lifecycle_objects_v2.rs`).",
+    "consensus/core/src/palw_state_v2.rs:964-1002 — the object gained `admission: Option<Box<PalwClassAdmissionCarriageV2>>` (struct at :933-940: profile + canonical job). None = genesis (catalog-checked), Some = post-genesis.",
+    "consensus/src/pipeline/virtual_processor/processor.rs:3845-3885 — the acceptance arm is real: requires the V2 bundle, requires the carriage, enforces `share_permille == state_params.min_grantable_share_permille()` (:3873-3878), then calls `verify_class_admission_v2` (:3879-3884).",
+    "consensus/src/pipeline/virtual_processor/processor.rs:1214 — that validator runs on the chain-validation path (`palw_v2_validate_objects`); Err disqualifies the block. The gate is wired, not dormant."
+   ],
+   "what_remains": "The contradiction the finding names IS resolved: there is one registration policy (carriage decides shape, acceptance runs verify_class_admission_v2 + the min-share rule, transition folds), it is reached from the real chain-validation path, and the weightless clock is now a parameter of that one policy rather than a rival answer. What is not resolved is that the unified policy is PERMISSIONLESS and its checks are split across two layers that cannot see each other. Three things must land before t12 carries weight: (1) an authority on ClassRegistered — today nothing signs it and nothing gates wh …[clipped]"
+  },
+  {
+   "id": "H-02",
+   "verdict": "OPEN",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "consensus/core/src/palw_class_admission_v2.rs:266-268 — admission still calls only the WEAK gate: `verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id, kernel_ids })`, i.e. set inclusion over kernel IDs. The debug_assert at :270-272 also compares only id sets.",
+    "consensus/core/src/palw_catalog_coverage.rs:147-172 — `verify_profile_coverage_v1` is the strong gate (per-node `kernel_can_serve_node_v1`, then a prefill/decode sweep through `kernel_can_serve_call_class_v1`). Repo-wide grep for callers returns exactly two, both inside `#[cfg(test)]` modules: consensus/core/src/palw_base0_profile.rs:870 (test mod opens at :588) and consensus/core/src/palw_qwen25_ …[clipped]",
+    "consensus/core/src/palw_step_refute.rs:219 (`kernel_can_serve_call_class_v1`) and :237 (`kernel_can_serve_node_v1`) — grep shows their only non-test callers are inside `verify_profile_coverage_v1` itself (palw_catalog_coverage.rs:157, :166). No consensus path reaches either.",
+    "The GENESIS lane is the same story: consensus/core/src/palw_mode_v2.rs:680-687 (`verify_against_catalog`, called first thing by `verify_palw_genesis_v2` at palw_genesis_v2.rs:126) also runs only `verify_catalog_coverage_v1`, over the catalog entries' stored `reachable_kernels` id sets. The genesis catalog holds no profile (PalwClassCatalogEntryV2 is class_id / artifact_root / two leaf counts / ker …[clipped]"
+   ],
+   "what_remains": "Unchanged from the audit: `verify_profile_coverage_v1` has no non-test caller on this branch, and `verify_class_admission_v2` still checks only the reachable kernel-ID set. What DID change is the severity. At the audit's baseline this was near-inert, because classes could only come from genesis and the shipped floor's servability is pinned by the unit test at palw_base0_profile.rs:860-880. H-01's fix made post-genesis registration a live, permissionless path (palw_lifecycle_objects_v2.rs:113, processor.rs:3845-3885), so a stranger can now register a class whose nodes name catalogued kernel ids …[clipped]"
+  },
+  {
+   "id": "H-04",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "consensus/core/src/palw_qwen25_profile.rs:85-96 — QWEN25_1_5B still ships `n_ctx: 4_096` (line 93) with `tile_len: 128` (line 96); consensus/core/src/palw_qwen25_profile.rs:100-111 — QWEN25_3B likewise (n_ctx 4_096 at :108, tile_len 128 at :111). The shipped constants are UNCHANGED from what the audit read.",
+    "consensus/core/src/palw_step.rs:62 — `pub const PALW_STEP_MAX_LEAVES: u64 = 1 << 22;` = 4,194,304, the cap the audit cites.",
+    "Reproduced empirically, not from a comment: `cargo run -q -p misaka-palw-base0 --bin base0-class-sizing` prints `Qwen2.5-1.5B ... longest job: INADMISSIBLE — TooManyLeaves { got: 132354910, max: 4194304 }` and `Qwen2.5-3B ... TooManyLeaves { got: 219703654, max: 4194304 }`. The audit's 132,354,910 is exact on this branch.",
+    "consensus/core/src/palw_class_admission_v2.rs:612-626 — the tripwire `the_shipped_qwen_tile_len_does_not_admit_its_own_declared_context` asserts `worst_case_step_leaf_count_v1(as_shipped).is_err()` for BOTH shipped constants; it PASSES (`cargo test -p kaspa-consensus-core --lib palw_class_admission_v2` → 8 passed)."
+   ],
+   "what_remains": "The arithmetic defect is unchanged and the audit's numbers reproduce exactly; what closed is the missing VALUE (the derived admissible pair) and a tripwire that fires if the constants move. It is not a testnet-12 blocker because (a) no Qwen class is registered on testnet-12 (see SCOPE finding), and (b) the ladder check is fail-closed — an inadmissible geometry is refused at registration, never admitted in a broken state. Remaining work is a decision, not a defect: if Qwen2.5 is ever to be registered, either the shipped constants get an admissible tile_len or the court's `max_opening_bytes` is  …[clipped]"
+  },
+  {
+   "id": "H-05",
+   "verdict": "OPEN",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "The degeneration record the audit cites is still in the tree, verbatim: misaka-palw-base0/src/convert.rs:578-580 — \"the residual peak reaches 11 out of 127, so the stream occupies under a tenth of the int8 range, its effective precision is about 3.5 bits, and the argmax degenerates to a constant token\".",
+    "misaka-palw-base0/src/convert.rs:606 — after the per-layer calibration loop, \"the residual peak still reaches 5 of 127 at its worst\".",
+    "docs/palw-qwen25-class-phase0.md:469-479 — the measured depth sweep: at 28 layers the argmax is `[11, 11, 11, 11]` and attention spread falls from 111,401 to 2,855. :528 — \"It must not be activated on these numbers\".",
+    "The REMEDY MECHANISM landed (commit f375125e, ADR-0050): consensus/core/src/palw_base0_profile.rs:205 and :221 add `Scale`/`KDESC_BASE0_RESCALE` nodes at both residual sites (`blk.{layer}.attn_residual.scale`, `blk.{layer}.ffn_residual.scale`), so a decayed residual can be AMPLIFIED — which a requantize structurally cannot (its gain is ≤ 1). misaka-palw-base0/src/convert.rs:646-660 makes `calibrat …[clipped]"
+   ],
+   "what_remains": "The finding stands as written: the artifact's own comments still record constant-token degeneration and residual-range collapse, and nothing has re-measured them since the remedy landed. It does not block testnet-12 because the Qwen class is not registered there and the floor's quality is irrelevant to it. The residual risk is that quality is enforced by NO gate: if a Qwen class is ever registered, `verify_class_admission_v2` will admit it on structure alone. Before any second class carries weight, either (a) re-run `calibrate_layer_residuals` on the real 1.5B checkpoint with the ADR-0050 gain …[clipped]"
+  },
+  {
+   "id": "H-06",
+   "verdict": "OPEN",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "No integer Qwen3.6 class exists anywhere on this branch: no shape profile, no converter, no full-forward. The only Qwen3.6 references in code are the FLOAT llama.cpp runtime registry — consensus/core/src/vlt.rs:972 (\"PALW runtime registry — the pinned Qwen3.6-35B-A3B Metal profile\"), :993 (`GGUF_FILENAME`), :997 (`BASE_REPO_ID`) — consumed by misaka-palw-worker/src/main.rs via `qwen35_pins`.",
+    "The audit's characterisation of the existing GDN adjudication is exact: consensus/core/src/palw_step_refute.rs:57-58 — `KDESC_GDN_CORE_NEON = \"gated-delta-net/fused-seq/f32dot-step16-epr4/glibc-2.39-expf-fma/llama-030ebb558/v1\"` and `KDESC_GDN_CORE_AVX2 = \"...step32-epr8/glibc-2.39-expf-fma/llama-030ebb558/v1\"`. Float, with the SIMD dot structure, the glibc version and the llama.cpp commit baked i …[clipped]",
+    "The adjudication table (consensus/core/src/palw_step_refute.rs:176-194) has 17 entries: 7 float (L2Norm, RmsNormFused, Swiglu, Sigmoid, Softplus, GdnCore NEON, GdnCore AVX2) and 10 BASE-0 integer ops. There is NO MoE/expert-routing kernel of any kind, no `SsmConv` program, no `MatMulF16` program, no `CpyF32F16` program — so a Qwen3.6-35B-A3B (MoE) graph is not even expressible as an adjudicable cl …[clipped]",
+    "The float kernels are unreachable by any shipped class: `grep -rn \"KDESC_GDN_CORE_NEON|KDESC_SWIGLU|KDESC_L2_NORM\" --include=*.rs` returns zero hits outside palw_step_refute.rs itself. No profile in the tree names one."
+   ],
+   "what_remains": "Accurate and unchanged: the deterministic integer Qwen3.6 class does not exist. This is the \"not ready\" case, not the \"broken and weighted\" case — the class cannot be registered because its kernels are not in the adjudication table, and the coverage gate is the first check `verify_class_admission_v2` runs. Nothing on testnet-12 activates the float llama.cpp lane. The whole item is future work (integer MoE/GDN/SSM primitives, converter, full forward, real-checkpoint measurement), correctly fail-closed today."
+  },
+  {
+   "id": "M-03",
+   "verdict": "OPEN",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "Unchanged, at a new line number: consensus/core/src/palw_qwen25_profile.rs:485-499 — `probe_geometry()` is `layer_count: 1` (:487), `hidden_dim: 32` (:488), `ffn_dim: 64` (:489), `vocab_size: 48` (:493), `n_ctx: 16` (:494), `tile_len: 16` (:497). Exactly the values the audit reports.",
+    "It is still what the two heavyweight tests use: consensus/core/src/palw_qwen25_profile.rs:533 (`a_qwen_execution_commits_a_step_leg`, \"condition 9\") and :581 (`a_qwen_step_is_adjudicated_from_one_tile_and_no_model`, \"condition 10\").",
+    "The module's own comment concedes it: consensus/core/src/palw_qwen25_profile.rs:479-484 — \"The STRUCTURE is the real thing ... The dimensions are not\".",
+    "The real geometry IS used in the structural tests — coverage (:416), folded-transformation absences (:443), cache roles (:468), declared inventory (:762), profile-id distinctness (:400) — and in the new admissible-geometry search (:789-795). So the split the audit describes (structure real, magnitudes toy) is exactly what is there."
+   ],
+   "what_remains": "Reproduces exactly. It is a gap in the Qwen class's EVIDENCE, not a defect in shipped code, and the Qwen class carries no weight on testnet-12. It would become material the moment a Qwen registration is contemplated: the probe proves the graph is well-formed and one step adjudicates, it does not prove the 28-layer / 151,936-vocab class's opening sizes, court-close transaction mass or terminal latency are survivable."
+  },
+  {
+   "id": "SCOPE-does-testnet12-register-any-non-BASE0-class",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "ANSWER: no. The RC (testnet-12) genesis object list is exactly two objects — one class and one bond: consensus/core/src/palw_fp_devnet_v3.rs:242-259, `ClassRegistered { class_id: base_class_id, share_permille: 1000, activation_daa: 0, admission: None }` plus `BondRegistered`.",
+    "`base_class_id` is BASE-0 and the catalog has one entry: consensus/core/src/palw_base0_profile.rs:543-554 — `palw_rc_base0_registration_v1` builds `base0_profile_v1(PALW_RC_BASE0_GEOMETRY)` and `PalwClassCatalogV2::new(vec![entry])`; consensus/core/src/config/params.rs:2309 comments \"the RC catalog has its one class\".",
+    "That is actually enforced on the shipping path, not only in tests: consensus/core/src/config/params.rs:2338-2341 runs `verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, ...)` inside `palw_rc_params_from_artifacts`, resolving bond collateral against this network's own genesis UTXO set.",
+    "No Qwen constant or profile is referenced by any non-test, non-CLI code: `grep -rn \"qwen25_profile_v1|QWEN25_1_5B|QWEN25_3B\"` outside palw_qwen25_profile.rs hits only consensus/core/src/palw_class_admission_v2.rs tests (:322-624) and the reporting binary misaka-palw-base0/src/bin/base0-class-sizing.rs."
+   ],
+   "what_remains": "testnet-12 as shipped registers BASE-0 and nothing else — and right now, with the genesis card unset, it registers nothing at all and runs with PALW disabled. So all four Qwen findings are in the \"the class is not ready\" bucket, not the \"registered and weighted in a broken state\" bucket. The one thing an operator must not do is fill in the genesis card while also intending to register Qwen: the admission gate would accept a Qwen2.5 graph at (tile 64, n_ctx 125) on structure alone, with no quality check (see H-05) and no real-geometry court evidence (see M-03)."
+  },
+  {
+   "id": "OBS-post-genesis-class-registration-is-unauthenticated",
+   "verdict": "OPEN",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "Post-genesis `ClassRegistered` is now permitted (it used to be refused outright): consensus/core/src/palw_lifecycle_objects_v2.rs:113 — `ClassRegistered { admission: Some(_), .. } => Ok(())`.",
+    "The subnetwork has a door: consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:330-336 routes 0x4b to `validate_palw_lifecycle_tx`, which (consensus/core/src/palw_lifecycle_objects_v2.rs:188-194) checks only decode, wire version and the may-ride table.",
+    "The acceptance gate checks structure and share, and nothing else: consensus/src/pipeline/virtual_processor/processor.rs:3845-3887 — bundle present, carriage present, `share_permille == state_params.min_grantable_share_permille()` (:3873), then `verify_class_admission_v2`. There is NO signature, NO bond requirement, NO stake, and NO authorization of any kind. The object's own doc claims otherwise ( …[clipped]",
+    "`activation_daa` is NOT checked by the gate, so `0` grants the share immediately: consensus/core/src/palw_state_v2.rs:2932-2946 — `let weightless = *activation_daa > ctx.daa_score;` and the share table is written when it is false. The \"register weightless, soak, then activate\" story H-05's remedy relies on is optional for the registrant."
+   ],
+   "what_remains": "Not one of the four assigned findings, but it is the mechanism by which \"a Qwen class in a broken state\" could acquire weight, so it belongs in this report. On a bundled testnet-12 any stranger can, for a transaction fee, register any structurally-admissible graph — including a Qwen2.5 profile at (tile 64, n_ctx 125) with an arbitrary `artifact_root` and unmeasured quality — and take 1‰ of cadence from the floor immediately and irreversibly (there is no de-registration object, and `ClassFrozen` needs a contradiction certificate a never-producing class can never emit). Repeated ~999 times it po …[clipped]"
+  },
+  {
+   "id": "C-06",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "misaka-palw-base0/src/inventory.rs:125 `base0_inventory_v1(artifact, geometry)` is non-test production code: it emits one leaf per operand row at exactly the (tensor, layer, byte_offset) coordinates `palw_step_refute` asks for (row-shape table documented at :16-22), sorts into canonical order (:230), and can only return through `PalwArtifactInventoryV1::new` (:231), so a non-canonical layout is a  …[clipped]",
+    "misaka-palw-base0/src/rc.rs:71-74 `palw_rc_base0_artifact_root_v1()` derives the RC floor artifact from the pinned seed (:39, :62) and returns the inventory Merkle root; consensus/core/src/config/params.rs:2360 pins that value as `PALW_RC_GENESIS_ARTIFACT_ROOT` and params.rs:2402 feeds it into the shipped testnet-12 bundle via `palw_rc_params_from_artifacts` (params.rs:2307-2321).",
+    "The prover half now exists and is exercised against a real artifact: consensus/core/src/palw_artifact.rs:123 `open_artifact_leaf_v1` (promotion mirrored exactly, :132-134), and misaka-palw-base0/src/inventory.rs:288-345 opens six real rows of the RC artifact through it into `PalwProvenOperandsV1` and reads them back at the refuter's own coordinates — embed row, matmul tile, 9-byte requant, 5-byte  …[clipped]",
+    "The root is consumed on the adjudication path, not just produced: consensus/core/src/palw_court_v2.rs:338 builds the oracle with `PalwProvenOperandsV1::from_openings_v1(operand_openings, class.artifact_root)` before `check_execution_step_refutation_v1`, and consensus/src/pipeline/virtual_processor/processor.rs:3839-3843 rejects a close whose declared verdict its own proof does not produce."
+   ],
+   "what_remains": "(a) No shipped binary can FILE an opening. `open_artifact_leaf_v1` and `base0_inventory_v1` have no non-test caller outside rc.rs — produce.rs:416 and legs.rs:613 sit inside `#[cfg(test)]` modules that start at produce.rs:318 and legs.rs:400 — and no crate anywhere builds a `PalwLifecycleTxPayloadV2` or a `CourtClosed` object (both symbols appear only in consensus/core and the processor). The court is chain-verifiable but client-less, so on t12 nobody can actually prosecute arithmetic fraud. That is a wiring gap distinct from C-06, but it decides whether C-06's machinery ever runs. (b) Still n …[clipped]"
+  },
+  {
+   "id": "H-07",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "The layout rules landed and are structural. `PalwArtifactInventoryV1` holds a PRIVATE `operands` vec (consensus/core/src/palw_artifact.rs:422-425) and `new` (:430-465) is the only constructor: it refuses empty, zero-length rows, duplicate (name,layer,offset), non-canonical order, a tensor whose first row is not byte 0, and any gap/overlap within one (tensor,layer). So the 'public fields let anyone …[clipped]",
+    "Extra entries are still permitted by the rules (only profile-subset-of-inventory is ever checked) — but this one is genuinely harmless: every leaf binds its own coordinates (palw_artifact.rs:62-75), duplicates at a coordinate are refused, so a surplus tensor only lengthens Merkle paths. Not a blocker; say so plainly.",
+    "The 'per-layer fallback' half is NOT fixed. `verify_covers_profile` (palw_artifact.rs:484-503) matches a profile node's `weight_name` against operand NAMES only — the closure at :490-496 never reads `o.layer` — so an inventory carrying one layer's rows satisfies a `blk.{layer}.*` template for every layer of the class. The module's own passing test builds exactly such an inventory (one row per tens …[clipped]",
+    "That coverage check is on no consensus path at all: its only callers are misaka-palw-base0/src/inventory.rs:271 and rc.rs:106, both inside `#[cfg(test)]`. `verify_class_admission_v2` never calls it."
+   ],
+   "what_remains": "Two concrete items. (1) `verify_covers_profile` must check coverage per (tensor, layer) against the profile's layer_count instead of ignoring `o.layer`, and it must be called from somewhere that gates a real registration — today nothing outside tests calls it. (2) A post-genesis registrant's `artifact_root` is unvalidated and, for the weights themselves, unvalidatable on-chain as designed; the honest closes are either to require openings for every profile-named tensor (and every layer) inside the registration object, or to fence post-genesis `ClassRegistered` off for t12 and ship only the gene …[clipped]"
+  },
+  {
+   "id": "H-08",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "There is one meaning on the V2 lane, and it is the graph. `Base0ArtifactV1::execution_class_id` (misaka-palw-base0/src/artifact.rs:582-590) now takes the geometry, calls `check_geometry` (:594-624) and RETURNS `profile.shape_profile_id()`; the flat whole-artifact hash is renamed `artifact_digest` (:624) and the doc at :553-567 states the split explicitly ('nothing can be opened against it').",
+    "The chain enforces the equality rather than trusting the name: consensus/core/src/palw_class_admission_v2.rs:264-268 refuses a registration whose `class_id != profile.shape_profile_id()` with `ClassIdIsNotTheProfileId`, and that gate is now called at acceptance (consensus/src/pipeline/virtual_processor/processor.rs:3880-3885).",
+    "The shipped RC identity derives the class id the same way: consensus/core/src/config/params.rs:2309 `let class_id = profile.shape_profile_id();`, and consensus/core/src/palw_base0_profile.rs:540-547 ('the class id IS the shape profile id').",
+    "misaka-palw-base0/src/rc.rs:94-96 asserts the two namespaces meet at one value for the class t12 actually registers, and that test passes on this branch."
+   ],
+   "what_remains": "Two naming residues, neither on a consensus path. (a) misaka-palw-base0/src/bin/qwen25-convert.rs:72 and :95 still print `artifact.artifact_digest()` labelled 'class id', and the module doc (:8-10) repeats 'a verifier re-runs this and compares the class id' — an operator following that text would compare the wrong value. Cosmetic for consensus, misleading for a human. (b) The legacy V1 registry keeps a third id: consensus/core/src/palw_registry.rs:290 requires `runtime_class_id == derive_runtime_class_id(class_tag)` (a hash of a string) and :382 hands that same value to a coverage certificate  …[clipped]"
+  },
+  {
+   "id": "OBS-01 (adjacent to H-01/H-07, not one of the three asked)",
+   "verdict": "OPEN",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "consensus/src/pipeline/virtual_processor/processor.rs:3845-3886 is the entire acceptance gate for a transaction-carried `ClassRegistered`: a V2 bundle must exist, an admission carriage must be present, `share_permille` must equal `min_grantable_share_permille()`, and `verify_class_admission_v2` must pass. There is no signature check, no bond, no operator identity — contrast `BondRegistered`, which …[clipped]",
+    "Acceptance rewrites consensus share state: consensus/core/src/palw_state_v2.rs:2936 calls `granted_share_table_v2`, which dilutes every incumbent proportionally (:2426-2470) and refuses only when a donor would drop below the floor.",
+    "For the shipped RC bundle that floor is 1 permille: `min_grantable_share_permille` = ceil(1e6 / (budget_tolerance * epoch_length)) (palw_state_v2.rs:425-430) with BUDGET_TOLERANCE_PERMILLE = 1000 and EPOCH_LENGTH = 1000 (consensus/core/src/palw_fp_devnet_v3.rs:137, :52).",
+    "The registrant also supplies `initial_target` and `slash_value_per_pwu` with only a non-zero check (palw_state_v2.rs:2911-2927), and both feed the per-class epoch budget and retarget arithmetic (consensus/core/src/palw_class_daa.rs:409-440), where a zero budget is an error (`ZeroBudget`, :439)."
+   ],
+   "what_remains": "I verified the missing authorization and the share-table write; I did NOT establish the end-to-end liveness impact — whether a run of cheap registrations actually starves the floor class's epoch budget, because the attacker-chosen `initial_target` feeds W_e on both sides of the budget ratio (palw_class_daa.rs:411-440), and I did not work that arithmetic through. Treat as a must-decide before strangers can send transactions on t12: either require authorization (signature / bond / meaningful fee) for a post-genesis `ClassRegistered`, or fence the 0x4b registration arm off for t12 and keep only t …[clipped]"
+  },
+  {
+   "id": "C-02",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "consensus/core/src/palw_step_refute.rs:767 — the oracle trait is now `fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>>`; the `elements` parameter and its two-units-under-one-name ambiguity are gone.",
+    "consensus/core/src/palw_artifact.rs:235-248 — the production oracle `PalwProvenOperandsV1::operand_bytes` matches on `(tensor_name, layer, row_start == byte_offset)` and then `(operand.bytes.len() == byte_len as usize).then(...)`, i.e. it returns EXACTLY byte_len bytes or None. Over-long openings are refused too.",
+    "consensus/core/src/palw_step_refute.rs:451-459 — the Rescale arm now asks `operand_bytes(name, layer, 0, 5)` and checks `row.len() != 5`. The 1-element/5-byte contradiction the audit named is gone.",
+    "consensus/core/src/palw_step_refute.rs:578-586 — Requantize asks `9 * inputs[0].len()`, RoPE asks `8 * (inputs[0].len()/2)` (= 4N). Both widths now match the audit's 'expected' column."
+   ],
+   "what_remains": "The API defect itself is fixed and op 9 is proven through the production oracle. What is NOT done is the remedy the finding actually demanded — 'all ten ops verified E2E through PalwProvenOperandsV1, FixedRow alone is not enough'. Only Rescale got that test. Doing it by hand for RoPE shows court and production inventory still disagree in three ways at once: width (court wants 4*d_model bytes, the leaf is 4*d_head), position (court hardcodes byte_offset 0, the inventory keys rope rows by position) and layout (court rotates the whole row from one table, the engine rotates per head). On PALW-RC-B …[clipped]"
+  },
+  {
+   "id": "C-03",
+   "verdict": "CLOSED",
+   "blocks_public_testnet": false,
+   "evidence": [
+    "THE OPENING CONSTRUCTION, court side — consensus/core/src/palw_step_refute.rs:508-524: `tile_len = node.tile_len`; `start = coord.tile_index * tile_len`; `(tile_start, tile_width) = (start, tile_len.min(out_dim - start))`; then `wanted = tile_width * x.len()` and `byte_offset = tile_start * x.len()`. The old `wanted = out_dim * input_len` is gone (the comment at :505-517 records the measurement: 4 …[clipped]",
+    "consensus/core/src/palw_step_refute.rs:551-571 — the oracle is asked for exactly `(byte_offset, wanted)` and a differently-sized answer is `Unadjudicable`, never a conviction. Only `tile_width` output lanes are then recomputed: `ops::matmul_quant(&w, &x, tile_width)` at :567.",
+    "No second slice of a whole row: `run_program` reports `row_offset = tile_index * tile_len` for the BASE-0 matmul only (palw_step_refute.rs:1155-1161) and the comparison site subtracts it — `local_start = tile_start.checked_sub(row_offset)` (:1104-1112) — so the tile-local recompute is compared directly against the committed tile.",
+    "A whole-matrix opening CANNOT be substituted: `PalwProvenOperandsV1::operand_bytes` requires `row_start == byte_offset` AND `bytes.len() == byte_len` (consensus/core/src/palw_artifact.rs:236-248). For tile 1 the court asks at offset 512; a whole-matrix leaf sits at offset 0 and is not found. For tile 0 the offsets coincide but the length check rejects it."
+   ],
+   "what_remains": "Nothing that blocks. Two notes for completeness: (1) the weightless-matmul arm (attention Q.K^T and P.V, palw_step_refute.rs:541-548) still requires the full `out_dim x in_len` second operand from the step leg before slicing the tile — that operand is the KV cache, bounded by kv_len rather than by model size, so the model-size-independence claim holds, but those leg-side input openings are not counted by `check_close_cost_v2` (palw_court_v2.rs:356-376 sums only `operand_openings`); their count is bounded instead by the canonical input set derived from the claim-pinned profile (palw_step_refute …[clipped]"
+  },
+  {
+   "id": "C-04",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "The named defect is gone: consensus/core/src/palw_step_refute.rs:416-435 — the `if coord.call_index != 0 { return Err(Unadjudicable) }` guard is replaced by `let token = if coord.call_index == 0 { prompt_ids[position] } else { generated_ids[call_index - 1] }`, then the row is gathered from the registered table at `token * width`.",
+    "The ids are pinned before any is read: palw_step_refute.rs:1064-1092 — prompt ids are matched against `job_context.prompt_token_ids_hash`, and the generated ids are matched against `d.summary.output_token_ids_hash` AND `full_logits_trace_root_v2(context, summary, ordered_event_commitment)` is recomputed and required to equal `binding.full_logits_trace_root`.",
+    "That root is the claim's own: `output_token_ids_hash` is inside `full_logits_trace_root_v2` (consensus/core/src/palw_v2.rs:860-879), which is inside `execution_commitment_root_v2` (consensus/core/src/palw_step_leg.rs:481-496), which `verify_binding` recomputes and compares to `binding.committed_execution_root` (palw_step_leg.rs:849-858), which the court pins to the claim (`check_execution_root_bin …[clipped]",
+    "Fail-safe on absence: a decode step with no `decode_tokens` carried, or an index past the carried ids, is `Unadjudicable` rather than a default gather (palw_step_refute.rs:428-431, and the test at :2251-2280)."
+   ],
+   "what_remains": "The finding as written ('decode-time embedding is explicitly Unadjudicable') is genuinely closed, and closed the cheap way the ADR intended. But the audit's 必須修正 asked for one adjudicable chain — argmax, tie-break, previous-logits commitment, proof of the selected token, embedding opening for it — and the chain is missing its selection link. Nothing on-chain can refute a committed decode token, so the executor's last generated token id is a free parameter of the attempt: re-signing it yields a fresh attempt_id → fresh class ticket and fresh 200-byte L1 tag with no re-execution, ~vocab_size (4, …[clipped]"
+  },
+  {
+   "id": "C-01",
+   "verdict": "PARTIAL",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "misaka-palw-base0/src/produce.rs:224 `base0_execute_for_attempt_v1` is a REAL producer path: it runs the integer engine call-by-call (prefill call 0 over P positions, then D-1 decode calls), pushes every captured row into `Base0StepCaptureV1`, and derives `execution_root` from the capture via `legs::base0_binding_from_capture_v1` (produce.rs:280-285). This did not exist at the audited baseline.",
+    "kaspad/src/palw_producer.rs:226 the node's own block producer calls `base0_execute_for_attempt_v1` and puts `run.execution_root` into the attempt envelope (kaspad/src/palw_producer.rs:239) — so the commitment is derived from an execution, not chosen by the miner. The RC lane is genuinely wired.",
+    "misaka-palw-base0/src/legs.rs:183-186 `Base0StepCaptureV1::finish` refuses a short capture with `CaptureIncomplete`, so a producer cannot emit a root over a partially-filled space; `finish_partial` (legs.rs:193) is the measurement-only escape hatch and nothing on the produce path calls it.",
+    "PRE and POST tables ARE captured now: engine.rs:217 pushes the embedding gather, engine.rs:399/401/403 push the final RmsNorm, its narrowing, and the logits head as three separate post rows."
+   ],
+   "what_remains": "Two things. (1) Make the attention subgraph adjudicable: the court's MatMul arm (palw_step_refute.rs:496-568) models the KV-cache operand as one `out_dim x in_dim` matrix, while the engine computes per-head dot products over a `[position][kv_dim]` history — so slots 12/16 can never present a canonical operand set. Either the IR must declare per-head nodes whose operand layout matches the cache, or the court must learn the head/cache layout. (2) Teach `base0_refutation_from_capture_v1` to carry `decode_tokens` (the generated ids + the trace summary the binding already commits to) so decode-posi …[clipped]"
+  },
+  {
+   "id": "C-05",
+   "verdict": "OPEN",
+   "blocks_public_testnet": true,
+   "evidence": [
+    "The audit's specific list of engine/profile divergences IS fixed. `BASE0_LAYER_IR` (consensus/core/src/palw_base0_profile.rs:150-233) is now 38 nodes and the profile is GENERATED from it (palw_base0_profile.rs:337-364), so every narrowing is declared, K IS rotated (IR slots 10-11), the cache roles sit on the ROTATED key/narrowed V (palw_base0_profile.rs:172,178 via `c(...)`), and the norm-gain ten …[clipped]",
+    "BUT the third party — the COURT — still computes something else, and I demonstrated it executing rather than inferring it. Read-only harness (scratch crate, path-deps into this worktree; no repo file touched, `git status --porcelain` clean) that runs the repo's own producer, then for EVERY leaf of the resulting step space builds a refutation with the repo's own `base0_refutation_from_capture_v1` a …[clipped]",
+    "*** FALSE CONVICTION *** At `PALW_RC_BASE0_GEOMETRY` (4 heads) all 44 SoftMax leaves (IR slot 14) return `Ok(ComputationMismatch { value_index: 0 })` — the court CONVICTS a perfectly honest execution. Cause: engine.rs:290-322 runs `softmax(&amplified)` INSIDE `for head in 0..shape.n_heads` (engine.rs:307) and concatenates the per-head distributions head-major; the court (palw_step_refute.rs:390-39 …[clipped]",
+    "*** FALSE CONVICTION, second mechanism *** Re-running the sweep at 1 head / hidden 32 / head_dim 32 (which makes the softmax rows degenerate and hides the first bug): IR slots 8 and 10 (RopeImrope) return `Ok(ComputationMismatch{value_index:0})` at 8 of 10 leaves — everything except position 0. Cause: the court requests the rotary table at a HARDCODED byte offset 0 (palw_step_refute.rs:583-584 `we …[clipped]"
+   ],
+   "what_remains": "Three concrete arithmetic corrections plus one test that would have caught all of them. (1) SoftMax: either make the court's `Base0Op::Softmax` arm head-aware (it has `node.out_len`/`kv_len`/`profile.attn_heads` in hand — apply `ops::softmax` per `kv_len`-sized chunk) or split the IR's per-head nodes so one node is one head's row. (2) RoPE: pass `gather.0` through and request the rotary row at the position's own byte offset (`position * 8 * pairs`) and at `8 * (d_head/2)` bytes, not `8 * (row_len/2)`. (3) P·V: the KV-cache operand is `[position][kv_dim]`; the court must transpose (or the canon …[clipped]"
+  }
+ ],
+ "refutations": [
+  {
+   "id": "C-07-appendix-2-subnetwork-routing",
+   "refuted": true,
+   "reason": "The narrow, literal half of the verifier's claim checks out: 0x4a and 0x4b are no longer `SubnetworksDisabled`. `check_transaction_subnetwork` routes them at consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:317 and :330, the ids are pinned at consensus/core/src/subnets.rs:308/321 with the distinctness test at :393-394, nothing in mining/src/mempool gates on subnetwork id, and the 0x4b arm does share `palw_lifecycle_object_may_ride_v2` with the extraction walk. The 0x4a (free-prompt) arm is genuinely fine — its admission is strictly weaker than the walk, which re-runs …[clipped]"
+  },
+  {
+   "id": "H-03",
+   "refuted": true,
+   "reason": "The verifier's map of the path is accurate, and every citation they give checks out — but the fix bounds the wrong half of the object, and the half it does not bound is where the cost of adjudicating a close is actually decided.\n\n`check_close_cost_v2` (consensus/core/src/palw_court_v2.rs:355-378) opens the proof as `let PalwCourtVerdictProofV2::Arithmetic { operand_openings, .. } = proof;`. The `..` it discards is `refutation: PalwExecutionStepRefutationV1` (:205), and nothing else in `adjudicate_court_close_v2` measures it. So the ceilings bound the payload the close CARRIES, while the work t …[clipped]"
+  },
+  {
+   "id": "C-07-appendix-1-current-attempt",
+   "refuted": false,
+   "reason": "I could not find a live path on which the original defect still bites. The appendix's defect was `current_attempt` passed unconditionally as `None`, so a block's own work never reached the state machine, no claim was ever created, and PALW weight stayed zero. On this branch the work IS built and passed: consensus/src/pipeline/virtual_processor/processor.rs:1225 runs `palw_v2_check_attempt_admission` (which returns the validated envelope and disqualifies the block on error), :1237 runs `palw_v2_check_receipt_spend`, :1266-1272 folds both into a `PalwBlockWorkV3` with a TOTAL match (no `unreacha …[clipped]"
+  },
+  {
+   "id": "C-07a-header-commitment",
+   "refuted": true,
+   "reason": "検証者が挙げた事実は全部その通りで、私も一つずつ確認した(フィールド実在・PRE-POW preimage・virtual chain での失格・template の生成元・p2p 往復・否定テスト)。しかし「閉じている」のは **genesis から自力で DAG を歩いたノードだけ** で、公開 weight-bearing testnet-12 で見知らぬノードが実際に参加する経路 = pruning-point IBD には、この検査を成立させる前提(pruning point における PALW V2 state)が存在しない。\n\n決定的な構造:検査は `processor.rs:1187` にあるが、それは `match palw_state.as_mut() { Some(state) => ... }` の中で、`palw_state` は `processor.rs:992-1000` で「V2 params があり **かつ** store に tip row がある」ときだけ Some になる。その tip row を書く唯一の初期化は `process_genesis()` (`processor.rs:9186-9217`) で、これは `config.process_genesis` が真のときしか走らない (`consensus/src/consens …[clipped]"
+  },
+  {
+   "id": "C-07b-fork-choice-consumes-weight",
+   "refuted": true,
+   "reason": "The verifier's mechanical claims are all true — the rule is a value, ConsensusV2 gets `PalwWeighted`, `RankedTip::Ord` really calls `order_tips_v1`, the weights really are candidate-scoped, and the `blue_work < sink_blue_work` filter really keeps `pick_virtual_parents`' assert honest. But the tip site consumes only TWO of the PALW authority's THREE keys, and the one it drops is the PRIMARY one.\n\n`palw_candidate_order_v2` builds the authority's value with four keys (processor.rs:3530-3531): `PalwCandidateOrderV1::new(frontier_blue_score, safe_weight, bounded_immature, candidate)`. `compare_palw …[clipped]"
+  },
+  {
+   "id": "C-06",
+   "refuted": true,
+   "reason": "Most of the verifier's claim checks out: `base0_inventory_v1` is real production code, it is sorted and can only return through `PalwArtifactInventoryV1::new` (inventory.rs:229-231), the prover half exists (palw_artifact.rs:123), the derived root is pinned at params.rs:2360 and fed to the shipped testnet-12 bundle (params.rs:2400-2412), and the root is consumed on the adjudication path (palw_court_v2.rs:338 -> processor.rs:3818-3841). The three cited test filters do pass on this branch (I ran `inventory::` 3/3).\n\nBut the load-bearing sentence — \"it emits one leaf per operand row at exactly the …[clipped]"
+  },
+  {
+   "id": "SCOPE-does-testnet12-register-any-non-BASE0-class",
+   "refuted": true,
+   "reason": "REFUTED — the claim is true only of *genesis*, and it cites a module doc that this branch made false. Everything the verifier says about the genesis object list checks out (two objects, one class, `verify_palw_genesis_v2` really runs on the shipping path, no Qwen constant in non-test code, and the card is empty today so `palw_rc_shipped_params()` returns a `Disabled` network). But a *running* weight-bearing testnet-12 has a second, permissionless door that commit 332ee6ef (\"audit H-01 / ADR-0049 Decision H — one registration policy, and it is a gate\") opened on this very branch, and commit f89 …[clipped]"
+  },
+  {
+   "id": "C-03",
+   "refuted": true,
+   "reason": "C-03 is HALF closed. Every claim the verifier makes is true of the **weighted** arm of `Base0Op::MatMul` — I checked each one and none of them broke. But `palw_step_refute.rs:538` splits that op into two arms, and the fix stopped at the `if`. The other arm (`node.weight_name.is_empty()`) still computes the original defect's own expression, verbatim: `let full = out_dim.checked_mul(x.len())` and `if operand.len() != full { InputSetNotCanonical }` (:545-547). Its comment says so out loud — \"The opened row is the whole matrix … narrowing WHICH tiles a refutation must open is the leg's decision an …[clipped]"
+  },
+  {
+   "id": "C-07d-live-caller-restart-and-reorg",
+   "refuted": true,
+   "reason": "REFUTED — the live caller exists only for a database that processed genesis AND chain-validated every block itself. Both pruned-sync paths (which is how every stranger joins a public testnet-12 after ~38 h of chain: pruning_depth = 1144 blocks at the frozen 120 s cadence) leave the V2 state behind, and nothing detects it.\n\nWhat the verifier claims IS true for the from-genesis, steady-state path. I confirmed: retreat (processor.rs:1026-1039), advance-over-already-validated (1078-1093), first-validation transition + root check + atomic staging (1173-1300, 2077-2081), tip-at-walk-end (1341-1348), …[clipped]"
+  },
+  {
+   "id": "H-08",
+   "refuted": false,
+   "reason": "I could not find a live path on 740ed99e where the doubled meaning of \"class id\" bites a public weight-bearing testnet-12. Every consumer on the shipped V2 lane uses the graph meaning, and the one surviving artifact-digest-as-class-id surface is operator-facing text that the chain refuses fail-closed.\n\nWhat I checked and what holds:\n* The rename is real and the split is honest. `Base0ArtifactV1::execution_class_id` (misaka-palw-base0/src/artifact.rs:582-590) validates the geometry (`check_geometry`, :594-624) and returns `profile.shape_profile_id()`; the flat hash is `artifact_digest` (:624).\n …[clipped]"
+  }
+ ],
+ "dimensions": [
+  {
+   "dimension": "Fail-open sweep of the PALW consensus consumer layer (branch palw-base0-depth, HEAD 8db458f2 — two commits past the 740e …[clipped]",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "The 0x4b lifecycle band carries four object kinds that no layer authenticates, and the function that would authenticate the receipt objects — validate_receipt_quorum_v2 — has zero callers in the entire repository. One unsigned transaction from any stranger destroys an arbitrary set of bonds.",
+     "evidence": [
+      "consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:331-337 routes 0x4b to validate_palw_lifecycle_tx",
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:189-196 validate_palw_lifecycle_tx checks only decode, wire version, and the may-ride table — no signature, no key, no authorization"
+     ],
+     "fix": "Give palw_v2_validate_objects real arms for ReceiptLicensed and ProducerDefaulted that call validate_receipt_quorum_v2 with the ML-DSA-87 verifier (the same closure already used at processor.rs:3803/3815), and change the objects to carry PalwSeatReceiptV2 (signature + signed_daa + obligation fields) …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "BondRetireRequested is unauthenticated and irreversible: one 0x4b transaction naming a bond outpoint — all of which are public premine outpoints pinned in params.rs — permanently stops that bond producing blocks, with no un-retire path anywhere in the ruleset. On testnet-12 as the launch runbook describes it, that is a whole-network halt for the price of one transaction fee.",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:103 BondRetireRequested is on the may-ride list",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3887 `_ => {}` — the object reaches the transition with nothing checked"
+     ],
+     "fix": "Require an ML-DSA-87 signature over the retirement request under the bond's own registry pubkey, verified in a new palw_v2_validate_objects arm (mirroring the CourtDisclosed arm at processor.rs:3794-3807). Alternatively drop BondRetireRequested from palw_lifecycle_object_may_ride_v2 entirely until t …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "The receipt lane's (algo-7) producer signature is verified on no consensus path — the exact bug Appendix A records as fixed for the attempt lane (9e047dc4), still open in the receipt lane. The virtual processor calls the stateful-only admission and literally discards the network domain it just computed.",
+     "evidence": [
+      "consensus/src/pipeline/virtual_processor/processor.rs:4036 calls check_palw_receipt_spend_admission_v3 — the stateful half",
+      "consensus/src/pipeline/virtual_processor/processor.rs:4045 `let _ = (state_params, network_domain);` — the domain is derived and thrown away"
+     ],
+     "fix": "Change processor.rs:4036 to call check_palw_receipt_spend_admission_full_v3, passing network_domain, pre_pow_hash_64(header), header.timestamp, header.nonce and the same |key,msg,sig,ctx| verify_mldsa87_with_context(...).unwrap_or(false) closure the attempt arm uses at processor.rs:3989 — and delete …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CourtOpened names a challenger bond with no authorization from that bond, so a spurious court can be opened against any licensed claim under a third party's identity — and the rung clock then converts the honest producer's silence into a CourtFraud slash.",
+     "evidence": [
+      "consensus/core/src/palw_court_v2.rs:154-191 validate_court_opened_v2 checks the claim's phase, the challenge window, that the challenger bond EXISTS (:177-179), that it is not the claim's own bond (:180-182), and the session-id derivation — it verifies no signature from the challenger",
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:100 CourtOpened rides 0x4b with only shape validation at the transaction layer"
+     ],
+     "fix": "Add a challenger signature to CourtOpened over the derived session_id, verified under the challenger bond's registry pubkey in the existing processor.rs:3767-3793 arm — the same pattern CourtDisclosed and CourtVerdictPosted already use at processor.rs:3794-3819. Without it the two signed rung object …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "ClassFrozen is checked for shape only — no signature on either attestation — so a forged contradiction certificate freezes a class permanently. Inert today only because the liveness floor is exempt, and it arms itself the moment a second class is registered.",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:104 ClassFrozen rides 0x4b",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3887 `_ => {}` — no acceptance-layer arm"
+     ],
+     "fix": "Add a ClassFrozen arm to palw_v2_validate_objects that calls palw_slash::adjudicate_class_contradiction_v1 with the ML-DSA-87 verifier, resolving each attestation's executor_id to a registry pubkey through the chain state, before the transition's structural check runs. Close this before the second c …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "fork choice, chain weight and state root (branch palw-base0-depth, HEAD 8db458f2 — note: 2 commits past the 740ed99e nam …[clipped]",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "PALW V2 consensus state is never installed on any node that does not sync from genesis. Such a node silently runs with ALL PALW validation disabled — state root, attempt admission, bond/signature checks, escrow payouts — permanently, with no rebuild path and no log line.",
+     "evidence": [
+      "consensus/src/consensus/factory.rs:389 — the staging consensus used by headers-proof IBD is built with `.skip_adding_genesis()`.",
+      "consensus/core/src/config/mod.rs:258-261 — `skip_adding_genesis()` sets `process_genesis = false`."
+     ],
+     "fix": "Make the absence fail closed, then give it a real import. Minimum for launch: in the virtual processor, when `palw_state_params_v2.is_some()` but `palw_state_v2_store.tip_record()` is `None`, refuse to resolve virtual at all (the `processor.rs:1699` EVM pattern: log and stop) rather than falling to  …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "The IBD commit gate — ADR-0042 \"Unit D site 2\", the check that a node must not commit a staged chain its own fork choice would reject — is structurally unreachable and fails open on every headers-proof IBD.",
+     "evidence": [
+      "protocol/flows/src/ibd/flow.rs:1804-1808 — `let (Some(incumbent), Some(challenger)) = (incumbent, challenger) else { return Ok(()); };`. If either side is `None` the commit is authorized unconditionally.",
+      "`challenger` is the STAGING consensus's order: consensus/src/consensus/mod.rs:2123-2126 → `virtual_processor.palw_candidate_order_v2(sink)` → consensus/src/pipeline/virtual_processor/processor.rs:3517-3519 → `store.load_tip(state_params).ok().flatten()?` → returns `None` because the staging store is …[clipped]"
+     ],
+     "fix": "Invert the guard to fail closed: if the network is `ConsensusV2` (`palw_state_params_v2.is_some()`) and either order is `None`, refuse the commit and cancel staging rather than returning `Ok(())`. This is correct independently of blocker 1's import work, and is the smaller change — but note the gate …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "`reindex_if_stale` wipes the V2 delta rows and tip together on any schema-version bump, at every startup, with no rebuilder — so an already-healthy, genesis-synced testnet-12 node loses all PALW enforcement on a routine software upgrade.",
+     "evidence": [
+      "consensus/src/model/stores/palw_state_v2.rs:113-129 — `reindex_if_stale` calls `self.deltas.delete_all(...)` and removes the tip whenever the stored `u32` schema version differs from the build's.",
+      "consensus/src/consensus/storage.rs:353-358 — it is called unconditionally when the store is constructed, i.e. at every node startup."
+     ],
+     "fix": "Either implement the rebuild the doc promises (re-walk the selected chain from genesis or from the pruning-point carriage and repopulate deltas + tip), or make an empty store on a `ConsensusV2` network a hard startup refusal. Do not leave the third option — silently continuing — reachable."
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "Virtual sink selection is ordered by blue work in steady state, not by PALW weight: a candidate's weight is resolved by walking STORED DELTAS, and a delta only exists after that block has already been validated as a chain block, so every unvalidated tip resolves to `None` at heap-construction time.",
+     "evidence": [
+      "consensus/src/pipeline/virtual_processor/processor.rs:8037-8043 and :8162-8167 — the sink-search heap is built with `palw: self.palw_tip_weights_v1(block, ...)` for each tip, before any candidate is validated.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3523-3529 — `palw_candidate_order_v2` calls `calculate_chain_path(tip_block, candidate, None)` then `walk_chain_path(...).ok()?`."
+     ],
+     "fix": "This is not independently money-losing on a healthy node (validity gating, below, does the real work), but it must not be described as PALW-weight-ordered fork choice in the launch material — the honest description is \"permissioned hash ordering with a PALW deep-reorg brake\". If PALW weight is meant …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "P2P, handshake, IBD and pruning for a brand-new network (testnet-12)",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "PALW V2 chain state is never transferred or rebuilt during pruned IBD, and its absence silently disables ALL PALW consensus validation instead of failing closed. Any node joining an established testnet-12 (i.e. once the pruning point has left genesis) runs with the entire ConsensusV2 rule set off, permanently, with no recovery path.",
+     "evidence": [
+      "consensus/src/consensus/factory.rs:389 — the staging consensus used by IbdType::DownloadHeadersProof is built with `self.config.to_builder().skip_adding_genesis().build()`.",
+      "consensus/core/src/config/mod.rs:259-262 — `skip_adding_genesis()` sets `process_genesis = false`."
+     ],
+     "fix": "Add the PALW V2 state as the third pruning-point sidecar, alongside EVM and the overlay: a `RequestPruningPointPalwState`/`PruningPointPalwState` message pair carrying the borsh `PalwStateCarriageV2`, verified on receipt by `into_state(params, Some(root))` against the pruning-point header's `palw_st …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "Pruning on testnet-12 cannot advance at all until at least one claim reaches Final, and PALW delta rows are never deleted by the pruning processor. A chain where the panel/receipt lifecycle is not actively driven by transactions never prunes, and its single tip-snapshot row grows one claim per block without bound.",
+     "evidence": [
+      "consensus/src/pipeline/pruning_processor/processor.rs:222-228 — `if !self.virtual_processor.palw_pruning_point_allowed_v2(new_pruning_point) { … return; }` blocks every pruning-point move above the safe frontier.",
+      "consensus/core/src/palw_fork_authority_v2.rs:70-77 — `pruning_ceiling_v2(f) = f` and `pruning_point_allowed_v2(candidate_blue_score, f) = candidate_blue_score <= f`."
+     ],
+     "fix": "Decide and state the liveness contract: either the panel/receipt lifecycle is guaranteed to be driven on testnet-12 (and there is a monitored, tested path that produces PanelBound/ReceiptLicensed transactions), or the frontier needs a floor that advances on resolution rather than only on Final — e.g …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "The ADR-0044 free-prompt receipt lane (algo_id = 7) cannot produce a single block on a ConsensusV2 network: the header gate demands exact equality with the bundle's attempt id (6), so every algo-7 header is rejected as UnknownPowAlgoId before its implemented admission path is ever reached.",
+     "evidence": [
+      "consensus/core/src/pow_layer0.rs:622-633 — `check_algo_id_for_mode` is `if algo_id == required_algo_id_for_mode(mode_required, …) { Ok } else { Err(UnknownAlgoId) }`; strict equality.",
+      "consensus/core/src/palw_mode_v2.rs:713-718 — `required_algo_id()` for `ConsensusV2(bundle)` returns `Some(bundle.algorithm_id)`, and palw_mode_v2.rs:399 forces that to be `POW_ALGO_ID_PALW_COMMITTED_V2` (6)."
+     ],
+     "fix": "Either land the FP-08 seam swap (route the header and pruning-proof gates through `PalwConsensusParamsV2::accepts_algo_id` instead of `check_algo_id_for_mode`'s single-id equality, plus a template path that can build an algo-7 header) or remove the free-prompt receipt bundle from the shipped RC rule …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "Genesis and boot (testnet-12 / PALW-RC): genesis block identity, ruleset assembly, the genesis card, premine/bond backin …[clipped]",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "The RC genesis registers exactly ONE bond, but a panel needs 5 non-executor bonds and bonds may only be registered at genesis — so no claim can ever be bound, and the selected chain wedges permanently at genesis+2 blocks.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:242-260 — `genesis_objects` is exactly one `ClassRegistered` + one `BondRegistered`; `palw_rc_params_from_artifacts` (consensus/core/src/config/params.rs:2300-2310) takes a SINGLE bond, and the card carries a single `PALW_RC_GENESIS_BOND_INDEX` (params.rs:2376 …[clipped]",
+      "consensus/core/src/palw_fp_devnet_v3.rs:225 — `panel: PalwPanelParamsV2::new(5, 3, ANCHOR_DELAY)` → seat_count 5."
+     ],
+     "fix": "Make the genesis registration list carry a bond SET, not one bond: change `palw_rc_params_from_artifacts` / `palw_fp_devnet_bundle_v3` to accept `Vec<(bond_outpoint, bond_pubkey, operator_pubkey, payout_payload)>`, extend the genesis card to N entries, and add a boot check in `verify_palw_genesis_v2 …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "The shipped genesis card is UNSET, so `Params::from(testnet-12)` returns a bundle-free, hash-only identity: no shipped binary can boot a weight-bearing testnet-12 at all.",
+     "evidence": [
+      "consensus/core/src/config/params.rs:2376-2379 — `PALW_RC_GENESIS_BOND_PUBKEY: &[u8] = &[]`, `PALW_RC_GENESIS_OPERATOR_PUBKEY: &[u8] = &[]`, `PALW_RC_GENESIS_PAYOUT_PAYLOAD = [0u8; 64]`.",
+      "consensus/core/src/config/params.rs:2384-2388 — `palw_rc_genesis_card_is_set()` requires both keys non-empty and a non-zero payout; consensus/core/src/config/params.rs:2397-2401 falls back to `palw_rc_base_params()` when unset."
+     ],
+     "fix": "This is a deliberate, honestly-documented operator step rather than a code defect — but it means the branch as it stands cannot launch t12. Before calling the dimension ready, run `palw-rc-genesis` with real operator keys, paste the five constants, and re-release; every participant must build the id …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "`palw_rc_params` raises `finality_depth` to 600 without raising `pruning_depth` (1144), violating the prunality lower bound (1384) and dropping the network into the branch upstream's own comment labels \"unsafe\".",
+     "evidence": [
+      "consensus/core/src/config/params.rs:2506 — `params.blockrate.finality_depth = bundle.state.window_challenge() / 2;` (window_challenge 1200 → 600). Nothing else in the function touches `pruning_depth`.",
+      "consensus/core/src/config/params.rs:2437-2438 — the base is `TESTNET_PARAMS.clone()`, whose blockrate is `BlockrateParams::new_two_minute_bps()` (params.rs:2084, :228-231) → finality_depth 360, merge_depth 30, mergeset 180, k 1, pruning_depth max(1144, 900) = 1144."
+     ],
+     "fix": "Recompute `pruning_depth` alongside the raised `finality_depth` in `palw_rc_params` — reuse the `new_seconds_per_block` decomposition: `pruning_depth = max(finality_depth + 2*merge_depth + 4*mergeset_size_limit*k + 2k + 2, PRUNING_DURATION/secs)` = 1384 here — and add the same `lower_bound <= prunin …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "testnet-12 silently inherits testnet-10's entire DNS-finality PoS overlay and VLT shadow overlay, genesis-active — the same class of inherited accident the EVM lane was caught as, but unexamined against ConsensusV2 fork choice.",
+     "evidence": [
+      "consensus/core/src/config/params.rs:2437-2474 — `palw_rc_base_params` clones `TESTNET_PARAMS` and edits only `net`, `genesis`, `dns_seeders`, three PoW activations and `target_time_per_block`. `dns_params`, `crescendo_activation`, `pq_*` and `evm_*` all ride along untouched.",
+      "consensus/core/src/config/params.rs:2102 — `TESTNET_PARAMS.dns_params = Some(TESTNET_DNS_PARAMS)`; params.rs:1779 `TESTNET_VLT_SHADOW_FORK_DAA_SCORE = 0`; params.rs:1889-1894 sets `bond_spend_gate_mergeset_activation_daa_score` and `vlt.vlt_shadow_activation_daa_score` to that 0; params.rs:1897 `..P …[clipped]"
+     ],
+     "fix": "Decide each inherited overlay explicitly in `palw_rc_base_params` the way the EVM lane now is (a commented decision, not an inheritance), and pin it: extend `the_palw_rc_network_id_builds_params_instead_of_aborting` to assert the RC's `dns_activation_daa_score`, `vlt.*` fences, `bond_spend_gate_merg …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "The PALW-RC producer path end to end (kaspad/src/palw_producer.rs + consensus/core/src/palw_producer_v2.rs + misaka-palw …[clipped]",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "The RC's genesis bond can back only 2 concurrent claims while a claim holds its reservation for 600 DAA, and the only release path needs blocks — so the chain halts at block 2 (or 3), permanently, on the shipped ConsensusV2 bundle.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:130 `const MIN_COLLATERAL_SOMPI: u64 = 400_000;` is the collateral the single genesis bond registers (same file:257 `collateral: MIN_COLLATERAL_SOMPI`).",
+      "consensus/core/src/palw_fp_devnet_v3.rs:116 `MAX_EXPOSURE_RATIO_PERMILLE = 500` -> ceiling = 400_000 * 500/1000 = 200_000 (consensus/core/src/palw_producer_v2.rs:143 and the identical rule at consensus/core/src/palw_admission_v2.rs:273-280)."
+     ],
+     "fix": "Size the genesis bond's collateral from the ruleset instead of from a hand-written floor: collateral >= 2 * WINDOW_BIND * (2 * canonical_step_leaf_count * slash_value_per_pwu) / (max_exposure_ratio_permille/1000), computed in `palw_fp_devnet_bundle_v3` from the catalog entry it already has, and asse …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "The producer signs a data-availability promise (`trace_retention_daa`) it structurally cannot keep: the execution's tiles and binding are dropped when `produce_one` returns, and no code in the tree persists or serves them.",
+     "evidence": [
+      "kaspad/src/palw_producer.rs:249 sets `trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa)` — 600+600+1200+2400 = 4,800 DAA on the RC (consensus/core/src/palw_producer_v2.rs:148-152; windows at consensus/core/src/palw_fp_devnet_v3.rs:46-49).",
+      "The comment two lines above it (kaspad/src/palw_producer.rs:247-248) asserts 'The material is in hand (`run.tiles`), which is what makes the promise one it can keep.' `run` is a local created at kaspad/src/palw_producer.rs:226 and dropped at the end of the function; `grep -n \"chain_point|tiles|bindi …[clipped]"
+     ],
+     "fix": "Either persist the run (tiles + binding + prompt) keyed by attempt id with a pruning rule at `trace_retention_daa`, plus a serve path, before any bond is slashable; or, if that is out of scope for the RC, do not sign a retention promise that cannot be met — and delete the comment at kaspad/src/palw_ …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "`PalwProducerFactsV2::ready_to_produce` applies the epoch budget to the base class, which admission deliberately exempts — re-creating client-side the chain-stopping deadlock this branch removed from admission.",
+     "evidence": [
+      "consensus/core/src/palw_admission_v2.rs:234 gates the whole budget check on `if attempt.class_id != state_params.base_class_id()`, with 30 lines above it explaining that exempting the floor is what makes the deadlock unrepresentable (commit 58291251).",
+      "consensus/core/src/palw_producer_v2.rs:84-86 `has_epoch_room` and :96-98 in `ready_to_produce` have no such exemption; kaspad/src/palw_producer.rs:176-180 turns the Err into an indefinite 5-second hold with 'holding: this class's epoch budget is already spent'."
+     ],
+     "fix": "Give `PalwProducerFactsV2` the base_class_id (or a precomputed `budget_applies: bool`) and make `has_epoch_room` return true for the floor, mirroring consensus/core/src/palw_admission_v2.rs:234 exactly. Add a test that asserts the two predicates agree for the base class at a spent budget — the produ …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "The nonce grind runs synchronously inside an async task on the shared AsyncRuntime, pinning one tokio worker thread for the whole search; the 'expensive check runs rarely' assumption is false at the shipped genesis class target.",
+     "evidence": [
+      "kaspad/src/palw_producer.rs:266-302: the `for nonce in 0..NONCES_PER_TEMPLATE` loop (4,000,000, kaspad/src/palw_producer.rs:64) contains no `.await`; the only await in `produce_one` after the template is `submit_rpc_block` on a hit.",
+      "Per nonce: `class_ticket_v2` -> `commitment_root_v2` -> `attempt_id_v2` does `borsh::to_vec` of the whole attempt (~3.2 KB, including the 2,592-byte ML-DSA-87 verification key) plus three keyed BLAKE2b-512 passes (consensus/core/src/palw_attempt_v2.rs:196-236), plus `challenge_v2`."
+     ],
+     "fix": "Move the CPU section of `produce_one` (job build, inference, nonce loop) into `tokio::task::spawn_blocking` or a dedicated OS thread, returning the solved header to the async task for submission. Cheap secondary wins in the same loop: hoist the artifact/profile out of `produce_one` (they are re-deri …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "Operator tooling — can a human execute docs/palw-rc-testnet12-launch-runbook.md with the binaries on this branch? (HEAD  …[clipped]",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "Runbook §4 tells every node to dial the wrong P2P port. testnet-12 listens on 26411, the runbook says 16311, and with dns_seeders empty --addpeer is the only discovery path — so a fleet brought up by following the runbook never forms.",
+     "evidence": [
+      "docs/palw-rc-testnet12-launch-runbook.md:166 — 'kaspad --testnet --netsuffix=12 --addpeer=<producer-host>:16311 --utxoindex'",
+      "consensus/core/src/network.rs:277-281 — NetworkType::Testnet arms: Some(10)=>26211, Some(11)=>26311, None|Some(_)=>26411. testnet-12 hits the wildcard: 26411. network.rs:273-274 says this repo's P2P port is upstream+10000, so 16311 is the UPSTREAM t11 port, not any port of this codebase."
+     ],
+     "fix": "Change line 166 to --addpeer=<producer-host>:26411, or drop the port entirely — kaspad/src/daemon.rs:894 normalizes a bare host through config.default_p2p_port(), which is the form that cannot go stale."
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "palw-rc-genesis applies no length validation to --bond-pubkey / --operator-pubkey, and neither does the genesis gate, yet it prints 'ACCEPTED — every gate the genesis loader runs has passed'. A truncated paste mints a genesis card whose bond key can never sign; an empty --bond-pubkey= emits the UNSET sentinel and silently degrades the network to hash-only.",
+     "evidence": [
+      "misaka-palw-base0/src/bin/palw-rc-genesis.rs:149,157 — arg(\"--bond-pubkey\").and_then(|v| hex_bytes(&v)); hex_bytes only checks even length. No 2592-byte (MLDSA87_PK_LEN) check anywhere on this path.",
+      "Ran it: --bond-pubkey <128-hex validator_id> (64 bytes) => 'ACCEPTED — every gate the genesis loader runs has passed.' plus a full paste-ready constant block. --bond-pubkey=aa (1 byte) => same ACCEPTED."
+     ],
+     "fix": "In palw-rc-genesis, require bond_pubkey.len() == 2592 and operator_pubkey non-empty before printing ACCEPTED (refuse with the observed length). Better: add the same check to PalwConsensusObjectV2::BondRegistered at consensus/core/src/palw_state_v2.rs:2855 beside the existing EmptyOperatorKey guard,  …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "Runbook §1 names a key-derivation path that does not exist. It says misaka-cli produces --bond-pubkey / --operator-pubkey, but no tool in the tree prints an ML-DSA-87 verification key hex. The working path (--bond-seed / --operator-seed / --payout-address) landed at HEAD and the runbook was never updated, so an operator following §1 literally stops at step 1.",
+     "evidence": [
+      "docs/palw-rc-testnet12-launch-runbook.md:72-76 — the table says --bond-pubkey and --operator-pubkey are made by `misaka-cli`, and 'Generate the keys with misaka-cli ... Pass only verification keys.'",
+      "kaspa-pq-validator/src/main.rs:653-655 — keygen prints only the key path, validator_id (BLAKE2b-512(pk), 64 bytes) and funding_address. Never the 2592-byte verification key."
+     ],
+     "fix": "Rewrite §1's table and prose to the --bond-seed / --operator-seed / --payout-address form the binary already prints, and add the two `misaka validator keygen --out ...` lines ahead of it. Keep the raw-hex flags documented as the escape hatch, but say plainly that nothing in this tree can emit that h …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "Runbook §3's --palw-producer-bond=<txid>:<index> cannot be filled in from any tool output. The ACCEPTED genesis card prints 'bond outpoint premine #0' and never the txid, and the premine txid is a private const.",
+     "evidence": [
+      "docs/palw-rc-testnet12-launch-runbook.md:127,135 — '--palw-producer-bond=<txid>:<index>' and '--palw-producer-bond is the same outpoint the genesis card names.'",
+      "misaka-palw-base0/src/bin/palw-rc-genesis.rs:225 — the ACCEPTED block prints 'bond outpoint       premine #{bond_index}' only. Confirmed by running it: no txid in the output."
+     ],
+     "fix": "Print the full `{txid}:{index}` on the ACCEPTED card next to 'premine #N' (palw-rc-genesis.rs:225) and quote it in §3, so --palw-producer-bond is a copy of a line the tool emitted rather than a hand-built hash."
+    }
+   ]
+  },
+  {
+   "dimension": "Economics and money conservation (PALW ConsensusV2 / testnet-12) — branch palw-base0-depth @ 740ed99e",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "Four money-moving PALW lifecycle objects ride an ordinary transaction and are folded into consensus state with NO acceptance check. One ~1 KB transaction from any stranger destroys the whole PALW bond collateral of testnet-12 and permanently ends block production. validate_receipt_quorum_v2 — the function that checks seat signatures, panel membership, one-receipt-per-seat and quorum — has zero non …[clipped]",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:97-104 — ReceiptLicensed, ProducerDefaulted, BondRetireRequested and ClassFrozen all return Ok(()) from palw_lifecycle_object_may_ride_v2, i.e. they may be carried by a subnetwork-0x4b transaction",
+      "consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:330-337 — 0x4b routes at admission; validate_palw_lifecycle_tx checks only borsh decode, wire version and the may-ride table (consensus/core/src/palw_lifecycle_objects_v2.rs:188-195). No signature, no authority, no state."
+     ],
+     "fix": "Give ReceiptLicensed and ProducerDefaulted real arms in palw_v2_validate_objects that call the already-written validate_receipt_quorum_v2 with an ML-DSA verifier — which means the carried type must become the signature-bearing PalwSeatReceiptV2, not the bare PalwSeatVerdictV2 (consensus/core/src/pal …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "On the shipped RC genesis no panel can EVER bind, so every attempt-lane chain block's escrowed worker carve (620 permille = its entire §F worker base share) is forfeited and burned, and safe_weight never leaves zero. The producer of every chain block earns essentially zero subsidy, permanently, with no remedy available on-chain.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:242-259 — the RC bundle's genesis_objects register exactly ONE class and ONE bond (collateral hardcoded to MIN_COLLATERAL_SOMPI)",
+      "consensus/core/src/palw_fp_devnet_v3.rs:225 — PalwPanelParamsV2::new(5, 3, ANCHOR_DELAY): five seats are required"
+     ],
+     "fix": "Either (a) let the RC genesis card carry N bonds (at least seat_count + 1 distinct operators) instead of one — palw_fp_devnet_bundle_v3's genesis_objects and the PALW_RC_GENESIS_* constants are both single-bond today — or (b) add the gated post-genesis BondRegistered path the module doc defers ('bon …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "The per-bond exposure ceiling caps the SELECTED CHAIN at four attempt-lane blocks per 600-DAA bind window, and the number is hardcoded inside the bundle (hence inside palw_ruleset_id_v2), so no operator can raise it without minting a different network. Combined with blocker 2 nothing can release a claim early, so testnet-12's issuance-bearing chain advances at roughly 1 block per 150 DAA.",
+     "evidence": [
+      "consensus/src/pipeline/virtual_processor/tests.rs:1067-1100 — palw_v2_the_exposure_ceiling_bites_when_reservations_are_real: four chain blocks fit, the fifth cannot become the sink. Verified passing on this branch (cargo test -p kaspa-consensus --lib palw: 38 passed, 0 failed)",
+      "consensus/core/src/palw_fp_devnet_v3.rs:129-131 — MIN_COLLATERAL_SOMPI = 400_000 and MAX_EXPOSURE_RATIO_PERMILLE = 500 give a 200,000-sompi ceiling; :157-159 GENESIS_CLASS_TARGET = u128::MAX/2 and SLASH_VALUE_PER_PWU = 5 give 2 x 4096 x 5 = 40,960 reserved per claim, i.e. exactly four concurrent cla …[clipped]"
+     ],
+     "fix": "Size the genesis bond's collateral from the operator's card rather than pinning it at MIN_COLLATERAL_SOMPI inside the bundle, or state the 4-claims-per-window rate limit and its interaction with window_bind explicitly in the launch runbook's §6 'what is NOT in place' list. Fixing blocker 2 removes t …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "RPC surface and the external-miner gap on testnet-12 (ConsensusV2): can a third party mine, what one producer does to di …[clipped]",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "testnet-12 halts permanently after a handful of blocks: with exactly one genesis bond, the exposure ceiling fills and no claim can ever release it, because releasing requires DAA to advance and DAA only advances with blocks the ceiling now refuses.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:257 registers the genesis bond with `collateral: MIN_COLLATERAL_SOMPI`; :130 `const MIN_COLLATERAL_SOMPI: u64 = 400_000`; :116 `MAX_EXPOSURE_RATIO_PERMILLE = 500` → ceiling = 200,000.",
+      "consensus/core/src/palw_state_v2.rs:3320-3321 `reserved = pwu × slash_value_per_pwu`; consensus/core/src/palw_pwu.rs:144-148 pwu = expected_attempts(target) × pwu_per_inference, and at palw_fp_devnet_v3.rs:157 `GENESIS_CLASS_TARGET = u128::MAX/2` that is exactly 2 × pwu_per_inference; :159 `SLASH_VA …[clipped]"
+     ],
+     "fix": "Two changes, both needed. (1) Size the RC genesis bond's DECLARED collateral against the window it must survive, not against the per-claim floor: the ceiling must fund at least `window_bind` blocks' worth of concurrent claims (≥ 600 × 10 × canonical_step_leaf_count / 500‰), and the premine vault bac …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "Third-party participation in consensus is impossible by rule, not just by missing miner support: `BondRegistered` is refused on the transaction path, so the single genesis bond is the only producer, the only possible panel member and the only slashable party for the life of the network.",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:16-24: \"**`BondRegistered` may not.** ... Bonds come from the genesis registration list until a collateral lock exists\" — the extractor accepts a fixed subset of `PalwConsensusObjectV2` and this is not in it.",
+      "consensus/core/src/palw_fp_devnet_v3.rs:242-259: `genesis_objects` is exactly one `ClassRegistered` + one `BondRegistered`."
+     ],
+     "fix": "Decide and state which network this is. If testnet-12 is meant to be weight-bearing with strangers, the post-genesis bond path (collateral lock + burn) has to land before launch. If it is a single-operator RC, say so in §0 of the runbook in those words — \"one bond, genesis-only, no third party can p …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "The per-class DAA target hardens without bound — 4x every 1000-DAA epoch — because the attempt lane is measured against a 150‰ expectation on a network where the receipt lane that owes the other 850‰ can never produce a block.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:58 `ATTEMPT_SHARE_PERMILLE = 150` is passed as `fp_attempt_share_permille` (11th arg of `PalwStateParamsV2::new`, consensus/core/src/palw_state_v2.rs:275).",
+      "consensus/core/src/palw_state_v2.rs:2666-2764: the lane loop composes `share × lane_permille`, so with one class the attempt lane's composed share is 150‰ while `census.total_daa_blocks = combined` = the attempt count itself (receipt count 0). consensus/core/src/palw_class_daa.rs:599 then sets expec …[clipped]"
+     ],
+     "fix": "Either set `ATTEMPT_SHARE_PERMILLE = 1000` for any bundle whose network refuses algo 7 (the pure-attempt configuration the retarget is byte-for-byte compatible with — see the `split = 1000` arm of `two_lane_retarget_splits_one_census`, palw_state_v2.rs:6497-6507), or make `validate_palw_v2` (palw_mo …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "misaminer and pq-miner spin every core at 100% forever, with no log line and no template refetch, when pointed at a ConsensusV2 network — both have an explicit refusal for algo 4/5 and nothing for algo 6/7.",
+     "evidence": [
+      "misaminer/src/main.rs:273-274 builds `palw_ids = [POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA]` only; :278 an algo-6 template therefore takes the `else` arm `(0u64..u64::MAX).into_par_iter().find_any(|&n| state.check_pow_layer0(n).map(|(ok,_)| ok).unwrap_or(false))`.",
+      "pq-miner/src/main.rs:348-358 exits loudly for algo 4/5 and falls through for 6/7 into the same unbounded `find_any` at :363."
+     ],
+     "fix": "Extend the existing refusals to the V2 lineage — add `POW_ALGO_ID_PALW_COMMITTED_V2 | POW_ALGO_ID_PALW_RECEIPT_V3` to the `matches!` at pq-miner/src/main.rs:349-351 and add the same guard before misaminer's grind at main.rs:275 — and print the runbook's own sentence: this network's blocks are produc …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "No PALW V2 state is transferred at a pruning point, and resolve_virtual silently assumes the stored V2 tip block equals the current sink — a latent break in pruned IBD that is unreachable today only because a side effect of the one-bond registry pins the pruning point at genesis.",
+     "evidence": [
+      "consensus/src/consensus/mod.rs:2060-2080 has `import_pruning_point_evm_state` and `import_pruning_point_overlay_snapshot`; there is no PALW analogue anywhere (grep for `import_pruning_point_palw` returns nothing), and protocol/flows/src/ibd/flow.rs:1566-1569 imports only the utxoset + those two side …[clipped]",
+      "consensus/src/pipeline/virtual_processor/processor.rs:992-1000 loads the V2 tip and DISCARDS the block it stands at (`.map(|(_, state)| state)`), then walks from `from` — so after a pruning-point import the walk would start from the genesis state at a sink far above it, and processor.rs:1186-1195 wo …[clipped]"
+     ],
+     "fix": "Add a PALW V2 pruning-point sidecar beside the EVM/overlay ones (`PalwStateCarriageV2` already round-trips under its committed root — consensus/core/src/palw_state_v2.rs:1586-1587 refuses a tampered one), and make `calculate_utxo_state_relatively` assert the loaded tip's block equals `from` rather t …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "fail-open",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW / not reported: testnet-12 stops producing blocks at block 5 and can never restart. The RC bundle demands a 5-seat panel but genesis registers exactly ONE bond and `BondRegistered` may not ride a transaction, so `derive_panel_v2` fails forever, no claim can ever reach Final, exposure is only released by a sweep that runs after the admission check, and the per-bond exposure ceiling funds exactl …[clipped]",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:225 the RC bundle is built with `panel: PalwPanelParamsV2::new(5, 3, ANCHOR_DELAY)?` — five seats, quorum three",
+      "consensus/core/src/palw_panel_v2.rs:197-203 derive_panel_v2 skips the executor's own bond, its operator id AND its pubkey, so five seats need five OTHER bonds — six in total"
+     ],
+     "fix": "Two independent changes, both needed. (1) Make the panel derivable at launch: either register enough genesis bonds to seat 5 non-executor seats, or make seat_count/quorum a function of the eligible registry size with an explicit degenerate-network rule, and log `InsufficientEligibleBonds` at process …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW / not reported: the free-prompt commitment's ML-DSA-87 signature is verified NOWHERE in the tree — `validate_signature_v3` on PalwFreePromptCommitmentEnvelopeV3 has zero callers, not even a test — and the extraction walk drops `executor_pubkey` entirely. Any stranger's 0x4a transaction creates a claim bound to any bond outpoint it names, including the genesis premine bond pinned in params.rs.",
+     "evidence": [
+      "consensus/core/src/palw_freeprompt_v3.rs:738 `pub fn validate_signature_v3` on the COMMITMENT envelope. `rg -n validate_signature_v3` over the whole tree returns three lines: this definition, the spend envelope's definition at :816, and one call at consensus/core/src/palw_fp_admission_v3.rs:201 — wh …[clipped]",
+      "consensus/core/src/palw_freeprompt_v3.rs:1051-1052 the doc states the contract plainly: \"The signature is verified by the caller\" — and there is no caller"
+     ],
+     "fix": "Verify the commitment signature on the only path that creates claims. Pass the ML-DSA-87 verifier into palw_fp_objects_from_accepted_txs_v3 and call `payload.validate_signature_v3(|k,m,s,c| verify_mldsa87_with_context(k,m,s,c).unwrap_or(false))` alongside validate_stateless_v3 at palw_fp_objects_v3. …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW / not reported: any stranger can mint a transaction that is valid in isolation but fatal to the transition, and every block that accepts it is disqualified from the virtual chain. The mempool and block-template layers have zero PALW awareness, so an honest producer cannot avoid including it. `ReceiptLicensed { claim: <any 64 bytes>, receipts: [] }` costs one transaction fee.",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:189-196 validate_palw_lifecycle_tx admits on decode + wire version + the may-ride table; :97 ReceiptLicensed is on that table. A claim hash is never checked against chain state here, and cannot be — isolation has no state",
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:136-159 the extraction walk emits the object for any admitted carrier"
+     ],
+     "fix": "Decide one boundary and hold it. Either (a) make the transition total over admitted objects — a referential failure (MissingClaim, MissingBond, MissingClass, WrongPhase, DuplicateSession) becomes a logged skip of that object, exactly as the extraction walk already treats a malformed carrier, reservi …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED, still open: the 0x4b lifecycle band carries four object kinds no layer authenticates, and validate_receipt_quorum_v2 still has zero callers. `_ => {}` at processor.rs:3887 is unchanged on this branch.",
+     "evidence": [
+      "consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:330-337 routes 0x4b to validate_palw_lifecycle_tx",
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:189-196 decode + wire version + may-ride table only"
+     ],
+     "fix": "Give palw_v2_validate_objects arms for ReceiptLicensed and ProducerDefaulted that call validate_receipt_quorum_v2 with the same ML-DSA-87 closure the CourtDisclosed arm uses at processor.rs:3803, and change the wire objects to carry PalwSeatReceiptV2 so the quorum check has a signature and a signed_ …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED, still open: BondRetireRequested is unauthenticated and has no inverse. One 0x4b transaction naming the genesis bond outpoint — a published constant — permanently stops the only producer on testnet-12.",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:103 BondRetireRequested is on the may-ride list",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3887 `_ => {}` — no acceptance-layer arm"
+     ],
+     "fix": "Require an ML-DSA-87 signature over the retirement request under the bond's own registry pubkey, verified in a new palw_v2_validate_objects arm mirroring processor.rs:3794-3807. Or drop BondRetireRequested from palw_lifecycle_object_may_ride_v2 until that signature exists — the same reasoning palw_l …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW / not reported: the PALW deep-reorg gate fails OPEN on any candidate this node cannot weigh. palw_state_walk::load_delta deliberately refuses to read a missing delta as \"nothing\", and two layers up `.ok()?` converts that refusal into None, which dns_reorg_outcome converts into GateInactive — allow.",
+     "evidence": [
+      "consensus/src/processes/palw_state_walk.rs:83-92 load_delta refuses a missing delta on purpose: \"A missing delta is a missing FACT (ADR-0042 Decision 5: reading absent data as nothing is forbidden). Treating it as 'this block changed nothing' would make a pruned or half-written history look like a v …[clipped]",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3529-3530 `let state = walk_chain_path(...).ok()?;` — that refusal becomes None"
+     ],
+     "fix": "Make the None case lose rather than disappear. At processor.rs:7544, match on the pair: (Some, Some) -> decide_deep_reorg_v2; (Some, None) -> DominanceViolation (an unweighable challenger never beats a weighed incumbent); (None, _) -> a named, logged refusal rather than a silent fall-through. Separa …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED, still open: CourtOpened names a challenger bond with no authorization from that bond, so a court can be opened against a licensed claim under a third party's identity and the rung clock then converts the honest producer's silence into a CourtFraud slash.",
+     "evidence": [
+      "consensus/core/src/palw_court_v2.rs:154-190 validate_court_opened_v2 checks the claim's phase (:165-170), the challenge window (:171-176), that the challenger bond EXISTS (:177-179), that it is not the claim's own (:180-182), the space size and the session-id derivation (:186-189). It verifies no si …[clipped]",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3767-3793 the acceptance arm calls validate_court_opened_v2 and adds only the ruleset space/space_size check — no verifier closure, unlike the CourtDisclosed arm at :3794-3807 and the CourtVerdictPosted arm at :3808-3819 which both pass verify_ml …[clipped]"
+     ],
+     "fix": "Add a challenger signature over the derived session_id to CourtOpened, verified under the challenger bond's registry pubkey in the existing processor.rs:3767-3793 arm, using the same closure shape as :3803. Without it the two signed rung objects protect the wrong half of the dispute: the answers are …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED, still open: ClassFrozen is checked for shape only — neither attestation's signature is verified anywhere on a consensus path — so a forged contradiction certificate freezes a class permanently. Inert today only because the liveness floor is exempt and testnet-12 launches with one class.",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:104 ClassFrozen rides 0x4b",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3887 `_ => {}` — no acceptance-layer arm"
+     ],
+     "fix": "Add a ClassFrozen arm to palw_v2_validate_objects that calls palw_slash::adjudicate_class_contradiction_v1 with the ML-DSA-87 verifier, resolving each attestation's executor_id to a registry pubkey through chain state, before the transition's structural check runs. Close it before the second class i …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "fork-choice",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED (blocker 1, survives): PALW V2 state is written only by `process_genesis`, which never runs on a staging consensus or on any consensus entry that already exists — so a node that joins by headers-proof IBD runs with the entire V2 lane disabled, permanently, silently, and computes a different expected coinbase than the rest of the network.",
+     "evidence": [
+      "consensus/src/consensus/factory.rs:389 — the staging consensus is built with `.skip_adding_genesis()`; consensus/core/src/config/mod.rs:258-261 sets `process_genesis = false`.",
+      "consensus/src/consensus/mod.rs:313-316 — `virtual_processor.process_genesis()` runs only under `if config.process_genesis`."
+     ],
+     "fix": "Fail closed first: in `calculate_utxo_state_relatively`, when `palw_state_params_v2.is_some()` but `tip_record()` is `None`, refuse to resolve virtual (the EVM pattern at processor.rs:1699) instead of taking the `None => None` arm at :1292. Then add `import_pruning_point_palw_state` beside `import_p …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW — not reported: on a ConsensusV2 network the tip comparator makes a resolvable tip beat ANY unresolvable one, and only the current sink is resolvable. A sink the network then orphans wedges a non-mining node on it permanently — and an attacker can force that state on any chosen node with one privately-delivered block.",
+     "evidence": [
+      "consensus/core/src/config/params.rs:749-751 — a `ConsensusV2` network returns `PalwTipOrderV1::PalwWeighted`; processor.rs:641 caches it as `palw_tip_order`.",
+      "consensus/core/src/palw_chain_weight.rs:206-212 — under `PalwWeighted`, `(Some(_), None) => Greater` and `(None, Some(_)) => Less`. A resolvable candidate wins regardless of blue work."
+     ],
+     "fix": "On a `ConsensusV2` network an unresolvable candidate must not be ordered against a resolvable one by fiat. Either (a) make the heap comparison fall back to blue work whenever ANY candidate is `None` (i.e. `(Some,None)` and `(None,Some)` both defer to `a.1.cmp(b.1)` in palw_chain_weight.rs:206-212),  …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED (blocker 2, survives): the ADR-0042 \"Unit D site 2\" IBD commit gate is structurally vacuous — the staging consensus can never hold PALW state at the moment it is consulted, so `decide_ibd_commit_v2` is never reached on a real IBD and the commit is authorized unconditionally.",
+     "evidence": [
+      "protocol/flows/src/ibd/flow.rs:1806-1808 — `let (Some(incumbent), Some(challenger)) = (incumbent, challenger) else { return Ok(()); };` authorizes the commit whenever either side is `None`.",
+      "flow.rs:1782 — `validate_staging_palw_order` is invoked inside `ibd_with_headers_proof` immediately after `sync_headers`/`async_validate_pruning_points`, before any body, UTXO set or sidecar exists in staging."
+     ],
+     "fix": "Invert the guard: if `palw_state_params_v2.is_some()` on this network and either order is `None`, refuse the commit and cancel staging rather than returning `Ok(())`. This is independent of blocker 1's import work and is the smaller change — but the gate stays vacuous until staging actually carries  …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — not reported: block subsidy on testnet-12 is claimable with hash alone. PALW attempt admission (bond exists + Active, holder's ML-DSA signature, class ticket) runs ONLY for selected-chain candidates, while every merged blue block in the DAA window is paid its full worker share — with no escrow — from the accepting block's coinbase.",
+     "evidence": [
+      "Header-stage validation for algo-6 checks shape and position only: consensus/src/pipeline/header_processor/pre_ghostdag_validation.rs:133-158 runs `validate_stateless_v2` and states outright \"The SIGNATURE is deliberately not verified here\"; consensus/core/src/pow_layer0.rs:513-520 (`check_palw_comm …[clipped]",
+      "The algo-6 PoW is a pure hash expansion — consensus/pow/src/lib.rs:337-352 computes `l1_tag_v2(commitment_root_v2(attempt))` after a challenge equality check. No inference, no bond, no stake is needed to solve it."
+     ],
+     "fix": "Decide explicitly whether a V2 network admits unbonded blocks. If not, the bond/signature half of admission must move to a stage every block passes — body validation or `check_palw_carriage_stateless`'s successor with a bond view — and a merged block that fails it must be excluded from `mergeset_rew …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED (blocker 3, survives): `reindex_if_stale` deletes every V2 delta row and the tip on any schema-version bump, at every node start, with nothing that rebuilds — so a routine binary upgrade silently disables PALW enforcement on an already-healthy genesis-synced node.",
+     "evidence": [
+      "consensus/src/model/stores/palw_state_v2.rs:113-129 — on a stored-version mismatch it calls `self.deltas.delete_all(...)` and removes the tip.",
+      "consensus/src/consensus/storage.rs:353-358 — called unconditionally whenever the store is constructed, i.e. at every startup, and a failure only logs a warning."
+     ],
+     "fix": "Either implement the rebuild the doc promises (re-walk the selected chain from genesis / the pruning-point carriage and repopulate deltas + tip), or make an empty store on a `ConsensusV2` network a hard startup refusal. Silently continuing must not remain reachable."
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — not reported: the V2 tip snapshot is written in its own WriteBatch BEFORE the virtual state is committed, so an unclean shutdown in that window leaves the PALW tip ahead of the virtual sink — and the next start panics in `apply_delta_v2`, in a loop, with no recovery but a data-directory wipe.",
+     "evidence": [
+      "processor.rs:1344-1349 — at the end of `calculate_utxo_state_relatively` the tip is written in a standalone `self.db.write(batch)`. The virtual state is committed later, in `resolve_virtual` at processor.rs:888-897 (`calculate_and_commit_virtual_state`).",
+      "On restart `from` is virtual's selected parent (the OLD sink), but processor.rs:992-1000 loads the tip state and DISCARDS the block it stands at (`.map(|(_, state)| state)`), so a state that is already past `from` is used as if it were the state at `from`."
+     ],
+     "fix": "Write the tip in the SAME batch as the last per-block commit, or (cheaper and independently correct) compare `tip_record().block` against `from` in processor.rs:992-1000 and walk the stored deltas to reconcile — `palw_state_walk::walk_chain_path` already does exactly this and is otherwise dead code. …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — not reported: the pruning ceiling is the PALW safe frontier, and the frontier advances ONLY when a claim reaches `Final`. On a testnet-12 where claims are slow, rare, or void, the pruning point never advances past genesis — unbounded history, no pruning, and full from-genesis sync forever.",
+     "evidence": [
+      "consensus/src/pipeline/pruning_processor/processor.rs:223-228 — a proposed pruning point is refused unless `palw_pruning_point_allowed_v2` accepts it; processor.rs:3539-3546 → `pruning_point_allowed_v2(header.blue_score, frontier)` = `blue_score <= safe_frontier_blue_score` (palw_fork_authority_v2.r …[clipped]",
+      "consensus/core/src/palw_state_v2.rs:1323-1324 — `safe_frontier_blue_score` starts at 0; :2268-2287 is the ONLY place it moves, and only when a claim's work reaches `Final`."
+     ],
+     "fix": "Give the ceiling a floor: allow pruning up to `max(safe_frontier, sink_blue_score - pruning_depth)` or an explicit configured lag, so a network with no matured claims degrades to ordinary pruning instead of to no pruning. Whatever the rule, it must be stated in the launch material, because 'the prun …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED but MIS-SEVERED (blocker 4): the reading is right — fresh competing tips resolve to `None` and are ordered by blue work — but the conclusion \"not independently money-losing\" is wrong, because the same `None` resolution is what makes the Some/None inversion above a permanent wedge. Separately, the tip site uses a DIFFERENT comparator from the other three, contradicting Unit D's own claim  …[clipped]",
+     "evidence": [
+      "Confirmed as reported: processor.rs:8034-8041 and :8163-8167 build the heap with `palw_tip_weights_v1` before any candidate is validated; processor.rs:3523-3529 walks stored deltas and `.ok()?` swallows `MissingDelta`; deltas are written only at processor.rs:2080/:9214. So `(None, None) => a.1.cmp(b …[clipped]",
+      "The severity is wrong because the `(Some, None) => Greater` arm at palw_chain_weight.rs:209 is reached exactly when one tip is the already-validated sink — see the separate BLOCKER above."
+     ],
+     "fix": "Do not describe testnet-12 as PALW-weight-ordered fork choice; the honest description is 'blue-work ordering with a PALW validity gate, a PALW deep-reorg brake and a PALW pruning ceiling'. Then either make the tip site call `compare_palw_candidates_v1` like the other three (and fix the resulting fro …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "p2p-ibd",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "A ConsensusV2 node built on an EXISTING datadir never installs the PALW V2 zero point, and its absence disables ALL PALW consensus validation silently. This is the auditor's fail-open, but with a trigger that needs no IBD and no pruning at all: the only datadir guard is the genesis hash, and bundle-free testnet-12 and bundled testnet-12 share the same genesis.",
+     "evidence": [
+      "consensus/src/consensus/factory.rs:325-327 — `ConsensusEntryType::Existing(entry) => { config.process_genesis = false; ... }`. Every restart on an existing datadir skips genesis processing.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:9186-9218 — `process_genesis` is the ONLY installer of the V2 zero point (`insert_delta_batch` + `set_tip_batch` for `palw_genesis_objects_v2`). The only other tip writer is the virtual walk (processor.rs:1343-1349), which writes a tip only when  …[clipped]"
+     ],
+     "fix": "Two independent changes. (1) Make the absence fail CLOSED: in `calculate_utxo_state_relatively` the pair `(palw_state_params_v2 = Some, tip_record = None)` must abort/error, not take the `_ => None` arm — a ConsensusV2 node with no PALW state must refuse to validate rather than validate nothing. Sam …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "On testnet-12 no claim can EVER be bound to a panel, because the RC genesis registers exactly one bond and the panel needs five seats with the executor's own bond excluded — and no bond can ever be added to a running chain. Every claim therefore voids at BindTimeout: the safe frontier never leaves zero, so the pruning point can never move off genesis; `safe_weight` is permanently zero; and the 62% …[clipped]",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:242-260 — `genesis_objects` is exactly two entries: one `ClassRegistered` and ONE `BondRegistered`. This is the bundle `palw_rc_params` installs (consensus/core/src/config/params.rs:2478-2507).",
+      "consensus/core/src/palw_fp_devnet_v3.rs:225 — `panel: PalwPanelParamsV2::new(5, 3, ANCHOR_DELAY)?` — five seats, quorum three."
+     ],
+     "fix": "The panel/bond arithmetic has to close before launch, not after: either the RC genesis registers at least `seat_count + 1` independent bonds (distinct operator ids and pubkeys, each holding its declared collateral — `verify_palw_genesis_v2` already checks that), or `PalwPanelParamsV2` for the RC is  …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "PALW V2 chain state is not transferred or rebuilt during pruned IBD, and the staged consensus commits with an empty store — permanently, because the promoted entry is `Existing` on every later restart. The auditor's finding stands as a code fact; its reachability today is gated behind the pruning freeze above, which means fixing that one WITHOUT this one turns every late joiner into a silently PAL …[clipped]",
+     "evidence": [
+      "consensus/src/consensus/factory.rs:388 — the staging consensus is built with `self.config.to_builder().skip_adding_genesis().build()`; consensus/core/src/config/mod.rs:259-262 sets `process_genesis = false`, so the V2 zero point is never installed in the staged DB.",
+      "consensus/src/consensus/factory.rs:176-183 — `commit_staging_consensus` promotes that entry to `current_consensus_key`. On the next boot it is `Existing`, so `process_genesis` stays false forever (factory.rs:325-327). The empty store is permanent."
+     ],
+     "fix": "Add the PALW V2 state as the third pruning-point sidecar: a `RequestPruningPointPalwState`/`PruningPointPalwState` pair carrying the borsh `PalwStateCarriageV2`, verified on receipt with `into_state(params, Some(root))` against the pruning-point header's `palw_state_root`, imported inside `sync_new_ …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "Because `safe_weight` is permanently zero on testnet-12, the V2 fork choice's two primary keys are constants and the virtual sink — and the IBD commit decision — are settled by in-flight immature claim weight, with blue work demoted to a tie-break. For the first ~600 DAA that key is proportional to attempt-block COUNT, not to work.",
+     "evidence": [
+      "consensus/core/src/palw_chain_weight.rs:157-159 — `compare_tips_v1` is `a.safe.cmp(&b.safe).then(a.live.cmp(&b.live))`; palw_chain_weight.rs:201-215 — under `PalwTipOrderV1::PalwWeighted` the caller's blue-work order `W` is consulted only as `.then_with(|| a.1.cmp(b.1))`.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:7886-7903 — on a V2 network `palw_tip_weights_v1` returns `PalwChainWeightsV1 { safe: order.safe_weight, live: order.live_total }` from `palw_candidate_order_v2`; processor.rs:641 sets `palw_tip_order: params.palw_tip_order_v1()`, which is `PalwW …[clipped]"
+     ],
+     "fix": "This is a consequence of the panel blocker, not an independent bug, and it disappears once claims can mature. But it should not be left implicit: add an assertion or a startup refusal that a ConsensusV2 network whose genesis cannot seat a panel is not runnable, and add a test that pins the sink unde …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "The ADR-0044 free-prompt receipt lane (algo_id = 7) cannot produce a block on a ConsensusV2 network: the header gate demands exact equality with the bundle's attempt id (6), so every algo-7 header is rejected before its implemented admission path is reached. Confirmed exactly as reported — fail-closed and uniform, so a dead advertised lane rather than a fork risk.",
+     "evidence": [
+      "consensus/core/src/pow_layer0.rs:620-633 — `check_algo_id_for_mode` is strict equality against `required_algo_id_for_mode(mode_required, ...)`.",
+      "consensus/core/src/palw_mode_v2.rs:712-718 — `required_algo_id()` for `ConsensusV2(bundle)` returns `Some(bundle.algorithm_id)`, forced to `POW_ALGO_ID_PALW_COMMITTED_V2` (6) at palw_mode_v2.rs:398-400."
+     ],
+     "fix": "Either land the FP-08 seam swap — route the header gate (pre_ghostdag_validation.rs:103) and the pruning-proof gate (pruning_proof/mod.rs:234) through `PalwConsensusParamsV2::accepts_algo_id`, and give `build_block_template` a path that can emit an algo-7 header — or remove the free-prompt bundle fr …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "PALW V2 state grows without bound: claims are never removed from the state, and the pruning processor never deletes `palw_state_v2_store` delta rows. The single tip carriage is re-serialized and re-rooted on every virtual commit, and `load_tip` performs a full root-verified rebuild on every sink-search candidate — so per-block cost grows with total chain history.",
+     "evidence": [
+      "consensus/core/src/palw_state_v2.rs:1867-1872 — `write_claim(key, None)` is the only deletion path, and a repo grep shows every call site passes `Some(...)` (lines 2102, 2131, 2142, 3007, 3029, 3219, 3261, 3344). No claim is ever removed.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:1343-1349 — `set_tip_batch` writes the whole `PalwStateCarriageV2` (consensus/src/model/stores/palw_state_v2.rs:186-188 borsh-serializes the entire state) on every virtual commit."
+     ],
+     "fix": "Add `palw_state_v2_store` delta deletion to the pruning processor's delete loop for blocks below the retention root, and give terminal claims (`Final`/`Voided` past their hold) a deterministic retirement rule so `claims` is bounded by the live window rather than by chain length. CAUTION on the delta …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "producer-e2e",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED (reported #1), and sharper than reported: the RC genesis bond backs exactly 2 concurrent claims, the only release path needs 600 more DAA of blocks, and at the RC's genesis difficulty the producer reaches that wall roughly one second after the first block. testnet-12 halts permanently at block 2.",
+     "evidence": [
+      "MEASURED, not derived on paper: `./target/debug/base0-class-sizing` (already built at HEAD) prints for `PALW-BASE-0, the RC liveness floor` the row `| 8/4 | 7900 | 13 |` — the canonical job (consensus/core/src/palw_base0_profile.rs:528 `PALW_RC_BASE0_CANONICAL = (8, 4)`) counts 7,900 step leaves, no …[clipped]",
+      "consensus/core/src/config/params.rs:2315 passes `entry.canonical_step_leaf_count` as `genesis_pwu_per_inference`, and consensus/core/src/palw_fp_devnet_v3.rs:247 installs it as `PalwPwuRuleV2::DerivedV1 { pwu_per_inference }`."
+     ],
+     "fix": "Derive the genesis collateral from the ruleset instead of a hand-written floor, in `palw_fp_devnet_bundle_v3`, from the catalog entry it already receives: collateral >= (WINDOW_BIND + margin) * pwu * slash_value_per_pwu * 1000 / max_exposure_ratio_permille, i.e. enough concurrent claims to cover a w …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW — the producer refuses to build the FIRST block of every epoch, because it looks up the epoch budget for the CANDIDATE's epoch in a table the chain only writes for the TIP's epoch. A missing entry becomes `unwrap_or(0)`, `has_epoch_room()` is false, and the node holds forever. This is the reported finding #3's live trigger: it halts the shipped single-class RC at DAA 1000 even after the collat …[clipped]",
+     "evidence": [
+      "The epoch index is the candidate's, deliberately: consensus/core/src/palw_producer_v2.rs:126 `let epoch_index = daa_score / state_params.epoch_length();` where `daa_score` is VIRTUAL's, not the tip's — consensus/src/pipeline/virtual_processor/processor.rs:3612 `let candidate_daa = virtual_read.state …[clipped]",
+      "The budget table is the TIP's: consensus/core/src/palw_state_v2.rs:2593-2596 `ensure_epoch_budgets` keys on `ctx.daa_score / epoch_length` of the block being applied, and it is the only writer (called at :2234 inside `apply_palw_transition_v3`; the only other path is delta replay at :3430-3433). The …[clipped]"
+     ],
+     "fix": "Two independent fixes, both wanted. (1) Distinguish 'no budget for this epoch yet' from 'budget zero': have `palw_producer_facts_v2` return `Option<u64>`/an explicit `budget_unknown` and treat unknown as permissive, since the chain derives the budget when the block lands. (2) Mirror consensus/core/s …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW / escalates reported #2 — the claim lattice has NO configuration in which a claim reaches Final, and both configurations lose money. With the shipped one bond, no panel can ever seat, every claim voids at BindTimeout, `safe_weight` stays 0 forever and 62% of every block reward is withheld and never released. With enough bonds to seat a panel, the chain binds one automatically and then slashes  …[clipped]",
+     "evidence": [
+      "No seat client exists. `grep -rn 'SUBNETWORK_ID_PALW_LIFECYCLE'` over the tree hits only consensus/core/src/palw_lifecycle_objects_v2.rs, consensus/core/src/subnets.rs, and consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:330. `ReceiptLicensed` appears outside consensus-co …[clipped]",
+      "The chain binds the panel by itself, so silence is automatic: consensus/src/pipeline/virtual_processor/processor.rs:4109-4141 `palw_v2_derived_panel_bindings` emits `PanelBound` for every Provisional claim once the anchor slot is reached; consensus/core/src/palw_state_v2.rs:2996-3011 sets phase Pane …[clipped]"
+     ],
+     "fix": "Do not open testnet-12 to bonded strangers until the receipt half of the lattice has an implementation. Concretely: (a) make the genesis bond set a list in `palw_rc_params_from_artifacts`; (b) ship a seat service in kaspad that fetches the trace, verifies it and files `ReceiptLicensed` (or `Unavaila …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED (reported #2's other half) — the producer signs a `trace_retention_daa` obligation it structurally cannot meet: the execution's tiles and binding are dropped when `produce_one` returns, and the comment asserting the opposite reads as a verified property.",
+     "evidence": [
+      "kaspad/src/palw_producer.rs:249 `trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa)` — 600+600+1200+2400 = 4,800 DAA on the RC (consensus/core/src/palw_producer_v2.rs:148-152; windows at consensus/core/src/palw_fp_devnet_v3.rs:46-49).",
+      "kaspad/src/palw_producer.rs:246-248 claims 'The material is in hand (`run.tiles`), which is what makes the promise one it can keep.' `run` is a local created at :226 and dropped at the end of the function. `grep -n 'run.tiles\\|run.binding' kaspad/src/palw_producer.rs` returns line 247 only — the com …[clipped]"
+     ],
+     "fix": "Either persist the run (tiles + binding + prompt) keyed by attempt id with a pruning rule at `trace_retention_daa` plus a serve path, before any bond is slashable, or stop signing a retention promise that cannot be met — and in either case delete or correct kaspad/src/palw_producer.rs:246-248, which …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED (reported #4), with the trigger corrected — the job build, the inference and the nonce grind run synchronously inside an async task on the shared AsyncRuntime, pinning one tokio worker. At genesis difficulty the grind is trivial, so this bites only once the DAA retarget pulls the search out to the 120 s cadence — at which point one worker thread is busy essentially 100% of the time.",
+     "evidence": [
+      "kaspad/src/palw_producer.rs:266-302: the `for nonce in 0..NONCES_PER_TEMPLATE` loop (4,000,000 at :64) contains no `.await`; the only await after the template is `submit_rpc_block` on a hit (:297-300). The inference at :226 and the artifact derivation at :218 are synchronous too.",
+      "The service shares the runtime with p2p, rpc-core, grpc and notify: kaspad/src/daemon.rs:1299-1301 registers it on the same `async_runtime`, and core/src/task/runtime.rs:53-58 builds one `new_multi_thread().worker_threads(self.threads)`. The documented small-VPS profile sets 2 (kaspad/src/args.rs:86 …[clipped]"
+     ],
+     "fix": "Move the CPU section of `produce_one` (job build, inference, nonce loop) onto `tokio::task::spawn_blocking` or a dedicated OS thread and return the solved header to the async task for submission. In the same pass: hoist the artifact and profile to `PalwProducerService::new`, drop the dummy signature …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — the producer bypasses `FlowContext::should_mine`, the gate whose own doc calls it 'the gate every participation path consults'. It will produce blocks while the chain-participation gate is closed, with zero peers, and on a stale sink — none of which the RPC mining path allows.",
+     "evidence": [
+      "The producer's only pre-condition is a transitional-IBD check: kaspad/src/palw_producer.rs:167-169 `if session.async_is_consensus_in_transitional_ibd_state().await { continue; }`. It holds `flow_context` (kaspad/src/palw_producer.rs:86) and uses it only for `submit_rpc_block` at :297.",
+      "The gate it skips: protocol/flows/src/flow_context.rs:977-985 `pub async fn should_mine(&self, session)` and, two lines below, 'The gate every participation path consults — mining, both validators, compute.'"
+     ],
+     "fix": "Call `self.flow_context.should_mine(&session).await` in the worker loop next to the IBD check and hold when it is false (logging which sub-condition failed), and honour `--enable-unsynced-mining` the same way rpc/service/src/service.rs:381 does. A producer that is exempt from the participation gate  …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "economics",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "The per-bond exposure ceiling is a ONE-WAY RATCHET, not a rate limit: on a ConsensusV2 network the chain permanently stops after exactly floor(ceiling / reserved) chain blocks and can never restart. On the shipped RC card that number is 2. Issuance ends there, and every block's worker subsidy (620 permille = the whole worker base share) is burned. The reported blocker 3 is real but understates it  …[clipped]",
+     "evidence": [
+      "consensus/core/src/palw_admission_v2.rs:273-289 — admission item 8 refuses an attempt when reserved_exposure + pwu*slash_value > collateral*ratio/1000. This is the ONLY gate; the transition's reserve_for_claim (palw_state_v2.rs:3343) does not re-check it.",
+      "consensus/core/src/palw_state_v2.rs:1969-1979, 2081, 2141, 2152 — reserved exposure is released in exactly three places (finalize_claim, void_claim, release_abandon_hold), all three reached only from sweep_deadlines / sweep_court_deadlines."
+     ],
+     "fix": "Two independent changes, both needed. (1) Make the ceiling non-terminal: run the deadline sweep against the candidate's own DAA before the admission check (i.e. admit against the post-sweep exposure), or move the ceiling check inside the transition after step 2. Without this, ANY collateral value on …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "Block-killing transaction relay: a stranger can permanently halt testnet-12 for FREE with one relayed ~100-byte transaction. Subnetworks 0x4a and 0x4b are admitted on a purely stateless basis, but the objects they carry are folded by a state machine that returns Err on ordinary state mismatches — and a transition error DISQUALIFIES the block that carried the transaction. The transaction is never a …[clipped]",
+     "evidence": [
+      "consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:330-337 — 0x4b admission is validate_palw_lifecycle_tx, which checks only borsh decode, wire version and the may-ride table (consensus/core/src/palw_lifecycle_objects_v2.rs:188-195). No state is consulted; none can be, at is …[clipped]",
+      "consensus/src/pipeline/virtual_processor/processor.rs:4171-4175 — the extracted objects go straight into the block's object list; processor.rs:3887 is `_ => {}` so ReceiptLicensed / ProducerDefaulted / BondRetireRequested / ClassFrozen are not rejected earlier either."
+     ],
+     "fix": "Make the extraction walks total against STATE, not just against bytes: palw_v2_objects_of_block must drop (and log) any object the transition would reject, exactly as palw_fp_objects_from_accepted_txs_v3 already drops stateless-inadmissible carriers — or apply_object must return a per-object skip ra …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "Four money-moving PALW lifecycle objects ride an ordinary transaction and are folded into consensus state with no acceptance check. CONFIRMED as reported, with one refinement: the two panel-slashing arms are currently masked by the no-panel-ever bug, but BondRetireRequested is reachable today with zero preconditions and alone ends block production forever AND permanently freezes the 100,000,000 MS …[clipped]",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:95-104 — ReceiptLicensed, ProducerDefaulted, BondRetireRequested and ClassFrozen all return Ok(()) from palw_lifecycle_object_may_ride_v2.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3737-3887 — palw_v2_validate_objects has arms only for PanelBound, CourtOpened, CourtDisclosed, CourtVerdictPosted, CourtClosed and ClassRegistered; line 3887 is `_ => {}`."
+     ],
+     "fix": "Give ReceiptLicensed and ProducerDefaulted real arms in palw_v2_validate_objects that call validate_receipt_quorum_v2 with an ML-DSA verifier — which requires the carried type to become the signature-bearing PalwSeatReceiptV2 (consensus/core/src/palw_panel_v2.rs) rather than the bare PalwSeatVerdict …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "On the shipped RC genesis no panel can EVER bind, so every attempt-lane chain block's escrowed worker carve — its entire 620-permille worker base share — is forfeited and burned, safe_weight never leaves zero, and the producer keeps 2 sompi of subsidy per block. CONFIRMED exactly as reported.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:242-259 — genesis_objects registers exactly ONE class and ONE bond; verified by consensus/src/pipeline/virtual_processor/tests.rs:603-605 ('the bundle registers exactly its class and its bond').",
+      "consensus/core/src/palw_fp_devnet_v3.rs:225 — PalwPanelParamsV2::new(5, 3, ANCHOR_DELAY): five seats required, quorum three."
+     ],
+     "fix": "Let the RC genesis card carry N bonds (at least seat_count + 1 distinct operators) — palw_fp_devnet_bundle_v3's genesis_objects and the PALW_RC_GENESIS_* constants (consensus/core/src/config/params.rs:2373-2377) are single-bond today — or add the gated post-genesis BondRegistered path the module doc …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "The genesis bond immobilizes an entire 100,000,000 MSK premine vault to back 0.004 MSK of declared collateral — a 25-billion-to-one ratio — and the only path that ever unlocks it is the retire path that permanently stops the chain. The exposure ceiling is denominated in the tiny declared number while the lock is on the whole output, which is the root cause of the two-block halt.",
+     "evidence": [
+      "consensus/core/src/config/params.rs:2374 — PALW_RC_GENESIS_BOND_INDEX = 0, and consensus/core/src/config/params.rs:2403 resolves it with premine_outpoint(0), i.e. vault 0.",
+      "consensus/core/src/config/premine.rs:39 — VAULT_PREMINE_SOMPI = 100_000_000 * SOMPI_PER_KASPA = 1e16 sompi; consensus/core/src/constants.rs:27 — SOMPI_PER_KASPA = 100_000_000."
+     ],
+     "fix": "Take the genesis bond's collateral from the operator's card (a --collateral flag on palw-rc-genesis, threaded through palw_rc_params_from_artifacts into palw_fp_devnet_bundle_v3) instead of pinning it at MIN_COLLATERAL_SOMPI inside the bundle, and document that the whole named outpoint is locked for …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "genesis-boot",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED BY DIRECT MEASUREMENT on the shipped RC bundle: the genesis registration list carries exactly one bond, so no panel can ever be seated, and the bond's own exposure ceiling admits exactly TWO blocks before every subsequent block is refused at admission — at any DAA, forever. The chain wedges at genesis+2.",
+     "evidence": [
+      "MEASURED (out-of-repo probe against `palw_rc_params_from_artifacts` with the pinned artifact root and premine_outpoint(0)): `genesis folded: bonds=1 classes=1`; `pwu_per_inference=DerivedV1 { pwu_per_inference: 7900 } derived pwu=15800 slash_per_pwu=5`; `claim_exposure=79000 collateral=400000 ceilin …[clipped]",
+      "MEASURED permanence: blocks re-offered at DAA 601, 700, 1200, 5000 and 100000 are ALL refused with the same ExposureCeilingExceeded, and `chain state last_point daa = Some(2)`. The bind deadline (accepted_daa 1 + window_bind 600) can never sweep because `sweep_deadlines` runs only inside `apply_palw …[clipped]"
+     ],
+     "fix": "Make the genesis registration a bond SET: change `palw_rc_params_from_artifacts` / `palw_fp_devnet_bundle_v3` to take `Vec<(bond_outpoint, bond_pubkey, operator_pubkey, payout_payload)>`, extend the genesis card to N entries, and add a boot check in `verify_palw_genesis_v2` that the number of DISTIN …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW, UNREPORTED BLOCKER: a ConsensusV2 network demands exactly ONE pow_algo_id, so the free-prompt receipt lane is structurally impossible — yet the per-class DAA retarget still composes the floor's share with the 150-permille attempt-lane split. The floor therefore measures as a 6.67x over-producer at EVERY epoch boundary and its target is divided by 4 each time, reaching the floor of 1 after 63  …[clipped]",
+     "evidence": [
+      "consensus/core/src/palw_mode_v2.rs:713-718 — `required_algo_id()` returns `Some(bundle.algorithm_id)`, a SINGLE u8 (= `POW_ALGO_ID_PALW_COMMITTED_V2`, 6). consensus/core/src/pow_layer0.rs:621-633 — `check_algo_id_for_mode` is exact equality, and pow_layer0.rs:600-604 states it outright: \"a V2 networ …[clipped]",
+      "The ruleset gate asserts the opposite: consensus/core/src/palw_mode_v2.rs:511-514 refuses any bundle whose `fp_attempt_share_permille` is outside 1..=999 because \"both lanes must exist\" / \"a full one has no receipts\". The RC ships 150 (consensus/core/src/palw_fp_devnet_v3.rs:58) on a network where t …[clipped]"
+     ],
+     "fix": "Either (a) make `required_algo_id_for_mode` accept the V2 LINEAGE rather than one id — `is_palw_v2_algo_id` already exists at consensus/core/src/pow_layer0.rs:426-428 and every downstream consumer (`check_palw_carriage_stateless`, `palw_v2_check_receipt_spend`, the pruning-proof gate) already has an …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "The shipped genesis card is UNSET, so `Params::from(testnet-12)` returns a bundle-free, hash-only identity: no shipped binary can boot a weight-bearing testnet-12. Confirmed, and it is an honest operator step rather than a code defect — but the branch cannot launch t12 as it stands.",
+     "evidence": [
+      "consensus/core/src/config/params.rs:2376-2379 — `PALW_RC_GENESIS_BOND_PUBKEY: &[u8] = &[]`, `PALW_RC_GENESIS_OPERATOR_PUBKEY: &[u8] = &[]`, `PALW_RC_GENESIS_PAYOUT_PAYLOAD = [0u8; 64]`; params.rs:2384-2388 `palw_rc_genesis_card_is_set()`; params.rs:2397-2401 falls back to `palw_rc_base_params()`.",
+      "MEASURED: `Params::from(NetworkId::with_suffix(Testnet, 12))` gives `card_is_set = false`, `mode_is_v2 = false`, fingerprint `76782732b7f1729c528a31ff38252d65d226d12c9c577a4be729d82e2c4d7e52`, `dns_seeders = []`."
+     ],
+     "fix": "Run `palw-rc-genesis` with real operator keys and paste the five constants — but do NOT do that until blockers 1 and 2 are closed, because a card pasted today mints a network that produces two blocks and stops. Note the card-set path panics in a `From<NetworkId>` impl (params.rs:2408-2411), which is …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED: `palw_rc_params` raises `finality_depth` to 600 without raising `pruning_depth` (1144), violating the prunality lower bound of 1384 and dropping the network into the branch upstream's own comment labels \"unsafe\".",
+     "evidence": [
+      "consensus/core/src/config/params.rs:2506 — `params.blockrate.finality_depth = bundle.state.window_challenge() / 2;` (1200 -> 600). Nothing else in the function touches `pruning_depth`.",
+      "MEASURED on the assembled RC params: `ttpb=120000 k=1 merge_depth=30 mergeset=180 finality=600 pruning=1144 maturity=1`; `prunality lower_bound = 1384 pruning_depth = 1144 violated = true`; `anticone_final = 1144`. The shipped base for comparison: `finality=360 pruning=1144`, `anticone_final = 1114` …[clipped]"
+     ],
+     "fix": "Recompute `pruning_depth` alongside the raised `finality_depth` in `palw_rc_params`, reusing `new_seconds_per_block`'s own decomposition (consensus/core/src/config/params.rs:239-265): `max(finality_depth + 2*merge_depth + 4*mergeset*k + 2k + 2, PRUNING_DURATION/secs)` = 1384. Then assert `lower_boun …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "PARTLY REFUTED, and the alarming half is the refuted half. testnet-12 does silently inherit testnet-10's DNS-finality PoS overlay and VLT shadow overlay genesis-active, with the VLT model cost table installed into the consensus fingerprint — all confirmed by measurement. But the specific failure the audit named (the TwoDimensionalDominance reorg gate refusing a PALW-heavier candidate, the t10-2026 …[clipped]",
+     "evidence": [
+      "MEASURED on `Params::from(testnet-12)`: `dns_activation = 0`, `vlt_shadow_fence = 0`, `vlt_weight_fence = u64::MAX`, `bond_spend_gate = 0`, `min_bond_sompi = 1000000000` (10 MSK), `reorg_mode = TwoDimensionalDominance`, `model_table_len = 4`, `crescendo = 0`, `evm_activation = 0`, `pq_activation = 0 …[clipped]",
+      "The model table really is installed by the `From` impl: consensus/core/src/config/params.rs:1232-1240 `with_registered_models` fires because the shadow fence is 0 and `VltParams::INERT.model_cost_table` is `ModelCostTable::EMPTY` (consensus/core/src/vlt.rs:1867 and vlt.rs:1542-1551). `dns_params` is …[clipped]"
+     ],
+     "fix": "Decide each inherited overlay explicitly in `palw_rc_base_params` the way the EVM lane now is (a commented decision, not an inheritance), and pin it: extend `the_palw_rc_network_id_builds_params_instead_of_aborting` (params.rs:3108) to assert the RC's `dns_activation_daa_score`, `vlt.*` fences, `bon …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "operator-tooling",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW — the runbook's own launch produces a chain that halts at 2 blocks. The RC's genesis bond funds exactly 2 concurrent claims, the only release path (panel → license → Final) needs 6 bonds, `palw-rc-genesis` can register exactly ONE, and no tool anywhere can add a bond or raise the collateral. §3 then tells the operator the hold 'clears as claims resolve' — on this network it never does.",
+     "evidence": [
+      "Arithmetic, all four inputs read off this branch: target/debug/base0-class-sizing prints the RC floor's canonical job 8/4 = **7900** step leaves (same number palw-rc-genesis prints as 'step leaves 7900'), so pwu_per_inference = 7900. consensus/core/src/palw_fp_devnet_v3.rs:157 GENESIS_CLASS_TARGET = …[clipped]",
+      "The RC's genesis bond collateral is a HARDCODED constant, not an operator input: consensus/core/src/palw_fp_devnet_v3.rs:253-258 `BondRegistered { …, collateral: MIN_COLLATERAL_SOMPI, … }`. palw-rc-genesis has no --collateral flag (misaka-palw-base0/src/bin/palw-rc-genesis.rs:139-199 accepts only bo …[clipped]"
+     ],
+     "fix": "Two changes, both in the tooling the operator actually holds. (1) Let `palw-rc-genesis` take a validator SET — repeatable `--bond-index/--bond-seed/--operator-seed/--payout-address` groups — so the card can register the ≥6 bonds `derive_panel_v2` needs; params.rs:2296-2299 already says a weight-bear …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "Runbook §4 tells every node to dial the wrong P2P port. testnet-12 listens on 26411, the runbook says 16311, and with dns_seeders empty --addpeer is the only discovery path — so a fleet brought up by following the runbook never forms. CONFIRMED, refutation failed.",
+     "evidence": [
+      "docs/palw-rc-testnet12-launch-runbook.md:166 — `kaspad --testnet --netsuffix=12 --addpeer=<producer-host>:16311 --utxoindex`",
+      "consensus/core/src/network.rs:275-283 — Testnet arms are Some(10)=>26211, Some(11)=>26311, `None | Some(_) => 26411`; testnet-12 hits the wildcard. The comment at :273-274 says this repo's P2P port is upstream+10000, so 16311 is an UPSTREAM number, not any port this codebase binds."
+     ],
+     "fix": "Change docs/palw-rc-testnet12-launch-runbook.md:166 to `--addpeer=<producer-host>:26411`, or better drop the port entirely — kaspad/src/daemon.rs:894 normalizes a bare host through config.default_p2p_port(), which is the form that cannot go stale."
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — a one-bond registry also means PALW weight is permanently zero and 62% of every block's subsidy is escrowed and then burned. §6 'What is NOT in place' lists three gaps and does not mention either.",
+     "evidence": [
+      "Every attempt block escrows the worker carve: consensus/core/src/palw_state_v2.rs:3340 `escrowed_reward: worker_carve_v2(builder.params, ctx.subsidy)`, and consensus/core/src/palw_fp_devnet_v3.rs:146 WORKER_CARVE_PERMILLE = 620. The coinbase withholds it (consensus/src/pipeline/virtual_processor/pro …[clipped]",
+      "Escrow becomes payable only at Final: palw_state_v2.rs:2080-2098 (`finalize_claim` → write_payout). Every void reason forfeits it: consensus/core/src/palw_reward_v2.rs:118-130 — 'every void reason forfeits — no reason is a discount'. Nothing writes a payout for a Voided claim, so the 62% is minted t …[clipped]"
+     ],
+     "fix": "Same root fix as the BLOCKER (a multi-bond genesis card). Until it exists, §6 must state it: 'the RC genesis registers ONE bond; a panel needs five seats excluding the executor, so no claim can be bound, safe_weight stays zero, and the 62% worker carve is withheld and forfeited on every block.' That …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "palw-rc-genesis applies no length validation to --bond-pubkey / --operator-pubkey, and neither does the genesis gate, yet it prints 'ACCEPTED — every gate the genesis loader runs has passed'. CONFIRMED and reproduced; downgraded to SERIOUS because the node is loud about the consequence, but the cost is still a flag-day relaunch.",
+     "evidence": [
+      "misaka-palw-base0/src/bin/palw-rc-genesis.rs:149,157 — `arg(\"--bond-pubkey\").and_then(|v| hex_bytes(&v))`; hex_bytes (:61-67) only checks even length. No 2592-byte check on this path (`rg '2592'` finds it only in crypto/txscript/src/lib.rs:65, multisig.rs and kaspa-evm/src/mldsa_verify.rs:54).",
+      "Reproduced on this branch: `palw-rc-genesis --bond-index 0 --bond-pubkey aa --operator-pubkey bb --payout-payload <64B>` printed 'ACCEPTED — every gate the genesis loader runs has passed.' plus the full paste block with `PALW_RC_GENESIS_BOND_PUBKEY: &[u8] = &[ 0xaa, ]`."
+     ],
+     "fix": "In palw-rc-genesis, refuse unless bond_pubkey.len() == 2592 and operator_pubkey is non-empty, naming the observed length. Better: add the same check to PalwConsensusObjectV2::BondRegistered at consensus/core/src/palw_state_v2.rs:2855, beside the existing EmptyOperatorKey guard, so the gate the tool  …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "Runbook §1 names a key-derivation path that does not exist: it says misaka-cli produces --bond-pubkey / --operator-pubkey, and nothing in the tree prints an ML-DSA-87 verification key hex. The working path (--bond-seed / --operator-seed / --payout-address) landed at HEAD and the runbook was never updated. CONFIRMED.",
+     "evidence": [
+      "docs/palw-rc-testnet12-launch-runbook.md:72-78 — the table credits `misaka-cli` with both pubkeys and says 'Generate the keys with misaka-cli … Pass only verification keys.'",
+      "kaspa-pq-validator/src/main.rs:612-657 — keygen prints only the key path, `validator_id` and `funding_address`; I ran it and got exactly those three lines. Nothing prints the 2592-byte verification key. `rg 'verification_key|public_key\\(\\)' misaka-cli/src kaspa-pq-validator/src` shows no print site  …[clipped]"
+     ],
+     "fix": "Rewrite §1's table and prose to the --bond-seed / --operator-seed / --payout-address form the binary already prints, with the two `misaka validator keygen --out … --network testnet-12` lines ahead of it. Keep the raw-hex flags documented as an escape hatch, but say plainly that nothing in this tree  …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — `--bond-index 40` silently locks the entire 9,000,000,000 MSK main premine wallet as collateral for a 400,000-sompi bond, and it is the only premine output whose key a testnet operator plausibly holds. The tool ACCEPTs it with no amount, no warning, and its one refusal message steers toward larger outputs.",
+     "evidence": [
+      "consensus/core/src/config/premine.rs:38-45 — 40 vault UTXOs of 0.1B KAS at indices 0..39 plus one 9B main UTXO at index VAULT_COUNT = 40.",
+      "premine.rs:47-51 VAULT_ADDRESSES are 'MAINNET custody' addresses reused on every network, while premine.rs:108-109/:160-167 put testnet-11 and testnet-12's 9B main wallet at PALW_PUBLIC_MAIN_ADDRESS — so index 40 is the one output a t12 operator actually controls, and therefore the natural pick."
+     ],
+     "fix": "Print the outpoint's VALUE on the ACCEPTED card next to 'premine #N' and refuse (or require an explicit --i-know-this-locks-it) when the chosen output is the 9B main wallet: `genesis_premine_utxos_for(params.net)` is already resolved at palw-rc-genesis.rs:202-215 via the gate, so the number is in ha …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — half of §5's 'verify the network is what you think it is' table names things an operator cannot observe. No log line on a healthy node mentions algo 6, and `epoch_produced_blocks` has no RPC, CLI or log surface at all.",
+     "evidence": [
+      "docs/palw-rc-testnet12-launch-runbook.md:184 — 'the lane | the producer's first log line names algo 6'. The producer's actual first line is kaspad/src/palw_producer.rs:162 `[palw-producer] starting (bond={bond}, key={path})`. `rg 'info!|warn!' kaspad/src/palw_producer.rs` shows every line it can emi …[clipped]",
+      "docs/palw-rc-testnet12-launch-runbook.md:186 — 'the floor is producing | `palw_producer_facts_v2().epoch_produced_blocks` moves'. `rg 'epoch_produced_blocks'` over the tree: consensus/core/src/palw_producer_v2.rs:72,85,132,161 and two assertions in consensus/src/pipeline/virtual_processor/tests.rs.  …[clipped]"
+     ],
+     "fix": "Either add the two surfaces the table assumes — one startup line from the producer naming `POW_ALGO_ID_PALW_COMMITTED_V2` and the class id, and a periodic `[palw-producer] epoch {e}: produced {n}/{budget}` — or rewrite §5's rows 2 and 4 to checks a human can run today (the `Consensus params fingerpr …[clipped]"
+    }
+   ]
+  },
+  {
+   "dimension": "rpc-miner",
+   "ready": false,
+   "blockers": [
+    {
+     "severity": "BLOCKER",
+     "summary": "All five reported blockers survive on this branch (HEAD is 8db458f2, two commits above the 740ed99e named in the brief; neither touches collateral, bond count or seat count). Blocker #1 — the exposure-ceiling deadlock — is confirmed exactly as described and is the hardest of them: testnet-12 with a filled genesis card halts permanently 2–4 blocks after genesis.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:130 `MIN_COLLATERAL_SOMPI = 400_000`, :116 `MAX_EXPOSURE_RATIO_PERMILLE = 500` → ceiling 200,000; :157 `GENESIS_CLASS_TARGET = u128::MAX/2`, :159 `SLASH_VALUE_PER_PWU = 5`.",
+      "consensus/core/src/palw_pwu.rs:123-137: at target = u128::MAX/2, d = 2^127 and `attempts = 2^128/2^127 = 2`, so pwu = 2·L exactly. consensus/core/src/palw_state_v2.rs:3319-3321 reserves `pwu × slash_value_per_pwu` = 10·L, so the ceiling funds floor(20_000/L) concurrent claims — 4 at the test fixture …[clipped]"
+     ],
+     "fix": "Size the declared genesis collateral against the window it must survive (≥ `window_bind × 10 × canonical_step_leaf_count / 500‰` ≈ 4.7e6 sompi at L=7900) AND give claims a resolution path that exists — register ≥ `seat_count + 1` distinct operator bonds in `genesis_objects`, or size `PalwPanelParams …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "NEW — not reported. Any stranger can mint an unbounded number of distinct, relay-valid blocks from ONE solved PoW by overwriting the ML-DSA-87 signature with arbitrary bytes of the right length. Header validation never verifies the signature, the block is broadcast to every peer as soon as header+body validation passes, and the only check runs later inside `resolve_virtual`. Cost to the attacker:  …[clipped]",
+     "evidence": [
+      "consensus/src/pipeline/header_processor/pre_ghostdag_validation.rs:134-160 `check_palw_carriage_stateless` calls only `validate_stateless_v2`; consensus/core/src/palw_attempt_v2.rs:336-351 shows that is shape + challenge recompute and NOTHING else. `validate_signature_v2` is a separate function (pal …[clipped]",
+      "The shape gate only length-checks the signature: consensus/core/src/pow_layer0.rs:508-518 → `validate_shape_v2` (consensus/core/src/palw_attempt_v2.rs:309-328), whose signature test is `self.signature.len() != expected`."
+     ],
+     "fix": "Verify the attempt signature where the block is admitted to the DAG, not where it is admitted to the chain: call `validate_signature_v2` from `check_palw_carriage_stateless` (pre_ghostdag_validation.rs:134) for algo 6 and the algo-7 equivalent. The stated reason for deferring it — \"~1 ms of ML-DSA p …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED — third-party participation is impossible by RULE, not by a missing miner: `BondRegistered` is refused on the transaction path, so the single genesis bond is the only producer, the only possible panel seat and the only slashable party for the life of the network. The runbook's §6 wording understates this in the direction that misleads.",
+     "evidence": [
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:16-24: \"**`BondRegistered` may not.** … Bonds come from the genesis registration list until a collateral lock exists\" — the extractor takes a fixed subset and this is not in it.",
+      "consensus/core/src/palw_fp_devnet_v3.rs:242-259: `genesis_objects` is exactly one `ClassRegistered` + one `BondRegistered`. `palw_rc_params_from_artifacts` (consensus/core/src/config/params.rs:2300-2310) takes exactly ONE bond, while its own doc four lines above (:2295-2299) says \"The genesis bond s …[clipped]"
+     ],
+     "fix": "Decide which network this is and say it in §0 of the runbook in those words. If testnet-12 is meant to be weight-bearing with strangers, the post-genesis bond path (collateral lock + burn) must land first. If it is a single-operator RC, write \"one bond, genesis-only; no third party can produce, sit  …[clipped]"
+    },
+    {
+     "severity": "BLOCKER",
+     "summary": "CONFIRMED — the per-class DAA target divides by 4 at every 1000-DAA epoch boundary, without bound, because the attempt lane is measured against a 150‰ expectation on a network where the receipt lane that owes the other 850‰ can never produce a block. Latent only because blocker #1 stops the chain before DAA 1000; it goes live the moment the collateral is raised.",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:58 `ATTEMPT_SHARE_PERMILLE = 150`, :52 `EPOCH_LENGTH = 1_000`, :136 `CLASS_DAA_MAX_FACTOR = 4`.",
+      "consensus/core/src/palw_state_v2.rs:2666-2667 composes `share × lane_permille / 1000`; with one class the renormalized share is 1000‰ and `composed_share = (1000·150+500)/1000 = 150`, while :2653 keeps `combined` as the REAL total, which on this network is the attempt count itself (receipt count 0). …[clipped]"
+     ],
+     "fix": "Either set `ATTEMPT_SHARE_PERMILLE = 1000` for any bundle whose network refuses algo 7 (the pure-attempt configuration the retarget is byte-for-byte compatible with), or make `validate_palw_v2` (consensus/core/src/palw_mode_v2.rs:509-540) refuse a split < 1000 unless the header gate admits `freeprom …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "NEW — not reported. On this configuration the producer permanently loses the ADR-0042 Decision 10 escrow: 620‰ of every block's subsidy is withheld from its coinbase output at the block that creates the claim and is minted only when the claim reaches `Final`. With one bond no claim ever reaches Final, so the escrow is destroyed by don't-mint — the operator mines and is paid a fraction of what the  …[clipped]",
+     "evidence": [
+      "consensus/core/src/palw_fp_devnet_v3.rs:146 `WORKER_CARVE_PERMILLE = 620`; consensus/core/src/palw_state_v2.rs:3340 sets `escrowed_reward: worker_carve_v2(builder.params, ctx.subsidy)` on every attempt claim (the unit test at palw_state_v2.rs:4066 pins it: subsidy 1000 → escrow 620).",
+      "It is withheld from the coinbase, not added to it: consensus/src/processes/coinbase.rs:198-205 — \"an attempt-lane chain block's worker reward is ESCROWED, not paid — it becomes spendable when its claim reaches `Final`, and is burned by don't-mint if the claim voids\" — subtracted from the selected pa …[clipped]"
+     ],
+     "fix": "This is a consequence of the one-bond registry rather than an independent bug, and it closes when blockers #1/#3 close. Until then it must at minimum be said out loud in the runbook and surfaced by the producer: log the escrowed amount per block and the pending-payout queue depth, so an operator can …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED — misaminer and pq-miner spin every core at 100% forever, with no log line and no template refetch, when pointed at a ConsensusV2 network. Both have an explicit refusal for algo 4/5 and nothing for algo 6/7. This is the failure a public testnet actually produces, because the template is well-formed and `is_synced` is true once the network has peers.",
+     "evidence": [
+      "misaminer/src/main.rs:272-274 builds `palw_ids = [POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA]` only; :278 an algo-6 template takes the `else` arm `(0u64..u64::MAX).into_par_iter().find_any(...)`.",
+      "pq-miner/src/main.rs:348-357 exits loudly for algo 4/5 and falls through for 6/7 into the same unbounded `find_any` at :363."
+     ],
+     "fix": "Three lines each. Add `POW_ALGO_ID_PALW_COMMITTED_V2 | POW_ALGO_ID_PALW_RECEIPT_V3` to the `matches!` at pq-miner/src/main.rs:349-351 and add the same guard before misaminer's grind at main.rs:275, printing the runbook's own sentence: this network's blocks are produced in-process by `kaspad --palw-p …[clipped]"
+    },
+    {
+     "severity": "SERIOUS",
+     "summary": "CONFIRMED — no PALW V2 state is transferred at a pruning point, and `calculate_utxo_state_relatively` silently assumes the stored V2 tip block equals the current sink. Unreachable today only because the one-bond registry pins the pruning point at genesis, which is a side effect of blockers #1/#3 and disappears the moment they are fixed.",
+     "evidence": [
+      "consensus/src/consensus/mod.rs:2060-2078 has `import_pruning_point_evm_state` and `import_pruning_point_overlay_snapshot`; grepping `import_pruning_point` across consensus/ and protocol/ returns no PALW analogue, and protocol/flows/src/ibd/flow.rs:1565-1567 imports \"the new pruning point's utxoset A …[clipped]",
+      "consensus/src/pipeline/virtual_processor/processor.rs:992-1000 loads the V2 tip and DISCARDS the block it stands at (`.map(|(_, state)| state)`); after a pruning-point import the walk would start from the genesis state at a sink far above it, and :1186-1194 would then disqualify every chain block wi …[clipped]"
+     ],
+     "fix": "Add a PALW V2 pruning-point sidecar beside the EVM/overlay ones (`PalwStateCarriageV2` already round-trips under its committed root, consensus/core/src/palw_state_v2.rs:1586-1587), and make `calculate_utxo_state_relatively` assert the loaded tip's block equals `from` rather than discarding it, so a  …[clipped]"
+    }
+   ]
+  }
+ ],
+ "critic": [
+  {
+   "missing_coverage": [
+    {
+     "area": "Pruned join / IBD: the PALW V2 chain state has no pruning-point import, so no stranger can join once the pruning point leaves genesis",
+     "finding": "Every other chain-scoped overlay on this tree got an explicit pruning-point sidecar because its absence disqualifies every post-pruning block — the EVM lane (`import_pruning_point_evm_state`) and the DNS/PoS-v2 overlay (`import_pruning_point_overlay_snapshot`), each with a p2p request/serve flow and a comment naming the failure. `PalwChainStateV2` has none. It is bootstrapped exclusively by `VirtualProcessor::process_genesis` and advanced only by the virtual chain walk, which is gated on a tip already existing. A node that must adopt a pruning point it did not itself walk to therefore holds either a genesis-stale PALW state or none at all. In the stale case `header.palw_state_root != parent_root` disqualifies the first post-pruning chain block and, by propagation, every descendant — the node's sink never leaves the pruning point. This is dormant only while the network is broken: `pruning_ceiling_v2` pins pruning to the safe frontier, so the pruning point cannot leave genesis until claims start finalizing. The moment the network actually works, every new joiner hits this, and what the operator sees is 'peers connected, chain not advancing' — the same shape that cost this repo weeks twice on testnet-10.",
+     "evidence": [
+      "consensus/src/pipeline/virtual_processor/processor.rs:9214-9215 — the ONLY production writer of a PALW tip other than the walk: `store.insert_delta_batch(...genesis...)` + `store.set_tip_batch(&mut batch, self.genesis.hash, &genesis_state)`, inside `process_genesis`.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:1343-1348 — the only other writer, `set_tip_batch(diff_point, state)`, reachable only when `palw_state.is_some()`, i.e. only when a tip already exists. `rg set_tip_batch` over consensus/src returns exactly these two plus the dormant `palw_state_v2_sync.rs`.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:9237-9315 `import_pruning_point_utxo_set` — imports the UTXO set, validates the pp's txs, commits virtual with the pp as the only parent. It never touches `palw_state_v2_store`.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:9320-9345 `import_pruning_point_evm_state` — the precedent, with the failure spelled out: \"Without this, the first post-pruning block re-executes the EVM lane against an empty genesis state ... so its recomputed `evm_commitment_root` mismatches the header and the whole chain is disqualified.\" Substitute `palw_state_root` and the sentence is this finding.",
+      "protocol/flows/src/ibd/flow.rs:2076-2100 `sync_new_utxo_set` — the complete sidecar list: `sync_pruning_point_utxoset`, `sync_pruning_point_evm_state`, `sync_pruning_point_overlay_snapshot`. No PALW step.",
+      "protocol/p2p/proto/p2p.proto:422-438 — `RequestPruningPointEvmStateMessage` / `PruningPointEvmStateMessage` / `RequestPruningPointOverlaySnapshotMessage` / `PruningPointOverlaySnapshotMessage`. `rg -i palw protocol/p2p/proto/p2p.proto` returns nothing: there is no wire message for a PALW state snapshot, and protocol/flows/src/v8/request_pruning_point_snapshots.rs serves only the two.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:1186-1196 — the consequence: `if header.palw_state_root != parent_root { ... StatusDisqualifiedFromChain; continue; }`. `rg palw_state_root consensus/src` shows this is the field's ONLY consumer, so nothing catches the divergence earlier or more clearly.",
+      "protocol/flows/src/ibd/flow.rs:1655-1663 — the path a fresh node actually takes once the syncer's pruning point leads: `SyncerSkew::Leading` + no local body for the syncer's pp → `IbdType::PruningCatchUp`, which runs on the node's OWN consensus (PALW tip still at genesis) and then calls `sync_new_utxo_set`.",
+      "consensus/core/src/palw_fork_authority_v2.rs:70-77 `pruning_ceiling_v2(frontier) = frontier` — why this is latent today and live the day the network works.",
+      "The snapshot format the fix would carry already exists and is root-verified: consensus/src/model/stores/palw_state_v2.rs:212-223 `load_tip` decodes a `PalwStateCarriageV2` and rebuilds it under `into_state(params, Some(record.state_root))`. Only the request/serve/import is missing.",
+      "No test covers it: `rg 'skip_adding_genesis|process_genesis' consensus/src/pipeline/virtual_processor/tests.rs` returns nothing, and every V2 test builds `TestConsensus::new(&config)` with the default `process_genesis: true` (consensus/core/src/config/mod.rs:158)."
+     ],
+     "severity": "BLOCKER"
+    },
+    {
+     "area": "Fail-open: on a ConsensusV2 network with no PALW tip, EVERY PALW consensus rule is silently skipped",
+     "finding": "The same root cause as the item above, but the other direction and worth its own line because it is fail-OPEN and reachable without any IBD. The walk's guard reads `(Some(params), Ok(Some(_))) => Some(state), _ => None`, and its comment states the author's belief that `None` means 'not a V2 network'. It also means 'a V2 network whose state store was never seeded'. In that state the block loop skips the state-root check, `palw_v2_validate_objects`, `palw_v2_check_attempt_admission`, `palw_v2_check_receipt_spend` and `apply_palw_transition_v3` outright, and `ctx.palw_v2_payout_outputs`/`palw_v2_locked_bonds`/`palw_v2_escrow_withheld`/`palw_v2_bond_burns` all take their empty defaults — so bond collateral is spendable and the escrow carve is not enforced. Two reachable routes: (1) headers-proof IBD, whose staging consensus is built with `skip_adding_genesis()` and, once committed, is thereafter an `Existing` entry that never processes genesis again; (2) an operator who ran kaspad on the shipped card-UNSET testnet-12 and later restarts the same datadir with the card pasted — both configurations carry the identical `PALW_RC_GENESIS`, so the re-genesis guard passes and the node resumes bundle-aware but state-blind. Nothing logs it: daemon.rs warns about a missing BUNDLE, never about a bundle with no state.",
+     "evidence": [
+      "consensus/src/pipeline/virtual_processor/processor.rs:992-1000 — the guard, with the mistaken comment at :991 (\"`None` everywhere else, and every leg below is a no-op there\").",
+      "consensus/src/model/stores/palw_state_v2.rs:201-207 — `tip_record()` maps `KeyNotFound` to `Ok(None)`, so an unseeded store is indistinguishable from a non-V2 network at that match.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:1174-1289 — the entire PALW block is inside `match palw_state.as_mut() { Some(state) => {...}, None => None }`: root check (:1188), object validation (:1213), attempt admission (:1226), receipt spend (:1240), transition (:1273).",
+      "consensus/src/pipeline/virtual_processor/processor.rs:1118-1129 — `palw_v2_payout_outputs`, `palw_v2_locked_bond_outpoints`, `palw_v2_escrow_withheld_at`, `palw_v2_bond_burn_obligations` all `.unwrap_or_default()` when `palw_state` is None.",
+      "consensus/src/pipeline/virtual_processor/utxo_validation.rs:159 and :919 — `ctx.palw_v2_escrow_withheld` (0 by default, utxo_validation.rs:187) is passed to `verify_coinbase_transaction`, so a state-blind node reconstructs a different coinbase than the network's and disqualifies honest blocks. `palw_v2_escrow_withheld_at` (processor.rs:3657-3667) is non-zero for the selected parent of any block whose parent created a claim — i.e. essentially every RC block.",
+      "consensus/src/consensus/factory.rs:386-389 — the staging consensus: `Arc::new(self.config.to_builder().skip_adding_genesis().build())`; consensus/core/src/config/mod.rs:259-262 — `skip_adding_genesis` sets `process_genesis = false`.",
+      "consensus/src/consensus/factory.rs:322-325 — after the staging consensus is committed it is an `ConsensusEntryType::Existing` entry, which sets `config.process_genesis = false` on every subsequent start. The tip is never installed, ever.",
+      "consensus/core/src/config/params.rs:2437-2474 — `palw_rc_base_params` (card unset) and the bundled RC share the same `PALW_RC_GENESIS`, so the re-genesis guard at consensus/src/consensus/mod.rs:313-332 (`past_pruning_points[0] == config.genesis.hash`) passes for route (2).",
+      "kaspad/src/daemon.rs:461-469 — the only startup warning is for a node with the RC genesis and NO ConsensusV2 bundle. A node with a bundle and no PALW state gets no warning at all.",
+      "docs/palw-rc-testnet12-launch-runbook.md:88-95 and :170-176 — the runbook documents the card-unset state as the shipped state and gives no instruction to wipe the datadir when the card is pasted."
+     ],
+     "severity": "BLOCKER"
+    },
+    {
+     "area": "Reachability correction: the court cannot be opened at all on the shipped testnet-12 bundle — which means the bond-set fix is a fuse that arms C-05's false convictions",
+     "finding": "Nobody stated the scheduling consequence of the genesis registration list on the court findings. A `CourtOpened` requires a claim in `ReceiptLicensed` and a challenger that is a REGISTERED bond which is not the executor's own. The RC genesis registers exactly one bond and `BondRegistered` is refused by the transaction extractor, so on the shipped bundle (a) no claim ever reaches `ReceiptLicensed` because the 5-seat panel can never be derived, and (b) even if one did, there is no second bond to challenge with. So C-01, C-02, C-05 and C-06's court defects — including the three false-conviction mechanisms that burn an honest producer's bond — are all currently unreachable. They become reachable in exactly the commit that fixes the genesis bond set. Anyone reading the two lists independently could conclude 'fix the wedge first, court later'; the code says those two are one release, because the wedge fix is what turns the false convictions on.",
+     "evidence": [
+      "consensus/core/src/palw_court_v2.rs:164-183 `validate_court_opened_v2` — `PalwClaimPhaseV2::ReceiptLicensed` required (:168-171); `if state.bond(challenger_bond).is_none() { ChallengerMissing }` (:177-179); `if *challenger_bond == claim.bond { SelfChallenge }` (:180-182).",
+      "consensus/core/src/palw_lifecycle_objects_v2.rs:124-126 — `BondRegistered` is refused on the transaction path: \"a bond registration declares collateral nothing on this path locks — bonds come from genesis\".",
+      "consensus/core/src/palw_fp_devnet_v3.rs:242-260 — `genesis_objects` is one `ClassRegistered` plus one `BondRegistered`; consensus/core/src/config/params.rs:2300-2312 takes a single bond.",
+      "consensus/core/src/palw_panel_v2.rs:196-227 — `derive_panel_v2` excludes the executor's own bond/operator/key and returns `InsufficientEligibleBonds` below `seat_count`, which is 5 (consensus/core/src/palw_fp_devnet_v3.rs:225).",
+      "Consequence chain for the arming: fixing the bond set to >= 6 operator bonds makes panels seatable → claims reach `ReceiptLicensed` → `validate_court_opened_v2` passes for any of the other five → the SoftMax/RoPE/P·V false convictions in consensus/core/src/palw_step_refute.rs become live against `void_and_slash(..., CourtFraud)` at consensus/core/src/palw_state_v2.rs:3096-3106."
+     ],
+     "severity": "HIGH"
+    },
+    {
+     "area": "Fork choice: the PALW-weighted tip order degenerates to blue work at the only moment it matters, and a state-blind node falls back to the testnet-10 DNS dominance gate",
+     "finding": "Two things nobody checked. (1) `palw_tip_weights_v1` is computed for every tip BEFORE any of them is UTXO-validated, and `palw_candidate_order_v2` derives a candidate's standing by walking STORED deltas — which only exist for blocks that were already validated as chain blocks. A fresh tip therefore yields `MissingDelta`, the `.ok()?` swallows it, and `order_tips_v1`'s `(None, None)` arm falls through to blue work. On a `ConsensusV2` network, whose `palw_tip_order` is `PalwWeighted` by construction, sink selection at a genuine fork is therefore blue-work ordering, not the ADR-0042 Unit D comparator. The deep-reorg gate at processor.rs:7544-7552 does still resolve (the candidate's deltas exist by then), so the deep-reorg protection survives — but 'one comparator at all four sites' is not true at site 1. (2) This directly refutes the genesis-boot adversarial pass's stated reason for dismissing the t10 reorg-wedge worry. That pass argued `palw_candidate_order_v2` \"yields `Some` exactly when `palw_state_params_v2` exists\". It also requires a loaded tip. On any state-blind node (the two items above) it returns None, the `if let (Some, Some)` fails, and control falls straight through to `dns_params` / `DnsRolloutStage::Active` / `last_dns_confirmed_anchor` — the exact gate that wedged testnet-10's virtual in 2026-08, now inherited genesis-active on testnet-12.",
+     "evidence": [
+      "consensus/src/pipeline/virtual_processor/processor.rs:8035-8042 — the heap is built with `palw: self.palw_tip_weights_v1(block, ...)` for every tip, before the `calculate_utxo_state_relatively` call at :8069 that would create any delta.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:3516-3532 — `palw_candidate_order_v2` loads the tip, computes `ChainPath`, and calls `walk_chain_path(...).ok()?`.",
+      "consensus/src/processes/palw_state_walk.rs:63-91 — `walk_chain_path` reads only stored deltas; `load_delta` returns `PalwStateWalkError::MissingDelta` on `KeyNotFound`, whose own comment says a missing delta must never read as 'changed nothing'. The `.ok()?` at the call site converts exactly that refusal into a silent None.",
+      "consensus/core/src/palw_chain_weight.rs:206-214 — `order_tips_v1`: `PalwWeighted` with `(None, None)` compares `a.1.cmp(b.1)`, i.e. blue work.",
+      "consensus/core/src/config/params.rs:744-756 — `palw_tip_order_v1` returns `PalwWeighted` for any `ConsensusV2` network, with a comment asserting the opposite of what the None path does.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:7544-7552 — `if !is_chain_ancestor_of(prev_sink, candidate) && let (Some(incumbent), Some(challenger)) = (...)`; falling out of that `if let` reaches the `dns_params` / rollout-stage / confirmed-anchor gate at :7553-7570.",
+      "Deltas are only ever written by `commit_utxo_state` for a chain block that passed UTXO validation (processor.rs:2075-2082), so a competing branch's blocks — body-valid but never chain blocks — have none."
+     ],
+     "severity": "HIGH"
+    },
+    {
+     "area": "PALW state deltas are never deleted in production — unbounded store growth and no pruning story",
+     "finding": "`delete_delta_batch` has no production caller. The reorg leg of the virtual walk reverts deltas in memory and leaves every row on disk, and the only code that deletes them is `palw_state_v2_sync.rs`, which the earlier grep showed has no caller anywhere. So the store accumulates one row per chain block forever, plus orphaned rows for every block of every abandoned branch. Not a consensus defect and not a launch blocker at testnet-12 volumes, but it is the missing half of a pruning design: `pruning_ceiling_v2` decides what history may be pruned, and nothing prunes the PALW rows that history's deltas live in.",
+     "evidence": [
+      "consensus/src/model/stores/palw_state_v2.rs:147 `delete_delta_batch` — `rg 'delete_delta_batch' consensus/src` returns only its definition and consensus/src/processes/palw_state_v2_sync.rs:176.",
+      "consensus/src/processes/palw_state_v2_sync.rs:1-30 — the module's own doc: \"Nothing constructs this on any preset.\" `rg 'PalwStateSyncV2|palw_state_v2_sync' consensus/src kaspad/src` returns only `processes/mod.rs:8` (the `pub mod` line) and a doc reference.",
+      "consensus/src/pipeline/virtual_processor/processor.rs:1029-1038 — the retreat leg reads `delta_of(current)` and reverts in memory; no delete.",
+      "consensus/src/pipeline/pruning_processor/processor.rs:223 — the pruning processor's only PALW interaction is the ceiling check `palw_pruning_point_allowed_v2`; it deletes no PALW rows and captures no PALW snapshot (contrast the overlay snapshot it does capture)."
+     ],
+     "severity": "LOW"
+    },
+    {
+     "area": "Relay and mempool path for court / lifecycle transactions — checked, and it is FINE, with one operational number worth stating",
+     "finding": "C-06's write-up flagged that the court is 'client-less'; nobody checked the next gate, which is whether such a transaction could reach a block even with a client. It can. Consensus routes subnetwork 0x4b (lifecycle) and 0x4a (free-prompt commitment) instead of hitting the blanket `SubnetworksDisabled`, and the mempool's standardness check has no subnetwork gate at all — only tx version, mass, signature-script size, PQ output class and dust. Payload bytes count 1:1 into compute mass, and the carriage constants were sized against the relay cap deliberately. The one number to state rather than discover: a 340,000-byte evidence chunk is ~340k mass against a 500,000 `max_block_mass`, so at most ONE chunk fits per block and a 3-4 chunk group needs 3-4 blocks — 6 to 8 minutes at the frozen 120 s cadence. That is comfortably inside `window_challenge` (1200), so it is a fact to write down, not a defect. Also checked and fine: the header's `palw_commitment: Vec<u8>` is shape-bounded on every header including parentless proof headers, so there is no unbounded-header DoS.",
+     "evidence": [
+      "consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:317-337 — the 0x4a and 0x4b arms, with the comment recording that both ids previously had no route and every carrier was refused at admission; the blanket `SubnetworksDisabled` is at :339.",
+      "mining/src/mempool/check_transaction_standard.rs:54-133 — `check_transaction_standard_in_isolation` checks version, compute/transient mass against `MAXIMUM_STANDARD_TRANSACTION_MASS = 480_000` (:51), sig-script size, output script class and dust. `rg -i subnetwork mining/src/mempool/check_transaction_standard.rs` returns nothing.",
+      "consensus/core/src/mass/mod.rs:27-30 and :255 — `size += tx.payload.len()`, `compute_mass_for_size = size * self.mass_per_tx_byte`.",
+      "consensus/core/src/palw_carriage.rs:137-141 — `PALW_CARRIAGE_MAX_CHUNK_BYTES = 340_000` with the comment \"≈331 KB payloads ride a 480 KB standard tx\"; `PALW_CARRIAGE_MAX_CHUNKS = 4`. Against `max_block_mass: 500_000` (consensus/core/src/config/params.rs:1949, :2065, :2193) that is one chunk per block.",
+      "consensus/src/pipeline/header_processor/pre_ghostdag_validation.rs:111-117 and consensus/src/processes/pruning_proof/mod.rs:218-244 — `check_palw_commitment_shape` runs on every header, parentless included, precisely because the field is hash-invisible on non-PALW headers."
+     ],
+     "severity": "INFO"
+    }
+   ],
+   "no_go_still_correct": true,
+   "no_go_reasoning": "Still NO-GO, and the branch does not fail the standard on a technicality — it fails it three independent ways, only one of which the external audit knew about.\n\nFirst, the audit's own criticals are not all closed. C-05 is worse than 'open': the court CONVICTS an honest producer at 44 of the 7,900 leaves of every RC block (the per-head SoftMax mismatch), and two more false-conviction mechanisms sit behind it (the hardcoded rope byte offset, the transposed P·V operand). `map_refutation_outcome` → `ExecutorGuilty` → `void_and_slash(CourtFraud)` is a live money path with a `CourtClosed` object that may ride a transaction. C-01 parts 1-2, C-02's RoPE end-to-end, C-03's kv-scaled arm and C-04's missing selection rule survive alongside it.\n\nSecond — and this is the part neither document reaches — the network cannot be operated. The shipped genesis card is unset, so `Params::from(testnet-12)` is hash-only and no binary can boot a weight-bearing t12 at all; with the card filled the measured chain wedges at genesis+2 (one bond, ceiling 200,000, claim exposure 79,000, no release path without blocks); and at DAA 1000 the per-class retarget composes a one-class census with the 150-permille attempt-lane split and divides the floor's target by 4 at every epoch boundary.\n\nThird, my own pass: `PalwChainStateV2` has no pruning-point import, and `process_genesis` is its only bootstrapper. So the moment the network works well enough for the safe frontier — and therefore the pruning point — to le …[clipped]",
+   "blockers_that_fell": [
+    "C-03, the weighted half — the court's `Base0Op::MatMul` weighted arm now requests exactly `(tile_start * in_len, tile_width * in_len)` and treats a differently-sized answer as `Unadjudicable`, never a conviction (consensus/core/src/palw_step_refute.rs:508-571); the single-slice comparison via `row_offset` is real (:1155-1161, :1104-1112); `PalwProvenOperandsV1::operand_bytes` refuses a substituted whole-matrix opening on both offset and length (consensus/core/src/palw_artifact.rs:236-248); and the production inventory really does cut one Merkle leaf per tile (misaka-palw-base0/src/inventory.rs:97-116, applied at :151 and :172-181). A court proof is now independent of model size on the weighted arm. The kv-scaled twin arm is NOT fixed — see the survivors.",
+    "C-06 as worded — `base0_inventory_v1` is production code emitting one leaf per operand row in canonical order through `PalwArtifactInventoryV1::new` (misaka-palw-base0/src/inventory.rs:125-231); `palw_rc_base0_artifact_root_v1` derives the root from the pinned seed and consensus/core/src/config/params.rs:2360 pins that exact value into the shipped bundle; the prover half exists (`open_artifact_leaf_v1`, consensus/core/src/palw_artifact.rs:123) and the root is consumed on the adjudication path (consensus/core/src/palw_court_v2.rs:338 → consensus/src/pipeline/virtual_processor/processor.rs:3839-3843). The rope-offset defect found inside it is a new bug, not C-06 as written.",
+    "H-08 — `Base0ArtifactV1::execution_class_id` validates the geometry and returns `profile.shape_profile_id()`, the flat hash is renamed `artifact_digest` (misaka-palw-base0/src/artifact.rs:582-624), the chain refuses `class_id != profile.shape_profile_id()` with `ClassIdIsNotTheProfileId` (consensus/core/src/palw_class_admission_v2.rs:263-268), that gate is called at acceptance (processor.rs:3879-3885), and the shipped t12 identity derives the id in code (params.rs:2309). The V1 `runtime_class_id` namespace is measurably dead on a V2 network (palw_base0_profile.rs:566-577 zeroes it).",
+    "C-04's named defect — the `if coord.call_index != 0 { Unadjudicable }` guard is gone; the decode gather reads `generated_ids[call_index - 1]` from ids hash-pinned against the claim's own `full_logits_trace_root` (consensus/core/src/palw_step_refute.rs:416-435, :1064-1092), and absence is `Unadjudicable` rather than a default gather. The ADR's second half (a selection/argmax refutation) was never built — see the survivors.",
+    "C-02's API defect — the oracle trait is now byte-denominated (`byte_offset`, `byte_len`, consensus/core/src/palw_step_refute.rs:767), the production oracle returns exactly `byte_len` bytes or None (consensus/core/src/palw_artifact.rs:235-248), the Rescale 1-element/5-byte contradiction is gone (:451-459), and the `FixedRow` test double honours `byte_len` so it can no longer hide a size defect (:1426-1436). The end-to-end disagreement between court and inventory on RoPE survives.",
+    "Liveness wiring the audit did not name but that was equally fatal: 0x4a and 0x4b now route at transaction admission instead of hitting the blanket `SubnetworksDisabled` (consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs:317-337), a block's own work reaches the state machine so claims exist at all (processor.rs:1266-1289), testnet-12 can be named without aborting the process (params.rs:1265), a genesis bond must show its collateral and the collateral stays put (consensus/core/src/palw_genesis_v2.rs:126-186 plus the spend lock), the escrow became a carve of the subsidy rather than an addition to it (utxo_validation.rs:919), and the epoch budget no longer deadlocks the base class at admission (consensus/core/src/palw_admission_v2.rs:234)."
+   ],
+   "blockers_that_survive": [
+    "C-05, and it is the worst thing on the branch: the court convicts honest executions. All 44 SoftMax leaves (IR slot 14) of an RC run return `ComputationMismatch` because the engine softmaxes per head inside `for head in 0..n_heads` (misaka-palw-base0/src/engine.rs:290-322) while the court does one `ops::softmax` over the whole concatenation (consensus/core/src/palw_step_refute.rs:390-393). Two more mechanisms behind it: the court asks for the rotary table at a hardcoded byte offset 0 (:583-585) while the inventory keys rope rows by position (misaka-palw-base0/src/inventory.rs:84-95, :215-222), and the weightless-MatMul arm reads the KV cache as `[out_dim][in_dim]` when it is `[position][kv_dim]` (:540-550 vs :889-928). `ExecutorGuilty` → `void_and_slash(CourtFraud)` (consensus/core/src/palw_state_v2.rs:3096-3106) is a live path and `CourtClosed` may ride a transaction.",
+    "C-03's other half: `palw_step_refute.rs:538-549` still computes `full = out_dim * x.len()` for a weightless matmul, and `kernel_can_serve_node_v1` (:281-286) routes every kv-scaled matmul onto exactly that arm — which is both of BASE-0's per-layer attention matmuls (palw_base0_profile.rs:186, :193). At multi-head geometry the length can never be satisfied, so attention fraud on the floor class is structurally unprosecutable, and `derive_court_cost_v1` prices a weightless node's opening at 0 (palw_class_admission_v2.rs:155-157) so the ceiling that was supposed to catch it measures nothing.",
+    "C-01 parts 1-2: the attention subgraph produces a commitment nobody can challenge (slots 8/10 `Unadjudicable`, slots 12/16 `InputSetNotCanonical`), and the prover side of the decode gather was never built — `base0_refutation_from_capture_v1` hardcodes `decode_tokens: None` (misaka-palw-base0/src/legs.rs:355-395) against a court arm that needs them.",
+    "C-02's RoPE end-to-end: court and production inventory disagree on width, position and layout simultaneously, so both RoPE steps of every layer at every position are `Unadjudicable` on PALW-RC-BASE-0 — a producer may commit arbitrary bytes there and mint weight without rotating.",
+    "C-04's second half: ADR-0049 Decision E's selection rule does not exist — no argmax, no tie-break, no fault code. The last generated token id is constrained by nothing adjudicable and is inside `attempt_id_v2`, hence inside the class ticket and the L1 tag.",
+    "Genesis and boot: the shipped card is unset so no binary boots a weight-bearing t12; with it filled the chain wedges at genesis+2 on a measured exposure ceiling with no release path; the per-class DAA retarget divides the floor's target by 4 at every epoch boundary and floors at 1 after 63 epochs; and `palw_rc_params` raises `finality_depth` to 600 without raising `pruning_depth` (1144 against a 1384 lower bound), putting a public network in the branch upstream labels unsafe.",
+    "NEW, mine: `PalwChainStateV2` has no pruning-point import, so a stranger cannot join once the pruning point leaves genesis (evidence in the coverage list).",
+    "NEW, mine: `palw_state = None` on a bundled network silently disables every PALW consensus rule, reachable via headers-proof IBD's staging consensus and via enabling the bundle on an existing t12 datadir.",
+    "NEW, mine: `palw_candidate_order_v2` is None for any not-yet-validated tip, so the ADR-0042 Unit D tip-order authority degenerates to blue work at a fork, and on a state-blind node the deep-reorg gate falls back to the testnet-10 DNS dominance gate — which refutes the genesis-boot sweep's stated reason for dismissing that risk."
+   ],
+   "the_one_thing": "Give `PalwChainStateV2` a pruning-point import — a `RequestPruningPointPalwState` / `PruningPointPalwState` message pair, a capture in the pruning processor beside the overlay snapshot it already captures, and an `import_pruning_point_palw_state` that installs the root-verified carriage as the store's tip — and make an absent tip on a `ConsensusV2` network a hard refusal at startup instead of a silent `None`.\n\nWhy this one and not the court bugs. The invitation itself is what this fixes. Every other survivor either has an operator-side workaround or is confined to the operator's own bonds: the false convictions need a second registered bond to act as challenger and bonds are genesis-only (consensus/core/src/palw_court_v2.rs:177-182, consensus/core/src/palw_lifecycle_objects_v2.rs:124-126), the runbook already says third-party mining does not work, and the genesis-boot blockers are things the operator discovers on their own node before anyone else is asked to join. This one is discovered only by the strangers, only after they accept the invitation, and only in the form the operator cannot debug from their own machine — their node connects, takes headers, and then disqualifies every chain block with an `info!` that names the coinbase rather than PALW (consensus/src/pipeline/virtual_processor/processor.rs:1160-1196). That is the exact shape of the two multi-week incidents already in this repo's own operator notes.\n\nIt is also the only survivor with no natural discovery point. It …[clipped]"
+  }
+ ]
+}

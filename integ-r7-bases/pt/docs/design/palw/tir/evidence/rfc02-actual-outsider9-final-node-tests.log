@@ -1,0 +1,6 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_native_v9::actual_outsider::flat_v9_actual_qwen_fresh_node_unknown_ordinary_public_discovery_own_proof_redemption_and_ibd ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 842 filtered out; finished in 155.22s
+

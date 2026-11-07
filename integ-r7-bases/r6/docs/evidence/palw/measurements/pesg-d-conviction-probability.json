@@ -1,0 +1,203 @@
+{
+ "schema": "pesg-d/v1",
+ "note": "PESG 4 D from MEAS. p_min is never filled optimistically; a UNKNOWN factor has lower bound 0. See pesg-d-conviction-probability.md",
+ "decomposition": "p_min >= P_run * p_check|run * p_evidence|detect * p_inclusion|evidence * p_collect|convicted (conditional chain, no independence)",
+ "factors": [
+  {
+   "factor": "P_run",
+   "lower_bound": 0,
+   "verdict": "UNKNOWN",
+   "kind": "unknown",
+   "src": "not observable on chain (RFC-0015 4.3, ADR-0177); no watcher measured"
+  },
+  {
+   "factor": "p_check",
+   "lower_bound": null,
+   "verdict": "UNKNOWN",
+   "kind": "unknown",
+   "src": "PESG-B (pesg/detection-bounds) has no commit; declared plan bits 238-240 (v1) / 162-164 (v2), unapproved"
+  },
+  {
+   "factor": "p_evidence",
+   "lower_bound": 0,
+   "verdict": "FAIL",
+   "kind": "measured",
+   "src": "embedding-gather lie: found in 13 s, filing 272,271,336 B > 67,108,864 B wire ceiling (Qwen2.5-0.5B, n=2); 4 other lie types convicted"
+  },
+  {
+   "factor": "p_inclusion",
+   "lower_bound": null,
+   "verdict": "UNKNOWN",
+   "kind": "unknown",
+   "src": "carrier wait, junk lanes, reorg depth unmeasured (F6); filing 31,492 B fits"
+  },
+  {
+   "factor": "p_collect",
+   "lower_bound": 1,
+   "verdict": "UNKNOWN",
+   "kind": "derived",
+   "src": "ledger convict() slashes min(reserved, collateral); gate cell only once BUDGET reward paths are connected"
+  }
+ ],
+ "separate_rows": [
+  {
+   "id": "N1",
+   "condition": "no watcher",
+   "p_min": 0,
+   "p_min_kind": "lower bound",
+   "verdict": "UNKNOWN (FAIL if absent)"
+  },
+  {
+   "id": "N2",
+   "condition": "cannot check in time (time or RAM axis)",
+   "p_min": 0,
+   "verdict": "FAIL where measured/derived (0.5B beyond ~130 positions on a 32 GiB host; 9B-8k), UNKNOWN for classes that did not run"
+  },
+  {
+   "id": "N3",
+   "condition": "closed model (nobody but the producer holds it)",
+   "p_min": 0,
+   "verdict": "FAIL"
+  },
+  {
+   "id": "N4",
+   "condition": "best-placed lie, K2-TIR v1/v2 (embedding gather)",
+   "p_min": 0,
+   "verdict": "FAIL",
+   "kind": "measured"
+  },
+  {
+   "id": "N5",
+   "condition": "check probability, other placements",
+   "p_min": null,
+   "verdict": "UNKNOWN"
+  },
+  {
+   "id": "N6",
+   "condition": "inclusion in time",
+   "p_min": null,
+   "verdict": "UNKNOWN"
+  },
+  {
+   "id": "N7",
+   "condition": "collection",
+   "p_min": 1,
+   "verdict": "UNKNOWN as a gate cell",
+   "kind": "derived"
+  }
+ ],
+ "classes": [
+  {
+   "class": "qwen25-0.5b",
+   "declared_error_bits_v1_v2": "240/164",
+   "verifier_ram": "10.4 GB (P<=16), 13.2 GB (P=32), >15.1 GB (P=64, stopped)",
+   "profiles": {
+    "panel_licensed_every_seat_colluding": {
+     "p_min": "UNKNOWN",
+     "window_daa": 50
+    },
+    "opv": {
+     "p_min": "UNKNOWN (not registrable at the interim carriers: carrier_fit_v1)",
+     "window_daa": 50
+    },
+    "closed_model": {
+     "p": 0,
+     "verdict": "FAIL"
+    }
+   }
+  },
+  {
+   "class": "qwen35-0.8b",
+   "declared_error_bits_v1_v2": "238/162",
+   "verifier_ram": ">=12.3 GB",
+   "profiles": {
+    "panel_licensed_every_seat_colluding": {
+     "p_min": "UNKNOWN",
+     "window_daa": 50
+    },
+    "opv": {
+     "p_min": "UNKNOWN (not registrable at the interim carriers: carrier_fit_v1)",
+     "window_daa": 50
+    },
+    "closed_model": {
+     "p": 0,
+     "verdict": "FAIL"
+    }
+   }
+  },
+  {
+   "class": "llama32-1b",
+   "declared_error_bits_v1_v2": "240/164",
+   "verifier_ram": ">=19.9 GB",
+   "profiles": {
+    "panel_licensed_every_seat_colluding": {
+     "p_min": "UNKNOWN",
+     "window_daa": 50
+    },
+    "opv": {
+     "p_min": "UNKNOWN (not registrable at the interim carriers: carrier_fit_v1)",
+     "window_daa": 50
+    },
+    "closed_model": {
+     "p": 0,
+     "verdict": "FAIL"
+    }
+   }
+  },
+  {
+   "class": "glm-edge-1.5b",
+   "declared_error_bits_v1_v2": "239/163",
+   "verifier_ram": ">=23.8 GB",
+   "profiles": {
+    "panel_licensed_every_seat_colluding": {
+     "p_min": "UNKNOWN",
+     "window_daa": 50
+    },
+    "opv": {
+     "p_min": "UNKNOWN (not registrable at the interim carriers: carrier_fit_v1)",
+     "window_daa": 50
+    },
+    "closed_model": {
+     "p": 0,
+     "verdict": "FAIL"
+    }
+   }
+  },
+  {
+   "class": "smollm2-1.7b",
+   "declared_error_bits_v1_v2": "238/162",
+   "verifier_ram": ">=27.6 GB",
+   "profiles": {
+    "panel_licensed_every_seat_colluding": {
+     "p_min": "UNKNOWN",
+     "window_daa": 50
+    },
+    "opv": {
+     "p_min": "UNKNOWN (not registrable at the interim carriers: carrier_fit_v1)",
+     "window_daa": 50
+    },
+    "closed_model": {
+     "p": 0,
+     "verdict": "FAIL"
+    }
+   }
+  }
+ ],
+ "record": {
+  "hardware": "Apple M1 Max, 10 cores, 32 GiB, shared",
+  "claim_rate": "not observed; code reading: 1 claim/DAA (rho 10) to 100/DAA (rho 1000) for a 13,000 BILI bond",
+  "cold_model_fetch": "1.00 s CPU local file for 0.66 GB; off-chain assumption",
+  "p95_p99": "not estimable (n<=5); observed max check 154.1 CPU-s at P=3, 624.2 CPU-s at P=32",
+  "max_claim_count": "interim 3/producer, 32 total; t12 2,000 slots at rho 1000 (13k bond)",
+  "da_congestion": "not measured; derived 149 MB/s at 100 claims/DAA, P=3, 0.5B",
+  "evidence_bytes": "227 B .. 607,896 B fit; 272 MB gather and 59 MB disclosure do not",
+  "carrier_wait": "unmeasured",
+  "daa_vs_wall": "s_daa >= 120 s lower bound; 125-150 cited; unmeasured"
+ },
+ "required_p": {
+  "G": 20,
+  "S=1000": ">3.8%",
+  "S=40157": ">0.098%",
+  "closed": "no finite S"
+ }
+}

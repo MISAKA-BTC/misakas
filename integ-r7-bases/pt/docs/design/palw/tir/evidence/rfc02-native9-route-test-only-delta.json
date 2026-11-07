@@ -1,0 +1,8 @@
+{
+  "production_bytes": 45722,
+  "production_prefix_sha256": "7042b2935d1b574918f16376b9e1914a5f376d02686674040bd49d4eaea3e27e",
+  "production_prefix_unchanged": true,
+  "before_full_sha256": "a8f197bfa5fc9a7c3379ef314e19176b023ed697da7dd8ca0c8448cb13e6b356",
+  "after_full_sha256": "b08b0c6c2c55778c7e53248e2bf09e917509e33dc0ad6539940e44adcbbccd14",
+  "formatted_prefix_compiled_unit_only": "72e1b9a9ac88799892003a97e411e01389316ba7bb6a0f32c7a65afb51d70c8a"
+}

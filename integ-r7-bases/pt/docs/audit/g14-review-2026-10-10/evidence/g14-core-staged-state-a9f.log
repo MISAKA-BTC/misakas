@@ -1,0 +1,12 @@
+
+running 7 tests
+test palw_state_v2::staged_court_state_tests_v1::certificate_reference_requires_completed_rooted_court_and_exact_identity ... ok
+test palw_state_v2::staged_court_state_tests_v1::owner_exposure_and_holds_rebuild_and_revert_without_other_owner_scan ... ok
+test palw_state_v2::staged_court_state_tests_v1::paid_claim_work_extension_holds_every_bound_seat_and_restores_all_indexes ... ok
+test palw_state_v2::staged_court_state_tests_v1::prospective_contract_roots_carries_and_reverts_without_historic_tail_changes ... ok
+test palw_state_v2::staged_court_state_tests_v1::staged_progress_uses_one_accepted_snapshot_and_never_copies_parser_state ... ok
+test palw_state_v2::staged_court_state_tests_v1::tokenizer_owned_moves_root_reload_and_reorg_preserve_exact_certificate_and_capital ... ok
+test palw_state_v2::staged_court_state_tests_v1::typed_prefix_owned_journal_authenticates_eof_and_restores_all_paid_state ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 3845 filtered out; finished in 0.91s
+

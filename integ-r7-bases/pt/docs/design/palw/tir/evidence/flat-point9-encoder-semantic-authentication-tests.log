@@ -1,0 +1,17 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 12s
+     Running tests/flat_point9.rs (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_point9-08d73bbd9de87f13)
+
+running 7 tests
+test semantic_refusal_has_no_honest_value_and_missing_material_is_not_conviction ... ok
+test encoder_maximum_axis_noninline_large_index_padding_and_count_remain_within_point_scope ... ok
+test column_parameter_proofs_are_explicitly_derived_and_borrowed_missing_or_wrong_axes_dismiss ... ok
+test all_six_dtypes_and_flat_tail_thresholds_use_one_point_without_changing_commitments ... ok
+test actual_pinned_qwen_complete_metadata_scope_has_a_distinct_scalar_court_set ... ok
+test history_scope_covers_every_position_and_tail_not_only_the_maximum_shape ... ok
+test all_24_ordinary_primitives_dismiss_honest_and_convict_exact_authenticated_wrong_points has been running for over 60 seconds
+test all_24_ordinary_primitives_dismiss_honest_and_convict_exact_authenticated_wrong_points ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 70.40s
+

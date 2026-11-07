@@ -1,0 +1,16 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "seed-oss",
+  "doc": "Seed-OSS (ByteDance): Llama with attention_bias on q/k/v (default true), attention_out_bias on o_proj (default false) and an explicit head_dim; residual_dropout is training-only. Third-party adapter (lane H): data only.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["SeedOssForCausalLM"], "model_types": ["seed_oss"]},
+  "config": {
+    "defaults": {"vocab_size": 155136, "hidden_size": 4096, "intermediate_size": 27648, "num_hidden_layers": 64, "num_attention_heads": 80, "num_key_value_heads": 8, "max_position_embeddings": 524288, "rms_norm_eps": 1e-06, "attention_bias": true, "attention_out_bias": false, "head_dim": 128},
+    "inert": ["residual_dropout"]
+  },
+  "vars": [
+    {"name": "qkv_bias", "value": {"$var": "abias"}},
+    {"name": "o_bias", "value": {"$cfg": "attention_out_bias"}},
+    {"name": "model_type", "value": "seed_oss"}
+  ]
+}

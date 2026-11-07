@@ -1,0 +1,9 @@
+test_actual_fed_extent_includes_own_generated_feedback (__main__.Checks.test_actual_fed_extent_includes_own_generated_feedback) ... ok
+test_every_scope_pin_and_policy_field_is_fixed (__main__.Checks.test_every_scope_pin_and_policy_field_is_fixed) ... ok
+test_independent_count_and_decode_reject_fabricated_aggregate (__main__.Checks.test_independent_count_and_decode_reject_fabricated_aggregate) ... ok
+test_task_token_eos_and_duplicate_job_bounds_precede_execution (__main__.Checks.test_task_token_eos_and_duplicate_job_bounds_precede_execution) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.001s
+
+OK

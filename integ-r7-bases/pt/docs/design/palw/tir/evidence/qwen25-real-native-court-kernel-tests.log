@@ -1,0 +1,11 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/misaka-palw-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.88s
+     Running unittests src/lib.rs (target/debug/deps/misaka_palw_kernel-f12a3fe57e2b7746)
+
+running 4 tests
+test seg::tests::prompt_tiles_open_against_the_prompt_root ... ok
+test seg::tests::streamed_position_paths_match_retained_commitments_at_segment_and_odd_boundaries ... ok
+test seg::tests::segment_roots_from_position_roots_alone_are_the_commitments_own ... ok
+test seg::tests::every_node_opens_against_the_segment_roots_and_nothing_else_does ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 91 filtered out; finished in 0.04s

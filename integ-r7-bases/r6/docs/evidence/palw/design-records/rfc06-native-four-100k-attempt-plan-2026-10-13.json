@@ -1,0 +1,13 @@
+{
+  "kind": "rfc06-native-four-100k-measurement",
+  "schemaVersion": 1,
+  "timeoutSeconds": 900,
+  "transportCanonicalByteCap": 402653184,
+  "transportCapIsExisting": true,
+  "maximumRssApproved": false,
+  "wholeFleetApproval": false,
+  "execution": "real native fold with funded generated fixture keys and reference beacon; no P2P",
+  "host": "shared developer host; timing is not idle-fleet latency",
+  "binary": "/tmp/misaka-rfc67812-node-target/debug/deps/kaspa_consensus-6d96fc21431cf706",
+  "binarySha256": "fcdae1842a29b33e35b5a00b8972185ce1d9985facbbe85fb22c2fcd2859b8c0"
+}

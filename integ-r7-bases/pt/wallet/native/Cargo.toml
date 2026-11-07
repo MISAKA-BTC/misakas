@@ -1,0 +1,28 @@
+[package]
+name = "kaspa-wallet"
+description = "Kaspa wallet"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# kaspa-pq PQ-only (ADR-0019 §14): the native `kaspa-wallet` CLI is PQ-only by
+# default (secp-free, via kaspa-cli's pq-only default); `legacy-secp256k1` builds
+# the classical wallet.
+default = []
+legacy-secp256k1 = ["kaspa-cli/legacy-secp256k1"]
+
+[dependencies]
+async-lock.workspace = true
+async-trait.workspace = true
+kaspa-cli.workspace = true
+tokio.workspace = true
+workflow-log.workspace = true
+workflow-terminal.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,899 @@
+//! **Model onboarding against the chain** (G14 onboarding P0): the signed registration envelope (tag 108), the conformance evidence
+//! object (tag 109), and the fresh verifier that rebuilds the chain's conformance verdict from public reads alone.
+//!
+//! # Detached signing (tag 108)
+//!
+//! ```text
+//! build: SignedRegistrationRequestV1::for_network(registration, bond, valid_from, valid_until, &params)  ── no key ──► JSON
+//! sign:  where the key is, the request is RE-DERIVED from its own fields (the exported message is never trusted) and checked
+//!        against THIS build's compiled params (network domain, fork digest), then signed over `palw_signed_registration_message_v1`
+//! file:  the envelope (`PalwConsensusObjectV2::SignedRegistrationV1`) is an ordinary onboarding object: `misaka palw submit-object`
+//! ```
+//!
+//! The library never holds a seed: signing goes through [`EnvelopeSigner`] (the CLI's key, a hardware signer, a remote one).
+//! The envelope is valid in `[valid_from_daa, valid_until_daa]` and only while the chain's fork-id fired digest is the one it
+//! names — computed HERE from the client's own compiled params at `valid_from_daa` ([`envelope_fork_digest_v1`]), never from an
+//! RPC answer (RFC-0009 G-EXPIRY / G-RULESET; F-C4R3-01(b): never `consensus_params_id`, which a merely scheduled fence moves).
+//!
+//! # The fresh verifier
+//!
+//! [`fresh_verify_from_reads_v1`] takes public attempt/evidence/program, attributed Finals and v3 seals,
+//! plus optionally the artifact. It re-derives the beacon, seed, selection and evidence using the
+//! chain's implementation, then re-reads selected leaves. [`crate::onboarding_snapshot`] derives
+//! these reads from one root-consistent op-211 snapshot. Callers must authenticate the served roots
+//! against their chain, and callers assembling their own reads must keep the same snapshot. It
+//! needs no node-private state, no producer state and no Panel (G14 condition 9, RFC-0014 §3.4).
+//! Complete-check policy dispatch uses [`fresh_verify_complete_check_file_v1`] to re-execute its
+//! entire enumerable domain from the verifier's own file, with the chain's bounds checked first.
+
+use crate::runtime_pack::commit::{Refusal, hex};
+use kaspa_consensus_core::config::params::Params;
+use kaspa_consensus_core::palw_conformance_evidence_v1::{
+    ConformanceEvidenceActionV1, ConformanceEvidencePostV1, FreshInputV1, FreshVerdictV1, SelectedLeafV1, fresh_verify_v1,
+};
+use kaspa_consensus_core::palw_onboarding_v1::{
+    ConformanceAttemptRowV1, PALW_ONBOARDING_MLDSA87_CONTEXT_V1, PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1,
+    palw_onboarding_message_v1, palw_signed_registration_message_v1,
+};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, palw_class_registration_buyer_v1};
+use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+use kaspa_hashes::{Hash, Hash64};
+use misaka_palw_challenge::AttributedWorkV1;
+/// The v3 seal fact a reader derives from op 211's rows (re-exported so a caller need not depend on the challenge crate).
+pub use misaka_palw_challenge::SealedSourceV3;
+use serde_json::{Value, json};
+use std::path::Path;
+
+/// The JSON schema of an unsigned envelope request.
+pub const SIGNED_REGISTRATION_REQUEST_SCHEMA_V1: &str = "misaka.palw.signed-registration-request.v2";
+
+/// **Whoever holds the bond's key.** ML-DSA-87 over `message` under `context`; the library never sees the seed.
+pub trait EnvelopeSigner {
+    fn public_key(&self) -> Vec<u8>;
+    fn sign_with_context(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String>;
+}
+
+/// **The fork digest an envelope names** — `fork_id_v1(params, daa).fired` of THESE (the caller's own, compiled) params.
+pub fn envelope_fork_digest_v1(params: &Params, daa: u64) -> Hash {
+    kaspa_consensus_core::fork_id_v1::fork_id_v1(params, daa).fired
+}
+
+/// The network domain every PALW signature on `params`' chain is made under.
+pub fn network_domain_v1(params: &Params) -> Hash64 {
+    kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(params.net.to_string().as_bytes(), Some(params.genesis.hash))
+}
+
+/// **An unsigned tag-108 envelope**: the wrapped registration, its signer, its validity window, and the network and fork digest it
+/// is for. Its message is a function of these fields alone ([`Self::message`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignedRegistrationRequestV1 {
+    pub registration: PalwConsensusObjectV2,
+    pub signer: PalwBondKeyV2,
+    pub valid_from_daa: u64,
+    pub valid_until_daa: u64,
+    /// `palw_network_domain_v2_for(network name, genesis)`.
+    pub network_domain: Hash64,
+    /// `fork_id_v1(params, valid_from_daa).fired` ([`envelope_fork_digest_v1`]).
+    pub fork_digest: Hash,
+}
+
+impl SignedRegistrationRequestV1 {
+    /// **The one envelope builder.** Refuses a wrapped object that is not a bought class registration of `signer`'s own bond (the
+    /// acceptance walk would drop it) and an empty or inverted window.
+    pub fn new(
+        registration: PalwConsensusObjectV2,
+        signer: PalwBondKeyV2,
+        valid_from_daa: u64,
+        valid_until_daa: u64,
+        network_domain: Hash64,
+        fork_digest: Hash,
+    ) -> Result<Self, Refusal> {
+        if palw_class_registration_buyer_v1(&registration) != Some(signer) {
+            return Err(Refusal::new(
+                "ENVELOPE_NOT_A_REGISTRATION",
+                "the envelope wraps a bought class registration (ClassRegistered / ClassRegisteredTirV1) of the signer's own bond",
+            ));
+        }
+        if valid_until_daa < valid_from_daa {
+            return Err(Refusal::new("ENVELOPE_WINDOW", "valid_until_daa is before valid_from_daa"));
+        }
+        Ok(Self { registration, signer, valid_from_daa, valid_until_daa, network_domain, fork_digest })
+    }
+
+    /// The builder over the caller's own compiled `params`: the network domain and the fork digest at `valid_from_daa` are computed
+    /// here, never taken from a node.
+    pub fn for_network(
+        registration: PalwConsensusObjectV2,
+        signer: PalwBondKeyV2,
+        valid_from_daa: u64,
+        valid_until_daa: u64,
+        params: &Params,
+    ) -> Result<Self, Refusal> {
+        Self::new(
+            registration,
+            signer,
+            valid_from_daa,
+            valid_until_daa,
+            network_domain_v1(params),
+            envelope_fork_digest_v1(params, valid_from_daa),
+        )
+    }
+
+    /// Whether this request is for `params`' chain: the same network domain and the fork digest `params` computes at its
+    /// `valid_from_daa` (what a signer checks before signing a request someone else built).
+    pub fn check_for_network(&self, params: &Params) -> Result<(), Refusal> {
+        if self.network_domain != network_domain_v1(params) {
+            return Err(Refusal::new("ENVELOPE_OTHER_NETWORK", "the request is for another network than these params"));
+        }
+        if self.fork_digest != envelope_fork_digest_v1(params, self.valid_from_daa) {
+            return Err(Refusal::new(
+                "ENVELOPE_OTHER_FORK",
+                "the request names another fork digest than these params compute at its valid_from_daa (G-RULESET)",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The message the bond signs (`palw_signed_registration_message_v1`).
+    pub fn message(&self) -> Hash64 {
+        let bytes = borsh::to_vec(&self.registration).expect("an object serializes");
+        palw_signed_registration_message_v1(
+            self.network_domain,
+            self.fork_digest,
+            self.valid_from_daa,
+            self.valid_until_daa,
+            &self.signer,
+            &bytes,
+        )
+    }
+
+    /// The envelope with `signature` attached (no check: see [`Self::sign`] and [`verify_signed_registration_v1`]).
+    pub fn with_signature(&self, signature: Vec<u8>) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::SignedRegistrationV1 {
+            registration: Box::new(self.registration.clone()),
+            valid_from_daa: self.valid_from_daa,
+            valid_until_daa: self.valid_until_daa,
+            fork_digest: self.fork_digest,
+            signer: self.signer,
+            signature,
+        }
+    }
+
+    /// **Sign** with `signer` and check the signature verifies under `signer`'s own public key before returning the envelope.
+    pub fn sign(&self, signer: &dyn EnvelopeSigner) -> Result<PalwConsensusObjectV2, Refusal> {
+        let message = self.message();
+        let signature = signer
+            .sign_with_context(message.as_byte_slice(), PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1)
+            .map_err(|e| Refusal::new("SIGNER_FAILED", e))?;
+        let envelope = self.with_signature(signature);
+        verify_signed_registration_v1(&envelope, self.network_domain, &signer.public_key())?;
+        Ok(envelope)
+    }
+
+    /// The detached-signing record: every field the signer re-derives the message from, and the message for display only.
+    pub fn to_json(&self) -> Value {
+        json!({
+            "schema": SIGNED_REGISTRATION_REQUEST_SCHEMA_V1,
+            "note": "UNSIGNED. The signer re-derives the message from these fields and checks the network and fork digest against its own build; `message` is shown, never trusted.",
+            "registration_borsh": hex(&borsh::to_vec(&self.registration).expect("an object serializes")),
+            "signer": format!("{}:{}", self.signer.0.transaction_id, self.signer.0.index),
+            "valid_from_daa": self.valid_from_daa,
+            "valid_until_daa": self.valid_until_daa,
+            "network_domain": self.network_domain.to_string(),
+            "fork_digest": self.fork_digest.to_string(),
+            "message": self.message().to_string(),
+        })
+    }
+
+    /// Read a detached-signing record. Every field is parsed; `message` is ignored (it is recomputed).
+    pub fn from_json(text: &str) -> Result<Self, Refusal> {
+        let bad = |why: String| Refusal::new("REQUEST_MALFORMED", why);
+        let v: Value = serde_json::from_str(text).map_err(|e| bad(e.to_string()))?;
+        if v["schema"].as_str() != Some(SIGNED_REGISTRATION_REQUEST_SCHEMA_V1) {
+            return Err(bad(format!("schema is not {SIGNED_REGISTRATION_REQUEST_SCHEMA_V1}")));
+        }
+        let field = |k: &str| v[k].as_str().ok_or_else(|| bad(format!("{k} is missing")));
+        let raw = unhex(field("registration_borsh")?).map_err(bad)?;
+        let registration: PalwConsensusObjectV2 = borsh::from_slice(&raw).map_err(|e| bad(format!("registration_borsh: {e}")))?;
+        let signer = parse_bond(field("signer")?).map_err(bad)?;
+        let valid_from_daa = v["valid_from_daa"].as_u64().ok_or_else(|| bad("valid_from_daa is missing".into()))?;
+        let valid_until_daa = v["valid_until_daa"].as_u64().ok_or_else(|| bad("valid_until_daa is missing".into()))?;
+        let network_domain: Hash64 = field("network_domain")?.parse().map_err(|_| bad("network_domain".into()))?;
+        let fork_digest: Hash = field("fork_digest")?.parse().map_err(|_| bad("fork_digest".into()))?;
+        Self::new(registration, signer, valid_from_daa, valid_until_daa, network_domain, fork_digest)
+    }
+}
+
+/// **Check a signed envelope's own consistency** as the acceptance walk will (minus the chain-state parts: the fence, the bond being
+/// Active, the window and the fork digest against the inclusion block): the wrapped object is a registration of the signer, the
+/// window is not inverted, and the signature verifies under `pubkey` over the message re-derived from its fields.
+pub fn verify_signed_registration_v1(envelope: &PalwConsensusObjectV2, network_domain: Hash64, pubkey: &[u8]) -> Result<(), Refusal> {
+    let PalwConsensusObjectV2::SignedRegistrationV1 { registration, valid_from_daa, valid_until_daa, fork_digest, signer, signature } =
+        envelope
+    else {
+        return Err(Refusal::new("ENVELOPE_MALFORMED", "not a signed registration envelope (tag 108)"));
+    };
+    if valid_until_daa < valid_from_daa {
+        return Err(Refusal::new("ENVELOPE_WINDOW", "valid_until_daa is before valid_from_daa"));
+    }
+    if palw_class_registration_buyer_v1(registration) != Some(*signer) {
+        return Err(Refusal::new("ENVELOPE_NOT_A_REGISTRATION", "the envelope wraps no bought class registration of its signer"));
+    }
+    let bytes = borsh::to_vec(registration.as_ref()).expect("an object serializes");
+    let message = palw_signed_registration_message_v1(network_domain, *fork_digest, *valid_from_daa, *valid_until_daa, signer, &bytes);
+    match kaspa_txscript::verify_mldsa87_with_context(
+        pubkey,
+        message.as_byte_slice(),
+        signature,
+        PALW_SIGNED_REGISTRATION_MLDSA87_CONTEXT_V1,
+    ) {
+        Ok(true) => Ok(()),
+        _ => Err(Refusal::new("ENVELOPE_SIGNATURE", "the signature does not verify under the signer's key")),
+    }
+}
+
+// ---- tag 109 -----------------------------------------------------------------------------------------------------------------
+
+/// **A signed conformance evidence object (tag 109)**: `action` (the registrant's `Post`, or anyone else's `Refute`) for `v2_class`,
+/// signed by `signer`'s key over `palw_onboarding_message_v1(network, 109, signer, borsh(v2_class, action))`.
+pub fn conformance_evidence_object_v1(
+    network_domain: Hash64,
+    v2_class: Hash64,
+    action: ConformanceEvidenceActionV1,
+    signer_bond: PalwBondKeyV2,
+    signer: &dyn EnvelopeSigner,
+) -> Result<PalwConsensusObjectV2, Refusal> {
+    let payload = borsh::to_vec(&(v2_class, &action)).expect("an action serializes");
+    let message = palw_onboarding_message_v1(network_domain, 109, &signer_bond, &payload);
+    let signature = signer
+        .sign_with_context(message.as_byte_slice(), PALW_ONBOARDING_MLDSA87_CONTEXT_V1)
+        .map_err(|e| Refusal::new("SIGNER_FAILED", e))?;
+    Ok(PalwConsensusObjectV2::ConformanceEvidenceV1 { v2_class, action: Box::new(action), signer: signer_bond, signature })
+}
+
+/// The `Post` action for a computed run (the runtime pack's evidence, scope and outcomes).
+pub fn post_action_v1(post: ConformanceEvidencePostV1) -> ConformanceEvidenceActionV1 {
+    ConformanceEvidenceActionV1::Post(Box::new(post))
+}
+
+// ---- the fresh verifier ---------------------------------------------------------------------------------------------------
+
+/// **What a node serves publicly about one class's conformance** (op 231's rows, op 212's facts, op 230 / the registry's class).
+pub struct PublicConformanceReadsV1 {
+    /// Table 39's row, raw (op 231 `attemptRow`).
+    pub attempt_row: Vec<u8>,
+    /// Table 40's row, raw (op 231 `evidenceRow`), if evidence was posted.
+    pub evidence_row: Option<Vec<u8>>,
+    /// Every Final fact with a beacon event (op 212 `workFinalEvent`: an attributed event — the producer stands behind it, for the
+    /// policy's distinct source rule), any order.
+    pub events: Vec<AttributedWorkV1>,
+    /// A sealed-source (v3) attempt's beacon facts, from op 211's rows ([`sealed_sources_from_kernel_rows_v1`]); empty for v2.
+    pub sealed_sources: Vec<SealedSourceV3>,
+    /// The DAA the reads were taken at.
+    pub tip_daa: u64,
+    /// The class's canonical program bytes (op 231 `program`).
+    pub program: Vec<u8>,
+}
+
+/// The committed policy selects sampled conformance or an exhaustive bootstrap check.
+/// Obtain both variants from one root-consistent public row snapshot; the caller authenticates
+/// those served roots against its chain. These are not interchangeable evidence formats.
+pub enum PublicOnboardingReadsV1 {
+    Sampled(PublicConformanceReadsV1),
+    CompleteCheck(PublicCompleteCheckReadsV1),
+}
+
+/// The fresh verifier's report: its own verdict and the chain's state it should agree with.
+#[derive(Debug)]
+pub struct FreshReportV1 {
+    pub verdict: FreshVerdictV1,
+    pub attempt: ConformanceAttemptRowV1,
+    /// The chain's record says the attempt passed (or the class is past it) — compare with `verdict.posted`.
+    pub chain_says_passed: bool,
+    /// The verifier's verdict and the chain's record agree.
+    pub agrees: bool,
+    pub why: String,
+}
+
+/// **Rebuild the verdict from public reads alone**, re-reading every selected leaf from `artifact` (a `PALWTIR1` container) when
+/// given. Agreement: the chain says CONFORMANCE_PASSED (or later) exactly when the verifier finds bound, passing evidence whose
+/// window has closed and no leaf it re-read contradicts it; an open attempt agrees when the verifier finds nothing to refute yet.
+pub fn fresh_verify_from_reads_v1(reads: &PublicConformanceReadsV1, artifact: Option<&Path>) -> Result<FreshReportV1, Refusal> {
+    fresh_verify_reads_inner(reads, artifact, None)
+}
+
+/// v4 verification additionally requires source reservations and the frozen target from root-checked op 211 rows.
+pub fn fresh_verify_from_reads_v4(
+    reads: &PublicConformanceReadsV1,
+    sources: &VerifiedOptInSourcesV4,
+    artifact: Option<&Path>,
+) -> Result<FreshReportV1, Refusal> {
+    if sources.target.context.policy.is_paid_opt_in_source() {
+        return Err(Refusal::new("POLICY_SUBSTITUTED", "mandatory paid v5 needs its verified fee inventory"));
+    }
+    fresh_verify_reads_inner(reads, artifact, Some(sources))
+}
+
+pub fn fresh_verify_from_reads_v5(
+    reads: &PublicConformanceReadsV1,
+    sources: &VerifiedPaidOptInSourcesV5,
+    artifact: Option<&Path>,
+) -> Result<FreshReportV1, Refusal> {
+    fresh_verify_reads_inner(reads, artifact, Some(&sources.sources))
+}
+
+fn fresh_verify_reads_inner(
+    reads: &PublicConformanceReadsV1,
+    artifact: Option<&Path>,
+    opt_in: Option<&VerifiedOptInSourcesV4>,
+) -> Result<FreshReportV1, Refusal> {
+    use misaka_palw_challenge::OnboardingStateV1 as S;
+    let attempt: ConformanceAttemptRowV1 =
+        borsh::from_slice(&reads.attempt_row).map_err(|e| Refusal::new("ROW_MALFORMED", format!("attempt row: {e}")))?;
+    let post: Option<ConformanceEvidencePostV1> = match &reads.evidence_row {
+        Some(bytes) => Some(borsh::from_slice(bytes).map_err(|e| Refusal::new("ROW_MALFORMED", format!("evidence row: {e}")))?),
+        None => None,
+    };
+    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
+        .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
+    // The network policy the commitment names (the sampled v2 or the sealed-source v3 one; an unknown id falls to v2 and is refused
+    // as substituted just below).
+    let policy = attempt.policy();
+    if attempt.is_complete_check() {
+        return Err(Refusal::new(
+            "COMPLETE_CHECK",
+            "a complete-check attempt has no beacon or seed to re-derive: verify it with fresh_verify_complete_check_v1 (it re-runs the \
+             whole check from the verifier's own copy of the registered artifact)",
+        ));
+    }
+    if policy.id() != attempt.commitment.challenge_policy_id {
+        return Err(Refusal::new(
+            "POLICY_SUBSTITUTED",
+            "the attempt's commitment names another policy than this build's network policy",
+        ));
+    }
+    let ctx = attempt.beacon_context(&policy);
+    if attempt.is_opt_in_source() {
+        let sources = opt_in.ok_or_else(|| Refusal::new("OPT_IN_ROWS_REQUIRED", "v4 needs root-checked source reservations"))?;
+        if reads.attempt_row != sources.attempt_row || reads.evidence_row != sources.evidence_row || reads.program != sources.program {
+            return Err(Refusal::new("READS_NOT_THE_CHAIN", "v4 attempt, evidence and program must match the same rooted snapshot"));
+        }
+        if sources.target.context != ctx {
+            return Err(Refusal::new("TARGET_SUBSTITUTED", "source target belongs to another attempt/context"));
+        }
+    } else if opt_in.is_some() {
+        return Err(Refusal::new("POLICY_SUBSTITUTED", "v4 source rows cannot verify another policy"));
+    }
+    let container = match artifact {
+        Some(p) => Some(
+            misaka_palw_tir_artifact::PalwTirContainerV1::open(p).map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e.to_string()))?,
+        ),
+        None => None,
+    };
+    // The artifact is the class's only if its inventory roots to the registered artifact root the commitment names (one streamed
+    // pass): a re-read leaf is then authenticated, and a contradiction is a refutation the chain will take.
+    if let Some(p) = artifact {
+        let (root, _) =
+            crate::tir_stream::palw_tir_inventory_root_of_file_v1(p).map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e))?;
+        if root.as_bytes() != attempt.commitment.artifact_root {
+            return Err(Refusal::new(
+                "ARTIFACT_NOT_THE_CLASS",
+                "the artifact's inventory root is not the class's registered artifact root",
+            ));
+        }
+    }
+    let ranges = match container.as_ref() {
+        Some(c) => Some(crate::tir_stream::ContainerRanges::open(c).map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e))?),
+        None => None,
+    };
+    let leaf_source = |leaf: &SelectedLeafV1| -> Option<Vec<u8>> {
+        use crate::tir_stream::PalwTirRangeSourceV1;
+        let r = ranges.as_ref()?;
+        let mut out = vec![0u8; leaf.len as usize];
+        r.read_range(leaf.param, leaf.layer, leaf.row_start as u64..leaf.row_start as u64 + leaf.len as u64, &mut out).ok()?;
+        Some(out)
+    };
+    let input = FreshInputV1 {
+        commitment: &attempt.commitment,
+        policy: &policy,
+        ctx: &ctx,
+        events: &reads.events,
+        sealed: &reads.sealed_sources,
+        tip_daa: reads.tip_daa,
+        program: &program,
+        post: post.as_ref(),
+        leaf_source: if artifact.is_some() { Some(&leaf_source) } else { None },
+    };
+    let verdict = match opt_in {
+        Some(sources) if sources.target.context.policy.is_paid_opt_in_source() => {
+            let (contract, facts, promises) = sources
+                .paid_material
+                .as_ref()
+                .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?;
+            kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v5_with(&input, contract, facts, promises, sources.seal_reveal)
+        }
+        Some(sources) => kaspa_consensus_core::palw_conformance_evidence_v1::fresh_verify_v4_with(
+            &input,
+            &misaka_palw_challenge::OptInContractV4 {
+                context_id: sources.target.terms.context,
+                terms_id: sources.target.terms.id(),
+                source_final_by: sources.target.terms.final_by,
+            },
+            &sources.facts,
+            sources.seal_reveal,
+        ),
+        None => fresh_verify_v1(&input),
+    };
+    let chain_says_passed = matches!(attempt.record.state, S::ConformancePassed | S::G14Eligible | S::ActiveRewardable);
+    let window_closed = attempt.evidence.is_some_and(|e| reads.tip_daa >= e.window_end_daa);
+    let verifier_pass = matches!(verdict.posted, Some(Ok(()))) && verdict.leaf_faults.is_empty();
+    let (agrees, why) = if chain_says_passed {
+        (verifier_pass && window_closed, "the chain passed it: the verifier must find bound, passing, unrefuted evidence".to_string())
+    } else if attempt.open() {
+        (
+            verdict.leaf_faults.is_empty() || attempt.evidence.is_some(),
+            "the attempt is open: the chain decides when the window closes (a leaf fault found here is a refutation to file)"
+                .to_string(),
+        )
+    } else {
+        (true, format!("the attempt ended: {:?}", attempt.last_end))
+    };
+    Ok(FreshReportV1 { verdict, attempt, chain_says_passed, agrees, why })
+}
+
+/// **A v3 attempt's seal facts from op 211's pages**: the reader rebuilds its own copy of the route from every served row
+/// (`PalwKernelRouteStateV1::from_served_rows_v1`, refused unless the rows root to the served roots) and derives the facts with the
+/// chain's own function — no seal-specific read, no node-private state.
+pub fn sealed_sources_from_kernel_rows_v1(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+) -> Result<Vec<SealedSourceV3>, Refusal> {
+    let route =
+        kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
+            .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    route.beacon_sealed_sources_v1().map_err(|e| Refusal::new("ROWS_MALFORMED", e))
+}
+
+/// Constructed only by rebuilding the route against the roots supplied by the caller's authenticated chain view.
+/// Private fields prevent substituting ordinary seals or unrooted reservation facts through the SDK API.
+pub struct VerifiedOptInSourcesV4 {
+    target: misaka_palw_kernel::beacon_source::BeaconSourceTargetV1,
+    facts: Vec<misaka_palw_challenge::OptInSourceV4>,
+    attempt_row: Vec<u8>,
+    evidence_row: Option<Vec<u8>>,
+    program: Vec<u8>,
+    fee_contract: Option<misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1>,
+    fee_receipts:
+        std::collections::BTreeMap<misaka_palw_kernel::hash::Digest, misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1>,
+    paid_material: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PaidBeaconMaterialV5>,
+    /// The route's seal-reveal rule (`opt_in_seal_reveal_v6`), read from the same rooted route.
+    seal_reveal: bool,
+    paid_cost_bounds: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1>,
+}
+
+/// The v5 API can only obtain mandatory money facts from the same root-verified
+/// route as its immutable source and attempt. V4 cannot supply these facts.
+pub struct VerifiedPaidOptInSourcesV5 {
+    sources: VerifiedOptInSourcesV4,
+}
+/// Public monetary row type, so CLI consumers do not need the internal kernel crate.
+pub type SourceFeeFundingV1 = misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1;
+impl VerifiedPaidOptInSourcesV5 {
+    pub fn cost_bounds(&self) -> &kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1 {
+        self.sources.paid_cost_bounds.as_ref().expect("v5 constructor verifies frozen cost bounds")
+    }
+    pub fn fee_contract(&self) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1> {
+        self.sources.fee_contract()
+    }
+    pub fn fee_receipt(
+        &self,
+        producer: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1> {
+        self.sources.fee_receipt(producer)
+    }
+}
+
+impl VerifiedOptInSourcesV4 {
+    /// Root-verified prepaid terms and money inventory for this exact context. None is an unpaid contract, not a profit floor.
+    pub fn fee_contract(&self) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeeFundingV1> {
+        self.fee_contract.as_ref()
+    }
+    /// A source's signed fee promise/outcome from the same rooted snapshot as the verified beacon facts.
+    pub fn fee_receipt(
+        &self,
+        producer: &misaka_palw_kernel::hash::Digest,
+    ) -> Option<&misaka_palw_kernel::beacon_source_fee::BeaconSourceFeePromiseV1> {
+        self.fee_receipts.get(producer)
+    }
+}
+
+pub fn opt_in_sources_from_kernel_rows_v4(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+) -> Result<VerifiedOptInSourcesV4, Refusal> {
+    opt_in_sources_from_kernel_rows_inner(header, rows, ledger_root, aux_root, context, false)
+}
+
+pub fn paid_opt_in_sources_from_kernel_rows_v5(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+) -> Result<VerifiedPaidOptInSourcesV5, Refusal> {
+    Ok(VerifiedPaidOptInSourcesV5 {
+        sources: opt_in_sources_from_kernel_rows_inner(header, rows, ledger_root, aux_root, context, true)?,
+    })
+}
+
+fn opt_in_sources_from_kernel_rows_inner(
+    header: &[u8],
+    rows: Vec<(u8, Vec<u8>, Vec<u8>)>,
+    ledger_root: &Hash64,
+    aux_root: &Hash64,
+    context: &misaka_palw_challenge::hash::Digest,
+    paid: bool,
+) -> Result<VerifiedOptInSourcesV4, Refusal> {
+    let route =
+        kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::from_served_rows_v1(header, rows, ledger_root, aux_root)
+            .map_err(|e| Refusal::new("ROWS_NOT_THE_CHAIN", e))?;
+    let target = route.beacon_source_target_v4(context).map_err(|e| Refusal::new("TARGET_MALFORMED", e))?;
+    let facts = route.beacon_opt_in_sources_v4(context).map_err(|e| Refusal::new("ROWS_MALFORMED", e))?;
+    use kaspa_consensus_core::palw_onboarding_v1::{
+        PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1, PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1,
+    };
+    let misaka_palw_challenge::RootV1::Present(candidate) = target.context.candidate_profile_id else {
+        return Err(Refusal::new("TARGET_MALFORMED", "v4 onboarding target needs its candidate"));
+    };
+    let class = Hash64::from_bytes(candidate);
+    let key = borsh::to_vec(&class).expect("class serializes");
+    let attempt_row = route
+        .aux
+        .get(&(PALW_ONBOARDING_TABLE_CONFORMANCE_ATTEMPTS_V1, key.clone()))
+        .cloned()
+        .ok_or_else(|| Refusal::new("TARGET_MALFORMED", "source target has no rooted attempt"))?;
+    let attempt =
+        route.conformance_attempt_v1(&class).ok_or_else(|| Refusal::new("ROW_MALFORMED", "rooted attempt does not decode"))?;
+    if !attempt.is_opt_in_source()
+        || attempt.is_paid_opt_in_source() != paid
+        || target.context != attempt.beacon_context(&attempt.policy())
+    {
+        return Err(Refusal::new("TARGET_SUBSTITUTED", "source target is not the current rooted attempt"));
+    }
+    let evidence_row = route.aux.get(&(PALW_ONBOARDING_TABLE_CONFORMANCE_EVIDENCE_V1, key)).cloned();
+    let binding =
+        route.kernel_binding_v1(&class).ok_or_else(|| Refusal::new("ROWS_MALFORMED", "rooted attempt has no kernel binding"))?;
+    let program = route
+        .kernel_class_record_v1(&binding.kernel_class)
+        .ok_or_else(|| Refusal::new("ROWS_MALFORMED", "rooted binding has no kernel class"))?
+        .program_bytes;
+    let ledger = route.ledger().map_err(|e| Refusal::new("ROWS_MALFORMED", e))?;
+    let fee_contract = ledger.beacon_source_fees.get(context).cloned();
+    if fee_contract.as_ref().is_some_and(|f| f.target != target) {
+        return Err(Refusal::new("TARGET_SUBSTITUTED", "prepaid fee target differs from the rooted source target"));
+    }
+    let fee_receipts = ledger
+        .beacon_source_fee_promises
+        .range((*context, [0; 64])..=(*context, [255; 64]))
+        .map(|((_, producer), p)| (*producer, p.clone()))
+        .collect();
+    let paid_material = if paid {
+        Some(
+            route
+                .paid_beacon_material_v5(context)
+                .map_err(|e| Refusal::new("SOURCE_FEE_MALFORMED", e))?
+                .ok_or_else(|| Refusal::new("SOURCE_FEE_UNFUNDED", "mandatory source fee capacity has not been prepaid"))?,
+        )
+    } else {
+        None
+    };
+    let paid_cost_bounds = if paid {
+        Some(route.beacon_source_cost_bounds_v5(context).map_err(|e| Refusal::new("SOURCE_COST_MALFORMED", e))?)
+    } else {
+        None
+    };
+    Ok(VerifiedOptInSourcesV4 {
+        target,
+        facts,
+        attempt_row,
+        evidence_row,
+        program,
+        fee_contract,
+        fee_receipts,
+        paid_material,
+        paid_cost_bounds,
+        seal_reveal: route.opt_in_seal_reveal_v6(),
+    })
+}
+
+fn unhex(s: &str) -> Result<Vec<u8>, String> {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("not hex".into());
+    }
+    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).map_err(|e| e.to_string())).collect()
+}
+
+// ---- the fresh complete-check verifier (lane G14C, GAP-71b; OPVB's GAP-B10) ---------------------------------------------------
+
+/// **What a node serves publicly about a complete-check attempt** — the post itself is in no served row (it rides its block), so a
+/// fresh verifier re-runs the whole check instead of reading it back.
+pub struct PublicCompleteCheckReadsV1 {
+    /// Table 39's row, raw (op 231 `attemptRow`).
+    pub attempt_row: Vec<u8>,
+    /// The class's canonical program bytes (op 231 `program`).
+    pub program: Vec<u8>,
+    /// The bound kernel class's position bound (its plan's `max_positions`, from op 211's rows).
+    pub max_positions: u32,
+    /// The kernel binding's commitments root (from op 211's rows: the binding the chain holds for the class).
+    pub kernel_param_root: Hash64,
+}
+
+/// The fresh complete-check verifier's report.
+#[derive(Debug)]
+pub struct FreshCompleteReportV1 {
+    /// The id of the honest post: every input and every leaf, recomputed from the verifier's own copy of the registered artifact.
+    pub honest_post_id: [u8; 64],
+    /// The id of the post the chain judged (the attempt row's evidence id), `None` while nothing is posted.
+    pub chain_post_id: Option<[u8; 64]>,
+    /// Whether the honest post passes (`false` only when the artifact's tensors are not the ones the kernel binding committed).
+    pub honest_passes: bool,
+    /// The chain's record says the attempt passed (or the class is past it).
+    pub chain_says_passed: bool,
+    /// The verifier's verdict and the chain's record agree.
+    pub agrees: bool,
+    pub why: String,
+}
+
+/// Replay an enumerable complete-check attempt from a verifier's own PALWTIR1 file. The
+/// chain's domain bounds are checked before collecting any tensor bytes. Large/history-bearing
+/// programs must use their sampled policy; this helper never truncates their input domain.
+pub fn fresh_verify_complete_check_file_v1(
+    reads: &PublicCompleteCheckReadsV1,
+    artifact: &Path,
+) -> Result<FreshCompleteReportV1, Refusal> {
+    use crate::tir_stream::{ContainerRanges, PalwTirRangeSourceV1};
+    use kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1;
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::palw_complete_check_domain_v1;
+    use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_visit_inventory_rows_v1;
+
+    let attempt: ConformanceAttemptRowV1 =
+        borsh::from_slice(&reads.attempt_row).map_err(|e| Refusal::new("ROW_MALFORMED", format!("attempt row: {e}")))?;
+    if !attempt.is_complete_check() {
+        return Err(Refusal::new("NOT_COMPLETE_CHECK", "use fresh_verify_from_reads_v1 for the sampled policy"));
+    }
+    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
+        .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
+    let domain =
+        palw_complete_check_domain_v1(&program, reads.max_positions).map_err(|e| Refusal::new("NOT_COMPLETELY_CHECKABLE", e))?;
+    let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact)
+        .map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e.to_string()))?;
+    if container.header.program != reads.program {
+        return Err(Refusal::new("ARTIFACT_PROGRAM_MISMATCH", "the file does not carry the registered program"));
+    }
+    // No read-ahead beyond the bounded tensor domain: a large container metadata section must
+    // not make the reader prefetch megabytes of unrelated padding/provenance for a tiny leaf.
+    let source = ContainerRanges::open_with_window(&container, 1).map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e))?;
+    let mut operands = Vec::with_capacity(domain.leaves as usize);
+    let mut failure = None;
+    palw_tir_visit_inventory_rows_v1(&program, &mut |row| {
+        if failure.is_some() {
+            return;
+        }
+        let mut bytes = vec![0; row.len as usize];
+        let at = row.row_start as u64;
+        if let Err(e) = source.read_range(row.param, row.layer, at..at + row.len as u64, &mut bytes) {
+            failure = Some(Refusal::new("ARTIFACT_UNREADABLE", e));
+            return;
+        }
+        operands.push(PalwArtifactOperandV1 {
+            tensor_name: program.params[row.param as usize].name.clone(),
+            layer: row.layer,
+            row_start: row.row_start,
+            bytes,
+        });
+    })
+    .map_err(|e| Refusal::new("ARTIFACT_UNREADABLE", e.to_string()))?;
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    fresh_verify_complete_check_v1(reads, &operands)
+}
+
+/// **Verify a complete-check attempt from public reads and the verifier's own copy of the registered artifact** (ADR-0177: the
+/// verifier acquired the model off-chain; it is authenticated here against the commitment's artifact root before anything else).
+///
+/// The complete check is a pure function of the program, the artifact and the plan's position bound, so the verifier rebuilds the
+/// honest post exactly as the chain's own reference computes it (`complete_check_post_v1`). A post passes in the fold only if its
+/// leaves root to the registered artifact root (so they are the artifact's bytes) and every implementation's roots equal the
+/// reference's, i.e. only if it IS the honest post; so the chain's verdict is right exactly when "passed" coincides with "the judged
+/// post's id is the honest post's id" (and with nothing passing when the binding is not equal).
+pub fn fresh_verify_complete_check_v1(
+    reads: &PublicCompleteCheckReadsV1,
+    artifact: &[kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1],
+) -> Result<FreshCompleteReportV1, Refusal> {
+    use kaspa_consensus_core::palw_opv_bootstrap_v1::{
+        complete_check_post_v1, complete_check_reference_v1, palw_complete_check_domain_v1,
+    };
+    use misaka_palw_challenge::OnboardingStateV1 as S;
+    let attempt: ConformanceAttemptRowV1 =
+        borsh::from_slice(&reads.attempt_row).map_err(|e| Refusal::new("ROW_MALFORMED", format!("attempt row: {e}")))?;
+    if !attempt.is_complete_check() {
+        return Err(Refusal::new("NOT_COMPLETE_CHECK", "a sampled attempt: verify it with fresh_verify_from_reads_v1"));
+    }
+    let program = misaka_palw_tir::TirProgramV1::decode_canonical(&reads.program)
+        .map_err(|e| Refusal::new("PROGRAM_MALFORMED", e.to_string()))?;
+    let domain =
+        palw_complete_check_domain_v1(&program, reads.max_positions).map_err(|e| Refusal::new("NOT_COMPLETELY_CHECKABLE", e))?;
+    let reference = complete_check_reference_v1(&program, &domain, artifact)
+        .map_err(|f| Refusal::new("ARTIFACT_UNREADABLE", format!("{}: {}", f.code, f.detail)))?;
+    if reference.artifact_root.as_bytes() != attempt.commitment.artifact_root {
+        return Err(Refusal::new(
+            "ARTIFACT_NOT_REGISTERED",
+            "the verifier's copy does not root to the registered artifact root: it holds another model",
+        ));
+    }
+    let honest_passes = reference.kernel_param_root == reads.kernel_param_root.as_bytes();
+    let honest = complete_check_post_v1(&program, &domain, attempt.commitment.statement_root(), artifact.to_vec())
+        .map_err(|f| Refusal::new("ARTIFACT_UNREADABLE", format!("{}: {}", f.code, f.detail)))?;
+    let honest_post_id = honest.id();
+    let chain_post_id = attempt.evidence.map(|e| e.evidence_id.as_bytes());
+    let chain_says_passed = matches!(attempt.record.state, S::ConformancePassed | S::G14Eligible | S::ActiveRewardable);
+    let (agrees, why) = match (chain_post_id, chain_says_passed) {
+        (None, false) => (true, "nothing posted yet".to_string()),
+        (None, true) => (false, "the chain passed an attempt with no judged post".to_string()),
+        (Some(id), true) => {
+            let ok = honest_passes && id == honest_post_id;
+            (
+                ok,
+                if ok {
+                    "the judged post is the honest complete check".into()
+                } else {
+                    "the chain passed a post that is not the honest one".into()
+                },
+            )
+        }
+        (Some(id), false) => {
+            let ok = !honest_passes || id != honest_post_id;
+            (
+                ok,
+                if ok {
+                    "the judged post was not the honest complete check; it failed".into()
+                } else {
+                    "the chain failed the honest complete check".into()
+                },
+            )
+        }
+    };
+    Ok(FreshCompleteReportV1 { honest_post_id, chain_post_id, honest_passes, chain_says_passed, agrees, why })
+}
+
+fn parse_bond(s: &str) -> Result<PalwBondKeyV2, String> {
+    let (txid, index) = s.split_once(':').ok_or_else(|| format!("{s}: not <txid>:<index>"))?;
+    let txid: TransactionId = txid.parse().map_err(|_| format!("{txid}: not a transaction id"))?;
+    let index: u32 = index.parse().map_err(|_| format!("{index}: not an index"))?;
+    Ok(PalwBondKeyV2(TransactionOutpoint::new(txid, index)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A throwaway key (never a real one): the test's seed is a constant.
+    struct TestKey(kaspa_pq_validator_core::ValidatorKey);
+    impl EnvelopeSigner for TestKey {
+        fn public_key(&self) -> Vec<u8> {
+            self.0.public_key().to_vec()
+        }
+        fn sign_with_context(&self, message: &[u8], context: &[u8]) -> Result<Vec<u8>, String> {
+            Ok(self.0.sign_with_context(message, context).to_vec())
+        }
+    }
+
+    /// A bought IR registration of `bond` (its content is not judged here: the envelope binds whatever it wraps).
+    fn registration(bond: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+        use kaspa_consensus_core::palw_tir_class_v1::{
+            PALW_TIR_CLASS_VERSION_V1, PALW_TIR_LAYOUT_VERSION_V1, PalwTirAdmissionCarriageV1, PalwTirClassV1, PalwTirLayoutV1,
+        };
+        let z = Hash64::from_bytes([0; 64]);
+        let canonical = kaspa_consensus_core::palw_v2::PalwJobContextV2 {
+            version: 2,
+            network_id: b"test".to_vec(),
+            job_id: z,
+            job_nullifier: z,
+            assignment_id: z,
+            execution_seed: [0; 32],
+            model_profile_id: z,
+            runtime_manifest_hash: z,
+            runtime_class_id: z,
+            shape_profile_id: z,
+            trace_scheme_id: z,
+            cu_ruleset_id: z,
+            tokenizer_id: z,
+            prompt_token_ids_hash: z,
+            declared_prefill_tokens: 1,
+            exact_decode_tokens: 1,
+            max_context_tokens: 8,
+        };
+        let class = PalwTirClassV1 {
+            version: PALW_TIR_CLASS_VERSION_V1,
+            program: vec![1, 2, 3],
+            layout: PalwTirLayoutV1 {
+                version: PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: 8,
+                checkpoint_interval: 2,
+                h_tile: 2,
+                commit_tiles: vec![],
+                state_tiles: vec![],
+            },
+            tokenizer_id: Hash64::from_bytes([7; 64]),
+        };
+        PalwConsensusObjectV2::ClassRegisteredTirV1 {
+            class_id: Hash64::from_bytes([1; 64]),
+            artifact_root: Hash64::from_bytes([2; 64]),
+            slash_value_per_pwu: 1,
+            pwu_rule: kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 1 },
+            initial_target: 1,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: Box::new(PalwTirAdmissionCarriageV1 { class, canonical, registrant_bond: bond, signature: vec![] }),
+        }
+    }
+
+    /// The envelope is built over THIS build's params, exported unsigned, re-read where the key is, checked against the params,
+    /// signed, and verifies; every field the message covers changes it; a forged signature, an inverted window, another fork digest
+    /// and another signer's object are refused; a fence scheduled in the future does not move the digest (F-C4R3-01(b)).
+    #[test]
+    fn the_envelope_round_trips_through_detached_signing_and_binds_every_field() {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        let params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let key = TestKey(kaspa_pq_validator_core::ValidatorKey::from_seed([0x5A; 32]));
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(9), 0));
+        let req = SignedRegistrationRequestV1::for_network(registration(bond), bond, 100, 500, &params).unwrap();
+        req.check_for_network(&params).unwrap();
+        let exported = req.to_json().to_string();
+        let reread = SignedRegistrationRequestV1::from_json(&exported).unwrap();
+        assert_eq!(reread, req, "the detached record round-trips");
+        reread.check_for_network(&params).unwrap();
+        let envelope = reread.sign(&key).unwrap();
+        verify_signed_registration_v1(&envelope, req.network_domain, &key.public_key()).unwrap();
+        // A build that differs only in a fence far in the future computes the same digest and accepts the request.
+        let mut next = params.clone();
+        next.palw_receipt_spend_v4 = Some(ForkActivation::new(5_000_000));
+        assert_ne!(next.consensus_params_id(), params.consensus_params_id(), "the scheduled fence moves consensus_params_id");
+        req.check_for_network(&next).expect("but not the fork digest: the rollout does not split on the envelope");
+        // Every covered field moves the message.
+        let m = req.message();
+        for other in [
+            SignedRegistrationRequestV1 { valid_from_daa: 101, ..req.clone() },
+            SignedRegistrationRequestV1 { valid_until_daa: 501, ..req.clone() },
+            SignedRegistrationRequestV1 { network_domain: Hash64::from_bytes([5; 64]), ..req.clone() },
+            SignedRegistrationRequestV1 { fork_digest: Hash::from_bytes([6; 32]), ..req.clone() },
+        ] {
+            assert_ne!(other.message(), m);
+        }
+        let forged_fork = SignedRegistrationRequestV1 { fork_digest: Hash::from_bytes([6; 32]), ..req.clone() };
+        assert!(forged_fork.check_for_network(&params).is_err(), "another fork digest is refused before signing");
+        let PalwConsensusObjectV2::SignedRegistrationV1 { mut signature, .. } = envelope.clone() else { unreachable!() };
+        signature[0] ^= 1;
+        assert!(
+            verify_signed_registration_v1(&req.with_signature(signature), req.network_domain, &key.public_key()).is_err(),
+            "forged"
+        );
+        let stranger = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(10), 0));
+        assert!(
+            SignedRegistrationRequestV1::for_network(registration(bond), stranger, 100, 500, &params).is_err(),
+            "not the signer's"
+        );
+        assert!(SignedRegistrationRequestV1::for_network(registration(bond), bond, 500, 100, &params).is_err(), "inverted window");
+        // A tampered export: the message is recomputed, so editing it changes nothing.
+        let mut v: Value = serde_json::from_str(&exported).unwrap();
+        v["message"] = Value::String("00".repeat(64));
+        assert_eq!(SignedRegistrationRequestV1::from_json(&v.to_string()).unwrap().message(), m, "the shown message is never trusted");
+    }
+}

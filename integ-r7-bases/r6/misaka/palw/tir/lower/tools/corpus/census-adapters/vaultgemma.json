@@ -1,0 +1,12 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "vaultgemma",
+  "doc": "VaultGemma (Google): Gemma-2 without the two post norms - the residual blocks are pre-norm only (input_layernorm, pre_feedforward_layernorm); the sliding/global layers, (1+w) norms, score and logit soft-caps are Gemma-2's. Third-party adapter (lane H): data only, extends the built-in gemma2.",
+  "extends": ["gemma2"],
+  "match": {"architectures": ["VaultGemmaForCausalLM"], "model_types": ["vaultgemma"]},
+  "vars": [
+    {"name": "residual", "value": {"Sequential": {"pre_mixer": {"$var": "norm"}, "pre_ffn": {"$var": "norm"}, "multiplier": 1.0}}},
+    {"name": "names", "value": {"$merge": [{"$var": "names_base"}, {"norm.ffn": "{p}layers.{L}.pre_feedforward_layernorm"}]}},
+    {"name": "model_type", "value": "vaultgemma"}
+  ]
+}

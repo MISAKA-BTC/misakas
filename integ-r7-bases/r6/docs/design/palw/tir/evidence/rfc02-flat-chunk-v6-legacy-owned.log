@@ -1,0 +1,6 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::c4r3::g14_c4r3_eight_junk_chunk_groups_must_not_hold_a_chunked_proof_off_the_chain ... [F-C4R3-03] 1 chunked attempts between DAA 4 and the horizon 254: convicted = true; claim Convicted { daa: 11 }
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 824 filtered out; finished in 3.19s

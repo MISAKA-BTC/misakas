@@ -1,0 +1,25 @@
+
+running 20 tests
+test palw_panel::palw_fraud_filer::input::tests::input_bootstrap_authenticates_the_job_and_worker_state_before_replay ... ok
+test palw_panel::palw_fraud_filer::input::tests::canonical_fp_input_is_derived_from_its_job_anchor_and_never_a_served_prompt ... ok
+test palw_panel::palw_fraud_filer::input::tests::panel_input_requires_the_exact_job_and_authenticated_ids_without_reading_a_capture_tail ... ok
+test palw_panel::palw_fraud_filer::tests::a_partial_history_page_cannot_end_a_pursuit_before_older_direct_evidence_is_read ... ok
+test palw_panel::palw_fraud_filer::tests::a_unit_the_chain_answered_is_read_never_demanded ... ok
+test palw_panel::palw_fraud_filer::tests::an_invalidated_blocking_replay_drains_under_its_reservation_before_the_next_starts ... ok
+test palw_panel::palw_fraud_filer::tests::an_item_is_sent_at_most_twice ... ok
+test palw_panel::palw_fraud_filer::tests::another_acceptance_restarts_an_honest_or_mismatched_case_and_rejects_old_results ... ok
+test palw_panel::palw_fraud_filer::tests::partial_pages_and_newer_pursuits_do_not_inherit_a_completed_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::restarting_public_history_discards_old_localization_and_resend_state_but_keeps_the_same_jobs_replay ... ok
+test palw_panel::palw_fraud_filer::tests::selecting_an_already_answered_legacy_unit_backfills_instead_of_inheriting_a_recent_watermark ... ok
+test palw_panel::palw_fraud_filer::tests::the_book_replays_oldest_first_and_bounds_what_it_holds ... ok
+test palw_panel::palw_fraud_filer::tests::the_history_cache_cannot_accumulate_unused_range_units ... ok
+test palw_panel::palw_fraud_filer::tests::the_tick_wires_the_filer_behind_no_flag ... ok
+test palw_panel::palw_fraud_filer::tests::the_walk_starts_at_the_oldest_pursuit_then_follows_the_tip ... ok
+test palw_panel::palw_fraud_filer::tests::trace_only_and_output_only_mismatches_are_pursued_and_only_three_matching_roots_are_honest ... ok
+test palw_panel::palw_fraud_filer::tests::unrelated_settled_case_cleanup_cannot_restart_a_pursuits_history_and_a_new_seat_leaves_the_public_lane ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_bootstrap_is_pursued_without_holding_a_replay_slot_and_reorg_forgets_input ... ok
+test palw_panel::palw_fraud_filer::tests::waiting_public_input_does_not_spend_a_run_or_block_another_pending_claim ... ok
+test palw_panel::palw_fraud_filer::input::tests::public_fp_input_replays_on_a_fresh_model_and_retains_its_own_pins ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 578 filtered out; finished in 0.81s
+

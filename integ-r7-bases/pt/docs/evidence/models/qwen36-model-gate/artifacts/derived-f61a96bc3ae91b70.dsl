@@ -1,0 +1,1 @@
+{"frac_bits":2,"sketches":{},"solid":{"max":[6,6,6],"min":[-6,-6,-6],"op":"box"},"v":1}

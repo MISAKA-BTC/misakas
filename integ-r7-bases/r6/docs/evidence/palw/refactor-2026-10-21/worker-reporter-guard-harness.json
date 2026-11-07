@@ -1,0 +1,6 @@
+{
+  "compile_exit_code": 0,
+  "test_exit_code": 0,
+  "source_sha256": "45d6f034f31736e61b5f5ce0004dec47f20ada95244207401cd068171f560770",
+  "scope": "One exact resident pure source-guard function, with its actual source inventory and code-shape helper; a native supporting harness, not a full node-crate test run."
+}

@@ -1,0 +1,11 @@
+{
+  "before_passed": 461,
+  "after_passed": 463,
+  "missing": [],
+  "regressed": [],
+  "added": [
+    "palw_panel::carrier_chain::tests::a_persistence_callback_panic_precedes_memory_updates",
+    "palw_panel::carrier_chain::tests::held_tick_and_refused_spend_do_not_erase_the_persistent_tip_or_free_its_slot"
+  ],
+  "scope": "Same non-service panel scope; real-service cases reported separately."
+}

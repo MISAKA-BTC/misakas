@@ -1,0 +1,407 @@
+{
+  "date": "2026-10-21",
+  "parent": "54c0081d604208d0aa33c6a9518cc1f95aae3e0e",
+  "heavy_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "selected_unique_passes": 134,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "selection": "native40 + public-prefix17 + ordinary13 + kernel23 + integrations41 =134; targeted1 overlaps native40, historical105 excluded.",
+  "commands": [
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "palw_tir_public_fold_v1"
+      ],
+      "log": "borrowed-v5-native.log",
+      "exit_code": 0,
+      "elapsed_seconds": 75.781,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "palw_state_v2::tests::public_prefix_fold_v1::"
+      ],
+      "log": "borrowed-v5-prefix.log",
+      "exit_code": 0,
+      "elapsed_seconds": 5.753,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "held_close_chunks_clock::"
+      ],
+      "log": "borrowed-v5-ordinary-0.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.018,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_court_session_cannot_outlive_its_claim_and_stop_the_chain"
+      ],
+      "log": "borrowed-v5-ordinary-1.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.017,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_lapsed_dissection_move_loses_on_the_movers_side"
+      ],
+      "log": "borrowed-v5-ordinary-2.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.018,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_lapsed_child_choice_loses_on_the_challengers_side"
+      ],
+      "log": "borrowed-v5-ordinary-3.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.018,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_non_fused_class_is_not_charged_for_a_root_claim_it_cannot_file"
+      ],
+      "log": "borrowed-v5-ordinary-4.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.017,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence"
+      ],
+      "log": "borrowed-v5-ordinary-5.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.017,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "a_responder_that_never_files_the_root_claim_loses_on_its_own_side"
+      ],
+      "log": "borrowed-v5-ordinary-6.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.017,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain"
+      ],
+      "log": "borrowed-v5-ordinary-7.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.154,
+      "selected": true
+    },
+    {
+      "command": [
+        "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+        "palw_court_v2::"
+      ],
+      "log": "borrowed-v5-kernel.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.021,
+      "selected": true
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--release",
+        "-p",
+        "kaspa-consensus-core",
+        "--test",
+        "palw_court_service_state_v2",
+        "--test",
+        "palw_court_policy_v1",
+        "--test",
+        "g14_close_gates",
+        "--test",
+        "palw_activation_pool_is_t12_only",
+        "--test",
+        "palw_the_release_did_not_move",
+        "--test",
+        "palw_tir_dissect_fold"
+      ],
+      "log": "borrowed-v5-regressions.log",
+      "exit_code": 0,
+      "elapsed_seconds": 314.677,
+      "selected": true
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--release",
+        "-p",
+        "kaspa-consensus"
+      ],
+      "log": "borrowed-v5-consensus-check.log",
+      "exit_code": 0,
+      "elapsed_seconds": 53.022,
+      "selected": false
+    }
+  ],
+  "selected_tests": [
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_honest_twin_is_not_convicted_and_a_holding_predicate_certifies_nothing",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_conviction_asserts_each_valid_seat_lock",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_an_outsider_detects_a_fault_and_its_filed_finding_convicts_and_slashes",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_an_honest_custodian_answers_in_time_and_is_not_slashed",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_one_outside_bond_reaches_the_preparation_default_with_no_panel_signature",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_full_collusion_one_outside_verifier_convicts_slashes_and_refuses_the_claims_standing",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::court_relay_presigned_custody_response_uses_literal_signer_not_carrier_inputs",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_staged_witness_assembles_in_order_and_convicts_once",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_convicts_with_the_fence_at_genesis_and_no_legacy_history",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_owner_slots_cannot_be_preempted_by_idle_owners",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_seat_finding_reaches_the_filer_queue",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_without_tfp1_earns_nothing_past_the_fence",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_fresh_node_import_continues_the_original_frame_identically",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_replays_without_derived_work_prompt_ids",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_output_identity_convicts_from_the_complete_authenticated_ids_only",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_duty_clock_records_actual_stages_and_survives_native_restore",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_response_duty_reads_original_state_and_never_erases_expired_obligations",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::native_duty_clock_demand_and_latest_parts_keep_the_original_deadline",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_complete_malformed_side_is_settled_once",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_fulfilled_close_keeps_raw_material_without_pending_charge",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_native_verdict_preserves_other_side",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_uncaptured_removal_retains_nominal_court_stake",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_court_sweeps_skip_held_without_starving_cleanup",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_guard_denies_default_and_native_undo_restores_legacy",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14r2_eight_active_colluding_owners_cannot_lock_out_a_newcomer_who_convicts_in_time",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_close_receipt_preserves_signed_native_inputs",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_hold_retains_final_collateral_and_material_past_hard",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_streamed_fraud_keeps_complete_evidence",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_repair_journals_without_releasing_holds",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_semantic_custody_guard_rejects_missing_short_and_substituted_contracts",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_hold_does_not_block_streamed_fraud_conviction",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::service_stage_eligibility_is_not_recoverable_from_current_tir_cursor_alone",
+    "palw_state_v2::palw_tir_public_fold_v1::tests::new_original_frame_cannot_license_an_unqualified_valid_or_reinterpret_typed_receipt",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::transport_budget_counts_signed_native_parts_and_preserves_old_claims",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_query_and_signed_streams_work_with_all_native_owner_slots_occupied_and_reload",
+    "palw_state_v2::palw_tir_public_fold_v1::tests::owner_fee_and_deposit_are_a_separate_component_without_new_absolute_clocks",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_shared_wide_leaf_stream_crosses_part_boundary_and_reloads",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_decode_token_and_stop_rule_filing_convicts",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::tir_frame_accepting_actions_are_measured_across_custodian_uppers",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_archive_v5_replays_signed_bytes_without_state_or_money_changes",
+    "palw_state_v2::tests::public_prefix_fold_v1::prospective_public_job_retention_precedes_the_legacy_fence_and_survives_native_reload",
+    "palw_state_v2::tests::public_prefix_fold_v1::named_prefix_job_keeps_its_immutable_registered_tokenizer_statement",
+    "palw_state_v2::tests::public_prefix_fold_v1::expired_public_collection_preserves_pending_material_but_never_revives_collection",
+    "palw_state_v2::tests::public_prefix_fold_v1::prospective_prefix_acceptance_prices_complete_acquisition_and_refuses_overflow_before_writes",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_collection_can_finish_after_stream_horizon_but_not_at_collection_expiry",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once",
+    "palw_state_v2::tests::public_prefix_fold_v1::already_charged_public_claim_keeps_paid_material_without_a_second_collection",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_history_is_literal_success_only_rooted_and_reversible",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_answer_advances_only_after_original_leaf_eof_and_restores_the_pruning_clock",
+    "palw_state_v2::tests::public_prefix_fold_v1::targeted_public_collection_bypasses_maintenance_backlog_and_is_identity_bound_once",
+    "palw_state_v2::tests::public_prefix_fold_v1::producer_only_history_default_does_not_discharge_other_paid_prefix_valid_signers",
+    "palw_state_v2::tests::public_prefix_fold_v1::shared_owned_rows_preserve_every_old_box_encoding_and_copy_only_the_written_owner",
+    "palw_state_v2::tests::public_prefix_fold_v1::staged_source_default_charges_the_producer_only_when_it_is_itself_in_the_unpaid_set",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel",
+    "palw_state_v2::tests::public_prefix_fold_v1::every_paid_family_continues_and_convicts_after_actual_sibling_da_default",
+    "palw_state_v2::tests::public_prefix_fold_v1::public_response_index_is_bounded_signer_scoped_paged_and_rebuilt_from_literal_rows",
+    "palw_state_v2::tests::public_prefix_fold_v1::flat_response_index_pages_literal_phase_deadlines_and_roundtrips_seed_journals",
+    "palw_state_v2::tests::held_close_chunks_clock::the_executors_duty_turn_is_terminal_where_the_challengers_group_stands",
+    "palw_state_v2::tests::held_close_chunks_clock::with_both_groups_standing_the_session_waits_at_the_terminal_on_the_executors_clause_first",
+    "palw_state_v2::tests::held_close_chunks_clock::a_silent_executor_is_not_convicted_past_the_old_rung_while_the_challengers_close_assembles",
+    "palw_state_v2::tests::held_close_chunks_clock::a_lapsed_challenger_group_convicts_the_challenger_and_nobody_else",
+    "palw_state_v2::tests::held_close_chunks_clock::a_challenger_only_group_keys_the_session_at_its_backstop",
+    "palw_state_v2::tests::held_close_chunks_clock::the_clause_moves_no_clock_but_the_challenger_only_one_at_an_ir_or_pipeline_terminal",
+    "palw_state_v2::tests::a_court_session_cannot_outlive_its_claim_and_stop_the_chain",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_lapsed_dissection_move_loses_on_the_movers_side",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_lapsed_child_choice_loses_on_the_challengers_side",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_non_fused_class_is_not_charged_for_a_root_claim_it_cannot_file",
+    "palw_state_v2::tests::adr0082_dissection_drill::f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence",
+    "palw_state_v2::tests::adr0082_dissection_drill::a_responder_that_never_files_the_root_claim_loses_on_its_own_side",
+    "palw_state_v2::tests::adr0082_dissection_drill::the_parties_moves_from_evidence_acquit_the_honest_and_convict_the_forged_through_the_chain",
+    "palw_court_v2::decode_close_v4_tests::a_decode_close_does_not_try_a_claim_accepted_past_the_decode_rules",
+    "palw_court_v2::tests::a_court_opens_over_the_rulesets_space_not_the_claims",
+    "palw_court_v2::tests::a_dissection_move_under_a_dormant_fence_is_refused_by_name",
+    "palw_court_v2::decode_door_tests::a_decode_close_is_judged_at_the_head_and_never_acquits",
+    "palw_court_v2::tests::an_accuser_written_binding_cannot_convict_an_honest_executor",
+    "palw_court_v2::tests::an_oversized_decode_pin_is_refused_by_the_cost_gate",
+    "palw_court_v2::tests::a_close_speaks_the_networks_prompt_form_or_it_is_not_a_move",
+    "palw_court_v2::tests::a_close_must_bind_the_claims_root_and_name_a_real_session",
+    "palw_court_v2::tests::opening_is_validated_end_to_end",
+    "palw_court_v2::tests::palw_v2_an_honest_producer_survives_a_challenge_and_keeps_its_stake",
+    "palw_court_v2::tests::the_court_domains_are_distinct_from_nothing_by_accident",
+    "palw_court_v2::tests::a_close_is_adjudicated_from_its_carried_proof_not_from_its_claim",
+    "palw_court_v2::tests::the_outcome_mapping_convicts_defeats_or_refuses",
+    "palw_court_v2::tests::palw_v2_matmul_fraud_convicts_a_claim_and_slashes_its_bond_without_a_model",
+    "palw_court_v2::tests::an_opened_arithmetic_close_adjudicates_on_a_merkle_network_and_nowhere_else",
+    "palw_court_v2::tests::the_session_id_binds_the_whole_dispute",
+    "palw_court_v2::tests::req_cell_2_court_v4_convicts_an_uncoverable_class_at_a_terminal_session",
+    "palw_court_v2::tests::palw_v2_a_lying_decode_token_convicts_through_the_court_close",
+    "palw_court_v2::tests::a_close_that_exceeds_the_rulesets_cost_ceilings_is_refused_before_any_path_is_walked",
+    "palw_court_v2::tests::a_window_that_cannot_hold_its_dispute_refuses_rather_than_falling_back_to_two",
+    "palw_court_v2::tests::a_dormant_fence_leaves_every_shipped_presets_court_byte_identical",
+    "palw_court_v2::tests::an_armed_fence_takes_the_arity_the_ruleset_derives",
+    "palw_court_v2::tests::the_ir_close_arms_adjudicate_through_the_court",
+    "kimi_is_out_of_scope_in_both_coverage_dispositions",
+    "armable_g14_fences_refuse_without_a_measured_record",
+    "an_arming_record_admits_exactly_its_network_and_height",
+    "staged_court_validation_requires_the_legacy_filer_fence",
+    "g14_genesis_from_block_zero_only_families_with_an_armed_route_earn",
+    "legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_armed",
+    "testnet12_identity_did_not_move",
+    "x3_candidate_is_derived_from_existing_horizons_and_stays_refused",
+    "n4_v5_image_and_panel_da_claims_take_no_new_reward",
+    "certified_and_final_rewards_are_held_until_the_liability_horizon",
+    "g14_genesis_ruleset_validates_and_its_exception_reaches_no_shipped_preset",
+    "legacy_route_claim_without_a_g14_path_earns_nothing_past_14000",
+    "the_pool_carries_its_fork_id_name",
+    "the_pool_is_genesis_only_and_needs_the_registry_the_jury_and_the_audit",
+    "the_pool_and_its_terms_move_testnet12s_fingerprint",
+    "testnet11_devnet_and_mainnet_fingerprint_as_they_did_before_the_pool",
+    "the_activation_pool_is_armed_on_testnet12_only",
+    "clock_overflow_never_clamps_or_wraps",
+    "dependency_horizon_boundary_and_shared_bond_liability",
+    "readiness_record_cannot_bypass_unfinished_outsider_path",
+    "persisted_residual_quota_is_recomputed_instead_of_trusted",
+    "persisted_bindings_cannot_alias_packets_or_rebase_hard_deadline",
+    "service_v2_rejects_old_versions_and_foreign_profile_namespace",
+    "canonical_claim_repair_keeps_blocked_claim_held_and_serves_another",
+    "x3_container_tags_remain_disjoint_from_service_v2",
+    "rooted_service_codec_is_bounded_and_appends_its_tags",
+    "the_verification_s3_and_s2_fences_are_past_s1_and_the_lock_ledger",
+    "the_objective_offence_fence_is_past_the_clock",
+    "p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it",
+    "the_execution_quanta_fence_is_past_the_clock",
+    "the_daa_clock_fence_is_past_the_stalled_tip",
+    "every_fence_the_reward_work_added_is_dormant_everywhere",
+    "the_shipped_release_fingerprint_did_not_move",
+    "arming_one_fence_of_the_bundle_on_the_release_is_refused",
+    "the_work_price_denominator_cannot_reach_the_payer_past_the_bundle",
+    "a_leaf_that_is_not_dissected_is_answered_by_a_declared_close",
+    "every_move_is_refused_out_of_turn_by_the_wrong_party_and_below_the_fence",
+    "silence_loses_at_every_turn",
+    "the_held_regime_opens_the_phase_from_a_one_move_accusation",
+    "an_honest_executor_is_acquitted_at_the_bottom_whichever_child_is_named",
+    "a_lie_in_each_reduction_is_convicted_at_the_bottom_or_at_the_fold"
+  ],
+  "source_sha256": {
+    "consensus/core/src/palw_court_archive_verify_v1.rs": "dced26beae43232db4337d3760d684d221a054055d5cb1271bdabb89b2297db5",
+    "consensus/core/src/palw_court_v2.rs": "c21e8da29b15301ee4289941bebb1d16c56e382029276bbb239b374b88790fab",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "065aada1e5e823a678730c12da00d175ddbc2bd2ad4de7227cef349a3f09501d"
+  },
+  "executable_sha256": {
+    "target/release/deps/kaspa_consensus_core-cd85ed321316b157": "ccab7b7849c0c1bdbee1634416c3a823a149789ecf342f547c6b801d1fb8010f",
+    "target/release/deps/g14_close_gates-07a58aeba402f266": "5ac48ee73744f4df4d13cd7639ca38e041800cf34e34eff5e09e11823f1111f9",
+    "target/release/deps/palw_activation_pool_is_t12_only-19bd1d2a52f9c5c6": "6698dd68dda9799bf7046261012f5b95f44fb6c1c1d79a3db6e5419c2b6a5540",
+    "target/release/deps/palw_court_policy_v1-411f3ee2af7ee8dc": "df414aea9c7482d714b52de6bfddeb8dc6e093d70813be6a83c6155ce9e5a3ba",
+    "target/release/deps/palw_court_service_state_v2-84a662caba178f3c": "f4972e6ad343af222fd7870d7c25c62cff461d7eb191e5b2262fb7a435aeffb2",
+    "target/release/deps/palw_the_release_did_not_move-c8b47338cdf2801d": "d7d4a375ee5236bf952871cc3900d8bb6528d08ecf368a1e66e459652d0769df",
+    "target/release/deps/palw_tir_dissect_fold-5a46643fbe82b0e2": "a2abef3cec5ebad9d6f074e77e12ceb4ea0e9a70d6c0a91457971ad23400f4bc"
+  },
+  "patch_sha256": "8543e916906591bf24c069e48f0a53310b5e76893bac87167acb512b414b6aab",
+  "patch_reconstruction": "All three changed runtime sources reconstructed from parent plus patch and SHA-256 matched.",
+  "kernel_audit_sha256": "30f924d6ce428f0a5c15349b2e1f50eaa3891a6c6d3443d922237dd892bdc4f2",
+  "scope": "Native public v5 and private authenticated retained-record replay use one kernel. Cost gate remains before state reads. Only three separate phase lookups changed to a borrowed argument. Archive verifier no longer clones global state, session or phase; output/message/assembly/decode quotes remain.",
+  "test_scope": "Existing eight signed tiny archive cases additionally compare active and borrowed verdicts, reject mismatched session scope, and prove cost gate precedence. Native kernel23 and six pre-existing F7 TIR dissection component cases cover active phase forwarding. Six F7 cases use a deterministic toy corpus, not measured real-model door or public funded archive admission.",
+  "limits": "Root hashing, signature work, inner legacy v5 allocations/CPU, complete original branching, all-actor funding, actual supply, public ingress, qualified settlement/pruning, physical capacity, T01-T15/R-D2/tag230 and real-model door<=3120 remain incomplete. No production rule adoption, pre merge, push, arming or deployment.",
+  "targeted": {
+    "log": "borrowed-v5-targeted.log",
+    "exit_code": 0,
+    "selected": false
+  },
+  "type_check": {
+    "log": "borrowed-v5-type-check.log",
+    "exit_code": 0,
+    "executed_tests": 0
+  },
+  "intermediate": {
+    "log": "borrowed-v5-first-check.log",
+    "source": "borrowed-v5-first-source.json",
+    "patch": "borrowed-v5-first-runtime.patch",
+    "exit_code": 0,
+    "executed_tests": 0
+  },
+  "docs_check": {
+    "log": "borrowed-v5-docs-final.log",
+    "exit_code": 1,
+    "limits": "Same five imported missing links and43 baseline-known. No new authored missing links; no baseline update."
+  },
+  "logs": [
+    {
+      "path": "borrowed-v5-consensus-check.log",
+      "sha256": "05e40a5b54ac784af42f56a40c597f55b6523c211f8c5ebec00e6b2689cd7ad9"
+    },
+    {
+      "path": "borrowed-v5-docs-final.log",
+      "sha256": "fa6700bdd18dac2bd66b5f2796e731bea8d9ad6e1f6f9a8018b3174d9394eb51"
+    },
+    {
+      "path": "borrowed-v5-first-check.log",
+      "sha256": "b0761fdc28a2450cf3fe2c61a38d076c5d0068d369ea4befd718468683860788"
+    },
+    {
+      "path": "borrowed-v5-kernel.log",
+      "sha256": "7b751a4a37b43f5047d2c62663c9c5e8f780278d77c61eb1c9972df8084535f6"
+    },
+    {
+      "path": "borrowed-v5-native.log",
+      "sha256": "0e3f279a274535edb1afc28d70ea9fde56d262a51a05e8d98947fb2670333d4f"
+    },
+    {
+      "path": "borrowed-v5-ordinary-0.log",
+      "sha256": "42ea1bcf96200dc261c8f3819b58da2e536102237d16d6f352023a02df523e31"
+    },
+    {
+      "path": "borrowed-v5-ordinary-1.log",
+      "sha256": "cf2d4565704f305a314c5291f224f993e8bf31370863f47e71bc5d8bc514fa76"
+    },
+    {
+      "path": "borrowed-v5-ordinary-2.log",
+      "sha256": "fcf1e353c36f59a5beb40e03ed10cc80cfc18bcd22fc07611b46ffe8a2ab83c2"
+    },
+    {
+      "path": "borrowed-v5-ordinary-3.log",
+      "sha256": "6c865aa0f79b02f8edab883caf064c7cddaba01f233b2b391f230c1689252195"
+    },
+    {
+      "path": "borrowed-v5-ordinary-4.log",
+      "sha256": "2c30b43db40ee1d5ae8e507ab146c97add2d7d43df1a50c1ba0b98d32e46817d"
+    },
+    {
+      "path": "borrowed-v5-ordinary-5.log",
+      "sha256": "a58a0bd0678bcc694f8abd92ec2a705f9e8ef2995b2b3671918f01ded36afea9"
+    },
+    {
+      "path": "borrowed-v5-ordinary-6.log",
+      "sha256": "b2a5c46d8f824e19c2708883a643c0b097cd3c9c12cacc4808248f44e90b677c"
+    },
+    {
+      "path": "borrowed-v5-ordinary-7.log",
+      "sha256": "40a2f5312020314dadf7a75a0bbe3931e599031f04666fd52f1d2f20e11989aa"
+    },
+    {
+      "path": "borrowed-v5-prefix.log",
+      "sha256": "5d9d0dc388078d7973c65c33f3a3087a4b0f8faa560a8f05d584064a11ec52dc"
+    },
+    {
+      "path": "borrowed-v5-regressions.log",
+      "sha256": "7f129bd33b7fc114aa6c4d875b4e0ae9138d755d6521108b096a378cbc38b3a6"
+    },
+    {
+      "path": "borrowed-v5-targeted.log",
+      "sha256": "47cd761776761c1ab06140725a3d03bb1a800cb905f8d0405720bd48c7b663fd"
+    },
+    {
+      "path": "borrowed-v5-type-check.log",
+      "sha256": "0e5a60dfff23525e8ddd27f7655313fb6e61f39cad6c14a4e89b5502a51386a4"
+    }
+  ]
+}

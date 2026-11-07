@@ -1,0 +1,38 @@
+{"model_type": "big_bird", "class": "BigBirdModel", "ok": true, "params": 24416, "pad": 0, "s": 0.9}
+{"model_type": "camembert", "class": "CamembertModel", "ok": true, "params": 24416, "pad": 1, "s": 0.8}
+{"model_type": "convbert", "class": "ConvBertModel", "ok": true, "params": 192356, "pad": 1, "s": 0.9}
+{"model_type": "data2vec-text", "class": "Data2VecTextModel", "ok": true, "params": 24416, "pad": 1, "s": 0.8}
+{"model_type": "deberta", "class": "DebertaModel", "ok": true, "params": 23232, "pad": 0, "s": 1.0}
+{"model_type": "electra", "class": "ElectraModel", "ok": true, "params": 46304, "pad": 0, "s": 0.9}
+{"model_type": "ernie", "class": "ErnieModel", "ok": true, "params": 24416, "pad": 0, "s": 0.9}
+{"model_type": "esm", "ok": false, "error": "TypeError: ne() received an invalid combination of arguments - got (NoneType), but expected one of:  * (Tensor other)       didn't match because some of the arguments have"}
+{"model_type": "esmc", "ok": false, "error": "StrictDataclassClassValidationError: Class validation error for validator 'validate_architecture':     ValueError: ESMC does not support grouped-query attention: `num_key_value_heads` (2) must equa"}
+{"model_type": "eurobert", "class": "EuroBertModel", "ok": true, "params": 20640, "pad": 0, "s": 0.9}
+{"model_type": "flaubert", "ok": false, "error": "RuntimeError: not tiny: 101,113,856 parameters, largest tensor 64 MiB (shrink its config keys)"}
+{"model_type": "fnet", "class": "FNetModel", "ok": true, "params": 17088, "pad": 3, "s": 0.8}
+{"model_type": "funnel", "ok": false, "error": "TypeError: 'NoneType' object is not iterable"}
+{"model_type": "ibert", "class": "IBertModel", "ok": true, "params": 24416, "pad": 1, "s": 0.8}
+{"model_type": "jina_embeddings_v3", "class": "JinaEmbeddingsV3Model", "ok": true, "params": 20288, "pad": 1, "s": 1.6}
+{"model_type": "layoutlm", "class": "LayoutLMModel", "ok": true, "params": 155488, "pad": 0, "s": 1.1}
+{"model_type": "longformer", "class": "LongformerModel", "ok": true, "params": 30752, "pad": 1, "s": 1.0}
+{"model_type": "luke", "ok": false, "error": "RuntimeError: not tiny: 128,043,168 parameters, largest tensor 488 MiB (shrink its config keys)"}
+{"model_type": "megatron-bert", "class": "MegatronBertModel", "ok": true, "params": 24416, "pad": 0, "s": 0.8}
+{"model_type": "mobilebert", "class": "MobileBertModel", "ok": true, "params": 294784, "pad": 0, "s": 0.8}
+{"model_type": "modernvbert", "ok": false, "error": "RuntimeError: not tiny: 251,335,680 parameters, largest tensor 148 MiB (shrink its config keys)"}
+{"model_type": "mra", "class": "MraModel", "ok": true, "params": 23392, "pad": 1, "s": 0.9}
+{"model_type": "mvp", "class": "MvpModel", "ok": true, "params": 6556928, "pad": 1, "s": 0.9}
+{"model_type": "neomme", "ok": false, "error": "ValueError: rope_parameters['full_attention']['partial_rotary_factor']=0.25 rotates 2 of head_dim=8 dims, which is not a multiple of 4: the two M-RoPE axes consume frequenc"}
+{"model_type": "nystromformer", "class": "NystromformerModel", "ok": true, "params": 23944, "pad": 1, "s": 0.9}
+{"model_type": "perceiver", "ok": false, "error": "RuntimeError: not tiny: 259,620,768 parameters, largest tensor 6 MiB (shrink its config keys)"}
+{"model_type": "reformer", "ok": false, "error": "ValueError: Make sure that config.axial_pos_embds factors: (64, 192) sum to config.hidden_size: 32"}
+{"model_type": "rembert", "class": "RemBertModel", "ok": true, "params": 76544, "pad": 0, "s": 0.9}
+{"model_type": "roberta-prelayernorm", "class": "RobertaPreLayerNormModel", "ok": true, "params": 24480, "pad": 1, "s": 0.8}
+{"model_type": "roc_bert", "class": "RoCBertModel", "ok": true, "params": 13492608, "pad": 0, "s": 1.2}
+{"model_type": "roformer", "class": "RoFormerModel", "ok": true, "params": 20288, "pad": 0, "s": 0.8}
+{"model_type": "squeezebert", "ok": false, "error": "AssertionError: If you want embedding_size != intermediate hidden_size, please insert a Conv1d layer to adjust the number of channels before the first SqueezeBertModule."}
+{"model_type": "tapas", "class": "TapasModel", "ok": true, "params": 57600, "pad": 0, "s": 0.8}
+{"model_type": "xlm", "ok": false, "error": "RuntimeError: not tiny: 101,113,856 parameters, largest tensor 64 MiB (shrink its config keys)"}
+{"model_type": "xlm-roberta-xl", "class": "XLMRobertaXLModel", "ok": true, "params": 24384, "pad": 1, "s": 0.8}
+{"model_type": "xmod", "ok": false, "error": "ValueError: Input language unknown. Please call `XmodPreTrainedModel.set_default_language()`"}
+{"model_type": "yoso", "class": "YosoModel", "ok": true, "params": 23392, "pad": 1, "s": 0.8}
+finished

@@ -1,0 +1,87 @@
+{
+  "sources": {
+    "palw_prefix_family_court_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_family_court_v1.rs",
+      "sha256": "833e47c8e6f39d2e3f252675071606ca67ab877b5f406c05ed5f4b06d4abacec"
+    },
+    "palw_prefix_gdn_contract_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_gdn_contract_v1.rs",
+      "sha256": "f7e9ede6a2b5bbda0a8ff81e3abd6690349bc1a65ee2b52d97eeaad81b6236d5"
+    },
+    "palw_prefix_gdn_paged_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_gdn_paged_v1.rs",
+      "sha256": "f0ae667c73d4467b82ddc99f00f9a4ec42d44868a59dd2771287179ccdc81ab6"
+    },
+    "palw_prefix_gdn_replay_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_gdn_replay_v1.rs",
+      "sha256": "dac9a20dd85daf115b6794e8b4ea84540f1d5793a46a2d2d5d37828e85f3bcf7"
+    },
+    "palw_prefix_family_state_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_family_state_v1.rs",
+      "sha256": "a2493519a4ebdfdb855d75c8edb44384f7c5850eb36746fb69c04ff743837ef8"
+    },
+    "palw_prefix_base0_codec_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_base0_codec_v1.rs",
+      "sha256": "505c89f9b67c4e2c4a940ce7a6895af1fa094834718a9d02eab700303d26ecd5"
+    },
+    "palw_prefix_q36_public_rows_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_q36_public_rows_v1.rs",
+      "sha256": "e261114781d2c094961256f49bbc09a4abd01faca81ab003da324efb2cbdd892"
+    },
+    "palw_prefix_state_court_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_state_court_v1.rs",
+      "sha256": "d4ce89aa32186c8e2fda77d3be76fd2752294b4b58c09a3165a71d671a916ec6"
+    },
+    "palw_prefix_resources_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_resources_v1.rs",
+      "sha256": "fc9b55daa6e7a0b150593161751f745f9072e46e2f0585ffcf97827a33b39743"
+    },
+    "palw_prefix_state_stream_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-terminal-carriage/MISAKA-testnet/consensus/core/src/palw_prefix_state_stream_v1.rs",
+      "sha256": "eca6cc9bb5caa8da710782d2cff33750e6543d9204c5399a87058319a3c7d1ba"
+    },
+    "palw_rendering_stream_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-terminal-carriage/MISAKA-testnet/consensus/core/src/palw_rendering_stream_v1.rs",
+      "sha256": "0cb56523f3ae35e4827f805d1f86c3257a57f970727a1882bfa59c56488bbd77"
+    },
+    "palw_prefix_source_stream_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_source_stream_v1.rs",
+      "sha256": "01b1e900ab6d4ca57a26003500c0c95421d9f82818f6670c6ec90276d5e4d488"
+    },
+    "palw_prefix_owned_court_v1": {
+      "path": "/Users/wata/.codex/worktrees/g14-family-semantics/MISAKA-testnet/consensus/core/src/palw_prefix_owned_court_v1.rs",
+      "sha256": "28ae5bad8904de65aa24658bd2a64fccba5e5cb6ffc3967dca00eab83212f1c4"
+    }
+  },
+  "command": [
+    "rustc",
+    "--edition=2024",
+    "-C",
+    "opt-level=1",
+    "-C",
+    "debuginfo=0",
+    "/tmp/g14-prefix-quote-harness.rs",
+    "-L",
+    "dependency=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps",
+    "-o",
+    "/tmp/g14-prefix-quote-harness",
+    "--extern",
+    "kaspa_consensus_core=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libkaspa_consensus_core-f5cc033a7eb58bbd.rlib",
+    "--extern",
+    "borsh=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libborsh-7cfec46d29ea91a2.rlib",
+    "--extern",
+    "blake2b_simd=/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/libblake2b_simd-4b3164d19dbd178a.rlib"
+  ],
+  "dependency_sha256": {
+    "kaspa_consensus_core": "7cbcd97535d98fe0e1913f9f9f827b231a887c82e410a00a1cdd3e3f445e6335",
+    "borsh": "0f2c78f5da046a09f7fd657367abca6a6d764daee5f89fb1a8ce8c9b731e539e",
+    "blake2b_simd": "c03a4d0c82641e9ec3a8ab299128aa3470ed7a9dc85577eb1d1804cd624e5468"
+  },
+  "compile_status": 0,
+  "binary_sha256": "5a0d12ecd3f5f814b4f47ee4fc4f837ebe0fa46bbc718409a42c242778b1f422",
+  "run_status": 0,
+  "run_stdout": "prices=PalwRenderingResourcePricesV1 { inclusion_margin_daa: 4, rent_per_stream_byte: 1, rent_per_parser_step: 1, rent_per_row_byte: 1, deposit_per_move: 1, reorg_replay_moves: 64 } quote_profile_v6=true carrier=90000 decode=1\nk=2 n_ctx=8 profile=c3674930fae975c702f7ccdd441342ac7efe1332f01bf32729b1516e5236c5a1087c459a58b5ea9e9bacf0cbf8131897850f31cda2d3fbe8eb1f63c2680a0e04 profile_bytes=12314 leaves=999292 mode=(Whole, 133896)\nplan=Ok(PalwPrefixResourcePlanV1 { envelope: PalwRenderingResourcePlanV1 { prefix_tokens: 2, vocab: 248320, maximum_stream_bytes: 8503040, maximum_stream_leaves: 73300, maximum_eog_bytes: 0, maximum_moves: 222107, maximum_parser_steps: 999020589296, maximum_blake_blocks: 7795202364, inclusion_daa: 888428, rent_sompi: 1019019245378, deposit_sompi: 222107, row_bytes: 523042, resident_ram_bytes: 1231728 }, maximum_head_working_set_bytes: 133896, maximum_carrier_bytes: 19989630000 })\nk=8192 n_ctx=8194 profile=54705f85f99f5d4c8f408d25a2ad20100efd73ddf84fb0e31ab1722802d393bd1f3ad0eab3c0d053e9c7b71e143810cd7e76c0530e1334687db38ee1616f2ea4 profile_bytes=12314 leaves=2644305412 mode=(Whole, 133896)\nplan=Ok(PalwPrefixResourcePlanV1 { envelope: PalwRenderingResourcePlanV1 { prefix_tokens: 8192, vocab: 248320, maximum_stream_bytes: 26511998720, maximum_stream_leaves: 44770240, maximum_eog_bytes: 0, maximum_moves: 142344245, maximum_parser_steps: 644607894114320, maximum_blake_blocks: 4995532303779, inclusion_daa: 569376980, rent_sompi: 657445388686082, deposit_sompi: 142344245, row_bytes: 523042, resident_ram_bytes: 1231728 }, maximum_head_working_set_bytes: 133896, maximum_carrier_bytes: 12810982050000 })\n",
+  "run_stderr": "",
+  "source_commit": "e5c9a4139",
+  "qualification": "Standalone rustc harness includes local resource/court modules at listed SHA256 values and reads cached dependencies. This is not integrated Cargo or registered-service PASS. Count-context uses extracted floor fixture with declared prefill/decode updated; no claim was admitted."
+}

@@ -1,0 +1,56 @@
+{
+  "counts": [
+    {
+      "candidate": "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0",
+      "eligible": false,
+      "primary": [
+        9,
+        1,
+        0
+      ],
+      "regression": [
+        0,
+        1,
+        0
+      ]
+    },
+    {
+      "candidate": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+      "eligible": false,
+      "primary": [
+        5,
+        1,
+        4
+      ],
+      "regression": [
+        0,
+        0,
+        1
+      ]
+    },
+    {
+      "candidate": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0",
+      "eligible": true,
+      "primary": [
+        9,
+        1,
+        0
+      ],
+      "regression": [
+        1,
+        0,
+        0
+      ]
+    }
+  ],
+  "decision": "Promoted { class_id: c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0, wins: 9, losses: 1 }",
+  "rule": {
+    "K": 3,
+    "alpha_permille": 50,
+    "delta_permille": 100,
+    "epsilon_permille": 100,
+    "epsilon_safety_permille": 0,
+    "n_min": 4
+  },
+  "scenario": "items 0–8 and 11 primary (the parent fails 0–8 and has no score on 11; A and C pass all; B passes the even ones, ties the odd ones, and has no score on 11); item 9 dropped; item 10 regression (A −200 vs −100, B tie, C better)"
+}

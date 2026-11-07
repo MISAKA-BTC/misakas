@@ -110,6 +110,31 @@ fn seed_state(
 }
 
 #[test]
+fn pending_public_prefix_acquisition_reports_incomplete_and_retains_its_custodians() {
+    let (state, p, extras, seed) = seed_state(5);
+    let mut builder = TransitionBuilder::new(&state, &p, false, false, false, true, &extras);
+    palw_staged_court_fold_v1::open(&mut builder, &ctx(2, 101, 101), &seed).unwrap();
+    let key = PalwStagedCourtKeyV1::Owner(seed.claim, seed.reserver);
+    let PalwStagedCourtRowV1::PublicPrefix(row) = &builder.state.staged_courts[&key] else { unreachable!() };
+    let demand = row.next_demand_v1(102).unwrap().unwrap();
+    let movement = PalwConstraintStreamMoveV1 {
+        version: 1, claim: seed.claim, reserver: seed.reserver, reserved_daa: seed.reserved_daa,
+        seed_id: row.seed_id(), phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt,
+        action: Action::PrefixPublicDemand(demand.clone()),
+        signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+    };
+    palw_staged_court_fold_v1::movement(&mut builder, &ctx(3, 102, 102), &movement).unwrap();
+    let progress = palw_staged_owned_progress_v1(&builder.state, (seed.claim, seed.reserver)).unwrap().unwrap();
+    let Some(PalwStagedOwnedCursorV1::PublicPrefix { pending: Some(pending), completed, .. }) = progress.cursor else {
+        panic!("the accepted public demand remains pending through the production read API")
+    };
+    assert_eq!(completed, None, "awaiting original authenticated bytes is not an honest completion");
+    assert_eq!(pending.source.coordinate, demand.coordinate);
+    assert_eq!(pending.deadline_daa, demand.deadline_daa);
+    assert_eq!(pending.signers.len(), 7, "five literal custodians, producer and owner retain their response slots");
+}
+
+#[test]
 fn public_prefix_seed_admission_is_independent_exact_funded_and_not_vetoed_by_unsigned_panel() {
     use crate::palw_constraint_stream_carriage_v1::PalwAuxiliaryPublicCourtSeedV1 as Auxiliary;
     for signed in [0, 1, 5] {

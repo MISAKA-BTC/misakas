@@ -1,0 +1,2289 @@
+//! **The fork id — what a node has already crossed, and what it will cross next** (ADR-0072 SA-2).
+//!
+//! `consensus_identity_id` refuses a peer that disagrees about a rule in force NOW, and
+//! `consensus_schedule_id` reports a peer that disagrees about a FUTURE fence without refusing it.
+//! That pair is what makes a scheduled activation deployable at all (audit M1-6): two builds that
+//! differ only in when a fence fires agree about every block either can produce today, so they must
+//! stay peers for the whole rollout.
+//!
+//! It also leaves the hole this module closes, which the identity id's own doc names as its
+//! residual: **at the fence, the disagreement stops being about the future.** The un-upgraded
+//! minority keeps extending the old arm, refuses every block the majority produces under the new
+//! one, and both handshakes still say the two are peers — because the identity is computed with
+//! every fence normalised away, and normalising a fence cannot tell whether the chain has passed
+//! it. Neither side sees a partition. It is a silent fork with a warning in the log at worst, and
+//! this repository has already paid for one.
+//!
+//! The fork id is the missing term: the height. A node announces
+//!
+//! * the **genesis** it builds on,
+//! * a digest of the **fences it has already crossed** at its own DAA score, and
+//! * the **next fence** it expects to cross,
+//!
+//! and past a fence of its own it refuses a peer whose fired set is not its own schedule seen from
+//! some point along it. The set is derived from [`Params::fence_schedule_v1`] and the node's DAA —
+//! never from the peer's word about itself, which is an unauthenticated claim and would let a
+//! stale node talk its way past the gate by announcing whatever the gate wanted to hear.
+//!
+//! ## Why "differs" is not "is not identical"
+//!
+//! A fresh node has crossed nothing. If "the fired set differs" meant refusal, a node past the
+//! fence would refuse every node that still has to sync the pre-fence history — which is every new
+//! node, forever, and which would make ADR-0072 SA-3's one-binary mixed history unreachable in
+//! practice. So the comparison is against the SCHEDULE, not against the fired set:
+//!
+//! * a peer whose fired set is a **prefix** of this build's schedule, and whose next fence is the
+//!   one that follows that prefix, is the same build seen from an earlier height — keep it;
+//! * a peer whose fired set matches this build's schedule **entirely** has crossed everything this
+//!   build knows about — keep it (it may know about fences this build does not; that is this build
+//!   being out of date, and fork choice, not the handshake, is the instrument for it);
+//! * anything else is a different schedule.
+//!
+//! An un-upgraded node lands in the third case precisely: its schedule is empty, so it announces
+//! the empty fired set with **no** next fence, and the empty set matches this build's length-0
+//! prefix while `u64::MAX` is not the fence that follows it. That is the whole gate — it separates
+//! "behind" from "different" using the one field a stale-but-honest node always gets right.
+//!
+//! ## Why the gate only bites once the DISPUTED fence has fired
+//!
+//! Refusing a different schedule at ANY height would re-create the deploy-day partition M1-6 exists
+//! to remove: the first operator to publish a build that arms a future fence would disconnect from
+//! every un-upgraded peer immediately, for the whole rollout, with nothing about the fence height
+//! involved. So before the disputed fence fires, a schedule difference is a WARNING — the same
+//! verdict `consensus_schedule_id` already earns. At and after it, it is a refusal, because from
+//! there the two builds disagree about blocks that exist.
+//!
+//! **"The disputed fence", not "any fence", and the difference is the whole of finding 6.** Three
+//! shipped presets already schedule crescendo, so "this node has crossed a fence" is true of
+//! mainnet from DAA 110,165,000 — and under the first rule ("has this node crossed anything")
+//! arming ADR-0072's fence at a future height refused every un-armed peer from the instant the
+//! build started, which is the partition, not the fence. When the mismatch names fences
+//! (`NextFenceDiffers`) the disputed one is the LOWER of the two builds' next fences — where the
+//! schedules part: the peer's own, if it carries a fence this build does not, else this build's,
+//! which then refuses only if the gate names it; when it names none (`Absent`, `UnknownFiredSet`)
+//! the test falls back to [`fork_id_gate_fences_v1`], the fences this module refuses on, which
+//! crescendo is deliberately not among — and never to a gate fence the peer has already agreed
+//! about by matching a prefix of this schedule.
+//!
+//! ## Why the gate is armed by a field and not by "does this build schedule anything"
+//!
+//! The obvious arming condition — refuse as soon as this build has crossed any fence at all — is
+//! **not dormant, and the measurement says so**: three shipped presets already schedule a fence.
+//! Mainnet schedules crescendo at `110_165_000` and testnet-10/-11 at `2_125_000`
+//! (`the_shipped_schedules_are_measured_not_assumed` prints and pins them). Under that condition
+//! this module would, the day a live testnet crossed `2_125_000`, start refusing every peer running
+//! a build that predates the fork-id field — a peering change on a running network, shipped by a
+//! commit whose whole premise is that it changes nothing until an operator arms it.
+//!
+//! So the gate is armed by [`fork_id_gate_fences_v1`], which names `Params::palw_attempt_activation`
+//! — ADR-0072's fence, the one this module was written to make survivable — and
+//! `Params::palw_difficulty_priced_rows` — ADR-0083's, the first fence an operator actually
+//! scheduled on a live chain (testnet-11, DAA 1150, 2026-09-04) — and which crescendo is
+//! deliberately not in. That list does double duty: it is both "is the gate armed at all" and
+//! "which fences does a refusal rest on", and the second is what keeps a pre-existing fence from
+//! turning the gate on by being crossed. The fork id is still ADVERTISED by every node from the
+//! moment this lands, because an advertisement refuses nobody and a gate that has never been on
+//! the wire is a gate nobody has tested. What is fenced is only the refusal.
+//!
+//! ## What "armed on a shipped preset" means, now that one is
+//!
+//! Until ADR-0083 no shipped preset scheduled a gate fence, and the test that said so was the claim
+//! that made the module safe to land on a running network. testnet-11 now schedules one, so the
+//! claim is restated as what it always meant: **an armed gate refuses nobody before its fence
+//! fires** — every verdict below the height is `Agree` or a warning, including for a build with no
+//! fork-id field at all — **and at the height it refuses exactly the peers that do not carry the
+//! fence**: the un-upgraded build (fired set the empty prefix, next fence `2_125_000` instead of
+//! `1150`) is `DisagreePastFence { fired_through: 1150 }` from DAA 1150 on, while a fresh node on
+//! the new build syncing pre-1150 history (empty prefix, next `1150`) and a node already past it
+//! (prefix `[1150]`, next `2_125_000`) are prefix peers and kept, in both directions. That is the
+//! block-level silent fork of a flag day turned into a named handshake refusal, which is the
+//! module's purpose. A connection accepted before the height used to stay up when the height
+//! passed — "the block rules separate that pair, and the next handshake refuses it" — and a node
+//! syncing from an empty datadir meets EVERY un-upgraded peer below the height, so it kept them all
+//! (measured 2026-09-10, six of them). The connection layer now stores
+//! [`fork_id_refusal_height_v1`] with each peer it keeps on a warning and judges it again there.
+//!
+//! A later ADR arming a different fence must add it to that list, and the tests
+//! `the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence` and
+//! `the_gate_refuses_only_on_the_fences_it_names` are what make forgetting visible.
+
+use crate::config::params::Params;
+use kaspa_hashes::{ConsensusParamsId, Hash, Hash64};
+
+/// Domain separator for the fired-fence digest. Versioned so a future encoding change is a
+/// deliberate break rather than a silent one, exactly as `CONSENSUS_FINGERPRINT_DOMAIN_V1` is.
+pub const FORK_ID_DOMAIN_V1: &[u8] = b"misaka/consensus-fork-id/v1";
+
+/// The sentinel a node announces when it has no further fence to cross. Not a height any chain
+/// reaches, and the same value `ForkActivation::never()` carries, so "no next fence" and "a fence
+/// that never fires" are one answer rather than two.
+pub const FORK_ID_NO_NEXT_FENCE: u64 = u64::MAX;
+
+/// **What a node advertises at the handshake** (ADR-0072 SA-2).
+///
+/// The genesis is not carried here: it is already its own handshake field, compared before this
+/// one, and it is hashed into [`Self::fired`] so a fired set cannot be replayed onto another chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForkIdV1 {
+    /// Digest of `(genesis, the fence heights this node has already crossed, in order)`.
+    pub fired: Hash,
+    /// The lowest scheduled fence strictly above this node's DAA score, or
+    /// [`FORK_ID_NO_NEXT_FENCE`].
+    pub next: u64,
+}
+
+/// Why two fork ids are not the same schedule. Carried so the refusal names the case rather than
+/// leaving an operator to infer it from two hex strings — the three have different operator
+/// responses (upgrade the peer, upgrade this node, or check which build is which).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForkIdMismatch {
+    /// The peer sent no fork id at all: a build that predates the field, and therefore one that
+    /// cannot know about the fence this node has crossed.
+    Absent,
+    /// The peer's fired set is not this build's schedule seen from any point along it. Either it
+    /// carries fences this build does not, or it crossed them at different heights.
+    UnknownFiredSet,
+    /// The peer's fired set IS a prefix of this build's schedule, but it expects a different fence
+    /// next — so the two agree about the past and disagree about the very next rule change.
+    NextFenceDiffers { expected: u64, got: u64 },
+    /// The peer's fork id was taken below a gate fence this node has since crossed, and it does not prove the peer carries
+    /// that fence (`fork_id_crossing_rejudge_v1`): the connection is dropped and judged again on a fresh announcement.
+    NotCarriedPastCrossedFence { fence: u64 },
+}
+
+impl std::fmt::Display for ForkIdMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Absent => write!(f, "the peer sent no fork id (a build predating the fence)"),
+            Self::UnknownFiredSet => {
+                write!(f, "the peer's fired-fence set is not this build's schedule seen from any height along it")
+            }
+            Self::NextFenceDiffers { expected, got } => {
+                write!(f, "the peer agrees about every fence crossed so far but expects fence {got} next, not {expected}")
+            }
+            Self::NotCarriedPastCrossedFence { fence } => write!(
+                f,
+                "the peer's fork id was taken before this node crossed fence {fence} and does not prove it carries it; reconnect to be judged again"
+            ),
+        }
+    }
+}
+
+/// The verdict on a peer's fork id. Three outcomes rather than a bool, because "different" and
+/// "refuse" are not the same question — see the module doc's last section.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForkIdVerdict {
+    /// The gate is not armed on this build (see [`fork_id_gate_armed_v1`]) or this build schedules
+    /// no fence at all, so the fork id decides nothing here. Every shipped preset takes this arm,
+    /// which is why adding the field changes no live network's peering.
+    Unfenced,
+    /// The peer runs this build's schedule, seen from some height along it.
+    Agree,
+    /// A different schedule, but this node has not crossed the fence the difference is ABOUT: the
+    /// two still agree about every block either can produce, so refusing would partition the
+    /// network for the whole rollout (M1-6). Warn. The name is kept for the wire-visible verdict
+    /// text; "any fence" is what it used to mean and what made it wrong past crescendo.
+    DisagreeBeforeAnyFence(ForkIdMismatch),
+    /// A different schedule and this node is already past `fired_through` — the disputed fence
+    /// itself when the mismatch names one, otherwise the highest gate-arming fence crossed. From
+    /// here the two disagree about blocks that exist. Refuse.
+    DisagreePastFence { mismatch: ForkIdMismatch, fired_through: u64 },
+}
+
+impl ForkIdVerdict {
+    /// Is this a refusal? The one place the p2p layer asks, so the policy lives here rather than
+    /// being re-derived at the call site.
+    pub fn refuses(&self) -> bool {
+        matches!(self, Self::DisagreePastFence { .. })
+    }
+}
+
+/// **Is the fork-id gate armed on this build?**
+///
+/// `false` on every shipped preset, and therefore inert everywhere today — see the module doc's
+/// last section for why this is a named field rather than "does the schedule contain anything",
+/// and what the measurement was that made the difference matter.
+///
+/// A fence added later that needs the gate must be ORed in HERE, and only here.
+pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
+    !fork_id_gate_fences_v1(params).is_empty()
+}
+
+/// **Measured on testnet-11's second flag day (2026-09-06): adding a fence to the schedule
+/// partitions old from new IMMEDIATELY, not at the height.**
+///
+/// The module doc above says two builds that differ only about a future fence "must stay peers for
+/// the whole rollout". That is what the NEW build does — it logs "keeping the peer" and carries on.
+/// It is not what the OLD build does: its gate is already armed (ADR-0083's fence at 1150), the new
+/// build announces `next = 1900`, and 1900 is not on the old schedule, so the old side sends the
+/// reject and closes. The partition is symmetric in effect and arrives the moment the first
+/// upgraded node connects.
+///
+/// So a release that adds a gate fence is a flag day for EVERY node, not only for the fleet: a seat
+/// that has not upgraded is cut off at once rather than at the height. Six third-party seats were
+/// measured being cut off within four minutes of the first restart. Whoever schedules a gate fence
+/// has to say so where node operators read it, and the height's lead time buys the fleet an
+/// ordering, not the network a grace period.
+///
+/// **The third flag day (DAA 2400, 2026-09-09) did it again, and the cause was one arm of
+/// [`evaluate_fork_id_v1`]:** the old side's next fence was crescendo, the gate does not name
+/// crescendo, and the fallback refused on a lower gate fence the peer had just agreed about.
+/// Builds carrying the 2026-09-10 fix keep a peer whose next fence is lower than their own until
+/// they pass it. That fixes the NEXT flag day only for nodes that are already on such a build —
+/// every build from before it still refuses at once, so the notice above stays true for one more
+/// rollout.
+///
+/// **The fences that ARM the gate, as heights.**
+///
+/// The set [`fork_id_gate_armed_v1`] is derived from, and the one this module refuses on. A fence
+/// listed here is one whose crossing turns a schedule disagreement from a warning into a refusal;
+/// a fence NOT listed here — crescendo, on all three presets that schedule it — is a rule every
+/// build in circulation already implements, so crossing it says nothing about whether a peer can
+/// follow this node.
+///
+/// The distinction is not cosmetic, and it is the whole of finding 6. `evaluate_fork_id_v1` used to
+/// classify on "has this node crossed ANY fence", which on mainnet is true from DAA 110,165,000 —
+/// so scheduling ADR-0072's fence at a future height would have made the first operator to deploy
+/// the armed build refuse every un-armed peer, inbound and outbound, from the moment it started,
+/// for the entire rollout window BEFORE the fence fired. That is M1-6's deploy-day partition
+/// arriving through the module written to prevent it.
+///
+/// **DERIVED from [`Params::palw_fences_v1`], not restated** (mainnet audit 2026-09-06, M-6).
+///
+/// This used to be a hand-written array of four field names, and the module's own doc directly
+/// above told a later ADR to add its fence "HERE". That step is a thing a person has to remember,
+/// and by the 2026-09-06 merge it had been skipped four times: `palw_court_ladder`,
+/// `palw_model_market`, `palw_model_lines` and `palw_model_evm` joined `Params` and not this list.
+/// It happened to cost nothing on testnet-11 — the three model fences ride `palw_da_court`'s
+/// height, so `dedup` produced the same set — and it costs everything on a carded mainnet, where a
+/// card arms its fences at `always()` (score 0, filtered below) and writes none of the four names:
+/// `fork_id_gate_armed_v1` is then `false` permanently, `evaluate_fork_id_v1` returns `Unfenced`
+/// before comparing anything, and the fence the operator schedules NEXT is not gated either.
+///
+/// Every PALW fence qualifies, and that is not a widening: a top-level `Option<ForkActivation>` on
+/// `Params` is by construction a rule an un-upgraded peer does not implement, which is exactly the
+/// criterion the doc above states. What is excluded stays excluded — `crescendo_activation`, the
+/// PoW activations and the EVM scores are rules every build in circulation implements, and
+/// `palw_fences_v1` does not return them.
+///
+/// `0` and `u64::MAX` are excluded for the same reasons [`Params::fence_schedule_v1`] excludes
+/// them: a fence active at genesis is `consensus_identity_id`'s business and never "crossed", and
+/// `never()` is not a height. Sorted and deduplicated so the list reads as a schedule — which is
+/// also why fences that ride one height contribute one entry, as `palw_panel_da` and the three
+/// model fences do on testnet-11 behind `palw_da_court`.
+pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
+    let mut fences: Vec<u64> = params
+        .palw_fences_v1()
+        .into_iter()
+        .filter_map(|(_, fence)| fence)
+        .map(|fence| fence.daa_score())
+        .filter(|&score| score != 0 && score != u64::MAX)
+        .collect();
+    // **RFC-0019 §7.3: every annual catalog edition's height gates too.** An edition is a fence an un-upgraded binary does not carry
+    // (it changes the allocation weights from its height), but it lives inside `palw_model_tier_v1`'s value, so `palw_fences_v1`
+    // names only the tier fence's own height. ORed in HERE, as the doc above asks: before the edition a peer lacking it is a warning
+    // (the identity id still matches — the edition left it in normalisation), from its height a refusal, so a node still on the
+    // old binary is cut off by name rather than silently extending the old weights.
+    fences.extend(params.palw_annual_catalog_activations_v1().into_iter().filter(|&score| score != 0 && score != u64::MAX));
+    fences.sort_unstable();
+    fences.dedup();
+    fences
+}
+
+/// The fence heights at or below `daa_score`, in order — what this node has crossed.
+fn fired_at(schedule: &[u64], daa_score: u64) -> &[u64] {
+    let crossed = schedule.partition_point(|&fence| fence <= daa_score);
+    &schedule[..crossed]
+}
+
+/// `(genesis, fired fences)` as one digest.
+///
+/// The genesis is inside it so a fired set cannot be lifted onto another chain that happens to
+/// schedule the same heights, and the count is written before the heights so no two distinct sets
+/// can collide by concatenation — the same discipline `consensus_params_id` keeps.
+pub fn fired_fences_digest_v1(genesis: Hash64, fired: &[u64]) -> Hash {
+    let mut h = ConsensusParamsId::new();
+    h.write(FORK_ID_DOMAIN_V1);
+    h.write(genesis.as_byte_slice());
+    h.write((fired.len() as u64).to_le_bytes());
+    for fence in fired {
+        h.write(fence.to_le_bytes());
+    }
+    h.finalize()
+}
+
+/// **What this node advertises at `daa_score`.**
+pub fn fork_id_v1(params: &Params, daa_score: u64) -> ForkIdV1 {
+    let schedule = params.fence_schedule_v1();
+    let fired = fired_at(&schedule, daa_score);
+    let next = schedule.get(fired.len()).copied().unwrap_or(FORK_ID_NO_NEXT_FENCE);
+    ForkIdV1 { fired: fired_fences_digest_v1(params.genesis.hash, fired), next }
+}
+
+/// **The gate.** `peer_fired` is the peer's advertised digest as raw bytes (empty from a build that
+/// predates the field); `peer_next` is its advertised next fence.
+///
+/// Nothing the peer says about ITSELF is trusted: the comparison is against digests this node
+/// computes from its own `Params` and its own DAA score, and the peer's bytes are only ever
+/// compared, never interpreted.
+pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[u8], peer_next: u64) -> ForkIdVerdict {
+    if !fork_id_gate_armed_v1(params) {
+        return ForkIdVerdict::Unfenced;
+    }
+    let schedule = params.fence_schedule_v1();
+    if schedule.is_empty() {
+        return ForkIdVerdict::Unfenced;
+    }
+    // **The verdict on a difference depends on whether THIS node has crossed the fence the
+    // difference is ABOUT — not on whether it has crossed anything at all.**
+    //
+    // "Anything at all" was `local_fired.last()`, and it is wrong on every preset that already
+    // schedules a fence, which is three of the five. On mainnet a node is past crescendo from DAA
+    // 110,165,000 onward; under that rule, arming ADR-0072's fence at a FUTURE height made the
+    // first operator to deploy the armed build refuse every un-armed peer — in both directions,
+    // because `initialize_connection` is one code path — for the whole rollout window, with
+    // nothing about the new fence's height involved. Reproduced before it was fixed: mainnet armed
+    // at 200,000,000 judging an un-armed mainnet at local DAA 120,000,000 returned
+    // `DisagreePastFence { fired_through: 110165000 }`. That is M1-6's deploy-day partition,
+    // arriving through the module written to prevent it — and the lane's own tests could not see it
+    // because `armed_at()` clears crescendo first, which is exactly the configuration in which the
+    // bug is unreachable.
+    //
+    // Two questions, because a mismatch either names a fence or does not:
+    //
+    // * `NextFenceDiffers` names one — `schedule[k]`, the fence following the prefix the peer
+    //   agrees about. Refuse once this node is at or past THAT height, and not before: below it
+    //   the two builds still agree about every block either can produce, which is the whole
+    //   premise of a scheduled activation.
+    // * `Absent` and `UnknownFiredSet` name none, so the question falls back to
+    //   [`fork_id_gate_fences_v1`] — the fences whose crossing this module refuses on. Crescendo is
+    //   not one of them: a build that predates the fork-id field still implements crescendo, so
+    //   this node being past it says nothing about whether that peer can follow.
+    //
+    // **And a named fence only carries a refusal if the gate names it too.** `NextFenceDiffers`
+    // names `schedule[k]`, which is any fence on this build's schedule — including crescendo, which
+    // `fork_id_gate_fences_v1` deliberately excludes. Keyed on the height alone, an armed mainnet
+    // node past crescendo refused a peer that agreed about the empty prefix but announced some
+    // other next fence, and the refusal rested on the one fence every build in circulation already
+    // implements. That is the same defect as the `local_fired.last()` rule above, one arm over, and
+    // it made `the_gate_refuses_only_on_the_fences_it_names` an overclaim rather than an invariant.
+    // A disputed fence the gate does not name falls back to the gate's own fences, exactly as
+    // `Absent` and `UnknownFiredSet` do.
+    //
+    // **…but only to the gate fences the peer has not already agreed about** (2026-09-10). The
+    // fallback used to be "any gate fence this node has crossed", and a peer recognised as a PREFIX
+    // of this schedule has told this node, in a digest this node computed itself, that it crossed
+    // exactly those fences. Refusing it on one of them is refusing it for agreeing. `agreed` is that
+    // prefix; for `Absent` and `UnknownFiredSet` nothing was recognised, so nothing is excluded and
+    // they behave as they always did.
+    let gate_fences = fork_id_gate_fences_v1(params);
+    let armed_fired_through =
+        |agreed: &[u64]| gate_fences.iter().copied().filter(|&fence| fence <= local_daa_score && !agreed.contains(&fence)).max();
+    let classify_at = |mismatch: ForkIdMismatch, disputed: Option<u64>, agreed: &[u64]| {
+        let fired_through = match disputed {
+            // A gate-arming fence in dispute: refuse from that height and not one score before it.
+            // Never fall back here — a LOWER armed fence the peer already agreed about must not
+            // carry a refusal about a fence still ahead of both of them.
+            Some(fence) if gate_fences.contains(&fence) => (fence <= local_daa_score).then_some(fence),
+            _ => armed_fired_through(agreed),
+        };
+        match fired_through {
+            Some(fired_through) => ForkIdVerdict::DisagreePastFence { mismatch, fired_through },
+            None => ForkIdVerdict::DisagreeBeforeAnyFence(mismatch),
+        }
+    };
+    let classify = |mismatch: ForkIdMismatch| classify_at(mismatch, None, &[]);
+
+    if peer_fired.is_empty() {
+        return classify(ForkIdMismatch::Absent);
+    }
+
+    // Which prefix of this build's schedule is the peer claiming? Computed rather than read: the
+    // peer sends a digest, and a digest can only be recognised by recomputing the sets this node
+    // is willing to accept. `0..=len` because "crossed nothing" and "crossed everything" are both
+    // legitimate positions on one schedule.
+    let genesis = params.genesis.hash;
+    let matched = (0..=schedule.len()).find(|&k| fired_fences_digest_v1(genesis, &schedule[..k]).as_bytes() == peer_fired);
+
+    let Some(k) = matched else {
+        return classify(ForkIdMismatch::UnknownFiredSet);
+    };
+
+    match schedule.get(k) {
+        // The peer is somewhere along this schedule with a fence still ahead of it. That fence is
+        // the one term a stale-but-honest node still gets right, and an un-upgraded node cannot:
+        // it is the rule the peer has not reached, not the history it has.
+        Some(&expected) if peer_next != expected => {
+            let mismatch = ForkIdMismatch::NextFenceDiffers { expected, got: peer_next };
+            // **The two schedules part at the LOWER of the two next fences, and when that is the
+            // peer's, the dispute is about the peer's fence** (2026-09-10).
+            //
+            // A next fence below this build's is a fence this build does not carry — a rule it does
+            // not implement, so not "a rule every build in circulation implements", which is the
+            // only thing the gate-name test below exists to keep out of a refusal. Below that
+            // height the two builds judge every block alike; from it they do not. So refuse once
+            // this node has passed it, and not before.
+            //
+            // This is the arm the second and third flag days fell through. An un-upgraded
+            // testnet-11 node (schedule `1150, 1900, 2150, 2125000`) meeting the upgraded build
+            // (`… 2150, 2400, 2125000`) at DAA ~2241 saw `expected: 2125000` — crescendo, which the
+            // gate does not name — and fell back to "has this node crossed a gate fence", which it
+            // had (2150, a fence the peer had just AGREED about). It refused at once, the fleet's
+            // first restart cut every third-party node off, and they mined their own arm from DAA
+            // ~2,241 while the fleet went past 3,040. Measured 2026-09-09/10.
+            //
+            // Trusting `got` decides only WHEN a peer that matched a prefix this node computed is
+            // refused. The gate was never a defence against a lying peer — any peer can announce
+            // this node's own fork id — and block validity does not read it.
+            if peer_next < expected {
+                return match peer_next <= local_daa_score {
+                    true => ForkIdVerdict::DisagreePastFence { mismatch, fired_through: peer_next },
+                    false => ForkIdVerdict::DisagreeBeforeAnyFence(mismatch),
+                };
+            }
+            // Otherwise the peer lacks THIS build's `expected`: that fence is the dispute, and it
+            // carries a refusal only if the gate names it (crescendo does not).
+            classify_at(mismatch, Some(expected), &schedule[..k])
+        }
+        // Either the next fence agrees, or the peer has crossed this build's whole schedule and is
+        // announcing a fence this build does not carry. The second is this node being out of date,
+        // which is a fork-choice question and not a reason to refuse a peer.
+        _ => ForkIdVerdict::Agree,
+    }
+}
+
+/// **The highest gate fence at or below `daa_score`** — the last one this node has crossed — or `None`.
+pub fn fork_id_last_crossed_gate_fence_v1(params: &Params, daa_score: u64) -> Option<u64> {
+    fork_id_gate_fences_v1(params).into_iter().filter(|&fence| fence <= daa_score).max()
+}
+
+/// **Whether a peer's advertised fired-fence digest PROVES it carries `fence`**: it is the digest of a prefix of this
+/// build's schedule that includes `fence`. A peer that has not crossed the fence yet cannot prove it, whatever it will do
+/// later — which is why a connection judged below a fence has to be judged again once this node is past it
+/// ([`fork_id_crossing_rejudge_v1`]).
+pub fn fork_id_peer_carries_fence_v1(params: &Params, peer_fired: &[u8], fence: u64) -> bool {
+    let schedule = params.fence_schedule_v1();
+    (1..=schedule.len()).any(|k| {
+        schedule[k - 1] >= fence
+            && schedule[..k].contains(&fence)
+            && fired_fences_digest_v1(params.genesis.hash, &schedule[..k]).as_bytes().as_slice() == peer_fired
+    })
+}
+
+/// **The re-judgement a CROSSED fence owes a connection kept since before it** (the int-11 drill, 2026-10-03).
+///
+/// A handshake is one snapshot. [`fork_id_refusal_height_v1`] re-judges a peer whose snapshot already DISAGREES; it
+/// cannot see a peer whose snapshot AGREES because it was taken below this build's first disputed fence — a
+/// launched peer met below fence `F1` announces `next = F1`, the same as an armed build, and nothing in that
+/// announcement says whether the peer carries the fence after it (the gap `palw_hb_transparency_same_chain_fence` measured).
+/// Such a peer stays connected across the fence: it keeps relaying, disqualifies every block past it and stalls at `H − 1`
+/// without a word on the new side. So once this node's score is at or past a gate fence, a peer whose fork id was taken
+/// at a local score BELOW that fence and does not prove it carries it is refused; it reconnects and is judged on a
+/// fresh announcement (one that carries the fence agrees at once). `true` = refuse. Pure.
+pub fn fork_id_crossing_rejudge_v1(params: &Params, local_daa_score: u64, judged_at_daa: u64, peer_fired: &[u8]) -> Option<u64> {
+    if !fork_id_gate_armed_v1(params) {
+        return None;
+    }
+    let crossed = fork_id_last_crossed_gate_fence_v1(params, local_daa_score)?;
+    (judged_at_daa < crossed && !fork_id_peer_carries_fence_v1(params, peer_fired, crossed)).then_some(crossed)
+}
+
+/// **The lowest local DAA score, from `local_daa_score` on, at which [`evaluate_fork_id_v1`] would
+/// refuse this peer** — `None` if it never would.
+///
+/// A handshake is one snapshot of both sides, and a peer kept with a warning below the disputed
+/// height used to stay connected for good once this node passed it. Measured 2026-09-10: the
+/// explorer node (169.58.232.113) resynced from an empty datadir, met six un-upgraded peers at its
+/// own DAA 0 ("this node has not crossed a fence yet (DAA 0); keeping the peer"), and still held
+/// all six after its IBD reached DAA 3,158 — well past the 2400 fence they were missing — until
+/// they were kicked by hand. The connection layer stores this height with the peer and judges it
+/// again when its own score reaches it.
+///
+/// The verdict can only change at a height this node knows in advance — one of its own gate
+/// fences, or the next fence the peer announced — and it is monotone: once a score refuses, every
+/// higher score does (each arm refuses from a threshold and the recognised prefix does not depend on
+/// the score). So scanning those candidates in order finds the exact height. Pure: no peer state
+/// beyond what the handshake already received.
+pub fn fork_id_refusal_height_v1(params: &Params, local_daa_score: u64, peer_fired: &[u8], peer_next: u64) -> Option<u64> {
+    let mut candidates = fork_id_gate_fences_v1(params);
+    candidates.push(peer_next);
+    candidates.push(local_daa_score);
+    candidates.retain(|&height| height >= local_daa_score && height != FORK_ID_NO_NEXT_FENCE);
+    candidates.sort_unstable();
+    candidates.dedup();
+    candidates.into_iter().find(|&height| evaluate_fork_id_v1(params, height, peer_fired, peer_next).refuses())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::params::{
+        ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, devnet_shipped_params, palw_rc_shipped_params,
+    };
+    use crate::network::NetworkId;
+
+    fn shipped() -> Vec<(&'static str, Params)> {
+        vec![
+            ("mainnet", Params::from(NetworkId::new(crate::network::NetworkType::Mainnet))),
+            ("testnet-10", Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 10))),
+            ("testnet-11", Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11))),
+            ("devnet", Params::from(NetworkId::new(crate::network::NetworkType::Devnet))),
+            ("simnet", Params::from(NetworkId::new(crate::network::NetworkType::Simnet))),
+        ]
+    }
+
+    /// **The gate names every PALW fence a preset SCHEDULES** (mainnet audit 2026-09-06, M-6).
+    ///
+    /// Two clauses. The first is the RULE, and the probe is what makes it a test of the rule rather
+    /// than of the patch: every PALW fence on `Params`, each at its own distinct height, must appear
+    /// in the gate's schedule. On the pre-patch tree it fails with twenty-one unnamed fences and
+    /// cannot be satisfied by adding one name to a hand-written array — which is the step the
+    /// module's own doc used to prescribe, and which the 2026-09-06 merge skipped four times.
+    ///
+    /// The second is the INVARIANCE clause, and it is the guard on the repair: deriving the list
+    /// must not widen the gate on the live chain. testnet-11's set is {1150, 1900} before and
+    /// after, because the three model fences ride `palw_da_court`'s height and dedup away.
+    #[test]
+    fn the_fork_id_gate_names_every_scheduled_palw_fence() {
+        for (name, params) in [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())] {
+            let gate = fork_id_gate_fences_v1(&params);
+            for (fence_name, fence) in params.palw_fences_v1() {
+                let Some(fence) = fence else { continue };
+                let score = fence.daa_score();
+                if score == 0 || score == u64::MAX {
+                    continue;
+                }
+                assert!(
+                    gate.contains(&score),
+                    "{name}: {fence_name} is scheduled at {score} and the fork-id gate does not name it: an un-upgraded \
+                     seat would fork at the height with nothing but a log line"
+                );
+            }
+        }
+
+        // The probe: EVERY fence at its own distinct height, so no fence can hide behind a
+        // neighbour that happens to share one. A hand-written list cannot pass this.
+        let mut probe = palw_rc_shipped_params();
+        let names: Vec<&'static str> = probe.palw_fences_v1().into_iter().map(|(n, _)| n).collect();
+        for (i, name) in names.iter().enumerate() {
+            let at = ForkActivation::new(9_000_000 + i as u64);
+            set_fence_for_probe(&mut probe, name, at);
+        }
+        let gate = fork_id_gate_fences_v1(&probe);
+        for (i, name) in names.iter().enumerate() {
+            let score = 9_000_000 + i as u64;
+            assert!(gate.contains(&score), "{name} scheduled at {score} and the gate does not name it");
+        }
+
+        // The invariance the repair had to meet: the live chain's gate set does not move.
+        assert_eq!(
+            fork_id_gate_fences_v1(&palw_rc_shipped_params()),
+            vec![
+                1150,
+                crate::config::params::PALW_RC_DA_COURT_FENCE_DAA,
+                crate::config::params::PALW_RC_COURT_LADDER_FENCE_DAA,
+                crate::config::params::PALW_RC_MODEL_BENEFITS_FENCE_DAA,
+                crate::config::params::PALW_RC_MODEL_LEG_V2_FENCE_DAA,
+                crate::config::params::PALW_RC_AUDIT_FENCE_DAA,
+                // One entry for 6,000: the held regime and the deep-audit fence share it (ADR-0118; 7,000 until 2026-09-17).
+                // ADR-0120's 6,900, where the deployed release put it — now BELOW the moved flag day.
+                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
+                // One for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
+                crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                // ADR-0130 latency: 5 DAA → 1 DAA, its own height before ADR-0134.
+                crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
+                // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
+                crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+                crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
+                crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
+            ],
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, ADR-0133 §7's seat gate, and ADR-0144's lock ledger), and deriving the list must not widen it"
+        );
+    }
+
+    /// Write one named fence on a probe `Params`. A `match` rather than reflection, so a fence
+    /// added to `Params` and not to `palw_fences_v1` cannot reach here at all, and one added to
+    /// both but not here fails the probe by name instead of passing silently.
+    fn set_fence_for_probe(params: &mut Params, name: &str, at: ForkActivation) {
+        match name {
+            "palw_bootstrap_activation" => params.palw_bootstrap_activation = Some(at),
+            "palw_unavailable_abstains" => params.palw_unavailable_abstains = Some(at),
+            "palw_bond_maturity" => {
+                params.palw_bond_maturity = Some(crate::config::params::PalwBondMaturityV1 { activation: at, window_daa: 1_000 })
+            }
+            // Lane maturity (post-launch, 2026-09-26): refused without `palw_bond_maturity` scheduled above
+            // it by `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_bond_maturity_early" => params.palw_bond_maturity_early = Some(at),
+            "palw_frontier_provenance" => params.palw_frontier_provenance = Some(at),
+            // lane: rcore/f1-forkchoice-attacks
+            "palw_reorg_strict_economic_win" => params.palw_reorg_strict_economic_win = Some(at),
+            "palw_pruning_proof_strict_economic_win" => params.palw_pruning_proof_strict_economic_win = Some(at),
+            // lane: rcore/cap-weight (ADR-0160 F-W): refused without R-core+, strict-win and lane A's operator
+            // anchor at or below it by `validate_palw_v2`, which the probe does not run — it asks only the
+            // hashers and the schedule.
+            "palw_capacity_weight_cap" => {
+                params.palw_capacity_weight_cap = Some(at);
+                params.sync_palw_capacity_weight_cap();
+            }
+            "palw_heartbeat" => {
+                let hb = params.palw_heartbeat.as_mut().expect("the RC probe base carries the heartbeat lane");
+                hb.activation = at;
+            }
+            "palw_attempt_work" => {
+                let work = params.palw_attempt_work.as_mut().expect("the RC probe base carries the attempt-work constant");
+                work.activation = at;
+            }
+            "palw_attempt_activation" => params.palw_attempt_activation = Some(at),
+            "dns_bft_gate" => {
+                params.dns_bft_gate = Some(crate::config::params::DnsBftGateV1 {
+                    activation: at,
+                    t_leak_daa: 5_040,
+                    reentry_final_depth_daa: 200,
+                    min_retained_validators: 4,
+                })
+            }
+            "palw_inactivity_leak" => {
+                params.palw_inactivity_leak = Some(crate::config::params::PalwInactivityLeakV1 {
+                    activation: at,
+                    t_leak_daa: 1_000,
+                    reentry_final_depth_daa: 1_000,
+                })
+            }
+            "palw_beacon_fold" => {
+                params.palw_beacon_fold = Some(crate::config::params::PalwBeaconFoldV1 {
+                    activation: at,
+                    k: crate::palw_fp_beacon_v3::PALW_BEACON_FOLD_MIN_K_V1,
+                })
+            }
+            "palw_capability_bound" => params.palw_capability_bound = Some(at),
+            "palw_compute_overlay_retired" => params.palw_compute_overlay_retired = Some(at),
+            "palw_model_registry" => params.palw_model_registry = Some(at),
+            "palw_work_target" => params.palw_work_target = Some(at),
+            "palw_single_lottery" => params.palw_single_lottery = Some(at),
+            "palw_short_challenge_window" => params.set_palw_short_challenge_window(Some(at)),
+            "palw_verification_v2" => params.palw_verification_v2 = Some(at),
+            "palw_verification_s3" => params.palw_verification_s3 = Some(at),
+            "palw_verification_s2" => params.palw_verification_s2 = Some(at),
+            "palw_readiness_v2" => params.palw_readiness_v2 = Some(at),
+            "palw_anchor_clock" => params.palw_anchor_clock = Some(at),
+            // ADR-0142. `validate_palw_v2` refuses the anchor clock without this at or below it, so
+            // the probe sets the cursor wherever it sets the clock; setting the cursor alone is
+            // legal on its own.
+            "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
+            // The clock floor (H3/H5) refines the cursor; `validate_palw_v2` wants the cursor at or
+            // below it, which the probe does not run — it asks only the hashers and the schedule.
+            "palw_clock_floor" => params.palw_clock_floor = Some(at),
+            // The lead cap: no prerequisite; the probe asks only the hashers and the schedule.
+            "palw_clock_lead_cap" => params.palw_clock_lead_cap = Some(at),
+            // ADR-0152 v2 F2: genesis-only and refused without four other fences by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_offence_attribution" => params.palw_offence_attribution = Some(at),
+            // ADR-0152 R-core+: genesis-only and refused without thirteen other fences by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_rcore_plus" => params.palw_rcore_plus = Some(at),
+            // Lane F1 (the panel seed, post-launch): refused without R-core+ at or below it by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_panel_seed_execution" => params.palw_panel_seed_execution = Some(at),
+            // Lane A (the operator anchor, post-launch): the height over every genesis bond (the RC probe
+            // base is ConsensusV2); refused without R-core+ at or below it by `validate_palw_v2`, which the
+            // probe does not run — it asks only the hashers and the schedule.
+            "palw_operator_anchor" => {
+                let rule = params.palw_operator_anchor_of_genesis_bonds_v1(at).expect("the RC probe base is ConsensusV2");
+                params.palw_operator_anchor = Some(rule);
+            }
+            // Lane V02 (a resolved claim's lock off the work ceiling, post-launch): refused without R-core+
+            // at or below it and an unsynced mirror by `validate_palw_v2`, which the probe does not run.
+            "palw_final_lock_full_collateral" => params.palw_final_lock_full_collateral = Some(at),
+            // Lane V02 (the shortened post-Final lock life, post-launch): refused without R-core+ at or
+            // below it and an unsynced mirror by `validate_palw_v2`, which the probe does not run.
+            "palw_final_lock_life" => params.palw_final_lock_life = Some(at),
+            // ADR-0160 lane liab (F-L): the height over testnet-12's schedule (its one step at the height);
+            // refused without R-core+ and the attribution fence at or below it by `validate_palw_v2`, which
+            // the probe does not run — it asks only the hashers and the schedule.
+            "palw_capacity_aggregate_liability" => {
+                params.palw_capacity_aggregate_liability =
+                    Some(crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at))
+            }
+            // A later step's slot: the value (armed at 1,000 where absent, as a widening's lane is) grows to
+            // `slot` steps, the missing ones one DAA apart above the last, and step `slot` sits at `at`.
+            step if step.starts_with("palw_capacity_aggregate_liability_step_") => {
+                let slot: usize = step["palw_capacity_aggregate_liability_step_".len()..].parse().expect("a slot number");
+                let value = params.palw_capacity_aggregate_liability.get_or_insert_with(|| {
+                    crate::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(ForkActivation::new(1_000))
+                });
+                while value.steps.len() < slot {
+                    let last = *value.steps.last().expect("a value has its first step");
+                    value.steps.push(crate::palw_aggregate_liability_v1::PalwCapacityStepV1 { from_daa: last.from_daa + 1, ..last });
+                }
+                value.steps[slot - 1].from_daa = at.daa_score();
+            }
+            // Lane F2-lock (the lock life applied retroactively, post-launch): refused without lane V02's
+            // lock life at or below it and an unsynced mirror by `validate_palw_v2`, which the probe does
+            // not run — it asks only the hashers and the schedule.
+            "palw_final_lock_life_retro" => params.palw_final_lock_life_retro = Some(at),
+            // ADR-0152 §4-quater: genesis-only and refused without §11.3's receipt window and the derived
+            // free-prompt work by `validate_palw_v2`, which the probe does not run — it asks only the
+            // hashers and the schedule.
+            "palw_class_verify_deadline" => params.palw_class_verify_deadline = Some(at),
+            // Lane bind-deadlock (post-launch): refused without R-core+ at or below it by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_anchor_at_ceiling" => params.palw_anchor_at_ceiling = Some(at),
+            "palw_lane_accept_parents_first" => params.palw_lane_accept_parents_first = Some(at),
+            // ADR-0152-adjacent (Activation Pool): the height with the user's terms beside it.
+            "palw_activation_pool" => {
+                params.palw_activation_pool = Some(crate::config::params::PalwActivationPoolParamsV1 {
+                    activation: at,
+                    terms: crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1,
+                })
+            }
+            // The readiness-V2 horizon (user decision 2026-09-25): the height with testnet-12's spans
+            // beside it; genesis-only by `validate_palw_v2`, which the probe does not run.
+            "palw_readiness_v2_max_age_spans" => {
+                params.palw_readiness_v2_max_age_spans = Some(crate::config::params::PalwReadinessV2MaxAgeParamsV1 {
+                    activation: at,
+                    max_age_spans: crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_T12_V1,
+                })
+            }
+            // Lane F1 (registry resilience, V03/V05): a post-launch fence, refused below R-core+ and the
+            // registry by `validate_palw_v2`, which the probe does not run — it asks only the hashers
+            // and the schedule.
+            "palw_registry_resilience" => params.palw_registry_resilience = Some(at),
+            // Lane F2 (the floor-refusal retry, post-launch): refused unsynced and without R-core+ at or
+            // below it by `validate_palw_v2`, which the probe does not run — it asks only the hashers and
+            // the schedule.
+            "palw_floor_refusal_retry" => params.palw_floor_refusal_retry = Some(at),
+            "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
+            "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
+            "palw_objective_offence" => params.palw_objective_offence = Some(at),
+            "palw_execution_quanta" => params.palw_execution_quanta = Some(at),
+            "palw_public_model_source_required" => {
+                params.palw_public_model_source_required = Some(crate::config::params::PalwPublicModelSourceRuleV1 { activation: at })
+            }
+            "palw_kimi_k3" => params.palw_kimi_k3 = Some(at),
+            // RFC-0002 Phase F: a fence with a value — the activation is what the probe moves.
+            "palw_tir_v1" => params.palw_tir_v1 = Some(crate::palw_tir_v1::PalwTirFenceV1::testnet12_v1(at)),
+            // RFC-0003, likewise: the drill's value (the fence is in no network's release).
+            "palw_gen_v1" => params.palw_gen_v1 = Some(crate::palw_gen_v1::PalwGenFenceV1::drill_v1(at)),
+            // FP Job V5 (RFC-0003 §II.2.1): a bare height.
+            "palw_fp_job_v5" => params.palw_fp_job_v5 = Some(at),
+            "palw_gen_range_twin_v1" => params.palw_gen_range_twin_v1 = Some(at),
+            // The task-head profile (HFX): a fence with a value — testnet-12's, at the probed height.
+            "palw_task_heads_v1" => {
+                params.palw_task_heads_v1 = Some(crate::palw_task_heads_v1::PalwTaskHeadsFenceV1::testnet12_v1(at))
+            }
+            // RFC-0011 §15.7's dormant kernel-route fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_probabilistic_constraints_v1" => params.palw_probabilistic_constraints_v1 = Some(at),
+            // ADR-0178's rule E: refused when armed (and the DNS retirement's order checked) by `validate_palw_v2`, which the probe
+            // does not run.
+            "palw_fork_choice_rule_e_v1" => params.palw_fork_choice_rule_e_v1 = Some(at),
+            // RFC-0004 Part II's dormant typed-roots fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_typed_roots_v1" => params.palw_typed_roots_v1 = Some(at),
+            // RFC-0009 L2's dormant fork-choice commitment fence: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_fork_choice_commitment_v1" => params.palw_fork_choice_commitment_v1 = Some(at),
+            "palw_verifier_pay_v1" => params.palw_verifier_pay_v1 = Some(at),
+            "palw_model_refutation_seal_v1" => params.palw_model_refutation_seal_v1 = Some(at),
+            // RFC-0002 §II.14.60 typed window class (funded action 45): refused when armed by `validate_palw_v2`.
+            "palw_window_class_v37" => params.palw_window_class_v37 = Some(at),
+            // codex RFC-7's per-attempt beacon source opt-in (inner 40): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_beacon_source_opt_in_v1" => {
+                params.palw_beacon_source_opt_in_v1 =
+                    Some(crate::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1::unapproved_probe_at(at))
+            }
+            // codex G14 final's dormant fences (bare heights, refused when armed; the probe does not validate).
+            "palw_class_semantics_v1" => params.palw_class_semantics_v1 = Some(at),
+            "palw_court_commitment_scope_v1" => params.palw_court_commitment_scope_v1 = Some(at),
+            "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
+            "palw_staged_tir_route_v1" => params.palw_staged_tir_route_v1 = Some(at),
+            // G14 original paid TIR conviction: a bare height; `palw_tir_public_conviction_v1_fence` resolves it only with the staged
+            // TIR route, the staged court, the objective-offence ledger, R-core+ and the aggregate liability, which the probe does not ask.
+            "palw_tir_public_conviction_v1" => params.palw_tir_public_conviction_v1 = Some(at),
+            "palw_staged_float_constraint_v1" => params.palw_staged_float_constraint_v1 = Some(at),
+            // codex RFC-8 / RFC-12 final's monetary fences (R6781-F): bare heights, and the paid consumer lifecycle with its
+            // unapproved probe terms (its values only ride along).
+            // RFC07 signed paid claims / absolute Panel lifetime and RFC08 monetary material: unapproved probe policies whose
+            // values only ride along (validation refuses every real activation; the probe does not validate).
+            "palw_claim_challenge_v2" => {
+                params.palw_claim_challenge_v2 =
+                    Some(crate::palw_claim_challenge_v2::PalwClaimChallengeFenceV2::unapproved_probe_at(at))
+            }
+            "palw_panel_lifetime_v2" => {
+                params.palw_panel_lifetime_v2 = Some(crate::palw_panel_lifetime_v2::PalwPanelLifetimeFenceV2::unapproved_probe_at(at))
+            }
+            "palw_material_release_recovery_v2"=> {params.palw_material_release_recovery_v2=Some(crate::palw_material_release_recovery_v2::PalwMaterialReleaseRecoveryFenceV2::unapproved_probe_at(at));}
+            // The retired compact contract v4 (PRINCIPLES §8): validation refuses every activation; the probe asks only the hashers
+            // and the schedule, with nominal policy values that only ride along.
+            "palw_claim_compact_v4" => {
+                params.palw_claim_compact_v4 = Some(crate::palw_claim_compact_v4::PalwClaimCompactFenceV4 {
+                    activation: at,
+                    policy: crate::palw_claim_compact_v4::PalwClaimCompactPolicyV4 {
+                        max_contracts: 1,
+                        maximum_opening_bytes: 1,
+                        maximum_proof_bytes: 1,
+                        maximum_verifier_work: 1,
+                        maximum_stream_words: 1,
+                        require_independent_review: true,
+                    },
+                })
+            }
+            "palw_monetary_material_v1" => {
+                params.palw_monetary_material_v1 = Some(crate::palw_monetary_material_v1::PalwMonetaryMaterialFenceV1 {
+                    activation: at,
+                    policy: crate::palw_monetary_material_v1::PalwMonetaryMaterialPolicyV1 {
+                        version: 1,
+                        max_contracts: 16,
+                        max_contracts_per_provider: 8,
+                        max_bytes_per_contract: 1_000_000,
+                        max_bytes_per_provider: 8_000_000,
+                        minimum_collateral_sompi: 1,
+                        minimum_fee_sompi: 1,
+                        window_daa: 280,
+                        response_window_daa: 64,
+                        max_enrollment_daa: 100,
+                        cost_report_root: Hash64::from_bytes([0xF4; 64]),
+                    },
+                })
+            }
+            // RFC07/RFC08 signed economic contracts: unapproved probe policies whose values only ride along (validation refuses every
+            // real activation; the probe does not validate), mirrored into the V2 bundle.
+            "palw_model_verification_gate_v1" => {
+                params.palw_model_verification_gate_v1 =
+                    Some(crate::palw_econ_contracts_v1::PalwModelVerificationGateFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
+            "palw_horizon_extension_v1" => {
+                params.palw_horizon_extension_v1 =
+                    Some(crate::palw_econ_contracts_v1::PalwHorizonExtensionFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
+            "palw_minimum_price_v1" => {
+                params.palw_minimum_price_v1 = Some(crate::palw_econ_contracts_v1::PalwMinimumPriceFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
+            // N3 (round 3): the BootstrapExact source rounds, an unapproved probe policy (synthetic profile) mirrored likewise.
+            "palw_beacon_bootstrap_v1" => {
+                params.palw_beacon_bootstrap_v1 =
+                    Some(crate::palw_beacon_bootstrap_v1::PalwBeaconBootstrapFenceV1::unapproved_probe_at(at));
+                params.sync_palw_econ_contracts_v1();
+            }
+            "palw_reporter_income_v2" => params.palw_reporter_income_v2 = Some(at),
+            "palw_material_income_v3" => params.palw_material_income_v3 = Some(at),
+            "palw_settlement_once_v1" => {
+                params.palw_settlement_once_v1 = Some(at);
+                params.sync_palw_settlement_once_v1();
+            }
+            "palw_paid_claim_trap_v1" => {
+                params.palw_paid_claim_trap_v1 = Some(at);
+                params.sync_palw_paid_claim_trap_v1();
+            }
+            "palw_native_liability_horizon_v1" => {
+                params.palw_native_liability_horizon_v1 = Some(at);
+                params.sync_palw_native_liability_horizon_v1();
+            }
+            "palw_paid_consumer_lifecycle_v1" => {
+                params.palw_paid_consumer_lifecycle_v1 = Some(crate::palw_bond_budget_v1::PalwPaidConsumerLifecycleFenceV1 {
+                    activation: at,
+                    policy: crate::palw_bond_budget_v1::PalwPaidConsumerLifecyclePolicyV1 {
+                        version: 1,
+                        service_span_daa: 60,
+                        dispute_tail_daa: 700,
+                        material_tail_daa: 500,
+                    },
+                })
+            }
+            // codex RFC-7 final's prepaid source fees (inner 61/62): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_stage_execution_v14" => {
+                params.palw_stage_execution_v14 =
+                    Some(crate::palw_flat_stage_v14::PalwStageExecutionFenceV14::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_native_final_v27" => {
+                params.palw_native_final_v27 =
+                    Some(crate::palw_native_final_v27::PalwNativeFinalFenceV27::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_stage_execution_v28" => {
+                params.palw_stage_execution_v28 =
+                    Some(crate::palw_flat_stage_v28::PalwStageExecutionFenceV28::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_native_execution_v39" => {
+                params.palw_native_execution_v39 =
+                    Some(crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_native_mining_v39" => {
+                params.palw_native_mining_v39 =
+                    Some(crate::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_funded_execution_v11" => {
+                params.palw_funded_execution_v11 =
+                    Some(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_beacon_source_fee_v1" => {
+                params.palw_beacon_source_fee_v1 =
+                    Some(crate::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1::unapproved_probe_at(at))
+            }
+            // codex RFC-10's complete-population and retired-archive Panel profiles: refused when armed (the probe does not validate);
+            // the height rides with the V2 probe policy below, whose values only ride along.
+            "palw_permissionless_panel_complete_v1" | "palw_permissionless_panel_retired_v1" => {
+                let mut probe = params.clone();
+                probe.palw_permissionless_panel_v1 = None;
+                set_fence_for_probe(&mut probe, "palw_permissionless_panel_v1", at);
+                let policy = probe.palw_permissionless_panel_v1.expect("armed above").policy;
+                if name == "palw_permissionless_panel_complete_v1" {
+                    params.palw_permissionless_panel_complete_v1 =
+                        Some(crate::palw_permissionless_panel_v1::PalwPermissionlessPanelCompleteV1 { activation: at, policy });
+                } else {
+                    params.palw_permissionless_panel_retired_v1 =
+                        Some(crate::palw_permissionless_panel_v1::PalwPermissionlessPanelRetiredV1 { activation: at, policy });
+                }
+            }
+            "palw_panel_free_v1" => params.palw_panel_free_v1 = Some(crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(at)),
+            "palw_signed_registration_v1" => params.palw_signed_registration_v1 = Some(at),
+            // RFC-0006 per-segment pricing (SHARD): refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_tir_shard_segment_v2" => params.palw_tir_shard_segment_v2 = Some(at),
+            // DA16's provider court: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
+            "palw_provider_court_v1" => params.palw_provider_court_v1 = Some(at),
+            "palw_legacy_held_da_v2" => params.palw_legacy_held_da_v2 = Some(at),
+            // ADR-0176 / ADR-0177 (lane BUDGET): a height with the unapproved probe policy (its value only rides along; the probe asks the
+            // hashers and the schedule, never `validate_palw_v2`, which refuses both armed).
+            "palw_bond_budget_v1" => {
+                params.palw_bond_budget_v1 = Some(crate::palw_bond_budget_v1::PalwBondBudgetFenceV1::at(at));
+            }
+            "palw_model_bond_allocation_v1" => {
+                params.palw_model_bond_allocation_v1 = Some(crate::palw_bond_budget_v1::PalwModelBondAllocationFenceV1::at(at));
+            }
+            // ADR-0176 amendment (ユーザー判断 2026-10-15): a height with the unapproved probe policy (refused by `validate_palw_v2`).
+            "palw_bond_formula_v2" => params.palw_bond_formula_v2 = Some(crate::palw_bond_formula_v2::PalwBondFormulaFenceV2::at(at)),
+            // ADR-0032's amended reporter share (lane INTF): a bare height, refused when armed by `validate_palw_v2` (which the probe
+            // does not run).
+            "palw_reporter_share_v2" => params.palw_reporter_share_v2 = Some(at),
+            // Lane LG14-A's public filer: a bare height, refused when armed by `validate_palw_v2` (which the probe does not run).
+            "palw_legacy_public_filer_v1" => params.palw_legacy_public_filer_v1 = Some(at),
+            // The three fences of the 2026-10-12 rulings: bare heights, refused when armed by `validate_palw_v2`.
+            "palw_court_model_scope_v1" => params.palw_court_model_scope_v1 = Some(at),
+            "palw_public_evidence_reward_v1" => params.palw_public_evidence_reward_v1 = Some(at),
+            "palw_claim_hard_deadline_v1" => {
+                params.palw_claim_hard_deadline_v1 =
+                    Some(crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at))
+            }
+            // RFC-0006 R6-CELL round 4's coverage closure: a bare height, refused when armed by `validate_palw_v2`.
+            "palw_cell_coverage_closure_v1" => params.palw_cell_coverage_closure_v1 = Some(at),
+            // The cross-lane G14 gates: bare heights, refused when armed by `validate_palw_v2` (no pinned record); the probe does not validate.
+            "palw_g14_route_required_v1" => params.palw_g14_route_required_v1 = Some(at),
+            "palw_reward_liability_horizon_v1" => params.palw_reward_liability_horizon_v1 = Some(at),
+            // The court-capacity fence: a height with the placeholder policy, refused when armed by `validate_palw_v2`.
+            "palw_court_capacity_v1" => {
+                params.palw_court_capacity_v1 = Some(crate::palw_court_capacity_v1::PalwCourtCapacityFenceV1::placeholder_at(at))
+            }
+            "palw_court_transport_v1" => {
+                params.palw_court_transport_v1 = Some(crate::palw_court_transport_v1::PalwCourtTransportFenceV1::unapproved_probe_at(at))
+            }
+            // RFC-0016's two dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_unresolved_bound_v1" => params.palw_unresolved_bound_v1 = Some(at),
+            "palw_claim_local_settlement_v1" => params.palw_claim_local_settlement_v1 = Some(at),
+            "palw_model_block_rights_v1" => params.palw_model_block_rights_v1 = Some(at),
+            "palw_elastic_final_capacity_v1" => params.palw_elastic_final_capacity_v1 = Some(at),
+            // RFC-0017's model eligibility: a bare height, refused when armed by `validate_palw_v2`.
+            "palw_model_eligibility_v1" => params.palw_model_eligibility_v1 = Some(at),
+            // ADR-0179's model tiers: the design values and empty lists, refused when armed by `validate_palw_v2`.
+            "palw_model_tier_v1" => {
+                params.palw_model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierFenceV1::at(at));
+            }
+            // G14's per-class detection policy: the height with no policy, refused when armed by `validate_palw_v2`.
+            "palw_detection_policy_v1" => {
+                params.palw_detection_policy_v1 = Some(crate::palw_detection_policy_v1::PalwDetectionPolicyFenceV1::at(at));
+            }
+            // RFC-0018's five dormant fences: refused when armed by `validate_palw_v2`, which the probe does not run.
+            "palw_dag_sibling_attribution_v1" => params.palw_dag_sibling_attribution_v1 = Some(at),
+            "palw_panel_anchor_permissionless_v1" => params.palw_panel_anchor_permissionless_v1 = Some(at),
+            "palw_rule_e_participation_v2" => params.palw_rule_e_participation_v2 = Some(at),
+            "palw_independently_work_certified_v1" => params.palw_independently_work_certified_v1 = Some(at),
+            "palw_dag_width_schedule_v1" => {
+                params.palw_dag_width_schedule_v1 = Some(crate::palw_rfc0018_v1::PalwDagWidthScheduleFenceV1::unapproved_probe_at(at))
+            }
+            // RFC-0012's coordinated retirement: the height, with a complete settlement policy beside it (its values only ride
+            // along; the probe asks the hashers and the schedule, never `validate_palw_v2`).
+            "palw_dns_retirement_v1" => {
+                params.palw_dns_retirement = Some(crate::palw_native_settlement_v1::PalwDnsRetirementV1 {
+                    activation: at,
+                    settlement: crate::palw_native_settlement_v1::PalwSettlementPolicyV1 {
+                        settled_anchor_depth: 1,
+                        unique_mature_work: 1,
+                        max_operator_permille: 1000,
+                        max_class_permille: 1000,
+                    },
+                    legacy_evidence_horizon_daa: 1,
+                })
+            }
+            // RFC-0010's permissionless Panel: refused when armed by `validate_palw_permissionless_panel_v1`, which the probe does not
+            // run; the height rides with a complete policy (its values only ride along, the probe asks the hashers and the schedule).
+            "palw_permissionless_panel_v1" => {
+                params.palw_permissionless_panel_v1 = Some(crate::palw_permissionless_panel_v1::PalwPermissionlessPanelV1 {
+                    activation: at,
+                    policy: crate::palw_permissionless_panel_v1::PanelPolicyV1 {
+                        seal_depth_blocks: 1,
+                        seal_wait_daa: 50,
+                        bond_maturity_daa: 1,
+                        beacon_period_daa: 100,
+                        beacon_wait_daa: 8,
+                        assignment_delay_daa: 1,
+                        receipt_window_daa: 3,
+                        seat_count: 5,
+                        outsider_seats: 0,
+                        max_retries: 1,
+                        min_collateral: 1,
+                        max_candidates: 64,
+                        max_pending: 64,
+                        max_pending_per_bond: 16,
+                        max_assignments_per_block: 8,
+                        max_admissions_per_block: 8,
+                        max_tracked_claims: 256,
+                        max_beacons_per_block: 2,
+                        max_beacon_proof_bytes: 4096,
+                        beacon_scheme: crate::Hash64::default(),
+                    },
+                })
+            }
+            "palw_fp_prefix_inherit" => params.palw_fp_prefix_inherit = Some(at),
+            "palw_fp_prefix_state" => params.palw_fp_prefix_state = Some(at),
+            "palw_fp_tokenizer_match" => params.palw_fp_tokenizer_match = Some(at),
+            "palw_fp_constraint_v2" => params.palw_fp_constraint_v2 = Some(at),
+            "palw_adapter_class_v1" => params.palw_adapter_class_v1 = Some(at),
+            "palw_tir_fence2" => params.palw_tir_fence2 = Some(at),
+            // RFC-0006: a bare height (its prerequisites are `validate_palw_v2`'s, which the probe does not run).
+            "palw_tir_shard_v1" => params.palw_tir_shard_v1 = Some(at),
+            "palw_floor_reserve_v1" => params.palw_floor_reserve_v1 = Some(at),
+            "palw_real_clock_tick_v1" => params.palw_real_clock_tick_v1 = Some(at),
+            "palw_anchor_window_v1" => params.palw_anchor_window_v1 = Some(at),
+            // RFC-0009: a bare height (its prerequisites are `validate_palw_v2`'s, which the probe does not run).
+            "palw_receipt_spend_v4" => params.palw_receipt_spend_v4 = Some(at),
+            // RFC-0009 stage B: a bare height.
+            "palw_evidence_court_v1" => params.palw_evidence_court_v1 = Some(at),
+            "palw_audit_1004_v1" => params.palw_audit_1004_v1 = Some(at),
+            // RFC-0004, likewise: the drill's value (the fence is in no network's release).
+            "palw_improvement_v1" => params.palw_improvement_v1 = Some(crate::palw_improve_v1::PalwImprovementFenceV1::drill_v1(at)),
+            // RFC-0003 decision 22: a bare height.
+            "palw_held_close_chunks_v1" => params.palw_held_close_chunks_v1 = Some(at),
+            // RFC-0007 Part I: a bare height.
+            "palw_verification_vertex_v1" => params.palw_verification_vertex_v1 = Some(at),
+            // RFC-0008 v2: a bare height, armable on no ruleset until the section 9 gates pass (`validate_palw_exec_payload_v2`), which the
+            // probe does not run — it asks only the hashers and the schedule.
+            "palw_exec_payload_v2" => params.palw_exec_payload_v2 = Some(at),
+            "palw_witness_manifest_v1" => params.palw_witness_manifest_v1 = Some(at),
+            "palw_audit_mesh_v1" => params.palw_audit_mesh_v1 = Some(at),
+            "palw_capped_onboarding_v1" => params.palw_capped_onboarding_v1 = Some(at),
+            // RFC-0002 Part II Proposal A, likewise: the drill's value (the fence is in no network's release).
+            // RFC-0002 Phase H: a bare height.
+            "palw_tir_only_v1" => params.palw_tir_only_v1 = Some(at),
+            "palw_class_seating" => {
+                params.palw_class_seating = Some(crate::palw_class_seating_fence_v1::PalwClassSeatingFenceV1::drill_v1(at))
+            }
+            "palw_canonical_work" => params.palw_canonical_work = Some(at),
+            "palw_admission_independence" => params.palw_admission_independence = Some(at),
+            "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),
+            "palw_class_receipt_window" => params.palw_class_receipt_window = Some(at),
+            "palw_economic_payout" => {
+                params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
+                    activation: at,
+                    ..crate::palw_economic_payout_v1::PALW_ECONOMIC_PAYOUT_DEVNET_V1
+                })
+            }
+            "palw_context_ladder" => params.palw_context_ladder = Some(at),
+            "palw_panel_da" => params.palw_panel_da = Some(at),
+            "palw_certification_rent" => params.palw_certification_rent = Some(at),
+            "palw_uncertified_weightless" => params.palw_uncertified_weightless = Some(at),
+            "palw_da_court" => params.palw_da_court = Some(at),
+            "palw_court_ladder" => params.palw_court_ladder = Some(at),
+            "palw_fp_da_pins" => params.palw_fp_da_pins = Some(at),
+            "palw_validator_payout_bounds" => params.palw_validator_payout_bounds = Some(at),
+            "palw_slashing_evidence_utxo_genuine" => params.palw_slashing_evidence_utxo_genuine = Some(at),
+            "palw_epoch_boundary_budget" => params.palw_epoch_boundary_budget = Some(at),
+            "palw_epoch_budget_release" => params.palw_epoch_budget_release = Some(at),
+            "palw_fp_ruleset_caps" => params.palw_fp_ruleset_caps = Some(at),
+            "palw_model_market" => params.palw_model_market = Some(at),
+            "palw_model_lines" => params.palw_model_lines = Some(at),
+            "palw_model_immutable_v1" => params.palw_model_immutable_v1 = Some(at),
+            "palw_model_benefits" => params.palw_model_benefits = Some(at),
+            "palw_model_leg_v2" => params.palw_model_leg_v2 = Some(at),
+            "palw_model_seed_v2" => params.palw_model_seed_v2 = Some(at),
+            // ADR-0162: a bare height, folded with the market by `palw_model_virtual_v1_fence`.
+            "palw_model_virtual_v1" => params.palw_model_virtual_v1 = Some(at),
+            "palw_model_evm" => params.palw_model_evm = Some(at),
+            // Lane sink (the model sink binding, post-launch): refused without the market and the
+            // 2026-09-23 audit fence at or below it by `validate_palw_v2`, which the probe does not run.
+            "palw_model_sink_bound" => params.palw_model_sink_bound = Some(at),
+            // ADR-0160 lane verify (F-B, F-R): bare heights; `validate_palw_v2` (not run by the probe)
+            // refuses them without R-core+, the audit and attribution fences and their mirrors.
+            "palw_capacity_batch_licence" => params.palw_capacity_batch_licence = Some(at),
+            "palw_capacity_verify_room" => params.palw_capacity_verify_room = Some(at),
+            "palw_capacity_audit_door" => params.palw_capacity_audit_door = Some(at),
+            "palw_capacity_issuance_slots" => params.palw_capacity_issuance_slots = Some(at),
+            "palw_capacity_network_room" => params.palw_capacity_network_room = Some(at),
+            "palw_capacity_network_verify" => params.palw_capacity_network_verify = Some(at),
+            "palw_panel_unavailable_expiry" => params.palw_panel_unavailable_expiry = Some(at),
+            "palw_panel_fast_switch" => params.palw_panel_fast_switch = Some(at),
+            "palw_seat_availability" => params.palw_seat_availability = Some(at),
+            "palw_capacity_emission_budget" => params.palw_capacity_emission_budget = Some(at),
+            "palw_capacity_multi_claim" => params.palw_capacity_multi_claim = Some(at),
+            "palw_capacity_rho_breaker" => params.palw_capacity_rho_breaker = Some(at),
+            "palw_chunk_cap_charge" => params.palw_chunk_cap_charge = Some(at),
+            "palw_prompt_ids_merkle" => params.palw_prompt_ids_merkle = Some(at),
+            "palw_kary_court" => params.palw_kary_court = Some(at),
+            // The model-specific finite court window (DAA-3,600 flag day): a bare height; `validate_palw_v2`
+            // (not run by the probe) refuses it without the k-ary court at or below it.
+            "palw_model_court_window" => params.palw_model_court_window = Some(at),
+            "palw_court_responder_coverage" => params.palw_court_responder_coverage = Some(at),
+            "palw_fp_decode_rules" => params.palw_fp_decode_rules = Some(at),
+            "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),
+            "palw_fp_decode_constraint" => params.palw_fp_decode_constraint = Some(at),
+            "palw_shard_court" => params.palw_shard_court = Some(at),
+            // RFC-0006 memory/routing court v2: a bare height, refused when armed by `validate_palw_v2` (the probe does not run it).
+            "palw_memory_routing_court_v2" => params.palw_memory_routing_court_v2 = Some(at),
+            // lane g14p/r7-fence-16000: the five G14 fences newly on `palw_fences_v1` — bare heights; their prerequisites and mirrors are
+            // `validate_palw_v2`'s, which the probe does not run.
+            "palw_tir_bounded_door_v1" => params.palw_tir_bounded_door_v1 = Some(at),
+            "palw_tir_designated_answers_v1" => params.palw_tir_designated_answers_v1 = Some(at),
+            "palw_court_outsider_lane_v1" => params.palw_court_outsider_lane_v1 = Some(at),
+            "palw_kernel_route_panel_one_v1" => params.palw_kernel_route_panel_one_v1 = Some(at),
+            "palw_court_clock_v2" => params.palw_court_clock_v2 = Some(at),
+            "palw_class_registration_origin_v1" => {
+                params.palw_class_registration_origin_v1 = Some(at);
+                params.sync_palw_class_registration_origin_v1();
+            }
+            "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
+            "palw_token_lift" => params.palw_token_lift = Some(at),
+            // P0a: a bare height; its genesis rule is `validate_palw_v2`'s, which the probe does not run.
+            "palw_gdn_key_heads" => params.palw_gdn_key_heads = Some(at),
+            "palw_fused_dissectable" => params.palw_fused_dissectable = Some(at),
+            "palw_attn_anchored_root" => params.palw_attn_anchored_root = Some(at),
+            "palw_held_context" => params.palw_held_context = Some(at),
+            "palw_prefill_draw" => params.palw_prefill_draw = Some(at),
+            "palw_audit_2026_09_11" => params.palw_audit_2026_09_11 = Some(at),
+            "palw_audit_2026_09_11_deep" => params.palw_audit_2026_09_11_deep = Some(at),
+            "palw_audit_2026_09_23" => params.palw_audit_2026_09_23 = Some(at),
+            "palw_difficulty_priced_rows" => params.palw_difficulty_priced_rows = Some(at),
+            "palw_receipt_rows_unpriced" => params.palw_receipt_rows_unpriced = Some(at),
+            "palw_attempt_header_pins" => params.palw_attempt_header_pins = Some(at),
+            "palw_signature_contexts_v2" => params.palw_signature_contexts_v2 = Some(at),
+            "palw_heartbeat_transparent" => params.palw_heartbeat_transparent = Some(at),
+            // F1 heartbeat transparency (post-launch flag day, rcore/f1-hb-transparency): refines the
+            // fence above; `validate_palw_v2` wants that one at or below it, which the probe does not
+            // run — it asks only the hashers and the schedule.
+            "palw_heartbeat_transparent_same_chain" => params.palw_heartbeat_transparent_same_chain = Some(at),
+            // ADR-0160 lane escrow (post-launch): a bare height; its prerequisites are `validate_palw_v2`'s,
+            // which the probe does not run.
+            "palw_capacity_escrow_at_licence" => params.palw_capacity_escrow_at_licence = Some(at),
+            "palw_share_growth_final" => params.palw_share_growth_final = Some(at),
+            "palw_panel_economy" => params.palw_panel_economy = Some(at),
+            "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
+            "palw_overlay_carve" => {
+                params.palw_overlay_carve = Some(crate::config::params::PalwOverlayCarveV1 {
+                    activation: at,
+                    subsidy_validator_bps: 2_000,
+                    worker_carve_permille: 720,
+                })
+            }
+            "palw_panel_exposure_floor" => {
+                params.palw_panel_exposure_floor =
+                    Some(crate::config::params::PalwPanelExposureFloorV1 { activation: at, reward_multiple_permille: 2_000 })
+            }
+            "palw_execution_lane" => {
+                params.palw_execution_lane = Some(crate::config::params::PalwExecutionLaneV1 {
+                    activation: at,
+                    permits_per_round: 1,
+                    widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
+                    max_per_mergeset: 600,
+                    schedule_span_daa: 5,
+                    short_span: crate::config::params::PalwExecSpanShortV1::NONE,
+                })
+            }
+            widening if widening.starts_with("palw_execution_lane_widening_") => {
+                let slot: usize = widening["palw_execution_lane_widening_".len()..].parse().expect("a slot number");
+                // A widening rides a lane; the probe base gets one at a fixed height, so two probes that
+                // differ only in the widening's height differ only in that height.
+                let lane = params.palw_execution_lane.get_or_insert(crate::config::params::PalwExecutionLaneV1 {
+                    activation: ForkActivation::new(1_000),
+                    permits_per_round: 1,
+                    widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
+                    max_per_mergeset: 600,
+                    schedule_span_daa: 5,
+                    short_span: crate::config::params::PalwExecSpanShortV1::NONE,
+                });
+                lane.widenings[slot - 1] =
+                    crate::config::params::PalwExecWideningV1 { activation: at, permits_per_round: 1 + slot as u16 };
+            }
+            "palw_execution_lane_span_short" => {
+                let lane = params.palw_execution_lane.get_or_insert(crate::config::params::PalwExecutionLaneV1 {
+                    activation: ForkActivation::new(1_000),
+                    permits_per_round: 1,
+                    widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
+                    max_per_mergeset: 600,
+                    schedule_span_daa: 5,
+                    short_span: crate::config::params::PalwExecSpanShortV1::NONE,
+                });
+                lane.short_span = crate::config::params::PalwExecSpanShortV1 { activation: at, schedule_span_daa: 1 };
+            }
+            other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),
+        }
+    }
+
+    /// **Every PALW fence's HEIGHT reaches the printed fingerprint and the schedule id, and none
+    /// reaches the identity.**
+    ///
+    /// Three spellings say "this build schedules a fence": the gate reads `palw_fences_v1`, the
+    /// schedule reads `for_each_fence`, and the startup line prints `consensus_params_id`. Each is
+    /// an exhaustive destructure of `Params`, and a destructure proves a field was BOUND, not that
+    /// it was WRITTEN. ADR-0095's `palw_model_benefits` was bound in `consensus_params_id` and never
+    /// hashed (`14c453d1`), which is why the builds on either side of testnet-11's DAA-2400 fence
+    /// printed one fingerprint (`0448d955`); this test was written listing it as the known
+    /// exception, and the release that writes it (testnet-11's pin 060e3597… → ecbdbc22…) emptied
+    /// the list. A fence added tomorrow and forgotten the same way fails here by name.
+    /// `params::consensus_params_id_tests::every_fence_the_visitor_reaches_moves_the_fingerprint`
+    /// asks the same of every fence on every shipped preset, PALW or not.
+    ///
+    /// Two FUTURE heights on each side rather than "absent vs scheduled", so a fence the RC base
+    /// arms at genesis is compared as a schedule against a schedule — the identity is only
+    /// supposed to be blind to heights that have not fired.
+    #[test]
+    fn every_scheduled_palw_fence_moves_the_fingerprint_and_the_schedule_and_never_the_identity() {
+        const KNOWN_UNHASHED: &[&str] = &[];
+        let base = palw_rc_shipped_params();
+        let mut unhashed = Vec::new();
+        for (name, _) in base.palw_fences_v1() {
+            let mut early = base.clone();
+            set_fence_for_probe(&mut early, name, ForkActivation::new(9_000_000));
+            let mut late = base.clone();
+            set_fence_for_probe(&mut late, name, ForkActivation::new(9_000_001));
+            if early.consensus_params_id() == late.consensus_params_id() {
+                unhashed.push(name);
+            }
+            assert_ne!(
+                early.consensus_schedule_id(),
+                late.consensus_schedule_id(),
+                "{name}: two builds scheduling it at different heights must print different schedule ids — that id is \
+                 the only place the operator log can name the disagreement"
+            );
+            assert_eq!(
+                early.consensus_identity_id(),
+                late.consensus_identity_id(),
+                "{name}: a height that has not fired is normalised out of the identity, or scheduling it partitions the \
+                 fleet at deploy instead of at the height"
+            );
+            assert!(
+                early.fence_schedule_v1().contains(&9_000_000) && late.fence_schedule_v1().contains(&9_000_001),
+                "{name}: a scheduled fence must be on the schedule the fork id is derived from"
+            );
+        }
+        assert_eq!(
+            unhashed, KNOWN_UNHASHED,
+            "the fences whose height the printed fingerprint does not carry — a new name here is a fence that was \
+             destructured in consensus_params_id and never written"
+        );
+    }
+
+    /// **The shipped schedules, measured rather than assumed** — and the measurement is the reason
+    /// this module has an arming field at all.
+    ///
+    /// The first draft of `the_gate_is_disarmed_on_every_shipped_preset` asserted that no shipped
+    /// preset schedules a fence, and three of them do. Crescendo is a real scheduled activation on
+    /// mainnet and on both testnets, so "this node has crossed a fence" is already true of a live
+    /// network at a height it will actually reach — which would have made a module that changes
+    /// nothing today start refusing peers at testnet DAA 2,125,000.
+    ///
+    /// Pinned, so that a preset gaining or losing a fence is a decision someone takes here.
+    #[test]
+    fn the_shipped_schedules_are_measured_not_assumed() {
+        let measured: Vec<(&str, Vec<u64>)> = shipped().into_iter().map(|(n, p)| (n, p.fence_schedule_v1())).collect();
+        assert_eq!(
+            measured,
+            vec![
+                ("mainnet", vec![110_165_000]),
+                ("testnet-10", vec![2_125_000]),
+                // ADR-0083 Decision 1, scheduled at 1150 on the live chain (2026-09-04, the operator's
+                // path (a)). On the schedule AND on the gate — the first shipped preset whose gate is
+                // armed; see the module doc's "What armed on a shipped preset means" and
+                // `the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence`.
+                // ADR-0062's court, `PanelDa` and the model market, scheduled at 1900 (2026-09-06,
+                // the second flag day). One height, five fences; the schedule lists heights.
+                //
+                // **And 2150, the refutation ladder's own flag day** (ADR-0084 U-08). It first rode
+                // 1900, and that is precisely what the schedule cannot express: `fork_id_v1` digests
+                // the fired HEIGHTS, so a build with the ladder at 1900 and one without advertise the
+                // same fork id, peer, and disagree past the height. A rule added to a named height is
+                // invisible here; a height is not. Measured before it moved: identical fork ids at
+                // 1899, 1900 and 2500.
+                //
+                // **And 3500, the owner leg's flag day** (ADR-0114, scheduled 2026-09-11 at ≈3,399).
+                //
+                // **And 4000, the pre-mainnet audit's flag day** (`PALW_RC_AUDIT_FENCE_DAA`,
+                // scheduled 2026-09-11): `palw_audit_2026_09_11` fires here — the audit's
+                // state-transition and acceptance-filter fixes. (The share-census and dense-court
+                // fences the audit also touches are mainnet-card corrections, dormant on t11.)
+                // ADR-0117's `palw_prefill_draw` fires at 4000 too — one height, so this list does
+                // not move, and a build with only one of the two is invisible to the gate
+                // (`PALW_RC_AUDIT_FENCE_DAA`'s doc).
+                //
+                // **And 6000, the held regime's flag day and the audit's deep one** (ADR-0118, the
+                // operator's height: 7,000 on 2026-09-12, moved to 6,000 on 2026-09-17 with the tip at
+                // 5,798 because the wait was too long — the deployed 7,000 release never reaches its
+                // height): `palw_held_context`, `palw_shard_court`, `palw_fp_da_pins` and
+                // `palw_audit_2026_09_11_deep` fire together, so one release carries all four.
+                //
+                // **And 6001, the operator's flag day of 2026-09-17** (ADR-0124's panel economy and work
+                // price, ADR-0125's execution lane at one block a second, ADR-0126's validator carve at a
+                // fifth, ADR-0128's BFT stake gate, ADR-0130's operator lottery and spans): one past
+                // 6000 because a fence at a height the schedule already names is invisible to the gate.
+                //
+                // **And 6201, ADR-0134's retirement of the compute overlay** — its own height, two hundred
+                // past the flag day, so a failure at either height names its cause.
+                //
+                // **And 6900, ADR-0120's one-million-MSK least seed** (scheduled 2026-09-12 to ship with
+                // the 7,000 release at a height of its own, so the gate can see a build without it; it
+                // stays where the deployed release put it, so it now follows the moved heights).
+                (
+                    "testnet-11",
+                    vec![
+                        1150,
+                        1900,
+                        2150,
+                        2400,
+                        3500,
+                        4000,
+                        // ADR-0120's 6,900, where the deployed release put it — now BELOW the moved flag day.
+                        crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                        crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
+                        crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
+                        crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                        crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
+                        crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+                        crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                        crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                        crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                        crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
+                        crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+                        crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
+                        crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
+                        2_125_000
+                    ]
+                ),
+                ("devnet", vec![]),
+                ("simnet", vec![]),
+            ],
+            "a shipped preset's fence schedule moved — read the module doc before deciding this is fine"
+        );
+    }
+
+    /// **The gate is armed on a shipped preset only where its operator scheduled a gate fence, and
+    /// an armed gate refuses nobody before that fence fires.**
+    ///
+    /// Until ADR-0083 this test said "disarmed on every shipped preset", and that was the claim
+    /// that made the module safe to land on a running network. testnet-11 now schedules a gate
+    /// fence at 1150 (ADR-0083 Decision 1, the operator's flag day of 2026-09-04), so the claim is
+    /// restated as what it always meant. Four presets stay exactly as before: `Unfenced` at every
+    /// height for every peer, crescendo crossed or not. On testnet-11 the gate is armed by exactly
+    /// that one fence, and the whole rollout below it is warnings: the un-upgraded build, a build
+    /// with no fork-id field, a stranger. From 1150 the un-upgraded build is refused ON that fence,
+    /// and the two prefix peers a live rollout is made of — the fresh node syncing pre-1150 history
+    /// and the node already past the height — are kept, in both directions.
+    #[test]
+    fn the_gate_is_armed_only_where_a_shipped_preset_schedules_a_gate_fence() {
+        const ADR_0083: u64 = 1150;
+        const ADR_0062: u64 = 1900;
+        /// ADR-0084 U-08's own height — see `the_shipped_schedules_are_measured_not_assumed`.
+        const ADR_0084_U08: u64 = 2150;
+        /// ADR-0095's own height — the membership writes rows that enter the state root, so it
+        /// cannot ride the registry's fence on a chain where the registry is already live.
+        const ADR_0095: u64 = 2400;
+        /// ADR-0114's own height — the owner's leg becomes 5 %.
+        const ADR_0114: u64 = 3500;
+        /// The pre-mainnet audit's flag day — the audit's state-transition/acceptance fixes and the
+        /// dense-court and share-census fences that carry audit corrections all arm here.
+        const AUDIT_FENCE: u64 = 4000;
+        /// ADR-0118's height — the held regime, the one-move court and the retention pins — and the
+        /// audit's DEEP findings' flag day (B-1/C-01/B-4/court cluster): one height, one release
+        /// (7,000 until the operator moved it on 2026-09-17).
+        const HELD_AND_AUDIT_DEEP: u64 = crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA;
+        /// The operator's flag day of 2026-09-17: ADR-0124, 0125, 0126, 0128 and 0130.
+        const PALW_UPGRADE_DAY: u64 = crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA;
+        /// ADR-0134's retirement of the compute overlay, its own height after the flag day.
+        const RETIRED_6201: u64 = crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA;
+        /// ADR-0120's own height — the least seed becomes 1,000,000 MSK; scheduled by the deployed
+        /// release and left there, so it now follows the moved heights.
+        const ADR_0120: u64 = crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        for (name, params) in shipped() {
+            if name == "testnet-11" {
+                assert_eq!(
+                    fork_id_gate_fences_v1(&params),
+                    vec![
+                        ADR_0083,
+                        ADR_0062,
+                        ADR_0084_U08,
+                        ADR_0095,
+                        ADR_0114,
+                        AUDIT_FENCE,
+                        ADR_0120,
+                        HELD_AND_AUDIT_DEEP,
+                        PALW_UPGRADE_DAY,
+                        crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                        crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
+                        RETIRED_6201,
+                        crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                        crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                        crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                        crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
+                        crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+                        crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
+                        crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
+                    ],
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, ADR-0144's lock ledger, and nothing else"
+                );
+                assert!(fork_id_gate_armed_v1(&params));
+                continue;
+            }
+            assert!(!fork_id_gate_armed_v1(&params), "{name}: no operator scheduled a gate fence here");
+            // Past crescendo included: crossing a PRE-EXISTING fence must not turn the gate on.
+            for daa in [0u64, 1, 2_125_000, 110_165_000, u64::MAX] {
+                for (peer_fired, peer_next) in [(&[][..], FORK_ID_NO_NEXT_FENCE), (&[0u8; 32][..], 7)] {
+                    let verdict = evaluate_fork_id_v1(&params, daa, peer_fired, peer_next);
+                    assert_eq!(verdict, ForkIdVerdict::Unfenced, "{name} at {daa}");
+                    assert!(!verdict.refuses(), "{name} at {daa}");
+                }
+            }
+        }
+
+        let t11 = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        assert_eq!(
+            t11.fence_schedule_v1(),
+            vec![
+                ADR_0083,
+                ADR_0062,
+                ADR_0084_U08,
+                ADR_0095,
+                ADR_0114,
+                AUDIT_FENCE,
+                ADR_0120,
+                HELD_AND_AUDIT_DEEP,
+                PALW_UPGRADE_DAY,
+                crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
+                RETIRED_6201,
+                crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
+                crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
+                CRESCENDO_T11
+            ]
+        );
+        let genesis = t11.genesis.hash;
+        // The un-upgraded build: same genesis, schedule [2_125_000] — it has crossed nothing and names
+        // crescendo as its next fence, which is exactly what its digest and next look like on the wire.
+        let stale_fired = fired_fences_digest_v1(genesis, &[]);
+        let stale_next = CRESCENDO_T11;
+        // The fresh node on THIS build, syncing pre-1150 history.
+        let fresh = fork_id_v1(&t11, 10);
+        assert_eq!(
+            (fresh.fired, fresh.next),
+            (stale_fired, ADR_0083),
+            "same empty prefix as the stale build; the next fence is what tells them apart"
+        );
+        // A node on this build past the DAA clock still has ADR-0144's lock ledger ahead;
+        // past that, crescendo is next.
+        let past_clock = fork_id_v1(&t11, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1);
+        assert_eq!(past_clock.next, crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA);
+        let past_quanta = fork_id_v1(&t11, crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA + 1);
+        assert_eq!(past_quanta.next, crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA);
+        let past_seat_gate = fork_id_v1(&t11, crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA + 1);
+        assert_eq!(past_seat_gate.next, crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA);
+        let past_receipt_window = fork_id_v1(&t11, crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA + 1);
+        assert_eq!(past_receipt_window.next, crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA);
+        let past_lock = fork_id_v1(&t11, crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA + 1);
+        assert_eq!(past_lock.next, crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA);
+        let past_s3 = fork_id_v1(&t11, crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA + 1);
+        assert_eq!(past_s3.next, crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA);
+        let past = fork_id_v1(&t11, crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA + 1);
+        assert_eq!(past.next, CRESCENDO_T11);
+        let stranger = &[0u8; 32][..];
+
+        // Below the fence: the whole rollout is warnings, never a refusal, whatever the peer is.
+        for local_daa in [0u64, 1, 1_149] {
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, local_daa, stale_fired.as_bytes().as_slice(), stale_next),
+                ForkIdVerdict::DisagreeBeforeAnyFence(ForkIdMismatch::NextFenceDiffers { expected: ADR_0083, got: CRESCENDO_T11 }),
+                "at {local_daa}: the un-upgraded build is a warning until the fence fires"
+            );
+            assert!(!evaluate_fork_id_v1(&t11, local_daa, &[], FORK_ID_NO_NEXT_FENCE).refuses(), "absent, at {local_daa}");
+            assert!(!evaluate_fork_id_v1(&t11, local_daa, stranger, 7).refuses(), "stranger, at {local_daa}");
+            assert_eq!(evaluate_fork_id_v1(&t11, local_daa, fresh.fired.as_bytes().as_slice(), fresh.next), ForkIdVerdict::Agree);
+            assert_eq!(evaluate_fork_id_v1(&t11, local_daa, past.fired.as_bytes().as_slice(), past.next), ForkIdVerdict::Agree);
+        }
+
+        // From the fence: the un-upgraded build is refused, on that fence — the flag day's silent
+        // fork made a named refusal. A build with no fork-id field is the same case.
+        for local_daa in [ADR_0083, ADR_0083 + 1, 5_000, CRESCENDO_T11 + 1] {
+            let verdict = evaluate_fork_id_v1(&t11, local_daa, stale_fired.as_bytes().as_slice(), stale_next);
+            assert_eq!(
+                verdict,
+                ForkIdVerdict::DisagreePastFence {
+                    mismatch: ForkIdMismatch::NextFenceDiffers { expected: ADR_0083, got: CRESCENDO_T11 },
+                    fired_through: ADR_0083
+                },
+                "at {local_daa}"
+            );
+            assert!(verdict.refuses());
+            assert!(evaluate_fork_id_v1(&t11, local_daa, &[], FORK_ID_NO_NEXT_FENCE).refuses(), "absent, at {local_daa}");
+            // …and the prefix peers are kept, in both directions: the fresh node is this build seen
+            // from an earlier height, the past node is this build seen from a later one.
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, local_daa, fresh.fired.as_bytes().as_slice(), fresh.next),
+                ForkIdVerdict::Agree,
+                "fresh, at {local_daa}"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, local_daa, past.fired.as_bytes().as_slice(), past.next),
+                ForkIdVerdict::Agree,
+                "past, at {local_daa}"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&t11, 10, past.fired.as_bytes().as_slice(), past.next),
+                ForkIdVerdict::Agree,
+                "a fresh node keeps the node ahead of it"
+            );
+        }
+    }
+
+    /// The advertisement ships on day one even though the gate does not: a node past crescendo
+    /// announces that it has crossed it, so an operator can SEE the two sides differ before any
+    /// build is armed to act on it.
+    #[test]
+    fn the_advertisement_is_live_even_where_the_gate_is_not() {
+        let mainnet = Params::from(NetworkId::new(crate::network::NetworkType::Mainnet));
+        assert!(!fork_id_gate_armed_v1(&mainnet));
+        let before = fork_id_v1(&mainnet, 110_164_999);
+        let after = fork_id_v1(&mainnet, 110_165_000);
+        assert_eq!(before.next, 110_165_000);
+        assert_eq!(after.next, FORK_ID_NO_NEXT_FENCE);
+        assert_ne!(before.fired, after.fired, "crossing a fence must change what a node advertises");
+    }
+
+    /// **A fence active at genesis is not on the schedule, and `never()` is not either.**
+    ///
+    /// The first is `consensus_identity_id`'s business (re-audit R-1) and the second is not a
+    /// height. Either one leaking into the schedule would make the fork id claim two builds "cross"
+    /// something they never do.
+    #[test]
+    fn the_schedule_carries_heights_a_chain_can_actually_reach() {
+        // The raw const, not `Params::from` — and crescendo is on it, so the assertions below are
+        // about what ADDING a fence does rather than about the schedule being empty.
+        let base = MAINNET_PARAMS.fence_schedule_v1();
+        assert_eq!(base, vec![110_165_000]);
+
+        let mut params = MAINNET_PARAMS;
+        params.palw_attempt_activation = Some(ForkActivation::always());
+        assert_eq!(params.fence_schedule_v1(), base, "a genesis-active fence is a rule about block 1, not a schedule");
+
+        params.palw_attempt_activation = Some(ForkActivation::never());
+        assert_eq!(params.fence_schedule_v1(), base, "`never()` is not a height");
+
+        params.palw_attempt_activation = Some(ForkActivation::new(9_000_000));
+        assert_eq!(params.fence_schedule_v1(), vec![9_000_000, 110_165_000], "sorted, whatever order the visitor ran in");
+    }
+
+    /// A network with exactly one scheduled fence — ADR-0072's — so the tests below read as the
+    /// activation they are about. Crescendo is cleared for the same reason: two fences would test
+    /// two things at once.
+    fn armed_at(height: u64) -> Params {
+        let mut params = MAINNET_PARAMS;
+        params.crescendo_activation = ForkActivation::never();
+        params.palw_attempt_activation = Some(ForkActivation::new(height));
+        assert_eq!(params.fence_schedule_v1(), vec![height]);
+        params
+    }
+
+    /// **The rollout survives: the same build at two heights is one network.**
+    ///
+    /// A node past the fence and a node still syncing towards it announce different fired sets, and
+    /// they must stay peers — otherwise the fence makes IBD impossible and SA-3's one-binary mixed
+    /// history is unreachable in practice.
+    #[test]
+    fn a_peer_that_is_merely_behind_the_fence_is_kept() {
+        let params = armed_at(1_000);
+        let ahead = fork_id_v1(&params, 5_000);
+        let behind = fork_id_v1(&params, 10);
+        assert_ne!(ahead.fired, behind.fired, "the two really are at different points on the schedule");
+        assert_eq!(behind.next, 1_000, "a node below the fence names the fence it has not crossed");
+        assert_eq!(ahead.next, FORK_ID_NO_NEXT_FENCE, "a node past the last fence has nothing left to cross");
+
+        // Each side judges the other.
+        assert_eq!(evaluate_fork_id_v1(&params, 5_000, behind.fired.as_bytes().as_slice(), behind.next), ForkIdVerdict::Agree);
+        assert_eq!(evaluate_fork_id_v1(&params, 10, ahead.fired.as_bytes().as_slice(), ahead.next), ForkIdVerdict::Agree);
+    }
+
+    /// **The silent fork this exists for: an un-upgraded peer past the fence is refused.**
+    ///
+    /// The un-upgraded build has no fence, so it announces the empty fired set with no next fence.
+    /// The empty set is a legitimate prefix of the armed schedule — which is exactly why the NEXT
+    /// fence has to be in the message. Without it, "I have crossed nothing" from a node that will
+    /// never cross anything is indistinguishable from "I have crossed nothing yet".
+    #[test]
+    fn an_un_upgraded_peer_is_refused_once_this_node_is_past_the_fence() {
+        let armed = armed_at(1_000);
+        // The un-upgraded build: same network, same genesis, no ADR-0072 fence.
+        let mut un_upgraded = MAINNET_PARAMS;
+        un_upgraded.crescendo_activation = ForkActivation::never();
+        assert!(un_upgraded.fence_schedule_v1().is_empty());
+        let stale = fork_id_v1(&un_upgraded, 5_000);
+        assert_eq!(stale.next, FORK_ID_NO_NEXT_FENCE);
+
+        let verdict = evaluate_fork_id_v1(&armed, 5_000, stale.fired.as_bytes().as_slice(), stale.next);
+        assert_eq!(
+            verdict,
+            ForkIdVerdict::DisagreePastFence {
+                mismatch: ForkIdMismatch::NextFenceDiffers { expected: 1_000, got: FORK_ID_NO_NEXT_FENCE },
+                fired_through: 1_000
+            }
+        );
+        assert!(verdict.refuses(), "past the fence, an un-upgraded peer must not become an IBD source");
+
+        // And the same peer BEFORE the fence fires is only a warning — otherwise arming a future
+        // fence would disconnect the first upgrading operator from the whole network (M1-6).
+        let early = evaluate_fork_id_v1(&armed, 999, stale.fired.as_bytes().as_slice(), stale.next);
+        assert_eq!(
+            early,
+            ForkIdVerdict::DisagreeBeforeAnyFence(ForkIdMismatch::NextFenceDiffers { expected: 1_000, got: FORK_ID_NO_NEXT_FENCE })
+        );
+        assert!(!early.refuses(), "a scheduled fence must not partition the network on deploy day");
+    }
+
+    /// **Crossing a fence this module does not refuse on is not a refusal** — the deploy-day
+    /// partition, reproduced and then closed.
+    ///
+    /// This is the case `armed_at()` cannot see, because it clears crescendo first. On the real
+    /// mainnet preset crescendo fires at 110,165,000, so a node at DAA 120,000,000 has "crossed a
+    /// fence" from the moment it starts. Under the first rule — refuse as soon as `local_fired` is
+    /// non-empty — arming ADR-0072's fence at 200,000,000 made that node refuse every un-armed peer
+    /// immediately, in both directions (`initialize_connection` is one path), for the 80 million
+    /// DAA scores before the fence it is arming actually fires. The measured verdict was
+    /// `DisagreePastFence { NextFenceDiffers { expected: 200000000, got: u64::MAX },
+    /// fired_through: 110165000 }`.
+    ///
+    /// Both builds agree about crescendo and about every block either can produce until 200M. They
+    /// must stay peers until then, and be refused from then.
+    #[test]
+    fn arming_a_future_fence_does_not_refuse_peers_over_a_fence_they_already_share() {
+        const ADR_0072: u64 = 200_000_000;
+        const CRESCENDO: u64 = 110_165_000;
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_attempt_activation = Some(ForkActivation::new(ADR_0072));
+        assert_eq!(armed.fence_schedule_v1(), vec![CRESCENDO, ADR_0072], "crescendo is real and it is first");
+
+        // The un-armed build: same mainnet, same crescendo, no ADR-0072 fence and no fork-id field.
+        let un_armed = MAINNET_PARAMS;
+        assert_eq!(un_armed.fence_schedule_v1(), vec![CRESCENDO]);
+        let peer = fork_id_v1(&un_armed, CRESCENDO + 10);
+
+        // Deploy day: past crescendo, far below the new fence.
+        for local_daa in [0u64, CRESCENDO, CRESCENDO + 10, ADR_0072 - 1] {
+            let verdict = evaluate_fork_id_v1(&armed, local_daa, peer.fired.as_bytes().as_slice(), peer.next);
+            assert!(!verdict.refuses(), "at {local_daa}: the two agree about every block either can produce");
+            // A build with no fork-id field at all is the same case, and it is the common one.
+            assert!(!evaluate_fork_id_v1(&armed, local_daa, &[], FORK_ID_NO_NEXT_FENCE).refuses(), "absent, at {local_daa}");
+        }
+
+        // And from the fence itself, the refusal the module exists for.
+        let verdict = evaluate_fork_id_v1(&armed, ADR_0072, peer.fired.as_bytes().as_slice(), peer.next);
+        assert_eq!(
+            verdict,
+            ForkIdVerdict::DisagreePastFence {
+                mismatch: ForkIdMismatch::NextFenceDiffers { expected: ADR_0072, got: FORK_ID_NO_NEXT_FENCE },
+                fired_through: ADR_0072
+            },
+            "the fence that is reported is the one in dispute, not the one both builds implement"
+        );
+        assert!(evaluate_fork_id_v1(&armed, ADR_0072, &[], FORK_ID_NO_NEXT_FENCE).refuses());
+    }
+
+    /// **Crescendo does not arm the gate, and the ADR-0072 fence does** — the predicate the case
+    /// above rests on, stated on its own so a later ADR that forgets to add its fence fails here.
+    #[test]
+    fn the_gate_refuses_only_on_the_fences_it_names() {
+        let mut params = MAINNET_PARAMS;
+        assert_eq!(fork_id_gate_fences_v1(&params), Vec::<u64>::new(), "crescendo is not a gate-arming fence");
+        assert!(!fork_id_gate_armed_v1(&params));
+
+        params.palw_attempt_activation = Some(ForkActivation::new(9_000_000));
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000]);
+        assert!(fork_id_gate_armed_v1(&params));
+        // ADR-0083's fence arms it too, and the list reads as a schedule: sorted, one entry per height.
+        params.palw_difficulty_priced_rows = Some(ForkActivation::new(8_000_000));
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![8_000_000, 9_000_000], "two ADRs, two fences, in height order");
+        params.palw_difficulty_priced_rows = Some(ForkActivation::new(9_000_000));
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000], "one height, whichever rules share it");
+        params.palw_difficulty_priced_rows = Some(ForkActivation::never());
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000], "`never()` on the second fence is absence");
+        params.palw_difficulty_priced_rows = Some(ForkActivation::always());
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000], "a genesis-active second fence is not crossed");
+        params.palw_difficulty_priced_rows = None;
+
+        // `never()` is not a height and a genesis-active fence is not crossed — the same two
+        // exclusions `fence_schedule_v1` makes, for the same reasons. A fence at genesis separates
+        // `consensus_identity_id` instead, which refuses before this module is consulted.
+        params.palw_attempt_activation = Some(ForkActivation::never());
+        assert!(!fork_id_gate_armed_v1(&params));
+        params.palw_attempt_activation = Some(ForkActivation::always());
+        assert!(!fork_id_gate_armed_v1(&params));
+        assert_ne!(
+            params.consensus_identity_id(),
+            MAINNET_PARAMS.consensus_identity_id(),
+            "a genesis-active fence is a rule difference the identity id already refuses on"
+        );
+
+        // **The arm the name used to lie about.** `NextFenceDiffers` names a fence off THIS
+        // build's schedule, and that schedule carries crescendo — which the gate excludes. So the
+        // invariant has to be checked on a mismatch that names crescendo, not only on one that
+        // names ADR-0072's fence: a peer that agrees about the empty prefix but announces some
+        // other next fence is disputing crescendo, and an armed node past crescendo used to refuse
+        // it — a refusal resting on a fence every build in circulation implements.
+        const ADR_0072: u64 = 200_000_000;
+        const CRESCENDO: u64 = 110_165_000;
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_attempt_activation = Some(ForkActivation::new(ADR_0072));
+        assert_eq!(armed.fence_schedule_v1(), vec![CRESCENDO, ADR_0072]);
+        assert_eq!(fork_id_gate_fences_v1(&armed), vec![ADR_0072], "crescendo is on the schedule and off the gate");
+        // A peer whose fired set IS the empty prefix but whose next fence is neither of ours and lies
+        // PAST crescendo: it does not carry crescendo where this build does, so what it disputes is
+        // crescendo itself.
+        //
+        // (Until 2026-09-10 this case was written with `got: 42`, a next fence BELOW crescendo. That
+        // is not a dispute about crescendo — the peer then carries a fence at 42 this build does not,
+        // and the two schedules part at 42 — and reading it as one is exactly the fallback that cut
+        // off testnet-11's un-upgraded nodes on both flag days. That case is pinned below, and in
+        // `an_un_upgraded_node_keeps_the_upgraded_build_until_the_new_fence`.)
+        let stranger = fired_fences_digest_v1(armed.genesis.hash, &[]);
+        let beyond = CRESCENDO + 5;
+        let dispute = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO, got: beyond };
+        for local_daa in [CRESCENDO, CRESCENDO + 1, ADR_0072 - 1] {
+            let verdict = evaluate_fork_id_v1(&armed, local_daa, stranger.as_bytes().as_slice(), beyond);
+            assert_eq!(
+                verdict,
+                ForkIdVerdict::DisagreeBeforeAnyFence(dispute),
+                "at {local_daa}: crescendo is not a fence this gate may refuse on"
+            );
+            assert!(!verdict.refuses(), "at {local_daa}");
+        }
+        // …and past the fence the gate DOES name, the same peer is refused — on that fence, so the
+        // arm is not merely permissive.
+        assert_eq!(
+            evaluate_fork_id_v1(&armed, ADR_0072, stranger.as_bytes().as_slice(), beyond),
+            ForkIdVerdict::DisagreePastFence { mismatch: dispute, fired_through: ADR_0072 }
+        );
+
+        // A next fence BELOW this build's is the peer's own fence: refused from that height — never
+        // from crescendo, and never before it.
+        let lower = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO, got: 42 };
+        assert_eq!(evaluate_fork_id_v1(&armed, 41, stranger.as_bytes().as_slice(), 42), ForkIdVerdict::DisagreeBeforeAnyFence(lower));
+        for local_daa in [42, CRESCENDO, ADR_0072] {
+            assert_eq!(
+                evaluate_fork_id_v1(&armed, local_daa, stranger.as_bytes().as_slice(), 42),
+                ForkIdVerdict::DisagreePastFence { mismatch: lower, fired_through: 42 },
+                "at {local_daa}: the refusal rests on the peer's fence, which this build does not implement"
+            );
+        }
+    }
+
+    /// **The third flag day, as it was measured (2026-09-09/10): an un-upgraded node keeps the
+    /// upgraded build until the NEW fence, and not one score longer.**
+    ///
+    /// The upgraded testnet-11 build schedules ADR-0095's fence at 2400; the build before it did
+    /// not, so its next fence after 2150 is crescendo. At DAA ~2241 the fleet restarted on the new
+    /// build and every node on the old one refused it — `expected: 2125000`, crescendo, is not a
+    /// gate fence, and the fallback refused on 2150, which the upgraded peer had agreed about. The
+    /// third parties mined their own arm from ~2,241 while the fleet went past 3,040. Both halves
+    /// of the rollout are pinned here, from both sides, and the second flag day's shape (1900 added
+    /// after 1150, measured 2026-09-06) with them.
+    #[test]
+    fn an_un_upgraded_node_keeps_the_upgraded_build_until_the_new_fence() {
+        const ADR_0095: u64 = 2400;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        // The builds of that day: ADR-0114's fence (3500) was scheduled later, and is not theirs —
+        // nor is the pre-mainnet audit's fence (4000, `palw_audit_2026_09_11` and the fixes riding
+        // its height), scheduled later still.
+        let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        upgraded.palw_model_leg_v2 = None;
+        upgraded.palw_audit_2026_09_11 = None;
+        upgraded.palw_prefill_draw = None;
+        upgraded.palw_audit_2026_09_11_deep = None;
+        upgraded.palw_model_seed_v2 = None;
+        upgraded.palw_share_growth_final = None;
+        upgraded.palw_fused_dissectable = None;
+        upgraded.palw_attn_anchored_root = None;
+        // …and the held regime's (6000: `palw_held_context` with the one-move court and the
+        // retention pins, ADR-0118), scheduled after that.
+        upgraded.palw_held_context = None;
+        upgraded.palw_shard_court = None;
+        upgraded.palw_fp_da_pins = None;
+        // …and the 6,001 flag day's, later again.
+        crate::config::params::palw_rc_clear_flag_day_6001_for_tests(&mut upgraded);
+        let mut un_upgraded = upgraded.clone();
+        un_upgraded.palw_model_benefits = None;
+        assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, ADR_0095, CRESCENDO_T11]);
+        assert_eq!(un_upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, CRESCENDO_T11], "the build before ADR-0095");
+
+        // The fleet on the new build at the moment it restarted, and a third party at the same height.
+        let new_peer = fork_id_v1(&upgraded, 2241);
+        let old_peer = fork_id_v1(&un_upgraded, 2241);
+        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed 1150, 1900 and 2150");
+        assert_eq!((new_peer.next, old_peer.next), (ADR_0095, CRESCENDO_T11));
+        let dispute_seen_by_old = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO_T11, got: ADR_0095 };
+        let dispute_seen_by_new = ForkIdMismatch::NextFenceDiffers { expected: ADR_0095, got: CRESCENDO_T11 };
+
+        // Below 2400 neither side refuses the other: they agree about every block either can produce.
+        for local_daa in [2150, 2241, 2270, ADR_0095 - 1] {
+            assert_eq!(
+                evaluate_fork_id_v1(&un_upgraded, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next),
+                ForkIdVerdict::DisagreeBeforeAnyFence(dispute_seen_by_old),
+                "old judging new at {local_daa}: this is the refusal that cut the third parties off"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next),
+                ForkIdVerdict::DisagreeBeforeAnyFence(dispute_seen_by_new),
+                "new judging old at {local_daa}"
+            );
+        }
+        // From 2400 both refuse, each on the height where the schedules part.
+        for local_daa in [ADR_0095, ADR_0095 + 1, 3_040] {
+            assert_eq!(
+                evaluate_fork_id_v1(&un_upgraded, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next),
+                ForkIdVerdict::DisagreePastFence { mismatch: dispute_seen_by_old, fired_through: ADR_0095 },
+                "old judging new at {local_daa}"
+            );
+            assert_eq!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next),
+                ForkIdVerdict::DisagreePastFence { mismatch: dispute_seen_by_new, fired_through: ADR_0095 },
+                "new judging old at {local_daa}"
+            );
+        }
+        // And once the new build is itself past 2400 its fired set is no prefix of the old schedule —
+        // the old side refuses that whatever the heights, as it always did.
+        let new_past = fork_id_v1(&upgraded, 3_040);
+        assert!(evaluate_fork_id_v1(&un_upgraded, 2270, new_past.fired.as_bytes().as_slice(), new_past.next).refuses());
+
+        // The second flag day's shape: a build that knew only ADR-0083's 1150, judging the build that
+        // added 1900 — measured at DAA 1679 as "this node has crossed fence 1150; … expects fence
+        // 1900 next, not 2125000". Now a warning until 1900.
+        let mut before_second = upgraded.clone();
+        before_second.palw_da_court = None;
+        before_second.palw_panel_da = None;
+        before_second.palw_model_market = None;
+        before_second.palw_model_lines = None;
+        before_second.palw_model_evm = None;
+        before_second.palw_court_ladder = None;
+        before_second.palw_model_benefits = None;
+        assert_eq!(before_second.fence_schedule_v1(), vec![1150, CRESCENDO_T11]);
+        let second = fork_id_v1(&upgraded, 1679);
+        assert_eq!(second.next, 1900);
+        assert!(!evaluate_fork_id_v1(&before_second, 1679, second.fired.as_bytes().as_slice(), second.next).refuses());
+        assert!(evaluate_fork_id_v1(&before_second, 1900, second.fired.as_bytes().as_slice(), second.next).refuses());
+    }
+
+    /// **ADR-0114's flag day, before it happens: the fleet's current build keeps the upgraded one
+    /// until 3500, and not one score longer** — the rolling restart the 2400 day could not do.
+    ///
+    /// The build the fleet runs on 2026-09-11 (`e458683e`) schedules everything up to 2400 and not
+    /// 3500; the upgraded build adds 3500. Between the fleet's restart (DAA ≈3,400) and the height the
+    /// two must stay peers — they agree about every block either can produce — and at 3500 each refuses
+    /// the other on that height.
+    #[test]
+    fn the_owner_leg_flag_day_keeps_every_current_node_until_3500() {
+        const ADR_0114: u64 = 3500;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        // The pre-mainnet audit's fence (4000) was scheduled after 3500, and is not part of this
+        // flag day; clear it (and the fixes riding its height) so this pins the 3500 boundary alone.
+        let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        upgraded.palw_audit_2026_09_11 = None;
+        upgraded.palw_prefill_draw = None;
+        upgraded.palw_audit_2026_09_11_deep = None;
+        upgraded.palw_model_seed_v2 = None;
+        upgraded.palw_share_growth_final = None;
+        upgraded.palw_fused_dissectable = None;
+        upgraded.palw_attn_anchored_root = None;
+        // …and the held regime's (6000: `palw_held_context` with the one-move court and the
+        // retention pins, ADR-0118), scheduled after that.
+        upgraded.palw_held_context = None;
+        upgraded.palw_shard_court = None;
+        upgraded.palw_fp_da_pins = None;
+        // …and the 6,001 flag day's, later again.
+        crate::config::params::palw_rc_clear_flag_day_6001_for_tests(&mut upgraded);
+        let mut current = upgraded.clone();
+        current.palw_model_leg_v2 = None;
+        assert_eq!(upgraded.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, ADR_0114, CRESCENDO_T11]);
+        assert_eq!(current.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, CRESCENDO_T11], "the fleet's build before ADR-0114");
+        let new_peer = fork_id_v1(&upgraded, 3400);
+        let old_peer = fork_id_v1(&current, 3400);
+        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 2400");
+        assert_eq!((new_peer.next, old_peer.next), (ADR_0114, CRESCENDO_T11));
+        for local_daa in [3399, 3400, 3450, ADR_0114 - 1] {
+            assert!(
+                !evaluate_fork_id_v1(&current, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next).refuses(),
+                "the current build keeps the upgraded peer at {local_daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next).refuses(),
+                "the upgraded build keeps the current peer at {local_daa}"
+            );
+        }
+        for local_daa in [ADR_0114, ADR_0114 + 1] {
+            assert!(
+                evaluate_fork_id_v1(&current, local_daa, new_peer.fired.as_bytes().as_slice(), new_peer.next).refuses(),
+                "…and refuses it at {local_daa}"
+            );
+            assert!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_peer.fired.as_bytes().as_slice(), old_peer.next).refuses(),
+                "…both ways at {local_daa}"
+            );
+        }
+    }
+
+    /// **The moved heights, before they happen: the deployed 7,000 release keeps this build below
+    /// 6,000, and each refuses the other from 6,000** — the same rolling restart ADR-0114's day was.
+    ///
+    /// The fleet's release (`13520042`, fingerprint `ae1d6162…`) schedules 6,900 and 6,000; this build
+    /// carries the held regime and the audit's deep fence at 6,000 (the operator, 2026-09-17: the wait
+    /// to 7,000 was too long), the flag-day set at 6,001 and ADR-0134's retirement at 6,201, and leaves
+    /// 6,900 where it was. Below 6,000 the two agree about every block either can produce and must stay
+    /// peers; 6,000 is a height the deployed schedule does not name, so from it each refuses the other
+    /// — before either reaches a height where their rules differ. And the flag-day set is at 6,001 and
+    /// not 6,000 for the reason 7,001 was not 7,000: at 6,000 it would share the held regime's height
+    /// and be invisible beside a build carrying the regime without the set.
+    #[test]
+    fn the_moved_heights_refuse_the_deployed_7000_release_from_6000_and_keep_it_below() {
+        const HELD_AND_DEEP: u64 = crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA;
+        const PALW_UPGRADE_DAY: u64 = crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA;
+        const RETIRED_6201: u64 = crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA;
+        const CRESCENDO_T11: u64 = 2_125_000;
+        let upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        let mut release_7000 = upgraded.clone();
+        crate::config::params::palw_rc_deployed_7000_release_for_tests(&mut release_7000);
+        assert_eq!(release_7000.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, CRESCENDO_T11]);
+        assert_eq!(
+            upgraded.fence_schedule_v1(),
+            vec![
+                1150,
+                1900,
+                2150,
+                2400,
+                3500,
+                4000,
+                // ADR-0120's 6,900, where the deployed release put it — now BELOW the moved flag day.
+                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
+                HELD_AND_DEEP,
+                PALW_UPGRADE_DAY,
+                crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
+                RETIRED_6201,
+                crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
+                crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
+                CRESCENDO_T11
+            ],
+            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0130's span-short at 7,300, ADR-0134 two hundred past, ADR-0138/0142 at the clock fence, ADR-0144's lock ledger, ADR-0120 where it was"
+        );
+
+        // **The deployment window.** The heights moved twice: to 6,000 on 2026-09-17 with the tip at
+        // 5,798, and to 6,300 on 2026-09-18 with the tip at 6,008 — the second move because holding
+        // the release to fix the DAA clock took the tip past the boundary it had been pinned to.
+        // Every score from the tip up to the moved height is a height at which an operator may still
+        // roll the fleet, so those are the scores this test walks.
+        const TIP_AT_THE_FIRST_MOVE: u64 = 5_798;
+        const TIP_AT_THE_SECOND_MOVE: u64 = 6_008;
+        // 2026-09-19: the release was held for the drill and the tip reached this while it ran, so
+        // the heights moved a third time. The three are kept because each one is a measurement of
+        // the same lesson — a height is only above the tip until the release takes long enough.
+        const TIP_AT_THE_THIRD_MOVE: u64 = 6_263;
+        // 2026-09-19, the fourth: the drill's own clock runs on heartbeats past its anchor-clock
+        // fence, so the DAA-denominated challenge window the finals phase waits on is hours of wall
+        // clock, and the heights went above ADR-0120's 6,900 to buy that time.
+        const TIP_AT_THE_FOURTH_MOVE: u64 = 6_454;
+        let new_peer = fork_id_v1(&upgraded, TIP_AT_THE_FOURTH_MOVE);
+        let old_peer = fork_id_v1(&release_7000, TIP_AT_THE_FOURTH_MOVE);
+        assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 4,000");
+        // **The fourth move put the flag day ABOVE ADR-0120's 6,900, and that changes what the
+        // handshake can see and when.** Both builds schedule 6,900, so below it they advertise the
+        // identical schedule and are indistinguishable — correctly, because they agree about every
+        // block either can produce there. From 6,900 their next fences differ (this build's 7,100
+        // against the deployed release's 7,000), and the disputed fence is the LOWER of the two, so
+        // the refusal lands at 7,000 — which is where the two actually start disagreeing about
+        // blocks, the deployed release firing its held regime there and this build not. Refused
+        // before the disputed fence, never after: the property is intact, only its dates moved.
+        assert_eq!((new_peer.next, old_peer.next), (6_900, 6_900), "below 6,900 the two are one schedule");
+        assert!(TIP_AT_THE_FIRST_MOVE < TIP_AT_THE_SECOND_MOVE && TIP_AT_THE_SECOND_MOVE < TIP_AT_THE_THIRD_MOVE);
+        assert!(TIP_AT_THE_THIRD_MOVE < TIP_AT_THE_FOURTH_MOVE && TIP_AT_THE_FOURTH_MOVE < 6_900);
+        assert!(TIP_AT_THE_FOURTH_MOVE < HELD_AND_DEEP, "the boundary is above the tip it was re-pinned over");
+        assert_eq!(fork_id_v1(&upgraded, 6_900).next, HELD_AND_DEEP, "past 6,900 this build points at the flag day");
+        assert_eq!(fork_id_v1(&release_7000, 6_900).next, 7_000, "…and the deployed release at its own held regime");
+        for local_daa in [TIP_AT_THE_FIRST_MOVE, TIP_AT_THE_SECOND_MOVE, TIP_AT_THE_FOURTH_MOVE, 6_900, 6_999] {
+            let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
+            assert!(
+                !evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
+                "the 7,000 release keeps this build at {local_daa}"
+            );
+            assert!(
+                !evaluate_fork_id_v1(&upgraded, local_daa, old_at.fired.as_bytes().as_slice(), old_at.next).refuses(),
+                "this build keeps the 7,000 release at {local_daa}"
+            );
+        }
+        // 7,000 is the first height the two disagree about a BLOCK: the deployed release fires its
+        // held regime there and this build does not.
+        for local_daa in [7_000, 7_001, HELD_AND_DEEP, PALW_UPGRADE_DAY, PALW_UPGRADE_DAY + 1, RETIRED_6201] {
+            let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
+            assert!(
+                evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
+                "…and refuses it at {local_daa}"
+            );
+            assert!(
+                evaluate_fork_id_v1(&upgraded, local_daa, old_at.fired.as_bytes().as_slice(), old_at.next).refuses(),
+                "…both ways at {local_daa}"
+            );
+        }
+
+        // The counterfactual the flag day's own height exists for: the same set at 6,000 is invisible
+        // beside a build that carries the held regime at 6,000 without it.
+        let mut without_the_set = upgraded.clone();
+        crate::config::params::palw_rc_clear_flag_day_6001_for_tests(&mut without_the_set);
+        let mut at_6000 = upgraded.clone();
+        // The counterfactual is about the flag day's height; ADR-0134's later retirement and
+        // ADR-0130's later span-short are not part of it.
+        at_6000.palw_compute_overlay_retired = None;
+        let six_thousand = crate::config::params::ForkActivation::new(HELD_AND_DEEP);
+        at_6000.palw_panel_economy = Some(six_thousand);
+        at_6000.palw_work_priced_reward = Some(six_thousand);
+        at_6000.palw_execution_lane = at_6000.palw_execution_lane.map(|lane| crate::config::params::PalwExecutionLaneV1 {
+            activation: six_thousand,
+            short_span: crate::config::params::PalwExecSpanShortV1::NONE,
+            ..lane
+        });
+        at_6000.palw_overlay_carve =
+            at_6000.palw_overlay_carve.map(|carve| crate::config::params::PalwOverlayCarveV1 { activation: six_thousand, ..carve });
+        at_6000.dns_bft_gate =
+            at_6000.dns_bft_gate.map(|gate| crate::config::params::DnsBftGateV1 { activation: six_thousand, ..gate });
+        // ADR-0135 and ADR-0132 Upgrade C ride the same flag day.
+        at_6000.palw_model_registry = Some(six_thousand);
+        at_6000.palw_economic_payout = at_6000
+            .palw_economic_payout
+            .map(|payout| crate::config::params::PalwEconomicPayoutV1 { activation: six_thousand, ..payout });
+        // ADR-0137's work target rides it too — and it has to, or the registry's shares would be the
+        // only rule in force for the gap (ADR-0137 §3.5).
+        at_6000.palw_work_target = Some(six_thousand);
+        at_6000.palw_single_lottery = Some(six_thousand);
+        at_6000.palw_anchor_clock = Some(six_thousand);
+        at_6000.palw_clock_cursor = Some(six_thousand);
+        at_6000.set_palw_short_challenge_window(Some(six_thousand));
+        // ADR-0133 V2 has its own day (6,100); the counterfactual moves it with the rest so the
+        // schedule reads as a build without the whole upgrade.
+        at_6000.palw_verification_v2 = Some(six_thousand);
+        at_6000.palw_readiness_v2 = Some(six_thousand);
+        // ADR-0144's lock ledger, ADR-0133 §7's seat gate and ADR-0133 S3/S2 are later unused
+        // heights, not part of the 6,000 counterfactual.
+        at_6000.palw_objective_offence = None;
+        at_6000.palw_seat_gate_possession = None;
+        at_6000.palw_class_receipt_window = None;
+        at_6000.palw_execution_quanta = None;
+        at_6000.palw_verification_s3 = None;
+        at_6000.palw_verification_s2 = None;
+        assert_eq!(
+            at_6000.fence_schedule_v1(),
+            without_the_set.fence_schedule_v1(),
+            "at 6,000 the set would advertise the schedule of a build without it"
+        );
+        for local_daa in [HELD_AND_DEEP, PALW_UPGRADE_DAY, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA] {
+            let (hidden, bare) = (fork_id_v1(&at_6000, local_daa), fork_id_v1(&without_the_set, local_daa));
+            assert_eq!(
+                (hidden.fired, hidden.next),
+                (bare.fired, bare.next),
+                "and one fork id at {local_daa}: the gate could not tell them apart"
+            );
+        }
+    }
+
+    /// **A peer kept on a warning is judged again at the height its verdict turns** — the second
+    /// defect of 2026-09-10, where a node that met six un-upgraded peers at its own DAA 0 kept them
+    /// past the fence they lacked.
+    ///
+    /// The height must be EXACT in both directions: one score below it the peer is still kept, and
+    /// at it the peer is refused. Checked over every verdict shape the gate produces, on both
+    /// testnet-11 schedules and on a mainnet preset where crescendo sits on the schedule and off the
+    /// gate.
+    #[test]
+    fn a_kept_peer_is_judged_again_exactly_where_its_verdict_turns() {
+        const ADR_0095: u64 = 2400;
+        // The 2400 flag day's two builds (ADR-0114's 3500 came later; its own day is pinned below).
+        let mut upgraded = Params::from(NetworkId::with_suffix(crate::network::NetworkType::Testnet, 11));
+        upgraded.palw_model_leg_v2 = None;
+        let mut un_upgraded = upgraded.clone();
+        un_upgraded.palw_model_benefits = None;
+
+        let exact = |params: &Params, from: u64, fired: &[u8], next: u64, want: Option<u64>, what: &str| {
+            let got = fork_id_refusal_height_v1(params, from, fired, next);
+            assert_eq!(got, want, "{what}: refusal height from {from}");
+            if let Some(height) = got {
+                assert!(evaluate_fork_id_v1(params, height, fired, next).refuses(), "{what}: refused at {height}");
+                if height > from {
+                    assert!(!evaluate_fork_id_v1(params, height - 1, fired, next).refuses(), "{what}: kept at {}", height - 1);
+                }
+            } else {
+                for probe in [from, from + 1, 2_125_000, 200_000_000, u64::MAX - 1] {
+                    assert!(!evaluate_fork_id_v1(params, probe, fired, next).refuses(), "{what}: never refused, probed at {probe}");
+                }
+            }
+        };
+
+        // The explorer node's case: this node at DAA 0 (empty datadir) meets the un-upgraded build.
+        let old_peer = fork_id_v1(&un_upgraded, 2270);
+        exact(&upgraded, 0, old_peer.fired.as_bytes().as_slice(), old_peer.next, Some(ADR_0095), "upgraded node meets old build");
+        // The mirror: an un-upgraded node meets the upgraded build below 2400 — the peer's own fence.
+        let new_peer = fork_id_v1(&upgraded, 2241);
+        exact(&un_upgraded, 2241, new_peer.fired.as_bytes().as_slice(), new_peer.next, Some(ADR_0095), "old node meets new build");
+        // A peer already refused has its height at this node's own score.
+        exact(&upgraded, 3_158, old_peer.fired.as_bytes().as_slice(), old_peer.next, Some(3_158), "already past");
+        // A build with no fork-id field, and a stranger: refused from the first gate fence.
+        exact(&upgraded, 0, &[], FORK_ID_NO_NEXT_FENCE, Some(1150), "absent");
+        exact(&upgraded, 0, &[0u8; 32], 7, Some(1150), "unknown fired set");
+        // The same build seen from anywhere along it is never refused.
+        for peer_daa in [0u64, 1_149, 1_150, 2_399, 2_400, 9_000] {
+            let same = fork_id_v1(&upgraded, peer_daa);
+            exact(&upgraded, 0, same.fired.as_bytes().as_slice(), same.next, None, "same build");
+        }
+        // A disarmed preset refuses nobody, crescendo crossed or not.
+        let mainnet = MAINNET_PARAMS;
+        exact(&mainnet, 0, &[], FORK_ID_NO_NEXT_FENCE, None, "disarmed mainnet");
+        // An armed mainnet: crescendo is on the schedule and off the gate, so a dispute about it
+        // turns only at the gate's own fence.
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_attempt_activation = Some(ForkActivation::new(200_000_000));
+        let stranger = fired_fences_digest_v1(armed.genesis.hash, &[]).as_bytes().to_vec();
+        exact(&armed, 110_165_000, &stranger, 110_165_005, Some(200_000_000), "dispute about crescendo");
+        exact(&armed, 0, &stranger, 42, Some(42), "the peer's own lower fence");
+    }
+
+    /// A build that predates the field sends nothing, and nothing is not a fired set.
+    #[test]
+    fn an_absent_fork_id_is_a_mismatch_named_as_one() {
+        let armed = armed_at(1_000);
+        assert_eq!(
+            evaluate_fork_id_v1(&armed, 5_000, &[], 0),
+            ForkIdVerdict::DisagreePastFence { mismatch: ForkIdMismatch::Absent, fired_through: 1_000 }
+        );
+        assert_eq!(evaluate_fork_id_v1(&armed, 10, &[], 0), ForkIdVerdict::DisagreeBeforeAnyFence(ForkIdMismatch::Absent));
+    }
+
+    /// **Two builds arming one rule at DIFFERENT heights are a fork, and the fork id says so.**
+    ///
+    /// This is the residual `consensus_identity_id`'s own doc records as beyond its reach: both
+    /// builds normalise their fence away, produce one identity, and peer. Past either height they
+    /// disagree about blocks that exist.
+    #[test]
+    fn two_builds_arming_one_fence_at_different_heights_are_refused_past_it() {
+        let ours = armed_at(1_000);
+        let theirs = armed_at(2_000);
+        assert_eq!(
+            ours.consensus_identity_id(),
+            theirs.consensus_identity_id(),
+            "the identity id cannot see this difference — that is why the fork id exists"
+        );
+
+        // Their node is past ITS fence; ours is past OURS.
+        let peer = fork_id_v1(&theirs, 3_000);
+        let verdict = evaluate_fork_id_v1(&ours, 3_000, peer.fired.as_bytes().as_slice(), peer.next);
+        assert_eq!(verdict, ForkIdVerdict::DisagreePastFence { mismatch: ForkIdMismatch::UnknownFiredSet, fired_through: 1_000 });
+        assert!(verdict.refuses());
+    }
+
+    /// **The fired set is bound to the chain it was fired on.**
+    ///
+    /// Two networks scheduling the same heights must not accept each other's fork ids; the genesis
+    /// inside the digest is what stops it. (The handshake compares genesis separately too — this is
+    /// the belt to that pair of braces, and it costs one hash input.)
+    #[test]
+    fn a_fired_set_from_another_genesis_does_not_match() {
+        let mut ours = armed_at(1_000);
+        let mut theirs = armed_at(1_000);
+        theirs.genesis = SIMNET_PARAMS.genesis;
+        assert_ne!(ours.genesis.hash, theirs.genesis.hash);
+
+        let peer = fork_id_v1(&theirs, 5_000);
+        assert!(evaluate_fork_id_v1(&ours, 5_000, peer.fired.as_bytes().as_slice(), peer.next).refuses());
+
+        // Same genesis, same schedule: agree. (Guards against the test above passing for the wrong
+        // reason.)
+        ours.genesis = SIMNET_PARAMS.genesis;
+        assert_eq!(evaluate_fork_id_v1(&ours, 5_000, peer.fired.as_bytes().as_slice(), peer.next), ForkIdVerdict::Agree);
+    }
+
+    /// **A peer that has crossed a fence this build does not carry is kept, not refused.**
+    ///
+    /// It means this node is the out-of-date one. Refusing there would let a stale minority
+    /// disconnect itself from the upgrade it needs to receive, and which chain wins is fork
+    /// choice's question, not the handshake's.
+    #[test]
+    fn a_peer_ahead_of_this_builds_whole_schedule_is_kept() {
+        let ours = armed_at(1_000);
+        let mut theirs = armed_at(1_000);
+        theirs.pq_activation_daa_score = 5_000; // a second fence, only they know about
+        assert_eq!(theirs.fence_schedule_v1(), vec![1_000, 5_000]);
+
+        let peer = fork_id_v1(&theirs, 9_000); // crossed both
+        // Their fired set [1000, 5000] is NOT a prefix of ours — ours is [1000] and stops there.
+        assert!(evaluate_fork_id_v1(&ours, 9_000, peer.fired.as_bytes().as_slice(), peer.next).refuses());
+
+        // But before their extra fence fires, they announce exactly our schedule with a next fence
+        // we do not carry — and that is the M1-6 case: keep the peer.
+        let peer_early = fork_id_v1(&theirs, 3_000);
+        assert_eq!(peer_early.next, 5_000);
+        assert_eq!(evaluate_fork_id_v1(&ours, 3_000, peer_early.fired.as_bytes().as_slice(), peer_early.next), ForkIdVerdict::Agree);
+    }
+
+    /// **The peer's word about itself decides nothing.**
+    ///
+    /// A stale node that simply echoes the digest an upgraded node would send must not thereby pass
+    /// — but the point of the test is the converse and it is the one that matters: the ACCEPTING
+    /// side computes every digest it is willing to match from its own params and its own DAA, so
+    /// there is no field a peer can set to make the gate compute a different set.
+    #[test]
+    fn the_accepted_sets_are_derived_locally_not_read_from_the_peer() {
+        let ours = armed_at(1_000);
+        // A digest of a set nobody scheduled.
+        let invented = fired_fences_digest_v1(ours.genesis.hash, &[7, 8, 9]);
+        assert!(evaluate_fork_id_v1(&ours, 5_000, invented.as_bytes().as_slice(), FORK_ID_NO_NEXT_FENCE).refuses());
+        // Garbage of the right length is refused for the same reason, and shorter/longer garbage
+        // never reaches a comparison at all (the p2p boundary bounds the field first).
+        assert!(evaluate_fork_id_v1(&ours, 5_000, &[0u8; 32], 1_000).refuses());
+        assert!(evaluate_fork_id_v1(&ours, 5_000, &[0xffu8; 8], 1_000).refuses());
+    }
+
+    /// Distinct sets do not collide, including the pair a length-free encoding would confuse.
+    #[test]
+    fn the_digest_separates_sets_that_a_bare_concatenation_would_not() {
+        let g = TESTNET_PARAMS.genesis.hash;
+        assert_ne!(fired_fences_digest_v1(g, &[]), fired_fences_digest_v1(g, &[0]));
+        assert_ne!(fired_fences_digest_v1(g, &[1, 2]), fired_fences_digest_v1(g, &[1]));
+        // `[0x0102…]` vs `[0x01, 0x02…]`: the length prefix is what keeps these apart.
+        assert_ne!(fired_fences_digest_v1(g, &[1, 2]), fired_fences_digest_v1(g, &[(2u64 << 32) | 1]));
+        assert_eq!(fired_fences_digest_v1(g, &[1, 2]), fired_fences_digest_v1(g, &[1, 2]), "and it is a function");
+    }
+}

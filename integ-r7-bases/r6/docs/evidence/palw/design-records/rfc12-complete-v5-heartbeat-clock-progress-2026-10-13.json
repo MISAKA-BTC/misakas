@@ -1,0 +1,996 @@
+{
+  "schemaVersion": 1,
+  "kind": "rfc12-normal-heartbeat-clock-progress",
+  "workflowComplete": false,
+  "matureUsefulWorkMeasured": false,
+  "fullSecurityApproval": false,
+  "observations": {
+    "A": {
+      "dag": {
+        "blockCount": 3,
+        "difficulty": 1.0000001192093038,
+        "headerCount": 3,
+        "network": "testnet-12",
+        "pastMedianTime": 1791897857429,
+        "pruningPointHash": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+        "sink": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+        "tipHashes": [
+          "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f"
+        ],
+        "virtualDaaScore": 3,
+        "virtualParentHashes": [
+          "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f"
+        ]
+      },
+      "node": {
+        "consensusParamsId": "978fcf57f12d314a4ea053adb23cb3adf20c1f696378cf5297cf06fb31bf1b26",
+        "consensusScheduleId": "660281a1a48f4b293c9cd412496fe042d437bc49dfc987455535ef1bb76e10ea",
+        "draws": 2303,
+        "drillSaltId": "e4d716c56db419e6",
+        "fenceSchedule": [
+          1,
+          750,
+          1000,
+          1300,
+          1700,
+          3600,
+          5300,
+          5395,
+          5490,
+          5585
+        ],
+        "genesisHash": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+        "importSessionAvailable": true,
+        "importSessionEpoch": 0,
+        "importSessionPhase": "legacy-stable",
+        "importSessionPoint": "",
+        "laneAlarm": "",
+        "laneHeartbeatBlocks": 6,
+        "laneLastWorkDaa": 1,
+        "laneMix": "12 blocks (DAA 0..3): attempt=5 receipt=0 exec-priced-attempt=0 heartbeat=6 other=1 | merged round blocks=0 merged attempts=0",
+        "laneWindowBlocks": 12,
+        "laneWorkBlocks": 5,
+        "lastBlock": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+        "lastBlockUnix": 1791898142,
+        "lastDrawUnix": 1791898187,
+        "memoryAvailableBytes": 0,
+        "memoryBounded": false,
+        "memoryHeadroomBytes": 0,
+        "memoryHolders": "producer of class f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8 job 9198db7191cd637427763ccc127923619f43ee41dbef352a4600379c850ee010a4de6325c3ed69d010ce8e58c9cd390acbd214eed66a81f93a879709b7e5d129 (0.50 GiB)",
+        "memoryReservedBytes": 536870912,
+        "memoryShareBytes": 0,
+        "networkLost": 0,
+        "panelRunning": true,
+        "panelSubmitter": true,
+        "producedBlocks": 6,
+        "producerBond": "2237116634843687a063d4b543cf033a61b283d23bfcb780904b5648be4e9ba7fcf98a6143908664cb43dc4636cc5e5fe18cde19228bb7b357ccfbeb3708228c:0",
+        "producerClass": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "producerReason": "",
+        "producerSinceUnix": 1791897803,
+        "producerState": "drawing",
+        "pruningImportStable": true,
+        "receiptBlocks": 0,
+        "retentionDir": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-rfc12-bootstrap-1gqqmn6o/A/appdir/misaka-testnet-12/palw-retention",
+        "verification": "pinned_mib=0 pinned_files=1 run_cap=64 run_last=0 run_narrowed=0 capacity_run_min=0 capacity_narrow_classes=0 host_ledger=off seat_duties=0 seat_oldest_wait_daa=0 seat_receipts_1h=0 sched_needed=0 sched_backup=0 sched_satisfied=0 slots=2 running=0 overdue=0 detached=0 load_limited=false tick_last_s=0.0 tick_max20_s=0.0 tick_slowest=tail-pre-licence:0.0 own_provisional=6 own_panel_bound=0 own_panel_bound_aged=0 own_oldest_wait_daa=0 debt_hold=false"
+      },
+      "onboarding": {
+        "artifactBindings": [
+          {
+            "binder": "2237116634843687a063d4b543cf033a61b283d23bfcb780904b5648be4e9ba7fcf98a6143908664cb43dc4636cc5e5fe18cde19228bb7b357ccfbeb3708228c:0",
+            "boundDaa": 0,
+            "finalDaa": 200,
+            "kernelParamRoot": "3bedeb2ef217f0998457a7dfe09ab6929366fc474ff9af9b800116779dead6165f63e41ed5013a93c05988ed2e5e9734049d2f464eea81b26203e7a96776f77f",
+            "maturesDaa": 40,
+            "reservedSompi": 10000000000,
+            "state": "Pending"
+          }
+        ],
+        "artifactRoot": "1fc3fca3cb5afaf3d35aaec4da855e6b3b3ebd7e9177f70411ffcac433fc025dc3b53bd0302044af33dd7fdf02b23e5ba93d434011cd87f901d33c4cda7d7c3e",
+        "auxRoot": "e6022ebca70c31c15ac29ba2edd9873a30f6fd7bcb485969ce2054bb1b322f4466fcebb43ad0f3268d7f675fe172943cb4c4f2ed40fc89cc809e013a6332181a",
+        "available": true,
+        "challengePolicyId": "",
+        "classId": "1e0b6758a1de11ba5fd7c05f0ff7d30d4ff1100bc830606f6705a931c06166162427fb6330ebd5e24ea92c05594d497d1cff2823512e2d57b4dafa45cacfb970",
+        "conformanceCommitted": false,
+        "conformanceDaa": 0,
+        "conformanceStatementRoot": "",
+        "found": true,
+        "gate": "Held",
+        "gateCode": "REGISTERED_DORMANT",
+        "gateReason": "the class has an artifact binding but no kernel binding (tag 106) yet",
+        "kernelBound": false,
+        "kernelClass": "",
+        "kernelPlanRoot": "",
+        "ledgerRoot": "23415c28cff6fc09e88fae690ac6011f954d4a5b67bd93c411017efeb9c4d2d187c30316e289e3155231f856d9f9d78b896c21f091053e32ded89dedc0d8fc6e",
+        "registrant": "2237116634843687a063d4b543cf033a61b283d23bfcb780904b5648be4e9ba7fcf98a6143908664cb43dc4636cc5e5fe18cde19228bb7b357ccfbeb3708228c:0",
+        "status": "Registered { activation_daa: 0, pending_share_permille: 0 }",
+        "tipDaa": 3
+      },
+      "dns": {
+        "available": false,
+        "blockDaaScore": 0,
+        "blockFound": false,
+        "blockHash": "",
+        "blockIsConfirmedAnchor": false,
+        "blockIsDnsFinal": false,
+        "dnsConfirmed": false,
+        "dnsReorgRiskConservativeBound": "",
+        "expectedDnsConfirmationSeconds": 0,
+        "health": 0,
+        "lastDnsConfirmedAnchor": "",
+        "lastDnsConfirmedAnchorDaaScore": 0,
+        "note": "",
+        "powConfirmed": false,
+        "requiredStakeDepth": "",
+        "requiredWorkDepth": "",
+        "rolloutStage": 0,
+        "stakeDepth": "",
+        "stakeReorgRiskUpperBound": "",
+        "vltFinalityActive": false,
+        "vltGaugesDaaScore": 0,
+        "vltQuorumWeight": "",
+        "vltShadowActive": false,
+        "vltSnapshotEpoch": 0,
+        "vltSnapshotRoot": "",
+        "vltState": "",
+        "vltTotalWeight": "",
+        "vltWeightFenceReached": false,
+        "workDepth": "",
+        "workReorgRiskUpperBound": ""
+      },
+      "settlement": {
+        "available": true,
+        "daaScore": 3,
+        "depth": 0,
+        "depthIsLowerBound": true,
+        "dnsRetiredAt": 1,
+        "nativeReadiness": {
+          "blocking": {
+            "block": "87906f852d0eae24d440bc1a2fccb3acee02e1fcec1071b06527bb9fb681c214ce1ae34afdb143fd9cfee52aae6e1433ca610e8d0d0e3838130326668342edf5",
+            "blue": 1,
+            "daa": 0,
+            "earliestReadyInDaa": null,
+            "evidence": {
+              "anchors": 0,
+              "maturedFacts": 0,
+              "pendingFacts": 0,
+              "pendingWork": "0",
+              "work": "0"
+            },
+            "inSafePrefix": false,
+            "openClaimsTotal": 1,
+            "openSessionsTotal": 0,
+            "waits": [
+              {
+                "effectBlue": 1,
+                "frontierBlue": 0,
+                "frontierOnBranch": false,
+                "kind": "frontierBehind"
+              },
+              {
+                "acceptedBlue": 1,
+                "claim": "b6bfd2e75a3a0b4cbb39567abecd5d29ebe236edfc5bce23211874180c4334cf00dc76a321f48ea5148dc2ce7f8b52d0fc69064b0c2b917431a5f5e756979ea0",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "have": 0,
+                "kind": "insufficientDepth",
+                "need": 1
+              },
+              {
+                "have": "0",
+                "kind": "insufficientWork",
+                "need": "1"
+              }
+            ]
+          },
+          "executedEffects": 12,
+          "finalized": {
+            "finalized": null,
+            "pruningBlue": 0,
+            "pruningPoint": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+            "wait": {
+              "kind": "noSafePrefix"
+            },
+            "withdrawnFrom": null
+          },
+          "generation": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "maturity": {
+            "claimRetirementDaa": 3000,
+            "quantumMaturityDaa": 120,
+            "rule": "v1"
+          },
+          "policy": {
+            "maxClassPermille": 1000,
+            "maxOperatorPermille": 1000,
+            "settledAnchorDepth": 1,
+            "uniqueMatureWork": "1"
+          },
+          "safe": null,
+          "safeLagBlue": null,
+          "safeLagDaa": null,
+          "sinkBlue": 12,
+          "sinkDaa": 3,
+          "skipped": {
+            "baseClass": 0,
+            "bondNotHeld": 0,
+            "openDa": 0,
+            "unpriced": 0,
+            "voided": 0
+          },
+          "stop": "frontierNotCovered",
+          "stoppedEarly": null,
+          "tip": {
+            "block": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+            "blue": 12,
+            "daa": 3,
+            "earliestReadyInDaa": null,
+            "evidence": {
+              "anchors": 0,
+              "maturedFacts": 0,
+              "pendingFacts": 0,
+              "pendingWork": "0",
+              "work": "0"
+            },
+            "inSafePrefix": false,
+            "openClaimsTotal": 6,
+            "openSessionsTotal": 0,
+            "waits": [
+              {
+                "effectBlue": 12,
+                "frontierBlue": 0,
+                "frontierOnBranch": false,
+                "kind": "frontierBehind"
+              },
+              {
+                "acceptedBlue": 1,
+                "claim": "b6bfd2e75a3a0b4cbb39567abecd5d29ebe236edfc5bce23211874180c4334cf00dc76a321f48ea5148dc2ce7f8b52d0fc69064b0c2b917431a5f5e756979ea0",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 2,
+                "claim": "cf4f3e949e3401962778f5e373347335a5104b00582208f9f74a94d9d0182c97607700664c5356aeef79edfa8ffecc0f3437c3a7535eb7e5f8da394e045bae19",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 3,
+                "claim": "84e7f7275d64447b1f77618020daee0257aa3f8622d253072df151d0f5952f2e41f35fb7f053b08e96a156f7a42c9b139e2dc26b9f9601a8f6c2fef0d79a5e23",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 6,
+                "claim": "68a9cd34948476f4eb46a986e2e94d35c1d4271adec546925fb81e2b63717916e629276e68193187a094c2c06ff6474328c4298678a0dba83c3f0e01d6a32bbb",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 601,
+                "retentionDaa": 5401,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 7,
+                "claim": "deb7cbec32c7ea693aaea06e2b7700282f8e1183ec001c5ab936b801efcb531bb566d4092646090085566f01cfbdec893bacad552159a767c61305fcfa3a1296",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 601,
+                "retentionDaa": 5401,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 12,
+                "claim": "5f4d38c10fd09dfea4e48dc62667de4d2735cb2c4061a0facdfd0b09ee54d71f7d6b9689889459062f4c846660cd10f54d64285a43193e89f50d332e513e516d",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 603,
+                "retentionDaa": 5403,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "have": 0,
+                "kind": "insufficientDepth",
+                "need": 1
+              },
+              {
+                "have": "0",
+                "kind": "insufficientWork",
+                "need": "1"
+              }
+            ]
+          },
+          "version": 1
+        },
+        "nativeSettlement": {
+          "depth": 0,
+          "finalized": null,
+          "frontier": null,
+          "generation": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "latest": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "policyId": "a53550fb8851b87d8bb3a428ec144144c4ddb6d163a1f1618641535b490b3fcfd4c6829b17e9ff1cf07458d2c8b8a3bc7e521da87de75022483edaed8c8124bb",
+          "retirementDaa": 1,
+          "rulesetId": "978fcf57f12d314a4ea053adb23cb3adf20c1f696378cf5297cf06fb31bf1b26",
+          "safe": null,
+          "stop": "frontierNotCovered",
+          "uniqueWork": "0",
+          "version": 1
+        },
+        "pendingAnchors": 1,
+        "safeFrontierBlueScore": 0,
+        "safeFrontierDaa": 0,
+        "settled": false,
+        "sinkDaa": 3
+      }
+    },
+    "B": {
+      "dag": {
+        "blockCount": 3,
+        "difficulty": 1.0000001192093038,
+        "headerCount": 3,
+        "network": "testnet-12",
+        "pastMedianTime": 1791897857429,
+        "pruningPointHash": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+        "sink": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+        "tipHashes": [
+          "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f"
+        ],
+        "virtualDaaScore": 3,
+        "virtualParentHashes": [
+          "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f"
+        ]
+      },
+      "node": {
+        "consensusParamsId": "978fcf57f12d314a4ea053adb23cb3adf20c1f696378cf5297cf06fb31bf1b26",
+        "consensusScheduleId": "660281a1a48f4b293c9cd412496fe042d437bc49dfc987455535ef1bb76e10ea",
+        "draws": 0,
+        "drillSaltId": "e4d716c56db419e6",
+        "fenceSchedule": [
+          1,
+          750,
+          1000,
+          1300,
+          1700,
+          3600,
+          5300,
+          5395,
+          5490,
+          5585
+        ],
+        "genesisHash": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+        "importSessionAvailable": true,
+        "importSessionEpoch": 0,
+        "importSessionPhase": "legacy-stable",
+        "importSessionPoint": "",
+        "laneAlarm": "",
+        "laneHeartbeatBlocks": 6,
+        "laneLastWorkDaa": 1,
+        "laneMix": "12 blocks (DAA 0..3): attempt=5 receipt=0 exec-priced-attempt=0 heartbeat=6 other=1 | merged round blocks=0 merged attempts=0",
+        "laneWindowBlocks": 12,
+        "laneWorkBlocks": 5,
+        "lastBlock": "",
+        "lastBlockUnix": 0,
+        "lastDrawUnix": 0,
+        "memoryAvailableBytes": 0,
+        "memoryBounded": false,
+        "memoryHeadroomBytes": 0,
+        "memoryHolders": "",
+        "memoryReservedBytes": 0,
+        "memoryShareBytes": 0,
+        "networkLost": 0,
+        "panelRunning": true,
+        "panelSubmitter": true,
+        "producedBlocks": 0,
+        "producerBond": "",
+        "producerClass": "",
+        "producerReason": "",
+        "producerSinceUnix": 0,
+        "producerState": "off",
+        "pruningImportStable": true,
+        "receiptBlocks": 0,
+        "retentionDir": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-rfc12-bootstrap-1gqqmn6o/B/appdir/misaka-testnet-12/palw-retention",
+        "verification": "pinned_mib=0 pinned_files=1 run_cap=64 run_last=0 run_narrowed=0 capacity_run_min=0 capacity_narrow_classes=0 host_ledger=off seat_duties=0 seat_oldest_wait_daa=0 seat_receipts_1h=0 sched_needed=0 sched_backup=0 sched_satisfied=0 slots=2 running=0 overdue=0 detached=0 load_limited=false tick_last_s=0.0 tick_max20_s=0.0 tick_slowest=tail-pre-licence:0.0"
+      },
+      "onboarding": {
+        "artifactBindings": [
+          {
+            "binder": "2237116634843687a063d4b543cf033a61b283d23bfcb780904b5648be4e9ba7fcf98a6143908664cb43dc4636cc5e5fe18cde19228bb7b357ccfbeb3708228c:0",
+            "boundDaa": 0,
+            "finalDaa": 200,
+            "kernelParamRoot": "3bedeb2ef217f0998457a7dfe09ab6929366fc474ff9af9b800116779dead6165f63e41ed5013a93c05988ed2e5e9734049d2f464eea81b26203e7a96776f77f",
+            "maturesDaa": 40,
+            "reservedSompi": 10000000000,
+            "state": "Pending"
+          }
+        ],
+        "artifactRoot": "1fc3fca3cb5afaf3d35aaec4da855e6b3b3ebd7e9177f70411ffcac433fc025dc3b53bd0302044af33dd7fdf02b23e5ba93d434011cd87f901d33c4cda7d7c3e",
+        "auxRoot": "e6022ebca70c31c15ac29ba2edd9873a30f6fd7bcb485969ce2054bb1b322f4466fcebb43ad0f3268d7f675fe172943cb4c4f2ed40fc89cc809e013a6332181a",
+        "available": true,
+        "challengePolicyId": "",
+        "classId": "1e0b6758a1de11ba5fd7c05f0ff7d30d4ff1100bc830606f6705a931c06166162427fb6330ebd5e24ea92c05594d497d1cff2823512e2d57b4dafa45cacfb970",
+        "conformanceCommitted": false,
+        "conformanceDaa": 0,
+        "conformanceStatementRoot": "",
+        "found": true,
+        "gate": "Held",
+        "gateCode": "REGISTERED_DORMANT",
+        "gateReason": "the class has an artifact binding but no kernel binding (tag 106) yet",
+        "kernelBound": false,
+        "kernelClass": "",
+        "kernelPlanRoot": "",
+        "ledgerRoot": "23415c28cff6fc09e88fae690ac6011f954d4a5b67bd93c411017efeb9c4d2d187c30316e289e3155231f856d9f9d78b896c21f091053e32ded89dedc0d8fc6e",
+        "registrant": "2237116634843687a063d4b543cf033a61b283d23bfcb780904b5648be4e9ba7fcf98a6143908664cb43dc4636cc5e5fe18cde19228bb7b357ccfbeb3708228c:0",
+        "status": "Registered { activation_daa: 0, pending_share_permille: 0 }",
+        "tipDaa": 3
+      },
+      "dns": {
+        "available": false,
+        "blockDaaScore": 0,
+        "blockFound": false,
+        "blockHash": "",
+        "blockIsConfirmedAnchor": false,
+        "blockIsDnsFinal": false,
+        "dnsConfirmed": false,
+        "dnsReorgRiskConservativeBound": "",
+        "expectedDnsConfirmationSeconds": 0,
+        "health": 0,
+        "lastDnsConfirmedAnchor": "",
+        "lastDnsConfirmedAnchorDaaScore": 0,
+        "note": "",
+        "powConfirmed": false,
+        "requiredStakeDepth": "",
+        "requiredWorkDepth": "",
+        "rolloutStage": 0,
+        "stakeDepth": "",
+        "stakeReorgRiskUpperBound": "",
+        "vltFinalityActive": false,
+        "vltGaugesDaaScore": 0,
+        "vltQuorumWeight": "",
+        "vltShadowActive": false,
+        "vltSnapshotEpoch": 0,
+        "vltSnapshotRoot": "",
+        "vltState": "",
+        "vltTotalWeight": "",
+        "vltWeightFenceReached": false,
+        "workDepth": "",
+        "workReorgRiskUpperBound": ""
+      },
+      "settlement": {
+        "available": true,
+        "daaScore": 3,
+        "depth": 0,
+        "depthIsLowerBound": true,
+        "dnsRetiredAt": 1,
+        "nativeReadiness": {
+          "blocking": {
+            "block": "87906f852d0eae24d440bc1a2fccb3acee02e1fcec1071b06527bb9fb681c214ce1ae34afdb143fd9cfee52aae6e1433ca610e8d0d0e3838130326668342edf5",
+            "blue": 1,
+            "daa": 0,
+            "earliestReadyInDaa": null,
+            "evidence": {
+              "anchors": 0,
+              "maturedFacts": 0,
+              "pendingFacts": 0,
+              "pendingWork": "0",
+              "work": "0"
+            },
+            "inSafePrefix": false,
+            "openClaimsTotal": 1,
+            "openSessionsTotal": 0,
+            "waits": [
+              {
+                "effectBlue": 1,
+                "frontierBlue": 0,
+                "frontierOnBranch": false,
+                "kind": "frontierBehind"
+              },
+              {
+                "acceptedBlue": 1,
+                "claim": "b6bfd2e75a3a0b4cbb39567abecd5d29ebe236edfc5bce23211874180c4334cf00dc76a321f48ea5148dc2ce7f8b52d0fc69064b0c2b917431a5f5e756979ea0",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "have": 0,
+                "kind": "insufficientDepth",
+                "need": 1
+              },
+              {
+                "have": "0",
+                "kind": "insufficientWork",
+                "need": "1"
+              }
+            ]
+          },
+          "executedEffects": 12,
+          "finalized": {
+            "finalized": null,
+            "pruningBlue": 0,
+            "pruningPoint": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+            "wait": {
+              "kind": "noSafePrefix"
+            },
+            "withdrawnFrom": null
+          },
+          "generation": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "maturity": {
+            "claimRetirementDaa": 3000,
+            "quantumMaturityDaa": 120,
+            "rule": "v1"
+          },
+          "policy": {
+            "maxClassPermille": 1000,
+            "maxOperatorPermille": 1000,
+            "settledAnchorDepth": 1,
+            "uniqueMatureWork": "1"
+          },
+          "safe": null,
+          "safeLagBlue": null,
+          "safeLagDaa": null,
+          "sinkBlue": 12,
+          "sinkDaa": 3,
+          "skipped": {
+            "baseClass": 0,
+            "bondNotHeld": 0,
+            "openDa": 0,
+            "unpriced": 0,
+            "voided": 0
+          },
+          "stop": "frontierNotCovered",
+          "stoppedEarly": null,
+          "tip": {
+            "block": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+            "blue": 12,
+            "daa": 3,
+            "earliestReadyInDaa": null,
+            "evidence": {
+              "anchors": 0,
+              "maturedFacts": 0,
+              "pendingFacts": 0,
+              "pendingWork": "0",
+              "work": "0"
+            },
+            "inSafePrefix": false,
+            "openClaimsTotal": 6,
+            "openSessionsTotal": 0,
+            "waits": [
+              {
+                "effectBlue": 12,
+                "frontierBlue": 0,
+                "frontierOnBranch": false,
+                "kind": "frontierBehind"
+              },
+              {
+                "acceptedBlue": 1,
+                "claim": "b6bfd2e75a3a0b4cbb39567abecd5d29ebe236edfc5bce23211874180c4334cf00dc76a321f48ea5148dc2ce7f8b52d0fc69064b0c2b917431a5f5e756979ea0",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 2,
+                "claim": "cf4f3e949e3401962778f5e373347335a5104b00582208f9f74a94d9d0182c97607700664c5356aeef79edfa8ffecc0f3437c3a7535eb7e5f8da394e045bae19",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 3,
+                "claim": "84e7f7275d64447b1f77618020daee0257aa3f8622d253072df151d0f5952f2e41f35fb7f053b08e96a156f7a42c9b139e2dc26b9f9601a8f6c2fef0d79a5e23",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 6,
+                "claim": "68a9cd34948476f4eb46a986e2e94d35c1d4271adec546925fb81e2b63717916e629276e68193187a094c2c06ff6474328c4298678a0dba83c3f0e01d6a32bbb",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 601,
+                "retentionDaa": 5401,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 7,
+                "claim": "deb7cbec32c7ea693aaea06e2b7700282f8e1183ec001c5ab936b801efcb531bb566d4092646090085566f01cfbdec893bacad552159a767c61305fcfa3a1296",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 601,
+                "retentionDaa": 5401,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 12,
+                "claim": "5f4d38c10fd09dfea4e48dc62667de4d2735cb2c4061a0facdfd0b09ee54d71f7d6b9689889459062f4c846660cd10f54d64285a43193e89f50d332e513e516d",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 603,
+                "retentionDaa": 5403,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "have": 0,
+                "kind": "insufficientDepth",
+                "need": 1
+              },
+              {
+                "have": "0",
+                "kind": "insufficientWork",
+                "need": "1"
+              }
+            ]
+          },
+          "version": 1
+        },
+        "nativeSettlement": {
+          "depth": 0,
+          "finalized": null,
+          "frontier": null,
+          "generation": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "latest": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "policyId": "a53550fb8851b87d8bb3a428ec144144c4ddb6d163a1f1618641535b490b3fcfd4c6829b17e9ff1cf07458d2c8b8a3bc7e521da87de75022483edaed8c8124bb",
+          "retirementDaa": 1,
+          "rulesetId": "978fcf57f12d314a4ea053adb23cb3adf20c1f696378cf5297cf06fb31bf1b26",
+          "safe": null,
+          "stop": "frontierNotCovered",
+          "uniqueWork": "0",
+          "version": 1
+        },
+        "pendingAnchors": 1,
+        "safeFrontierBlueScore": 0,
+        "safeFrontierDaa": 0,
+        "settled": false,
+        "sinkDaa": 3
+      }
+    },
+    "JOIN": {
+      "dag": {
+        "blockCount": 3,
+        "difficulty": 1.0000001192093038,
+        "headerCount": 3,
+        "network": "testnet-12",
+        "pastMedianTime": 1791897857429,
+        "pruningPointHash": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+        "sink": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+        "tipHashes": [
+          "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f"
+        ],
+        "virtualDaaScore": 3,
+        "virtualParentHashes": [
+          "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f"
+        ]
+      },
+      "node": {
+        "consensusParamsId": "978fcf57f12d314a4ea053adb23cb3adf20c1f696378cf5297cf06fb31bf1b26",
+        "consensusScheduleId": "660281a1a48f4b293c9cd412496fe042d437bc49dfc987455535ef1bb76e10ea",
+        "draws": 0,
+        "drillSaltId": "e4d716c56db419e6",
+        "fenceSchedule": [
+          1,
+          750,
+          1000,
+          1300,
+          1700,
+          3600,
+          5300,
+          5395,
+          5490,
+          5585
+        ],
+        "genesisHash": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+        "importSessionAvailable": true,
+        "importSessionEpoch": 0,
+        "importSessionPhase": "legacy-stable",
+        "importSessionPoint": "",
+        "laneAlarm": "",
+        "laneHeartbeatBlocks": 6,
+        "laneLastWorkDaa": 3,
+        "laneMix": "13 blocks (DAA 0..3): attempt=6 receipt=0 exec-priced-attempt=0 heartbeat=6 other=1 | merged round blocks=0 merged attempts=0",
+        "laneWindowBlocks": 13,
+        "laneWorkBlocks": 6,
+        "lastBlock": "",
+        "lastBlockUnix": 0,
+        "lastDrawUnix": 0,
+        "memoryAvailableBytes": 0,
+        "memoryBounded": false,
+        "memoryHeadroomBytes": 0,
+        "memoryHolders": "",
+        "memoryReservedBytes": 0,
+        "memoryShareBytes": 0,
+        "networkLost": 0,
+        "panelRunning": true,
+        "panelSubmitter": true,
+        "producedBlocks": 0,
+        "producerBond": "",
+        "producerClass": "",
+        "producerReason": "",
+        "producerSinceUnix": 0,
+        "producerState": "off",
+        "pruningImportStable": true,
+        "receiptBlocks": 0,
+        "retentionDir": "/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/misaka-rfc12-bootstrap-1gqqmn6o/JOIN/appdir/misaka-testnet-12/palw-retention",
+        "verification": "pinned_mib=0 pinned_files=1 run_cap=64 run_last=0 run_narrowed=0 capacity_run_min=0 capacity_narrow_classes=0 host_ledger=off seat_duties=0 seat_oldest_wait_daa=0 seat_receipts_1h=0 sched_needed=0 sched_backup=0 sched_satisfied=0 slots=2 running=0 overdue=0 detached=0 load_limited=false tick_last_s=0.0 tick_max20_s=0.0 tick_slowest=tail-pre-licence:0.0"
+      },
+      "onboarding": {
+        "artifactBindings": [
+          {
+            "binder": "2237116634843687a063d4b543cf033a61b283d23bfcb780904b5648be4e9ba7fcf98a6143908664cb43dc4636cc5e5fe18cde19228bb7b357ccfbeb3708228c:0",
+            "boundDaa": 0,
+            "finalDaa": 200,
+            "kernelParamRoot": "3bedeb2ef217f0998457a7dfe09ab6929366fc474ff9af9b800116779dead6165f63e41ed5013a93c05988ed2e5e9734049d2f464eea81b26203e7a96776f77f",
+            "maturesDaa": 40,
+            "reservedSompi": 10000000000,
+            "state": "Pending"
+          }
+        ],
+        "artifactRoot": "1fc3fca3cb5afaf3d35aaec4da855e6b3b3ebd7e9177f70411ffcac433fc025dc3b53bd0302044af33dd7fdf02b23e5ba93d434011cd87f901d33c4cda7d7c3e",
+        "auxRoot": "e6022ebca70c31c15ac29ba2edd9873a30f6fd7bcb485969ce2054bb1b322f4466fcebb43ad0f3268d7f675fe172943cb4c4f2ed40fc89cc809e013a6332181a",
+        "available": true,
+        "challengePolicyId": "",
+        "classId": "1e0b6758a1de11ba5fd7c05f0ff7d30d4ff1100bc830606f6705a931c06166162427fb6330ebd5e24ea92c05594d497d1cff2823512e2d57b4dafa45cacfb970",
+        "conformanceCommitted": false,
+        "conformanceDaa": 0,
+        "conformanceStatementRoot": "",
+        "found": true,
+        "gate": "Held",
+        "gateCode": "REGISTERED_DORMANT",
+        "gateReason": "the class has an artifact binding but no kernel binding (tag 106) yet",
+        "kernelBound": false,
+        "kernelClass": "",
+        "kernelPlanRoot": "",
+        "ledgerRoot": "23415c28cff6fc09e88fae690ac6011f954d4a5b67bd93c411017efeb9c4d2d187c30316e289e3155231f856d9f9d78b896c21f091053e32ded89dedc0d8fc6e",
+        "registrant": "2237116634843687a063d4b543cf033a61b283d23bfcb780904b5648be4e9ba7fcf98a6143908664cb43dc4636cc5e5fe18cde19228bb7b357ccfbeb3708228c:0",
+        "status": "Registered { activation_daa: 0, pending_share_permille: 0 }",
+        "tipDaa": 3
+      },
+      "dns": {
+        "available": false,
+        "blockDaaScore": 0,
+        "blockFound": false,
+        "blockHash": "",
+        "blockIsConfirmedAnchor": false,
+        "blockIsDnsFinal": false,
+        "dnsConfirmed": false,
+        "dnsReorgRiskConservativeBound": "",
+        "expectedDnsConfirmationSeconds": 0,
+        "health": 0,
+        "lastDnsConfirmedAnchor": "",
+        "lastDnsConfirmedAnchorDaaScore": 0,
+        "note": "",
+        "powConfirmed": false,
+        "requiredStakeDepth": "",
+        "requiredWorkDepth": "",
+        "rolloutStage": 0,
+        "stakeDepth": "",
+        "stakeReorgRiskUpperBound": "",
+        "vltFinalityActive": false,
+        "vltGaugesDaaScore": 0,
+        "vltQuorumWeight": "",
+        "vltShadowActive": false,
+        "vltSnapshotEpoch": 0,
+        "vltSnapshotRoot": "",
+        "vltState": "",
+        "vltTotalWeight": "",
+        "vltWeightFenceReached": false,
+        "workDepth": "",
+        "workReorgRiskUpperBound": ""
+      },
+      "settlement": {
+        "available": true,
+        "daaScore": 3,
+        "depth": 0,
+        "depthIsLowerBound": true,
+        "dnsRetiredAt": 1,
+        "nativeReadiness": {
+          "blocking": {
+            "block": "87906f852d0eae24d440bc1a2fccb3acee02e1fcec1071b06527bb9fb681c214ce1ae34afdb143fd9cfee52aae6e1433ca610e8d0d0e3838130326668342edf5",
+            "blue": 1,
+            "daa": 0,
+            "earliestReadyInDaa": null,
+            "evidence": {
+              "anchors": 0,
+              "maturedFacts": 0,
+              "pendingFacts": 0,
+              "pendingWork": "0",
+              "work": "0"
+            },
+            "inSafePrefix": false,
+            "openClaimsTotal": 1,
+            "openSessionsTotal": 0,
+            "waits": [
+              {
+                "effectBlue": 1,
+                "frontierBlue": 0,
+                "frontierOnBranch": false,
+                "kind": "frontierBehind"
+              },
+              {
+                "acceptedBlue": 1,
+                "claim": "b6bfd2e75a3a0b4cbb39567abecd5d29ebe236edfc5bce23211874180c4334cf00dc76a321f48ea5148dc2ce7f8b52d0fc69064b0c2b917431a5f5e756979ea0",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "have": 0,
+                "kind": "insufficientDepth",
+                "need": 1
+              },
+              {
+                "have": "0",
+                "kind": "insufficientWork",
+                "need": "1"
+              }
+            ]
+          },
+          "executedEffects": 12,
+          "finalized": {
+            "finalized": null,
+            "pruningBlue": 0,
+            "pruningPoint": "e049e96c5e3db6ac2edb67d8960bde192858dc1772b6736e638793c8a97e0b311fc8a8c3e88215612074d296276aaf104e8f40f6e33b358b7a314f76877d0fc0",
+            "wait": {
+              "kind": "noSafePrefix"
+            },
+            "withdrawnFrom": null
+          },
+          "generation": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "maturity": {
+            "claimRetirementDaa": 3000,
+            "quantumMaturityDaa": 120,
+            "rule": "v1"
+          },
+          "policy": {
+            "maxClassPermille": 1000,
+            "maxOperatorPermille": 1000,
+            "settledAnchorDepth": 1,
+            "uniqueMatureWork": "1"
+          },
+          "safe": null,
+          "safeLagBlue": null,
+          "safeLagDaa": null,
+          "sinkBlue": 12,
+          "sinkDaa": 3,
+          "skipped": {
+            "baseClass": 0,
+            "bondNotHeld": 0,
+            "openDa": 0,
+            "unpriced": 0,
+            "voided": 0
+          },
+          "stop": "frontierNotCovered",
+          "stoppedEarly": null,
+          "tip": {
+            "block": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+            "blue": 12,
+            "daa": 3,
+            "earliestReadyInDaa": null,
+            "evidence": {
+              "anchors": 0,
+              "maturedFacts": 0,
+              "pendingFacts": 0,
+              "pendingWork": "0",
+              "work": "0"
+            },
+            "inSafePrefix": false,
+            "openClaimsTotal": 6,
+            "openSessionsTotal": 0,
+            "waits": [
+              {
+                "effectBlue": 12,
+                "frontierBlue": 0,
+                "frontierOnBranch": false,
+                "kind": "frontierBehind"
+              },
+              {
+                "acceptedBlue": 1,
+                "claim": "b6bfd2e75a3a0b4cbb39567abecd5d29ebe236edfc5bce23211874180c4334cf00dc76a321f48ea5148dc2ce7f8b52d0fc69064b0c2b917431a5f5e756979ea0",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 2,
+                "claim": "cf4f3e949e3401962778f5e373347335a5104b00582208f9f74a94d9d0182c97607700664c5356aeef79edfa8ffecc0f3437c3a7535eb7e5f8da394e045bae19",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 3,
+                "claim": "84e7f7275d64447b1f77618020daee0257aa3f8622d253072df151d0f5952f2e41f35fb7f053b08e96a156f7a42c9b139e2dc26b9f9601a8f6c2fef0d79a5e23",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 600,
+                "retentionDaa": 5400,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 6,
+                "claim": "68a9cd34948476f4eb46a986e2e94d35c1d4271adec546925fb81e2b63717916e629276e68193187a094c2c06ff6474328c4298678a0dba83c3f0e01d6a32bbb",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 601,
+                "retentionDaa": 5401,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 7,
+                "claim": "deb7cbec32c7ea693aaea06e2b7700282f8e1183ec001c5ab936b801efcb531bb566d4092646090085566f01cfbdec893bacad552159a767c61305fcfa3a1296",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 601,
+                "retentionDaa": 5401,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "acceptedBlue": 12,
+                "claim": "5f4d38c10fd09dfea4e48dc62667de4d2735cb2c4061a0facdfd0b09ee54d71f7d6b9689889459062f4c846660cd10f54d64285a43193e89f50d332e513e516d",
+                "kind": "openClaim",
+                "nextDeadlineDaa": 603,
+                "retentionDaa": 5403,
+                "stage": "provisional",
+                "waitDaa": null
+              },
+              {
+                "have": 0,
+                "kind": "insufficientDepth",
+                "need": 1
+              },
+              {
+                "have": "0",
+                "kind": "insufficientWork",
+                "need": "1"
+              }
+            ]
+          },
+          "version": 1
+        },
+        "nativeSettlement": {
+          "depth": 0,
+          "finalized": null,
+          "frontier": null,
+          "generation": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "latest": "c5321ae3e34dcc95a0926234ba3ac22ceb7020fac213b07b8e0c2ec0b87cfbb5db9709f0154f88f21e63c06129c755d04a56cc6e3bd0630bbca7533920a02f2f",
+          "policyId": "a53550fb8851b87d8bb3a428ec144144c4ddb6d163a1f1618641535b490b3fcfd4c6829b17e9ff1cf07458d2c8b8a3bc7e521da87de75022483edaed8c8124bb",
+          "retirementDaa": 1,
+          "rulesetId": "978fcf57f12d314a4ea053adb23cb3adf20c1f696378cf5297cf06fb31bf1b26",
+          "safe": null,
+          "stop": "frontierNotCovered",
+          "uniqueWork": "0",
+          "version": 1
+        },
+        "pendingAnchors": 1,
+        "safeFrontierBlueScore": 0,
+        "safeFrontierDaa": 0,
+        "settled": false,
+        "sinkDaa": 3
+      }
+    }
+  }
+}

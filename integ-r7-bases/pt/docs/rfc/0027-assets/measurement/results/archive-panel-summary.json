@@ -1,0 +1,476 @@
+[
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "decode",
+    "cpu_s": {
+      "max": 4.509034,
+      "min": 4.328816,
+      "n": 2,
+      "p50": 4.418925,
+      "p95_nearest_rank": 4.509034,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 178650993,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 607896,
+    "label": "qwen25-0.5b",
+    "local_court_convictions": 2,
+    "n": 2,
+    "peak_rss_bytes": {
+      "max": 527482880,
+      "min": 508100608,
+      "n": 2,
+      "p50": 517791744.0,
+      "p95_nearest_rank": 527482880,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 31,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 33,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 7.233688875,
+      "min": 6.013300666,
+      "n": 2,
+      "p50": 6.623494770500001,
+      "p95_nearest_rank": 7.233688875,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "early",
+    "cpu_s": {
+      "max": 13.731629,
+      "min": 13.65258,
+      "n": 2,
+      "p50": 13.6921045,
+      "p95_nearest_rank": 13.731629,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 178650993,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 30468,
+    "label": "qwen25-0.5b",
+    "local_court_convictions": 2,
+    "n": 2,
+    "peak_rss_bytes": {
+      "max": 5250990080,
+      "min": 5187911680,
+      "n": 2,
+      "p50": 5219450880.0,
+      "p95_nearest_rank": 5250990080,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 39,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 41,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 18.273513625,
+      "min": 17.411048666,
+      "n": 2,
+      "p50": 17.8422811455,
+      "p95_nearest_rank": 18.273513625,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "elem",
+    "cpu_s": {
+      "max": 125.405476,
+      "min": 125.405476,
+      "n": 1,
+      "p50": 125.405476,
+      "p95_nearest_rank": 125.405476,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 178650993,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 227,
+    "label": "qwen25-0.5b",
+    "local_court_convictions": 1,
+    "n": 1,
+    "peak_rss_bytes": {
+      "max": 9903882240,
+      "min": 9903882240,
+      "n": 1,
+      "p50": 9903882240,
+      "p95_nearest_rank": 9903882240,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 51,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 204.196105709,
+      "min": 204.196105709,
+      "n": 1,
+      "p50": 204.196105709,
+      "p95_nearest_rank": 204.196105709,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "gather",
+    "cpu_s": {
+      "max": 15.119309999999999,
+      "min": 15.003993999999999,
+      "n": 2,
+      "p50": 15.061651999999999,
+      "p95_nearest_rank": 15.119309999999999,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 178650993,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 272271336,
+    "label": "qwen25-0.5b",
+    "local_court_convictions": 0,
+    "n": 2,
+    "peak_rss_bytes": {
+      "max": 8338112512,
+      "min": 8149385216,
+      "n": 2,
+      "p50": 8243748864.0,
+      "p95_nearest_rank": 8338112512,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 35,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 37,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 21.45804875,
+      "min": 21.281203917,
+      "n": 2,
+      "p50": 21.3696263335,
+      "p95_nearest_rank": 21.45804875,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 2
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "gather",
+    "cpu_s": {
+      "max": 15.98366,
+      "min": 15.635847,
+      "n": 2,
+      "p50": 15.8097535,
+      "p95_nearest_rank": 15.98366,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 178650993,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 272271336,
+    "label": "qwen25-0.5b",
+    "local_court_convictions": 0,
+    "n": 2,
+    "peak_rss_bytes": {
+      "max": 8189935616,
+      "min": 8160313344,
+      "n": 2,
+      "p50": 8175124480.0,
+      "p95_nearest_rank": 8189935616,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "http-localhost",
+    "source_rows": [
+      {
+        "line": 44,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 46,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 27.95393225,
+      "min": 26.020040209,
+      "n": 2,
+      "p50": 26.9869862295,
+      "p95_nearest_rank": 27.95393225,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 2
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "honest",
+    "cpu_s": {
+      "max": 155.38762799999998,
+      "min": 139.660506,
+      "n": 5,
+      "p50": 141.85024299999998,
+      "p95_nearest_rank": 155.38762799999998,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 178650993,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 0,
+    "label": "qwen25-0.5b",
+    "local_court_convictions": 0,
+    "n": 5,
+    "peak_rss_bytes": {
+      "max": 10548248576,
+      "min": 4626415616,
+      "n": 5,
+      "p50": 6851149824,
+      "p95_nearest_rank": 10548248576,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 4,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 6,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 8,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 10,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 49,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 293.300638833,
+      "min": 179.513806042,
+      "n": 5,
+      "p50": 191.930782583,
+      "p95_nearest_rank": 293.300638833,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "late",
+    "cpu_s": {
+      "max": 166.34402599999999,
+      "min": 164.404819,
+      "n": 2,
+      "p50": 165.37442249999998,
+      "p95_nearest_rank": 166.34402599999999,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 178650993,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 31492,
+    "label": "qwen25-0.5b",
+    "local_court_convictions": 2,
+    "n": 2,
+    "peak_rss_bytes": {
+      "max": 4494852096,
+      "min": 4442570752,
+      "n": 2,
+      "p50": 4468711424.0,
+      "p95_nearest_rank": 4494852096,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 12,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      },
+      {
+        "line": 14,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-p3.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 296.302000209,
+      "min": 290.652605042,
+      "n": 2,
+      "p50": 293.4773026255,
+      "p95_nearest_rank": 296.302000209,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "honest",
+    "cpu_s": {
+      "max": 376.165113,
+      "min": 370.802521,
+      "n": 2,
+      "p50": 373.48381700000004,
+      "p95_nearest_rank": 376.165113,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 956439472,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 0,
+    "label": "qwen25-0.5b-p16",
+    "local_court_convictions": 0,
+    "n": 2,
+    "peak_rss_bytes": {
+      "max": 10570498048,
+      "min": 10440179712,
+      "n": 2,
+      "p50": 10505338880.0,
+      "p95_nearest_rank": 10570498048,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 6,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-sweep.jsonl"
+      },
+      {
+        "line": 8,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-sweep.jsonl"
+      }
+    ],
+    "via": "fresh",
+    "wall_s": {
+      "max": 756.633216708,
+      "min": 667.374532416,
+      "n": 2,
+      "p50": 712.003874562,
+      "p95_nearest_rank": 756.633216708,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "late",
+    "cpu_s": {
+      "max": 628.313403,
+      "min": 628.313403,
+      "n": 1,
+      "p50": 628.313403,
+      "p95_nearest_rank": 628.313403,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 1921824608,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 31492,
+    "label": "qwen25-0.5b-p32",
+    "local_court_convictions": 1,
+    "n": 1,
+    "peak_rss_bytes": {
+      "max": 13217628160,
+      "min": 13217628160,
+      "n": 1,
+      "p50": 13217628160,
+      "p95_nearest_rank": 13217628160,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 2,
+        "path": "docs/evidence/palw/opv-measurements-data/gap07-verify.jsonl"
+      }
+    ],
+    "via": "outsider",
+    "wall_s": {
+      "max": 756.136085791,
+      "min": 756.136085791,
+      "n": 1,
+      "p50": 756.136085791,
+      "p95_nearest_rank": 756.136085791,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  },
+  {
+    "artifact_bytes_max": 660666048,
+    "claim_case": "honest",
+    "cpu_s": {
+      "max": 252.34363000000002,
+      "min": 249.085582,
+      "n": 2,
+      "p50": 250.714606,
+      "p95_nearest_rank": 252.34363000000002,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "da_bytes_max": 477101528,
+    "evidence": "M_ARCHIVE",
+    "filing_bytes_max": 0,
+    "label": "qwen25-0.5b-p8",
+    "local_court_convictions": 0,
+    "n": 2,
+    "peak_rss_bytes": {
+      "max": 10456907776,
+      "min": 6879330304,
+      "n": 2,
+      "p50": 8668119040.0,
+      "p95_nearest_rank": 10456907776,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "provider": "files",
+    "source_rows": [
+      {
+        "line": 2,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-sweep.jsonl"
+      },
+      {
+        "line": 4,
+        "path": "docs/evidence/palw/opv-measurements-data/qwen25-sweep.jsonl"
+      }
+    ],
+    "via": "fresh",
+    "wall_s": {
+      "max": 501.105644208,
+      "min": 472.46753675,
+      "n": 2,
+      "p50": 486.786590479,
+      "p95_nearest_rank": 501.105644208,
+      "tail_warning": "Descriptive sample quantile, not a population tail guarantee; small n."
+    },
+    "wire_refusals": 0
+  }
+]

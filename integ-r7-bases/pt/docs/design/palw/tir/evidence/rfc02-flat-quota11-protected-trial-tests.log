@@ -1,0 +1,20 @@
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-kernel)
+error[E0624]: method `check_protected_restored` is private
+   --> misaka-palw-kernel/src/flat_quota11.rs:962:14
+    |
+962 |           self.check_protected_restored(policy, &mut reserved, &mut actor_reserved, &mut actor_subject_consumed)?;
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^ private method
+    |
+   ::: misaka-palw-kernel/src/flat_quota11/protected.rs:341:5
+    |
+341 | /     fn check_protected_restored(
+342 | |         &self,
+343 | |         policy: &QuotaPolicyV11,
+344 | |         reserved: &mut QuotaQuantitiesV11,
+345 | |         actor_reserved: &mut BTreeMap<Digest, QuotaQuantitiesV11>,
+346 | |         actor_subject_consumed: &mut BTreeMap<Digest, QuotaQuantitiesV11>,
+347 | |     ) -> Result<(), String> {
+    | |___________________________- private method defined here
+
+For more information about this error, try `rustc --explain E0624`.
+error: could not compile `misaka-palw-kernel` (lib test) due to 1 previous error

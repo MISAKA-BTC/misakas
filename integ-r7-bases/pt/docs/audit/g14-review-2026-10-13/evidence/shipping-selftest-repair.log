@@ -1,0 +1,24 @@
+PASS  the tree as built: 0 pin(s) none
+PASS  t11 dump: only its roots moved, no layout golden moved: 1 pin(s) refuse
+PASS  t11 dump roots moved WITH a v22 record encoding, --allow-t11-layout: 2 pin(s) move
+PASS  t11 dump roots moved WITH a v22 record encoding, no flag: 2 pin(s) move, refuse
+PASS  t11 dump: a non-root line moved too (masked digest): 3 pin(s) move, refuse
+PASS  t11 verdict roots moved with the lock, and a layout move: 3 pin(s) move, refuse
+PASS  the dormant ring root moved with a layout move, no flag: 2 pin(s) move, refuse
+PASS  the dormant ring root moved with a layout move, --allow-t11-layout: 2 pin(s) move
+PASS  the corpus verdicts moved (allowed, but the manifest did not move): 1 pin(s) refuse
+PASS  testnet-11's params id moved: 12 pin(s) refuse
+PASS  devnet's identity moved: 10 pin(s) refuse
+PASS  mainnet's ruleset moved: 13 pin(s) move
+PASS  testnet-12's fingerprint and a twin moved: 10 pin(s) move
+PASS  testnet-12's shipped params moved (the horizon's full-ids pin): 15 pin(s) move
+PASS  the horizon's twin moved: 1 pin(s) move
+PASS  the maturity's twin moved: 1 pin(s) move
+PASS  testnet-12's genesis moved: 8 pin(s) move
+PASS  the 2M row's class id moved (C7, the held row, the kit and explorer copies; no CHECK): 5 pin(s) move
+PASS  the example drill genesis moved: 1 pin(s) move
+PASS  a twin was never printed (its premise failed first): 3 pin(s) nocompute
+PASS  a T41 record was not printed (its digest pin cannot be read): 1 pin(s) nocompute + CHECK
+PASS  an A-held gate failed: 0 pin(s) none + CHECK
+
+selftest: 22/22 scenarios as expected

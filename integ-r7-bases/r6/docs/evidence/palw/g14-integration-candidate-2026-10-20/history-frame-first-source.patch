@@ -1,0 +1,111 @@
+diff --git a/consensus/core/src/lib.rs b/consensus/core/src/lib.rs
+index 7e7aa84f5..dc7c7b5d7 100644
+--- a/consensus/core/src/lib.rs
++++ b/consensus/core/src/lib.rs
+@@ -8,6 +8,12 @@ extern crate alloc;
+ extern crate core;
+ extern crate self as consensus_core;
+ 
++#[cfg(test)]
++extern crate self as kaspa_consensus_core;
++#[cfg(test)]
++#[path = "../tests/palw_tir_fixture_common.rs"]
++pub(crate) mod palw_tir_corpus_fixture_v1;
++
+ pub mod palw_mergeset_v1;
+ pub mod palw_native_readiness_v1;
+ pub mod palw_native_settlement_v1;
+diff --git a/consensus/core/src/palw_tir_public_claim_v1.rs b/consensus/core/src/palw_tir_public_claim_v1.rs
+index 6a0b15669..f2b951db3 100644
+--- a/consensus/core/src/palw_tir_public_claim_v1.rs
++++ b/consensus/core/src/palw_tir_public_claim_v1.rs
+@@ -543,7 +543,21 @@ mod tests {
+         };
+         let x = if wide {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_wide_in(|_,_,_|context.clone(),forge,&select)}
+             else {crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select)};
++        frame_from_execution(x, job, maximum_custodians, output_root)
++    }
++
++    // Shared geometry construction: every tree is committed in this job's actual FP context.
++    // Signature/payment remain the explicitly injected verified-half fixture below.
++    fn frame_from_execution(
++        x: crate::palw_tir_court_v1::test_support::TinyExecution,
++        job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
++        maximum_custodians: u64,
++        output_root: Option<Hash64>,
++    ) -> super::PalwTirPublicFrameFixtureV1 {
++        use crate::palw_freeprompt_v3::*;
++        use crate::palw_tir_public_allocation_v1::*;
+         let binding = x.binding.clone();
++        let class_id = binding.class.class_id(&binding.artifact_root);
+         let original = PalwFreePromptCommitmentV3 {
+             job,
+             trace_root: binding.full_logits_trace_root,
+@@ -649,6 +663,67 @@ mod tests {
+         .unwrap();
+         super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object }
+     }
++    /// Actual golden GQA execution with history reductions, re-committed under the public job context.
++    pub(super) fn history_frame() -> super::PalwTirPublicFrameFixtureV1 {
++        use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
++        use crate::palw_freeprompt_v3::*;
++        use crate::palw_tir_corpus_fixture_v1::{fixture_with, programs};
++        let (name, program, params, tokens) = programs().into_iter()
++            .find(|(name, ..)| name == "dense-gqa-2layer").expect("golden GQA corpus");
++        let mut f = fixture_with(name, program, params, tokens, 16, 9);
++        assert!(f.greedy, "the V3 job uses greedy decoding");
++        let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
++        job.version = PALW_FP_V3_VERSION;
++        job.decode = None;
++        job.tail = None;
++        job.class_id = f.class_id;
++        job.tokenizer_id = f.class.tokenizer_id;
++        job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&f.prompt);
++        job.prompt_tokens = f.prompt.len() as u32;
++        job.decode_token_limit = f.generated.len() as u32;
++        job.max_context_tokens = 64;
++        let class = PalwFpClassFactsV3 {
++            model_profile_id: Hash64::default(), runtime_manifest_hash: Hash64::default(),
++            runtime_class_id: Hash64::default(), shape_profile_id: f.class_id, cu_ruleset_id: Hash64::default(),
++        };
++        let facts = PalwFpRunFactsV3 {
++            decode_tokens_executed: job.decode_token_limit, stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
++            full_logits_trace_root: Hash64::default(), activation_leg_root: Hash64::default(),
++            checkpoint_leg_root: Hash64::default(), step_leg_root: Hash64::default(), step_leaf_count: f.leaves.len() as u64,
++        };
++        f.ctx = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&job, &class, &facts, b"testnet-12").unwrap();
++        let x = f.honest();
++        let x = crate::palw_tir_court_v1::test_support::TinyExecution {
++            binding: x.binding, preimages: x.preimages, hashes: x.hashes, ops: f.ops,
++            prompt: f.prompt, rows: x.rows, generated: x.generated,
++        };
++        frame_from_execution(x, job, 1, None)
++    }
++
++    #[test]
++    fn history_original_frame_opens_its_own_dissected_root() {
++        use crate::palw_tir_dissect_v1::*;
++        use crate::palw_tir_court_v1::*;
++        let fx = history_frame();
++        let binding = &fx.execution.binding;
++        let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).unwrap();
++        let intervals = misaka_palw_tir::interval::analyze_ranges(&space.program).unwrap();
++        let (leaf, site) = (0..binding.step_leaf_count).filter_map(|i| {
++            let leaf = space.leaf_at(&binding.job_context, i).unwrap();
++            palw_tir_dissect_site_v1(&space, &intervals, &leaf).map(|site| (i, site))
++        }).max_by_key(|(i, site)| (site.history_positions, site.reductions.len(), std::cmp::Reverse(*i))).unwrap();
++        assert_eq!(site.history_positions, 24);
++        assert!(site.reductions.len() >= 3);
++        let rules = PalwTirCourtRulesV1 {
++            max_step_leaf_count: fx.rules.maximum_leaves, prompt_form: fx.rules.prompt_form,
++            limits: crate::palw_court_v2::palw_tir_court_limits_v1(&fx.rules.court),
++        };
++        let root = build_tir_root_claim_v1(binding, leaf, &fx.execution, &rules).unwrap();
++        assert_eq!(check_tir_root_claim_v1(&root, leaf, &rules).unwrap(), site);
++        assert_eq!(fx.frame.original_v1().execution_root, binding.committed_execution_root);
++        assert_eq!(fx.frame.original_v1().trace_root, binding.full_logits_trace_root);
++    }
++
+     fn fixture() -> Fixture {
+         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
+         use crate::palw_freeprompt_v3::*;

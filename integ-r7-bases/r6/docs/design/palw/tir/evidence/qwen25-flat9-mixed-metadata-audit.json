@@ -1,0 +1,84 @@
+{
+  "canonical_program_and_exact_ranges_and_parameter_set_passed": true,
+  "complete_mixed_api_bound_including_scope_preparation": {
+    "filing_bytes": 141228,
+    "scratch_bytes": 24346393,
+    "work": 228106240
+  },
+  "complete_v9_metadata_scope_passed": true,
+  "court_set": "a452ec069bb9157adb53230113aa90a9cac42734dff97b6cd2ed985cf0f9c60a8d34c65dd010a80ad20bb56cd93176669db9a7dbf7b703663346140d43845e68",
+  "elapsed_ms": 203,
+  "first_v7_ordinary_scope_refusal": {
+    "block": 1,
+    "input_shapes": [
+      [
+        1536,
+        1536
+      ],
+      [
+        1536,
+        1
+      ]
+    ],
+    "node": 27,
+    "occurrence": 1,
+    "ordinary_point_replacement": {
+      "Ok": {
+        "filing_bytes": 23281,
+        "node": 27,
+        "occurrence": 1,
+        "operand_kinds": [
+          "Row",
+          "Flat"
+        ],
+        "operand_leaf_bytes": [
+          2350,
+          675
+        ],
+        "operand_leaves": [
+          1,
+          24
+        ],
+        "operand_reads": [
+          1536,
+          1536
+        ],
+        "output_elements": 1536,
+        "output_leaf_bytes": 1437,
+        "position": 31,
+        "price_root": "c11198875f2062c554b50e983bd67114d62abba108ae20f21471dcb262b0d850e818215096420b1dbf430747db47bb9bf495d173380406271da203a5f087c25b",
+        "scratch_bytes": 9006449,
+        "work": 31977088
+      }
+    },
+    "output_shape": [
+      1536,
+      1
+    ],
+    "position": 31,
+    "primitive": "MatMul",
+    "v7_scope_refusal": "NotAuthentic(\"flat relation exceeds court resource caps\")"
+  },
+  "full_rfc02_complete": false,
+  "max_positions": 32,
+  "maximum_ordinary_operand_leaves_plus_output": 144,
+  "metadata_derivation_work": 119731200,
+  "metadata_relation_visits": 23814,
+  "native_candidate_or_execution_or_final": false,
+  "node_commitments_bytes_per_claim": 15683584,
+  "parameter_instances": 1636,
+  "parameter_map_sha256": "a45721593036993c53eb29ad1526906ca190fcdf7d7272fbf7aa3f0b62d19ef1",
+  "parameter_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729",
+  "profile": "0caa8102e6bac899f492405727ed71d5646309959adef3f00fc299aeb7da199040406ff1793b5d324ad822aa0e8e470255433d9803e6444534475317b6d0e0fe",
+  "program_sha256": "16a0de98fe52cdf47364392551b15bb85a7aad76acd8b14853b1803074bca8f1",
+  "reference_tensor_bytes_per_position": 247563344,
+  "relations": 7658,
+  "schema": "misaka.rfc02.actual-checkpoint-flat-v9-metadata-audit.v1",
+  "scope_root": "291df64dcc44dfdb28e4bec75bd30456dc1ea12e5a2635820e99a6ee6a7a7defd109e0ccb837b829061d1b9a10f9a83e7ba09b948c6b891be9d1cec4cd18ddd8",
+  "source_weights_loaded_or_authenticated": false,
+  "trace_value_bytes_per_claim": 3774482720,
+  "trace_value_bytes_per_position": 117952585,
+  "worst_court_bytes": 141228,
+  "worst_court_scratch_bytes": 12036889,
+  "worst_court_work": 108375040
+}

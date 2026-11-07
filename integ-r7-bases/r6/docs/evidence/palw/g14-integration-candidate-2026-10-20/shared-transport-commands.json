@@ -1,0 +1,54 @@
+[
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "palw_tir_public_fold_v1"
+    ],
+    "log": "shared-transport-native.log",
+    "exit_code": 0,
+    "elapsed_seconds": 316.051
+  },
+  {
+    "command": [
+      "target/release/deps/kaspa_consensus_core-cd85ed321316b157",
+      "court_tir_"
+    ],
+    "log": "shared-transport-queries.log",
+    "exit_code": 0,
+    "elapsed_seconds": 0.108
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "--release",
+      "-p",
+      "kaspa-consensus-core",
+      "--test",
+      "palw_court_service_state_v2",
+      "--test",
+      "palw_court_policy_v1",
+      "--test",
+      "g14_close_gates",
+      "--test",
+      "palw_activation_pool_is_t12_only",
+      "--test",
+      "palw_the_release_did_not_move"
+    ],
+    "log": "shared-transport-regressions.log",
+    "exit_code": 0,
+    "elapsed_seconds": 260.52
+  },
+  {
+    "command": [
+      "cargo",
+      "check",
+      "--release",
+      "-p",
+      "kaspa-consensus"
+    ],
+    "log": "shared-transport-consensus-check.log",
+    "exit_code": 0,
+    "elapsed_seconds": 52.78
+  }
+]

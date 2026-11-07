@@ -1,0 +1,128 @@
+{
+  "schema": "misaka.palw.rfc02-flat-native-tooling-evidence.v6",
+  "date": "2026-10-11",
+  "verdict": "PROTECTED_CANDIDATE_SDK_CLI_COMPONENT_PASS_FULL_RFC02_INCOMPLETE",
+  "goal_status": "active",
+  "base_commit": "e34734212bb093567ce2e43e7bef005b9eadc8cf",
+  "branch": "codex/rfc02-review-completion",
+  "scope": "Offline SDK/CLI preparation, private actor/network/exact-proof seals, generic transport-codec splitting, and SDK payload use in synthetic actual-node court/payout/redemption/replay. No deployment or full RFC02 acceptance.",
+  "test_groups": [
+    {
+      "group": "sdk",
+      "passed": 6,
+      "failed": 0,
+      "test_names": [
+        "cli_post_expiry_and_invalid_inputs_write_only_reviewable_carriers",
+        "cli_secret_permissions_no_overwrite_and_checked_reveal_roundtrip",
+        "private_sdk_codec_bounds_counts_and_preserves_exact_carrier",
+        "protected_sdk_post_binds_distinct_identity_and_all_implementation_records",
+        "sdk_reveal_requires_the_same_network_actor_exact_proof_and_mature_unspent_row",
+        "signatures_and_generic_carriage_preserve_network_bond_and_exact_protected_bytes"
+      ],
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p misaka-palw-sdk --test flat_candidate_v6 -- --nocapture --test-threads=1",
+      "log": "rfc02-flat-sdk-v6-sdk.log",
+      "log_sha256": "2c1c2610262e6c292436fa03d22e392cf7d220a45f75ac56bcfe552f88fd8d53",
+      "raw_log_sha256": "5c839ef41323582994406ad2df43d8c9c975d98720154f2c3f8faf086f8efc4b",
+      "binary": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_candidate_v6-e0a451f829e555db",
+      "binary_sha256": "36ea92444a542e47ef11cf17ce04061566709424be504da9931f1c81eb32ada3"
+    },
+    {
+      "group": "native",
+      "passed": 17,
+      "failed": 0,
+      "test_names": [
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_fresh_public_reads_localize_late_leaf_and_convict_without_output_values",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_hash_da_node_shared_slots_response_priority_withholding_and_horizon_hold",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_admits_typed_scope_convicts_leaf_and_whole_once_and_replays_redemption",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_and_v2_catalogs_share_the_same_capital_and_eight_statement_limit",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_model_vector_node_scope_identity_and_hostile_filings_pay_shared_budgets_without_poisoning",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v3_node_preemption_counterexample_and_staged_v6_seal_rejects_equivalent_carrier",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_mature_proof_uses_reserved_budget_after_admission_flood",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seal_blocks_equivalent_preemption_legacy_bypass_and_pays_finder_once",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::flat_v6_native_seals_bound_actor_slots_hold_capital_and_forfeit_expired_false_seals",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_catalog_shares_capital_and_keeps_its_bound_after_clocked_release",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_deadlines_hold_capital_and_responses_survive_a_full_court_budget",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_da_public_replies_enable_a_fresh_whole_value_conviction_without_model_disclosure",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_new_large_vocab_candidates_have_public_courts_without_a_final_or_execution_rights",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::model_vector_wrong_roots_scope_and_invalid_refutations_cost_only_the_actor",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_cannot_be_poisoned_by_an_earlier_false_source_root",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_registers_encoder_and_stateful_decoder_without_identity_hooks",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::model_conformance::scoped_model_complete_check_wrong_roles_and_floods_spend_only_attackers_budget"
+      ],
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo test --locked -p kaspa-consensus --lib g14_kernel_route_e2e::model_conformance -- --nocapture --test-threads=1",
+      "log": "rfc02-flat-sdk-v6-native.log",
+      "log_sha256": "0de81166149ae6904c51684a783421fdc465ecec3d384a89fae8e000f4662263",
+      "raw_log_sha256": "7b1413c26bc023326201e6af51e26dcc6419a6c63b39ab0ee38ae94fc04b46d7",
+      "binary": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-c0e7e4ea3dbd2fe9",
+      "binary_sha256": "51835d8a0ebcaa394395e83c31b6cc9a63390a99f3ac1d00582f3211f0413b7e"
+    }
+  ],
+  "distinct_selected_passing_tests": 23,
+  "new_tests": 6,
+  "checks": {
+    "check": {
+      "log": "rfc02-flat-sdk-v6-check.log",
+      "log_sha256": "307da4a7fb40447eadf0780209ecd3a6f06c2a0a7ecaf9093a07989e9612c7cb",
+      "raw_log_sha256": "307da4a7fb40447eadf0780209ecd3a6f06c2a0a7ecaf9093a07989e9612c7cb",
+      "exit_code": 0,
+      "command": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target cargo check --locked -p misaka-palw-sdk --lib --bin palw-class"
+    },
+    "help": {
+      "log": "rfc02-flat-sdk-v6-help.log",
+      "log_sha256": "0b0be7edd66e71cd3a158c3a31927f5e698be578100f58c3c74d93e2d41186b2",
+      "raw_log_sha256": "0b0be7edd66e71cd3a158c3a31927f5e698be578100f58c3c74d93e2d41186b2",
+      "exit_code": 0,
+      "command": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/palw-class flat-v6 --help",
+      "binary_sha256": "e66f7ddd07ffdfd3332f1f6faa68a85d947ae8ac376350420b602b0e691d01e2"
+    }
+  },
+  "prior_unchanged_evidence": {
+    "verdict": "rfc02-protected-native-v6-verdict.json",
+    "kernel_passed": 153,
+    "core_codec_passed": 1,
+    "rerun_for_this_sdk_increment": false,
+    "cumulative_distinct_component_passes_with_updated_native_and_sdk": 177
+  },
+  "formatting": {
+    "command": "rustfmt --edition 2024 --check --config skip_children=true,reorder_modules=false misaka-palw-sdk/src/flat_candidate_v6.rs misaka-palw-sdk/src/flat_candidate_v6/cli.rs misaka-palw-sdk/tests/flat_candidate_v6.rs consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs",
+    "exit_code": 0,
+    "entry_files": "Two lib.rs differences match baseline payload exactly; palw-class.rs passes. No formatting-only entry edits.",
+    "diff_check_exit_code": 0
+  },
+  "source_sha256": {
+    "misaka-palw-sdk/src/flat_candidate_v6.rs": "5fec47da158e5fb568dbe86ea400e51760036b27c37a3d773acfb4d1805e9eb7",
+    "misaka-palw-sdk/src/flat_candidate_v6/cli.rs": "1a5786c7ea6df17ffb933d4836e83c20a1c72e3a8d329191b1f63ae3338ca0e8",
+    "misaka-palw-sdk/tests/flat_candidate_v6.rs": "404c893b4cdfd1bd68199fcf4b9706036dfe6c358251c9dc647f2aa9207038d0",
+    "misaka-palw-sdk/src/lib.rs": "5314ca8da86299fc901dab0d56080ed113cc4894ff65d8382963b435489744aa",
+    "misaka-palw-sdk/src/bin/palw-class.rs": "b773185925d07dc23e82725379b71005daf46a409a5d76ddcb9bb6cbb6551328",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/model_conformance.rs": "0e302bd9cc8eb1e6ecd23b61660d738038fe0df3ec6c8c133335268dcdc58c53"
+  },
+  "build_provenance": {
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "cargo_locked": true,
+    "profile": "Ordinary unoptimized dev/test + debuginfo",
+    "CARGO_INCREMENTAL": "0: compiler caching only",
+    "target_dir": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target",
+    "other_worktree_source_modified": false,
+    "cache_cleanup": "Only generated rcgu.o intermediates whose complete linked rlib/test/CLI binary existed; sources, evidence and linked binaries retained.",
+    "runtime_stack_arithmetic_network_overrides": false,
+    "warnings": "Pre-existing consensus/TIR/lowerer/SDK warnings; none from new modules/tests."
+  },
+  "development_failures_excluded": [
+    "Initial CLI needed explicit PalwDrillSaltErrorV1-to-String conversion; fixed.",
+    "Initial proof fixture used node instead of FlatMalformedFaultV5.output; fixed.",
+    "Earlier passing SDK runs preceded root-agreement/size hardening; not added to final counts.",
+    "Evidence parser initially expected test status on the same line; one native case prints diagnostics before its successful status. Final names are read from starts and verified against the 17-pass summary."
+  ],
+  "limitations": [
+    "Post rebinding is a declaration migration, not proof of independent execution or native admission.",
+    "Proof parsing establishes bounded grammar; acquired court context establishes authenticity and a fault.",
+    "Supplied row/height files are UNVERIFIED_REMOTE_STATE until authenticated locally; native acceptance uses its own persisted row and DAA.",
+    "Large-carrier trial uses a deliberately hostile proof and establishes reassembly/signature identity only.",
+    "Generic chunk groups are shared: protected large-proof transport, honest inclusion/retention and aggregate saturation guarantees remain open.",
+    "Offline CLI sends no carrier. Public RPC/acquisition/authenticated snapshot discovery remain open.",
+    "Actual-node cases are synthetic components, not actual-checkpoint fidelity/task/performance or whole-model acceptance.",
+    "Shared resource/economic contracts, versioned long/sparse/state semantics, execution Final and A6/A8 remain required.",
+    "Historical v3 stays unsealed; shipping fences stay dormant."
+  ]
+}

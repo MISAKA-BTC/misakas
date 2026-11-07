@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'palw_panel::palw_fraud_filer::constraint::tests::tiled_public_builder_finds_later_faults_across_tiles_and_authenticates_every_input' (3699008) panicked at kaspad/src/palw_fraud_filer_constraint.rs:572:18:
+called `Result::unwrap()` on an `Err` value: "bootstrap waits for a binding or input unit"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_panel::palw_fraud_filer::constraint::tests::tiled_public_builder_finds_later_faults_across_tiles_and_authenticates_every_input ... FAILED
+
+failures:
+
+failures:
+    palw_panel::palw_fraud_filer::constraint::tests::tiled_public_builder_finds_later_faults_across_tiles_and_authenticates_every_input
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 637 filtered out; finished in 0.25s
+

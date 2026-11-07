@@ -1,0 +1,1181 @@
+{
+  "actual_weight_import_execution_final_or_coverage": false,
+  "layout_pass15_rewrites": 1,
+  "new_class_and_program_binding_required": true,
+  "program_history_bound": 262144,
+  "quoted_program_bytes": 32766,
+  "reports": [
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 250546,
+        "maximum_passed_input_leaves": 261,
+        "maximum_passed_scratch_bytes": 13306181,
+        "maximum_passed_work": 162334080,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 13355,
+        "reduction_samples": [
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 148,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 167,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8362,
+            "node": 301,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1501
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434810,
+            "work": 38582272
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 350,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          }
+        ],
+        "refusals": {}
+      },
+      "derived_history_relations": 64,
+      "greedy_decode_logits_elements": 248320,
+      "history_append_relations": 16,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 7393280,
+        "added_trace_payload_bytes_at_final_position": 1127424,
+        "added_trace_payload_per_claim_upper_bound": 29313024,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 14,
+      "maximum_primitive_inputs": 3,
+      "node_count": 13355,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 20,
+      "ordinary_total_callback_bound": 40,
+      "positions": 26,
+      "primitive_histogram": {
+        "Add": 850,
+        "Broadcast": 120,
+        "Clamp { lo: -16777215, hi: 16777215 }": 24,
+        "Clamp { lo: -16777216, hi: 16777216 }": 16,
+        "Clamp { lo: -2097152, hi: 0 }": 8,
+        "Clamp { lo: -2147483647, hi: 2147483647 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 32,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 339,
+        "Clamp { lo: -32767, hi: 32767 }": 449,
+        "Clamp { lo: -4194304, hi: 4194304 }": 24,
+        "Clamp { lo: -9223372036854775808, hi: 9223372036854775807 }": 168,
+        "Clamp { lo: 0, hi: 102 }": 105,
+        "Clamp { lo: 0, hi: 12287 }": 32,
+        "Clamp { lo: 0, hi: 16777216 }": 24,
+        "Clamp { lo: 0, hi: 20 }": 72,
+        "Clamp { lo: 0, hi: 2147483648 }": 24,
+        "Clamp { lo: 0, hi: 24 }": 305,
+        "Clamp { lo: 0, hi: 33554432 }": 8,
+        "Clamp { lo: 0, hi: 40 }": 48,
+        "Clamp { lo: 0, hi: 4095 }": 273,
+        "Clamp { lo: 0, hi: 41 }": 48,
+        "Clamp { lo: 0, hi: 51 }": 210,
+        "Clamp { lo: 0, hi: 511 }": 8,
+        "Clamp { lo: 0, hi: 62 }": 635,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 210,
+        "Compare { cmp: Ge }": 24,
+        "Compare { cmp: Gt }": 48,
+        "Compare { cmp: Le }": 96,
+        "Concat { axis: 0 }": 48,
+        "Concat { axis: 1 }": 32,
+        "Div { rule: Floor }": 732,
+        "Div { rule: HalfAwayFromZero }": 635,
+        "Gather { axis: 0, batch_dims: 0 }": 1650,
+        "HistAppend { state: 2 }": 8,
+        "HistAppend { state: 3 }": 8,
+        "IntExp": 80,
+        "IntLn": 48,
+        "IntRsqrt": 185,
+        "Log2Floor": 153,
+        "MatMul": 674,
+        "Mul": 1864,
+        "ReduceMax { axis: 2 }": 8,
+        "ReduceSum { axis: 0 }": 89,
+        "ReduceSum { axis: 1 }": 88,
+        "ReduceSum { axis: 2 }": 8,
+        "Reshape": 2084,
+        "Select": 168,
+        "Slice { axis: 0, start: 0 }": 24,
+        "Slice { axis: 0, start: 1 }": 24,
+        "Slice { axis: 0, start: 2048 }": 24,
+        "Slice { axis: 0, start: 4096 }": 24,
+        "Slice { axis: 1, start: 0 }": 32,
+        "Slice { axis: 1, start: 32 }": 16,
+        "Slice { axis: 1, start: 64 }": 16,
+        "StateWrite { state: 0 }": 24,
+        "StateWrite { state: 1 }": 24,
+        "Sub": 337,
+        "Transpose { perm: [0, 2, 1] }": 8,
+        "Transpose { perm: [1, 0, 2] }": 8,
+        "Transpose { perm: [1, 2, 0] }": 8
+      },
+      "root_localization_successful_read_bound": 20,
+      "scope9": {
+        "maximum_operand_leaves": 256,
+        "metadata_derivation_work": 212382720,
+        "metadata_relation_visits": 40321,
+        "node_commitments_bytes_per_claim": 22222720,
+        "reference_tensor_bytes_per_position": 2699884240,
+        "relations": 13355,
+        "status": "PASS",
+        "trace_value_bytes_per_claim": 37218977354,
+        "trace_value_bytes_per_position": 1431499129,
+        "worst_court_bytes": 250549,
+        "worst_court_scratch_bytes": 13306229,
+        "worst_court_work": 162334464
+      }
+    },
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 266994,
+        "maximum_passed_input_leaves": 261,
+        "maximum_passed_scratch_bytes": 13306181,
+        "maximum_passed_work": 162334080,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 13355,
+        "reduction_samples": [
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 148,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 167,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8362,
+            "node": 301,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1501
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434810,
+            "work": 38582272
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 350,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          }
+        ],
+        "refusals": {}
+      },
+      "derived_history_relations": 64,
+      "greedy_decode_logits_elements": 248320,
+      "history_append_relations": 16,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 17432576,
+        "added_trace_payload_bytes_at_final_position": 2392064,
+        "added_trace_payload_per_claim_upper_bound": 153092096,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 14,
+      "maximum_primitive_inputs": 3,
+      "node_count": 13355,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 20,
+      "ordinary_total_callback_bound": 41,
+      "positions": 64,
+      "primitive_histogram": {
+        "Add": 850,
+        "Broadcast": 120,
+        "Clamp { lo: -16777215, hi: 16777215 }": 24,
+        "Clamp { lo: -16777216, hi: 16777216 }": 16,
+        "Clamp { lo: -2097152, hi: 0 }": 8,
+        "Clamp { lo: -2147483647, hi: 2147483647 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 32,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 339,
+        "Clamp { lo: -32767, hi: 32767 }": 449,
+        "Clamp { lo: -4194304, hi: 4194304 }": 24,
+        "Clamp { lo: -9223372036854775808, hi: 9223372036854775807 }": 168,
+        "Clamp { lo: 0, hi: 102 }": 105,
+        "Clamp { lo: 0, hi: 12287 }": 32,
+        "Clamp { lo: 0, hi: 16777216 }": 24,
+        "Clamp { lo: 0, hi: 20 }": 72,
+        "Clamp { lo: 0, hi: 2147483648 }": 24,
+        "Clamp { lo: 0, hi: 24 }": 305,
+        "Clamp { lo: 0, hi: 33554432 }": 8,
+        "Clamp { lo: 0, hi: 40 }": 48,
+        "Clamp { lo: 0, hi: 4095 }": 273,
+        "Clamp { lo: 0, hi: 41 }": 48,
+        "Clamp { lo: 0, hi: 51 }": 210,
+        "Clamp { lo: 0, hi: 511 }": 8,
+        "Clamp { lo: 0, hi: 62 }": 635,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 210,
+        "Compare { cmp: Ge }": 24,
+        "Compare { cmp: Gt }": 48,
+        "Compare { cmp: Le }": 96,
+        "Concat { axis: 0 }": 48,
+        "Concat { axis: 1 }": 32,
+        "Div { rule: Floor }": 732,
+        "Div { rule: HalfAwayFromZero }": 635,
+        "Gather { axis: 0, batch_dims: 0 }": 1650,
+        "HistAppend { state: 2 }": 8,
+        "HistAppend { state: 3 }": 8,
+        "IntExp": 80,
+        "IntLn": 48,
+        "IntRsqrt": 185,
+        "Log2Floor": 153,
+        "MatMul": 674,
+        "Mul": 1864,
+        "ReduceMax { axis: 2 }": 8,
+        "ReduceSum { axis: 0 }": 89,
+        "ReduceSum { axis: 1 }": 88,
+        "ReduceSum { axis: 2 }": 8,
+        "Reshape": 2084,
+        "Select": 168,
+        "Slice { axis: 0, start: 0 }": 24,
+        "Slice { axis: 0, start: 1 }": 24,
+        "Slice { axis: 0, start: 2048 }": 24,
+        "Slice { axis: 0, start: 4096 }": 24,
+        "Slice { axis: 1, start: 0 }": 32,
+        "Slice { axis: 1, start: 32 }": 16,
+        "Slice { axis: 1, start: 64 }": 16,
+        "StateWrite { state: 0 }": 24,
+        "StateWrite { state: 1 }": 24,
+        "Sub": 337,
+        "Transpose { perm: [0, 2, 1] }": 8,
+        "Transpose { perm: [1, 0, 2] }": 8,
+        "Transpose { perm: [1, 2, 0] }": 8
+      },
+      "root_localization_successful_read_bound": 21,
+      "scope9": {
+        "maximum_operand_leaves": 256,
+        "metadata_derivation_work": 212382720,
+        "metadata_relation_visits": 40321,
+        "node_commitments_bytes_per_claim": 54702080,
+        "reference_tensor_bytes_per_position": 2740741840,
+        "relations": 13355,
+        "status": "PASS",
+        "trace_value_bytes_per_claim": 91968331328,
+        "trace_value_bytes_per_position": 1437005177,
+        "worst_court_bytes": 266997,
+        "worst_court_scratch_bytes": 13306229,
+        "worst_court_work": 162334464
+      }
+    },
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 316338,
+        "maximum_passed_input_leaves": 261,
+        "maximum_passed_scratch_bytes": 13306181,
+        "maximum_passed_work": 162334080,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 13355,
+        "reduction_samples": [
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 148,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 167,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8362,
+            "node": 301,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1501
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434810,
+            "work": 38582272
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 350,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          }
+        ],
+        "refusals": {}
+      },
+      "derived_history_relations": 64,
+      "greedy_decode_logits_elements": 248320,
+      "history_append_relations": 16,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 135790592,
+        "added_trace_payload_bytes_at_final_position": 17301504,
+        "added_trace_payload_per_claim_upper_bound": 8858370048,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 14,
+      "maximum_primitive_inputs": 3,
+      "node_count": 13355,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 20,
+      "ordinary_total_callback_bound": 44,
+      "positions": 512,
+      "primitive_histogram": {
+        "Add": 850,
+        "Broadcast": 120,
+        "Clamp { lo: -16777215, hi: 16777215 }": 24,
+        "Clamp { lo: -16777216, hi: 16777216 }": 16,
+        "Clamp { lo: -2097152, hi: 0 }": 8,
+        "Clamp { lo: -2147483647, hi: 2147483647 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 32,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 339,
+        "Clamp { lo: -32767, hi: 32767 }": 449,
+        "Clamp { lo: -4194304, hi: 4194304 }": 24,
+        "Clamp { lo: -9223372036854775808, hi: 9223372036854775807 }": 168,
+        "Clamp { lo: 0, hi: 102 }": 105,
+        "Clamp { lo: 0, hi: 12287 }": 32,
+        "Clamp { lo: 0, hi: 16777216 }": 24,
+        "Clamp { lo: 0, hi: 20 }": 72,
+        "Clamp { lo: 0, hi: 2147483648 }": 24,
+        "Clamp { lo: 0, hi: 24 }": 305,
+        "Clamp { lo: 0, hi: 33554432 }": 8,
+        "Clamp { lo: 0, hi: 40 }": 48,
+        "Clamp { lo: 0, hi: 4095 }": 273,
+        "Clamp { lo: 0, hi: 41 }": 48,
+        "Clamp { lo: 0, hi: 51 }": 210,
+        "Clamp { lo: 0, hi: 511 }": 8,
+        "Clamp { lo: 0, hi: 62 }": 635,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 210,
+        "Compare { cmp: Ge }": 24,
+        "Compare { cmp: Gt }": 48,
+        "Compare { cmp: Le }": 96,
+        "Concat { axis: 0 }": 48,
+        "Concat { axis: 1 }": 32,
+        "Div { rule: Floor }": 732,
+        "Div { rule: HalfAwayFromZero }": 635,
+        "Gather { axis: 0, batch_dims: 0 }": 1650,
+        "HistAppend { state: 2 }": 8,
+        "HistAppend { state: 3 }": 8,
+        "IntExp": 80,
+        "IntLn": 48,
+        "IntRsqrt": 185,
+        "Log2Floor": 153,
+        "MatMul": 674,
+        "Mul": 1864,
+        "ReduceMax { axis: 2 }": 8,
+        "ReduceSum { axis: 0 }": 89,
+        "ReduceSum { axis: 1 }": 88,
+        "ReduceSum { axis: 2 }": 8,
+        "Reshape": 2084,
+        "Select": 168,
+        "Slice { axis: 0, start: 0 }": 24,
+        "Slice { axis: 0, start: 1 }": 24,
+        "Slice { axis: 0, start: 2048 }": 24,
+        "Slice { axis: 0, start: 4096 }": 24,
+        "Slice { axis: 1, start: 0 }": 32,
+        "Slice { axis: 1, start: 32 }": 16,
+        "Slice { axis: 1, start: 64 }": 16,
+        "StateWrite { state: 0 }": 24,
+        "StateWrite { state: 1 }": 24,
+        "Sub": 337,
+        "Transpose { perm: [0, 2, 1] }": 8,
+        "Transpose { perm: [1, 0, 2] }": 8,
+        "Transpose { perm: [1, 2, 0] }": 8
+      },
+      "root_localization_successful_read_bound": 24,
+      "scope9": {
+        "maximum_operand_leaves": 256,
+        "metadata_derivation_work": 212382720,
+        "metadata_relation_visits": 40321,
+        "node_commitments_bytes_per_claim": 437616640,
+        "reference_tensor_bytes_per_position": 3222431440,
+        "relations": 13355,
+        "status": "PASS",
+        "trace_value_bytes_per_claim": 768982315520,
+        "trace_value_bytes_per_position": 1501918585,
+        "worst_court_bytes": 316341,
+        "worst_court_scratch_bytes": 13306229,
+        "worst_court_work": 162334464
+      }
+    },
+    {
+      "TopK_relations": 0,
+      "candidate_price15_at_max_position_only": {
+        "first_refusals": [
+          {
+            "bounded_price_refuses": true,
+            "node": 215,
+            "occurrence": 4,
+            "refusal": "ReduceMax { axis: 2 }: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 206,
+            "requested_filing_bytes": 6726968,
+            "requested_operand_leaf_bytes": [
+              1641
+            ],
+            "requested_operand_leaves": [
+              4097
+            ],
+            "requested_operand_reads": [
+              262144
+            ],
+            "requested_scratch_bytes": 77971752,
+            "requested_work": 1988550400
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 221,
+            "occurrence": 4,
+            "refusal": "ReduceSum { axis: 2 }: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 206,
+            "requested_filing_bytes": 6726972,
+            "requested_operand_leaf_bytes": [
+              1641
+            ],
+            "requested_operand_leaves": [
+              4097
+            ],
+            "requested_operand_reads": [
+              262144
+            ],
+            "requested_scratch_bytes": 77971756,
+            "requested_work": 1988550912
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 233,
+            "occurrence": 4,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 3521,
+            "requested_filing_bytes": 115364054,
+            "requested_operand_leaf_bytes": [
+              1779,
+              1649
+            ],
+            "requested_operand_leaves": [
+              4097,
+              65536
+            ],
+            "requested_operand_reads": [
+              262144,
+              262144
+            ],
+            "requested_scratch_bytes": 688876742,
+            "requested_work": 17236274688
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 215,
+            "occurrence": 8,
+            "refusal": "ReduceMax { axis: 2 }: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 206,
+            "requested_filing_bytes": 6726968,
+            "requested_operand_leaf_bytes": [
+              1641
+            ],
+            "requested_operand_leaves": [
+              4097
+            ],
+            "requested_operand_reads": [
+              262144
+            ],
+            "requested_scratch_bytes": 77971752,
+            "requested_work": 1988550400
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 221,
+            "occurrence": 8,
+            "refusal": "ReduceSum { axis: 2 }: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 206,
+            "requested_filing_bytes": 6726972,
+            "requested_operand_leaf_bytes": [
+              1641
+            ],
+            "requested_operand_leaves": [
+              4097
+            ],
+            "requested_operand_reads": [
+              262144
+            ],
+            "requested_scratch_bytes": 77971756,
+            "requested_work": 1988550912
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 233,
+            "occurrence": 8,
+            "refusal": "MatMul: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 3521,
+            "requested_filing_bytes": 115364054,
+            "requested_operand_leaf_bytes": [
+              1779,
+              1649
+            ],
+            "requested_operand_leaves": [
+              4097,
+              65536
+            ],
+            "requested_operand_reads": [
+              262144,
+              262144
+            ],
+            "requested_scratch_bytes": 688876742,
+            "requested_work": 17236274688
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 215,
+            "occurrence": 12,
+            "refusal": "ReduceMax { axis: 2 }: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 206,
+            "requested_filing_bytes": 6726968,
+            "requested_operand_leaf_bytes": [
+              1641
+            ],
+            "requested_operand_leaves": [
+              4097
+            ],
+            "requested_operand_reads": [
+              262144
+            ],
+            "requested_scratch_bytes": 77971752,
+            "requested_work": 1988550400
+          },
+          {
+            "bounded_price_refuses": true,
+            "node": 221,
+            "occurrence": 12,
+            "refusal": "ReduceSum { axis: 2 }: ordinary point relation exceeds frozen court resource caps",
+            "requested_chunks32KiB": 206,
+            "requested_filing_bytes": 6726972,
+            "requested_operand_leaf_bytes": [
+              1641
+            ],
+            "requested_operand_leaves": [
+              4097
+            ],
+            "requested_operand_reads": [
+              262144
+            ],
+            "requested_scratch_bytes": 77971756,
+            "requested_work": 1988550912
+          }
+        ],
+        "full_scope_or_admission_or_final_established": false,
+        "maximum_passed_filing_bytes": 464370,
+        "maximum_passed_input_leaves": 261,
+        "maximum_passed_scratch_bytes": 13306181,
+        "maximum_passed_work": 162334080,
+        "no_activated_descriptor_checker_or_terminal_court": true,
+        "passed_relations": 13331,
+        "reduction_samples": [
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 148,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8098,
+            "node": 167,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1437
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434546,
+            "work": 38548480
+          },
+          {
+            "filing_bytes": 8362,
+            "node": 301,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1501
+            ],
+            "operand_leaves": [
+              3
+            ],
+            "operand_reads": [
+              128
+            ],
+            "primitive": "ReduceSum { axis: 1 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8434810,
+            "work": 38582272
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 350,
+            "occurrence": 1,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 99083,
+            "node": 1,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1493
+            ],
+            "operand_leaves": [
+              64
+            ],
+            "operand_reads": [
+              4096
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 7,
+            "scratch_bytes": 9469707,
+            "work": 66697344
+          },
+          {
+            "filing_bytes": 11750,
+            "node": 134,
+            "occurrence": 2,
+            "operand_leaf_bytes": [
+              1693
+            ],
+            "operand_leaves": [
+              4
+            ],
+            "operand_reads": [
+              4
+            ],
+            "primitive": "ReduceSum { axis: 0 }",
+            "route_chunks16KiB": 1,
+            "scratch_bytes": 8429478,
+            "work": 38512128
+          }
+        ],
+        "refusals": {
+          "MatMul: ordinary point relation exceeds frozen court resource caps": 8,
+          "ReduceMax { axis: 2 }: ordinary point relation exceeds frozen court resource caps": 8,
+          "ReduceSum { axis: 2 }: ordinary point relation exceeds frozen court resource caps": 8
+        }
+      },
+      "derived_history_relations": 64,
+      "greedy_decode_logits_elements": 248320,
+      "history_append_relations": 16,
+      "layout_pass15": {
+        "added_reference_i128_bytes_at_final_position": 69256871936,
+        "added_trace_payload_bytes_at_final_position": 8724414464,
+        "added_trace_payload_per_claim_upper_bound": 2287052905250816,
+        "applied": true,
+        "not_a_measurement_or_complete_execution_retention_peak": true
+      },
+      "maximum_flat_leaf_localization_replies": 23,
+      "maximum_primitive_inputs": 3,
+      "node_count": 13355,
+      "ordinary_bound_does_not_certify_history_TopK_decode_or_encoder": true,
+      "ordinary_followup_callback_bound": 29,
+      "ordinary_total_callback_bound": 54,
+      "positions": 262144,
+      "primitive_histogram": {
+        "Add": 850,
+        "Broadcast": 120,
+        "Clamp { lo: -16777215, hi: 16777215 }": 24,
+        "Clamp { lo: -16777216, hi: 16777216 }": 16,
+        "Clamp { lo: -2097152, hi: 0 }": 8,
+        "Clamp { lo: -2147483647, hi: 2147483647 }": 24,
+        "Clamp { lo: -2147483648, hi: 0 }": 32,
+        "Clamp { lo: -2147483648, hi: 2147483647 }": 339,
+        "Clamp { lo: -32767, hi: 32767 }": 449,
+        "Clamp { lo: -4194304, hi: 4194304 }": 24,
+        "Clamp { lo: -9223372036854775808, hi: 9223372036854775807 }": 168,
+        "Clamp { lo: 0, hi: 102 }": 105,
+        "Clamp { lo: 0, hi: 12287 }": 32,
+        "Clamp { lo: 0, hi: 16777216 }": 24,
+        "Clamp { lo: 0, hi: 20 }": 72,
+        "Clamp { lo: 0, hi: 2147483648 }": 24,
+        "Clamp { lo: 0, hi: 24 }": 305,
+        "Clamp { lo: 0, hi: 33554432 }": 8,
+        "Clamp { lo: 0, hi: 40 }": 48,
+        "Clamp { lo: 0, hi: 4095 }": 273,
+        "Clamp { lo: 0, hi: 41 }": 48,
+        "Clamp { lo: 0, hi: 51 }": 210,
+        "Clamp { lo: 0, hi: 511 }": 8,
+        "Clamp { lo: 0, hi: 62 }": 635,
+        "Clamp { lo: 0, hi: 9223372036854775807 }": 210,
+        "Compare { cmp: Ge }": 24,
+        "Compare { cmp: Gt }": 48,
+        "Compare { cmp: Le }": 96,
+        "Concat { axis: 0 }": 48,
+        "Concat { axis: 1 }": 32,
+        "Div { rule: Floor }": 732,
+        "Div { rule: HalfAwayFromZero }": 635,
+        "Gather { axis: 0, batch_dims: 0 }": 1650,
+        "HistAppend { state: 2 }": 8,
+        "HistAppend { state: 3 }": 8,
+        "IntExp": 80,
+        "IntLn": 48,
+        "IntRsqrt": 185,
+        "Log2Floor": 153,
+        "MatMul": 674,
+        "Mul": 1864,
+        "ReduceMax { axis: 2 }": 8,
+        "ReduceSum { axis: 0 }": 89,
+        "ReduceSum { axis: 1 }": 88,
+        "ReduceSum { axis: 2 }": 8,
+        "Reshape": 2084,
+        "Select": 168,
+        "Slice { axis: 0, start: 0 }": 24,
+        "Slice { axis: 0, start: 1 }": 24,
+        "Slice { axis: 0, start: 2048 }": 24,
+        "Slice { axis: 0, start: 4096 }": 24,
+        "Slice { axis: 1, start: 0 }": 32,
+        "Slice { axis: 1, start: 32 }": 16,
+        "Slice { axis: 1, start: 64 }": 16,
+        "StateWrite { state: 0 }": 24,
+        "StateWrite { state: 1 }": 24,
+        "Sub": 337,
+        "Transpose { perm: [0, 2, 1] }": 8,
+        "Transpose { perm: [1, 0, 2] }": 8,
+        "Transpose { perm: [1, 2, 0] }": 8
+      },
+      "root_localization_successful_read_bound": 25,
+      "scope9": {
+        "refusal": "NotAuthentic(\"v9 ordinary (262143,4,215) ReduceMax { axis: 2 }: NotAuthentic(\\\"ordinary point relation exceeds frozen court resource caps\\\")\")",
+        "status": "FAIL"
+      }
+    }
+  ],
+  "schema": "misaka.rfc02.actual-checkpoint-geometry-bounds.v1",
+  "source_program_bytes": 32640,
+  "derived_canonical_program_sha256": "2617aeba166a88e3d078984dc16a46649e16f8b2b77aa2a40f30280d4098eaba"
+}

@@ -1,0 +1,10 @@
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-pow v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/pow)
+    Checking kaspa-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/notify)
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/pq/validator-core)
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/base0)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/notify)
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/components/consensusmanager)
+    Checking kaspa-consensus v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 35s

@@ -1,0 +1,14 @@
+    Blocking waiting for file lock on build directory
+    Checking libc v0.2.186
+    Checking zerocopy v0.7.35
+    Checking either v1.13.0
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking rayon v1.10.0
+    Checking getrandom v0.2.15
+    Checking rand_core v0.6.4
+    Checking ppv-lite86 v0.2.20
+    Checking rand_chacha v0.3.1
+    Checking rand v0.8.6
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/misaka/palw/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6m 47s

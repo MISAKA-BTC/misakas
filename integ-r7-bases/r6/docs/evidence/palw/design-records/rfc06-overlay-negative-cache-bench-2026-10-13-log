@@ -1,0 +1,22 @@
+round=0 legacy_us=5306484 cached_us=532302
+round=1 legacy_us=4912598 cached_us=1
+round=2 legacy_us=4917974 cached_us=1
+{"kind":"controlled-adjacent-SST-absence","giantValueBytes":167772160,"readsPerRound":12,"legacyMicros":[5306484, 4912598, 4917974],"cachedMicros":[532302, 1, 1],"native100kAccepted":false,"realP2pAccepted":false}
+       17.24 real        15.21 user         1.02 sys
+           691978240  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+               42516  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  61  voluntary context switches
+                9658  involuntary context switches
+         71074850750  instructions retired
+         48348354910  cycles elapsed
+           677659560  peak memory footprint

@@ -1,0 +1,150 @@
+{
+  "base": "0c3cb9f93",
+  "kind": "source schema audit, not a wire or node test",
+  "enums": [
+    {
+      "enum": "PalwStagedCourtKeyV1",
+      "x3_prefix_unchanged": true,
+      "old_tags": [
+        [
+          0,
+          "Claim(Hash64)"
+        ],
+        [
+          1,
+          "Owner(Hash64, PalwBondKeyV2)"
+        ],
+        [
+          2,
+          "InventoryOpen(Hash64, PalwBondKeyV2)"
+        ],
+        [
+          3,
+          "Inventory(Hash64)"
+        ],
+        [
+          4,
+          "TirLayout(Hash64)"
+        ],
+        [
+          5,
+          "TirAcquisition(Hash64, PalwBondKeyV2, Hash64)"
+        ],
+        [
+          6,
+          "TirRawChunk(Hash64)"
+        ],
+        [
+          7,
+          "TirAcceptedBody(Hash64)"
+        ],
+        [
+          8,
+          "TirPreparation(Hash64, Hash64)"
+        ],
+        [
+          9,
+          "TirClaim(Hash64)"
+        ],
+        [
+          10,
+          "TirWitness(Hash64, PalwBondKeyV2)"
+        ],
+        [
+          11,
+          "TirContainer(Hash64)"
+        ]
+      ],
+      "new_appended": [
+        [
+          12,
+          "CourtService"
+        ]
+      ]
+    },
+    {
+      "enum": "PalwStagedCourtRowV1",
+      "x3_prefix_unchanged": true,
+      "old_tags": [
+        [
+          0,
+          "Claim(PalwStagedClaimContractV1)"
+        ],
+        [
+          1,
+          "Constraint(PalwSharedCourtV1<PalwOwnedConstraintStreamV1>)"
+        ],
+        [
+          2,
+          "Tokenizer(PalwSharedCourtV1<crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1>)"
+        ],
+        [
+          3,
+          "Prefix(PalwSharedCourtV1<crate::palw_prefix_owned_court_v1::PalwOwnedPrefixCourtV1>)"
+        ],
+        [
+          4,
+          "PublicPrefix(PalwSharedCourtV1<crate::palw_prefix_public_owned_v1::PalwOwnedPublicPrefixCourtV1>)"
+        ],
+        [
+          5,
+          "ClaimBundle(Box<crate::palw_staged_bundle_v1::PalwStagedBundleContractV1>)"
+        ],
+        [
+          6,
+          "OwnerBundle(PalwSharedCourtV1<crate::palw_staged_bundle_v1::PalwOwnedStagedBundleV1>)"
+        ],
+        [
+          7,
+          "ArtifactInventoryOpen(PalwSharedCourtV1<crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryV1>)"
+        ],
+        [
+          8,
+          "ArtifactInventory(crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1)"
+        ],
+        [
+          9,
+          "TirPrefix(PalwSharedCourtV1<crate::palw_tir_prefix_owned_v1::PalwOwnedTirPrefixCourtV1>)"
+        ],
+        [
+          10,
+          "TirLayout(Box<crate::palw_tir_class_v1::PalwTirLayoutV1>)"
+        ],
+        [
+          11,
+          "TirAcquisition(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1>)"
+        ],
+        [
+          12,
+          "TirRawChunk(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicChunkRowV1>)"
+        ],
+        [
+          13,
+          "TirAcceptedBody(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicAcceptedRowV1>)"
+        ],
+        [
+          14,
+          "TirPreparation(PalwSharedCourtV1<crate::palw_tir_public_state_v1::PalwTirPublicPreparationRowV1>)"
+        ],
+        [
+          15,
+          "TirClaim(PalwSharedCourtV1<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1>)"
+        ],
+        [
+          16,
+          "TirWitness(PalwSharedCourtV1<crate::palw_tir_public_carriage_v1::PalwTirPublicWitnessRowV1>)"
+        ],
+        [
+          17,
+          "TirContainer(Box<crate::palw_tir_container_v1::PalwTirContainerRowV1>)"
+        ]
+      ],
+      "new_appended": [
+        [
+          18,
+          "CourtService(PalwSharedCourtV1<crate::palw_court_service_state_v2::CourtServiceStateV2>)"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "date": "2026-10-21",
+  "candidate_parent": "fa1104eed",
+  "selected_unique_passes": 89,
+  "selected_failed": 0,
+  "selected_ignored": 0,
+  "selection": "12 G14 + 5 activation + 3 codec + 9 release identity + same final unit executable 32 native + 17 query/frontier/signatures + 11 wire/manual = 89. Targeted rooted 2 are within 32. Do not add intermediate targeted 2 or historical 86/73/69/67/64/93.",
+  "scope": "Explicit original-Ready data replies bind actual accepted query block/DAA and authenticated current source data; private native receipt, current data-stage prerequisite view, replay/reacceptance, checkpoint/journal/carriage. Not a funded assignment, semantic-duty completion, default permission, credit, production lifecycle/paid ingress, complete graph, actual supply or node T05 acceptance.",
+  "fixture_limits": "Original/class/Ready/payment/context are verified-half native fixtures with the existing synthetic unit-cost book; new requester/stream/data-response signatures are real ML-DSA. Alternative accepting contexts are in-memory transitions, not a node reorg/restart/pruned-IBD campaign.",
+  "cargo_and_release_lock": "/Users/wata/.cache/misaka-heavy-lock.sh",
+  "final_sequence_exit": 0,
+  "non_test_consensus_check_exit": 0,
+  "commands": [
+    "cargo test --release -p kaspa-consensus-core --lib rooted_shared_ (targeted, included in final 32)",
+    "cargo test --release -p kaspa-consensus-core --test palw_court_shared_tir_state_v1 --test g14_close_gates --test palw_activation_pool_is_t12_only --test palw_the_release_did_not_move",
+    "cargo check --release -p kaspa-consensus",
+    "target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1",
+    "target/release/deps/kaspa_consensus_core-cd85ed321316b157 court_tir_",
+    "target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_native_resource_v1::wire",
+    "python3 scripts/drills/check_rfc06_native_wire_idempotent.py"
+  ],
+  "source_sha256": {
+    "consensus/core/src/lib.rs": "9b6d9509257d8eefc80ba776e663a086044d34dd5390b02a13491e586b970832",
+    "consensus/core/src/palw_court_service_state_v2.rs": "c41c1d9fdf9031572583bef0bbdac80cad0a85806c9534c944806a6a42a109f7",
+    "consensus/core/src/palw_court_shared_tir_fold_v1.rs": "366e703f6c285b758d02918da34095d4fd6dac566d715e3384a5ef0e7c9b2fa8",
+    "consensus/core/src/palw_court_shared_tir_response_v1.rs": "54b73ed6a16e126c3aad16d165c08a8b790c902e4393c5be7ecd461313fba2f0",
+    "consensus/core/src/palw_native_resource_v1/generated.rs": "a75f7de85e5b006dc0eea1ae0833c8cc4b0c27386f92bdec17fbf8700f82782a",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "1df5ba6a388ae435676933eac66f528124862903b1f8686dbc9011c012355cfe",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "74b70b159cab69de90e5b298ccde0084f95fb56d3d20eb508376293d7bf30010",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "352b3f5d089615787acf891b50c393ba6fa32d6f0567b2b9d8ab7d80e8343d8d",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "f64465d35b9213cb9ec98e210197f0afb3348d59369aacfcde060d9d969e39d7",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "9fbd6f0fcdfff96d1ec49bb387ec510402fd22ddcfa976f81bc889e4f58ba002",
+    "consensus/core/tests/palw_court_shared_tir_state_v1.rs": "178cfe19c85f34e542c4945b9798130c6832131ba0697cd27a34d506fc86541b"
+  },
+  "core_unit_executable_sha256": "80fa959ef8e015266d6116157944c3bee13e7548906aa5bba426b18c584f87b1",
+  "source_patch": {
+    "path": "fresh-response-runtime.patch",
+    "sha256": "fb3e3f4cb83e16e180ff3c316a7f44a96a7cd282c8cc681fdf356901f1d88f99"
+  },
+  "schema_prefix": {
+    "path": "fresh-response-schema-prefix.json",
+    "sha256": "c1852f4f64eb8969725ec92dbb22e7a500c593e5c89a1212374a9b97dd0b029a"
+  },
+  "logs": [
+    {
+      "path": "fresh-response-wire-generation.log",
+      "sha256": "e3fb825ff4a6e57022e0b843468a9912e793b334fa5b364a32118138fe4920a9",
+      "test_results": [],
+      "selected": false
+    },
+    {
+      "path": "fresh-response-core-check.log",
+      "sha256": "a483ce908beba30f8d89bbeea67cff8fdb8e010dfac522cb613c222c8af22a2b",
+      "test_results": [],
+      "selected": false
+    },
+    {
+      "path": "fresh-response-final-wire-generation.log",
+      "sha256": "e3fb825ff4a6e57022e0b843468a9912e793b334fa5b364a32118138fe4920a9",
+      "test_results": [],
+      "selected": false
+    },
+    {
+      "path": "fresh-response-native-release.log",
+      "sha256": "20940d01309755a5cbd616cfcb064a2d56e32d530a86d8e2de35b32a621db3bd",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "selected": false
+    },
+    {
+      "path": "fresh-response-final-regressions-check.log",
+      "sha256": "1538479b1896f83ec22dc60293d9058f3c4ee6518a5f400cab5a5ce2b1bf312e",
+      "test_results": [
+        {
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 32,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "status": "ok",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "selected": true
+    },
+    {
+      "path": "fresh-response-wire-idempotent.log",
+      "sha256": "f37ab49c54bf5b109caa581b2e6b1535ca0dc30de9442d0b7df178ef441dfb02",
+      "test_results": [],
+      "selected": false
+    }
+  ],
+  "docs_check": {
+    "exit": 1,
+    "path": "fresh-response-docs-check.log",
+    "sha256": "873c446853700e08901590abbf64f76830b180a72f94cfa58af95fd232e030ca"
+  }
+}

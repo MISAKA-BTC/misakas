@@ -1,0 +1,14 @@
+{
+  "source.patch": "7699cee5b41c4f9ff2f9bd8526de4c968842d7c5fe27c4d55e4dac3ca661c787",
+  "selected-test-summary.json": "15a00d7e263a81ad3c9b8e722d6409e00e169f3950a910516f336aa892b42f6a",
+  "palw_activation_pool_is_t12_only.log": "284b3259e18d27c95dcb9966aaf8945a46ba456c07da55e93a49dc2641818618",
+  "verification-runner.py": "e9b8e381af249065f3e4cdd671a1a8139913b83cbb5aeb907585ef56b18601a4",
+  "core-selection-0.log": "c5b3747687ecec5e4eec86447edf98b8c42daee6da8d824c884d03e14eb62d19",
+  "core-selection-1.log": "b4562d961ea9521121e7afa474f28c3f856266ecbcd617ffddeba6a4fb8146a1",
+  "core-build.log": "e5da07941b2eb6b8b1fa7e8bec271df268a86f5549db5b1d4f54d7d5f35139fe",
+  "core-selection-3.log": "9b85a4a18f14544482b2990b2026b2b71ce2b5e0bb27ad1d07378de498d8ab53",
+  "core-selection-2.log": "cab7ffeb8ed3b5b3050fb20ae5303b6cd22bc4eba689e23c665df68a234d06d9",
+  "verification.json": "1da648be4ec365483e202653b9e107719d09866b889f0c9b85b303eff8b7cee6",
+  "remaining-full-original-closure-audit.md": "f896e850e5c4c4759d75b16f9f436aa0115a3dc596c216b5dcad0cd2481eb070",
+  "palw_the_release_did_not_move.log": "59d6aff973fa049010e9e5ebee17a91de8ea07ddde1ab7f920e55b11b89dc202"
+}

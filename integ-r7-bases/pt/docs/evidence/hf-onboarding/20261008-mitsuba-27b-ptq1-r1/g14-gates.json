@@ -1,0 +1,31 @@
+{
+ "schema": "misaka.h1.g14-gates.v1",
+ "statement": "What the chain can say about this class's eligibility. A gate the chain has no state for is GAP, never PASS.",
+ "static_admission": {
+  "status": "NOT_RUN",
+  "source": "the node's own gate admitted the IR registration (palw_tir_registration_preflight_at_v1) and the fold kept it"
+ },
+ "kernel_route": {
+  "status": "KERNEL_NOT_ACTIVE",
+  "detail": {},
+  "source": "preflight: K2-TIR-v1 shipped KERNEL_NOT_ACTIVE; the kernel route is not folded by this build's node"
+ },
+ "beacon_conformance": {
+  "status": "NOT_RUN",
+  "label": null,
+  "chain_state": "GAP: no on-chain ConformanceCommitmentV1, no beacon-facts RPC (BEACON_UNAVAILABLE)"
+ },
+ "da": {
+  "status": "GAP",
+  "detail": "no artifact-holding seats were run for this class; readiness/possession is lifecycle, not G14 DA"
+ },
+ "public_prosecution_complete": {
+  "status": "GAP",
+  "detail": "G14_INCOMPLETE: the lifecycle step into Prefetching/Probation/Active consults seats/readiness/panel only (registration-e2e-record GAP-6); no plan/kernel binding in the class id (GAP-7)"
+ },
+ "registry_lifecycle": {
+  "state": {},
+  "class_status": null,
+  "note": "a registered class is not eligible; RegisteredDormant/Candidate is never L5"
+ }
+}

@@ -1,0 +1,38 @@
+{
+  "recorded_utc": "2026-10-11T12:48:37.983244+00:00",
+  "component": "sdk",
+  "binary": "/tmp/rfc02-actual-outsider9-final-sdk-immutable-76ed8e9d2743/flat_streamed_locator_v9-6ee75760eb45fb1b",
+  "binary_sha256": "76ed8e9d27437de5a37c1ada680156299b50e9983cad35332de2a603b856f5e0",
+  "compiler_artifact": {
+    "reason": "compiler-artifact",
+    "package_id": "path+file:///Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk#1.1.0",
+    "manifest_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk/Cargo.toml",
+    "target": {
+      "kind": [
+        "test"
+      ],
+      "crate_types": [
+        "bin"
+      ],
+      "name": "flat_streamed_locator_v9",
+      "src_path": "/Users/wata/.codex/worktrees/08bd/MISAKA-testnet/misaka-palw-sdk/tests/flat_streamed_locator_v9.rs",
+      "edition": "2024",
+      "doc": false,
+      "doctest": false,
+      "test": true
+    },
+    "profile": {
+      "opt_level": "0",
+      "debuginfo": 2,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "features": [],
+    "filenames": [
+      "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_streamed_locator_v9-6ee75760eb45fb1b"
+    ],
+    "executable": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/flat_streamed_locator_v9-6ee75760eb45fb1b",
+    "fresh": false
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "arcee",
+  "doc": "Arcee AFM (ArceeForCausalLM): Llama attention over an UNGATED MLP (up_proj, relu², down_proj: Nemotron's MLP). Third-party adapter (lane H): data only. Level A would read it if the standard template chose a plain MLP when the checkpoint has no gate_proj tensor.",
+  "extends": ["decoder-core"],
+  "match": {"architectures": ["ArceeForCausalLM"], "model_types": ["arcee"]},
+  "config": {
+    "defaults": {"vocab_size": 32000, "hidden_size": 2560, "intermediate_size": 18432, "num_hidden_layers": 32, "num_attention_heads": 32, "hidden_act": "relu2", "max_position_embeddings": 4096, "rms_norm_eps": 1e-05, "tie_word_embeddings": false, "attention_bias": false, "mlp_bias": false}
+  },
+  "vars": [
+    {"name": "mlp_gated", "value": false},
+    {"name": "model_type", "value": "arcee"}
+  ]
+}

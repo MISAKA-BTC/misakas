@@ -1,0 +1,3777 @@
+#[cfg(test)]
+mod mockery {
+
+    use crate::model::*;
+    use kaspa_addresses::{Prefix, Version};
+    use kaspa_consensus_core::api::BlockCount;
+    use kaspa_consensus_core::network::NetworkType;
+    use kaspa_consensus_core::subnets::SubnetworkId;
+    use kaspa_consensus_core::tx::ScriptPublicKey;
+    use kaspa_hashes::Hash;
+    use kaspa_math::Uint192;
+    use kaspa_notify::subscription::Command;
+    use kaspa_rpc_macros::test_wrpc_serializer as test;
+    use kaspa_txscript::script_class::ScriptClass;
+    use kaspa_utils::networking::{ContextualNetAddress, IpAddress, NetAddress};
+    use rand::Rng;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+    use uuid::Uuid;
+    use workflow_serializer::prelude::*;
+
+    // this trait is used to generate random
+    // values for testing on various data types
+    trait Mock {
+        fn mock() -> Self;
+    }
+
+    impl<T> Mock for Option<T>
+    where
+        T: Mock,
+    {
+        fn mock() -> Self {
+            Some(T::mock())
+        }
+    }
+
+    impl<T> Mock for Vec<T>
+    where
+        T: Mock,
+    {
+        fn mock() -> Self {
+            vec![T::mock()]
+        }
+    }
+
+    impl<T> Mock for Arc<T>
+    where
+        T: Mock,
+    {
+        fn mock() -> Self {
+            Arc::new(T::mock())
+        }
+    }
+
+    fn mock<T>() -> T
+    where
+        T: Mock,
+    {
+        // forward to the type's Mock implementation
+        T::mock()
+    }
+
+    // this function tests serialization and deserialization of a type
+    // by serializing it (A), deserializing it, serializing it again (B)
+    // and comparing A and B buffers.
+    fn test<T>(kind: &str)
+    where
+        T: Serializer + Deserializer + Mock,
+    {
+        let data = T::mock();
+
+        const PREFIX: u32 = 0x12345678;
+        const SUFFIX: u32 = 0x90abcdef;
+
+        let mut buffer1 = Vec::new();
+        let writer = &mut buffer1;
+        store!(u32, &PREFIX, writer).unwrap();
+        serialize!(T, &data, writer).unwrap();
+        store!(u32, &SUFFIX, writer).unwrap();
+
+        let reader = &mut buffer1.as_slice();
+        let prefix: u32 = load!(u32, reader).unwrap();
+        // this will never occur, but it's a good practice to check in case
+        // the serialization/deserialization logic changes in the future
+        assert_eq!(prefix, PREFIX, "misalignment when consuming serialized buffer in `{kind}`");
+        let tmp = deserialize!(T, reader).unwrap();
+        let suffix: u32 = load!(u32, reader).unwrap();
+        assert_eq!(suffix, SUFFIX, "misalignment when consuming serialized buffer in `{kind}`");
+
+        let mut buffer2 = Vec::new();
+        let writer = &mut buffer2;
+        store!(u32, &PREFIX, writer).unwrap();
+        serialize!(T, &tmp, writer).unwrap();
+        store!(u32, &SUFFIX, writer).unwrap();
+
+        assert!(buffer1 == buffer2, "serialization/deserialization failure while testing `{kind}`");
+    }
+
+    #[macro_export]
+    macro_rules! impl_mock {
+        ($($type:ty),*) => {
+            $(impl Mock for $type {
+                fn mock() -> Self {
+                    rand::thread_rng().r#gen()
+                }
+            })*
+        };
+    }
+
+    impl_mock!(bool, u8, u16, u32, f32, u64, i64, f64);
+
+    impl Mock for Uint192 {
+        fn mock() -> Self {
+            Uint192([mock(), mock(), mock()])
+        }
+    }
+
+    // kaspa-pq PR-8.5: BlueWorkType widened from Uint192 to Uint576.
+    impl Mock for kaspa_math::Uint576 {
+        fn mock() -> Self {
+            kaspa_math::Uint576([mock(), mock(), mock(), mock(), mock(), mock(), mock(), mock(), mock()])
+        }
+    }
+
+    impl Mock for SubnetworkId {
+        fn mock() -> Self {
+            let mut bytes: [u8; 20] = [0; 20];
+            rand::thread_rng().fill(&mut bytes);
+            SubnetworkId::from_bytes(bytes)
+        }
+    }
+
+    impl Mock for Hash {
+        fn mock() -> Self {
+            let mut bytes: [u8; 32] = [0; 32];
+            rand::thread_rng().fill(&mut bytes);
+            Hash::from_bytes(bytes)
+        }
+    }
+
+    // PR-9.5c/f: the consensus-identity aliases (TransactionId,
+    // TransactionHash, MerkleRoot, AcceptedIdMerkleRoot) are now
+    // `Hash64`; mock random 64-byte values for them. `rand`'s
+    // `fill` works on `[u8; 64]` (it operates on slices), unlike
+    // the `Standard` distribution which caps at 32.
+    impl Mock for kaspa_consensus_core::Hash64 {
+        fn mock() -> Self {
+            let mut bytes: [u8; 64] = [0; 64];
+            rand::thread_rng().fill(&mut bytes[..]);
+            kaspa_consensus_core::Hash64::from_bytes(bytes)
+        }
+    }
+
+    impl Mock for RpcAddress {
+        fn mock() -> Self {
+            RpcAddress::new(Prefix::Mainnet, Version::PubKey, Hash::mock().as_bytes().as_slice())
+        }
+    }
+
+    impl Mock for RpcHeader {
+        fn mock() -> Self {
+            RpcHeader {
+                version: mock(),
+                timestamp: mock(),
+                bits: mock(),
+                nonce: mock(),
+                hash_merkle_root: mock(),
+                accepted_id_merkle_root: mock(),
+                utxo_commitment: mock(),
+                hash: mock(),
+                parents_by_level: vec![mock()],
+                daa_score: mock(),
+                blue_score: mock(),
+                blue_work: mock(),
+                pruning_point: mock(),
+                // kaspa-pq: ADR-0007 algo id + ADR-0020 EVM commitments (wire v3).
+                pow_algo_id: mock(),
+                evm_payload_hash: mock(),
+                evm_commitment_root: mock(),
+                overlay_commitment_root: mock(),
+                palw_state_root: Default::default(),
+                // MISAKA ADR-0038 (wire v5): the post-PoW PALW commitment.
+                palw_commitment: vec![0xAB; 32],
+            }
+        }
+    }
+
+    impl Mock for RpcRawHeader {
+        fn mock() -> Self {
+            RpcRawHeader {
+                version: mock(),
+                timestamp: mock(),
+                bits: mock(),
+                nonce: mock(),
+                hash_merkle_root: mock(),
+                accepted_id_merkle_root: mock(),
+                utxo_commitment: mock(),
+                parents_by_level: vec![mock()],
+                daa_score: mock(),
+                blue_score: mock(),
+                blue_work: mock(),
+                pruning_point: mock(),
+                // kaspa-pq: ADR-0007 algo id + ADR-0020 EVM commitments (wire v3).
+                pow_algo_id: mock(),
+                evm_payload_hash: mock(),
+                evm_commitment_root: mock(),
+                overlay_commitment_root: mock(),
+                palw_state_root: Default::default(),
+                // MISAKA ADR-0038 (wire v5): the post-PoW PALW commitment.
+                palw_commitment: vec![0xAB; 32],
+            }
+        }
+    }
+
+    impl Mock for RpcBlockVerboseData {
+        fn mock() -> Self {
+            RpcBlockVerboseData {
+                hash: mock(),
+                difficulty: mock(),
+                selected_parent_hash: mock(),
+                transaction_ids: mock(),
+                is_header_only: mock(),
+                blue_score: mock(),
+                children_hashes: mock(),
+                merge_set_blues_hashes: mock(),
+                merge_set_reds_hashes: mock(),
+                palw_merge_view: None,
+                is_chain_block: mock(),
+                // Not on the borsh wire (ADR-0165): the round trip returns it empty.
+                block_kind: String::new(),
+                lane_class: "EXEC".to_string(),
+                exec: Some(RpcPalwExecBlock {
+                    round: 7,
+                    permit_index: 0,
+                    bond: "ab:0".to_string(),
+                    verdict: "granted".to_string(),
+                    refusal: None,
+                    claim_id: Some("cd".to_string()),
+                    class_id: Some("ef".to_string()),
+                    quantum_index: Some(3),
+                    quantum_id: Some("12".to_string()),
+                }),
+            }
+        }
+    }
+
+    impl Mock for RpcBlock {
+        fn mock() -> Self {
+            // kaspa-pq EVM Lane v0.4 (wire v2): non-empty payload bytes exercise the
+            // new field through the serializer round-trip.
+            RpcBlock { header: mock(), transactions: mock(), verbose_data: mock(), evm_payload: mock() }
+        }
+    }
+
+    impl Mock for RpcRawBlock {
+        fn mock() -> Self {
+            RpcRawBlock { header: mock(), transactions: mock(), evm_payload: mock() }
+        }
+    }
+
+    impl Mock for RpcOptionalTransactionInputVerboseData {
+        fn mock() -> Self {
+            RpcOptionalTransactionInputVerboseData { utxo_entry: mock() }
+        }
+    }
+
+    impl Mock for RpcTransactionInput {
+        fn mock() -> Self {
+            RpcTransactionInput {
+                previous_outpoint: mock(),
+                signature_script: Hash::mock().as_bytes().to_vec(),
+                sequence: mock(),
+                sig_op_count: mock(),
+                verbose_data: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcOptionalTransactionInput {
+        fn mock() -> Self {
+            RpcOptionalTransactionInput {
+                previous_outpoint: mock(),
+                signature_script: Some(Hash::mock().as_bytes().to_vec()),
+                sequence: mock(),
+                sig_op_count: mock(),
+                verbose_data: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcOptionalTransactionOutpoint {
+        fn mock() -> Self {
+            RpcOptionalTransactionOutpoint { transaction_id: mock(), index: mock() }
+        }
+    }
+
+    impl Mock for RpcTransactionOutputVerboseData {
+        fn mock() -> Self {
+            RpcTransactionOutputVerboseData { script_public_key_type: mock(), script_public_key_address: mock() }
+        }
+    }
+
+    impl Mock for RpcOptionalTransactionOutputVerboseData {
+        fn mock() -> Self {
+            RpcOptionalTransactionOutputVerboseData { script_public_key_type: mock(), script_public_key_address: mock() }
+        }
+    }
+
+    impl Mock for RpcTransactionOutput {
+        fn mock() -> Self {
+            RpcTransactionOutput { value: mock(), script_public_key: mock(), verbose_data: mock() }
+        }
+    }
+
+    impl Mock for RpcOptionalTransactionOutput {
+        fn mock() -> Self {
+            RpcOptionalTransactionOutput { value: mock(), script_public_key: mock(), verbose_data: mock() }
+        }
+    }
+
+    impl Mock for RpcTransactionVerboseData {
+        fn mock() -> Self {
+            RpcTransactionVerboseData {
+                transaction_id: mock(),
+                hash: mock(),
+                compute_mass: mock(),
+                block_hash: mock(),
+                block_time: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcOptionalTransactionVerboseData {
+        fn mock() -> Self {
+            RpcOptionalTransactionVerboseData {
+                transaction_id: mock(),
+                hash: mock(),
+                compute_mass: mock(),
+                block_hash: mock(),
+                block_time: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcUtxoEntryVerbosity {
+        fn mock() -> Self {
+            RpcUtxoEntryVerbosity {
+                include_amount: mock(),
+                include_script_public_key: mock(),
+                include_block_daa_score: mock(),
+                include_is_coinbase: mock(),
+                verbose_data_verbosity: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcUtxoEntryVerboseDataVerbosity {
+        fn mock() -> Self {
+            RpcUtxoEntryVerboseDataVerbosity { include_script_public_key_type: mock(), include_script_public_key_address: mock() }
+        }
+    }
+
+    impl Mock for RpcTransactionInputVerboseDataVerbosity {
+        fn mock() -> Self {
+            RpcTransactionInputVerboseDataVerbosity { utxo_entry_verbosity: mock() }
+        }
+    }
+
+    impl Mock for RpcTransactionInputVerboseData {
+        fn mock() -> Self {
+            RpcTransactionInputVerboseData {}
+        }
+    }
+
+    impl Mock for RpcTransactionInputVerbosity {
+        fn mock() -> Self {
+            RpcTransactionInputVerbosity {
+                include_previous_outpoint: mock(),
+                include_signature_script: mock(),
+                include_sequence: mock(),
+                include_sig_op_count: mock(),
+                verbose_data_verbosity: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcTransactionOutputVerbosity {
+        fn mock() -> Self {
+            RpcTransactionOutputVerbosity { include_amount: mock(), include_script_public_key: mock(), verbose_data_verbosity: mock() }
+        }
+    }
+
+    impl Mock for RpcTransactionOutputVerboseDataVerbosity {
+        fn mock() -> Self {
+            RpcTransactionOutputVerboseDataVerbosity {
+                include_script_public_key_type: mock(),
+                include_script_public_key_address: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcTransactionVerboseDataVerbosity {
+        fn mock() -> Self {
+            RpcTransactionVerboseDataVerbosity {
+                include_transaction_id: mock(),
+                include_hash: mock(),
+                include_compute_mass: mock(),
+                include_block_hash: mock(),
+                include_block_time: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcTransactionVerbosity {
+        fn mock() -> Self {
+            RpcTransactionVerbosity {
+                include_version: mock(),
+                input_verbosity: mock(),
+                output_verbosity: mock(),
+                include_lock_time: mock(),
+                include_subnetwork_id: mock(),
+                include_gas: mock(),
+                include_payload: mock(),
+                include_mass: mock(),
+                verbose_data_verbosity: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcTransaction {
+        fn mock() -> Self {
+            RpcTransaction {
+                version: mock(),
+                inputs: mock(),
+                outputs: mock(),
+                lock_time: mock(),
+                subnetwork_id: mock(),
+                gas: mock(),
+                payload: Hash::mock().as_bytes().to_vec(),
+                mass: mock(),
+                verbose_data: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcOptionalTransaction {
+        fn mock() -> Self {
+            RpcOptionalTransaction {
+                version: mock(),
+                inputs: mock(),
+                outputs: mock(),
+                lock_time: mock(),
+                subnetwork_id: mock(),
+                gas: mock(),
+                payload: Some(Hash::mock().as_bytes().to_vec()),
+                mass: mock(),
+                verbose_data: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcOptionalHeader {
+        fn mock() -> Self {
+            RpcOptionalHeader {
+                version: mock(),
+                timestamp: mock(),
+                bits: mock(),
+                nonce: mock(),
+                hash_merkle_root: mock(),
+                accepted_id_merkle_root: mock(),
+                utxo_commitment: mock(),
+                hash: mock(),
+                parents_by_level: mock(),
+                daa_score: mock(),
+                blue_score: mock(),
+                blue_work: mock(),
+                pruning_point: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcCompressedParents {
+        fn mock() -> Self {
+            // PR-9.5e: parents are block hashes (Hash64); CompressedParents is built from BlockHash.
+            let empty: Vec<(u8, Vec<kaspa_consensus_core::BlockHash>)> = vec![];
+            empty.try_into().expect("It should not fail.")
+        }
+    }
+
+    impl Mock for RpcNodeId {
+        fn mock() -> Self {
+            RpcNodeId::new(Uuid::new_v4())
+        }
+    }
+
+    impl Mock for IpAddr {
+        fn mock() -> Self {
+            IpAddr::V4(Ipv4Addr::new(mock(), mock(), mock(), mock()))
+        }
+    }
+
+    impl Mock for IpAddress {
+        fn mock() -> Self {
+            IpAddress::new(mock())
+        }
+    }
+
+    impl Mock for NetAddress {
+        fn mock() -> Self {
+            NetAddress::new(IpAddress::new(mock()), mock())
+        }
+    }
+
+    impl Mock for ContextualNetAddress {
+        fn mock() -> Self {
+            ContextualNetAddress::new(mock(), mock())
+        }
+    }
+
+    impl Mock for RpcPeerInfo {
+        fn mock() -> Self {
+            RpcPeerInfo {
+                id: mock(),
+                address: mock(),
+                last_ping_duration: mock(),
+                is_outbound: mock(),
+                time_offset: mock(),
+                user_agent: "0.4.2".to_string(),
+                advertised_protocol_version: mock(),
+                time_connected: mock(),
+                is_ibd_peer: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcMempoolEntry {
+        fn mock() -> Self {
+            RpcMempoolEntry { fee: mock(), transaction: mock(), is_orphan: mock() }
+        }
+    }
+
+    impl Mock for RpcMempoolEntryByAddress {
+        fn mock() -> Self {
+            RpcMempoolEntryByAddress { address: mock(), sending: mock(), receiving: mock() }
+        }
+    }
+
+    impl Mock for ScriptPublicKey {
+        fn mock() -> Self {
+            let mut bytes: [u8; 35] = [0; 35];
+            rand::thread_rng().fill(&mut bytes[..]);
+            ScriptPublicKey::from_vec(0, bytes.to_vec())
+        }
+    }
+
+    impl Mock for RpcUtxoEntry {
+        fn mock() -> Self {
+            RpcUtxoEntry { amount: mock(), script_public_key: mock(), block_daa_score: mock(), is_coinbase: mock() }
+        }
+    }
+
+    impl Mock for RpcOptionalUtxoEntry {
+        fn mock() -> Self {
+            RpcOptionalUtxoEntry {
+                amount: mock(),
+                script_public_key: mock(),
+                block_daa_score: mock(),
+                is_coinbase: mock(),
+                verbose_data: mock(),
+            }
+        }
+    }
+
+    impl Mock for RpcOptionalUtxoEntryVerboseData {
+        fn mock() -> Self {
+            RpcOptionalUtxoEntryVerboseData { script_public_key_type: mock(), script_public_key_address: mock() }
+        }
+    }
+
+    impl Mock for ScriptClass {
+        fn mock() -> Self {
+            match rand::thread_rng().r#gen::<u8>() % 4 {
+                0 => ScriptClass::NonStandard,
+                1 => ScriptClass::PubKey,
+                2 => ScriptClass::PubKeyECDSA,
+                _ => ScriptClass::ScriptHash, // 3
+            }
+        }
+    }
+
+    impl Mock for RpcTransactionOutpoint {
+        fn mock() -> Self {
+            RpcTransactionOutpoint { transaction_id: mock(), index: mock() }
+        }
+    }
+
+    impl Mock for RpcUtxosByAddressesEntry {
+        fn mock() -> Self {
+            RpcUtxosByAddressesEntry { address: mock(), outpoint: mock(), utxo_entry: mock() }
+        }
+    }
+
+    impl Mock for ProcessMetrics {
+        fn mock() -> Self {
+            ProcessMetrics {
+                resident_set_size: mock(),
+                virtual_memory_size: mock(),
+                core_num: mock(),
+                cpu_usage: mock(),
+                fd_num: mock(),
+                disk_io_read_bytes: mock(),
+                disk_io_write_bytes: mock(),
+                disk_io_read_per_sec: mock(),
+                disk_io_write_per_sec: mock(),
+            }
+        }
+    }
+
+    impl Mock for ConnectionMetrics {
+        fn mock() -> Self {
+            ConnectionMetrics {
+                borsh_live_connections: mock(),
+                borsh_connection_attempts: mock(),
+                borsh_handshake_failures: mock(),
+                json_live_connections: mock(),
+                json_connection_attempts: mock(),
+                json_handshake_failures: mock(),
+                active_peers: mock(),
+            }
+        }
+    }
+
+    impl Mock for BandwidthMetrics {
+        fn mock() -> Self {
+            BandwidthMetrics {
+                borsh_bytes_tx: mock(),
+                borsh_bytes_rx: mock(),
+                json_bytes_tx: mock(),
+                json_bytes_rx: mock(),
+                p2p_bytes_tx: mock(),
+                p2p_bytes_rx: mock(),
+                grpc_bytes_tx: mock(),
+                grpc_bytes_rx: mock(),
+            }
+        }
+    }
+
+    impl Mock for ConsensusMetrics {
+        fn mock() -> Self {
+            ConsensusMetrics {
+                node_blocks_submitted_count: mock(),
+                node_headers_processed_count: mock(),
+                node_dependencies_processed_count: mock(),
+                node_bodies_processed_count: mock(),
+                node_transactions_processed_count: mock(),
+                node_chain_blocks_processed_count: mock(),
+                node_mass_processed_count: mock(),
+                node_database_blocks_count: mock(),
+                node_database_headers_count: mock(),
+                network_mempool_size: mock(),
+                network_tip_hashes_count: mock(),
+                network_difficulty: mock(),
+                network_past_median_time: mock(),
+                network_virtual_parent_hashes_count: mock(),
+                network_virtual_daa_score: mock(),
+            }
+        }
+    }
+
+    impl Mock for StorageMetrics {
+        fn mock() -> Self {
+            StorageMetrics { storage_size_bytes: mock() }
+        }
+    }
+
+    // --------------------------------------------
+    // implementations for all the rpc request
+    // and response data structures.
+
+    impl Mock for SubmitBlockRequest {
+        fn mock() -> Self {
+            SubmitBlockRequest { block: mock(), allow_non_daa_blocks: true }
+        }
+    }
+
+    test!(SubmitBlockRequest);
+
+    impl Mock for SubmitBlockResponse {
+        fn mock() -> Self {
+            SubmitBlockResponse { report: SubmitBlockReport::Success }
+        }
+    }
+
+    test!(SubmitBlockResponse);
+
+    impl Mock for GetBlockTemplateRequest {
+        fn mock() -> Self {
+            GetBlockTemplateRequest { pay_address: mock(), extra_data: vec![4, 2] }
+        }
+    }
+
+    test!(GetBlockTemplateRequest);
+
+    impl Mock for GetBlockTemplateResponse {
+        fn mock() -> Self {
+            GetBlockTemplateResponse { block: mock(), is_synced: true }
+        }
+    }
+
+    test!(GetBlockTemplateResponse);
+
+    impl Mock for GetBlockRequest {
+        fn mock() -> Self {
+            GetBlockRequest { hash: mock(), include_transactions: true }
+        }
+    }
+
+    test!(GetBlockRequest);
+
+    impl Mock for GetBlockResponse {
+        fn mock() -> Self {
+            GetBlockResponse { block: mock() }
+        }
+    }
+
+    test!(GetBlockResponse);
+
+    impl Mock for GetInfoRequest {
+        fn mock() -> Self {
+            GetInfoRequest {}
+        }
+    }
+
+    test!(GetInfoRequest);
+
+    impl Mock for GetInfoResponse {
+        fn mock() -> Self {
+            GetInfoResponse {
+                p2p_id: Hash::mock().to_string(),
+                mempool_size: mock(),
+                server_version: "0.4.2".to_string(),
+                is_utxo_indexed: true,
+                is_synced: false,
+                has_notify_command: true,
+                has_message_id: false,
+            }
+        }
+    }
+
+    test!(GetInfoResponse);
+
+    impl Mock for GetCurrentNetworkRequest {
+        fn mock() -> Self {
+            GetCurrentNetworkRequest {}
+        }
+    }
+
+    test!(GetCurrentNetworkRequest);
+
+    impl Mock for GetCurrentNetworkResponse {
+        fn mock() -> Self {
+            GetCurrentNetworkResponse { network: NetworkType::Mainnet }
+        }
+    }
+
+    test!(GetCurrentNetworkResponse);
+
+    impl Mock for GetPeerAddressesRequest {
+        fn mock() -> Self {
+            GetPeerAddressesRequest {}
+        }
+    }
+
+    test!(GetPeerAddressesRequest);
+
+    impl Mock for GetPeerAddressesResponse {
+        fn mock() -> Self {
+            GetPeerAddressesResponse { known_addresses: mock(), banned_addresses: mock() }
+        }
+    }
+
+    test!(GetPeerAddressesResponse);
+
+    impl Mock for GetSinkRequest {
+        fn mock() -> Self {
+            GetSinkRequest {}
+        }
+    }
+
+    test!(GetSinkRequest);
+
+    impl Mock for GetSinkResponse {
+        fn mock() -> Self {
+            GetSinkResponse { sink: mock() }
+        }
+    }
+
+    test!(GetSinkResponse);
+
+    impl Mock for GetMempoolEntryRequest {
+        fn mock() -> Self {
+            GetMempoolEntryRequest { transaction_id: mock(), include_orphan_pool: true, filter_transaction_pool: false }
+        }
+    }
+
+    test!(GetMempoolEntryRequest);
+
+    impl Mock for GetMempoolEntryResponse {
+        fn mock() -> Self {
+            GetMempoolEntryResponse { mempool_entry: RpcMempoolEntry { fee: mock(), transaction: mock(), is_orphan: false } }
+        }
+    }
+
+    test!(GetMempoolEntryResponse);
+
+    impl Mock for GetMempoolEntriesRequest {
+        fn mock() -> Self {
+            GetMempoolEntriesRequest { include_orphan_pool: true, filter_transaction_pool: false }
+        }
+    }
+
+    test!(GetMempoolEntriesRequest);
+
+    impl Mock for GetMempoolEntriesResponse {
+        fn mock() -> Self {
+            GetMempoolEntriesResponse { mempool_entries: mock() }
+        }
+    }
+
+    test!(GetMempoolEntriesResponse);
+
+    impl Mock for GetConnectedPeerInfoRequest {
+        fn mock() -> Self {
+            GetConnectedPeerInfoRequest {}
+        }
+    }
+
+    test!(GetConnectedPeerInfoRequest);
+
+    impl Mock for GetConnectedPeerInfoResponse {
+        fn mock() -> Self {
+            GetConnectedPeerInfoResponse { peer_info: mock() }
+        }
+    }
+
+    test!(GetConnectedPeerInfoResponse);
+
+    impl Mock for AddPeerRequest {
+        fn mock() -> Self {
+            AddPeerRequest { peer_address: mock(), is_permanent: mock() }
+        }
+    }
+
+    test!(AddPeerRequest);
+
+    impl Mock for AddPeerResponse {
+        fn mock() -> Self {
+            AddPeerResponse {}
+        }
+    }
+
+    test!(AddPeerResponse);
+
+    impl Mock for SubmitTransactionRequest {
+        fn mock() -> Self {
+            SubmitTransactionRequest { transaction: mock(), allow_orphan: mock() }
+        }
+    }
+
+    test!(SubmitTransactionRequest);
+
+    impl Mock for SubmitTransactionResponse {
+        fn mock() -> Self {
+            SubmitTransactionResponse { transaction_id: mock() }
+        }
+    }
+
+    test!(SubmitTransactionResponse);
+
+    impl Mock for GetSubnetworkRequest {
+        fn mock() -> Self {
+            GetSubnetworkRequest { subnetwork_id: mock() }
+        }
+    }
+
+    test!(GetSubnetworkRequest);
+
+    impl Mock for GetSubnetworkResponse {
+        fn mock() -> Self {
+            GetSubnetworkResponse { gas_limit: mock() }
+        }
+    }
+
+    test!(GetSubnetworkResponse);
+
+    impl Mock for GetVirtualChainFromBlockRequest {
+        fn mock() -> Self {
+            GetVirtualChainFromBlockRequest {
+                start_hash: mock(),
+                include_accepted_transaction_ids: mock(),
+                min_confirmation_count: mock(),
+            }
+        }
+    }
+
+    test!(GetVirtualChainFromBlockRequest);
+
+    impl Mock for RpcAcceptedTransactionIds {
+        fn mock() -> Self {
+            RpcAcceptedTransactionIds { accepting_block_hash: mock(), accepted_transaction_ids: mock() }
+        }
+    }
+
+    impl Mock for GetVirtualChainFromBlockResponse {
+        fn mock() -> Self {
+            GetVirtualChainFromBlockResponse {
+                removed_chain_block_hashes: mock(),
+                added_chain_block_hashes: mock(),
+                accepted_transaction_ids: mock(),
+            }
+        }
+    }
+
+    test!(GetVirtualChainFromBlockResponse);
+
+    impl Mock for GetBlocksRequest {
+        fn mock() -> Self {
+            GetBlocksRequest { low_hash: mock(), include_blocks: mock(), include_transactions: mock() }
+        }
+    }
+
+    test!(GetBlocksRequest);
+
+    impl Mock for GetBlocksResponse {
+        fn mock() -> Self {
+            GetBlocksResponse { block_hashes: mock(), blocks: mock() }
+        }
+    }
+
+    test!(GetBlocksResponse);
+
+    impl Mock for GetBlockCountRequest {
+        fn mock() -> Self {
+            GetBlockCountRequest {}
+        }
+    }
+
+    test!(GetBlockCountRequest);
+
+    impl Mock for BlockCount {
+        fn mock() -> Self {
+            BlockCount { header_count: mock(), block_count: mock() }
+        }
+    }
+
+    test!(BlockCount);
+
+    impl Mock for GetBlockDagInfoRequest {
+        fn mock() -> Self {
+            GetBlockDagInfoRequest {}
+        }
+    }
+
+    test!(GetBlockDagInfoRequest);
+
+    impl Mock for GetBlockDagInfoResponse {
+        fn mock() -> Self {
+            GetBlockDagInfoResponse {
+                network: NetworkType::Mainnet.try_into().unwrap(),
+                block_count: mock(),
+                header_count: mock(),
+                tip_hashes: mock(),
+                difficulty: mock(),
+                past_median_time: mock(),
+                virtual_parent_hashes: mock(),
+                pruning_point_hash: mock(),
+                virtual_daa_score: mock(),
+                sink: mock(),
+            }
+        }
+    }
+
+    test!(GetBlockDagInfoResponse);
+
+    impl Mock for ResolveFinalityConflictRequest {
+        fn mock() -> Self {
+            ResolveFinalityConflictRequest { finality_block_hash: mock() }
+        }
+    }
+
+    test!(ResolveFinalityConflictRequest);
+
+    impl Mock for ResolveFinalityConflictResponse {
+        fn mock() -> Self {
+            ResolveFinalityConflictResponse {}
+        }
+    }
+
+    test!(ResolveFinalityConflictResponse);
+
+    impl Mock for ShutdownRequest {
+        fn mock() -> Self {
+            ShutdownRequest {}
+        }
+    }
+
+    test!(ShutdownRequest);
+
+    impl Mock for ShutdownResponse {
+        fn mock() -> Self {
+            ShutdownResponse {}
+        }
+    }
+
+    test!(ShutdownResponse);
+
+    impl Mock for GetHeadersRequest {
+        fn mock() -> Self {
+            GetHeadersRequest { start_hash: mock(), limit: mock(), is_ascending: mock() }
+        }
+    }
+
+    test!(GetHeadersRequest);
+
+    impl Mock for GetHeadersResponse {
+        fn mock() -> Self {
+            GetHeadersResponse { headers: mock() }
+        }
+    }
+
+    test!(GetHeadersResponse);
+
+    impl Mock for GetBalanceByAddressRequest {
+        fn mock() -> Self {
+            GetBalanceByAddressRequest { address: mock() }
+        }
+    }
+
+    test!(GetBalanceByAddressRequest);
+
+    impl Mock for GetBalanceByAddressResponse {
+        fn mock() -> Self {
+            GetBalanceByAddressResponse { balance: mock() }
+        }
+    }
+
+    test!(GetBalanceByAddressResponse);
+
+    impl Mock for GetBalancesByAddressesRequest {
+        fn mock() -> Self {
+            GetBalancesByAddressesRequest { addresses: mock() }
+        }
+    }
+
+    test!(GetBalancesByAddressesRequest);
+
+    impl Mock for RpcBalancesByAddressesEntry {
+        fn mock() -> Self {
+            RpcBalancesByAddressesEntry { address: mock(), balance: mock() }
+        }
+    }
+
+    impl Mock for GetBalancesByAddressesResponse {
+        fn mock() -> Self {
+            GetBalancesByAddressesResponse { entries: mock() }
+        }
+    }
+
+    test!(GetBalancesByAddressesResponse);
+
+    impl Mock for GetSinkBlueScoreRequest {
+        fn mock() -> Self {
+            GetSinkBlueScoreRequest {}
+        }
+    }
+
+    test!(GetSinkBlueScoreRequest);
+
+    impl Mock for GetSinkBlueScoreResponse {
+        fn mock() -> Self {
+            GetSinkBlueScoreResponse { blue_score: mock() }
+        }
+    }
+
+    test!(GetSinkBlueScoreResponse);
+
+    impl Mock for GetUtxosByAddressesRequest {
+        fn mock() -> Self {
+            GetUtxosByAddressesRequest { addresses: mock() }
+        }
+    }
+
+    test!(GetUtxosByAddressesRequest);
+
+    impl Mock for GetUtxosByAddressesResponse {
+        fn mock() -> Self {
+            GetUtxosByAddressesResponse { entries: mock() }
+        }
+    }
+
+    test!(GetUtxosByAddressesResponse);
+
+    impl Mock for BanRequest {
+        fn mock() -> Self {
+            BanRequest { ip: mock() }
+        }
+    }
+
+    test!(BanRequest);
+
+    impl Mock for BanResponse {
+        fn mock() -> Self {
+            BanResponse {}
+        }
+    }
+
+    test!(BanResponse);
+
+    impl Mock for UnbanRequest {
+        fn mock() -> Self {
+            UnbanRequest { ip: mock() }
+        }
+    }
+
+    test!(UnbanRequest);
+
+    impl Mock for UnbanResponse {
+        fn mock() -> Self {
+            UnbanResponse {}
+        }
+    }
+
+    test!(UnbanResponse);
+
+    impl Mock for EstimateNetworkHashesPerSecondRequest {
+        fn mock() -> Self {
+            EstimateNetworkHashesPerSecondRequest { window_size: mock(), start_hash: mock() }
+        }
+    }
+
+    test!(EstimateNetworkHashesPerSecondRequest);
+
+    impl Mock for EstimateNetworkHashesPerSecondResponse {
+        fn mock() -> Self {
+            EstimateNetworkHashesPerSecondResponse { network_hashes_per_second: mock() }
+        }
+    }
+
+    test!(EstimateNetworkHashesPerSecondResponse);
+
+    impl Mock for GetMempoolEntriesByAddressesRequest {
+        fn mock() -> Self {
+            GetMempoolEntriesByAddressesRequest { addresses: mock(), include_orphan_pool: true, filter_transaction_pool: false }
+        }
+    }
+
+    test!(GetMempoolEntriesByAddressesRequest);
+
+    impl Mock for GetMempoolEntriesByAddressesResponse {
+        fn mock() -> Self {
+            GetMempoolEntriesByAddressesResponse { entries: mock() }
+        }
+    }
+
+    test!(GetMempoolEntriesByAddressesResponse);
+
+    impl Mock for GetCoinSupplyRequest {
+        fn mock() -> Self {
+            GetCoinSupplyRequest {}
+        }
+    }
+
+    test!(GetCoinSupplyRequest);
+
+    impl Mock for GetCoinSupplyResponse {
+        fn mock() -> Self {
+            GetCoinSupplyResponse { max_sompi: mock(), circulating_sompi: mock() }
+        }
+    }
+
+    test!(GetCoinSupplyResponse);
+
+    impl Mock for PingRequest {
+        fn mock() -> Self {
+            PingRequest {}
+        }
+    }
+
+    test!(PingRequest);
+
+    impl Mock for PingResponse {
+        fn mock() -> Self {
+            PingResponse {}
+        }
+    }
+
+    test!(PingResponse);
+
+    impl Mock for GetConnectionsRequest {
+        fn mock() -> Self {
+            GetConnectionsRequest { include_profile_data: false }
+        }
+    }
+
+    test!(GetConnectionsRequest);
+
+    impl Mock for GetConnectionsResponse {
+        fn mock() -> Self {
+            GetConnectionsResponse { clients: mock(), peers: mock(), profile_data: None }
+        }
+    }
+
+    test!(GetConnectionsResponse);
+
+    impl Mock for GetSystemInfoRequest {
+        fn mock() -> Self {
+            GetSystemInfoRequest {}
+        }
+    }
+
+    test!(GetSystemInfoRequest);
+
+    impl Mock for GetSystemInfoResponse {
+        fn mock() -> Self {
+            GetSystemInfoResponse {
+                version: "1.2.3".to_string(),
+                system_id: mock(),
+                git_hash: mock(),
+                cpu_physical_cores: mock(),
+                total_memory: mock(),
+                fd_limit: mock(),
+                proxy_socket_limit_per_cpu_core: mock(),
+            }
+        }
+    }
+
+    test!(GetSystemInfoResponse);
+
+    impl Mock for GetMetricsRequest {
+        fn mock() -> Self {
+            GetMetricsRequest {
+                process_metrics: true,
+                connection_metrics: true,
+                bandwidth_metrics: true,
+                consensus_metrics: true,
+                storage_metrics: true,
+                custom_metrics: false,
+            }
+        }
+    }
+
+    test!(GetMetricsRequest);
+
+    impl Mock for GetMetricsResponse {
+        fn mock() -> Self {
+            GetMetricsResponse {
+                server_time: mock(),
+                process_metrics: mock(),
+                connection_metrics: mock(),
+                bandwidth_metrics: mock(),
+                consensus_metrics: mock(),
+                storage_metrics: mock(),
+                custom_metrics: None,
+            }
+        }
+    }
+
+    test!(GetMetricsResponse);
+
+    impl Mock for GetServerInfoRequest {
+        fn mock() -> Self {
+            GetServerInfoRequest {}
+        }
+    }
+
+    test!(GetServerInfoRequest);
+
+    impl Mock for GetServerInfoResponse {
+        fn mock() -> Self {
+            GetServerInfoResponse {
+                rpc_api_version: mock(),
+                rpc_api_revision: mock(),
+                server_version: "0.4.2".to_string(),
+                network_id: NetworkType::Mainnet.try_into().unwrap(),
+                has_utxo_index: true,
+                is_synced: false,
+                virtual_daa_score: mock(),
+            }
+        }
+    }
+
+    test!(GetServerInfoResponse);
+
+    impl Mock for GetSyncStatusRequest {
+        fn mock() -> Self {
+            GetSyncStatusRequest {}
+        }
+    }
+
+    test!(GetSyncStatusRequest);
+
+    impl Mock for GetSyncStatusResponse {
+        fn mock() -> Self {
+            GetSyncStatusResponse { is_synced: true }
+        }
+    }
+
+    test!(GetSyncStatusResponse);
+
+    impl Mock for GetDaaScoreTimestampEstimateRequest {
+        fn mock() -> Self {
+            GetDaaScoreTimestampEstimateRequest { daa_scores: mock() }
+        }
+    }
+
+    test!(GetDaaScoreTimestampEstimateRequest);
+
+    impl Mock for GetDaaScoreTimestampEstimateResponse {
+        fn mock() -> Self {
+            GetDaaScoreTimestampEstimateResponse { timestamps: mock() }
+        }
+    }
+
+    test!(GetDaaScoreTimestampEstimateResponse);
+
+    impl Mock for GetVirtualChainFromBlockV2Request {
+        fn mock() -> Self {
+            GetVirtualChainFromBlockV2Request { start_hash: mock(), data_verbosity_level: None, min_confirmation_count: mock() }
+        }
+    }
+
+    test!(GetVirtualChainFromBlockV2Request);
+
+    impl Mock for RpcChainBlockAcceptedTransactions {
+        fn mock() -> Self {
+            RpcChainBlockAcceptedTransactions { chain_block_header: mock(), accepted_transactions: mock() }
+        }
+    }
+
+    impl Mock for GetVirtualChainFromBlockV2Response {
+        fn mock() -> Self {
+            GetVirtualChainFromBlockV2Response {
+                removed_chain_block_hashes: mock(),
+                added_chain_block_hashes: mock(),
+                chain_block_accepted_transactions: mock(),
+            }
+        }
+    }
+
+    test!(GetVirtualChainFromBlockV2Response);
+
+    impl Mock for NotifyBlockAddedRequest {
+        fn mock() -> Self {
+            NotifyBlockAddedRequest { command: Command::Start }
+        }
+    }
+
+    test!(NotifyBlockAddedRequest);
+
+    impl Mock for NotifyBlockAddedResponse {
+        fn mock() -> Self {
+            NotifyBlockAddedResponse {}
+        }
+    }
+
+    test!(NotifyBlockAddedResponse);
+
+    impl Mock for BlockAddedNotification {
+        fn mock() -> Self {
+            BlockAddedNotification { block: mock() }
+        }
+    }
+
+    test!(BlockAddedNotification);
+
+    impl Mock for NotifyVirtualChainChangedRequest {
+        fn mock() -> Self {
+            NotifyVirtualChainChangedRequest { command: Command::Start, include_accepted_transaction_ids: true }
+        }
+    }
+
+    test!(NotifyVirtualChainChangedRequest);
+
+    impl Mock for NotifyVirtualChainChangedResponse {
+        fn mock() -> Self {
+            NotifyVirtualChainChangedResponse {}
+        }
+    }
+
+    test!(NotifyVirtualChainChangedResponse);
+
+    impl Mock for VirtualChainChangedNotification {
+        fn mock() -> Self {
+            VirtualChainChangedNotification {
+                removed_chain_block_hashes: mock(),
+                added_chain_block_hashes: mock(),
+                accepted_transaction_ids: mock(),
+            }
+        }
+    }
+
+    test!(VirtualChainChangedNotification);
+
+    impl Mock for NotifyFinalityConflictRequest {
+        fn mock() -> Self {
+            NotifyFinalityConflictRequest { command: Command::Start }
+        }
+    }
+
+    test!(NotifyFinalityConflictRequest);
+
+    impl Mock for NotifyFinalityConflictResponse {
+        fn mock() -> Self {
+            NotifyFinalityConflictResponse {}
+        }
+    }
+
+    test!(NotifyFinalityConflictResponse);
+
+    impl Mock for FinalityConflictNotification {
+        fn mock() -> Self {
+            FinalityConflictNotification { violating_block_hash: mock() }
+        }
+    }
+
+    test!(FinalityConflictNotification);
+
+    impl Mock for NotifyFinalityConflictResolvedRequest {
+        fn mock() -> Self {
+            NotifyFinalityConflictResolvedRequest { command: Command::Start }
+        }
+    }
+
+    test!(NotifyFinalityConflictResolvedRequest);
+
+    impl Mock for NotifyFinalityConflictResolvedResponse {
+        fn mock() -> Self {
+            NotifyFinalityConflictResolvedResponse {}
+        }
+    }
+
+    test!(NotifyFinalityConflictResolvedResponse);
+
+    impl Mock for FinalityConflictResolvedNotification {
+        fn mock() -> Self {
+            FinalityConflictResolvedNotification { finality_block_hash: mock() }
+        }
+    }
+
+    test!(FinalityConflictResolvedNotification);
+
+    impl Mock for NotifyUtxosChangedRequest {
+        fn mock() -> Self {
+            NotifyUtxosChangedRequest { addresses: mock(), command: Command::Start }
+        }
+    }
+
+    test!(NotifyUtxosChangedRequest);
+
+    impl Mock for NotifyUtxosChangedResponse {
+        fn mock() -> Self {
+            NotifyUtxosChangedResponse {}
+        }
+    }
+
+    test!(NotifyUtxosChangedResponse);
+
+    impl Mock for UtxosChangedNotification {
+        fn mock() -> Self {
+            UtxosChangedNotification { added: mock(), removed: mock() }
+        }
+    }
+
+    test!(UtxosChangedNotification);
+
+    impl Mock for NotifySinkBlueScoreChangedRequest {
+        fn mock() -> Self {
+            NotifySinkBlueScoreChangedRequest { command: Command::Start }
+        }
+    }
+
+    test!(NotifySinkBlueScoreChangedRequest);
+
+    impl Mock for NotifySinkBlueScoreChangedResponse {
+        fn mock() -> Self {
+            NotifySinkBlueScoreChangedResponse {}
+        }
+    }
+
+    test!(NotifySinkBlueScoreChangedResponse);
+
+    impl Mock for SinkBlueScoreChangedNotification {
+        fn mock() -> Self {
+            SinkBlueScoreChangedNotification { sink_blue_score: mock() }
+        }
+    }
+
+    test!(SinkBlueScoreChangedNotification);
+
+    impl Mock for NotifyVirtualDaaScoreChangedRequest {
+        fn mock() -> Self {
+            NotifyVirtualDaaScoreChangedRequest { command: Command::Start }
+        }
+    }
+
+    test!(NotifyVirtualDaaScoreChangedRequest);
+
+    impl Mock for NotifyVirtualDaaScoreChangedResponse {
+        fn mock() -> Self {
+            NotifyVirtualDaaScoreChangedResponse {}
+        }
+    }
+
+    test!(NotifyVirtualDaaScoreChangedResponse);
+
+    impl Mock for VirtualDaaScoreChangedNotification {
+        fn mock() -> Self {
+            VirtualDaaScoreChangedNotification { virtual_daa_score: mock() }
+        }
+    }
+
+    test!(VirtualDaaScoreChangedNotification);
+
+    impl Mock for NotifyPruningPointUtxoSetOverrideRequest {
+        fn mock() -> Self {
+            NotifyPruningPointUtxoSetOverrideRequest { command: Command::Start }
+        }
+    }
+
+    test!(NotifyPruningPointUtxoSetOverrideRequest);
+
+    impl Mock for NotifyPruningPointUtxoSetOverrideResponse {
+        fn mock() -> Self {
+            NotifyPruningPointUtxoSetOverrideResponse {}
+        }
+    }
+
+    test!(NotifyPruningPointUtxoSetOverrideResponse);
+
+    impl Mock for PruningPointUtxoSetOverrideNotification {
+        fn mock() -> Self {
+            PruningPointUtxoSetOverrideNotification {}
+        }
+    }
+
+    test!(PruningPointUtxoSetOverrideNotification);
+
+    impl Mock for NotifyNewBlockTemplateRequest {
+        fn mock() -> Self {
+            NotifyNewBlockTemplateRequest { command: Command::Start }
+        }
+    }
+
+    test!(NotifyNewBlockTemplateRequest);
+
+    impl Mock for NotifyNewBlockTemplateResponse {
+        fn mock() -> Self {
+            NotifyNewBlockTemplateResponse {}
+        }
+    }
+
+    test!(NotifyNewBlockTemplateResponse);
+
+    impl Mock for NewBlockTemplateNotification {
+        fn mock() -> Self {
+            NewBlockTemplateNotification {}
+        }
+    }
+
+    test!(NewBlockTemplateNotification);
+
+    impl Mock for NotifyPalwClassReadinessChangedRequest {
+        fn mock() -> Self {
+            NotifyPalwClassReadinessChangedRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwClassReadinessChangedRequest);
+    impl Mock for NotifyPalwClassReadinessChangedResponse {
+        fn mock() -> Self {
+            NotifyPalwClassReadinessChangedResponse {}
+        }
+    }
+    test!(NotifyPalwClassReadinessChangedResponse);
+    impl Mock for PalwClassReadinessChangedNotification {
+        fn mock() -> Self {
+            PalwClassReadinessChangedNotification {
+                class_id: mock_hex(),
+                model_name: "QWEN36".to_string(),
+                registry_state: "Probation".to_string(),
+                previous_registry_state: "Prefetching".to_string(),
+                ready_seats: 7,
+                previous_ready_seats: 6,
+                required_ready_seats: 7,
+                bonded_seats: 8,
+            }
+        }
+    }
+    test!(PalwClassReadinessChangedNotification);
+
+    impl Mock for NotifyPalwPanelAssignmentRequest {
+        fn mock() -> Self {
+            NotifyPalwPanelAssignmentRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwPanelAssignmentRequest);
+    impl Mock for NotifyPalwPanelAssignmentResponse {
+        fn mock() -> Self {
+            NotifyPalwPanelAssignmentResponse {}
+        }
+    }
+    test!(NotifyPalwPanelAssignmentResponse);
+    impl Mock for PalwPanelAssignmentNotification {
+        fn mock() -> Self {
+            PalwPanelAssignmentNotification {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                licensed_state: "panelBound".to_string(),
+                deadline_daa: mock(),
+                coverage_mask: mock(),
+                full_seat: format!("{}:0", mock_hex()),
+                valid_receipt_seats: mock(),
+                selected_panel_seats: mock(),
+                seats: mock(),
+            }
+        }
+    }
+    test!(PalwPanelAssignmentNotification);
+
+    impl Mock for NotifyPalwPanelReceiptRequest {
+        fn mock() -> Self {
+            NotifyPalwPanelReceiptRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwPanelReceiptRequest);
+    impl Mock for NotifyPalwPanelReceiptResponse {
+        fn mock() -> Self {
+            NotifyPalwPanelReceiptResponse {}
+        }
+    }
+    test!(NotifyPalwPanelReceiptResponse);
+    impl Mock for PalwPanelReceiptNotification {
+        fn mock() -> Self {
+            PalwPanelReceiptNotification {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                coverage_mask: mock(),
+                previous_coverage_mask: mock(),
+                valid_receipt_seats: mock(),
+                previous_valid_receipt_seats: mock(),
+                selected_panel_seats: mock(),
+            }
+        }
+    }
+    test!(PalwPanelReceiptNotification);
+
+    impl Mock for NotifyPalwPanelEligibilityChangedRequest {
+        fn mock() -> Self {
+            NotifyPalwPanelEligibilityChangedRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwPanelEligibilityChangedRequest);
+    impl Mock for NotifyPalwPanelEligibilityChangedResponse {
+        fn mock() -> Self {
+            NotifyPalwPanelEligibilityChangedResponse {}
+        }
+    }
+    test!(NotifyPalwPanelEligibilityChangedResponse);
+    impl Mock for PalwPanelEligibilityChangedNotification {
+        fn mock() -> Self {
+            PalwPanelEligibilityChangedNotification {
+                seat_id: format!("{}:0", mock_hex()),
+                class_id: mock_hex(),
+                eligible: mock(),
+                ready: mock(),
+                hold: mock(),
+            }
+        }
+    }
+    test!(PalwPanelEligibilityChangedNotification);
+
+    impl Mock for SubscribeResponse {
+        fn mock() -> Self {
+            SubscribeResponse::new(mock())
+        }
+    }
+
+    test!(SubscribeResponse);
+
+    impl Mock for UnsubscribeResponse {
+        fn mock() -> Self {
+            UnsubscribeResponse {}
+        }
+    }
+
+    test!(UnsubscribeResponse);
+
+    // ops 182–184: the settlement read, the precommit duty and the class contexts round-trip.
+    fn mock_hex() -> String {
+        format!("{:016x}{:016x}", mock::<u64>(), mock::<u64>())
+    }
+
+    impl Mock for GetPalwSettlementRequest {
+        fn mock() -> Self {
+            GetPalwSettlementRequest { daa_score: mock() }
+        }
+    }
+
+    test!(GetPalwSettlementRequest);
+
+    impl Mock for GetPalwSettlementResponse {
+        fn mock() -> Self {
+            GetPalwSettlementResponse {
+                dns_retired_at: None,
+                native_settlement: None,
+                native_readiness: None,
+                available: mock(),
+                sink_daa: mock(),
+                daa_score: mock(),
+                settled: mock(),
+                depth: mock(),
+                pending_anchors: mock(),
+                depth_is_lower_bound: mock(),
+                safe_frontier_blue_score: mock(),
+                safe_frontier_daa: mock(),
+                uncertified_final_anchors: 0,
+                security_certification_premise: None,
+            }
+        }
+    }
+
+    test!(GetPalwSettlementResponse);
+
+    impl Mock for GetPrecommitDutyRequest {
+        fn mock() -> Self {
+            GetPrecommitDutyRequest { validator_id: mock_hex(), bond_outpoint: format!("{}:{}", mock_hex(), mock::<u32>()) }
+        }
+    }
+
+    test!(GetPrecommitDutyRequest);
+
+    impl Mock for RpcPrecommitDue {
+        fn mock() -> Self {
+            RpcPrecommitDue { epoch: mock(), anchor_hash: mock_hex(), anchor_daa_score: mock(), snapshot_commitment: mock_hex() }
+        }
+    }
+
+    test!(RpcPrecommitDue);
+
+    impl Mock for GetPrecommitDutyResponse {
+        fn mock() -> Self {
+            GetPrecommitDutyResponse {
+                retired_at: None,
+                available: mock(),
+                round_active: mock(),
+                sink_daa_score: mock(),
+                held_epoch: mock(),
+                held_anchor: mock_hex(),
+                due: mock(),
+            }
+        }
+    }
+
+    test!(GetPrecommitDutyResponse);
+
+    impl Mock for GetPalwClassContextsRequest {
+        fn mock() -> Self {
+            GetPalwClassContextsRequest {}
+        }
+    }
+
+    test!(GetPalwClassContextsRequest);
+
+    impl Mock for RpcPalwClassContext {
+        fn mock() -> Self {
+            RpcPalwClassContext {
+                class_id: mock_hex(),
+                model_id: mock_hex(),
+                n_ctx: mock(),
+                canonical_prefill_tokens: mock(),
+                canonical_decode_tokens: mock(),
+                canonical_footprint_positions: mock(),
+                max_context_tokens: mock(),
+                source: "chain_registration".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassContext);
+
+    /// The row a client reads for this build's Qwen3.6-35B-A3B class — a (7, 2) canonical job at
+    /// `n_ctx` 8, whose footprint is 8 — survives the wire field for field.
+    #[test]
+    fn a_class_context_row_round_trips_with_its_footprint() {
+        let row = RpcPalwClassContext {
+            class_id: "11".repeat(64),
+            model_id: "qwen3.6-35b-a3b".to_string(),
+            n_ctx: 8,
+            canonical_prefill_tokens: 7,
+            canonical_decode_tokens: 2,
+            canonical_footprint_positions: 8,
+            max_context_tokens: 8,
+            source: "chain_registration".to_string(),
+        };
+        let mut bytes = Vec::new();
+        serialize!(RpcPalwClassContext, &row, &mut bytes).unwrap();
+        let back = deserialize!(RpcPalwClassContext, &mut bytes.as_slice()).unwrap();
+        assert_eq!((back.class_id, back.model_id, back.source), (row.class_id.clone(), row.model_id.clone(), row.source.clone()));
+        assert_eq!(
+            (
+                back.n_ctx,
+                back.canonical_prefill_tokens,
+                back.canonical_decode_tokens,
+                back.canonical_footprint_positions,
+                back.max_context_tokens
+            ),
+            (8, 7, 2, 8, 8)
+        );
+    }
+
+    impl Mock for GetPalwClassContextsResponse {
+        fn mock() -> Self {
+            GetPalwClassContextsResponse {
+                available: mock(),
+                fp_max_prompt_tokens: mock(),
+                fp_max_decode_tokens: mock(),
+                classes: mock(),
+            }
+        }
+    }
+
+    test!(GetPalwClassContextsResponse);
+
+    impl Mock for GetPalwClassEconomicsRequest {
+        fn mock() -> Self {
+            GetPalwClassEconomicsRequest {}
+        }
+    }
+
+    test!(GetPalwClassEconomicsRequest);
+
+    impl Mock for RpcPalwClassLedgerTotals {
+        fn mock() -> Self {
+            RpcPalwClassLedgerTotals {
+                available: mock(),
+                claims: mock(),
+                bound: mock(),
+                licensed: mock(),
+                finals: mock(),
+                voided: mock(),
+                redrawn: mock(),
+                paid_at_acceptance: mock(),
+                escrow_final_sompi: "1".to_string(),
+                producer_named_sompi: "1".to_string(),
+                panel_named_sompi: "1".to_string(),
+                reserve_sompi: "1".to_string(),
+                burned_sompi: "1".to_string(),
+                attempted_compute: "1".to_string(),
+                final_compute: "1".to_string(),
+                verification_compute: "1".to_string(),
+                producer_per_attempted_compute: "1".to_string(),
+                panel_per_verification_compute: "1".to_string(),
+                total_per_attempted_compute: "1".to_string(),
+                total_per_final_compute: "1".to_string(),
+                licence_rate_permille: mock(),
+                final_of_licensed_permille: mock(),
+                final_rate_permille: mock(),
+                avg_bind_wait_daa: mock(),
+                avg_licence_wait_daa: mock(),
+                avg_final_wait_daa: mock(),
+                avg_void_wait_daa: mock(),
+                avg_expected_attempts_q32: "1".to_string(),
+                avg_network_expected_attempts_q32: "1".to_string(),
+                first_accepted_daa: mock(),
+                last_accepted_daa: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassLedgerTotals);
+
+    impl Mock for RpcPalwClassNodeTelemetry {
+        fn mock() -> Self {
+            RpcPalwClassNodeTelemetry {
+                available: mock(),
+                draws: mock(),
+                class_wins: mock(),
+                produced: mock(),
+                draw_millis: mock(),
+                storage_read_mib: mock(),
+                replays: mock(),
+                replay_millis: mock(),
+                replay_leaves: mock(),
+                receipts_valid: mock(),
+                receipts_unavailable: mock(),
+                receipts_incapable: mock(),
+                receipts_other: mock(),
+                openings_held: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassNodeTelemetry);
+
+    impl Mock for RpcPalwClassEconomics {
+        fn mock() -> Self {
+            RpcPalwClassEconomics {
+                class_id: mock_hex(),
+                model_id: mock_hex(),
+                is_base_class: mock(),
+                status: "Active".to_string(),
+                share_permille: mock(),
+                pwu_per_inference: mock(),
+                class_target: u128::MAX.to_string(),
+                expected_attempts: mock(),
+                expected_attempts_q32: (1u128 << 32).to_string(),
+                economic_compute_job: "18055200736".to_string(),
+                economic_compute_canonical: "21070759296".to_string(),
+                economic_source: "build_ledger".to_string(),
+                claims_accepted: mock(),
+                claims_provisional: mock(),
+                claims_panel_bound: mock(),
+                claims_licensed: mock(),
+                claims_final: mock(),
+                claims_voided: mock(),
+                claims_redrawn: mock(),
+                escrow_accepted_sompi: "320084650080".to_string(),
+                escrow_final_sompi: "0".to_string(),
+                ledger: mock(),
+                telemetry: mock(),
+                eligible_seats: mock(),
+                duty_seats_inflight: mock(),
+                seat_exposure_inflight_sompi: "0".to_string(),
+                free_collateral_sompi: "1000000000000".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassEconomics);
+
+    impl Mock for GetPalwClassEconomicsResponse {
+        fn mock() -> Self {
+            GetPalwClassEconomicsResponse {
+                available: mock(),
+                tip_daa: mock(),
+                economic_compute_version: mock(),
+                seat_count: mock(),
+                prefill_draw: mock(),
+                network_bits: mock(),
+                network_expected_attempts_q32: "8589934592".to_string(),
+                ledger_available: mock(),
+                ledger_claims: mock(),
+                ledger_first_daa: mock(),
+                ledger_last_daa: mock(),
+                classes: mock(),
+            }
+        }
+    }
+
+    test!(GetPalwClassEconomicsResponse);
+
+    impl Mock for GetPalwModelRegistryRequest {
+        fn mock() -> Self {
+            GetPalwModelRegistryRequest {}
+        }
+    }
+
+    test!(GetPalwModelRegistryRequest);
+
+    impl Mock for GetPalwFreePromptPriceRequest {
+        fn mock() -> Self {
+            GetPalwFreePromptPriceRequest {
+                class_id: mock_hex(),
+                prompt_token_ids: vec![151644, 872, 198, 9707],
+                prompt_tokens: mock(),
+                decode_tokens_executed: mock(),
+                work_leaves: mock(),
+                bond: format!("{}:0", mock_hex()),
+            }
+        }
+    }
+
+    test!(GetPalwFreePromptPriceRequest);
+
+    impl Mock for GetPalwFreePromptPriceResponse {
+        fn mock() -> Self {
+            GetPalwFreePromptPriceResponse {
+                available: mock(),
+                daa_score: mock(),
+                priced: mock(),
+                refusal: "FreePromptWorkLeavesMismatch".to_string(),
+                priced_in_compute: mock(),
+                quanta: mock(),
+                pwu: mock(),
+                reserved_sompi: "340282366920938463463374607431768211455".to_string(),
+                bond_room_sompi: "1000000000000".to_string(),
+            }
+        }
+    }
+
+    test!(GetPalwFreePromptPriceResponse);
+
+    impl Mock for RpcPalwPanelHoldReason {
+        fn mock() -> Self {
+            RpcPalwPanelHoldReason {
+                code: "NO_ARTIFACT".to_string(),
+                message: "this node does not hold a converted artifact".to_string(),
+            }
+        }
+    }
+    test!(RpcPalwPanelHoldReason);
+
+    impl Mock for RpcPalwPanelHoldReasonCount {
+        fn mock() -> Self {
+            RpcPalwPanelHoldReasonCount {
+                code: "NO_ARTIFACT".to_string(),
+                message: "this node does not hold a converted artifact".to_string(),
+                seats: mock(),
+            }
+        }
+    }
+    test!(RpcPalwPanelHoldReasonCount);
+
+    impl Mock for RpcPalwClassPanelStatus {
+        fn mock() -> Self {
+            RpcPalwClassPanelStatus {
+                class_id: mock_hex(),
+                model_name: "QWEN36".to_string(),
+                registry_state: "Probation".to_string(),
+                bonded_seats: mock(),
+                ready_seats: mock(),
+                required_ready_seats: mock(),
+                selected_panel_seats: mock(),
+                valid_receipt_seats: mock(),
+                panel_size: mock(),
+                receipt_quorum: mock(),
+                full_seats_per_panel: mock(),
+                partial_seats_per_panel: mock(),
+                segment_count: mock(),
+                inflight_claims: mock(),
+                active_assignments: mock(),
+                admission_permille: mock(),
+                verification_mode: "s1".to_string(),
+                s1_active: mock(),
+                s1_scheduled_daa: mock(),
+                s3_active: mock(),
+                s3_scheduled_daa: mock(),
+                s2_active: mock(),
+                s2_scheduled_daa: mock(),
+                holds_local: mock(),
+                missing: mock(),
+            }
+        }
+    }
+    test!(RpcPalwClassPanelStatus);
+
+    impl Mock for RpcPalwPanelSeat {
+        fn mock() -> Self {
+            RpcPalwPanelSeat {
+                seat_id: format!("{}:0", mock_hex()),
+                bond_outpoint: format!("{}:0", mock_hex()),
+                class_id: mock_hex(),
+                ready: mock(),
+                eligible: mock(),
+                readiness_version: mock(),
+                readiness_proved_daa: mock(),
+                readiness_expires_daa: mock(),
+                collateral_available: "124000000000".to_string(),
+                collateral_locked: "0".to_string(),
+                assigned: mock(),
+                hold: mock(),
+            }
+        }
+    }
+    test!(RpcPalwPanelSeat);
+
+    impl Mock for RpcPalwPanelAssignmentSeat {
+        fn mock() -> Self {
+            RpcPalwPanelAssignmentSeat {
+                seat_id: format!("{}:0", mock_hex()),
+                seat_index: mock(),
+                full_seat: mock(),
+                segment_index: mock(),
+                mask: mock(),
+                receipt_status: "valid".to_string(),
+                credited_daa: mock(),
+            }
+        }
+    }
+    test!(RpcPalwPanelAssignmentSeat);
+
+    impl Mock for RpcPalwPanelAssignment {
+        fn mock() -> Self {
+            RpcPalwPanelAssignment {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                licensed_state: "panelBound".to_string(),
+                deadline_daa: mock(),
+                coverage_mask: mock(),
+                full_seat: format!("{}:0", mock_hex()),
+                valid_receipt_seats: mock(),
+                selected_panel_seats: mock(),
+                seats: mock(),
+            }
+        }
+    }
+    test!(RpcPalwPanelAssignment);
+
+    impl Mock for RpcPalwLocalPanelClass {
+        fn mock() -> Self {
+            RpcPalwLocalPanelClass {
+                class_id: mock_hex(),
+                model_name: "QWEN36".to_string(),
+                seat_id: format!("{}:2", mock_hex()),
+                artifact_loaded: mock(),
+                artifact_root: mock_hex(),
+                working_set_bytes: mock(),
+                replay_capable: mock(),
+                synced: mock(),
+                bond_active: mock(),
+                collateral_sompi: mock(),
+                readiness_proof_accepted: mock(),
+                readiness_proved_daa: mock(),
+                chain_state: "READY".to_string(),
+                assignments: mock(),
+                hold: mock(),
+                runtime_profile: "A16-KV-i16".to_string(),
+                artifact_resident_bytes: mock(),
+                producer_working_set_bytes: mock(),
+                full_seat_working_set_bytes: mock(),
+                partial_seat_working_set_bytes: mock(),
+                producer_capable: mock(),
+                full_seat_capable: mock(),
+                partial_seat_capable: mock(),
+            }
+        }
+    }
+    test!(RpcPalwLocalPanelClass);
+
+    impl Mock for GetPalwClassPanelStatusRequest {
+        fn mock() -> Self {
+            GetPalwClassPanelStatusRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwClassPanelStatusRequest);
+
+    impl Mock for GetPalwClassPanelStatusResponse {
+        fn mock() -> Self {
+            GetPalwClassPanelStatusResponse { available: mock(), tip_daa: mock(), found: mock(), status: mock() }
+        }
+    }
+    test!(GetPalwClassPanelStatusResponse);
+
+    impl Mock for GetPalwPanelSeatsRequest {
+        fn mock() -> Self {
+            GetPalwPanelSeatsRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwPanelSeatsRequest);
+
+    impl Mock for GetPalwPanelSeatsResponse {
+        fn mock() -> Self {
+            GetPalwPanelSeatsResponse { available: mock(), tip_daa: mock(), seats: mock() }
+        }
+    }
+    test!(GetPalwPanelSeatsResponse);
+
+    impl Mock for GetPalwPanelStatusRequest {
+        fn mock() -> Self {
+            GetPalwPanelStatusRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwPanelStatusRequest);
+
+    impl Mock for GetPalwPanelStatusResponse {
+        fn mock() -> Self {
+            GetPalwPanelStatusResponse {
+                available: mock(),
+                tip_daa: mock(),
+                panel_running: mock(),
+                panel_submitter: mock(),
+                synced: mock(),
+                classes: mock(),
+            }
+        }
+    }
+    test!(GetPalwPanelStatusResponse);
+
+    impl Mock for GetPalwPanelAssignmentsRequest {
+        fn mock() -> Self {
+            GetPalwPanelAssignmentsRequest { claim_id: mock_hex(), seat_id: format!("{}:0", mock_hex()) }
+        }
+    }
+    test!(GetPalwPanelAssignmentsRequest);
+
+    impl Mock for GetPalwPanelAssignmentsResponse {
+        fn mock() -> Self {
+            GetPalwPanelAssignmentsResponse { available: mock(), tip_daa: mock(), truncated: mock(), assignments: mock() }
+        }
+    }
+    test!(GetPalwPanelAssignmentsResponse);
+
+    impl Mock for RpcPalwModelPreflightCheck {
+        fn mock() -> Self {
+            RpcPalwModelPreflightCheck { code: "FitsGlobalWindow".into(), ok: mock(), message: "fits".into() }
+        }
+    }
+    test!(RpcPalwModelPreflightCheck);
+
+    impl Mock for RpcPalwModelRegistration {
+        fn mock() -> Self {
+            RpcPalwModelRegistration {
+                object_id: mock_hex(),
+                class_id: mock_hex(),
+                constructed: mock(),
+                submitted: mock(),
+                accepted: mock(),
+                included: mock(),
+                folded: mock(),
+                submission_state: "folded".into(),
+                processor_verdict: "ADMISSION_OK".into(),
+                reject_code: String::new(),
+                mempool_accepted: mock(),
+                included_block: mock_hex(),
+                included_daa: mock(),
+                registry_state: "Probation".into(),
+                transaction_id: mock_hex(),
+                drop_reason: "CLASS_NOT_ATTRIBUTABLE: the registered canonical job (14, 2) is not the formula's (1, 2)".into(),
+            }
+        }
+    }
+    test!(RpcPalwModelRegistration);
+
+    impl Mock for GetPalwModelPreflightRequest {
+        fn mock() -> Self {
+            GetPalwModelPreflightRequest { object_hex: "00".into(), class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelPreflightRequest);
+
+    impl Mock for GetPalwModelPreflightResponse {
+        fn mock() -> Self {
+            GetPalwModelPreflightResponse {
+                available: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                artifact_root: mock_hex(),
+                n_ctx: mock(),
+                layer_count: mock(),
+                admissible: mock(),
+                processor_verdict: "ADMISSION_OK".into(),
+                reject_code: String::new(),
+                checks: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelPreflightResponse);
+
+    impl Mock for SubmitPalwModelRegistrationRequest {
+        fn mock() -> Self {
+            SubmitPalwModelRegistrationRequest { object_hex: "00".into(), transaction_id: mock_hex() }
+        }
+    }
+    test!(SubmitPalwModelRegistrationRequest);
+
+    impl Mock for SubmitPalwModelRegistrationResponse {
+        fn mock() -> Self {
+            SubmitPalwModelRegistrationResponse { available: mock(), tip_daa: mock(), registration: mock(), checks: mock() }
+        }
+    }
+    test!(SubmitPalwModelRegistrationResponse);
+
+    impl Mock for GetPalwModelRegistrationStatusRequest {
+        fn mock() -> Self {
+            GetPalwModelRegistrationStatusRequest { class_id: mock_hex(), object_id: mock_hex(), transaction_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelRegistrationStatusRequest);
+
+    impl Mock for GetPalwModelRegistrationStatusResponse {
+        fn mock() -> Self {
+            GetPalwModelRegistrationStatusResponse { available: mock(), tip_daa: mock(), found: mock(), registration: mock() }
+        }
+    }
+    test!(GetPalwModelRegistrationStatusResponse);
+
+    impl Mock for GetPalwModelRequest {
+        fn mock() -> Self {
+            GetPalwModelRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelRequest);
+
+    impl Mock for GetPalwModelResponse {
+        fn mock() -> Self {
+            GetPalwModelResponse {
+                available: mock(),
+                tip_daa: mock(),
+                found: mock(),
+                class_id: mock_hex(),
+                model_name: "qwen".into(),
+                n_ctx: mock(),
+                artifact_root: mock_hex(),
+                class_status: "Active".into(),
+                registry_state: "Probation".into(),
+                ready_seats: mock(),
+                required_ready_seats: mock(),
+                inflight_claims: mock(),
+                admission_permille: mock(),
+                share_permille: mock(),
+                certified_family: mock_hex(),
+                fence_active: mock(),
+                reason: "probing".into(),
+            }
+        }
+    }
+    test!(GetPalwModelResponse);
+
+    impl Mock for GetPalwModelReadinessRequest {
+        fn mock() -> Self {
+            GetPalwModelReadinessRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelReadinessRequest);
+
+    impl Mock for RpcPalwModelSeatReadiness {
+        fn mock() -> Self {
+            RpcPalwModelSeatReadiness {
+                seat_id: format!("{}:0", mock_hex()),
+                bond_txid: mock_hex(),
+                bond_index: mock(),
+                proved_daa: mock(),
+                proved_span: mock(),
+                expires_daa: mock(),
+                fresh: mock(),
+                ready: mock(),
+                collateral_sompi: mock(),
+                needed_collateral_sompi: mock(),
+                not_ready_reason: String::new(),
+            }
+        }
+    }
+    test!(RpcPalwModelSeatReadiness);
+
+    impl Mock for GetPalwModelReadinessResponse {
+        fn mock() -> Self {
+            GetPalwModelReadinessResponse {
+                available: mock(),
+                tip_daa: mock(),
+                found: mock(),
+                class_id: mock_hex(),
+                registry_state: "Prefetching".into(),
+                ready_seats: mock(),
+                required_ready_seats: mock(),
+                seats: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelReadinessResponse);
+
+    impl Mock for GetPalwModelAdmissionRequest {
+        fn mock() -> Self {
+            GetPalwModelAdmissionRequest { class_id: mock_hex(), object_hex: "00".into() }
+        }
+    }
+    test!(GetPalwModelAdmissionRequest);
+
+    impl Mock for GetPalwModelAdmissionResponse {
+        fn mock() -> Self {
+            GetPalwModelAdmissionResponse {
+                available: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                admissible: mock(),
+                processor_verdict: "ADMISSION_OK".into(),
+                reject_code: String::new(),
+                checks: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelAdmissionResponse);
+
+    impl Mock for GetPalwModelCertificationRequest {
+        fn mock() -> Self {
+            GetPalwModelCertificationRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelCertificationRequest);
+
+    impl Mock for RpcPalwModelCertifiedFamily {
+        fn mock() -> Self {
+            RpcPalwModelCertifiedFamily { lane: "attempt".into(), digest: mock_hex(), covers: mock() }
+        }
+    }
+    test!(RpcPalwModelCertifiedFamily);
+
+    impl Mock for GetPalwModelCertificationResponse {
+        fn mock() -> Self {
+            GetPalwModelCertificationResponse {
+                available: mock(),
+                tip_daa: mock(),
+                found: mock(),
+                class_id: mock_hex(),
+                end_to_end_certified: mock(),
+                families: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelCertificationResponse);
+
+    // ADR-0152-adjacent (Activation Pool): op 200 round-trips.
+    impl Mock for GetPalwActivationPoolRequest {
+        fn mock() -> Self {
+            GetPalwActivationPoolRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwActivationPoolRequest);
+
+    impl Mock for GetPalwActivationPoolResponse {
+        fn mock() -> Self {
+            GetPalwActivationPoolResponse {
+                available: mock(),
+                pool_armed: mock(),
+                tip_daa: mock(),
+                class_found: mock(),
+                class_id: mock_hex(),
+                class_status: "active".into(),
+                lifecycle: "Candidate".into(),
+                has_pool: mock(),
+                prep_sompi: mock(),
+                bonus_sompi: mock(),
+                funded_sompi: mock(),
+                paid_sompi: mock(),
+                withheld_sompi: mock(),
+                opened_daa: mock(),
+                prep_paid: vec![mock_hex()],
+                bonus_paid: vec![mock_hex(), mock_hex()],
+                probe_credited: Vec::new(),
+                registrant_operator: mock_hex(),
+                prep_reward_now_sompi: mock(),
+                prep_cap_now_sompi: mock(),
+                next_audit_span: mock(),
+                span_daa: mock(),
+                sink_script: mock_hex(),
+                min_topup_sompi: mock(),
+                prep_base_sompi: mock(),
+                prep_share_permille: mock(),
+                bonus_share_permille: mock(),
+                ramp_daa: mock(),
+                prep_payee_cap: mock(),
+                bonus_payee_cap: mock(),
+                total_funded_sompi: mock(),
+                total_paid_sompi: mock(),
+                total_withheld_sompi: mock(),
+                total_available_sompi: mock(),
+                scheduled_sompi: mock(),
+                class_is_floor: mock(),
+                recommended_pool_sompi: mock(),
+                bonus_cap_sompi: mock(),
+            }
+        }
+    }
+    test!(GetPalwActivationPoolResponse);
+
+    // ADR-0160 §7.5: op 201 and its parts round-trip.
+    impl Mock for RpcPalwCapacityStep {
+        fn mock() -> Self {
+            RpcPalwCapacityStep { from_daa: mock(), rho: mock(), q_credit_permille: mock() }
+        }
+    }
+    test!(RpcPalwCapacityStep);
+
+    impl Mock for GetPalwCapacityShadowRequest {
+        fn mock() -> Self {
+            GetPalwCapacityShadowRequest {
+                steps: mock(),
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                adversary_bonds: vec![format!("{}:{}", mock_hex(), mock::<u32>())],
+                include_claims: mock(),
+                limit: mock(),
+            }
+        }
+    }
+    test!(GetPalwCapacityShadowRequest);
+
+    impl Mock for RpcPalwCapacityStepRow {
+        fn mock() -> Self {
+            RpcPalwCapacityStepRow {
+                step: mock(),
+                m_floor_sompi: mock::<u64>().to_string(),
+                q_needed_permille: mock(),
+                ramp_binds: mock(),
+                seat_credit: mock(),
+                claims_commitment_sompi: mock::<u64>().to_string(),
+                committed_sompi: mock::<u64>().to_string(),
+                seat_duty_sompi: mock::<u64>().to_string(),
+                seat_lock_sompi: mock::<u64>().to_string(),
+                seat_capacity_milli_per_daa: mock(),
+                n_instant_13k: mock(),
+                q_alarm: mock(),
+                seat_credit_if_d5: mock(),
+                seat_capacity_if_d5_milli_per_daa: mock(),
+                m_floor_v1_superseded_sompi: mock::<u64>().to_string(),
+                n_instant_13k_v1_superseded: mock(),
+                q_needed_route_permille: mock(),
+                q_required_permille: mock(),
+                q_alarm_unmeasured: mock(),
+            }
+        }
+    }
+    test!(RpcPalwCapacityStepRow);
+
+    impl Mock for RpcPalwCapacityClaimRow {
+        fn mock() -> Self {
+            RpcPalwCapacityClaimRow {
+                claim_id: mock_hex(),
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                class_id: mock_hex(),
+                phase: "panel-bound".to_string(),
+                stage: "anchored".to_string(),
+                accepted_daa: mock(),
+                free_prompt: mock(),
+                c7: mock(),
+                raw_weight: mock::<u64>().to_string(),
+                staged_weight: mock::<u64>().to_string(),
+                reserved_today_sompi: mock::<u64>().to_string(),
+                reserved_new_sompi: mock::<u64>().to_string(),
+                commitment_today_sompi: mock::<u64>().to_string(),
+                commitment_new_sompi: vec![mock::<u64>().to_string(), mock::<u64>().to_string()],
+            }
+        }
+    }
+    test!(RpcPalwCapacityClaimRow);
+
+    impl Mock for RpcPalwCapacityBondRow {
+        fn mock() -> Self {
+            RpcPalwCapacityBondRow {
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                collateral_sompi: mock(),
+                seat: mock(),
+                live_claims: mock(),
+                unlicensed_claims: mock(),
+                raw_immature: mock::<u64>().to_string(),
+                w_cap: mock::<u64>().to_string(),
+                x_b: mock::<u64>().to_string(),
+                capped: mock::<u64>().to_string(),
+                r_budget_sompi: mock::<u64>().to_string(),
+                reserved_new_sompi: mock::<u64>().to_string(),
+                committed_today_sompi: mock::<u64>().to_string(),
+                own_claims_today_sompi: mock::<u64>().to_string(),
+                committed_new_sompi: vec![mock::<u64>().to_string()],
+                n_instant_today: mock(),
+                n_instant_new: mock(),
+                n_more_today: mock(),
+                n_more_new: mock(),
+                frozen_would_be: mock(),
+                freeze_final: mock(),
+                freeze_undetermined: mock(),
+                convictions: mock(),
+            }
+        }
+    }
+    test!(RpcPalwCapacityBondRow);
+
+    impl Mock for RpcPalwCapacityAttributionRow {
+        fn mock() -> Self {
+            RpcPalwCapacityAttributionRow {
+                class_id: mock_hex(),
+                claims_live: mock(),
+                claims_final: mock(),
+                claims_voided: mock(),
+                voids_attributed: mock(),
+                voids_by_reason: vec!["CourtFraud=1".to_string()],
+                convictions_by_kind: vec!["5=1".to_string()],
+                da_open_non_seat: mock(),
+                da_open_seat: mock(),
+                da_opened_non_seat_total: mock(),
+                conviction_latency_histogram: vec![mock(), mock(), mock()],
+            }
+        }
+    }
+    test!(RpcPalwCapacityAttributionRow);
+
+    impl Mock for RpcPalwCapacityAdversaryRow {
+        fn mock() -> Self {
+            RpcPalwCapacityAdversaryRow {
+                class_id: mock_hex(),
+                strategy: "garbage".to_string(),
+                c7: mock(),
+                claims: mock(),
+                caught: mock(),
+                caught_late: mock(),
+                caught_unpriced: mock(),
+                unpriced_by_route: vec!["refuted-untagged=2".to_string(), "court-default=1".to_string()],
+                undetected: mock(),
+                censored: mock(),
+                in_flight: mock(),
+                seat_only: mock(),
+                q_measured_permille: mock(),
+            }
+        }
+    }
+    test!(RpcPalwCapacityAdversaryRow);
+
+    impl Mock for GetPalwCapacityShadowResponse {
+        fn mock() -> Self {
+            GetPalwCapacityShadowResponse {
+                available: mock(),
+                now_daa: mock(),
+                tip_daa: mock(),
+                summary: "capacity-shadow: daa=1".to_string(),
+                bounded_immature_today: mock::<u64>().to_string(),
+                bounded_immature_new: mock::<u64>().to_string(),
+                safe_weight: mock::<u64>().to_string(),
+                w_cap_total: mock::<u64>().to_string(),
+                reference_escrow_sompi: mock::<u64>().to_string(),
+                reference_w_floor_sompi: mock::<u64>().to_string(),
+                reference_l_sompi: mock::<u64>().to_string(),
+                reference_conviction_tier_sompi: mock::<u64>().to_string(),
+                reference_seats: mock(),
+                reference_duty_sompi: mock::<u64>().to_string(),
+                reference_lock_sompi: mock::<u64>().to_string(),
+                claims_commitment_today_sompi: mock::<u64>().to_string(),
+                committed_today_sompi: mock::<u64>().to_string(),
+                seats: mock(),
+                seat_usable_capital_sompi: mock::<u64>().to_string(),
+                seat_duty_today_sompi: mock::<u64>().to_string(),
+                seat_lock_today_sompi: mock::<u64>().to_string(),
+                seat_capacity_today_milli_per_daa: mock(),
+                duty_rows: mock(),
+                duty_rows_capped: mock(),
+                licence_queue: mock(),
+                licence_queue_oldest_bound_daa: mock(),
+                licensed_recent: mock(),
+                carriers_per_block: mock(),
+                carriage_blocks_to_drain: mock(),
+                convictions_total: mock(),
+                steps: mock(),
+                bonds: mock(),
+                bonds_total: mock(),
+                claims: mock(),
+                claims_total: mock(),
+                attribution: mock(),
+                adversary: mock(),
+            }
+        }
+    }
+    test!(GetPalwCapacityShadowResponse);
+
+    // RFC-0009 stage D: op 202 and its parts round-trip.
+    impl Mock for GetPalwStateProofRequest {
+        fn mock() -> Self {
+            GetPalwStateProofRequest { block_hash: mock_hex(), collection: "bonds".to_string() }
+        }
+    }
+    test!(GetPalwStateProofRequest);
+
+    impl Mock for RpcPalwProofRow {
+        fn mock() -> Self {
+            RpcPalwProofRow { key: mock(), value: vec![1, 2, 3] }
+        }
+    }
+    test!(RpcPalwProofRow);
+
+    impl Mock for GetPalwStateProofResponse {
+        fn mock() -> Self {
+            GetPalwStateProofResponse {
+                available: mock(),
+                reason: "a reason".to_string(),
+                block_hash: mock_hex(),
+                header: mock(),
+                state_preimage: vec![9; 70],
+                native_audit_record: None,
+                native_coinbase_proof: None,
+                collection: "classes".to_string(),
+                rows: mock(),
+            }
+        }
+    }
+    test!(GetPalwStateProofResponse);
+
+    // RFC-0009 L2: op 203 and its parts round-trip.
+    impl Mock for GetPalwForkChoiceOpeningRequest {
+        fn mock() -> Self {
+            GetPalwForkChoiceOpeningRequest {
+                block_hashes: vec![mock_hex(), mock_hex()],
+                rule_e_window_above_blue: Some(77),
+                registry_bonds: vec!["ab".repeat(68)],
+            }
+        }
+    }
+    test!(GetPalwForkChoiceOpeningRequest);
+
+    impl Mock for RpcPalwForkChoiceEntry {
+        fn mock() -> Self {
+            RpcPalwForkChoiceEntry {
+                block_hash: mock_hex(),
+                available: mock(),
+                reason: "a reason".to_string(),
+                header: mock(),
+                leaf: vec![7; 194],
+                inner_root: mock_hex(),
+                committed_root: mock_hex(),
+                committed_form: mock(),
+                committed_leaf: vec![3; 300],
+                rule_e_window: vec![4; 20],
+                registry_openings: vec![vec![5; 9], vec![6; 2]],
+            }
+        }
+    }
+    test!(RpcPalwForkChoiceEntry);
+
+    impl Mock for GetPalwForkChoiceOpeningResponse {
+        fn mock() -> Self {
+            GetPalwForkChoiceOpeningResponse {
+                available: mock(),
+                reason: "a reason".to_string(),
+                sink: mock_hex(),
+                tips: vec![mock_hex()],
+                entries: mock(),
+                dns_overlay: mock(),
+                dns_stage_active: mock(),
+                dns_confirmed_anchor: mock_hex(),
+                dns_confirmed_anchor_daa: mock(),
+            }
+        }
+    }
+    test!(GetPalwForkChoiceOpeningResponse);
+
+    // RFC-0012 acceptance: op 246 round-trips.
+    impl Mock for GetPalwAcceptanceReadsRequest {
+        fn mock() -> Self {
+            GetPalwAcceptanceReadsRequest { reserve_blocks: vec![mock_hex()], outpoints: vec!["ab:1".to_string()] }
+        }
+    }
+    test!(GetPalwAcceptanceReadsRequest);
+
+    impl Mock for GetPalwAcceptanceReadsResponse {
+        fn mock() -> Self {
+            GetPalwAcceptanceReadsResponse {
+                available: true,
+                sink: mock_hex(),
+                virtual_daa: 9,
+                reserve_balances: vec![RpcPalwReserveBalance { block_hash: mock_hex(), known: true, balance_sompi: 7 }],
+                outpoints: vec![RpcPalwOutpointEntry {
+                    outpoint: "ab:1".into(),
+                    present: true,
+                    amount: 5,
+                    script_version: 0,
+                    script_hex: "ab".into(),
+                    block_daa_score: 3,
+                    is_coinbase: false,
+                }],
+            }
+        }
+    }
+    test!(GetPalwAcceptanceReadsResponse);
+
+    // RFC-0010 (lane C2): op 220 round-trips.
+    // RFC-0008 v2 (lane X8R): op 240 round-trips.
+    impl Mock for GetPalwExecV2StatusRequest {
+        fn mock() -> Self {
+            GetPalwExecV2StatusRequest { root_claim_ids: vec![mock_hex(), mock_hex()], block_hash: mock_hex() }
+        }
+    }
+    test!(GetPalwExecV2StatusRequest);
+
+    impl Mock for GetPalwExecV2StatusResponse {
+        fn mock() -> Self {
+            GetPalwExecV2StatusResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
+        }
+    }
+    test!(GetPalwExecV2StatusResponse);
+
+    impl Mock for GetPalwPanelV3StatusRequest {
+        fn mock() -> Self {
+            GetPalwPanelV3StatusRequest { claim_ids: vec![mock_hex(), mock_hex()], limit: mock() }
+        }
+    }
+    test!(GetPalwPanelV3StatusRequest);
+
+    impl Mock for GetPalwPanelV3StatusResponse {
+        fn mock() -> Self {
+            GetPalwPanelV3StatusResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
+        }
+    }
+    test!(GetPalwPanelV3StatusResponse);
+
+    // Lane LG14-A: ops 204-206 round-trip.
+    impl Mock for GetPalwLegacyDisputeRequest {
+        fn mock() -> Self {
+            GetPalwLegacyDisputeRequest { claim_id: mock_hex() }
+        }
+    }
+    test!(GetPalwLegacyDisputeRequest);
+
+    impl Mock for GetPalwLegacyDisputeResponse {
+        fn mock() -> Self {
+            GetPalwLegacyDisputeResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
+        }
+    }
+    test!(GetPalwLegacyDisputeResponse);
+
+    impl Mock for GetPalwLegacyDisputesRequest {
+        fn mock() -> Self {
+            GetPalwLegacyDisputesRequest { reserver: format!("{}:{}", mock_hex(), mock::<u32>()), limit: mock() }
+        }
+    }
+    test!(GetPalwLegacyDisputesRequest);
+
+    impl Mock for GetPalwLegacyDisputesResponse {
+        fn mock() -> Self {
+            GetPalwLegacyDisputesResponse { available: mock(), claim_ids: vec![mock_hex(), mock_hex()] }
+        }
+    }
+    test!(GetPalwLegacyDisputesResponse);
+
+    impl Mock for GetPalwFraudFilerStatusRequest {
+        fn mock() -> Self {
+            GetPalwFraudFilerStatusRequest { bond: format!("{}:{}", mock_hex(), mock::<u32>()) }
+        }
+    }
+    test!(GetPalwFraudFilerStatusRequest);
+
+    impl Mock for GetPalwFraudFilerStatusResponse {
+        fn mock() -> Self {
+            GetPalwFraudFilerStatusResponse {
+                available: mock(),
+                observation_version: mock(),
+                json: format!("{{\"version\":{}}}", mock::<u32>()),
+            }
+        }
+    }
+    test!(GetPalwFraudFilerStatusResponse);
+
+    // G14 lane D: ops 210 and 211 and their parts round-trip.
+    impl Mock for GetPalwKernelClaimRequest {
+        fn mock() -> Self {
+            GetPalwKernelClaimRequest { claim_id: mock_hex() }
+        }
+    }
+    test!(GetPalwKernelClaimRequest);
+
+    impl Mock for RpcPalwKernelServed {
+        fn mock() -> Self {
+            RpcPalwKernelServed { stage: mock(), position: mock(), bytes: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelServed);
+
+    impl Mock for RpcPalwKernelDemand {
+        fn mock() -> Self {
+            RpcPalwKernelDemand {
+                stage: mock(),
+                position: mock(),
+                demanders: mock(),
+                filed_daa: mock(),
+                deadline_daa: mock(),
+                last_rejection: "fake_opening".to_string(),
+            }
+        }
+    }
+    test!(RpcPalwKernelDemand);
+
+    impl Mock for RpcPalwKernelSeat {
+        fn mock() -> Self {
+            RpcPalwKernelSeat { bond: format!("{}:{}", mock_hex(), mock::<u32>()), kernel_bond: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelSeat);
+
+    impl Mock for GetPalwKernelClaimResponse {
+        fn mock() -> Self {
+            GetPalwKernelClaimResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                claim_id: mock_hex(),
+                kind: "program".to_string(),
+                state: "Final { final_daa: 7 }".to_string(),
+                final_daa: mock(),
+                convicted: mock(),
+                rewarded: mock(),
+                reserved_sompi: mock(),
+                committed_daa: mock(),
+                liability_until: mock(),
+                producer_bond: mock_hex(),
+                job_id: mock_hex(),
+                class_id: mock_hex(),
+                public_record: mock_hex(),
+                record_header: mock_hex(),
+                served: mock(),
+                demands: mock(),
+                seats: mock(),
+                quorum: mock(),
+                assignment_deadline_daa: mock(),
+                receipts_counted: mock(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+                mode: "OptimisticPublicVerification".to_string(),
+                opv: mock(),
+                opv_admitted_daa: mock(),
+                opv_verifier_start_cutoff_daa: mock(),
+                opv_final_floor_daa: mock(),
+                opv_hard_deadline_daa: mock(),
+                opv_reservation_sompi: mock(),
+                opv_max_gain_sompi: mock(),
+                final_statement: "Final under optimistic public verification".to_string(),
+                settlement: "final-revocable".to_string(),
+                settled_from_daa: mock(),
+            }
+        }
+    }
+    test!(GetPalwKernelClaimResponse);
+
+    impl Mock for GetPalwKernelRowsRequest {
+        fn mock() -> Self {
+            GetPalwKernelRowsRequest { has_cursor: mock(), after_table: mock(), after_key: mock_hex(), max_bytes: mock() }
+        }
+    }
+    test!(GetPalwKernelRowsRequest);
+
+    impl Mock for RpcPalwKernelRow {
+        fn mock() -> Self {
+            RpcPalwKernelRow { table: mock(), key: mock_hex(), row: mock_hex() }
+        }
+    }
+    test!(RpcPalwKernelRow);
+
+    impl Mock for GetPalwKernelRowsResponse {
+        fn mock() -> Self {
+            GetPalwKernelRowsResponse {
+                available: mock(),
+                tip_daa: mock(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+                header: mock_hex(),
+                rows: mock(),
+                more: mock(),
+                next_table: mock(),
+                next_key: mock_hex(),
+                total_rows: mock(),
+            }
+        }
+    }
+    test!(GetPalwKernelRowsResponse);
+
+    impl Mock for GetPalwKernelFinalsRequest {
+        fn mock() -> Self {
+            GetPalwKernelFinalsRequest { limit: mock() }
+        }
+    }
+    test!(GetPalwKernelFinalsRequest);
+
+    impl Mock for RpcPalwKernelFinal {
+        fn mock() -> Self {
+            RpcPalwKernelFinal {
+                claim_id: mock_hex(),
+                mode: "OptimisticPublicVerification".to_string(),
+                final_path: "PanelIndependent".to_string(),
+                source_profile_id: mock_hex(),
+                canonical_work_id: mock_hex(),
+                execution_commitment: mock_hex(),
+                accepted_daa: mock(),
+                final_daa: mock(),
+                da_satisfied: mock(),
+                standing: "Standing".to_string(),
+                work_final_event: mock_hex(),
+                statement: "Final".to_string(),
+            }
+        }
+    }
+    test!(RpcPalwKernelFinal);
+
+    impl Mock for GetPalwKernelFinalsResponse {
+        fn mock() -> Self {
+            GetPalwKernelFinalsResponse { available: mock(), tip_daa: mock(), finals: mock(), total: mock(), ledger_root: mock_hex() }
+        }
+    }
+    test!(GetPalwKernelFinalsResponse);
+
+    impl Mock for GetPalwOnboardingRequest {
+        fn mock() -> Self {
+            GetPalwOnboardingRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwOnboardingRequest);
+
+    impl Mock for RpcPalwOnboardingBinding {
+        fn mock() -> Self {
+            RpcPalwOnboardingBinding {
+                kernel_param_root: mock_hex(),
+                state: "Matured".to_string(),
+                binder: format!("{}:{}", mock_hex(), mock::<u32>()),
+                bound_daa: mock(),
+                matures_daa: mock(),
+                final_daa: mock(),
+                reserved_sompi: mock(),
+            }
+        }
+    }
+    test!(RpcPalwOnboardingBinding);
+
+    impl Mock for GetPalwOnboardingResponse {
+        fn mock() -> Self {
+            GetPalwOnboardingResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                status: "Registered".to_string(),
+                artifact_root: mock_hex(),
+                registrant: format!("{}:{}", mock_hex(), mock::<u32>()),
+                artifact_bindings: mock(),
+                kernel_bound: mock(),
+                kernel_class: mock_hex(),
+                kernel_plan_root: mock_hex(),
+                challenge_policy_id: mock_hex(),
+                conformance_committed: mock(),
+                conformance_statement_root: mock_hex(),
+                conformance_daa: mock(),
+                gate: "Held".to_string(),
+                gate_code: "REGISTERED_DORMANT".to_string(),
+                gate_reason: "no conformance commitment".to_string(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwOnboardingResponse);
+
+    impl Mock for GetPalwConformanceEvidenceRequest {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwConformanceEvidenceRequest);
+
+    impl Mock for GetPalwConformanceEvidenceResponse {
+        fn mock() -> Self {
+            GetPalwConformanceEvidenceResponse {
+                available: mock(),
+                found: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                lifecycle_state: "CHALLENGE_PENDING".to_string(),
+                last_failure: "BEACON_UNAVAILABLE".to_string(),
+                attempt_end: "EVIDENCE_WITHHELD".to_string(),
+                attempts: mock(),
+                attempt_limit: mock(),
+                challenge_policy_id: mock_hex(),
+                challenge_policy: mock_hex(),
+                statement_root: mock_hex(),
+                committed_daa: mock(),
+                challenge_epoch: mock(),
+                beacon_state: "LOCKED".to_string(),
+                beacon_have: mock(),
+                beacon_need: mock(),
+                lock_position: mock(),
+                beacon_output: mock_hex(),
+                evidence_posted: mock(),
+                evidence_id: mock_hex(),
+                evidence_daa: mock(),
+                window_end_daa: mock(),
+                gate: "Held".to_string(),
+                gate_code: "CHALLENGE_PENDING".to_string(),
+                gate_reason: "the window is open".to_string(),
+                attempt_row: mock_hex(),
+                evidence_row: mock_hex(),
+                program: mock_hex(),
+                ledger_root: mock_hex(),
+                aux_root: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwConformanceEvidenceResponse);
+
+    // ADR-0152 P2-10: op 199 and its parts round-trip.
+    impl Mock for GetPalwVestingRequest {
+        fn mock() -> Self {
+            GetPalwVestingRequest {
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                payout_address: String::new(),
+                claim_id: mock_hex(),
+                limit: mock(),
+                after: format!("{}:{}", mock::<u64>(), mock_hex()),
+            }
+        }
+    }
+    test!(GetPalwVestingRequest);
+
+    impl Mock for RpcPalwVestingLeg {
+        fn mock() -> Self {
+            RpcPalwVestingLeg {
+                kind: "seat".into(),
+                payee_bond: format!("{}:0", mock_hex()),
+                payload: mock_hex(),
+                sompi: mock(),
+                queue_key: mock_hex(),
+            }
+        }
+    }
+    test!(RpcPalwVestingLeg);
+
+    impl Mock for RpcPalwVestingRow {
+        fn mock() -> Self {
+            RpcPalwVestingRow {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                producer_bond: format!("{}:1", mock_hex()),
+                licence_door: "coverage".into(),
+                basis_k: mock(),
+                escrow_sompi: mock(),
+                buyback_bound_sompi: mock(),
+                total_sompi: mock(),
+                reserve_sompi: mock(),
+                final_daa: mock(),
+                expiry_daa: mock(),
+                settled_at_final: mock(),
+                matured_at: mock(),
+                stage: "latched".into(),
+                daa_clock_met: mock(),
+                licences_since_final: mock(),
+                licences_needed: mock(),
+                second_clock_bound_daa: mock(),
+                da_session_open: mock(),
+                mature_now: mock(),
+                lock_live: mock(),
+                moves_ahead: mock(),
+                keys_ahead: mock(),
+                in_next_block: mock(),
+                eta_daa: mock(),
+                eta_estimated: mock(),
+                legs: mock(),
+                legs_sompi: mock(),
+            }
+        }
+    }
+    test!(RpcPalwVestingRow);
+
+    impl Mock for RpcPalwReporterReward {
+        fn mock() -> Self {
+            RpcPalwReporterReward {
+                offence_key: mock_hex(),
+                stage: "pending".into(),
+                reporter_bond: format!("{}:2", mock_hex()),
+                payload: mock_hex(),
+                sompi: mock(),
+                reveal_until: mock(),
+                in_next_block: mock(),
+            }
+        }
+    }
+    test!(RpcPalwReporterReward);
+
+    impl Mock for RpcPalwVestingMove {
+        fn mock() -> Self {
+            RpcPalwVestingMove { source: "row".into(), id: mock_hex(), legs: mock() }
+        }
+    }
+    test!(RpcPalwVestingMove);
+
+    impl Mock for RpcPalwVestingDoorCount {
+        fn mock() -> Self {
+            RpcPalwVestingDoorCount { door: "quorum".into(), rows: mock(), latched_rows: mock(), sompi: mock::<u64>().to_string() }
+        }
+    }
+    test!(RpcPalwVestingDoorCount);
+
+    impl Mock for GetPalwVestingResponse {
+        fn mock() -> Self {
+            GetPalwVestingResponse {
+                available: mock(),
+                rcore_plus_active: mock(),
+                tip_daa: mock(),
+                next_daa: mock(),
+                halted: mock(),
+                second_clock_depth: mock(),
+                second_clock_escaped_depth: mock(),
+                settled_anchors: mock(),
+                measured_ms_per_daa: mock(),
+                created_sompi: mock::<u64>().to_string(),
+                moved_sompi: mock::<u64>().to_string(),
+                burned_sompi: mock::<u64>().to_string(),
+                live_rows: mock(),
+                latched_rows: mock(),
+                live_sompi: mock::<u64>().to_string(),
+                latched_sompi: mock::<u64>().to_string(),
+                latched_behind_head: mock(),
+                reporter_pending_rows: mock(),
+                reporter_awarded_rows: mock(),
+                next_block_moves: mock(),
+                next_block_legs: mock(),
+                next_block_new_keys: mock(),
+                next_block_stopped: "not_latched".into(),
+                next_block_stopped_at: mock_hex(),
+                backlog_keys: mock(),
+                backlog_blocks_est: mock(),
+                licence_histogram: mock(),
+                bond: format!("{}:3", mock_hex()),
+                payout_address: String::new(),
+                claim_id: String::new(),
+                claim_stage: "moved".into(),
+                bond_known: mock(),
+                payee_holds_collateral: mock(),
+                lock_live_rows: mock(),
+                lock_live_last_expiry_daa: mock(),
+                rows: mock(),
+                rows_total: mock(),
+                next_after: format!("{}:{}", mock::<u64>(), mock_hex()),
+                maturing_sompi: mock::<u64>().to_string(),
+                query_latched_sompi: mock::<u64>().to_string(),
+                reporter_rewards: mock(),
+            }
+        }
+    }
+    test!(GetPalwVestingResponse);
+
+    impl Mock for GetPalwRewardVestingRequest {
+        fn mock() -> Self {
+            Self {
+                bond: mock_hex(),
+                payout_address: mock_hex(),
+                claim_id: mock_hex(),
+                limit: mock(),
+                after: mock_hex(),
+                exec_after: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwRewardVestingRequest);
+
+    impl Mock for RpcPalwExecRewardLeg {
+        fn mock() -> Self {
+            Self {
+                claim_id: mock_hex(),
+                bond: mock_hex(),
+                fund: "kernel_fee".into(),
+                payload: mock_hex(),
+                sompi: "18446744073709551615".into(),
+                final_daa: mock(),
+                earliest_daa: mock(),
+                native_pending: mock(),
+                native_clock_live: mock(),
+                native_expiry_daa: mock(),
+                native_second_clock_bound_daa: mock(),
+                lock_live: mock(),
+                ready: mock(),
+                in_next_block: mock(),
+            }
+        }
+    }
+    test!(RpcPalwExecRewardLeg);
+
+    impl Mock for GetPalwRewardVestingResponse {
+        fn mock() -> Self {
+            Self {
+                available: mock(),
+                native: mock(),
+                state_root: mock_hex(),
+                outstanding_sompi: "340282366920938463463374607431768211455".into(),
+                exec_slice_sompi: "18446744073709551616".into(),
+                exec_kernel_fee_sompi: mock::<u64>().to_string(),
+                query_outstanding_sompi: "18446744073709551617".into(),
+                query_exec_pending_sompi: mock::<u64>().to_string(),
+                query_exec_ready_sompi: mock::<u64>().to_string(),
+                reporter_pending_sompi_of_query: "18446744073709551618".into(),
+                reporter_awarded_sompi_of_query: mock::<u64>().to_string(),
+                locked_sources: mock(),
+                last_lock_daa: mock(),
+                exec_rows: mock(),
+                exec_rows_total: mock(),
+                exec_next_after: mock_hex(),
+            }
+        }
+    }
+    test!(GetPalwRewardVestingResponse);
+
+    impl Mock for GetPalwMonetaryMaterialRequest {
+        fn mock() -> Self {
+            Self { block_hash: mock_hex(), row: mock(), offset: mock(), limit_bytes: mock() }
+        }
+    }
+    test!(GetPalwMonetaryMaterialRequest);
+
+    impl Mock for RpcPalwMonetaryAuxFragment {
+        fn mock() -> Self {
+            Self { row: mock(), table: 120, key: vec![7; 64], row_bytes: mock(), offset: mock(), bytes: vec![1, 2, 3] }
+        }
+    }
+    test!(RpcPalwMonetaryAuxFragment);
+
+    impl Mock for GetPalwMonetaryMaterialResponse {
+        fn mock() -> Self {
+            Self {
+                available: mock(),
+                reason: mock_hex(),
+                header: mock(),
+                parent_header: mock(),
+                state_preimage: vec![9; 17],
+                fork_choice_opening: Vec::new(),
+                kernel_route_offset: mock(),
+                aux_root: mock_hex(),
+                total_rows: mock(),
+                start_row: mock(),
+                start_offset: mock(),
+                next_row: mock(),
+                next_offset: mock(),
+                fragments: mock(),
+            }
+        }
+    }
+    test!(GetPalwMonetaryMaterialResponse);
+
+    impl Mock for GetPalwStateCarriageRequest {
+        fn mock() -> Self {
+            Self { block_hash: mock_hex(), offset: mock(), limit_bytes: mock() }
+        }
+    }
+    test!(GetPalwStateCarriageRequest);
+
+    impl Mock for GetPalwStateCarriageResponse {
+        fn mock() -> Self {
+            Self {
+                available: mock(),
+                reason: mock_hex(),
+                header: mock(),
+                parent_header: mock(),
+                fork_choice_opening: vec![3; 5],
+                state_root: mock_hex(),
+                total_bytes: mock(),
+                offset: mock(),
+                bytes: vec![1, 2, 3, 4],
+            }
+        }
+    }
+    test!(GetPalwStateCarriageResponse);
+
+    impl Mock for RpcPalwModelLifecycle {
+        fn mock() -> Self {
+            RpcPalwModelLifecycle {
+                class_id: mock_hex(),
+                artifact_root: mock_hex(),
+                is_base_class: mock(),
+                has_row: mock(),
+                state: "Active".to_string(),
+                since_span: mock(),
+                verification_ccu: "21070759296".to_string(),
+                economic_ccu_per_claim: "18055200736".to_string(),
+                artifact_bytes: mock(),
+                ops_supported: mock(),
+                verification_window_spans: mock(),
+                artifact_prefetch_spans: mock(),
+                max_inflight_claims: mock(),
+                required_ready_seats: mock(),
+                registration_bond_sompi: mock(),
+                recommended_pool_sompi: mock(),
+                eligibility_stage: "Probation".to_string(),
+                eligibility_next_renewal_daa: mock(),
+                eligibility_subsidy: mock(),
+                eligibility_block_right: mock(),
+                eligibility_final_weight: mock(),
+                eligibility_exams_passed: mock(),
+                eligibility_lineage_attempts: mock(),
+                model_tier: "registered".to_string(),
+                model_tier_permille: mock(),
+                admission_claims_per_span_milli: mock(),
+                probes_passed: mock(),
+                probes_failed: mock(),
+                ready_seats: mock(),
+                inflight_claims: mock(),
+                utilization_permille: mock(),
+                admission_milli: mock(),
+                cap_utilization_permille: mock(),
+                priced_share_permille: mock(),
+                work_ratio_permille: mock(),
+                expected_forwards_q32: "2400000000000".to_string(),
+                work_ticket_target: "2400000000000".to_string(),
+                class_target: "2400000000000".to_string(),
+                panel_room: mock(),
+                final_work_share_10_permille: mock(),
+                final_work_share_100_permille: mock(),
+                ready_seats_now: mock(),
+                inflight_now: mock(),
+                share_permille: mock(),
+                no_capable_panel_voids: mock(),
+                reason: "admitting in full".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwModelLifecycle);
+
+    impl Mock for RpcPalwSeatReadiness {
+        fn mock() -> Self {
+            RpcPalwSeatReadiness {
+                bond_txid: mock_hex(),
+                bond_index: mock(),
+                class_id: mock_hex(),
+                proved_daa: mock(),
+                proved_span: mock(),
+                leaf_index: mock(),
+                fresh: mock(),
+                not_ready_reason: "stale".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwSeatReadiness);
+
+    impl Mock for GetPalwModelRegistryResponse {
+        fn mock() -> Self {
+            GetPalwModelRegistryResponse {
+                available: mock(),
+                tip_daa: mock(),
+                scheduled: mock(),
+                fence_daa: mock(),
+                active: mock(),
+                grace_until_daa: mock(),
+                span_daa: mock(),
+                reference_work_per_span: "2400000000000".to_string(),
+                reference_bytes_per_span: mock(),
+                seat_count: mock(),
+                spare_seats: mock(),
+                utilization_permille: mock(),
+                probation_claims: mock(),
+                stable_epochs: mock(),
+                readiness_probe_max_age_spans: mock(),
+                readiness_collateral_multiple: mock(),
+                classes: mock(),
+                readiness: mock(),
+                classes_active: mock(),
+                classes_active_limited: mock(),
+                classes_probation: mock(),
+                classes_prefetching: mock(),
+                classes_registered: mock(),
+                classes_held: mock(),
+                bonds_active: mock(),
+                bonds_with_headroom: mock(),
+                work_target_shadow: mock(),
+                work_target: "2400000000000".to_string(),
+                work_floor: "2400000000000".to_string(),
+                work_network_draws_q32: "2400000000000".to_string(),
+                work_effective: "2400000000000".to_string(),
+                work_epoch_index: mock(),
+                work_closed_model_blocks: mock(),
+                work_closed_expected_blocks: mock(),
+                work_rate_sompi_per_giga: mock(),
+                panel_inflight_replay: "2400000000000".to_string(),
+                panel_horizon_spans: mock(),
+                final_work_epochs: mock(),
+                blocking: mock(),
+                seating: mock(),
+                // RFC-0019 (wire version 4): a scheduled catalog with one SCHEDULED edition, so the round trip covers every field.
+                annual_catalog: RpcPalwAnnualCatalogStatus {
+                    scheduled: true,
+                    fence_daa: 1_000,
+                    active: true,
+                    current_edition: 0,
+                    current_root: "ab".repeat(64),
+                    has_next: true,
+                    next_edition: 1,
+                    next_activation_daa: 5_000,
+                    next_root: "cd".repeat(64),
+                    editions: vec![RpcPalwAnnualCatalogEdition {
+                        edition: 1,
+                        activation_daa: 5_000,
+                        previous_root: "ab".repeat(64),
+                        root: "cd".repeat(64),
+                        models: 2,
+                        state: "SCHEDULED".to_string(),
+                    }],
+                    kernel_version_max: 1,
+                    readiness: "off-chain".to_string(),
+                },
+            }
+        }
+    }
+
+    test!(GetPalwModelRegistryResponse);
+
+    impl Mock for RpcPalwClassBlocking {
+        fn mock() -> Self {
+            RpcPalwClassBlocking {
+                class_id: "ab".repeat(64),
+                stage: "mine".to_string(),
+                code: "READY_SEATS".to_string(),
+                what: "3 of 7 seats hold a fresh possession proof".to_string(),
+                has_count: mock(),
+                have: mock(),
+                need: mock(),
+                next: "run a seat for this class".to_string(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassBlocking);
+
+    impl Mock for RpcPalwClassSeating {
+        fn mock() -> Self {
+            RpcPalwClassSeating {
+                class_id: "cd".repeat(64),
+                ready_operators: mock(),
+                needed_operators: mock(),
+                independent_operators: mock(),
+                needed_independent: mock(),
+                base_operators: mock(),
+                licensable_share_permille: mock(),
+            }
+        }
+    }
+
+    test!(RpcPalwClassSeating);
+
+    struct Misalign;
+
+    impl Mock for Misalign {
+        fn mock() -> Self {
+            Misalign
+        }
+    }
+
+    impl Serializer for Misalign {
+        fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+            store!(u32, &1, writer)?;
+            store!(u32, &2, writer)?;
+            store!(u32, &3, writer)?;
+            Ok(())
+        }
+    }
+
+    impl Deserializer for Misalign {
+        fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+            let version: u32 = load!(u32, reader)?;
+            assert_eq!(version, 1);
+            Ok(Self)
+        }
+    }
+
+    #[test]
+    fn test_misalignment() {
+        test::<Misalign>("Misalign");
+    }
+}
+
+#[cfg(test)]
+mod native_settlement_wire_tests {
+    use crate::model::{GetPalwSettlementResponse, GetPrecommitDutyResponse};
+    use kaspa_consensus_core::palw_native_settlement_v1::{NativeSettlementSnapshotV1, SettlementStopV1};
+    use workflow_serializer::prelude::*;
+
+    #[test]
+    fn rfc0012_legacy_v1_wire_and_json_remain_readable_without_native_fields() {
+        let value = GetPalwSettlementResponse { available: true, sink_daa: 8, daa_score: 3, depth: 2, ..Default::default() };
+        let mut actual = Vec::new();
+        Serializer::serialize(&value, &mut actual).unwrap();
+        let mut original = Vec::new();
+        store!(u16, &1, &mut original).unwrap();
+        store!(bool, &true, &mut original).unwrap();
+        store!(u64, &8, &mut original).unwrap();
+        store!(u64, &3, &mut original).unwrap();
+        store!(bool, &false, &mut original).unwrap();
+        store!(u64, &2, &mut original).unwrap();
+        store!(u64, &0, &mut original).unwrap();
+        store!(bool, &false, &mut original).unwrap();
+        store!(u64, &0, &mut original).unwrap();
+        store!(u64, &0, &mut original).unwrap();
+        assert_eq!(actual, original);
+        let decoded = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &actual[..]).unwrap();
+        assert!(decoded.native_settlement.is_none() && decoded.dns_retired_at.is_none());
+        let json = serde_json::to_value(&value).unwrap();
+        assert!(json.get("nativeSettlement").is_none() && json.get("dnsRetiredAt").is_none());
+        let decoded: GetPalwSettlementResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.sink_daa, 8);
+        let mut duty = Vec::new();
+        Serializer::serialize(&GetPrecommitDutyResponse::default(), &mut duty).unwrap();
+        assert_eq!(&duty[..2], &[1, 0]);
+        assert!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at.is_none());
+    }
+
+    /// A response a pre-RFC-0012 node wrote as JSON (no native keys, plus a key this build has never heard of) is still readable,
+    /// and reads as "no retirement": nothing is inferred from the absent fields.
+    #[test]
+    fn rfc0012_a_json_response_from_an_older_node_is_readable_and_means_no_retirement() {
+        let old = r#"{"available":true,"sinkDaa":9000,"daaScore":8000,"settled":true,"depth":3,"pendingAnchors":0,"depthIsLowerBound":false,
+            "safeFrontierBlueScore":7,"safeFrontierDaa":7990,"someFutureField":{"x":1}}"#;
+        let decoded: GetPalwSettlementResponse = serde_json::from_str(old).unwrap();
+        assert!(decoded.available && decoded.settled && decoded.depth == 3);
+        assert!(decoded.dns_retired_at.is_none() && decoded.native_settlement.is_none());
+        let again = serde_json::to_value(&decoded).unwrap();
+        assert!(again.get("dnsRetiredAt").is_none() && again.get("nativeSettlement").is_none(), "and it re-serialises without them");
+    }
+
+    /// Response v2 is chosen by what is present, per field: either native field alone selects it, neither keeps the v1 bytes, and each
+    /// round-trips with the other absent.
+    #[test]
+    fn rfc0012_response_v2_is_selected_by_either_field_and_never_by_neither() {
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: kaspa_hashes::Hash64::from_u64_word(9),
+            retirement_daa: 5,
+            frontier: None,
+            latest: Some(kaspa_hashes::Hash64::from_u64_word(9)),
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::FinalizedConflict),
+        };
+        let cases = [
+            (GetPalwSettlementResponse::default(), 1u8),
+            (GetPalwSettlementResponse { dns_retired_at: Some(5), ..Default::default() }, 2),
+            (GetPalwSettlementResponse { native_settlement: Some(native.clone()), ..Default::default() }, 2),
+            (GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() }, 2),
+        ];
+        for (value, version) in cases {
+            let mut bytes = Vec::new();
+            Serializer::serialize(&value, &mut bytes).unwrap();
+            assert_eq!(bytes[0], version);
+            let back = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+            assert_eq!((back.dns_retired_at, back.native_settlement), (value.dns_retired_at, value.native_settlement));
+        }
+    }
+
+    /// The stop reasons are a wire vocabulary: a reader keys on these names, so they are pinned, and the conflict alarm keeps its own.
+    #[test]
+    fn rfc0012_stop_reasons_have_stable_json_names() {
+        use SettlementStopV1::*;
+        let names: Vec<(SettlementStopV1, &str)> = vec![
+            (InvalidPolicy, "invalidPolicy"),
+            (MissingHistory, "missingHistory"),
+            (Unexecuted, "unexecuted"),
+            (FrontierNotCovered, "frontierNotCovered"),
+            (OpenLifecycle, "openLifecycle"),
+            (DuplicateWork, "duplicateWork"),
+            (InsufficientDepth, "insufficientDepth"),
+            (InsufficientWork, "insufficientWork"),
+            (ConcentratedWork, "concentratedWork"),
+            (ArithmeticOverflow, "arithmeticOverflow"),
+            (FinalizedConflict, "finalizedConflict"),
+        ];
+        for (stop, name) in names {
+            assert_eq!(serde_json::to_value(stop).unwrap(), serde_json::Value::String(name.into()));
+            assert_eq!(serde_json::from_value::<SettlementStopV1>(serde_json::Value::String(name.into())).unwrap(), stop);
+        }
+    }
+
+    #[test]
+    fn rfc0012_v2_wire_preserves_explicit_absent_heads_and_stop_reason() {
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: kaspa_hashes::Hash64::from_u64_word(7),
+            retirement_daa: 5,
+            frontier: None,
+            latest: Some(kaspa_hashes::Hash64::from_u64_word(7)),
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::MissingHistory),
+        };
+        let value =
+            GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&value, &mut bytes).unwrap();
+        assert_eq!(&bytes[..2], &[2, 0]);
+        let decoded = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();
+        assert_eq!(decoded.native_settlement, Some(native));
+        assert_eq!(decoded.dns_retired_at, Some(5));
+        assert!(!decoded.settled);
+        bytes[0] = 4;
+        assert!(
+            <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(),
+            "a version this build does not know"
+        );
+        bytes[0] = 3;
+        assert!(
+            <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).is_err(),
+            "version 3 without its readiness field is truncated, not a v2"
+        );
+        let mut duty = Vec::new();
+        Serializer::serialize(&GetPrecommitDutyResponse { retired_at: Some(5), ..Default::default() }, &mut duty).unwrap();
+        assert_eq!(<GetPrecommitDutyResponse as Deserializer>::deserialize(&mut &duty[..]).unwrap().retired_at, Some(5));
+    }
+
+    fn readiness_fixture() -> kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1 {
+        use kaspa_consensus_core::palw_native_readiness_v1::*;
+        use kaspa_consensus_core::palw_native_settlement_v1::{PalwSettlementPolicyV1, SkippedEvidenceV1};
+        let h = kaspa_hashes::Hash64::from_u64_word;
+        native_stopped_readiness_v1(
+            h(9),
+            (100, 90),
+            PalwSettlementPolicyV1 {
+                settled_anchor_depth: 2,
+                unique_mature_work: 20,
+                max_operator_permille: 600,
+                max_class_permille: 600,
+            },
+            native_maturity_report_v1(3_000, 120),
+            SafeWaitV1::MissingHistory { gap: HistoryGapV1::DeltaNotRetained, block: Some(h(4)) },
+            FinalizedReadinessV1 {
+                finalized: None,
+                pruning_point: h(1),
+                pruning_blue: Some(0),
+                wait: Some(FinalizedWaitV1::NoSafePrefix),
+                withdrawn_from: Some(kaspa_hashes::Hash64::from_u64_word(7)),
+            },
+            SkippedEvidenceV1 { bond_not_held: 2, ..Default::default() },
+        )
+    }
+
+    /// RFC-0012 D1: the readiness rides wire v3 only when present; every older shape keeps its bytes, and v3 is a strict superset of v2.
+    #[test]
+    fn rfc0012_response_v3_carries_the_readiness_and_older_wire_is_byte_identical_without_it() {
+        let readiness = readiness_fixture();
+        let native = NativeSettlementSnapshotV1 {
+            version: 1,
+            ruleset_id: Default::default(),
+            policy_id: Default::default(),
+            generation: readiness.generation,
+            retirement_daa: 5,
+            frontier: None,
+            latest: None,
+            safe: None,
+            finalized: None,
+            depth: 0,
+            unique_work: "0".into(),
+            stop: Some(SettlementStopV1::MissingHistory),
+        };
+        // Without the readiness: v1 / v2 exactly as before.
+        let v2 = GetPalwSettlementResponse { dns_retired_at: Some(5), native_settlement: Some(native.clone()), ..Default::default() };
+        let mut v2_bytes = Vec::new();
+        Serializer::serialize(&v2, &mut v2_bytes).unwrap();
+        assert_eq!(&v2_bytes[..2], &[2, 0]);
+        // With it: v3, the v2 body unchanged behind the version, then one optional JSON string.
+        let v3 = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..v2.clone() };
+        let mut v3_bytes = Vec::new();
+        Serializer::serialize(&v3, &mut v3_bytes).unwrap();
+        assert_eq!(&v3_bytes[..2], &[3, 0]);
+        assert_eq!(&v3_bytes[2..v2_bytes.len()], &v2_bytes[2..], "the v2 body is byte-identical inside v3");
+        let back = <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &v3_bytes[..]).unwrap();
+        assert_eq!(back.native_readiness, Some(readiness.clone()));
+        assert_eq!((back.native_settlement, back.dns_retired_at), (Some(native), Some(5)));
+        // The readiness alone selects v3 (a node can hold it without the snapshot never, but the encoding must not lose it).
+        let only = GetPalwSettlementResponse { native_readiness: Some(readiness.clone()), ..Default::default() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&only, &mut bytes).unwrap();
+        assert_eq!(bytes[0], 3);
+        assert_eq!(
+            <GetPalwSettlementResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap().native_readiness,
+            Some(readiness.clone())
+        );
+        // JSON: the key is absent when there is no readiness and camelCase when there is.
+        let json = serde_json::to_value(&v2).unwrap();
+        assert!(json.get("nativeReadiness").is_none());
+        let json = serde_json::to_value(&v3).unwrap();
+        assert_eq!(json["nativeReadiness"]["stoppedEarly"]["gap"], "deltaNotRetained");
+        assert_eq!(json["nativeReadiness"]["skipped"]["bondNotHeld"], 2);
+        let again: GetPalwSettlementResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(again.native_readiness, Some(readiness));
+    }
+}

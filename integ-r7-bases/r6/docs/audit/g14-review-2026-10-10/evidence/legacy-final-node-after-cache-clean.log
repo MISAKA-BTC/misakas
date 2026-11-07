@@ -1,0 +1,420 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/core)
+warning: variable does not need to be mutable
+   --> consensus/core/src/palw_tir_close_range_v1.rs:494:21
+    |
+494 |                 let mut put = |this: &mut Self, row: u32, lo: u64, hi: u64| -> Result<(), String> {
+    |                     ----^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/crypto/txscript)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-exec)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/mining/errors)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/pow)
+warning: function `lanes_le_v1` is never used
+   --> misaka-palw-tir-exec/src/node/run.rs:114:15
+    |
+114 | pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
+    |               ^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/notify)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/kaspa-pq-validator-core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/client)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-remote)
+warning: unused imports: `PalwClassAdmissionCarriageV2` and `PalwPwuRuleV2`
+  --> misaka-palw-remote/src/bundle.rs:43:103
+   |
+43 |     PALW_CLASS_REGISTRATION_BURN_SOMPI_V1, PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwClassAdmissionCarriageV2,
+   |                                                                                                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+44 |     PalwConsensusObjectV2, PalwPwuRuleV2, palw_class_registration_message_v2,
+   |                            ^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-base0)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/rpc/core)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-lower)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-tir-sketch)
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/backend.rs:323:13
+    |
+323 |         let ctx_hash = job.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/backend.rs:1256:9
+     |
+1256 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2008:9
+     |
+2008 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2186:9
+     |
+2186 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2425:13
+     |
+2425 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2456:9
+     |
+2456 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:2905:13
+     |
+2905 |         let ctx_hash = ctx.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3107:9
+     |
+3107 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3282:9
+     |
+3282 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:3558:9
+     |
+3558 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4310:9
+     |
+4310 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4353:9
+     |
+4353 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4473:17
+     |
+4473 |             let ctx_hash = binding.job_context.context_hash();
+     |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4561:9
+     |
+4561 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/fp_interval.rs:4640:9
+     |
+4640 |     let ctx_hash = v4.binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:199:13
+    |
+199 |         let ctx_hash = ctx.context_hash();
+    |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/legs.rs:437:9
+    |
+437 |     let ctx_hash = ctx.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/legs.rs:2056:9
+     |
+2056 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-remote` (lib) generated 1 warning (run `cargo fix --lib -p misaka-palw-remote` to apply 1 suggestion)
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1043:9
+     |
+1043 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1351:9
+     |
+1351 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/produce.rs:1734:9
+     |
+1734 |     let ctx_hash = ctx.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2078:14
+     |
+2078 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:2215:14
+     |
+2215 |         let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+     |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4336:13
+     |
+4336 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen25_a16_backend.rs:4386:9
+     |
+4386 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2885:13
+     |
+2885 |         let ctx_hash = job.context_hash();
+     |             ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+    --> misaka-palw-base0/src/qwen36_backend.rs:2935:9
+     |
+2935 |     let ctx_hash = binding.job_context.context_hash();
+     |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: unused variable: `ctx_hash`
+   --> misaka-palw-base0/src/segment_opening.rs:618:9
+    |
+618 |     let ctx_hash = job.context_hash();
+    |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ctx_hash`
+
+warning: `misaka-palw-tir-exec` (lib) generated 1 warning
+warning: value assigned to `out_node` is never read
+   --> misaka-palw-tir-lower/src/lower/cross.rs:194:24
+    |
+194 |     let mut out_node = None;
+    |                        ^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-palw-base0` (lib) generated 28 warnings (run `cargo fix --lib -p misaka-palw-base0` to apply 28 suggestions)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/misaka-palw-sdk)
+warning: unused doc comment
+   --> misaka-palw-sdk/src/tir_layout.rs:147:1
+    |
+147 | / /// **The search declare-layout runs**, over the gate `admit`: the logits tiles in order (the caller
+148 | | /// has dropped any whose close is estimated past the carriage); for each, the history tile from
+149 | | /// `h_chunk`, halved while the refusal is one a narrower history tile fixes; at each, the court's
+150 | | /// checkpoint interval (`interval`), halved while the refusal is one a narrower interval fixes — for a
+...   |
+153 | | /// if none is, the first refusal (the widest logits tile and history tile, at the court's interval),
+154 | | /// the one an operator acts on.
+    | |_-------------------------------^
+    |   |
+    |   rustdoc does not generate documentation for macro invocations
+    |
+    = help: to document an item produced by a macro, the macro must produce the documentation as part of its expansion
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable `routed_ok` is assigned to, but never used
+   --> misaka-palw-sdk/src/preflight/model.rs:284:9
+    |
+284 |     let mut routed_ok = false;
+    |         ^^^^^^^^^^^^^
+    |
+    = note: consider using `_routed_ok` instead
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:345:13
+    |
+345 |             routed_ok = false;
+    |             ^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `routed_ok` is never read
+   --> misaka-palw-sdk/src/preflight/model.rs:293:13
+    |
+293 |             routed_ok = true;
+    |             ^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: `misaka-palw-tir-lower` (lib) generated 1 warning
+warning: `misaka-palw-sdk` (lib) generated 4 warnings
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+   Compiling kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/g14-review-fixes/MISAKA-testnet/consensus)
+warning: unused imports: `PALW_FP_V3_VERSION` and `PalwReceiptSpendUnsignedV3`
+     --> consensus/src/pipeline/virtual_processor/tests.rs:14510:52
+      |
+14510 |     use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, fp_quantum_ticket_v3};
+      |                                                    ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+      |
+      = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `PalwVertexEquivocationV1`
+    --> consensus/src/pipeline/virtual_processor/tests/t12_capacity_verify.rs:1931:90
+     |
+1931 |     use kaspa_consensus_core::palw_vertex_v1::{PalwClaimRefV1, PalwVerificationVertexV1, PalwVertexEquivocationV1, PalwVertexLeafV1};
+     |                                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:1349:9
+     |
+1349 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:1807:9
+     |
+1807 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:2148:9
+     |
+2148 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+    --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:2441:9
+     |
+2441 |     let mut zn = w.net.on_chain(z);
+     |         ----^^
+     |         |
+     |         help: remove this `mut`
+
+warning: value assigned to `total` is never read
+   --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical.rs:347:24
+    |
+347 |         let (mut seen, mut total, mut pages) = (0u64, None, 0u32);
+    |                        ^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: methods `len` and `clear` are never used
+  --> consensus/src/pipeline/virtual_processor/native_settlement.rs:75:19
+   |
+73 | impl NativeRowCache {
+   | ------------------- methods in this implementation
+74 |     #[cfg(test)]
+75 |     pub(super) fn len(&self) -> usize {
+   |                   ^^^
+...
+79 |     pub(super) fn clear(&mut self) {
+   |                   ^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `sealed` is never read
+  --> consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/opv_bootstrap.rs:82:5
+   |
+73 | struct Onb {
+   |        --- field in this struct
+...
+82 |     sealed: bool,
+   |     ^^^^^^
+
+warning: `kaspa-consensus` (lib test) generated 9 warnings (run `cargo fix --lib -p kaspa-consensus --tests` to apply 6 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 02s
+     Running unittests src/lib.rs (/private/tmp/misaka-g14-review-20261010/34b6c3f5e/target/debug/deps/kaspa_consensus-4774c60947c1131d)
+
+running 8 tests
+[lg14a] card 0's lying attempt won its lottery on try 21: claim 0ffee1c918cfddf7dc507c2e6d9049cbea89a8161701796e6c680d459891765015eded98918229acb796a4a3bb4c4c44c2a7c16c1eac645dacd55ec9273224ed
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's honest attempt won its lottery on try 189: claim 123d5881bf3d6592a4108443139e542c50bb4bb02644db0a917696f4236fd2aa1b4d55bb7348e680c88b04aca287d6a0688a363a781d5d43f0019742aecb4893
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_lie_is_convicted_after_final ... ok
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 115: claim 5019e403bc4f4837d73c4de7d7dc1077186656cdb961ddde6387832d8807aaf83206eb7cea2609ff030f953fd9ce409f39de87646d9872c90ba76c73560f9b53
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_an_honest_claims_challenge_is_dismissed ... ok
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_unarmed_the_reservation_is_dropped_by_name_and_the_bystander_is_outrun ... ok
+[lg14a] card 0's lying attempt won its lottery on try 209: claim 941c0a3d557d26c5c51692440e9bcee42b87c0cec76a654b64320420539343fd5e731ca330742c7cfe5fc1d067c8fc9c4f69a2375933b49db0c84feb2701a20b
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+[lg14a] card 0's lying attempt won its lottery on try 235: claim 5c3787ad6fc5d515c0ee4ccb91cbfaa2e5b83b137cca5c34c9486f8c85072e0dc728803140b33a05096a5d85814b13538831383da9e54a3f41080a1f50608628
+[t12-e2e] the claim's anchor slot: reached after 38 heartbeats (DAA 3 -> 22)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final has been running for over 60 seconds
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_reorg_undoes_and_returns_the_reservation_exactly has been running for over 60 seconds
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_sybil_reservation_and_sessions_pre_empt_nothing has been running for over 60 seconds
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_withheld_unit_defaults has been running for over 60 seconds
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_the_pursuit_survives_a_node_restart has been running for over 60 seconds
+[lg14a] card 0's lying attempt won its lottery on try 275: claim 46d85a48919b8408d2fa4a22026eae175896a71abf7ae26a27514ab826dd93d380d708d17eafd7bd9c2bdd69406c7336215091c2bcc0373fb4050c86daeceeb7
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-10 17:28:19.760+09:00 [WARN ] PALW: block 94b29be4e89af7a73cf3bd59b2064879aafbee29b84e06e555dcbe7963d5ae6bdf9605f44b8dea95ccee17125f33960116341c1e193811e0be0900ca2a8edd41 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+[lg14a] verdict Convicted after 5 demands; lie at leaf Some(2780); claim Voided { voided_daa: 161, reason: CourtFraud }; licensed at 23, now 161
+[lg14a] card 0's lying attempt won its lottery on try 321: claim f0b6982e265ea0aeeec2614c6d4a579087b857d2a989b149e7a4167988ad71ce17e02d52d0bbca282a87930dbf65f07c4e97a228369657d521784e7ae218e54b
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-10 17:28:31.679+09:00 [WARN ] PALW: block 94b29be4e89af7a73cf3bd59b2064879aafbee29b84e06e555dcbe7963d5ae6bdf9605f44b8dea95ccee17125f33960116341c1e193811e0be0900ca2a8edd41 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_non_seat_newcomer_convicts_a_computation_lie_before_final ... ok
+2026-10-10 17:28:34.621+09:00 [WARN ] PALW: block 55cd4e9cb6fa7a008abb069fd9fc8aac477fa392077ade8e51e1db5d15afb7463a52a9d0e609da0aebd99efa51100bc83927bebafcc9cb45bc3c807246132dec voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_the_pursuit_survives_a_node_restart ... ok
+2026-10-10 17:28:41.583+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate b8561aea263c97f5cc49cbb73c68ebf23dba482229ca361cff05dd64b45041b718cd0010ba48db8a79fc816bd766d7bad2700e5ada88151910fc31611e2b1b0c (blue_work 2097454, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.598+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate ca905d359e41125c68c3f854f589ad485d0debdf4274a35df05cbe133f5939859e5bbe3d0c40aff1c8c05440ed5deb579986ef9a5970cf841a2f43be9a582c89 (blue_work 2097455, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.613+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate ca0c09e5ef4b1c74c181fac3f51e4f5bb8cd10a057344d53b4202b030f74da0e603cf93a2388cce8eb17a87691162907c6caadf0431c5967cb3aad4c9064b388 (blue_work 2097456, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.631+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate 639b9be500bbdf7a5912c3cb344db1ee38adb02b6d261f2bfcff017cb1d75a5ad12a9440092be2c812f4aaba76afd75f6950ef36e6262692055dccc3e793e39b (blue_work 2097457, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.649+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate 8647ef17883b6917e2b9bb2964003b8ef4ba5e6a2bfd27eaf1f71b1beb76d3da57b7b0665e131d0528570fc1d3cdfa4f949d38f6efab86d201704ebd3410fb84 (blue_work 2097458, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.671+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate ca25c8f13b7d38f35fbe58834ca8a9028e2dc6cedd8dd67f7cdafa3e4f3d3f8b92803a2a5654ec875ad91ede7fd7591ad62317407abaa609eb0f70fc5ca11883 (blue_work 2097459, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.686+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate 3902d1019e2e70c4ef90305a2ab14b76fb3bec671531486231a26597f26d52d468792123db67e57830a0e7ad4835ff064b7fc2586f697b3e745850ac4b2eaa01 (blue_work 2097460, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.707+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate e2a882ec7bac03d110e3b9ed21b74de35b077be0e471e60d4261e325fbcd6bbf318a6818b9b5063e36a2734e27dc7f780d5c1b58a3ef9890f11ae089ca143978 (blue_work 2097461, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+2026-10-10 17:28:41.729+09:00 [WARN ] DNS reorg gate: virtual settled on sink ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2 (blue_work 2097454) after refusing the heavier candidate 74ff04214d5c9ef0d0ce213b067f4f6557df4277c04c378ffc0f3aa135675fd349ff5a273c6d1adedb4fce6f5dafe58e2031c94505ad8139f23cea0ae536a1e9 (blue_work 2097462, reason DominanceViolation; this is the PALW deep-reorg rule (palw_reorg_strict_economic_win), not DNS: an all-economic tie deeper than the shallow window — this sink (frontier 6, safe 6042506112, live 6646756723) vs the candidate (frontier 6, safe 6042506112, live 6646756723). Blue work does not move this rule; this node follows that chain only once it strictly out-weighs this one on these keys (a later Final or licence there), or after a resync). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.
+
+thread 'pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_reorg_undoes_and_returns_the_reservation_exactly' (2153058) panicked at consensus/src/pipeline/virtual_processor/tests/lg14a_legacy_filer_e2e.rs:1107:5:
+assertion `left == right` failed: Z back on A
+  left: ade849937cc32095de2ad475b32ec9479c028bc950269d9a705bdfbb1dab3bdefda0fc0b4a0db2be6bc9ae631568e89de58ecec4818bb41bdffb49d724e7d2f2
+ right: 74ff04214d5c9ef0d0ce213b067f4f6557df4277c04c378ffc0f3aa135675fd349ff5a273c6d1adedb4fce6f5dafe58e2031c94505ad8139f23cea0ae536a1e9
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_reorg_undoes_and_returns_the_reservation_exactly ... FAILED
+[lg14a] card 0's lying attempt won its lottery on try 475: claim 0f21e1920f0c4d027205a897cc80192928acf57e80e9eb199c40aebe9248ef7c3ca9668ed05959c9276d808afbd9938749c417b5c0e7a783b0ab387f9d0f3e48
+[t12-e2e] the claim's anchor slot: reached after 40 heartbeats (DAA 2 -> 22)
+2026-10-10 17:28:52.406+09:00 [WARN ] PALW: block 664ccd2fa658925270154d08067c43f094befd1a4e6b9977d7f8faa61d4b8c92e4254a0aac5009475215a868e7b31299a2b4d94e27f18c890a852a1a4084231d voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_sybil_reservation_and_sessions_pre_empt_nothing ... ok
+2026-10-10 17:29:16.926+09:00 [WARN ] PALW: block 418ddf29b27cf5d59980bc3a9d7fa581f21804a554d4a71a4b66361bde2e5d731a9c96e394926fadf6d9336bc47cbfb4640e458ab0118cadbd25cc212e33233b voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+2026-10-10 17:32:58.208+09:00 [WARN ] PALW: block 04e802718dce10c2590304d1afb9af13fed86bc47f8e3403cff777ff509b1ed5cb134814719671ef10c923640f8a4b5289ef6337c1befbdbd67705a11ae25b83 voided claims holding 320084650080 sompi of escrowed worker reward; that value is destroyed, not paid (ADR-0042 Decision 10)
+test pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_withheld_unit_defaults ... ok
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::lg14a_legacy_filer_e2e::lg14a_a_reorg_undoes_and_returns_the_reservation_exactly
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 775 filtered out; finished in 350.80s
+
+error: test failed, to rerun pass `-p kaspa-consensus --lib`

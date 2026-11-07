@@ -1,0 +1,8 @@
+{
+  "misaka-palw-sdk/examples/check-source-checkpoint-generation.rs": "0b8ffba7c544769b698b69968d077bbe5a35e626654f05a0fbfc2b6c0932a74e",
+  "misaka-palw-tir-lower/tools/hf_checkpoint_generation.py": "4988cdddbd926ab75af3b23fec9637c413fa4b28401237753574982c4fdfce85",
+  "misaka-palw-tir-lower/tools/score_checkpoint_generation.py": "d34796b389a11ea8ff94d9d2631ea9594963cb9c23987c3fe6af6210a327218d",
+  "misaka-palw-tir-lower/tools/test_hf_checkpoint_generation.py": "6892b9a21cc32a3206a7e8d63117064f81fc4876822a850d17e2e9437dfa7460",
+  "docs/design/palw/tir/evidence/qwen25-independent-greedy-task-protocol.json": "c0909ad72a242093424e9974d7b61f3c72ed50196d9c2a68f549234018b4a998",
+  "/tmp/rfc02-greedy-generation-integer-binary": "3e698c107d102700efdd8ac3b92035d03b2dab08498321ce249c5664cf26079a"
+}

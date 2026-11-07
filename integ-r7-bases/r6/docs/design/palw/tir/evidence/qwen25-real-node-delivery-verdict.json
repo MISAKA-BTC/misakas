@@ -1,0 +1,83 @@
+{
+  "schema": "misaka.rfc02.node-delivery-mechanics-verdict.v1",
+  "observed_at_utc": "2026-10-10T14:56:50.951801+00:00",
+  "base_commit": "856cd8f4f90b72f2131c79b189691c0a680f99dc",
+  "checkpoint": "Qwen/Qwen2.5-1.5B-Instruct",
+  "source_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+  "artifact_sha256": "435ed8fcddf68a4fc7dd22792dfe912fdbc3a9b4ab1a6803a711fcb1ff834a64",
+  "model_artifact_reread_by_node_trial": false,
+  "bundle_sha256": "794aaf86c08dc6865d84dbaf60bd4af4140ad03d721eb9528f3e69c1de298e64",
+  "positions": 32,
+  "proof_bytes": 17924,
+  "program_root": "a1360976cdff92e473dff36769bf468140e4fb5a03150ed3be67d7af3ca72d0a5e21f4d1bf70aa4e39678aa5d6d82bdb499556f3b01999be362adb9e7a560f3d",
+  "plan_root": "0e31e5b93b6088bcb5b2b7a2e61faa9aecee0c9d62f9fe51a5d303367a3e762cec4b4a9b79c237bbb7e760b6d2679ecad9182f97088e29d4b3443d999fcd2dd2",
+  "descriptor_digest": "4fa5621e07f75fe493421315de0373eac6982fdd40e33a9481b93c420cb9bd6f027baa3e56b04a88ccb431698d2d67462d751c60c85bee9aef51c08de4a9ae6b",
+  "param_root": "1c07cbbadb1ec7166361a6ffdda43c7c5740183dbb8ecd9659e7c4c5c906cf5495ac5df4fd25617829628b3cec7969e43eeee06bed08c0beeaa51d76b023f729",
+  "inventory_root": "5c02fc51ad06f17066c64dca3b79c4bbf986fdd399b7e583a6384ff8d00580d13aeefb2f42c3cbec3a1499f639b6463e792ac40394ba590bc902e1b65fbeed9a",
+  "claim_root": "06f55704be0edec0b0b5d6e4f83a1b791037259d222aef829d1ba5f907977779ea99209d14f92ebde51e1f8e443be3cae1a0a2e9052fa0c1b41f65b769bf69d9",
+  "actual_node_delivery_mechanics_passed": true,
+  "independent_replay_and_redemption_passed": true,
+  "requested_claim_identity_regressions_passed": true,
+  "leaf_count_pricing_equals_original_oracle": true,
+  "exact_plan_root_unchanged": true,
+  "node_baseline_test_seconds": 408.66,
+  "node_final_test_seconds": 104.02,
+  "timing_scope": "One baseline and final node-harness run, including registration, carriers, Final and replay. Final package incremental cache disabled; uncontrolled concurrent host work. No isolated throughput/RSS or economic benchmark.",
+  "tests": {
+    "kernel_final_passed": 97,
+    "kernel_existing_manual_benchmark_ignored": 1,
+    "sdk_record_and_delivery_passed_before_pricing_optimization": 2,
+    "encoder_final_passed": 1,
+    "actual_node_final_passed": 1,
+    "distinct_passed": 101,
+    "repeat_runs_not_double_counted": true
+  },
+  "sdk_test_scope": "Requested-claim API and SDK test file were unchanged after their passing run. The final kernel suite and node run validate the later pricing-only change and unchanged plan root.",
+  "no_hook_eligibility": "NotOnboarded",
+  "full_rfc02_complete": false,
+  "whole_computation_g14_complete": false,
+  "shipping_activation_or_onboarding_proven": false,
+  "source_task_or_original_full_context_supported": false,
+  "public_DA_acquisition_service_proven": false,
+  "seams": [
+    "activation validation bypass in parent harness",
+    "cfg(test) parameter-root attestation",
+    "cfg(test) OPV eligibility, fixed from beginning on both nodes"
+  ],
+  "initial_failures": [
+    "100000-byte transport chunk: storage mass 614992 > 500000, fixed by 32000-byte transport",
+    "Mock eligibility added after early refusal: replay history diverged, fixed by immutable mock facts from beginning on both nodes",
+    "Terminal SDK/core archive ENOSPC, then final node incremental ENOSPC: completed/confirmed-terminal owned caches removed and node package incremental caching disabled"
+  ],
+  "next_required": [
+    "Conformance-only candidate registration without premature OPV rights",
+    "Actual inventory/kernel binding and conformance eligibility without hooks",
+    "Authenticated public material acquisition and internal weight/state/routing faults",
+    "Independent source/task fidelity, full contexts and shared-feature/RFC03 tasks",
+    "Aggregate resource/economic bounds and A6/A8 coverage"
+  ],
+  "code_sha256": {
+    "misaka-palw-kernel/src/seg_ledger.rs": "d1969f78299bd2d5605367bd9995b9deb9e3f5d31911f42b94f3c3f51d0dea63",
+    "misaka-palw-kernel/src/merkle3.rs": "383b069a41deb8ddde8c19dbc86d639af83dd582c19ae62eeaeafde88b3c5be0",
+    "misaka-palw-kernel/src/element.rs": "9fcce273576f84e771f9ed52102bfb6aa6df615258e22188622a22c3a7b3b4ae",
+    "misaka-palw-sdk/tests/real_native_decode_court.rs": "517e1c0d437daf1da9fa3d3e480765206da546dc6de94554e9988cfd36ff118f",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/real_scale.rs": "b5c0885d3a1e61cb03be213e5f800059ed49af01cc0e20a99036b18288df881b",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/real_scale_actual_native.rs": "91a912e5d2fc3aded947ee6b983bcede0c36ae1ebb17b398e283dfab65f867fd"
+  },
+  "node_binary": {
+    "path": "/Users/wata/.codex/worktrees/rfc10-permissionless-audit/MISAKA-testnet/target/debug/deps/kaspa_consensus-4b73c370557d4b42",
+    "bytes": 144194448,
+    "sha256": "02be40c4182506cd0e5bca234b479bda9a025bff907c47917faf28eb33837ff3"
+  },
+  "evidence_sha256": {
+    "qwen25-real-node-delivery-pricing-tests.log": "5926416d441f1809e40d3a9a7beb68113737211913e7277250d500c9f8792a07",
+    "qwen25-real-node-delivery-protocol.json": "b445376c3e2df8213711482a85ab27c4ad505cd7c0299554861ea9f93857df08",
+    "qwen25-real-node-delivery-kernel-tests.log": "6818ce86e2ab944a833daa301a3be9988cd9e382aa78957435d395c4040012a3",
+    "qwen25-real-node-delivery-baseline-binary.json": "4833fc682969e8b574b5c5f013864bdb02fec88148a17d29fce69cb1d20cd2ed",
+    "qwen25-real-node-delivery-public-record-tests.log": "0fc0553be6a88709768d12cbd440ccdae3535d7c8cf0a9efd081468b6b19cc8c",
+    "qwen25-real-node-delivery-node-baseline.log": "c5026e7ad3ac98fd392d846bd1b2633954ec2a5f81a2589f84d4b24b638c8704",
+    "qwen25-real-node-delivery-node-final.log": "8edfc1520539a81efbc65ed2eef38a0af62b3afb14734901541a520902c5e608",
+    "qwen25-real-node-delivery-encoder-tests.log": "287402b1f7fc6189f18b4c256f8a5b58cbef1a09a96385e2ad16c9ce54036be3",
+    "qwen25-real-node-delivery-replay-fixture-failure.log": "4563af2402af1026d5e39ae2546b5f95ebd63e0b32fe5d78b4fb5f75d5ab6b2f"
+  }
+}

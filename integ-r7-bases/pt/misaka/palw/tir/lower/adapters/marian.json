@@ -1,0 +1,93 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "marian",
+  "kind": "encdec",
+  "extends": [
+    "mixin-bart-lineage"
+  ],
+  "doc": "Marian (OPUS-MT): post-norm, sinusoidal positions computed (the checkpoint's table, if saved, is ignored), sqrt(d_model) embedding scale, one shared embedding for both stacks and the head (a separate decoder vocabulary or unshared embeddings are refused).",
+  "match": {
+    "architectures": [
+      "MarianMTModel"
+    ],
+    "model_types": [
+      "marian"
+    ]
+  },
+  "vars": [
+    {
+      "name": "learned_positions",
+      "value": false
+    },
+    {
+      "name": "pre_norm_stack",
+      "value": false
+    },
+    {
+      "name": "ignored",
+      "value": [
+        "model.encoder.embed_tokens.",
+        "model.decoder.embed_tokens.",
+        "model.encoder.embed_positions.",
+        "model.decoder.embed_positions."
+      ]
+    },
+    {
+      "name": "shared_ok",
+      "value": {
+        "$check": [
+          {
+            "$ne": [
+              {
+                "$cfg": [
+                  "share_encoder_decoder_embeddings",
+                  true
+                ]
+              },
+              false
+            ]
+          },
+          "separate encoder and decoder embeddings are not modelled"
+        ]
+      }
+    },
+    {
+      "name": "decoder_vocab_ok",
+      "value": {
+        "$check": [
+          {
+            "$let": [
+              "v",
+              {
+                "$cfg?": "decoder_vocab_size"
+              },
+              {
+                "$or": [
+                  {
+                    "$eq": [
+                      {
+                        "$var": "v"
+                      },
+                      null
+                    ]
+                  },
+                  {
+                    "$eq": [
+                      {
+                        "$var": "v"
+                      },
+                      {
+                        "$var": "vocab"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "a decoder vocabulary other than the encoder's is not modelled"
+        ]
+      }
+    }
+  ]
+}

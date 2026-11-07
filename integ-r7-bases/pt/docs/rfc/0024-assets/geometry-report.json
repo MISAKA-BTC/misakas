@@ -1,0 +1,25 @@
+{
+  "notice": "Arithmetic only: no node measurement, evidence authentication, security proof, coverage certification, formal ADR-0191 derivation, or arming authorization.",
+  "profiles": {
+    "32k": {
+      "history_positions": 32768,
+      "tile_positions": 16,
+      "tile_count": 2048,
+      "legacy_tile_logical_levels": 3,
+      "additional_position_logical_levels_upper": 1,
+      "single_position_total_logical_levels_upper": 4,
+      "depth2_response_phases_upper": 2,
+      "note_is_not_daa": 1
+    },
+    "2m": {
+      "history_positions": 2097152,
+      "tile_positions": 16,
+      "tile_count": 131072,
+      "legacy_tile_logical_levels": 5,
+      "additional_position_logical_levels_upper": 1,
+      "single_position_total_logical_levels_upper": 6,
+      "depth2_response_phases_upper": 3,
+      "note_is_not_daa": 1
+    }
+  }
+}

@@ -1,0 +1,3198 @@
+//! ADR-0077 Decision 8 / Decision 13, producer side: the free-prompt capture retained SPARSELY —
+//! the step leg's leaf hashes folded as they are produced, the tree kept only above a fixed
+//! level, every tile re-derived by replay from the checkpoint chunks when an opening is asked for.
+//!
+//! # What was measured, and why a dense capture cannot reach the ladder
+//!
+//! A capture today holds every tile of every node of every position, in memory and then on disk:
+//! roughly 50 MB per position for the A16 tier, ~25 GB at 512 positions and simply impossible at
+//! the 8,192 ADR-0077 Decision 13 plans. Even the LEAF HASHES alone are 64 bytes each, so a
+//! `PALW_STEP_LEG_MAX_LEAVES`-sized row is 256 MB of hashes and the `2^32` ladder Decision 12
+//! moves to is 256 GB. Neither the tiles nor the whole leaf vector can be the thing an executor
+//! keeps.
+//!
+//! What it CAN keep is the Merkle tree above a fixed level. [`Base0SparseStepAccumulatorV1`] folds
+//! each leaf hash the moment the capture produces it, retains the nodes at
+//! [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`], and throws every leaf away. At retain level 12 that is
+//! one 64-byte node per 4,096 leaves — 64 MiB at the `2^32` ladder's top, and 64 KiB at today's
+//! `2^22` cap. Everything below the retained level is RE-DERIVED by replay from the checkpoint
+//! chunks when an opening is asked for (`fp_interval`), which is the whole point of the checkpoint
+//! leg existing.
+//!
+//! # U-01, measured — what the fold costs against what the forward costs (ADR-0082 Decision 7)
+//!
+//! One job of ADR-0082 §1.5's own shape on the real dense artifact (`qwen25-1.5b-a16.palwart`,
+//! prefill 26, decode 12, 4,074,040 leaves, 37 forward calls), three phases in one process on one
+//! quiet host: **forward 0.0304 s/position (no capture) · dense capture 1.4684 s/position, 48.3x,
+//! 498 MB retained · the fold 0.1154 s/position, 3.8x, 27.5 MB retained** — the fold is 12.7x
+//! faster than the capture it replaces and retains 18.1x less, and what is left above the forward
+//! is the 0.77 us/leaf of hashing the commitment itself requires (`(4.268 − 1.126) s / 4,074,040`).
+//! §1.5's own numbers (5.66 s/token captured, 94x) were taken by another session on another
+//! occasion; this measures both ends in one process, and 4.53 s/token captured brackets theirs.
+//! Reproduce with
+//! `MISAKA_PALW_U01_ARTIFACT=<artifact> cargo test --release -p misaka-palw-base0 --lib -- u01 --nocapture`.
+//!
+//! # The one property this module owes
+//!
+//! **The accumulator's root is `step_merkle_root_v1`'s root, for every leaf count.** The step tree
+//! is a promote-odd tree — an odd tail at a level is carried up unchanged rather than paired with
+//! itself — and a fold that got that wrong would produce a root the court recomputes differently:
+//! an honest producer, unconvictable and unpayable. So the equality is pinned by a test over many
+//! leaf counts including odd ones and every retained level, and the same test covers the sibling
+//! derivation against `step_merkle_range_siblings_v1`.
+//!
+//! # Why the two primitives are CALLED here, and were once spelled again
+//!
+//! A streaming fold cannot be expressed through the public whole-vector functions —
+//! `step_merkle_root_v1` re-indexes its leaves from zero, so it cannot value a subtree that starts
+//! anywhere else — and `step_merkle_leaf` and the node hash were private to `palw_step_leg`. So
+//! this module restated them against the public DOMAIN constants, with the equality test above as
+//! the thing that kept the two spellings one rule.
+//!
+//! That is a test standing in for a definition. The leg now exports
+//! [`kaspa_consensus_core::palw_step_leg::step_merkle_leaf_v1`] and
+//! [`kaspa_consensus_core::palw_step_leg::step_merkle_node_v1`], this module calls them, and there
+//! is one spelling of each rule in the tree. The equality test stays, because it now checks the
+//! FOLD (promote-odd, block boundaries) rather than a re-derivation of two hashes.
+
+use kaspa_consensus_core::palw_step_leg::{
+    PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_MAX_OPENING_SIBLINGS, PalwStepRangeOpeningV1, step_merkle_leaf_v1, step_merkle_node_v1,
+};
+use kaspa_hashes::Hash64;
+
+/// **The level the tree is kept above** (ADR-0077 Decision 8). One retained node per `2^12`
+/// leaves: 64 KiB of retained nodes at today's `PALW_STEP_MAX_LEAVES = 2^22`, 64 MiB at the `2^32`
+/// Decision 12 moves to. It is also the width of the replay span an opening forces (below), and
+/// 4,096 leaves is a small fraction of ONE position of either model tier (~99 k leaves for the
+/// dense tier, ~298 k for the hybrid) — so re-deriving a boundary subtree never costs more than
+/// the calls the opening was already going to replay.
+pub const PALW_BASE0_SPARSE_RETAIN_LEVEL_V1: u32 = 12;
+
+/// The deepest level this module will retain at. A level above the tree's own height is not an
+/// error (the retained vector is then a single node — the root), but a level past this is a
+/// request to buffer `2^32` leaf hashes, which is the thing the module exists to avoid.
+pub const PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1: u32 = 24;
+
+/// Why a sparse fold, or an opening served from one, is refused.
+///
+/// A plain enum with a hand-written `Display`, which is this crate's idiom (`LegError`,
+/// `ProduceError`, `ArtifactError`) and not an accident: `misaka-palw-base0` carries no
+/// `thiserror` dependency, and adding one for two error types would put a proc-macro crate into
+/// the build of every consumer of the execution family.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Base0SparseCaptureError {
+    LeafCountOutOfRange {
+        got: u64,
+        max: u64,
+    },
+    RetainLevelOutOfRange {
+        got: u32,
+        max: u32,
+    },
+    CaptureIncomplete {
+        pushed: u64,
+        expected: u64,
+    },
+    CaptureOverrun {
+        got: u64,
+        expected: u64,
+    },
+    RangeOutOfLeafSpace {
+        first: u64,
+        count: u64,
+        leaf_count: u64,
+    },
+    SpanDoesNotCoverTheRange {
+        index: u64,
+        span_first: u64,
+        span_end: u64,
+    },
+    SpanNotAligned {
+        span_first: u64,
+        span_end: u64,
+    },
+    OpeningTooDeep {
+        got: usize,
+        max: usize,
+    },
+    /// **The fold was handed a call it was not expecting.** A cursor is only the canonical index
+    /// while the terms arrive in the canonical order; the dense capture could take them in any
+    /// order because it addressed every leaf, and this cannot.
+    CallOutOfOrder {
+        expected: (u32, u32),
+        got: (u32, u32),
+    },
+    /// A captured row whose `(table, layer, index)` is not a slot of the class's graph.
+    RowIsNotThisGraphs {
+        layer: u16,
+        index: usize,
+    },
+    /// Two rows for one global slot — one execution, two answers about the same node.
+    TwoRowsForOneSlot,
+    /// The position's enumeration reaches a slot the caller supplied no row for. The dense
+    /// capture's own refusal is the short capture its `finish` rejects, one call later.
+    MissingRowForSlot {
+        slot: u32,
+    },
+    /// A row for a slot this position does not have — a post row where no token is selected, or a
+    /// slot past the graph. `NotACanonicalCoordinate` on the dense path.
+    RowForASlotThePositionDoesNotHave {
+        slot: u32,
+    },
+    /// A row whose width is not the one its node's `out_len` implies at this position's `kv_len`.
+    /// The dense capture places such a row's overflow tiles at coordinates
+    /// `canonical_step_leaf_index` refuses; the fold has no coordinate to refuse, so it compares
+    /// the width itself.
+    RowIsNotTheGraphsWidth {
+        slot: u32,
+        got: u64,
+        tiles: u64,
+    },
+    /// A deserialized tree whose retained vector is not the width its own `(leaf_count,
+    /// retain_level)` implies. It describes no tree, so it has no root — and saying so is the
+    /// difference between a refusal and an index past the end of a vector.
+    TreeIsNotItsOwnShape {
+        retained: usize,
+        expected: u64,
+    },
+}
+
+impl std::fmt::Display for Base0SparseCaptureError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LeafCountOutOfRange { got, max } => write!(f, "a step tree of {got} leaves is outside the leg's range (max {max})"),
+            Self::RetainLevelOutOfRange { got, max } => write!(f, "retain level {got} is past the sparse cap of {max}"),
+            Self::CaptureIncomplete { pushed, expected } => {
+                write!(f, "the capture folded {pushed} leaves and the step space has {expected}")
+            }
+            Self::CaptureOverrun { got, expected } => {
+                write!(f, "the capture pushed a {got}th leaf into a step space of {expected}")
+            }
+            Self::RangeOutOfLeafSpace { first, count, leaf_count } => {
+                write!(f, "the range [{first}, {first}+{count}) is not inside a step space of {leaf_count} leaves")
+            }
+            Self::SpanDoesNotCoverTheRange { index, span_first, span_end } => {
+                write!(f, "the opening needs leaf {index}, which the replayed span [{span_first}, {span_end}) does not cover")
+            }
+            Self::SpanNotAligned { span_first, span_end } => {
+                write!(f, "the span [{span_first}, {span_end}) is not aligned to the retained level, so its nodes are not the tree's")
+            }
+            Self::OpeningTooDeep { got, max } => {
+                write!(f, "the range opening would carry {got} siblings, past the leg's cap of {max}")
+            }
+            Self::CallOutOfOrder { expected, got } => write!(
+                f,
+                "the fold expected call {} position {} and was handed call {} position {}",
+                expected.0, expected.1, got.0, got.1
+            ),
+            Self::RowIsNotThisGraphs { layer, index } => {
+                write!(f, "a captured row at layer {layer} index {index} is not a slot of this class's graph")
+            }
+            Self::TwoRowsForOneSlot => write!(f, "two captured rows name one global node slot"),
+            Self::MissingRowForSlot { slot } => {
+                write!(f, "this position's enumeration reaches slot {slot} and no row was captured for it")
+            }
+            Self::RowForASlotThePositionDoesNotHave { slot } => {
+                write!(f, "a row was captured for slot {slot}, which this position's enumeration does not reach")
+            }
+            Self::RowIsNotTheGraphsWidth { slot, got, tiles } => {
+                write!(f, "slot {slot} committed {got} values, which is not the {tiles} tile(s) its declared width implies")
+            }
+            Self::TreeIsNotItsOwnShape { retained, expected } => {
+                write!(f, "the retained vector holds {retained} nodes and this tree's shape implies {expected}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Base0SparseCaptureError {}
+
+// **The step tree's leaf and node rules are `palw_step_leg`'s, called rather than restated.**
+//
+// They used to be restated here — a `merkle_leaf_v1`, a `merkle_node_v1` and a `keyed64` that
+// reproduced the leg's private ones — and a restatement of a consensus hash is a second spelling
+// of it: the two agreed only because `the_sparse_accumulator_is_the_step_tree` compared their
+// roots, and a root the court recomputes differently is an honest producer who can neither be
+// convicted nor paid. `step_merkle_leaf_v1` / `step_merkle_node_v1` are the leg's own, exported
+// for exactly this caller.
+
+/// The promote-odd fold of one level's nodes into one — the shape `step_merkle_root_v1` walks,
+/// applied to a block whose left edge is even at every level it folds through (which is what makes
+/// the local pairing the global pairing; see [`Base0SparseStepAccumulatorV1`]).
+/// **One block's digest from its leaves**, folded exactly as the accumulator folds it — the leaf
+/// domain over the GLOBAL leaf index, then the node domain, promote-odd — so a seat that holds
+/// only a range's leaves reproduces the retained node of any block the range covers whole
+/// (ADR-0086 Decision 3). `None` for an empty block.
+pub fn base0_fold_block_digest_v1(first_leaf_index: u64, leaf_hashes: &[Hash64]) -> Option<Hash64> {
+    fold_block_v1(leaf_hashes.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(first_leaf_index + i as u64, h)).collect())
+}
+
+fn fold_block_v1(mut level: Vec<Hash64>) -> Option<Hash64> {
+    if level.is_empty() {
+        return None;
+    }
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(step_merkle_node_v1(&pair[0], &pair[1]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        level = next;
+    }
+    Some(level[0])
+}
+
+/// The same promote-odd fold, over a run of nodes whose left edge is even at every level it folds
+/// through, in `O(log n)` memory: a stack of perfect subtrees (a binary counter), then the stack
+/// folded right to left. The level-by-level fold carries an odd tail up unchanged, which is exactly
+/// what leaves the perfect subtrees of the run's binary decomposition to be joined right to left —
+/// `the_stack_fold_is_the_level_fold` holds the two equal over every width.
+fn fold_nodes_promote_odd_v1(nodes: &[Hash64]) -> Hash64 {
+    let mut stack: Vec<(u32, Hash64)> = Vec::with_capacity(64);
+    for node in nodes {
+        let mut carry = (0u32, *node);
+        while let Some(&(height, left)) = stack.last() {
+            if height != carry.0 {
+                break;
+            }
+            stack.pop();
+            carry = (height + 1, step_merkle_node_v1(&left, &carry.1));
+        }
+        stack.push(carry);
+    }
+    let mut acc = stack.pop().map(|(_, h)| h).unwrap_or_default();
+    while let Some((_, left)) = stack.pop() {
+        acc = step_merkle_node_v1(&left, &acc);
+    }
+    acc
+}
+
+/// **The capture's fold: leaf hashes in, one retained node per `2^retain_level` of them.**
+///
+/// Fed in canonical leaf order, exactly once per leaf, by the family's capture loop. It holds at
+/// most `2^retain_level` leaf hashes at a time (the block being folded) plus the retained vector,
+/// and it refuses a short capture the way [`crate::legs::Base0StepCaptureV1::finish`] does: a
+/// commitment over a partial space says "computed zero" about every leaf nobody filled, and an
+/// executor must never be the one that emits that object.
+///
+/// # Why a block fold rather than a per-level carry
+///
+/// The node at `(level, p)` of the step tree is the promote-odd fold of the leaves it covers,
+/// `[p·2^level, min((p+1)·2^level, n))`, because pairing at every level is local and the block's
+/// left edge `p·2^(level−j)` is even for every `j < level`. The only place promotion can occur
+/// inside a block is the rightmost one, where "the block's local width is odd" and "the global
+/// level width is odd, and this is its last node" are the same statement — again because the left
+/// edge is even. So folding whole blocks is not an approximation of the tree; it IS the tree, and
+/// the test says so over odd counts at every level.
+pub struct Base0SparseStepAccumulatorV1 {
+    leaf_count: u64,
+    retain_level: u32,
+    block: Vec<Hash64>,
+    retained: Vec<Hash64>,
+    pushed: u64,
+}
+
+impl Base0SparseStepAccumulatorV1 {
+    pub fn new(leaf_count: u64, retain_level: u32) -> Result<Self, Base0SparseCaptureError> {
+        Self::new_capped_v1(leaf_count, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// **The same fold against the ladder top the RULESET froze** — W1b's threading
+    /// (`bb4f145b`) applied to the retention side. The leg's own constant is a DEFAULT, and a job
+    /// priced against a deeper ruleset must be foldable or the executor commits a leg it cannot
+    /// retain. A caller with no ruleset in scope passes the default and nothing moves.
+    pub fn new_capped_v1(leaf_count: u64, retain_level: u32, max_step_leaf_count: u64) -> Result<Self, Base0SparseCaptureError> {
+        if leaf_count == 0 || leaf_count > max_step_leaf_count {
+            return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: leaf_count, max: max_step_leaf_count });
+        }
+        if retain_level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
+            return Err(Base0SparseCaptureError::RetainLevelOutOfRange {
+                got: retain_level,
+                max: PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1,
+            });
+        }
+        let block_leaves = 1usize << retain_level;
+        Ok(Self {
+            leaf_count,
+            retain_level,
+            block: Vec::with_capacity(block_leaves.min(leaf_count as usize)),
+            retained: Vec::with_capacity(((leaf_count as usize).div_ceil(block_leaves)).min(1 << 20)),
+            pushed: 0,
+        })
+    }
+
+    /// Fold one leaf hash. Order is the caller's obligation and the leaf index is derived from the
+    /// count so far — a caller that pushed out of order would be committing a different tree, and
+    /// the family's capture loops walk the canonical enumeration by construction.
+    /// Bytes this accumulator holds: its retained vector's capacity and the block in flight.
+    pub fn retained_bytes_v1(&self) -> u64 {
+        (self.retained.capacity() as u64 + self.block.capacity() as u64) * 64
+    }
+
+    pub fn push(&mut self, leaf_hash: Hash64) -> Result<(), Base0SparseCaptureError> {
+        if self.pushed >= self.leaf_count {
+            return Err(Base0SparseCaptureError::CaptureOverrun { got: self.pushed + 1, expected: self.leaf_count });
+        }
+        self.block.push(step_merkle_leaf_v1(self.pushed, &leaf_hash));
+        self.pushed += 1;
+        if self.block.len() == 1usize << self.retain_level {
+            let block = std::mem::take(&mut self.block);
+            self.retained.push(fold_block_v1(block).expect("a full block is not empty"));
+        }
+        Ok(())
+    }
+
+    /// How much of the step space this fold has seen — the sparse twin of
+    /// [`crate::legs::Base0StepCaptureV1::progress`].
+    pub fn progress(&self) -> (u64, u64) {
+        (self.pushed, self.leaf_count)
+    }
+
+    /// Seal the fold. A short capture is refused, for the reason `Base0StepCaptureV1` refuses one.
+    pub fn finish(mut self) -> Result<Base0SparseStepTreeV1, Base0SparseCaptureError> {
+        if self.pushed != self.leaf_count {
+            return Err(Base0SparseCaptureError::CaptureIncomplete { pushed: self.pushed, expected: self.leaf_count });
+        }
+        if !self.block.is_empty() {
+            let block = std::mem::take(&mut self.block);
+            self.retained.push(fold_block_v1(block).expect("a non-empty block"));
+        }
+        Ok(Base0SparseStepTreeV1 { leaf_count: self.leaf_count, retain_level: self.retain_level, retained: self.retained })
+    }
+}
+
+/// **What the executor keeps of the step tree**: the nodes at the retained level, in order.
+///
+/// Everything at or above the retained level is a pure function of this vector; everything below
+/// is re-derived by replay. So an opening is served from (this ‖ a replayed span), and the capture
+/// itself never has to be held whole — R1's retention half.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct Base0SparseStepTreeV1 {
+    leaf_count: u64,
+    retain_level: u32,
+    retained: Vec<Hash64>,
+}
+
+impl Base0SparseStepTreeV1 {
+    /// Nodes the tree retains — one per `2^retain_level` leaves.
+    pub fn retained_len(&self) -> usize {
+        self.retained.len()
+    }
+
+    pub fn leaf_count(&self) -> u64 {
+        self.leaf_count
+    }
+    pub fn retain_level(&self) -> u32 {
+        self.retain_level
+    }
+    /// The retained nodes — what an executor writes to disk instead of the capture.
+    pub fn retained_nodes(&self) -> &[Hash64] {
+        &self.retained
+    }
+
+    /// Build the sparse tree from a DENSE leaf vector. The producer's own path folds as it
+    /// captures ([`Base0SparseStepAccumulatorV1`]); this is for the callers that already hold the
+    /// leaves — the retention file as it is written today, and the tests — and it goes through the
+    /// same accumulator so the two cannot be two rules.
+    pub fn from_leaves_v1(leaves: &[Hash64], retain_level: u32) -> Result<Self, Base0SparseCaptureError> {
+        Self::from_leaves_capped_v1(leaves, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// [`Self::from_leaves_v1`] against the ruleset's ladder — the same threading, for the same
+    /// reason ([`Base0SparseStepAccumulatorV1::new_capped_v1`]).
+    pub fn from_leaves_capped_v1(
+        leaves: &[Hash64],
+        retain_level: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        let mut acc = Base0SparseStepAccumulatorV1::new_capped_v1(leaves.len() as u64, retain_level, max_step_leaf_count)?;
+        for leaf in leaves {
+            acc.push(*leaf)?;
+        }
+        acc.finish()
+    }
+
+    /// **This tree is the shape its own fields describe.**
+    ///
+    /// The three fields are private and the accumulator only ever produces a consistent triple —
+    /// but the type is `BorshDeserialize`, so a retention file (or anything else that hands over
+    /// bytes) can produce one that is not. Every derivation below indexes the retained vector at
+    /// positions `(leaf_count, retain_level)` implies, so an inconsistent triple is not a wrong
+    /// answer, it is an index past the end. Checked once, by name, and every derivation goes
+    /// through it.
+    pub fn validate_v1(&self) -> Result<(), Base0SparseCaptureError> {
+        // **No ladder bound here, deliberately.** The bound on the accumulator's `leaf_count` is
+        // an ALLOCATION guard — the dense forms size a `Hash64` vector from the field, and a
+        // stranger's blob asking for `2^48` leaves is a process abort. Nothing in this type is
+        // sized from `leaf_count`: the retained vector's width is checked against it below, the
+        // level walks are `O(64)`, and every leaf-hash slice an opening reads is the caller's own.
+        // Bounding it here by the leg's DEFAULT ladder would refuse a tree a deeper ruleset made
+        // legal, which is the w1b defect in the retention path.
+        if self.leaf_count == 0 {
+            return Err(Base0SparseCaptureError::LeafCountOutOfRange { got: self.leaf_count, max: PALW_STEP_LEG_MAX_LEAVES });
+        }
+        if self.retain_level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
+            return Err(Base0SparseCaptureError::RetainLevelOutOfRange {
+                got: self.retain_level,
+                max: PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1,
+            });
+        }
+        let expected = level_width(self.leaf_count, self.retain_level);
+        if self.retained.len() as u64 != expected {
+            return Err(Base0SparseCaptureError::TreeIsNotItsOwnShape { retained: self.retained.len(), expected });
+        }
+        Ok(())
+    }
+
+    /// The step leg's Merkle root — byte-identical to `step_merkle_root_v1` over the same leaves.
+    ///
+    /// `Err` only for a tree that is not its own shape ([`Self::validate_v1`]); one this crate
+    /// folded is always its own shape, which is why the accumulator's callers can treat this as
+    /// total.
+    pub fn root(&self) -> Result<Hash64, Base0SparseCaptureError> {
+        self.validate_v1()?;
+        let mut level = self.retained.clone();
+        let mut width = level_width(self.leaf_count, self.retain_level);
+        while width > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            let mut chunks = level.chunks_exact(2);
+            for pair in &mut chunks {
+                next.push(step_merkle_node_v1(&pair[0], &pair[1]));
+            }
+            if let [odd] = chunks.remainder() {
+                next.push(*odd);
+            }
+            level = next;
+            width = width.div_ceil(2);
+        }
+        level.first().copied().ok_or(Base0SparseCaptureError::TreeIsNotItsOwnShape { retained: 0, expected: 1 })
+    }
+
+    /// **The leaves an opening of `[first, first + count)` forces the executor to re-derive.**
+    ///
+    /// A sibling below the retained level is always inside the SAME retained-level subtree as the
+    /// range edge it hangs off — its parent is at a level no deeper than the retained one — so
+    /// re-deriving the two boundary subtrees whole is exactly enough, and re-deriving anything
+    /// wider would be replaying calls no opening reads. The span is therefore the range rounded
+    /// out to retained-level boundaries, clamped to the step space.
+    pub fn span_for_range(&self, first: u64, count: u64) -> Result<(u64, u64), Base0SparseCaptureError> {
+        self.validate_v1()?;
+        if count == 0 || first.checked_add(count).is_none_or(|end| end > self.leaf_count) {
+            return Err(Base0SparseCaptureError::RangeOutOfLeafSpace { first, count, leaf_count: self.leaf_count });
+        }
+        let block = 1u64 << self.retain_level;
+        let span_first = (first / block) * block;
+        let span_end = (((first + count - 1) / block) + 1).saturating_mul(block).min(self.leaf_count);
+        Ok((span_first, span_end))
+    }
+
+    /// **The sibling set `step_range_opening_root_v1` consumes, served from the sparse tree.**
+    ///
+    /// `span_leaves` are the LEAF HASHES of `[span_first, span_first + span_leaves.len())` — what
+    /// a replay re-derived — and must be the span [`Self::span_for_range`] named. Levels below the
+    /// retained one are folded out of those; the retained level is read from the kept vector; the
+    /// levels above are folded from it. The walk mirrors `step_merkle_range_siblings_v1` exactly,
+    /// including the promote rule and the left-then-right ordering within a level: a sibling set in
+    /// any other order is an opening nothing verifies.
+    pub fn range_siblings_v1(
+        &self,
+        span_first: u64,
+        span_leaves: &[Hash64],
+        first: u64,
+        count: u64,
+    ) -> Result<Vec<Hash64>, Base0SparseCaptureError> {
+        let (want_first, want_end) = self.span_for_range(first, count)?;
+        let span_end = span_first + span_leaves.len() as u64;
+        if span_first != want_first || span_end != want_end {
+            return Err(Base0SparseCaptureError::SpanNotAligned { span_first, span_end });
+        }
+        // Levels 0..=retain_level inside the span, and the retained level and above from the kept
+        // vector. Two towers, meeting at the retained level, which is what "kept only above a
+        // fixed level" means in code.
+        let lower = self.span_levels(span_first, span_leaves);
+        let upper = self.upper_levels();
+        self.walk_range_siblings_v1(first, count, &|level, position| self.node_at(&lower, &upper, span_first, level, position))
+    }
+
+    /// **The same sibling set from the range's two EDGE blocks alone** (ADR-0121): each edge given as
+    /// `(block_first_leaf, the block's leaves)`, the block the range's first leaf lies in and the one
+    /// its last leaf lies in (one block when the two are the same). A sibling below the retained level
+    /// hangs off an edge inside the edge's own block — see [`Self::span_for_range`] — so the interior
+    /// of a range an executor replays need not be held: its blocks are the retained nodes, and only
+    /// the two it opens partially are asked of the replay.
+    pub fn range_siblings_from_edges_v1(
+        &self,
+        edges: &[(u64, &[Hash64])],
+        first: u64,
+        count: u64,
+    ) -> Result<Vec<Hash64>, Base0SparseCaptureError> {
+        let (span_first, span_end) = self.span_for_range(first, count)?;
+        let block = 1u64 << self.retain_level;
+        for (block_first, leaves) in edges {
+            let end = (block_first + block).min(self.leaf_count);
+            if block_first % block != 0 || *block_first < span_first || end > span_end || leaves.len() as u64 != end - block_first {
+                return Err(Base0SparseCaptureError::SpanNotAligned {
+                    span_first: *block_first,
+                    span_end: block_first + leaves.len() as u64,
+                });
+            }
+        }
+        let towers: Vec<(u64, Vec<Vec<Hash64>>)> = edges.iter().map(|(at, leaves)| (*at, self.span_levels(*at, leaves))).collect();
+        let upper = self.upper_levels();
+        self.walk_range_siblings_v1(first, count, &|level, position| {
+            if level >= self.retain_level {
+                return self.node_at(&[], &upper, span_first, level, position);
+            }
+            towers
+                .iter()
+                .find_map(|(at, lower)| {
+                    let start = at >> level;
+                    position.checked_sub(start).and_then(|offset| lower[level as usize].get(offset as usize)).copied()
+                })
+                .ok_or(Base0SparseCaptureError::SpanDoesNotCoverTheRange { index: position << level, span_first, span_end })
+        })
+    }
+
+    /// **The sibling set of a range ALIGNED to the retained level, from the kept vector alone**
+    /// (SEAT-S4) — what a fold serves for a segment it cannot open at the leaf level.
+    ///
+    /// A range whose first leaf is a multiple of `2^retain_level` and whose end is one too (or the
+    /// tree's own end) consumes no sibling below the retained level: its left edge is even at every
+    /// level below it, and its right edge is either even or the level's promoted tail. So every
+    /// sibling is a node at or above the retained level, and each is the promote-odd fold of a run
+    /// of retained nodes — computed here run by run with a stack of perfect subtrees, so nothing the
+    /// size of the retained vector is copied (`range_siblings_from_edges_v1` with no edges answers
+    /// the same set, at the price of every level above the retained one held at once: the retained
+    /// vector twice over, 0.8 GB at the 2M attempt).
+    ///
+    /// `SpanNotAligned` for a range that is not its own span at this level.
+    pub fn aligned_range_siblings_v1(&self, first: u64, count: u64) -> Result<Vec<Hash64>, Base0SparseCaptureError> {
+        let (span_first, span_end) = self.span_for_range(first, count)?;
+        if span_first != first || span_end != first + count {
+            return Err(Base0SparseCaptureError::SpanNotAligned { span_first: first, span_end: first + count });
+        }
+        self.walk_range_siblings_v1(first, count, &|level, position| {
+            if level < self.retain_level {
+                return Err(Base0SparseCaptureError::SpanNotAligned { span_first: first, span_end: first + count });
+            }
+            self.retained_subtree_root_v1(level - self.retain_level, position)
+        })
+    }
+
+    /// The tree's node at `retain_level + height`, position `position`: the promote-odd fold of the
+    /// retained nodes it covers. Their left edge is `position · 2^height`, even at every height below
+    /// `height`, so the local pairing is the global one and a promotion can only be the level's own
+    /// tail (`Base0SparseStepAccumulatorV1`'s argument, one tower up).
+    fn retained_subtree_root_v1(&self, height: u32, position: u64) -> Result<Hash64, Base0SparseCaptureError> {
+        let missing = Base0SparseCaptureError::SpanDoesNotCoverTheRange { index: position, span_first: 0, span_end: 0 };
+        let width = 1u64.checked_shl(height).ok_or(missing.clone())?;
+        let lo = position.checked_mul(width).ok_or(missing.clone())?;
+        let hi = lo.saturating_add(width).min(self.retained.len() as u64);
+        let nodes = self.retained.get(lo as usize..hi as usize).filter(|n| !n.is_empty()).ok_or(missing)?;
+        Ok(fold_nodes_promote_odd_v1(nodes))
+    }
+
+    /// The sibling walk itself — `step_merkle_range_siblings_v1`'s order and promote rule, the node at
+    /// `(level, position)` asked of `node`.
+    fn walk_range_siblings_v1(
+        &self,
+        first: u64,
+        count: u64,
+        node: &dyn Fn(u32, u64) -> Result<Hash64, Base0SparseCaptureError>,
+    ) -> Result<Vec<Hash64>, Base0SparseCaptureError> {
+        let mut out = Vec::new();
+        let (mut a, mut b) = (first, first + count);
+        let mut level = 0u32;
+        let mut width = self.leaf_count;
+        while width > 1 {
+            if !a.is_multiple_of(2) {
+                out.push(node(level, a - 1)?);
+            }
+            if !b.is_multiple_of(2) && (b != width || width.is_multiple_of(2)) {
+                out.push(node(level, b)?);
+            }
+            a /= 2;
+            b = b.div_ceil(2);
+            width = width.div_ceil(2);
+            level += 1;
+        }
+        // **The tree's own depth bounds an honest range**: one sibling an edge a level. The default
+        // leg's cap (`2^22`'s 22 levels) refused honest openings of a deeper tree — a claim past
+        // `2^22` leaves, which a ruleset's ladder admits and the chain walks under that ladder's
+        // cap (`step_range_opening_root_capped_v1`, which holds every tree the ladder admits).
+        let max = 2 * kaspa_consensus_core::palw_step_leg::step_leg_max_opening_siblings_v1(self.leaf_count)
+            .max(PALW_STEP_LEG_MAX_OPENING_SIBLINGS);
+        if out.len() > max {
+            return Err(Base0SparseCaptureError::OpeningTooDeep { got: out.len(), max });
+        }
+        Ok(out)
+    }
+
+    /// The whole range opening — leaf hashes and siblings — ready for
+    /// `step_range_opening_root_v1`.
+    pub fn range_opening_v1(
+        &self,
+        span_first: u64,
+        span_leaves: &[Hash64],
+        first: u64,
+        count: u64,
+    ) -> Result<PalwStepRangeOpeningV1, Base0SparseCaptureError> {
+        let siblings = self.range_siblings_v1(span_first, span_leaves, first, count)?;
+        let start = (first - span_first) as usize;
+        let end = start + count as usize;
+        let leaf_hashes = span_leaves
+            .get(start..end)
+            .ok_or(Base0SparseCaptureError::SpanDoesNotCoverTheRange {
+                index: first + count - 1,
+                span_first,
+                span_end: span_first + span_leaves.len() as u64,
+            })?
+            .to_vec();
+        Ok(PalwStepRangeOpeningV1 { first_leaf_index: first, leaf_hashes, siblings })
+    }
+
+    /// Levels `0..=retain_level` of the span, each as (nodes, first global position).
+    fn span_levels(&self, span_first: u64, span_leaves: &[Hash64]) -> Vec<Vec<Hash64>> {
+        let mut levels: Vec<Vec<Hash64>> = Vec::with_capacity(self.retain_level as usize + 1);
+        levels.push(span_leaves.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(span_first + i as u64, h)).collect());
+        for level in 0..self.retain_level {
+            let width = level_width(self.leaf_count, level);
+            let start = span_first >> level;
+            let current = levels.last().expect("seeded");
+            let mut next = Vec::with_capacity(current.len().div_ceil(2));
+            let mut i = 0usize;
+            while i + 1 < current.len() {
+                next.push(step_merkle_node_v1(&current[i], &current[i + 1]));
+                i += 2;
+            }
+            if i < current.len() {
+                // **A lone tail inside the span can only be the level's global last node**, so the
+                // promote rule applies verbatim and the node is carried up unchanged.
+                //
+                // Why that holds: the span's left edge is a multiple of `2^retain_level`, so at
+                // every level `l < retain_level` its first node sits at an EVEN global position and
+                // the span's local pairing is the global pairing. A span that is a whole block has
+                // `2^(retain_level − l)` nodes at level `l` — even — so an odd remainder can only
+                // occur in the last, partial block, whose right edge is the leaf space's own. The
+                // debug assertion states it where it would fail rather than in prose.
+                debug_assert!(
+                    !width.is_multiple_of(2) && start + i as u64 == width - 1,
+                    "an aligned span promotes only at the level's global tail"
+                );
+                next.push(current[i]);
+            }
+            levels.push(next);
+        }
+        levels
+    }
+
+    /// Levels `retain_level..` folded from the kept vector; `[0]` is the retained level itself.
+    fn upper_levels(&self) -> Vec<Vec<Hash64>> {
+        let mut levels = vec![self.retained.clone()];
+        let mut width = level_width(self.leaf_count, self.retain_level);
+        while width > 1 {
+            let current = levels.last().expect("seeded");
+            let mut next = Vec::with_capacity(current.len().div_ceil(2));
+            let mut chunks = current.chunks_exact(2);
+            for pair in &mut chunks {
+                next.push(step_merkle_node_v1(&pair[0], &pair[1]));
+            }
+            if let [odd] = chunks.remainder() {
+                next.push(*odd);
+            }
+            levels.push(next);
+            width = width.div_ceil(2);
+        }
+        levels
+    }
+
+    fn node_at(
+        &self,
+        lower: &[Vec<Hash64>],
+        upper: &[Vec<Hash64>],
+        span_first: u64,
+        level: u32,
+        position: u64,
+    ) -> Result<Hash64, Base0SparseCaptureError> {
+        if level >= self.retain_level {
+            let tower = (level - self.retain_level) as usize;
+            return upper.get(tower).and_then(|nodes| nodes.get(position as usize)).copied().ok_or(
+                Base0SparseCaptureError::SpanDoesNotCoverTheRange { index: position << level, span_first, span_end: span_first },
+            );
+        }
+        let start = span_first >> level;
+        let nodes = &lower[level as usize];
+        position.checked_sub(start).and_then(|offset| nodes.get(offset as usize)).copied().ok_or(
+            Base0SparseCaptureError::SpanDoesNotCoverTheRange {
+                index: position << level,
+                span_first,
+                span_end: span_first + (nodes.len() as u64) * (1u64 << level),
+            },
+        )
+    }
+}
+
+/// `ceil(leaf_count / 2^level)` — the promote-odd tree's width at `level`, which is what decides
+/// both pairing and promotion. Derived rather than tracked: a width carried alongside the fold
+/// would be a second source for a number the leaf count already fixes.
+fn level_width(leaf_count: u64, level: u32) -> u64 {
+    let mut width = leaf_count;
+    for _ in 0..level {
+        width = width.div_ceil(2);
+        if width <= 1 {
+            return width.max(1);
+        }
+    }
+    width.max(1)
+}
+
+/// **A range opening's root from its edges and its whole blocks' digests** (ADR-0121) — the value
+/// `step_range_opening_root_capped_v1` computes from the range's every leaf, computed from what a
+/// streamed replay keeps: the leaves of the partial block at each edge, and one digest per block the
+/// range covers whole ([`base0_fold_block_digest_v1`], the tree's own node at `retain_level`).
+///
+/// `left` is `[first, ⌈first / 2^r⌉·2^r)` when the range does not start on a block boundary, `digests`
+/// the blocks `whole_blocks_v1` names (the tree's tail block counts when the range reaches the tree's
+/// end), `right` the rest of the range after them. It walks the consensus rule unchanged — the same
+/// sibling order, the same promote-odd tail — because below the retained level the three parts never
+/// pair across one another: an edge block's nodes pair inside the block (its outer edge is the only
+/// place a sibling is consumed, and its inner edge is even at every level below `r`), and a whole
+/// block is already its own node. From level `r` up the level vector is `[left] ‖ digests ‖ [right]`
+/// and the consensus loop runs as written. `the_fold_range_root_is_the_consensus_root` holds the
+/// equality over many trees, ranges and levels.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fold_range_root_v1(
+    leaf_count: u64,
+    first: u64,
+    count: u64,
+    retain_level: u32,
+    left: &[Hash64],
+    digests: &[Hash64],
+    right: &[Hash64],
+    siblings: &[Hash64],
+    max_step_leaf_count: u64,
+) -> Result<Hash64, String> {
+    use kaspa_consensus_core::palw_step_leg::{step_leg_max_opening_siblings_v1, step_range_opening_root_capped_v1};
+    if leaf_count == 0 || leaf_count > max_step_leaf_count {
+        return Err(format!("a step tree of {leaf_count} leaves is outside the ladder of {max_step_leaf_count}"));
+    }
+    let end = first.checked_add(count).filter(|end| count > 0 && *end <= leaf_count).ok_or("the range is not inside the tree")?;
+    // A range with no whole block is its own leaves: the consensus walk, verbatim.
+    if digests.is_empty() {
+        if left.len() as u64 + right.len() as u64 != count {
+            return Err("a range with no whole block must be carried whole".to_string());
+        }
+        let leaf_hashes: Vec<Hash64> = left.iter().chain(right).copied().collect();
+        let opening = PalwStepRangeOpeningV1 { first_leaf_index: first, leaf_hashes, siblings: siblings.to_vec() };
+        return step_range_opening_root_capped_v1(leaf_count, &opening, max_step_leaf_count).map_err(|e| format!("{e:?}"));
+    }
+    let sibling_cap = 2 * step_leg_max_opening_siblings_v1(max_step_leaf_count);
+    if siblings.len() > sibling_cap {
+        return Err(format!("{} siblings, past the cap of {sibling_cap}", siblings.len()));
+    }
+    let r = retain_level.min(63);
+    let block = 1u64 << r;
+    let first_block = first.div_ceil(block);
+    let middle_end = first_block
+        .checked_add(digests.len() as u64)
+        .and_then(|b| b.checked_mul(block))
+        .ok_or("the digests run past the tree")?
+        .min(leaf_count);
+    // The shape: the left edge ends where the first whole block begins, the right edge begins where
+    // the last one ends, and together with the blocks they are the range.
+    if first + left.len() as u64 != (first_block * block).min(end)
+        || middle_end + right.len() as u64 != end
+        || (!right.is_empty() && end >= leaf_count)
+    {
+        return Err("the edges and the digests are not the range's".to_string());
+    }
+    let mut siblings = siblings.iter();
+    let mut next = || siblings.next().copied().ok_or_else(|| "the opening's path is too short".to_string());
+    let mut lnodes: Vec<Hash64> = left.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(first + i as u64, h)).collect();
+    let mut rnodes: Vec<Hash64> = right.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(middle_end + i as u64, h)).collect();
+    let (mut a, mut b, mut width) = (first, end, leaf_count);
+    for _ in 0..r {
+        // The left edge block: an odd start takes its carried sibling; the rest pair inside it.
+        if !lnodes.is_empty() {
+            let mut level = Vec::with_capacity(lnodes.len() / 2 + 1);
+            let mut i = 0usize;
+            if !a.is_multiple_of(2) {
+                level.push(step_merkle_node_v1(&next()?, &lnodes[0]));
+                i = 1;
+            }
+            while i + 1 < lnodes.len() {
+                level.push(step_merkle_node_v1(&lnodes[i], &lnodes[i + 1]));
+                i += 2;
+            }
+            if i < lnodes.len() {
+                return Err("the left edge left a node unpaired below the retained level".to_string());
+            }
+            lnodes = level;
+        }
+        // The right edge block: pairs from its even start; a lone last node takes its sibling, or
+        // promotes where it is the level's odd tail.
+        if !rnodes.is_empty() {
+            let mut level = Vec::with_capacity(rnodes.len() / 2 + 1);
+            let mut i = 0usize;
+            while i + 1 < rnodes.len() {
+                level.push(step_merkle_node_v1(&rnodes[i], &rnodes[i + 1]));
+                i += 2;
+            }
+            if i < rnodes.len() {
+                if !width.is_multiple_of(2) && b == width {
+                    level.push(rnodes[i]);
+                } else {
+                    level.push(step_merkle_node_v1(&rnodes[i], &next()?));
+                }
+            }
+            rnodes = level;
+        }
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    if lnodes.len() > 1 || rnodes.len() > 1 {
+        return Err("an edge did not reduce to one node at the retained level".to_string());
+    }
+    // From the retained level up: the consensus loop over `[left] ‖ digests ‖ [right]`.
+    let mut nodes: Vec<Hash64> = lnodes.into_iter().chain(digests.iter().copied()).chain(rnodes).collect();
+    while width > 1 {
+        let mut level = Vec::with_capacity(nodes.len() / 2 + 2);
+        let mut i = 0usize;
+        if !a.is_multiple_of(2) {
+            level.push(step_merkle_node_v1(&next()?, &nodes[0]));
+            i = 1;
+        }
+        while i + 1 < nodes.len() {
+            level.push(step_merkle_node_v1(&nodes[i], &nodes[i + 1]));
+            i += 2;
+        }
+        if i < nodes.len() {
+            if !width.is_multiple_of(2) && b == width {
+                level.push(nodes[i]);
+            } else {
+                level.push(step_merkle_node_v1(&nodes[i], &next()?));
+            }
+        }
+        nodes = level;
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    if next().is_ok() {
+        return Err("the opening's path is too long".to_string());
+    }
+    nodes.first().copied().ok_or_else(|| "the range folded to nothing".to_string())
+}
+
+/// **A range's leaves folded as they stream past, for [`base0_fold_range_root_v1`]** (SEAT-S4): the
+/// left edge's leaves, one digest per whole block at `level`, the right edge's leaves — and nothing
+/// else, whatever the range's width. A partial seat replaying a held segment (26 M leaves at the
+/// 8,192 row) holds `O(width / 2^level + 2·2^level)` hashes here, where a vector of the range's
+/// leaves would be gigabytes.
+///
+/// The split is `base0_fold_range_root_v1`'s own: blocks are aligned to the step space and the
+/// tree's tail block is whole when the range reaches the tree's end
+/// (`Base0FpFoldRangeOpeningV1::whole_blocks_v1`'s rule), and a range with no whole block is all
+/// edge. Leaves arrive in order, each exactly once, from the range's first; anything else is
+/// refused, because a replay that emits another order is not the range's.
+pub struct Base0RangeFoldV1 {
+    leaf_count: u64,
+    first: u64,
+    end: u64,
+    level: u32,
+    block: u64,
+    whole: (u64, u64),
+    next: u64,
+    left: Vec<Hash64>,
+    current: Vec<Hash64>,
+    digests: Vec<Hash64>,
+    right: Vec<Hash64>,
+}
+
+impl Base0RangeFoldV1 {
+    /// `[first, first + count)` of a tree of `leaf_count` leaves, folded at `level` (at most
+    /// [`PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1`], so a block in flight is bounded).
+    pub fn new(leaf_count: u64, first: u64, count: u64, level: u32) -> Result<Self, String> {
+        let end = first.checked_add(count).filter(|end| count > 0 && *end <= leaf_count).ok_or("the range is not inside the tree")?;
+        if level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
+            return Err(format!("fold level {level} is past the sparse cap"));
+        }
+        let block = 1u64 << level;
+        let first_block = first.div_ceil(block);
+        let end_block = if end >= leaf_count { end.div_ceil(block) } else { end / block }.max(first_block);
+        Ok(Self {
+            leaf_count,
+            first,
+            end,
+            level,
+            block,
+            whole: (first_block, end_block),
+            next: first,
+            left: Vec::new(),
+            current: Vec::new(),
+            digests: Vec::with_capacity(((end_block - first_block) as usize).min(1 << 20)),
+            right: Vec::new(),
+        })
+    }
+
+    /// The next leaf of the range, by index and hash.
+    pub fn push(&mut self, index: u64, leaf_hash: Hash64) -> Result<(), String> {
+        if index != self.next || index >= self.end {
+            return Err(format!("leaf {index} arrived where leaf {} of [{}, {}) was due", self.next, self.first, self.end));
+        }
+        self.next += 1;
+        let (first_block, end_block) = self.whole;
+        let block_of = index / self.block;
+        if block_of < first_block || block_of >= end_block {
+            if index < first_block * self.block {
+                self.left.push(leaf_hash);
+            } else {
+                self.right.push(leaf_hash);
+            }
+            return Ok(());
+        }
+        self.current.push(leaf_hash);
+        let block_end = ((block_of + 1) * self.block).min(self.leaf_count);
+        if index + 1 == block_end {
+            let leaves = std::mem::take(&mut self.current);
+            self.digests.push(base0_fold_block_digest_v1(block_of * self.block, &leaves).ok_or("an empty block")?);
+        }
+        Ok(())
+    }
+
+    /// The range's root under the served `siblings` — every leaf must have arrived.
+    pub fn root_v1(&self, siblings: &[Hash64], max_step_leaf_count: u64) -> Result<Hash64, String> {
+        if self.next != self.end || !self.current.is_empty() {
+            return Err(format!("the range [{}, {}) streamed only to leaf {}", self.first, self.end, self.next));
+        }
+        base0_fold_range_root_v1(
+            self.leaf_count,
+            self.first,
+            self.end - self.first,
+            self.level,
+            &self.left,
+            &self.digests,
+            &self.right,
+            siblings,
+            max_step_leaf_count,
+        )
+    }
+}
+
+/// **How many siblings the consensus range walk consumes for `[first, first + count)`** — the
+/// count `step_range_opening_root_capped_v1` spends, derived without a leaf, so a served opening
+/// whose path is not its range's is refused before anything is replayed against it.
+pub fn base0_range_sibling_count_v1(leaf_count: u64, first: u64, count: u64) -> Option<usize> {
+    let end = first.checked_add(count).filter(|end| count > 0 && *end <= leaf_count)?;
+    let (mut a, mut b, mut width, mut siblings) = (first, end, leaf_count, 0usize);
+    while width > 1 {
+        if !a.is_multiple_of(2) {
+            siblings += 1;
+        }
+        if !b.is_multiple_of(2) && (b != width || width.is_multiple_of(2)) {
+            siblings += 1;
+        }
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    Some(siblings)
+}
+
+// =============================================================================================
+// The retained level, derived from the ruleset's ladder
+// =============================================================================================
+
+/// **What the retained set is allowed to weigh: 64 MiB, at any ladder** (ADR-0082 Decision 7).
+///
+/// The budget is the quantity the level is derived FROM; the level is not a number anyone types.
+pub const PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES: u64 = 64 << 20;
+
+/// `⌈log₂(budget / node bytes)⌉` — how many retained nodes the budget buys, as a level. A
+/// `Hash64` is 64 bytes, so 64 MiB is `2^20` of them.
+const fn sparse_retained_nodes_log2_v1() -> u32 {
+    (PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES / 64).trailing_zeros()
+}
+
+/// **The retained level a ladder of `max_step_leaf_count` leaves implies**:
+/// `retain_level = ⌈log₂ leaves⌉ − log₂(budget / 64)` — ADR-0082 Decision 7's own rule, which is
+/// the smallest level whose retained vector fits [`PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES`].
+///
+/// The argument is the RULESET's `PalwCourtParamsV2::max_step_leaf_count`, which is what the
+/// executor has priced its job against since W1b (`bb4f145b`) — never a constant here. At the
+/// `2^32` ladder ADR-0077 Decision 12 moves to it returns 12, which is what
+/// [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`] is; at any deeper ladder it returns more, and the
+/// retained set does not grow past the budget.
+pub fn palw_base0_sparse_retain_level_for_ladder_v1(max_step_leaf_count: u64) -> u32 {
+    let ladder_level = max_step_leaf_count.next_power_of_two().trailing_zeros();
+    ladder_level.saturating_sub(sparse_retained_nodes_log2_v1())
+}
+
+/// **The level a capture folds at, for a ruleset whose ladder is `max_step_leaf_count`.**
+///
+/// The ladder's own derivation, floored at [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`]. The floor is not
+/// a second rule about bytes — a level BELOW it retains more nodes, and it buys nothing, because
+/// the thing an opening re-derives is a whole CALL of the enumeration (~99 k leaves on the dense
+/// tier, ~298 k on the hybrid) and every level below `2^12` is already far inside one call. So
+/// under the shipped `2^22` ladder a claim's retained tree is 64 KiB rather than the 64 MiB the
+/// budget would allow, and at `2^32` the two rules agree on 12.
+pub fn palw_base0_sparse_retain_level_v1(max_step_leaf_count: u64) -> u32 {
+    palw_base0_sparse_retain_level_for_ladder_v1(max_step_leaf_count).max(PALW_BASE0_SPARSE_RETAIN_LEVEL_V1)
+}
+
+/// **The level THIS class's capture folds at** (ADR-0121 Decision 3): a class under the held
+/// regime folds at [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`] whatever its ladder; every other class at
+/// its ladder's level ([`palw_base0_sparse_retain_level_v1`]), exactly as before.
+///
+/// The held class's ladder is the regime's `2^40` (ADR-0119 Decision 1), and the ladder's own
+/// derivation would give 20 there: a block of `2^20` leaf hashes is 64 MiB, sixteen times the
+/// interval lane, so no block could be served. The class's interval width is also derived from one
+/// digest per `2^12` leaves (`palw_held_interval_positions_v1`), so an interval's digests fit the
+/// lane only at 12. What the pin costs is the retained set, `leaf_count / 64` bytes: 6 MiB for a
+/// 4,096-position job of the dense row and about 3 GiB at its `2^21` positions, beside the hundred
+/// gigabytes of cache that job holds anyway. A seat never derives the level: it reads it off the
+/// opening it was served (`Base0FpFoldRangeOpeningV1::retain_level`).
+pub fn palw_base0_sparse_retain_level_for_class_v1(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    max_step_leaf_count: u64,
+) -> u32 {
+    if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
+        PALW_BASE0_SPARSE_RETAIN_LEVEL_V1
+    } else {
+        palw_base0_sparse_retain_level_v1(max_step_leaf_count)
+    }
+}
+
+// =============================================================================================
+// The capture: a job's rows folded as they are produced
+// =============================================================================================
+
+/// The number of leaves one node of the graph commits at a position whose cache holds `kv_len`
+/// rows — `tiles_for(node_out_len(node, kv_len), node.tile_len)`, which `palw_step` keeps private
+/// to its own enumeration.
+///
+/// Restating it here is a second spelling of a consensus rule, and the way it is kept honest is
+/// the way the fold itself is: `the_fold_places_every_leaf_where_the_canonical_enumeration_does`
+/// compares this capture's whole index→hash map against the dense one's, which is built out of
+/// `canonical_step_leaf_index` and nothing else. A drift in either direction fails there rather
+/// than at a producer nobody can pay.
+fn node_leaf_count_v1(node: &kaspa_consensus_core::palw_step::PalwStepNodeV1, kv_len: u64) -> u64 {
+    use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
+    let elements = match node.out_len {
+        PalwStepOutLenV1::Fixed { elements } => elements as u64,
+        PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
+    };
+    if node.tile_len == 0 { 0 } else { elements.div_ceil(node.tile_len as u64) }
+}
+
+/// **One position's committed tiles, in the canonical order** — the slot walk the fold
+/// ([`Base0SparseStepCaptureV1::push_call`]) and the streaming replay
+/// (`fp_interval::base0_fp_replay_interval_into_v1`) share, so a leaf a replay emits at a cursor is
+/// the leaf the fold committed there (ADR-0121).
+///
+/// The canonical order is call-major, position-major, slot-major, tile-major, so the tiles of one
+/// `(call, position)` are consecutive leaves and this emits them in that order. `rows` may arrive in
+/// any order within the position; the SET must be the position's own — every slot the enumeration
+/// reaches at the position's `kv_len`, each the width its node's `out_len` implies there, and no post
+/// row at a position that selects no token. Each departure is refused by name, as the fold refuses it.
+pub fn base0_position_tiles_v1<E: From<Base0SparseCaptureError>>(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    prefill: u32,
+    call_index: u32,
+    position: u32,
+    rows: &[crate::legs::Base0CapturedRowV1],
+    mut emit: impl FnMut(kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1) -> Result<(), E>,
+) -> Result<(), E> {
+    use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1};
+    // The enumeration's own two facts about a position (`canonical_step_leaf_index`): what the
+    // cache holds when it runs, and whether the logits table exists at it.
+    let (kv_len, with_logits) =
+        if call_index == 0 { (position as u64 + 1, position + 1 == prefill) } else { (prefill as u64 + call_index as u64, true) };
+
+    // Rows by global slot: one `global_node_slot` per ROW, never one per tile.
+    let slot_count = profile.global_node_count();
+    let first_post_slot = slot_count.saturating_sub(profile.post_nodes.len() as u32);
+    let mut by_slot: Vec<(u32, usize)> = Vec::with_capacity(rows.len());
+    for (at, row) in rows.iter().enumerate() {
+        let slot = profile
+            .global_node_slot(row.table, row.layer, row.index)
+            .ok_or(Base0SparseCaptureError::RowIsNotThisGraphs { layer: row.layer, index: row.index })?;
+        by_slot.push((slot, at));
+    }
+    by_slot.sort_unstable_by_key(|(slot, _)| *slot);
+    if by_slot.windows(2).any(|w| w[0].0 == w[1].0) {
+        return Err(Base0SparseCaptureError::TwoRowsForOneSlot.into());
+    }
+
+    // The position's slots, in the order the enumeration walks them, against the rows in hand.
+    let mut supplied = by_slot.iter().peekable();
+    for slot in 0..slot_count {
+        if slot >= first_post_slot && !with_logits {
+            continue; // post nodes do not exist at a position that selects no token
+        }
+        let (node, _) = profile.resolve_node_slot(slot).ok_or(Base0SparseCaptureError::MissingRowForSlot { slot })?;
+        let expected = node_leaf_count_v1(node, kv_len);
+        let Some((_, at)) = supplied.next_if(|(s, _)| *s == slot).copied() else {
+            return Err(Base0SparseCaptureError::MissingRowForSlot { slot }.into());
+        };
+        let row = &rows[at];
+        let tile_len = node.tile_len as usize;
+        if tile_len == 0 || row.row.len().div_ceil(tile_len) as u64 != expected {
+            return Err(Base0SparseCaptureError::RowIsNotTheGraphsWidth { slot, got: row.row.len() as u64, tiles: expected }.into());
+        }
+        for (tile_index, chunk) in row.row.chunks(tile_len).enumerate() {
+            emit(PalwStepTileLeafV1 {
+                version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                coord: PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile_index as u32 },
+                value_count: chunk.len() as u32,
+                values_le: chunk.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            })?;
+        }
+    }
+    // A row for a slot the walk did not reach — a post row at a non-selecting position, or a
+    // slot past the graph — is a row about a different execution.
+    if let Some((slot, _)) = supplied.next() {
+        return Err(Base0SparseCaptureError::RowForASlotThePositionDoesNotHave { slot: *slot }.into());
+    }
+    Ok(())
+}
+
+/// **The free-prompt capture: every leaf hashed the moment the engine produces it, folded, and
+/// thrown away** (ADR-0082 Decision 7).
+///
+/// The dense twin ([`crate::legs::Base0StepCaptureV1`]) holds a `Hash64` for every leaf of the
+/// step space AND a `PalwStepTileLeafV1` — the tile's own bytes — for every one of them: ~50 MB a
+/// position on the dense tier, and it asks `canonical_step_leaf_index` where each of the ~110 k
+/// tiles of a position goes, a walk that is itself linear in the calls already captured. This
+/// holds one retained node per `2^retain_level` leaves and walks the enumeration ONCE per
+/// position, as a cursor: the canonical order is call-major, position-major, slot-major,
+/// tile-major, so the leaf a row's tile lands on is the one after the leaf before it.
+///
+/// **What it therefore requires of its caller, and refuses by name when it does not get it:**
+/// calls in ascending order from 0, positions in ascending order from 0 inside the prefill call,
+/// and every row of the position the class's graph declares — no more, no fewer, each the width
+/// its node's `out_len` implies at that position's `kv_len`. The dense capture could take rows in
+/// any order because it addressed every leaf; this one is a fold, and a fold cannot be given its
+/// terms out of order. Every one of those refusals is a case the dense capture also refused (as
+/// `NotACanonicalCoordinate`, or as the short capture its `finish` rejects) — the fold names them
+/// where they happen instead.
+pub struct Base0SparseStepCaptureV1 {
+    /// The job context: a step leaf is bound to the context its COORDINATE belongs to (stage 2b), not to one hash.
+    ctx: kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    profile_hash: Hash64,
+    prefill: u32,
+    decode_calls: u32,
+    acc: Base0SparseStepAccumulatorV1,
+    /// The next canonical leaf index the fold expects — the cursor that replaces a lookup per tile.
+    cursor: u64,
+    next_call: u32,
+    next_position: u32,
+}
+
+impl Base0SparseStepCaptureV1 {
+    /// `leaf_count` is the class's own step-leaf count for this job, priced against the ruleset's
+    /// ladder (`step_leaf_count_capped_v1`); `retain_level` is
+    /// [`palw_base0_sparse_retain_level_v1`] of that same ladder.
+    pub fn new(
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        leaf_count: u64,
+        retain_level: u32,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        Self::new_capped_v1(profile, ctx, leaf_count, retain_level, PALW_STEP_LEG_MAX_LEAVES)
+    }
+
+    /// The same capture against the ruleset's ladder.
+    pub fn new_capped_v1(
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        leaf_count: u64,
+        retain_level: u32,
+        max_step_leaf_count: u64,
+    ) -> Result<Self, Base0SparseCaptureError> {
+        Ok(Self {
+            ctx: ctx.clone(),
+            profile_hash: profile.shape_profile_id(),
+            prefill: ctx.declared_prefill_tokens,
+            decode_calls: ctx.exact_decode_tokens.saturating_sub(1),
+            acc: Base0SparseStepAccumulatorV1::new_capped_v1(leaf_count, retain_level, max_step_leaf_count)?,
+            cursor: 0,
+            next_call: 0,
+            next_position: 0,
+        })
+    }
+
+    /// How much of the step space this capture has folded — the sparse twin of
+    /// [`crate::legs::Base0StepCaptureV1::progress`].
+    /// Bytes this fold holds — the accumulator's.
+    pub fn retained_bytes_v1(&self) -> u64 {
+        self.acc.retained_bytes_v1()
+    }
+
+    pub fn progress(&self) -> (u64, u64) {
+        self.acc.progress()
+    }
+
+    /// **One forward call's committed rows, folded in canonical order.**
+    ///
+    /// `rows` are the family's own flattening ([`crate::legs::a16_captured_rows_v1`] and its two
+    /// siblings); they may arrive in any order within the call, because the slot walk below places
+    /// them, but the SET must be the position's own.
+    pub fn push_call(
+        &mut self,
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        call_index: u32,
+        position: u32,
+        rows: &[crate::legs::Base0CapturedRowV1],
+    ) -> Result<(), Base0SparseCaptureError> {
+        if call_index != self.next_call || position != self.next_position {
+            return Err(Base0SparseCaptureError::CallOutOfOrder {
+                expected: (self.next_call, self.next_position),
+                got: (call_index, position),
+            });
+        }
+        let hasher = crate::step_tile_hasher::StepTileHasherV1::new(&self.ctx, self.profile_hash);
+        base0_position_tiles_v1(profile, self.prefill, call_index, position, rows, |leaf| {
+            self.acc.push(hasher.hash(&leaf))?;
+            self.cursor += 1;
+            Ok(())
+        })?;
+
+        if call_index == 0 && position + 1 < self.prefill {
+            self.next_position = position + 1;
+        } else {
+            self.next_call = call_index + 1;
+            self.next_position = 0;
+        }
+        Ok(())
+    }
+
+    /// Seal the fold: the retained tree, and nothing else. A short capture is refused for the
+    /// reason [`crate::legs::Base0StepCaptureV1::finish`] refuses one — a commitment over a
+    /// partial space says "computed zero" about every leaf nobody filled.
+    pub fn finish(self) -> Result<Base0SparseStepTreeV1, Base0SparseCaptureError> {
+        if self.next_call <= self.decode_calls {
+            return Err(Base0SparseCaptureError::CaptureIncomplete { pushed: self.cursor, expected: self.acc.progress().1 });
+        }
+        self.acc.finish()
+    }
+}
+
+// =============================================================================================
+// ADR-0077 Decision 10 — the recurrence's replay state, chunked
+// =============================================================================================
+
+/// **The state a GatedDeltaNet layer carries between positions, as a chunk map** (ADR-0077
+/// Decision 10, executor half).
+///
+/// # Why this exists, stated as the cost it removes
+///
+/// The attention layers of every class in this family have a committed, resumable history: the KV
+/// cache under `integer_kv_state_chunk_map_id_v1`, opened by `KvCache::from_state_chunks` and
+/// walked by `base0_replay_from_checkpoint_v1`. The RECURRENCE has none. The hybrid class
+/// registers the checkpoint sentinel (`state_chunk_map_id == Hash64::default()`), so
+/// `gdn_core_genesis_replay` walks EVERY prior position for every disputed step, `positions =
+/// n_ctx` enters `derive_court_cost_v1` linearly, and that term is one of the three that hold the
+/// class at eight tokens (ADR-0077 §1). A recurrence whose state cannot be committed is a
+/// recurrence whose history cannot be skipped, at any context length.
+///
+/// # What one row is, and why the conv window is in it
+///
+/// A GatedDeltaNet head's state is `Qwen36GdnStateV1`: `d_v` rows of `d_k` `i32` values, row-major
+/// (`q36_gdn_step` walks it as `s.chunks_exact(d_k)`). That is the whole recurrent state of the
+/// delta rule — but it is NOT the whole state of the layer: the short causal convolution in front
+/// of it holds the last `conv_kernel` rows of the concatenated q/k/v channels, and a replay that
+/// restored the delta state and not the convolution would compute the first `conv_kernel − 1`
+/// positions after the anchor from zeros. So the map covers both kinds, and the enumeration says
+/// which is which by name rather than by position arithmetic a reader has to reconstruct.
+///
+/// # Not registered, and superseded for anything that wants to be
+///
+/// Registering it moves `state_chunk_map_id`, which is inside the checkpoint profile, which is
+/// inside the class id — a re-mint, and a consensus move this workstream does not make. It ships
+/// as the executor's machinery with its layout string frozen and its round trip and its anchored
+/// equivalence pinned, the way ADR-0078's hermetic runner shipped unregistered.
+///
+/// **And a class that wants a context registers [`PALW_GDN_STATE_CHUNK_MAP_NAME_V2`] instead.**
+/// The conv row above spans every head, so a court opening one head's window pays for all of them
+/// — 196,608 bytes of an 81,920-byte close carrier on Qwen3.6's geometry. v2 is the same bytes,
+/// keyed by head. v1 stays byte-identical for anything that already named it.
+///
+/// **A RE-EXPORT, not a copy.** The spelling lives in `kaspa_consensus_core::palw_state_chunk_map`
+/// — the lower crate, the one the court reads — and this crate names it so an executor and an
+/// adjudicator cannot come to hold two strings. They did: the same descriptor was written out
+/// twice, here and there, and two spellings of a map name is two ids, which is a class whose
+/// capture and whose court disagree about their map and therefore a class no dispute can open.
+pub use kaspa_consensus_core::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V1;
+/// The head-sliced enumeration of the same state — see
+/// [`kaspa_consensus_core::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2`]. Re-exported
+/// under the same rule.
+pub use kaspa_consensus_core::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2;
+
+/// `state_chunk_map_id` for the recurrence layout — the value a class that registers it declares.
+///
+/// The consensus crate's function, called: the id is `H(name)` and both halves of that must come
+/// from one place, or a respelling on either side mints a second id in silence.
+pub fn base0_gdn_state_chunk_map_id_v1() -> Hash64 {
+    kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v1()
+}
+
+/// `state_chunk_map_id` for the head-sliced recurrence layout (gdn v2).
+pub fn base0_gdn_state_chunk_map_id_v2() -> Hash64 {
+    kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v2()
+}
+
+/// **The map id a class of THIS shape registers** — the composition when it has attention layers,
+/// the recurrence's own when it does not.
+///
+/// A hybrid holds both kinds of state, so registering the recurrence map alone would leave its
+/// attention anchors with no geometry a court can read — `Unadjudicable` on honest material — and
+/// registering the cache map alone would leave the recurrence at its genesis-anchored replay. The
+/// executor is the side that files the profile, so the choice is derived here from the graph
+/// rather than passed in: a caller that reached for `base0_gdn_state_chunk_map_id_v2()` on a
+/// Qwen3.6-shaped class would register half a map.
+pub fn base0_class_state_chunk_map_id_v2(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> Hash64 {
+    if profile.full_attention_interval == 0 {
+        kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v2()
+    } else {
+        kaspa_consensus_core::palw_state_chunk_map::hybrid_state_chunk_map_id_v2()
+    }
+}
+
+/// [`base0_class_state_chunk_map_id_v2`] on the row-major recurrence enumeration (gdn v1).
+pub fn base0_class_state_chunk_map_id_v1(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> Hash64 {
+    if profile.full_attention_interval == 0 {
+        kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v1()
+    } else {
+        kaspa_consensus_core::palw_state_chunk_map::hybrid_state_chunk_map_id_v1()
+    }
+}
+
+/// Which half of the recurrence state a chunk belongs to. The discriminants ARE the enumeration
+/// order, exactly as `PalwStateChunkKindV1` does it for the KV map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Base0GdnChunkKindV1 {
+    /// One block of rows of one head's `d_v × d_k` delta state.
+    Delta = 0,
+    /// One block of rows of one layer's convolution window.
+    Conv = 1,
+}
+
+/// Why a recurrence state cannot be chunked, or restored from chunks.
+///
+/// P0a's three: `KeyHeadsDoNotGroupTheValueHeads` (the key heads a v3 window row is cut over do
+/// not group the value heads), `KeyHeadsAreNotTheClasss` (the engine's key-head count is not the
+/// one the class's profile derives) and `ConvCopiesDisagree` (two value heads' chunks carry
+/// different values for the one key-head channel they share — bytes no state gathers to, refused
+/// rather than resolved by whichever head was scattered last).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Base0GdnStateError {
+    ZeroGeometry { heads: u32, k_dim: u32, v_dim: u32 },
+    RowExceedsChunk { row_bytes: u64, max: usize },
+    NoRecurrenceLayers,
+    TooManyChunks { got: u64, max: usize },
+    ChunkCountIsNotTheMaps { got: usize, want: u64 },
+    ChunkIsNotItsOwnLength { index: u64, got: usize, want: u64 },
+    StateIsNotTheGeometrys { layer: u16, head: u32 },
+    ConvIsNotTheGeometrys { layer: u16 },
+    KeyHeadsDoNotGroupTheValueHeads { key_heads: u32, heads: u32 },
+    KeyHeadsAreNotTheClasss { engine: u32, class: u32 },
+    ConvCopiesDisagree { layer: u16, row: u32, channel: u32 },
+}
+
+impl std::fmt::Display for Base0GdnStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroGeometry { heads, k_dim, v_dim } => {
+                write!(f, "a recurrence of {heads} heads at {k_dim}×{v_dim} has no state to chunk")
+            }
+            Self::RowExceedsChunk { row_bytes, max } => {
+                write!(f, "one row is {row_bytes} bytes and a state chunk holds at most {max}")
+            }
+            Self::NoRecurrenceLayers => write!(f, "the profile declares no recurrence layer, so it has no recurrence state"),
+            Self::TooManyChunks { got, max } => write!(f, "the layout needs {got} chunks and the leg admits at most {max}"),
+            Self::ChunkCountIsNotTheMaps { got, want } => write!(f, "{got} chunks were served and the map has {want}"),
+            Self::ChunkIsNotItsOwnLength { index, got, want } => {
+                write!(f, "chunk {index} is {got} bytes and its entry declares {want}")
+            }
+            Self::StateIsNotTheGeometrys { layer, head } => {
+                write!(f, "layer {layer} head {head} holds a state of a shape this geometry does not describe")
+            }
+            Self::ConvIsNotTheGeometrys { layer } => {
+                write!(f, "layer {layer} holds a convolution window this geometry does not describe")
+            }
+            Self::KeyHeadsDoNotGroupTheValueHeads { key_heads, heads } => {
+                write!(f, "{key_heads} key heads do not group {heads} value heads")
+            }
+            Self::KeyHeadsAreNotTheClasss { engine, class } => {
+                write!(f, "the engine runs {engine} key heads and the class's profile derives {class}")
+            }
+            Self::ConvCopiesDisagree { layer, row, channel } => {
+                write!(f, "layer {layer}'s window row {row} holds two values for shared channel {channel}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for Base0GdnStateError {}
+
+/// The derived layout of one job's recurrence state. Every field is a function of the class's
+/// declared geometry; none is a choice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Base0GdnStateGeometryV1 {
+    /// The recurrence layers, ascending — in the PROFILE's numbering, because a court reading an
+    /// entry is about to index a layer table.
+    pub layers: Vec<u16>,
+    pub heads: u32,
+    pub k_dim: u32,
+    pub v_dim: u32,
+    pub conv_kernel: u32,
+    /// `(2 · k_dim + v_dim) · heads` — the concatenated q/k/v channels the convolution runs over.
+    pub conv_width: u32,
+    /// `k_dim × 4`: one row of one head's delta state.
+    pub delta_row_bytes: u32,
+    /// `conv_width × 4`: one row of the convolution window.
+    pub conv_row_bytes: u32,
+    pub delta_rows_per_chunk: u32,
+    pub conv_rows_per_chunk: u32,
+}
+
+impl Base0GdnStateGeometryV1 {
+    pub fn delta_chunks_per_head(&self) -> u32 {
+        self.v_dim.div_ceil(self.delta_rows_per_chunk)
+    }
+    pub fn conv_chunks_per_layer(&self) -> u32 {
+        self.conv_kernel.div_ceil(self.conv_rows_per_chunk)
+    }
+    /// Every chunk in the map: the delta half, then the conv half.
+    pub fn chunk_count(&self) -> u64 {
+        let layers = self.layers.len() as u64;
+        layers * self.heads as u64 * self.delta_chunks_per_head() as u64 + layers * self.conv_chunks_per_layer() as u64
+    }
+    pub fn total_bytes(&self) -> u64 {
+        let layers = self.layers.len() as u64;
+        layers * self.heads as u64 * self.v_dim as u64 * self.delta_row_bytes as u64
+            + layers * self.conv_kernel as u64 * self.conv_row_bytes as u64
+    }
+}
+
+/// One chunk of the recurrence map: a run of rows of one head's delta state, or of one layer's
+/// convolution window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0GdnChunkEntryV1 {
+    pub kind: Base0GdnChunkKindV1,
+    pub layer: u16,
+    /// Meaningless for `Conv`, which is per layer.
+    pub head: u32,
+    pub row_start: u32,
+    pub row_count: u32,
+    pub row_bytes: u32,
+}
+
+impl Base0GdnChunkEntryV1 {
+    pub fn byte_len(&self) -> u64 {
+        self.row_count as u64 * self.row_bytes as u64
+    }
+}
+
+/// **The layout at this geometry.** Derived, never chosen: the rows-per-chunk figure is the widest
+/// run that fits the leg's own per-chunk cap, which is the same rule
+/// `integer_kv_state_geometry_v1` applies to the KV map.
+pub fn base0_gdn_state_geometry_v1(
+    layers: &[u16],
+    heads: u32,
+    k_dim: u32,
+    v_dim: u32,
+    conv_kernel: u32,
+) -> Result<Base0GdnStateGeometryV1, Base0GdnStateError> {
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES, PALW_STEP_LEG_MAX_STATE_CHUNKS};
+    if heads == 0 || k_dim == 0 || v_dim == 0 || conv_kernel == 0 {
+        return Err(Base0GdnStateError::ZeroGeometry { heads, k_dim, v_dim });
+    }
+    if layers.is_empty() {
+        return Err(Base0GdnStateError::NoRecurrenceLayers);
+    }
+    let conv_width = (2 * k_dim as u64 + v_dim as u64) * heads as u64;
+    let delta_row_bytes = k_dim as u64 * 4;
+    let conv_row_bytes = conv_width * 4;
+    for row in [delta_row_bytes, conv_row_bytes] {
+        if row > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 {
+            return Err(Base0GdnStateError::RowExceedsChunk { row_bytes: row, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+        }
+    }
+    let geometry = Base0GdnStateGeometryV1 {
+        layers: layers.to_vec(),
+        heads,
+        k_dim,
+        v_dim,
+        conv_kernel,
+        conv_width: conv_width as u32,
+        delta_row_bytes: delta_row_bytes as u32,
+        conv_row_bytes: conv_row_bytes as u32,
+        delta_rows_per_chunk: ((PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 / delta_row_bytes).min(v_dim as u64)) as u32,
+        conv_rows_per_chunk: ((PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 / conv_row_bytes).min(conv_kernel as u64)) as u32,
+    };
+    let count = geometry.chunk_count();
+    if count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
+        return Err(Base0GdnStateError::TooManyChunks { got: count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    Ok(geometry)
+}
+
+/// The entry at `chunk_index`, or `None` past the end of the map — the enumeration itself.
+pub fn base0_gdn_chunk_entry_v1(geometry: &Base0GdnStateGeometryV1, chunk_index: u64) -> Option<Base0GdnChunkEntryV1> {
+    if chunk_index >= geometry.chunk_count() {
+        return None;
+    }
+    let per_head = geometry.delta_chunks_per_head() as u64;
+    let delta_total = geometry.layers.len() as u64 * geometry.heads as u64 * per_head;
+    if chunk_index < delta_total {
+        let layer_ordinal = (chunk_index / (geometry.heads as u64 * per_head)) as usize;
+        let within_layer = chunk_index % (geometry.heads as u64 * per_head);
+        let head = (within_layer / per_head) as u32;
+        let block = (within_layer % per_head) as u32;
+        let row_start = block * geometry.delta_rows_per_chunk;
+        return Some(Base0GdnChunkEntryV1 {
+            kind: Base0GdnChunkKindV1::Delta,
+            layer: geometry.layers[layer_ordinal],
+            head,
+            row_start,
+            row_count: (geometry.v_dim - row_start).min(geometry.delta_rows_per_chunk),
+            row_bytes: geometry.delta_row_bytes,
+        });
+    }
+    let within_conv = chunk_index - delta_total;
+    let per_layer = geometry.conv_chunks_per_layer() as u64;
+    let layer_ordinal = (within_conv / per_layer) as usize;
+    let block = (within_conv % per_layer) as u32;
+    let row_start = block * geometry.conv_rows_per_chunk;
+    Some(Base0GdnChunkEntryV1 {
+        kind: Base0GdnChunkKindV1::Conv,
+        layer: geometry.layers[layer_ordinal],
+        head: 0,
+        row_start,
+        row_count: (geometry.conv_kernel - row_start).min(geometry.conv_rows_per_chunk),
+        row_bytes: geometry.conv_row_bytes,
+    })
+}
+
+/// **One recurrence layer's live state**, in the shape the engine holds it: one delta state per
+/// head, plus the convolution's `conv_kernel` most recent rows, oldest first.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Base0GdnLayerStateV1 {
+    pub heads: Vec<kaspa_consensus_core::palw_qwen36_ops::Qwen36GdnStateV1>,
+    pub conv: Vec<Vec<i32>>,
+}
+
+/// **Chunk a live recurrence state, in the map's own order** — the capture side of Decision 10.
+///
+/// `states` is one entry per layer of `geometry.layers`, in that order. A state whose shape is not
+/// the geometry's is refused by NAME rather than padded: a checkpoint that opens to a state the
+/// producer never held is worse than a missing one, and the producer has signed for it — the rule
+/// `A16Cache::state_chunk_bytes_v1` states.
+pub fn base0_gdn_state_chunks_v1(
+    geometry: &Base0GdnStateGeometryV1,
+    states: &[Base0GdnLayerStateV1],
+) -> Result<Vec<Vec<u8>>, Base0GdnStateError> {
+    if states.len() != geometry.layers.len() {
+        return Err(Base0GdnStateError::NoRecurrenceLayers);
+    }
+    for (ordinal, state) in states.iter().enumerate() {
+        let layer = geometry.layers[ordinal];
+        if state.heads.len() != geometry.heads as usize {
+            return Err(Base0GdnStateError::StateIsNotTheGeometrys { layer, head: state.heads.len() as u32 });
+        }
+        for (head, s) in state.heads.iter().enumerate() {
+            if s.d_k != geometry.k_dim as usize || s.d_v != geometry.v_dim as usize || s.s.len() != s.d_k * s.d_v {
+                return Err(Base0GdnStateError::StateIsNotTheGeometrys { layer, head: head as u32 });
+            }
+        }
+        if state.conv.len() != geometry.conv_kernel as usize || state.conv.iter().any(|r| r.len() != geometry.conv_width as usize) {
+            return Err(Base0GdnStateError::ConvIsNotTheGeometrys { layer });
+        }
+    }
+    let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+    for index in 0..geometry.chunk_count() {
+        let entry = base0_gdn_chunk_entry_v1(geometry, index)
+            .ok_or(Base0GdnStateError::ChunkCountIsNotTheMaps { got: index as usize, want: geometry.chunk_count() })?;
+        let ordinal = geometry.layers.iter().position(|l| *l == entry.layer).ok_or(Base0GdnStateError::NoRecurrenceLayers)?;
+        let state = &states[ordinal];
+        let mut bytes = Vec::with_capacity(entry.byte_len() as usize);
+        match entry.kind {
+            Base0GdnChunkKindV1::Delta => {
+                let head = &state.heads[entry.head as usize];
+                for row in entry.row_start..entry.row_start + entry.row_count {
+                    let start = row as usize * geometry.k_dim as usize;
+                    for value in &head.s[start..start + geometry.k_dim as usize] {
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+            Base0GdnChunkKindV1::Conv => {
+                for row in entry.row_start..entry.row_start + entry.row_count {
+                    for value in &state.conv[row as usize] {
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+        }
+        out.push(bytes);
+    }
+    Ok(out)
+}
+
+/// **Restore a recurrence state from committed chunks** — the replay side of Decision 10, and the
+/// inverse [`base0_gdn_state_chunks_v1`]'s round trip pins.
+///
+/// Every refusal is a refusal to replay, never a partial state: a state assembled from material
+/// that does not cover it would fold from zeros, and zeros are indistinguishable from a computed
+/// state once they are in a commitment.
+pub fn base0_gdn_state_from_chunks_v1(
+    geometry: &Base0GdnStateGeometryV1,
+    chunks: &[Vec<u8>],
+) -> Result<Vec<Base0GdnLayerStateV1>, Base0GdnStateError> {
+    use kaspa_consensus_core::palw_qwen36_ops::Qwen36GdnStateV1;
+    if chunks.len() as u64 != geometry.chunk_count() {
+        return Err(Base0GdnStateError::ChunkCountIsNotTheMaps { got: chunks.len(), want: geometry.chunk_count() });
+    }
+    let mut states: Vec<Base0GdnLayerStateV1> = geometry
+        .layers
+        .iter()
+        .map(|_| Base0GdnLayerStateV1 {
+            heads: (0..geometry.heads).map(|_| Qwen36GdnStateV1::zeros(geometry.v_dim as usize, geometry.k_dim as usize)).collect(),
+            conv: vec![vec![0i32; geometry.conv_width as usize]; geometry.conv_kernel as usize],
+        })
+        .collect();
+    for (index, bytes) in chunks.iter().enumerate() {
+        let entry = base0_gdn_chunk_entry_v1(geometry, index as u64)
+            .ok_or(Base0GdnStateError::ChunkCountIsNotTheMaps { got: chunks.len(), want: geometry.chunk_count() })?;
+        if bytes.len() as u64 != entry.byte_len() {
+            return Err(Base0GdnStateError::ChunkIsNotItsOwnLength { index: index as u64, got: bytes.len(), want: entry.byte_len() });
+        }
+        let ordinal = geometry.layers.iter().position(|l| *l == entry.layer).ok_or(Base0GdnStateError::NoRecurrenceLayers)?;
+        let values: Vec<i32> = bytes.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let width = entry.row_bytes as usize / 4;
+        match entry.kind {
+            Base0GdnChunkKindV1::Delta => {
+                let head = &mut states[ordinal].heads[entry.head as usize];
+                for row in 0..entry.row_count as usize {
+                    let dst = (entry.row_start as usize + row) * width;
+                    head.s[dst..dst + width].copy_from_slice(&values[row * width..(row + 1) * width]);
+                }
+            }
+            Base0GdnChunkKindV1::Conv => {
+                for row in 0..entry.row_count as usize {
+                    states[ordinal].conv[entry.row_start as usize + row].copy_from_slice(&values[row * width..(row + 1) * width]);
+                }
+            }
+        }
+    }
+    Ok(states)
+}
+
+// =============================================================================================
+// gdn v2 — the same state, enumerated so ONE HEAD's window is one opening
+// =============================================================================================
+
+/// **The layout under [`PALW_GDN_STATE_CHUNK_MAP_NAME_V2`]**: the delta half exactly as v1 has it,
+/// and the convolution half keyed by HEAD instead of by window row.
+///
+/// # Why the conv half is re-keyed and the delta half is not
+///
+/// A court replaying `KDESC_Q36_GDN_STEP` replays one HEAD. v1's delta chunks are already per
+/// head, so opening one costs `v_dim × k_dim × 4` — 65,536 bytes on Qwen3.6's geometry, and that
+/// is the state the replay genuinely needs. v1's convolution chunks are per LAYER: one row spans
+/// every head's `2·k + v` channels, so a court that needed one head's four taps opened the layer's
+/// window and paid for thirty-one heads it would not read — 196,608 bytes against an 81,920-byte
+/// carrier, a term constant in the context and therefore payable at no context at all.
+///
+/// v2 covers the SAME bytes. `total_bytes` is v1's, chunk for chunk in the delta half and
+/// head-by-head in the conv half, and `the_two_recurrence_maps_cover_the_same_state` is what makes
+/// that a property rather than a claim.
+///
+/// # The gather, because head `h`'s conv channels are not contiguous
+///
+/// A window row is `[q | k | v]`, region-major, head-major inside each region — the engine's own
+/// `current.extend(q); extend(k); extend(v)` in `Qwen36Engine::linear_attention`. So head `h`'s
+/// channels are three disjoint ranges, and the map's name spells all three: a gather a reader has
+/// to reconstruct is a gather two readers reconstruct differently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Base0GdnStateGeometryV2 {
+    pub layers: Vec<u16>,
+    /// The VALUE heads — one delta state and one window slice each.
+    pub heads: u32,
+    /// **P0a: the key heads the window row's q and k regions are cut over.** `heads` under gdn v2,
+    /// whose gather is written over one head count; the class's derived `k_heads` under gdn v3
+    /// ([`base0_gdn_state_geometry_v3`]).
+    pub key_heads: u32,
+    pub k_dim: u32,
+    pub v_dim: u32,
+    pub conv_kernel: u32,
+    /// `2 · key_heads · k_dim + heads · v_dim` — the full window row the engine holds, which the
+    /// per-head rows are gathered OUT of (`(2 · k_dim + v_dim) · heads` under v2). Kept so a restore
+    /// can size the row it scatters back into.
+    pub conv_width: u32,
+    /// `k_dim × 4`: one row of one head's delta state. v1's, unchanged.
+    pub delta_row_bytes: u32,
+    /// `(2 · k_dim + v_dim) × 4`: one head's slice of one window row — the whole of what v2 moves.
+    pub conv_head_row_bytes: u32,
+    pub delta_rows_per_chunk: u32,
+    pub conv_rows_per_chunk: u32,
+}
+
+impl Base0GdnStateGeometryV2 {
+    pub fn delta_chunks_per_head(&self) -> u32 {
+        self.v_dim.div_ceil(self.delta_rows_per_chunk)
+    }
+    pub fn conv_chunks_per_head(&self) -> u32 {
+        self.conv_kernel.div_ceil(self.conv_rows_per_chunk)
+    }
+    /// Every chunk in the map: the delta half, then the conv half, both `(layer, head)`-keyed.
+    pub fn chunk_count(&self) -> u64 {
+        let per_head = self.delta_chunks_per_head() as u64 + self.conv_chunks_per_head() as u64;
+        self.layers.len() as u64 * self.heads as u64 * per_head
+    }
+    pub fn total_bytes(&self) -> u64 {
+        let heads = self.layers.len() as u64 * self.heads as u64;
+        heads * self.v_dim as u64 * self.delta_row_bytes as u64 + heads * self.conv_kernel as u64 * self.conv_head_row_bytes as u64
+    }
+    /// **Head `h`'s channel indices inside one full window row**, in the map's declared order
+    /// `[q, k, v]`. The one spelling of the gather: the chunker and the restorer both walk it, so
+    /// they cannot disagree about which channels are whose. It is [`Self::conv_head_channels_v3`],
+    /// which under v2 (`key_heads == heads`) is v2's gather `[q:h*k, k:heads*k+h*k, v:2*heads*k+h*v]`
+    /// lane for lane.
+    pub fn conv_head_channels(&self, head: u32) -> impl Iterator<Item = usize> + '_ {
+        self.conv_head_channels_v3(head)
+    }
+
+    /// **P0a: gdn v3's gather** — value head `h` reads key head `h % key_heads` (the tiling the
+    /// kernel, the court and the llama.cpp artifact agree on) out of a window row whose q and k
+    /// regions are `key_heads` wide: `[q:(h%kh)*k, k:kh*k+(h%kh)*k, v:2*kh*k+h*v]`.
+    pub fn conv_head_channels_v3(&self, head: u32) -> impl Iterator<Item = usize> + '_ {
+        let (k, v, kh) = (self.k_dim as usize, self.v_dim as usize, self.key_heads.max(1) as usize);
+        let h = head as usize;
+        let key = h % kh;
+        (key * k..key * k + k).chain(kh * k + key * k..kh * k + key * k + k).chain(2 * kh * k + h * v..2 * kh * k + h * v + v)
+    }
+}
+
+/// One chunk of the v2 map: a run of rows of one head's delta state, or of one head's slice of the
+/// convolution window. `head` is meaningful for BOTH kinds, which is the difference from v1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0GdnChunkEntryV2 {
+    pub kind: Base0GdnChunkKindV1,
+    pub layer: u16,
+    pub head: u32,
+    pub row_start: u32,
+    pub row_count: u32,
+    pub row_bytes: u32,
+}
+
+impl Base0GdnChunkEntryV2 {
+    pub fn byte_len(&self) -> u64 {
+        self.row_count as u64 * self.row_bytes as u64
+    }
+}
+
+/// **The v2 layout at this geometry.** Derived, never chosen — the same rule v1 applies, over the
+/// narrower conv row.
+pub fn base0_gdn_state_geometry_v2(
+    layers: &[u16],
+    heads: u32,
+    k_dim: u32,
+    v_dim: u32,
+    conv_kernel: u32,
+) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES, PALW_STEP_LEG_MAX_STATE_CHUNKS};
+    if heads == 0 || k_dim == 0 || v_dim == 0 || conv_kernel == 0 {
+        return Err(Base0GdnStateError::ZeroGeometry { heads, k_dim, v_dim });
+    }
+    if layers.is_empty() {
+        return Err(Base0GdnStateError::NoRecurrenceLayers);
+    }
+    let conv_width = (2 * k_dim as u64 + v_dim as u64) * heads as u64;
+    let delta_row_bytes = k_dim as u64 * 4;
+    let conv_head_row_bytes = (2 * k_dim as u64 + v_dim as u64) * 4;
+    for row in [delta_row_bytes, conv_head_row_bytes] {
+        if row > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 {
+            return Err(Base0GdnStateError::RowExceedsChunk { row_bytes: row, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+        }
+    }
+    if conv_width > u32::MAX as u64 {
+        return Err(Base0GdnStateError::RowExceedsChunk { row_bytes: conv_width * 4, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+    }
+    let geometry = Base0GdnStateGeometryV2 {
+        layers: layers.to_vec(),
+        heads,
+        key_heads: heads,
+        k_dim,
+        v_dim,
+        conv_kernel,
+        conv_width: conv_width as u32,
+        delta_row_bytes: delta_row_bytes as u32,
+        conv_head_row_bytes: conv_head_row_bytes as u32,
+        delta_rows_per_chunk: ((PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 / delta_row_bytes).min(v_dim as u64)) as u32,
+        conv_rows_per_chunk: ((PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 / conv_head_row_bytes).min(conv_kernel as u64)) as u32,
+    };
+    let count = geometry.chunk_count();
+    if count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
+        return Err(Base0GdnStateError::TooManyChunks { got: count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    Ok(geometry)
+}
+
+/// **P0a: the gdn v3 layout** — [`base0_gdn_state_geometry_v2`]'s chunks, head for head and byte for
+/// byte in size, over a window row cut at the KEY-head count: `2 · key_heads · k_dim + heads · v_dim`
+/// lanes, head `h` gathering key head `h % key_heads`. At `key_heads == heads` it IS v2's.
+pub fn base0_gdn_state_geometry_v3(
+    layers: &[u16],
+    key_heads: u32,
+    heads: u32,
+    k_dim: u32,
+    v_dim: u32,
+    conv_kernel: u32,
+) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
+    if key_heads == 0 || !heads.is_multiple_of(key_heads.max(1)) {
+        return Err(Base0GdnStateError::KeyHeadsDoNotGroupTheValueHeads { key_heads, heads });
+    }
+    let mut geometry = base0_gdn_state_geometry_v2(layers, heads, k_dim, v_dim, conv_kernel)?;
+    let conv_width = 2 * key_heads as u64 * k_dim as u64 + heads as u64 * v_dim as u64;
+    if conv_width > u32::MAX as u64 {
+        return Err(Base0GdnStateError::RowExceedsChunk {
+            row_bytes: conv_width * 4,
+            max: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES,
+        });
+    }
+    geometry.key_heads = key_heads;
+    geometry.conv_width = conv_width as u32;
+    Ok(geometry)
+}
+
+/// **The recurrence's capture geometry for THIS class** (P0a) — the one dispatch the producer's
+/// capture, the seat's recompute and the restore share: gdn v3's for a version-3 profile on the held
+/// composition that spells its key-head count (checked against the engine's own count), gdn v2's for
+/// every other class, whose map's gather is written over one head count.
+pub fn base0_gdn_state_geometry_for_class_v1(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    layers: &[u16],
+    key_heads: u32,
+    heads: u32,
+    head_dim: u32,
+    conv_kernel: u32,
+) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
+    // The held v5 composition, or (RFC-0006 consumer v2) the solo key-head map v3 — both gather over the class's key heads.
+    let key_head_map = kaspa_consensus_core::palw_state_chunk_map::palw_profile_spells_key_heads_v1(profile)
+        || profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v3();
+    if !key_head_map {
+        return base0_gdn_state_geometry_v2(layers, heads, head_dim, head_dim, conv_kernel);
+    }
+    let class = kaspa_consensus_core::palw_step::palw_gdn_key_heads_v1(profile)
+        .map_err(|_| Base0GdnStateError::KeyHeadsAreNotTheClasss { engine: key_heads, class: 0 })?;
+    if class != key_heads {
+        return Err(Base0GdnStateError::KeyHeadsAreNotTheClasss { engine: key_heads, class });
+    }
+    base0_gdn_state_geometry_v3(layers, key_heads, heads, head_dim, head_dim, conv_kernel)
+}
+
+/// **RFC-0006 consumer v2: does THIS class's recurrence ride gdn v1's full-window enumeration?** The solo gdn v1 map and the
+/// composed hybrid map whose `gdn=` half is v1. Every other recurrence map is head-windowed (v2, or v3's key-head gather).
+pub fn base0_gdn_full_window_v2(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> bool {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    let declared = profile.state_chunk_map_id;
+    declared == map::gdn_state_chunk_map_id_v1() || declared == map::hybrid_composed_state_chunk_map_id_v1()
+}
+
+/// **The recurrence's chunks under THIS class's map** (RFC-0006 consumer v2) — the one capture dispatch the producer, the seat's
+/// recompute and the composed checkpoint share: gdn v1's full-window enumeration where [`base0_gdn_full_window_v2`], the class's
+/// head-window enumeration ([`base0_gdn_state_geometry_for_class_v1`]) otherwise. Reading a v1 map's window at v2's head layout
+/// (or the reverse) is a state the producer never held, so the map, never the call site, decides.
+pub fn base0_gdn_state_chunks_for_map_v2(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    layers: &[u16],
+    states: &[Base0GdnLayerStateV1],
+    key_heads: u32,
+    heads: u32,
+    head_dim: u32,
+    conv_kernel: u32,
+) -> Result<Vec<Vec<u8>>, Base0GdnStateError> {
+    if base0_gdn_full_window_v2(profile) {
+        let geometry = base0_gdn_state_geometry_v1(layers, heads, head_dim, head_dim, conv_kernel)?;
+        return base0_gdn_state_chunks_v1(&geometry, states);
+    }
+    let geometry = base0_gdn_state_geometry_for_class_v1(profile, layers, key_heads, heads, head_dim, conv_kernel)?;
+    base0_gdn_state_chunks_v2(&geometry, states)
+}
+
+/// **The restore twin of [`base0_gdn_state_chunks_for_map_v2`]** — scatter under the gather the capture used.
+pub fn base0_gdn_state_from_chunks_for_map_v2(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    layers: &[u16],
+    chunks: &[Vec<u8>],
+    key_heads: u32,
+    heads: u32,
+    head_dim: u32,
+    conv_kernel: u32,
+) -> Result<Vec<Base0GdnLayerStateV1>, Base0GdnStateError> {
+    if base0_gdn_full_window_v2(profile) {
+        let geometry = base0_gdn_state_geometry_v1(layers, heads, head_dim, head_dim, conv_kernel)?;
+        return base0_gdn_state_from_chunks_v1(&geometry, chunks);
+    }
+    let geometry = base0_gdn_state_geometry_for_class_v1(profile, layers, key_heads, heads, head_dim, conv_kernel)?;
+    base0_gdn_state_from_chunks_v2(&geometry, chunks)
+}
+
+/// The v2 entry at `chunk_index`, or `None` past the end of the map — the enumeration itself.
+pub fn base0_gdn_chunk_entry_v2(geometry: &Base0GdnStateGeometryV2, chunk_index: u64) -> Option<Base0GdnChunkEntryV2> {
+    if chunk_index >= geometry.chunk_count() {
+        return None;
+    }
+    let delta_per_head = geometry.delta_chunks_per_head() as u64;
+    let conv_per_head = geometry.conv_chunks_per_head() as u64;
+    let delta_total = geometry.layers.len() as u64 * geometry.heads as u64 * delta_per_head;
+    if chunk_index < delta_total {
+        let layer_ordinal = (chunk_index / (geometry.heads as u64 * delta_per_head)) as usize;
+        let within_layer = chunk_index % (geometry.heads as u64 * delta_per_head);
+        let head = (within_layer / delta_per_head) as u32;
+        let block = (within_layer % delta_per_head) as u32;
+        let row_start = block * geometry.delta_rows_per_chunk;
+        return Some(Base0GdnChunkEntryV2 {
+            kind: Base0GdnChunkKindV1::Delta,
+            layer: geometry.layers[layer_ordinal],
+            head,
+            row_start,
+            row_count: (geometry.v_dim - row_start).min(geometry.delta_rows_per_chunk),
+            row_bytes: geometry.delta_row_bytes,
+        });
+    }
+    let within_conv = chunk_index - delta_total;
+    let layer_ordinal = (within_conv / (geometry.heads as u64 * conv_per_head)) as usize;
+    let within_layer = within_conv % (geometry.heads as u64 * conv_per_head);
+    let head = (within_layer / conv_per_head) as u32;
+    let block = (within_layer % conv_per_head) as u32;
+    let row_start = block * geometry.conv_rows_per_chunk;
+    Some(Base0GdnChunkEntryV2 {
+        kind: Base0GdnChunkKindV1::Conv,
+        layer: geometry.layers[layer_ordinal],
+        head,
+        row_start,
+        row_count: (geometry.conv_kernel - row_start).min(geometry.conv_rows_per_chunk),
+        row_bytes: geometry.conv_head_row_bytes,
+    })
+}
+
+/// **Chunk a live recurrence state under v2** — the capture side, gathering each head's conv
+/// channels out of the full window rows the engine holds.
+pub fn base0_gdn_state_chunks_v2(
+    geometry: &Base0GdnStateGeometryV2,
+    states: &[Base0GdnLayerStateV1],
+) -> Result<Vec<Vec<u8>>, Base0GdnStateError> {
+    if states.len() != geometry.layers.len() {
+        return Err(Base0GdnStateError::NoRecurrenceLayers);
+    }
+    for (ordinal, state) in states.iter().enumerate() {
+        let layer = geometry.layers[ordinal];
+        if state.heads.len() != geometry.heads as usize {
+            return Err(Base0GdnStateError::StateIsNotTheGeometrys { layer, head: state.heads.len() as u32 });
+        }
+        for (head, s) in state.heads.iter().enumerate() {
+            if s.d_k != geometry.k_dim as usize || s.d_v != geometry.v_dim as usize || s.s.len() != s.d_k * s.d_v {
+                return Err(Base0GdnStateError::StateIsNotTheGeometrys { layer, head: head as u32 });
+            }
+        }
+        if state.conv.len() != geometry.conv_kernel as usize || state.conv.iter().any(|r| r.len() != geometry.conv_width as usize) {
+            return Err(Base0GdnStateError::ConvIsNotTheGeometrys { layer });
+        }
+    }
+    let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+    for index in 0..geometry.chunk_count() {
+        let entry = base0_gdn_chunk_entry_v2(geometry, index)
+            .ok_or(Base0GdnStateError::ChunkCountIsNotTheMaps { got: index as usize, want: geometry.chunk_count() })?;
+        let ordinal = geometry.layers.iter().position(|l| *l == entry.layer).ok_or(Base0GdnStateError::NoRecurrenceLayers)?;
+        let state = &states[ordinal];
+        let mut bytes = Vec::with_capacity(entry.byte_len() as usize);
+        match entry.kind {
+            Base0GdnChunkKindV1::Delta => {
+                let head = &state.heads[entry.head as usize];
+                for row in entry.row_start..entry.row_start + entry.row_count {
+                    let start = row as usize * geometry.k_dim as usize;
+                    for value in &head.s[start..start + geometry.k_dim as usize] {
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+            Base0GdnChunkKindV1::Conv => {
+                for row in entry.row_start..entry.row_start + entry.row_count {
+                    let window = &state.conv[row as usize];
+                    for channel in geometry.conv_head_channels(entry.head) {
+                        let value = window.get(channel).ok_or(Base0GdnStateError::ConvIsNotTheGeometrys { layer: entry.layer })?;
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+        }
+        out.push(bytes);
+    }
+    Ok(out)
+}
+
+/// **Restore a recurrence state from v2 chunks** — the replay side, scattering each head's conv
+/// channels back where the gather took them from.
+///
+/// **P0a: under gdn v3 a key-head channel is gathered into every value head that reads it** (`heads
+/// / key_heads` copies), so the chunk stream is not every byte string: copies that disagree gather
+/// from no state at all, and the restore refuses them by name ([`Base0GdnStateError::ConvCopiesDisagree`])
+/// instead of keeping whichever head was scattered last. Under v2 every channel has one owner and
+/// the check never fires.
+pub fn base0_gdn_state_from_chunks_v2(
+    geometry: &Base0GdnStateGeometryV2,
+    chunks: &[Vec<u8>],
+) -> Result<Vec<Base0GdnLayerStateV1>, Base0GdnStateError> {
+    use kaspa_consensus_core::palw_qwen36_ops::Qwen36GdnStateV1;
+    if chunks.len() as u64 != geometry.chunk_count() {
+        return Err(Base0GdnStateError::ChunkCountIsNotTheMaps { got: chunks.len(), want: geometry.chunk_count() });
+    }
+    let mut states: Vec<Base0GdnLayerStateV1> = geometry
+        .layers
+        .iter()
+        .map(|_| Base0GdnLayerStateV1 {
+            heads: (0..geometry.heads).map(|_| Qwen36GdnStateV1::zeros(geometry.v_dim as usize, geometry.k_dim as usize)).collect(),
+            conv: vec![vec![0i32; geometry.conv_width as usize]; geometry.conv_kernel as usize],
+        })
+        .collect();
+    // Which window channels a chunk has already written, per layer and row — v3's shared q/k
+    // channels arrive once per value head that gathers them.
+    let mut written: Vec<Vec<Vec<bool>>> =
+        geometry.layers.iter().map(|_| vec![vec![false; geometry.conv_width as usize]; geometry.conv_kernel as usize]).collect();
+    for (index, bytes) in chunks.iter().enumerate() {
+        let entry = base0_gdn_chunk_entry_v2(geometry, index as u64)
+            .ok_or(Base0GdnStateError::ChunkCountIsNotTheMaps { got: chunks.len(), want: geometry.chunk_count() })?;
+        if bytes.len() as u64 != entry.byte_len() {
+            return Err(Base0GdnStateError::ChunkIsNotItsOwnLength { index: index as u64, got: bytes.len(), want: entry.byte_len() });
+        }
+        let ordinal = geometry.layers.iter().position(|l| *l == entry.layer).ok_or(Base0GdnStateError::NoRecurrenceLayers)?;
+        let values: Vec<i32> = bytes.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let width = entry.row_bytes as usize / 4;
+        match entry.kind {
+            Base0GdnChunkKindV1::Delta => {
+                let head = &mut states[ordinal].heads[entry.head as usize];
+                for row in 0..entry.row_count as usize {
+                    let dst = (entry.row_start as usize + row) * width;
+                    head.s[dst..dst + width].copy_from_slice(&values[row * width..(row + 1) * width]);
+                }
+            }
+            Base0GdnChunkKindV1::Conv => {
+                for row in 0..entry.row_count as usize {
+                    let at = entry.row_start as usize + row;
+                    let window = &mut states[ordinal].conv[at];
+                    let seen = &mut written[ordinal][at];
+                    for (slot, channel) in geometry.conv_head_channels(entry.head).enumerate() {
+                        let value = values[row * width + slot];
+                        if seen[channel] && window[channel] != value {
+                            return Err(Base0GdnStateError::ConvCopiesDisagree {
+                                layer: entry.layer,
+                                row: at as u32,
+                                channel: channel as u32,
+                            });
+                        }
+                        window[channel] = value;
+                        seen[channel] = true;
+                    }
+                }
+            }
+        }
+    }
+    Ok(states)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kaspa_consensus_core::palw_step_leg::{step_merkle_range_siblings_v1, step_merkle_root_v1, step_range_opening_root_v1};
+
+    fn leaves(n: usize) -> Vec<Hash64> {
+        (0..n as u64).map(|i| Hash64::from_u64_word(i.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(7))).collect()
+    }
+
+    /// **The accumulator IS the step tree.** The one property this module owes: fold the same
+    /// leaves and get the byte-identical root `step_merkle_root_v1` produces, at every retained
+    /// level and at every leaf count — the odd ones especially, because promote-odd is the rule a
+    /// second fold gets wrong, and a root the court recomputes differently is an honest producer
+    /// who can neither be convicted nor paid.
+    #[test]
+    fn the_sparse_accumulator_is_the_step_tree() {
+        let mut counts: Vec<usize> = (1..=80).collect();
+        counts.extend([127, 128, 129, 255, 256, 257, 511, 513, 1_000, 1_023, 1_024, 1_025, 4_095, 4_096, 4_097, 8_191]);
+        for n in counts {
+            let ls = leaves(n);
+            let dense = step_merkle_root_v1(&ls).expect("a dense root");
+            for retain_level in [0u32, 1, 2, 3, 5, 8, 12, 13] {
+                let sparse = Base0SparseStepTreeV1::from_leaves_v1(&ls, retain_level).expect("folds");
+                assert_eq!(sparse.root().expect("a shaped tree"), dense, "leaf count {n}, retain level {retain_level}");
+                assert_eq!(sparse.retained_nodes().len() as u64, level_width(n as u64, retain_level));
+            }
+        }
+    }
+
+    /// The sparse sibling walk is `step_merkle_range_siblings_v1`'s walk — same set, same ORDER.
+    /// Order is part of the form: `step_range_opening_root_v1` consumes left-then-right per level,
+    /// bottom-up, and a correctly-valued set in the wrong order verifies against nothing.
+    #[test]
+    fn the_sparse_range_siblings_are_the_dense_ones() {
+        for n in [1usize, 2, 3, 5, 8, 9, 16, 17, 31, 33, 64, 100, 129, 260] {
+            let ls = leaves(n);
+            for retain_level in [0u32, 1, 2, 3, 5] {
+                let tree = Base0SparseStepTreeV1::from_leaves_v1(&ls, retain_level).expect("folds");
+                for first in 0..n as u64 {
+                    for count in 1..=(n as u64 - first).min(9) {
+                        let (span_first, span_end) = tree.span_for_range(first, count).expect("a span");
+                        let span = &ls[span_first as usize..span_end as usize];
+                        let sparse = tree.range_siblings_v1(span_first, span, first, count).expect("siblings");
+                        let dense = step_merkle_range_siblings_v1(&ls, first as usize, count as usize).expect("dense siblings");
+                        assert_eq!(sparse, dense, "n={n} level={retain_level} first={first} count={count}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// **The edges alone give the span's siblings** (ADR-0121): over odd and even trees and small
+    /// retained levels, the sibling set computed from the range's two edge blocks is the one the
+    /// whole replayed span gives — so an executor opening an interval need hold only those two blocks.
+    #[test]
+    fn the_edge_blocks_give_the_spans_siblings() {
+        for n in [1usize, 2, 3, 5, 8, 9, 16, 17, 33, 64, 100, 129, 260] {
+            let ls = leaves(n);
+            for retain_level in [0u32, 1, 2, 3, 5] {
+                let tree = Base0SparseStepTreeV1::from_leaves_v1(&ls, retain_level).expect("folds");
+                let block = 1u64 << retain_level;
+                for first in 0..n as u64 {
+                    for count in 1..=(n as u64 - first).min(40) {
+                        let (span_first, span_end) = tree.span_for_range(first, count).expect("a span");
+                        let whole = tree.range_siblings_v1(span_first, &ls[span_first as usize..span_end as usize], first, count);
+                        let edge = |leaf: u64| {
+                            let at = (leaf / block) * block;
+                            let end = (at + block).min(n as u64);
+                            (at, &ls[at as usize..end as usize])
+                        };
+                        let (left, right) = (edge(first), edge(first + count - 1));
+                        let edges: Vec<(u64, &[Hash64])> = if left.0 == right.0 { vec![left] } else { vec![left, right] };
+                        let from_edges = tree.range_siblings_from_edges_v1(&edges, first, count);
+                        assert_eq!(from_edges, whole, "n={n} level={retain_level} first={first} count={count}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The opening the sparse tree assembles verifies against the tree's own root, which is the
+    /// step leg's root — end to end, without the dense leaf vector ever being consulted for
+    /// anything but the replayed span.
+    #[test]
+    fn a_sparse_range_opening_verifies_against_the_step_root() {
+        for n in [1usize, 7, 16, 33, 100, 257] {
+            let ls = leaves(n);
+            let tree = Base0SparseStepTreeV1::from_leaves_v1(&ls, 3).expect("folds");
+            let root = tree.root().expect("a shaped tree");
+            for first in 0..n as u64 {
+                for count in 1..=(n as u64 - first).min(5) {
+                    let (span_first, span_end) = tree.span_for_range(first, count).expect("a span");
+                    let opening = tree
+                        .range_opening_v1(span_first, &ls[span_first as usize..span_end as usize], first, count)
+                        .expect("an opening");
+                    assert_eq!(step_range_opening_root_v1(n as u64, &opening).expect("recomputes"), root);
+                }
+            }
+        }
+    }
+
+    /// **The fold range's root is the consensus root** (ADR-0121): over odd and even trees, every
+    /// retained level a small tree exercises, and ranges that start and end on and off block
+    /// boundaries, reach the tree's tail, or sit inside one block — the root computed from the
+    /// edges' leaves and the whole blocks' digests is `step_range_opening_root_v1`'s from every leaf,
+    /// with the same siblings; and a sibling too few or too many is refused, as the consensus walk
+    /// refuses it.
+    /// **The stack fold is the level fold** — `fold_nodes_promote_odd_v1` over every width, against
+    /// the level-by-level promote-odd fold (`fold_block_v1`) and the step tree's own root.
+    #[test]
+    fn the_stack_fold_is_the_level_fold() {
+        for n in 1..=300usize {
+            let ls = leaves(n);
+            let nodes: Vec<Hash64> = ls.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(i as u64, h)).collect();
+            assert_eq!(Some(fold_nodes_promote_odd_v1(&nodes)), fold_block_v1(nodes.clone()), "n={n}");
+            assert_eq!(fold_nodes_promote_odd_v1(&nodes), step_merkle_root_v1(&ls).expect("a root"), "n={n}");
+        }
+    }
+
+    /// **SEAT-S4's two fold primitives are the consensus walk.** For every tree, retained level and
+    /// segment-shaped range: the aligned span's siblings read off the retained vector are the
+    /// consensus siblings (and those of the tree's own edge walk); the streamed fold of the span's
+    /// leaves roots to the step root under them; the sibling count is the one the walk spends; and a
+    /// range that is not its own span is refused, as is a leaf out of order.
+    #[test]
+    fn an_aligned_span_is_opened_from_the_retained_vector_alone() {
+        let mut checked = 0usize;
+        for n in [1u64, 2, 3, 7, 8, 9, 31, 64, 65, 100, 257, 1_000] {
+            let ls = leaves(n as usize);
+            let root = step_merkle_root_v1(&ls).expect("a root");
+            for retain_level in [0u32, 1, 2, 3, 5, 7] {
+                let tree = Base0SparseStepTreeV1::from_leaves_v1(&ls, retain_level).expect("folds");
+                for k in [1u64, 2, 3, 4, 7] {
+                    for i in 0..k {
+                        let (first, end) = (i * n / k, (i + 1) * n / k);
+                        if end == first {
+                            continue;
+                        }
+                        let (span_first, span_end) = tree.span_for_range(first, end - first).expect("a span");
+                        let count = span_end - span_first;
+                        let siblings = tree.aligned_range_siblings_v1(span_first, count).expect("an aligned span opens");
+                        let consensus = step_merkle_range_siblings_v1(&ls, span_first as usize, count as usize).expect("siblings");
+                        assert_eq!(siblings, consensus, "n={n} r={retain_level} [{span_first}, {span_end})");
+                        assert_eq!(
+                            siblings,
+                            tree.range_siblings_from_edges_v1(&[], span_first, count).expect("the edge walk"),
+                            "n={n} r={retain_level}: the lean walk and the tower walk"
+                        );
+                        assert_eq!(base0_range_sibling_count_v1(n, span_first, count), Some(siblings.len()));
+                        // The seat's streamed fold — at the tree's level and at the seat's own.
+                        for fold_level in [retain_level, PALW_BASE0_SPARSE_RETAIN_LEVEL_V1] {
+                            let mut fold = Base0RangeFoldV1::new(n, span_first, count, fold_level).expect("a range");
+                            for index in span_first..span_end {
+                                fold.push(index, ls[index as usize]).expect("in order");
+                            }
+                            assert_eq!(fold.root_v1(&siblings, PALW_STEP_LEG_MAX_LEAVES), Ok(root), "n={n} r={retain_level}");
+                        }
+                        // The exact range, with the consensus siblings, streamed the same way.
+                        let exact = step_merkle_range_siblings_v1(&ls, first as usize, (end - first) as usize).expect("siblings");
+                        assert_eq!(base0_range_sibling_count_v1(n, first, end - first), Some(exact.len()));
+                        let mut fold = Base0RangeFoldV1::new(n, first, end - first, retain_level).expect("a range");
+                        for index in first..end {
+                            fold.push(index, ls[index as usize]).expect("in order");
+                        }
+                        assert_eq!(fold.root_v1(&exact, PALW_STEP_LEG_MAX_LEAVES), Ok(root), "n={n} exact [{first}, {end})");
+                        // A lie in one leaf moves the root.
+                        let mut fold = Base0RangeFoldV1::new(n, first, end - first, retain_level).expect("a range");
+                        for index in first..end {
+                            let h = if index == first { Hash64::from_u64_word(0xBAD) } else { ls[index as usize] };
+                            fold.push(index, h).expect("in order");
+                        }
+                        assert_ne!(fold.root_v1(&exact, PALW_STEP_LEG_MAX_LEAVES), Ok(root));
+                        if (span_first, span_end) != (first, end) {
+                            assert!(tree.aligned_range_siblings_v1(first, end - first).is_err(), "an unaligned range is refused");
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 300, "the sweep ran: {checked}");
+        let mut fold = Base0RangeFoldV1::new(10, 2, 5, 1).expect("a range");
+        assert!(fold.push(3, Hash64::default()).is_err(), "a leaf out of order");
+        assert!(fold.root_v1(&[], PALW_STEP_LEG_MAX_LEAVES).is_err(), "an unfinished range");
+        assert!(Base0RangeFoldV1::new(10, 8, 5, 1).is_err(), "a range past the tree");
+    }
+
+    #[test]
+    fn the_fold_range_root_is_the_consensus_root() {
+        use kaspa_consensus_core::palw_step_leg::{step_merkle_range_siblings_v1, step_range_opening_root_v1};
+        let mut checked = 0usize;
+        for n in [1u64, 2, 3, 5, 8, 9, 16, 17, 33, 65, 100, 257] {
+            let ls = leaves(n as usize);
+            for retain_level in [0u32, 1, 2, 3, 5] {
+                let block = 1u64 << retain_level;
+                for first in 0..n {
+                    for count in 1..=(n - first) {
+                        if count > 24 && count % 11 != 0 {
+                            continue; // keep the sweep quick; the long ranges are sampled
+                        }
+                        let end = first + count;
+                        let siblings = step_merkle_range_siblings_v1(&ls, first as usize, count as usize).expect("siblings");
+                        let opening = PalwStepRangeOpeningV1 {
+                            first_leaf_index: first,
+                            leaf_hashes: ls[first as usize..end as usize].to_vec(),
+                            siblings: siblings.clone(),
+                        };
+                        let consensus = step_range_opening_root_v1(n, &opening).expect("the consensus walk");
+                        // The whole blocks, as `whole_blocks_v1` names them.
+                        let first_block = first.div_ceil(block);
+                        let end_block = if end >= n { end.div_ceil(block) } else { end / block }.max(first_block);
+                        let digests: Vec<Hash64> = (first_block..end_block)
+                            .map(|k| {
+                                let a = k * block;
+                                let b = ((k + 1) * block).min(n);
+                                base0_fold_block_digest_v1(a, &ls[a as usize..b as usize]).expect("a block")
+                            })
+                            .collect();
+                        let left_end = (first_block * block).min(end);
+                        let right_first = (end_block * block).max(first).min(end);
+                        let (left, right) = if digests.is_empty() {
+                            (&ls[first as usize..end as usize], &ls[end as usize..end as usize])
+                        } else {
+                            (&ls[first as usize..left_end as usize], &ls[right_first as usize..end as usize])
+                        };
+                        let folded = base0_fold_range_root_v1(
+                            n,
+                            first,
+                            count,
+                            retain_level,
+                            left,
+                            &digests,
+                            right,
+                            &siblings,
+                            PALW_STEP_LEG_MAX_LEAVES,
+                        )
+                        .unwrap_or_else(|e| panic!("n={n} r={retain_level} [{first}, {end}): {e}"));
+                        assert_eq!(folded, consensus, "n={n} r={retain_level} [{first}, {end})");
+                        if !siblings.is_empty() {
+                            let short = &siblings[..siblings.len() - 1];
+                            assert!(
+                                base0_fold_range_root_v1(
+                                    n,
+                                    first,
+                                    count,
+                                    retain_level,
+                                    left,
+                                    &digests,
+                                    right,
+                                    short,
+                                    PALW_STEP_LEG_MAX_LEAVES
+                                )
+                                .is_err(),
+                                "a short path is refused"
+                            );
+                        }
+                        let mut long = siblings.clone();
+                        long.push(Hash64::from_u64_word(9));
+                        assert!(
+                            base0_fold_range_root_v1(
+                                n,
+                                first,
+                                count,
+                                retain_level,
+                                left,
+                                &digests,
+                                right,
+                                &long,
+                                PALW_STEP_LEG_MAX_LEAVES
+                            )
+                            .is_err(),
+                            "a long path is refused"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 5_000, "the sweep ran: {checked}");
+    }
+
+    /// **A tree deeper than `2^22` serves its honest openings** (ADR-0119 §7's sibling cap). The
+    /// range `[2^24 − 1, 2^24 + 1)` of a `2^26 − 1`-leaf tree has an odd edge at each of its 24
+    /// lowest levels on both sides, and the right half's root at the top: 49 siblings, past the
+    /// default leg's 44, which refused it — while the chain walks it under the ladder that admitted
+    /// the claim. Built from its retained
+    /// nodes and the replayed span alone, the way an executor holds a claim that size, with the two
+    /// span blocks' retained nodes the span's own so the tree is one tree.
+    #[test]
+    fn a_tree_deeper_than_the_default_leg_serves_its_honest_openings() {
+        use kaspa_consensus_core::palw_step_leg::step_range_opening_root_capped_v1;
+        let leaf_count = (1u64 << 26) - 1;
+        let retain_level = PALW_BASE0_SPARSE_RETAIN_LEVEL_V1;
+        let retained = (0..level_width(leaf_count, retain_level)).map(|i| Hash64::from_u64_word(i ^ 0x5A5A)).collect();
+        let mut tree = Base0SparseStepTreeV1 { leaf_count, retain_level, retained };
+        let (first, count) = ((1u64 << 24) - 1, 2);
+        let (span_first, span_end) = tree.span_for_range(first, count).expect("a span");
+        let span = leaves((span_end - span_first) as usize);
+        let folded = tree.span_levels(span_first, &span).pop().expect("the span at the retained level");
+        let at = (span_first >> retain_level) as usize;
+        tree.retained[at..at + folded.len()].copy_from_slice(&folded);
+
+        let opening = tree.range_opening_v1(span_first, &span, first, count).expect("an honest opening is served");
+        assert_eq!(opening.siblings.len(), 49, "24 levels on both edges, and the right half's root");
+        assert!(opening.siblings.len() > 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS, "past the default leg's cap");
+        let root = tree.root().expect("a shaped tree");
+        assert_eq!(step_range_opening_root_capped_v1(leaf_count, &opening, 1 << 26).expect("the chain walks it"), root);
+    }
+
+    /// A short fold is refused, for the reason `Base0StepCaptureV1::finish` refuses a short
+    /// capture: the root over an unfilled space says "computed zero" about every missing leaf.
+    #[test]
+    fn a_short_fold_is_refused_by_name() {
+        let mut acc = Base0SparseStepAccumulatorV1::new(4, 1).expect("new");
+        acc.push(Hash64::from_u64_word(1)).expect("push");
+        assert_eq!(acc.progress(), (1, 4));
+        assert_eq!(acc.finish().unwrap_err(), Base0SparseCaptureError::CaptureIncomplete { pushed: 1, expected: 4 });
+
+        let mut acc = Base0SparseStepAccumulatorV1::new(1, 1).expect("new");
+        acc.push(Hash64::from_u64_word(1)).expect("push");
+        assert_eq!(acc.push(Hash64::from_u64_word(2)).unwrap_err(), Base0SparseCaptureError::CaptureOverrun { got: 2, expected: 1 });
+    }
+
+    /// The retention bound the module exists for, stated as arithmetic: what an executor keeps is
+    /// the leaf count divided by the block, never the leaf count.
+    #[test]
+    fn the_retained_vector_is_the_leaf_count_over_the_block() {
+        let tree = Base0SparseStepTreeV1::from_leaves_v1(&leaves(4_097), PALW_BASE0_SPARSE_RETAIN_LEVEL_V1).expect("folds");
+        assert_eq!(tree.retained_nodes().len(), 2, "4,097 leaves ride two retained nodes at level 12");
+        // The whole tree at the ladder's current cap, priced: 2^22 leaves is 1,024 retained nodes.
+        assert_eq!(level_width(1 << 22, PALW_BASE0_SPARSE_RETAIN_LEVEL_V1), 1_024);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ADR-0077 Decision 10, the recurrence half — W2 on a synthetic GatedDeltaNet state map
+    // ------------------------------------------------------------------------------------------
+
+    use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
+    use kaspa_consensus_core::palw_qwen36_ops::{Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gdn_step};
+
+    /// A deterministic little stream of A16 codes — the same shape a projection would hand the
+    /// recurrence, without a 33 GiB artifact to produce it.
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> i32 {
+            self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            ((self.0.rotate_right(24) % 4_001) as i64 - 2_000) as i32
+        }
+        fn row(&mut self, n: usize) -> Vec<i32> {
+            (0..n).map(|_| self.next()).collect()
+        }
+    }
+
+    /// One head's inputs at one position: `(k, v, q, decay, beta)` — what the projections in front
+    /// of the recurrence hand it.
+    type GdnStep = (Vec<i32>, Vec<i32>, Vec<i32>, i64, i64);
+
+    fn gdn_params() -> Qwen36GdnParamsV1 {
+        let p = |m: i64, sh: u8| A16QuantParams { multiplier: m, shift: sh, zero: 0 };
+        Qwen36GdnParamsV1 { read: p(1 << 20, 20), write_shift: -6, delta: p(1 << 21, 20), out: p(1 << 20, 21) }
+    }
+
+    /// The synthetic class: two recurrence layers, two heads, `k=4`, `v=3`, a 3-row conv window.
+    fn gdn_geometry() -> Base0GdnStateGeometryV1 {
+        base0_gdn_state_geometry_v1(&[1, 3], 2, 4, 3, 3).expect("a geometry")
+    }
+
+    fn gdn_live_state(seed: u64, geometry: &Base0GdnStateGeometryV1) -> Vec<Base0GdnLayerStateV1> {
+        let mut rng = Lcg(seed);
+        geometry
+            .layers
+            .iter()
+            .map(|_| Base0GdnLayerStateV1 {
+                heads: (0..geometry.heads)
+                    .map(|_| {
+                        let mut st = Qwen36GdnStateV1::zeros(geometry.v_dim as usize, geometry.k_dim as usize);
+                        st.s = rng.row(st.s.len());
+                        st
+                    })
+                    .collect(),
+                conv: (0..geometry.conv_kernel).map(|_| rng.row(geometry.conv_width as usize)).collect(),
+            })
+            .collect()
+    }
+
+    /// **The map is a bijection on the state it describes.** Chunk a live recurrence state and
+    /// restore it: byte for byte, value for value. A map that lost the convolution window, or
+    /// mis-ordered the heads, would restore a state the replay folds forward — and the divergence
+    /// would surface as a fault against an honest producer, at a position nobody could point at.
+    #[test]
+    fn the_recurrence_state_survives_its_own_map() {
+        let geometry = gdn_geometry();
+        let live = gdn_live_state(0xC0FFEE, &geometry);
+        let chunks = base0_gdn_state_chunks_v1(&geometry, &live).expect("chunks");
+        assert_eq!(chunks.len() as u64, geometry.chunk_count());
+        assert_eq!(chunks.iter().map(|c| c.len() as u64).sum::<u64>(), geometry.total_bytes());
+        for (index, bytes) in chunks.iter().enumerate() {
+            let entry = base0_gdn_chunk_entry_v1(&geometry, index as u64).expect("an entry");
+            assert_eq!(bytes.len() as u64, entry.byte_len(), "chunk {index} is its entry's length");
+        }
+        assert_eq!(base0_gdn_state_from_chunks_v1(&geometry, &chunks).expect("restores"), live);
+
+        // A chunk that is not its own declared length is a refusal, never a partial state.
+        let mut short = chunks.clone();
+        short[0].pop();
+        assert!(matches!(
+            base0_gdn_state_from_chunks_v1(&geometry, &short),
+            Err(Base0GdnStateError::ChunkIsNotItsOwnLength { index: 0, .. })
+        ));
+        assert!(matches!(
+            base0_gdn_state_from_chunks_v1(&geometry, &chunks[1..]),
+            Err(Base0GdnStateError::ChunkCountIsNotTheMaps { .. })
+        ));
+        // And the layout string is frozen: the id a class would register is a function of it.
+        assert_eq!(base0_gdn_state_chunk_map_id_v1(), base0_gdn_state_chunk_map_id_v1());
+        assert_ne!(
+            base0_gdn_state_chunk_map_id_v1(),
+            kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
+            "the recurrence layout is not the KV one"
+        );
+    }
+
+    /// **The executor's map ids ARE the court's** — one spelling, in the lower crate, called from
+    /// here.
+    ///
+    /// This crate held its own copy of the layout string for a round. Two spellings of a map name
+    /// is two ids, and a class whose capture and whose adjudicator disagree about their map id is a
+    /// class no dispute can open: the producer commits chunks under one identity and the court
+    /// hashes them under another, so every honest refutation reads as malformed evidence. The
+    /// identity is checked here rather than assumed because the copy compiled fine.
+    #[test]
+    fn the_executors_recurrence_map_ids_are_the_courts() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        assert_eq!(base0_gdn_state_chunk_map_id_v1(), map::gdn_state_chunk_map_id_v1());
+        assert_eq!(base0_gdn_state_chunk_map_id_v2(), map::gdn_state_chunk_map_id_v2());
+        assert_ne!(base0_gdn_state_chunk_map_id_v1(), base0_gdn_state_chunk_map_id_v2(), "two enumerations, two ids");
+        assert_eq!(PALW_GDN_STATE_CHUNK_MAP_NAME_V1, map::PALW_GDN_STATE_CHUNK_MAP_NAME_V1);
+        assert_eq!(PALW_GDN_STATE_CHUNK_MAP_NAME_V2, map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2);
+
+        // **A class with attention layers registers the COMPOSITION, not the recurrence half.**
+        // Registering the recurrence map alone leaves its attention anchors with no geometry the
+        // court can read, which is `Unadjudicable` on honest material.
+        let hybrid = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(
+            kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
+            ),
+        )
+        .expect("the pinned hybrid geometry projects");
+        assert_ne!(hybrid.full_attention_interval, 0, "the hybrid stopped having attention layers");
+        assert_eq!(base0_class_state_chunk_map_id_v2(&hybrid), map::hybrid_state_chunk_map_id_v2());
+        assert_eq!(base0_class_state_chunk_map_id_v1(&hybrid), map::hybrid_state_chunk_map_id_v1());
+        let mut recurrent = hybrid.clone();
+        recurrent.full_attention_interval = 0;
+        assert_eq!(base0_class_state_chunk_map_id_v2(&recurrent), map::gdn_state_chunk_map_id_v2());
+        assert_eq!(base0_class_state_chunk_map_id_v1(&recurrent), map::gdn_state_chunk_map_id_v1());
+    }
+
+    /// **v2 is a RE-ORDERING, not a narrowing: the two maps cover the same state.**
+    ///
+    /// Same total bytes, same restored value. A v2 map that dropped a channel would restore a
+    /// state the producer never held and fold forward from it — the divergence surfacing as a
+    /// fault against an honest producer, at a position nobody could point at. The head-slice is
+    /// only sound because the bytes are all still there, so that is what is checked.
+    #[test]
+    fn the_two_recurrence_maps_cover_the_same_state() {
+        let v1 = gdn_geometry();
+        let v2 = base0_gdn_state_geometry_v2(&[1, 3], 2, 4, 3, 3).expect("a v2 geometry");
+        assert_eq!(v2.total_bytes(), v1.total_bytes(), "v2 covers different bytes than v1");
+        assert_eq!(
+            v2.conv_head_row_bytes as u64 * v2.heads as u64,
+            v1.conv_row_bytes as u64,
+            "a head row is the layer row over heads"
+        );
+        // Every channel of a window row belongs to exactly one head, and to one slot of it.
+        let mut seen = std::collections::HashSet::new();
+        for head in 0..v2.heads {
+            for channel in v2.conv_head_channels(head) {
+                assert!(seen.insert(channel), "channel {channel} is in two heads' slices");
+                assert!(channel < v2.conv_width as usize, "channel {channel} is past the window row");
+            }
+        }
+        assert_eq!(seen.len(), v2.conv_width as usize, "the head slices do not cover the window row");
+
+        let live = gdn_live_state(0xC0FFEE, &v1);
+        let chunks = base0_gdn_state_chunks_v2(&v2, &live).expect("v2 chunks");
+        assert_eq!(chunks.len() as u64, v2.chunk_count());
+        assert_eq!(chunks.iter().map(|c| c.len() as u64).sum::<u64>(), v2.total_bytes());
+        for (index, bytes) in chunks.iter().enumerate() {
+            let entry = base0_gdn_chunk_entry_v2(&v2, index as u64).expect("an entry");
+            assert_eq!(bytes.len() as u64, entry.byte_len(), "chunk {index} is its entry's length");
+        }
+        assert_eq!(base0_gdn_state_from_chunks_v2(&v2, &chunks).expect("restores"), live, "the v2 map is not a bijection");
+
+        // The refusals are v1's, for v1's reasons: a partial state is never assembled.
+        let mut short = chunks.clone();
+        short[0].pop();
+        assert!(matches!(
+            base0_gdn_state_from_chunks_v2(&v2, &short),
+            Err(Base0GdnStateError::ChunkIsNotItsOwnLength { index: 0, .. })
+        ));
+        assert!(matches!(base0_gdn_state_from_chunks_v2(&v2, &chunks[1..]), Err(Base0GdnStateError::ChunkCountIsNotTheMaps { .. })));
+        // And the two maps' chunk streams are genuinely different objects — a v1 capture opened
+        // under v2 restores a state nobody folded, which is why they are different classes.
+        assert_ne!(chunks, base0_gdn_state_chunks_v1(&v1, &live).expect("v1 chunks"));
+    }
+
+    /// **P0a: gdn v3 cuts the window row at the KEY heads, and survives its own map.**
+    ///
+    /// At 16 key and 32 value heads of 4 lanes the engine's row is `2·16·4 + 32·4 = 256` lanes;
+    /// v2's `(2·4 + 4)·32 = 384` is a row that does not exist, which is why capture refused. Under
+    /// v3 value head `h` gathers key head `h % 16` — the tiling the kernel and the court share — so
+    /// each q/k channel is read by two value heads and each v channel by one; the chunks are v2's
+    /// in count and size, and the state restores value for value. A key-head channel whose two
+    /// copies disagree is bytes no state gathers to, and is refused by name. At `key_heads ==
+    /// heads` v3 is v2 lane for lane.
+    #[test]
+    fn the_v3_window_is_cut_at_the_key_heads_and_survives_its_own_map() {
+        let (layers, kh, heads, k, v, kernel) = ([0u16, 1, 2], 16u32, 32u32, 4u32, 4u32, 4u32);
+        let v3 = base0_gdn_state_geometry_v3(&layers, kh, heads, k, v, kernel).expect("a v3 geometry");
+        let v2 = base0_gdn_state_geometry_v2(&layers, heads, k, v, kernel).expect("the v2 geometry");
+        assert_eq!(v3.conv_width, 2 * kh * k + heads * v, "the engine's window row");
+        assert_eq!(v2.conv_width, (2 * k + v) * heads, "v2's row, which the engine does not hold at k != v heads");
+        assert_ne!(v3.conv_width, v2.conv_width);
+        assert_eq!((v3.chunk_count(), v3.total_bytes()), (v2.chunk_count(), v2.total_bytes()), "one chunk per head either way");
+
+        // The gather: head h reads key head h % kh in the q and k regions and its own v block.
+        let mut readers = vec![0u32; v3.conv_width as usize];
+        for head in 0..heads {
+            let channels: Vec<usize> = v3.conv_head_channels(head).collect();
+            assert_eq!(channels.len() as u32, 2 * k + v, "one head row");
+            let key = (head % kh) as usize;
+            let (k_, v_, kh_) = (k as usize, v as usize, kh as usize);
+            assert_eq!(channels[0], key * k_, "head {head}: q region of key head {key}");
+            assert_eq!(channels[k_], kh_ * k_ + key * k_, "head {head}: k region of key head {key}");
+            assert_eq!(channels[2 * k_], 2 * kh_ * k_ + head as usize * v_, "head {head}: its own v block");
+            for c in channels {
+                readers[c] += 1;
+            }
+        }
+        let qk = (2 * kh * k) as usize;
+        assert!(readers[..qk].iter().all(|n| *n == heads / kh), "every q/k channel is read by heads/kh value heads");
+        assert!(readers[qk..].iter().all(|n| *n == 1), "every v channel has one owner");
+
+        // A live state and its round trip.
+        let mut rng = Lcg(0x0000_1632);
+        let live: Vec<Base0GdnLayerStateV1> = layers
+            .iter()
+            .map(|_| Base0GdnLayerStateV1 {
+                heads: (0..heads)
+                    .map(|_| {
+                        let mut st = Qwen36GdnStateV1::zeros(v as usize, k as usize);
+                        st.s = rng.row(st.s.len());
+                        st
+                    })
+                    .collect(),
+                conv: (0..kernel).map(|_| rng.row(v3.conv_width as usize)).collect(),
+            })
+            .collect();
+        assert!(
+            matches!(base0_gdn_state_chunks_v2(&v2, &live), Err(Base0GdnStateError::ConvIsNotTheGeometrys { layer: 0 })),
+            "v2's geometry refuses the engine's window — the defect P0a closes"
+        );
+        let chunks = base0_gdn_state_chunks_v2(&v3, &live).expect("v3 chunks");
+        assert_eq!(chunks.len() as u64, v3.chunk_count());
+        for (index, bytes) in chunks.iter().enumerate() {
+            let entry = base0_gdn_chunk_entry_v2(&v3, index as u64).expect("an entry");
+            assert_eq!(bytes.len() as u64, entry.byte_len(), "chunk {index} is its entry's length");
+        }
+        assert_eq!(base0_gdn_state_from_chunks_v2(&v3, &chunks).expect("restores"), live, "the v3 map is not a bijection");
+
+        // Two copies of one shared channel that disagree: head 20's copy of key head 4's first q
+        // lane moves, and head 4's does not.
+        let conv_chunk = (0..v3.chunk_count())
+            .find(|i| {
+                base0_gdn_chunk_entry_v2(&v3, *i).is_some_and(|e| e.kind == Base0GdnChunkKindV1::Conv && e.head == 20 && e.layer == 1)
+            })
+            .expect("head 20's window chunk") as usize;
+        let mut forged = chunks.clone();
+        forged[conv_chunk][0] ^= 1;
+        assert_eq!(
+            base0_gdn_state_from_chunks_v2(&v3, &forged),
+            Err(Base0GdnStateError::ConvCopiesDisagree { layer: 1, row: 0, channel: 4 * k }),
+            "a disagreeing copy is refused, not resolved by scatter order"
+        );
+        // A lie in a channel only one head owns is a different STATE, and restores as one.
+        let v_block = (2 * k * 4) as usize; // byte offset of head 20's v lanes inside its row
+        let mut other = chunks.clone();
+        other[conv_chunk][v_block] ^= 1;
+        assert_ne!(base0_gdn_state_from_chunks_v2(&v3, &other).expect("a state"), live);
+
+        // At key_heads == heads v3 is v2, lane for lane.
+        let same = base0_gdn_state_geometry_v3(&layers, heads, heads, k, v, kernel).expect("v3 at equal heads");
+        assert_eq!(same, v2, "v3 at equal head counts is v2");
+        // And a key-head count that does not group the value heads is refused.
+        assert_eq!(
+            base0_gdn_state_geometry_v3(&layers, 12, heads, k, v, kernel),
+            Err(Base0GdnStateError::KeyHeadsDoNotGroupTheValueHeads { key_heads: 12, heads })
+        );
+        assert!(base0_gdn_state_geometry_v3(&layers, 0, heads, k, v, kernel).is_err());
+    }
+
+    /// **The v2 map's cost, on the geometry that decided it.** Qwen3.6: 32 heads of 128, a
+    /// four-tap window. The figures are the court's
+    /// (`palw_state_chunk_map::gdn_state_row_bytes_v*`) read back through the executor's own
+    /// geometry, because a capture whose rows are not the size the court priced is a capture the
+    /// court cannot afford to open.
+    #[test]
+    fn one_heads_opening_is_the_carriers_size_under_v2_and_not_under_v1() {
+        let (heads, k, v, kernel) = (32u32, 128u32, 128u32, 4u32);
+        let layers: Vec<u16> = (0..30).collect();
+        let v1 = base0_gdn_state_geometry_v1(&layers, heads, k, v, kernel).expect("v1");
+        let v2 = base0_gdn_state_geometry_v2(&layers, heads, k, v, kernel).expect("v2");
+        // **The CARRIER, not the close budget** (ADR-0080 design A). A close is a chunk group of
+        // up to `DEFAULT_MAX_CLOSE_CHUNKS` parts now, so `DEFAULT_MAX_CLOSE_BYTES` is 2,250,000
+        // and comparing one opening against it would make this assertion true of both maps. The
+        // fact v2 exists for is about ONE transaction: v1's opening does not fit one and v2's
+        // does, so a v1 court pays extra carriers for thirty-one heads it will not read.
+        let carrier = kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
+        let budget = kaspa_consensus_core::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+
+        let delta = v as u64 * v1.delta_row_bytes as u64;
+        assert_eq!(delta, 65_536);
+        assert_eq!(kernel as u64 * v1.conv_row_bytes as u64, 196_608, "v1's window spans every head");
+        assert_eq!(kernel as u64 * v2.conv_head_row_bytes as u64, 6_144, "v2's window is one head's");
+        assert!(delta + kernel as u64 * v1.conv_row_bytes as u64 > carrier, "v1 fits one carrier after all");
+        assert!(delta + kernel as u64 * v2.conv_head_row_bytes as u64 <= carrier, "v2 does not fit one carrier");
+        // And both are inside the GROUP, which is what says the comparison above is about the part.
+        assert!(delta + kernel as u64 * v1.conv_row_bytes as u64 <= budget, "even v1's opening is inside the close budget now");
+        assert_eq!(v1.total_bytes(), v2.total_bytes(), "the re-ordering moved bytes");
+    }
+
+    /// **W2 for the recurrence: the anchored replay and the long form reach the same state.**
+    ///
+    /// The genesis form folds every position from zero — what `gdn_core_genesis_replay` does, and
+    /// what holds `positions = n_ctx` in `derive_court_cost_v1`. The anchored form takes the state
+    /// the producer committed at position `c`, restores it THROUGH THE MAP (not from the live
+    /// object — that would prove nothing about the chunking), and folds only the positions after
+    /// it. Every output row of every position from `c` on must be identical, and so must the final
+    /// state: an integer recurrence has no tolerance, and "close" is not a verdict.
+    ///
+    /// This is the whole claim Decision 10 makes about the recurrence, on the shipped arithmetic
+    /// (`q36_gdn_step`) rather than a restatement of it.
+    #[test]
+    fn an_anchored_recurrence_replay_is_the_genesis_one() {
+        let geometry = gdn_geometry();
+        let params = gdn_params();
+        let (kd, vd) = (geometry.k_dim as usize, geometry.v_dim as usize);
+        let positions = 12usize;
+        let mut rng = Lcg(0x5EED);
+        // One (k, v, q, decay, beta) per position per head — the projections' output, synthesised.
+        let inputs: Vec<Vec<GdnStep>> = (0..positions)
+            .map(|_| {
+                (0..geometry.heads)
+                    .map(|_| {
+                        let k = rng.row(kd);
+                        let v = rng.row(vd);
+                        let q = rng.row(kd);
+                        // Both gates live in [0, ONE] on the Q-rail the op declares.
+                        let decay = (rng.next().unsigned_abs() as i64) % (1 << 24);
+                        let beta = (rng.next().unsigned_abs() as i64) % (1 << 24);
+                        (k, v, q, decay, beta)
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let fold = |state: &mut Base0GdnLayerStateV1, from: usize| -> Vec<Vec<i32>> {
+            let mut out = Vec::new();
+            for step in inputs.iter().skip(from) {
+                let mut row = Vec::new();
+                for (head, (k, v, q, decay, beta)) in step.iter().enumerate() {
+                    row.extend(q36_gdn_step(&mut state.heads[head], k, v, q, *decay, *beta, params).expect("the step runs"));
+                }
+                out.push(row);
+            }
+            out
+        };
+
+        // The long form: fold all twelve positions from a zero state, keeping the state at the
+        // checkpoint on the way past it.
+        let zero = || Base0GdnLayerStateV1 {
+            heads: (0..geometry.heads).map(|_| Qwen36GdnStateV1::zeros(vd, kd)).collect(),
+            conv: vec![vec![0i32; geometry.conv_width as usize]; geometry.conv_kernel as usize],
+        };
+        let anchor_at = 5usize;
+        let mut long = zero();
+        let long_head = fold(&mut long, 0);
+        // The state the producer would have committed: exactly `anchor_at` positions folded.
+        let mut at_anchor = zero();
+        for step in inputs.iter().take(anchor_at) {
+            for (head, (k, v, q, decay, beta)) in step.iter().enumerate() {
+                q36_gdn_step(&mut at_anchor.heads[head], k, v, q, *decay, *beta, params).expect("the step runs");
+            }
+        }
+
+        // Commit it: chunk it under the map, and restore from the CHUNKS.
+        //
+        // **Both enumerations, in one sweep.** v2 re-keys the convolution half by head, and a
+        // re-keying is exactly the kind of change that round-trips its own test and still restores
+        // a state the replay folds forward differently. So the equivalence is asserted for each map
+        // against the SAME long form: a v1-named class still reaches the genesis verdict, and so
+        // does a v2-named one.
+        let v2 = base0_gdn_state_geometry_v2(&geometry.layers, geometry.heads, geometry.k_dim, geometry.v_dim, geometry.conv_kernel)
+            .expect("a v2 geometry");
+        let restored_v1 = base0_gdn_state_from_chunks_v1(
+            &geometry,
+            &base0_gdn_state_chunks_v1(&geometry, &[at_anchor.clone(), at_anchor.clone()]).expect("v1 chunks"),
+        )
+        .expect("restores");
+        let restored_v2 = base0_gdn_state_from_chunks_v2(
+            &v2,
+            &base0_gdn_state_chunks_v2(&v2, &[at_anchor.clone(), at_anchor.clone()]).expect("v2 chunks"),
+        )
+        .expect("restores");
+        assert_eq!(restored_v1[0], at_anchor, "the committed state is the state that was folded");
+        assert_eq!(restored_v2[0], at_anchor, "the head-sliced map restores a different state than it was given");
+
+        for (map, restored) in [("gdn v1", &restored_v1), ("gdn v2", &restored_v2)] {
+            let mut anchored = restored[0].clone();
+            let anchored_tail = fold(&mut anchored, anchor_at);
+
+            assert_eq!(
+                anchored_tail,
+                long_head[anchor_at..].to_vec(),
+                "{map}: every row after the anchor must be identical — an integer recurrence has no tolerance"
+            );
+            assert_eq!(anchored.heads, long.heads, "{map}: and the states they end in are the same state");
+            assert_eq!(
+                anchored_tail.len(),
+                positions - anchor_at,
+                "{map}: the anchored form costs the positions since the checkpoint"
+            );
+        }
+    }
+
+    /// **The retained level is the ladder's, and the budget is what derives it** (ADR-0082
+    /// Decision 7's `retain_level = ⌈log₂ leaves⌉ − 20`).
+    ///
+    /// Two things are pinned, and the shipped constant is the SECOND of them rather than an
+    /// independent number: that the level the derivation returns is the smallest one whose
+    /// retained vector fits [`PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES`] — one lower would exceed it
+    /// — and that at the `2^32` ladder ADR-0077 Decision 12 moves to, that level is
+    /// [`PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`].
+    #[test]
+    fn the_retained_level_is_the_ladders_and_the_budget_is_what_bounds_it() {
+        let node_bytes = 64u64;
+        for ladder_log2 in 10..=48u32 {
+            let ladder = 1u64 << ladder_log2;
+            let level = palw_base0_sparse_retain_level_for_ladder_v1(ladder);
+            let retained = |level: u32| -> u64 { ladder.div_ceil(1u64 << level) * node_bytes };
+            assert!(
+                retained(level) <= PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES,
+                "a 2^{ladder_log2} ladder retains {} bytes at level {level}, past the budget",
+                retained(level)
+            );
+            if level > 0 {
+                assert!(
+                    retained(level - 1) > PALW_BASE0_SPARSE_RETAIN_BUDGET_BYTES,
+                    "level {level} is not the smallest that fits at 2^{ladder_log2}"
+                );
+            }
+        }
+        assert_eq!(
+            palw_base0_sparse_retain_level_for_ladder_v1(1 << 32),
+            PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+            "the shipped constant is what the 2^32 ladder derives to — 2^20 retained nodes, 64 MiB"
+        );
+        // And the level a capture actually folds at never goes below it, because an opening
+        // re-derives a whole CALL and every level under 2^12 is already inside one.
+        assert_eq!(palw_base0_sparse_retain_level_v1(PALW_STEP_LEG_MAX_LEAVES), PALW_BASE0_SPARSE_RETAIN_LEVEL_V1);
+        assert_eq!(palw_base0_sparse_retain_level_v1(1 << 40), palw_base0_sparse_retain_level_for_ladder_v1(1 << 40));
+    }
+
+    /// **ADR-0121 Decision 3: a held class folds at 12 at every ladder; every other class at its
+    /// ladder's level.** At the regime's `2^40` the ladder's own rule says 20 — a 64 MiB block, past
+    /// the 4 MiB lane — and the held interval width is derived from one digest a `2^12` leaves.
+    #[test]
+    fn a_held_class_folds_at_twelve_and_every_other_class_at_its_ladders_level() {
+        use kaspa_consensus_core::palw_state_chunk_map::{
+            PALW_HELD_STEP_LADDER_V1, palw_profile_is_held_v4, tiled_kv_state_chunk_map_id_v4,
+        };
+        let shipped = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v5(
+            kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                layer_count: 2,
+                hidden_dim: 32,
+                ffn_dim: 64,
+                attn_heads: 4,
+                attn_kv_heads: 2,
+                attn_head_dim: 8,
+                vocab_size: 128,
+                n_ctx: 64,
+                n_threads: 1,
+                rms_eps_q: 1,
+                tile_len: 4,
+            },
+        )
+        .expect("a graph-v5 profile");
+        let mut held = shipped.clone();
+        held.state_chunk_map_id = tiled_kv_state_chunk_map_id_v4();
+        assert!(palw_profile_is_held_v4(&held) && !palw_profile_is_held_v4(&shipped));
+        assert_eq!(palw_base0_sparse_retain_level_v1(PALW_HELD_STEP_LADDER_V1), 20, "what the ladder's own rule would give");
+        for ladder_log2 in [22u32, 26, 32, 36, 40] {
+            let ladder = 1u64 << ladder_log2;
+            assert_eq!(
+                palw_base0_sparse_retain_level_for_class_v1(&held, ladder),
+                PALW_BASE0_SPARSE_RETAIN_LEVEL_V1,
+                "2^{ladder_log2}"
+            );
+            assert_eq!(
+                palw_base0_sparse_retain_level_for_class_v1(&shipped, ladder),
+                palw_base0_sparse_retain_level_v1(ladder),
+                "2^{ladder_log2}: the shipped rule, unchanged"
+            );
+        }
+    }
+
+    // =========================================================================================
+    // U-01 — the capture, measured against the forward (ADR-0082 Decision 7)
+    // =========================================================================================
+
+    /// The largest `exact_decode_tokens` this profile's job of `prefill` tokens fits under `cap`.
+    /// The width the registered row ALLOWS, derived rather than typed: the same
+    /// `step_leaf_count_capped_v1` the executor prices with.
+    fn u01_decode_budget(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3, prefill: u32, cap: u64) -> (u32, u64) {
+        let price = |decode: u32| -> Option<u64> {
+            let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, prefill, decode);
+            kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, &ctx, cap).ok()
+        };
+        let mut best = (0u32, 0u64);
+        let mut decode = 1u32;
+        while let Some(leaves) = price(decode) {
+            best = (decode, leaves);
+            decode += 1;
+            if decode > 100_000 {
+                break;
+            }
+        }
+        best
+    }
+
+    /// Peak RSS of this process while a phase runs, in bytes — sampled with `ps`, which is the
+    /// one number available on this host without a new dependency. `0` when `ps` cannot answer.
+    struct U01Rss {
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        peak: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl U01Rss {
+        fn start() -> Self {
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let peak = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let (s, p) = (stop.clone(), peak.clone());
+            let pid = std::process::id().to_string();
+            let handle = std::thread::spawn(move || {
+                while !s.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Ok(out) = std::process::Command::new("ps").args(["-o", "rss=", "-p", &pid]).output()
+                        && let Ok(kb) = String::from_utf8_lossy(&out.stdout).trim().parse::<u64>()
+                    {
+                        p.fetch_max(kb * 1024, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            });
+            Self { stop, peak, handle: Some(handle) }
+        }
+
+        fn finish(mut self) -> u64 {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+            self.peak.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    /// **U-01: what the capture costs, against what the forward costs** (ADR-0082 §1.5, Decision 7).
+    ///
+    /// Off unless `MISAKA_PALW_U01_ARTIFACT` names a converted dense artifact: 1.7 GiB of weights
+    /// and a minute of arithmetic are not a unit test's inputs, and a measurement that ran on
+    /// derived toy weights would be a number about nothing. Run it as
+    ///
+    /// ```text
+    /// MISAKA_PALW_U01_ARTIFACT=/path/qwen25-1.5b-a16.palwart \
+    ///   cargo test --release -p misaka-palw-base0 --lib -- u01_the_capture --nocapture
+    /// ```
+    ///
+    /// The job is the §1.5 one: the registered dense row, a 26-token prefill and the decode the
+    /// ruleset's ladder allows. Three phases, one process, one artifact: the engine's own forward
+    /// with nothing captured, then the shipped capture path, then whatever the executor's capture
+    /// costs after Decision 7.
+    #[test]
+    fn u01_the_capture_is_priced_against_the_forward() {
+        use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+
+        let Ok(path) = std::env::var("MISAKA_PALW_U01_ARTIFACT") else {
+            eprintln!("U-01: skipped — set MISAKA_PALW_U01_ARTIFACT to the dense .palwart to measure");
+            return;
+        };
+        let prefill: u32 = std::env::var("MISAKA_PALW_U01_PREFILL").ok().and_then(|v| v.parse().ok()).unwrap_or(26);
+
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let artifact = crate::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"));
+        drop(bytes);
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let entry = crate::classes::canonical_class_by_model_id_v1(&court, "Qwen/Qwen2.5-1.5B/graph-v2")
+            .expect("this build's catalog has the dense row");
+        let profile = entry.profile.clone();
+        let (mut decode, mut leaves) = u01_decode_budget(&profile, prefill, court.max_step_leaf_count());
+        assert!(decode >= 2, "a {prefill}-token prefill leaves no decode budget under this ladder");
+        // **A shorter job than the ladder allows**, for the one phase that cannot be run at full
+        // size on a shared host: the DENSE capture holds ~50 MB a position and its borsh encoding
+        // holds it again, so the §1.5 job is ~5 GB above the artifact. The fold has no such
+        // ceiling, which is the point — so the fold is measured at the full job and the dense
+        // capture at whatever this host can hold, with the difference stated rather than hidden.
+        if let Some(asked) = std::env::var("MISAKA_PALW_U01_DECODE").ok().and_then(|v| v.parse::<u32>().ok()) {
+            assert!(asked >= 2 && asked <= decode, "the ladder admits 2..={decode} decode tokens at this prefill");
+            decode = asked;
+            leaves = {
+                let ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+                kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, court.max_step_leaf_count())
+                    .expect("a shorter job is inside the ladder its longer form fit")
+            };
+        }
+        let positions = prefill as u64 + decode as u64 - 1;
+        eprintln!(
+            "U-01 job: prefill {prefill}, decode {decode}, {leaves} leaves of {} ladder, {positions} forward calls",
+            court.max_step_leaf_count()
+        );
+
+        // Deterministic in-vocabulary ids. The measurement is of arithmetic whose cost does not
+        // depend on WHICH ids they are, and a tokenizer here would only add a file to the recipe.
+        let vocab = artifact.shape.vocab;
+        let prompt: Vec<usize> = (0..prefill as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+
+        // ---- phase A: the engine's forward, nothing captured -------------------------------
+        let rss = U01Rss::start();
+        let started = std::time::Instant::now();
+        {
+            let engine = crate::engine_a16::A16Engine::new(&artifact).expect("the artifact is an A16 class");
+            let mut cache = crate::engine_a16::A16Cache::new(artifact.shape.n_layers);
+            let mut last = Vec::new();
+            for (position, token) in prompt.iter().enumerate() {
+                last = engine.forward_token(&mut cache, *token, position).expect("a prefill position runs");
+            }
+            let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last);
+            for call in 1..decode as usize {
+                let logits = engine.forward_token(&mut cache, next, prefill as usize + call - 1).expect("a decode call runs");
+                next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits);
+            }
+        }
+        let forward = started.elapsed();
+        let forward_rss = rss.finish();
+
+        // ---- phase B: the DENSE capture — every tile of every node of every position ---------
+        //
+        // The shipped path until ADR-0082 Decision 7, and the thing §1.5's 94x was measured on.
+        // Skippable (`MISAKA_PALW_U01_SKIP_DENSE=1`) because it is also the thing that does not
+        // fit in memory at a real context, which is the other half of what is being measured.
+        let ctx = {
+            let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+            ctx.job_id = Hash64::from_u64_word(0x0082_0001);
+            ctx.prompt_token_ids_hash =
+                kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt.iter().map(|t| *t as u32).collect::<Vec<_>>());
+            ctx
+        };
+        let cap = court.max_step_leaf_count();
+        let dense = if std::env::var("MISAKA_PALW_U01_SKIP_DENSE").is_ok() {
+            None
+        } else {
+            let rss = U01Rss::start();
+            let started = std::time::Instant::now();
+            let run = crate::qwen25_a16_backend::a16_execute_for_attempt_streaming_capped_v1(
+                &artifact,
+                &profile,
+                None,
+                &ctx,
+                &prompt,
+                cap,
+                &mut |_| {},
+            )
+            .expect("the dense capture runs this job");
+            let took = started.elapsed();
+            let bytes = crate::produce::base0_material_encode_v1(&run).expect("the dense retention encodes").len();
+            Some((took, rss.finish(), bytes))
+        };
+
+        // ---- phase C: the FOLD — Decision 7's capture -----------------------------------------
+        let rss = U01Rss::start();
+        let started = std::time::Instant::now();
+        let folded = crate::qwen25_a16_backend::a16_execute_free_prompt_streaming_v1(
+            &artifact,
+            &profile,
+            None,
+            &ctx,
+            &prompt,
+            cap,
+            &mut |_| {},
+        )
+        .expect("the folded capture runs this job");
+        let fold_took = started.elapsed();
+        let fold_rss = rss.finish();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let fold_bytes = crate::produce::base0_fp_material_encode_v2(&folded, &ids).expect("the fold retains").len();
+        let tree = folded.step_tree.as_ref().expect("a folded run keeps its tree");
+        if let Some((_, _, _)) = &dense {
+            // The measurement is only a measurement if both phases committed the same thing.
+            assert_eq!(tree.root().expect("the tree is its own shape"), folded.binding.step_merkle_root);
+        }
+
+        let per = |d: std::time::Duration| d.as_secs_f64() / decode as f64;
+        let per_position = |d: std::time::Duration| d.as_secs_f64() / positions as f64;
+        let line = |what: &str, took: std::time::Duration, rss: u64, bytes: Option<usize>| {
+            eprintln!(
+                "U-01 {what:<9}: {:>8.3} s total, {:>7.4} s/token, {:>7.4} s/position, peak RSS {:>5.2} GiB{}",
+                took.as_secs_f64(),
+                per(took),
+                per_position(took),
+                rss as f64 / (1 << 30) as f64,
+                match bytes {
+                    Some(b) => format!(", retention {b} bytes ({:.2} MB/position)", b as f64 / positions as f64 / 1e6),
+                    None => String::new(),
+                }
+            );
+        };
+        line("forward", forward, forward_rss, None);
+        if let Some((took, rss, bytes)) = &dense {
+            line("captured", *took, *rss, Some(*bytes));
+            eprintln!("U-01 captured/forward : {:.1}x", took.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
+        }
+        line("folded", fold_took, fold_rss, Some(fold_bytes));
+        eprintln!("U-01 folded/forward   : {:.1}x", fold_took.as_secs_f64() / forward.as_secs_f64().max(f64::MIN_POSITIVE));
+        if let Some((took, _, bytes)) = &dense {
+            eprintln!(
+                "U-01 fold vs dense    : {:.1}x faster, {:.1}x smaller retention",
+                took.as_secs_f64() / fold_took.as_secs_f64().max(f64::MIN_POSITIVE),
+                *bytes as f64 / fold_bytes.max(1) as f64
+            );
+        }
+        eprintln!(
+            "U-01 retained tree    : {} nodes at level {} ({} bytes)",
+            tree.retained_nodes().len(),
+            tree.retain_level(),
+            tree.retained_nodes().len() * 64
+        );
+        // **What the fold's retention is actually made of** — the number ADR-0082 Decision 4 is
+        // about. The tree is the part this unit made small; the checkpoint chunks are the part
+        // that still grows with the job, because a checkpoint is a copy of the cache and the
+        // cache is prefix-stable but not yet retained as one.
+        let chunk_bytes: usize = folded.checkpoints.chunks.iter().flatten().map(Vec::len).sum();
+        let rows_bytes: usize = folded.logits_rows.iter().map(|r| r.len() * 4).sum();
+        eprintln!(
+            "U-01 retention split  : tree {} B, logits rows {} B, checkpoint chunks {} B ({} checkpoints), ids {} B",
+            tree.retained_nodes().len() * 64,
+            rows_bytes,
+            chunk_bytes,
+            folded.checkpoints.chunks.len(),
+            (folded.generated_token_ids.len() + ids.len()) * 4
+        );
+        eprintln!("U-01 step leaves: {leaves}, {} per position", leaves / positions.max(1));
+    }
+    /// **A block's digest from its leaves is the retained node** (ADR-0086 Decision 3): a seat
+    /// that holds a range's leaves reproduces the fold's node for every block the range covers
+    /// whole, full blocks and the partial tail alike.
+    #[test]
+    fn a_blocks_digest_from_its_leaves_is_the_retained_node() {
+        let level = 3u32;
+        let block = 1u64 << level;
+        for leaf_count in [1u64, 7, 8, 9, 17, 24, 25, 100] {
+            let leaves: Vec<Hash64> = (0..leaf_count).map(|i| Hash64::from_u64_word(i * 31 + 5)).collect();
+            let tree = Base0SparseStepTreeV1::from_leaves_v1(&leaves, level).expect("a tree");
+            let retained = tree.retained_nodes();
+            assert_eq!(retained.len() as u64, leaf_count.div_ceil(block));
+            for (k, node) in retained.iter().enumerate() {
+                let first = k as u64 * block;
+                let end = (first + block).min(leaf_count);
+                assert_eq!(
+                    base0_fold_block_digest_v1(first, &leaves[first as usize..end as usize]),
+                    Some(*node),
+                    "leaf_count {leaf_count}, block {k}"
+                );
+            }
+            assert_eq!(base0_fold_block_digest_v1(0, &[]), None);
+        }
+    }
+}

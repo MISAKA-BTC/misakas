@@ -1,0 +1,365 @@
+/* MISAKAScan — one design system (2026-08-27 redesign).
+   Principles (after kaspa.stream): flat surfaces, one border color, one accent,
+   sectioned stats instead of a flat wall of cards, consistent 12px radius,
+   tabular numerals everywhere a number lives. Class names are unchanged —
+   app.js renders the same DOM; only the look is unified. */
+:root{
+  --bg:#0b0a12;            /* page */
+  --bg2:#12101c;           /* deep panel gradient partner (kept for compat) */
+  --panel:#141221;         /* card / table surface */
+  --panel2:#191627;        /* hover / thead */
+  --line:#262239;          /* THE border */
+  --txt:#eceaf5; --mut:#a29bc0; --dim:#675f87;
+  --acc:#a855f7;           /* the accent: actions, active nav, emphasis */
+  --acc2:#67e8f9;          /* links & hashes only */
+  --good:#34d399; --bad:#fb7185; --warn:#fbbf24;
+  --r:12px;
+  --mono:'SFMono-Regular',ui-monospace,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(900px 420px at 85% -8%, #a855f70e, transparent 60%),
+    radial-gradient(700px 380px at -10% 0%, #67e8f908, transparent 55%),
+    var(--bg);
+  color:var(--txt);font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  min-height:100vh;display:flex;flex-direction:column;font-size:14px;line-height:1.5;
+}
+a{color:var(--acc2);text-decoration:none}
+a:hover{text-decoration:underline}
+.mono{font-family:var(--mono)}
+.hash{font-family:var(--mono);word-break:break-all}
+
+/* ── top bar: two calm rows — identity+nav+status, then the search ── */
+.topbar{display:flex;align-items:center;gap:14px;row-gap:10px;padding:12px 20px 12px;
+  background:#0e0c17f2;backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;color:var(--txt)!important;text-decoration:none!important;order:1}
+.brand-logo{height:28px;width:28px}
+.brand-name{font-size:18px;font-weight:650;letter-spacing:.2px}
+.brand-name b{color:var(--acc);font-weight:750}
+.brand-tag{font-size:10.5px;color:var(--mut);border:1px solid var(--line);border-radius:20px;
+  padding:2px 9px;background:var(--panel);text-transform:uppercase;letter-spacing:.6px}
+.topnav{order:2;display:flex;gap:2px;align-items:center;margin:0 4px;flex-wrap:wrap}
+.topnav a{color:var(--mut);text-decoration:none;font-size:13px;padding:5px 10px;border-radius:8px;
+  border-bottom:0;line-height:1.3;white-space:nowrap}
+.topnav a:hover{color:var(--txt);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:#fff;background:#a855f72b}
+.conn{order:3;margin-left:auto;display:flex;align-items:center;gap:7px;font-size:12px;color:var(--mut);white-space:nowrap}
+.conn i{width:8px;height:8px;border-radius:50%;background:var(--dim)}
+.conn.up i{background:var(--good);box-shadow:0 0 7px var(--good)}
+.conn.down i{background:var(--bad);box-shadow:0 0 7px var(--bad)}
+.search{order:4;flex:1 1 100%;display:flex;gap:8px;min-width:260px;max-width:none}
+.search input{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--txt);
+  padding:10px 14px;border-radius:10px;font-size:13px;font-family:var(--mono)}
+.search input::placeholder{color:var(--dim)}
+.search input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px #a855f722}
+.search button{background:var(--acc);color:#fff;border:0;padding:0 20px;border-radius:10px;
+  font-weight:600;cursor:pointer;font-size:13px}
+.search button:hover{filter:brightness(1.12)}
+
+/* ── layout ── */
+main{flex:1;max-width:1180px;width:100%;margin:0 auto;padding:22px 20px 30px}
+.loading{color:var(--mut);padding:40px;text-align:center}
+h1.page{font-size:20px;margin:4px 0 16px;font-weight:650}
+h2.sec{font-size:13px;color:var(--mut);margin:28px 0 12px;font-weight:650;text-transform:uppercase;letter-spacing:.8px}
+.crumbs{font-size:12px;color:var(--dim);margin-bottom:10px}
+.crumbs a{color:var(--mut)}
+.footer{display:flex;justify-content:space-between;gap:12px;padding:16px 20px;margin-top:8px;
+  border-top:1px solid var(--line);color:var(--dim);font-size:12px;flex-wrap:wrap}
+
+/* ── stat cards (generic pages) ── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+.card .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px}
+.card .v{font-size:22px;font-weight:650;color:var(--txt);font-variant-numeric:tabular-nums}
+.card .v.sm{font-size:15px}
+.card .v.acc{color:var(--acc2)}
+.card .v.ov{color:#c9a4ff}
+.card .sub{font-size:11px;color:var(--mut);margin-top:3px}
+
+/* ── tables ── */
+.tbl{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);
+  border-radius:var(--r);overflow:hidden}
+.tbl th{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;text-align:left;
+  padding:11px 14px;background:var(--panel2);border-bottom:1px solid var(--line);white-space:nowrap}
+.tbl td{padding:10px 14px;border-bottom:1px solid #1e1a2f;font-size:13px;vertical-align:top}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tr:hover td{background:var(--panel2)}
+.tbl .num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.tbl .right{text-align:right}
+
+/* ── key-value detail ── */
+.kv{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.kv .row{display:grid;grid-template-columns:230px 1fr;gap:12px;padding:11px 16px;border-bottom:1px solid #1e1a2f}
+.kv .row:last-child{border-bottom:0}
+.kv .row:hover{background:var(--panel2)}
+.kv .key{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.5px;padding-top:1px}
+.kv .val{font-size:13px;word-break:break-all}
+@media(max-width:640px){.kv .row{grid-template-columns:1fr;gap:3px}}
+
+/* ── pills ── */
+.pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:20px;border:1px solid var(--line);color:var(--mut)}
+.pill.chain{color:var(--good);border-color:#34d39944;background:#34d3990f}
+.pill.red{color:var(--bad);border-color:#fb718544;background:#fb71850f}
+.pill.blue{color:var(--acc2);border-color:#67e8f944;background:#67e8f90f}
+.muted{color:var(--mut)}
+.dim{color:var(--dim)}
+.coin{color:var(--good);font-family:var(--mono);font-variant-numeric:tabular-nums}
+.note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--acc2);
+  color:var(--mut);border-radius:10px;padding:11px 14px;font-size:12.5px;margin:14px 0}
+.err{background:#fb718510;border:1px solid #fb718540;color:#fecdd3;border-radius:10px;padding:14px 16px;margin:14px 0}
+
+/* ── tx detail boxes ── */
+.txbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin-bottom:12px}
+.txbox .io{display:grid;grid-template-columns:1fr 40px 1fr;gap:10px;align-items:start;margin-top:8px}
+.io .side{background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:8px 11px}
+.io .arrow{align-self:center;text-align:center;color:var(--acc);font-size:18px}
+.io .line{padding:4px 0;border-bottom:1px solid #1e1a2f;font-size:12.5px}
+.io .line:last-child{border-bottom:0}
+@media(max-width:640px){.txbox .io{grid-template-columns:1fr}.io .arrow{transform:rotate(90deg)}}
+.spin{color:var(--mut);font-size:12.5px;padding:8px 0}
+
+@keyframes mskflash{0%{background:#34d39926}100%{background:transparent}}
+.tbl tr.fresh td{animation:mskflash 2.6s ease-out}
+
+/* EVM lookup field */
+#evmLookup input{background:var(--panel);border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:11px 13px;font:14px var(--mono)}
+#evmLookup input::placeholder{color:var(--dim)}
+#evmLookup input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px #a855f722}
+#evmLookup button{background:var(--acc);color:#fff;border:0;border-radius:10px;padding:11px 20px;font-weight:600;cursor:pointer;white-space:nowrap}
+#evmLookup button:hover{filter:brightness(1.12)}
+
+/* legacy netstats band (kept for compat; no gradients) */
+.netstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(116px,1fr));gap:1px;
+  background:var(--line);border:1px solid var(--line);border-radius:14px;overflow:hidden;margin:2px 0 22px}
+.netstat{background:var(--panel);padding:11px 13px;min-width:0}
+.netstat a{color:inherit;text-decoration:none;display:block}
+.netstat a:hover .nv{color:var(--acc)}
+.netstat .nk{font-size:10px;letter-spacing:.6px;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+.netstat .nv{font-size:17px;font-weight:700;color:var(--txt);margin-top:3px;line-height:1.15;
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.netstat .nv.acc{color:var(--acc2)}
+.netstat .nv.good{color:var(--good)}
+.netstat .nv.warn{color:var(--warn)}
+.netstat .ns{font-size:10.5px;color:var(--mut);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.netstat.loading{grid-column:1/-1;background:transparent;color:var(--mut);padding:16px;text-align:center}
+
+#txWrap .tbl td{vertical-align:middle}
+.amt-in{color:var(--good)}
+.amt-out{color:var(--bad)}
+
+/* ── home: the network overview, SECTIONED (Chain / PALW / Supply / Network) ── */
+.overview{border:1px solid var(--line);border-radius:16px;padding:16px 18px 18px;
+  background:var(--panel);margin:2px 0 24px}
+.ov-title{font-size:15px;font-weight:650;color:var(--txt);margin:0 2px 4px;letter-spacing:.2px}
+.ov-sec{font-size:10.5px;font-weight:650;color:var(--dim);text-transform:uppercase;letter-spacing:.9px;
+  margin:14px 2px 8px;display:flex;align-items:center;gap:10px}
+.ov-sec::after{content:"";flex:1;height:1px;background:var(--line)}
+.ovgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:9px}
+.ovbox{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:11px 13px;min-width:0}
+.ovbox .k{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ovbox .v{font-size:17px;font-weight:650;color:var(--txt);margin-top:5px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.ovbox .v.acc{color:var(--acc2)}
+.ovbox .v.good{color:var(--good)}
+.ovbox .v.warn{color:var(--warn)}
+.ovbox .v.ov{color:#c9a4ff}
+.ovbox .v a.hash{font-size:14px;color:var(--acc2)}
+.ovbox .s{font-size:10.5px;color:var(--mut);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:13px}
+.ovbox a{color:inherit;text-decoration:none;display:block}
+.ovbox a:hover .v{color:var(--acc)}
+
+/* section heading row with a "view all" link */
+.sec-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.sec-row .sec{margin-bottom:12px}
+.sec-more{font-size:12px;color:var(--acc2);white-space:nowrap}
+
+/* miners: share bar */
+.sharebar{height:7px;width:120px;max-width:34vw;background:#221d38;border-radius:5px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:8px}
+.sharebar>i{display:block;height:100%;background:linear-gradient(90deg,var(--acc),var(--acc2))}
+
+/* ── MTP ── */
+.mtp-lookup{display:flex;gap:9px;margin:16px 0 2px;flex-wrap:wrap}
+.mtp-lookup input{flex:1;min-width:240px;background:var(--panel);border:1px solid var(--line);color:var(--txt);
+  border-radius:10px;padding:11px 13px;font:14px var(--mono)}
+.mtp-lookup input::placeholder{color:var(--dim)}
+.mtp-lookup input:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px #a855f722}
+.mtp-lookup button{background:var(--acc);color:#fff;border:0;border-radius:10px;
+  padding:11px 20px;font-weight:600;cursor:pointer;white-space:nowrap}
+.mtp-lookup button:hover{filter:brightness(1.12)}
+pre.cmd{background:#0e0c17;border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin:14px 0;
+  overflow-x:auto;font:12.5px/1.65 var(--mono);color:var(--mut);white-space:pre}
+.tblscroll{overflow-x:auto}
+.tblscroll>.tbl{min-width:720px}
+.tblscroll.narrow>.tbl{min-width:400px}
+
+/* ── BlockDAG visualization (deliberately light — Kaspa Graph Inspector idiom) ── */
+.dag-sub{color:var(--mut);font-size:13px;margin:2px 0 12px}
+.dag-legend{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin:6px 0 12px}
+.dag-legend i.sw{display:inline-block;width:13px;height:13px;border-radius:4px;vertical-align:-2px;margin-right:6px;box-sizing:border-box}
+.dag-legend i.sw.chain{background:#3f6cab}
+.dag-legend i.sw.merged{background:#6f93c4}
+.dag-legend i.sw.red{background:#c0392b}
+.dag-legend i.sw.tip{background:#6f93c4;border:2.5px solid #f59e0b}
+.dag-legend i.sw.evm{background:#6f93c4;border:2.5px solid #15a34a}
+.dag-legend i.sw.spedge{width:20px;height:0;border-radius:0;border-top:3px solid #2f5fa6;vertical-align:4px}
+.kgi-wrap{position:relative}
+.dagwrap.kgi{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:#e9e9ef;padding:0}
+.kgisvg{display:block}
+.kgisvg .kgi-edge{fill:none;stroke:#aab2c4;stroke-width:1.2}
+.kgisvg .kgi-edge.sp{stroke:#2f5fa6;stroke-width:2}
+.kgisvg .kgi-node{fill:#6f93c4;stroke:#2b4a78;stroke-width:1;cursor:pointer;transition:filter .12s}
+.kgisvg .kgi-node.chain{fill:#3f6cab}
+.kgisvg .kgi-node.red{fill:#c0392b;stroke:#7f2318}
+.kgisvg .kgi-node.evm{stroke:#15a34a;stroke-width:3}
+.kgisvg .kgi-node.newest{stroke:#f59e0b;stroke-width:2.5}
+.kgisvg .kgi-tipring{fill:none;stroke:#f59e0b;stroke-width:2;stroke-dasharray:3 2;opacity:.9;pointer-events:none}
+.kgisvg .kgi-node:hover{filter:brightness(1.12)}
+.kgisvg .kgi-lbl{fill:#fff;font-weight:600;font-family:var(--mono);letter-spacing:.3px;pointer-events:none}
+.kgisvg .kgi-axis{fill:#5b6270;font-size:11px;font-family:var(--mono)}
+.kgisvg a{cursor:pointer}
+.kgi-ctrls{position:absolute;top:12px;right:12px;display:flex;flex-direction:column;gap:7px}
+.kgi-ctrls button{width:34px;height:34px;border-radius:8px;border:1px solid #c2c5d2;background:#fff;color:#3f6cab;
+  font-size:16px;font-weight:700;cursor:pointer;box-shadow:0 1px 3px #00000033;line-height:1;padding:0}
+.kgi-ctrls button:hover{background:#eef1f8}
+
+/* ── PALW pipeline stages ── */
+.palw-flow{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch}
+.palw-stage{flex:1 1 190px;min-width:180px;position:relative;background:var(--panel);
+  border:1px solid var(--line);border-radius:var(--r);padding:12px 14px}
+.palw-stage.ok{border-color:#34d39955}
+.palw-stage.wait{border-color:#f59e0b55}
+.palw-stage .n{position:absolute;top:-9px;left:12px;width:20px;height:20px;border-radius:50%;
+  background:var(--acc);color:#fff;font-size:11px;font-weight:700;line-height:20px;text-align:center}
+.palw-stage .t{font-size:13px;font-weight:650;color:var(--txt);margin:5px 0 5px}
+.palw-stage.ok .t{color:var(--good)}
+.palw-stage.wait .t{color:var(--warn)}
+.palw-stage .d{font-size:11.5px;color:var(--mut);line-height:1.5;word-break:break-word}
+@media(max-width:720px){.palw-stage{flex:1 1 100%}}
+
+/* LLM page filter chips */
+.llm-chips{display:flex;gap:6px;margin:-4px 0 12px}
+.llm-chips button{background:var(--panel);border:1px solid var(--line);color:var(--mut);border-radius:20px;
+  padding:5px 14px;font-size:12px;cursor:pointer}
+.llm-chips button:hover{color:var(--txt);background:var(--panel2)}
+.llm-chips button.on{background:#a855f72b;border-color:#a855f766;color:#fff}
+
+/* LLM job input/output cells */
+.llm-io{display:inline-block;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-family:var(--mono);font-size:12px;color:var(--txt);vertical-align:middle}
+.llm-io.out{color:var(--good)}
+
+/* Verifier-gated class cards (2026-08-28): a class below panel quorum renders dimmed with an
+   OFF pill — mining it would default every claim, so the card must not look invitational. */
+.card.off { opacity: .55; }
+.card.off .k { color: var(--dim, #8a8a9a); }
+.bad{color:var(--bad)}
+.sumrow td{border-top:1px solid var(--line, #26243a); padding-top:8px}
+
+/* Upgrade notice bar (2026-09-01, ADR-0068 Phase 1 arming): a plain, dismissible line under the
+   topbar. Static HTML in index.html so it shows even before app.js connects. */
+.upgrade-note{position:relative;max-width:1160px;margin:10px auto 0;padding:9px 14px;border:1px solid #fbbf2444;
+  background:#fbbf240f;border-radius:var(--r,12px);font-size:12.5px;color:var(--mut,#a29bc0);
+  display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.upgrade-note b{color:var(--txt,#eceaf5)}
+.upgrade-note .mono{font-family:var(--mono,monospace);color:var(--acc2,#67e8f9)}
+.upgrade-note button{margin-left:auto;background:none;border:none;color:var(--dim,#675f87);
+  font-size:15px;cursor:pointer;line-height:1}
+
+/* Issuance-weight ratio bars (#/llm, 2026-09-01): two stacked bars on ONE scale — the epoch's
+   designed weight budget vs what actually got produced — so the floor-vs-LLM ratio is read at a
+   glance instead of inferred from block counts (which invert it: the floor mines hundreds of
+   cheap blocks per LLM block). Segment colors are set inline per class by app.js. */
+.wbar-wrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;margin:0 0 12px}
+.wbar-head{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px 12px;margin-bottom:10px}
+.wbar-title{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px}
+.wbar-big{font-size:18px;font-weight:650;font-variant-numeric:tabular-nums}
+.wbar-row{display:flex;align-items:center;gap:10px;margin:6px 0}
+.wbar-lbl{flex:0 0 150px;font-size:11px;color:var(--mut);text-align:right;cursor:help}
+.wbar{flex:1;display:flex;height:16px;border-radius:8px;overflow:hidden;background:var(--bg2);border:1px solid var(--line)}
+.wbar i{display:block;height:100%;min-width:3px;font-style:normal}
+.wbar i.none{min-width:0;width:100%;background:none;font-size:10px;color:var(--dim);display:flex;align-items:center;justify-content:center}
+.wbar-legend{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:12px;color:var(--mut);margin-top:8px}
+.wbar-legend .swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+.wbar-note{font-size:11px;color:var(--dim);margin-top:8px;line-height:1.55}
+@media (max-width:640px){ .wbar-lbl{flex-basis:104px} }
+
+/* LLM jobs (2026-09-05): hashes and names never wrap mid-word; prompt/answer cells wrap as text and
+   open to the whole thing; a block's page shows its job as a card. */
+.tbl td.nowrap{white-space:nowrap}
+.tbl td a.hash{white-space:nowrap;word-break:normal}
+.llm-io{display:block;max-width:38ch;white-space:pre-wrap;word-break:break-word;overflow:visible;text-overflow:clip;line-height:1.45}
+.llm-io.out{color:var(--good)}
+.llm-more{display:inline-block;font-size:11px;color:var(--dim);margin-top:3px}
+details.llm-d summary{cursor:pointer;list-style:none;outline:none}
+details.llm-d summary::-webkit-details-marker{display:none}
+details.llm-d summary::after{content:" ▸ more";font-size:11px;color:var(--acc2)}
+details.llm-d[open] summary::after{content:" ▾ less"}
+details.llm-d .llm-full{margin-top:8px;white-space:pre-wrap;word-break:break-word;max-height:48vh;overflow:auto;border-left:2px solid var(--line);padding:4px 0 4px 10px;font-size:12.5px;line-height:1.5;color:var(--txt)}
+details.llm-d .llm-full.out{color:var(--good)}
+details.llm-d .llm-full.dim{color:var(--dim)}
+.llm-card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:8px 0 12px}
+.llm-card-head{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.llm-card-row{display:grid;grid-template-columns:110px 1fr;gap:10px;margin-top:10px;font-size:13px}
+.llm-card-row .key{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;padding-top:3px}
+.llm-card-row .io .llm-io{max-width:none}
+
+
+/* ── phones ───────────────────────────────────────────────────────────────────────────────────
+   Written against a 375 px viewport (an iPhone in portrait). The rule this block exists to keep:
+   nothing inside `main` may be wider than the viewport, or the browser scales the entire page and
+   every font size here becomes a lie. Wide things scroll INSIDE their own box. */
+@media (max-width:640px){
+  /* The header cost three wrapped rows before anything was read. One compact row for the brand,
+     one scrollable row for the nav, one for the search. */
+  .topbar{padding:9px 12px;gap:9px;row-gap:8px}
+  .brand-name{font-size:16px}
+  .brand-tag{display:none}                 /* "MISAKA TESTNET" is the page title's job on a phone */
+  .topnav{order:5;flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;margin:0;gap:1px;
+    scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .topnav::-webkit-scrollbar{display:none}
+  .topnav a{font-size:12.5px;padding:6px 9px}
+  .conn{font-size:11px}
+  .search{order:4;gap:6px;min-width:0}
+  .search input{padding:9px 11px;font-size:12.5px;min-width:0}
+  .search button{padding:0 14px;font-size:12.5px}
+
+  main{padding:14px 12px 26px}
+  h1.page{font-size:18px}
+  h2.sec{margin:20px 0 9px}
+
+  /* The flag-day banner is eleven lines of prose on a phone. Keep it — an operator whose node is
+     cut off needs it — but at a size that does not own the first screen. */
+  .upgrade-note{margin:8px 10px 0;padding:8px 11px;font-size:11.5px;line-height:1.5}
+
+  /* Two stat cards a row at 375 px, which needs a smaller floor than the desktop 190. */
+  .cards{grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:9px}
+  .card{padding:11px 12px}
+  .card .v{font-size:19px}
+  .card .v.sm{font-size:13.5px}
+  .overview{padding:13px 13px 15px;border-radius:13px}
+
+  /* Tables scroll sideways in their own box, and only as far as they must: the desktop floor of
+     720 px is two screens of dragging for a seven-column row. */
+  .tblscroll{overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+  .tblscroll>.tbl{min-width:560px}
+  .tblscroll.narrow>.tbl{min-width:340px}
+  .tbl th{padding:8px 10px;font-size:10px}
+  .tbl td{padding:8px 10px;font-size:12px}
+
+  /* Folded to its first line and a half, with the fade as the affordance. Tapping opens it; the
+     × still dismisses it. An operator who needs this reads it in two taps instead of scrolling
+     past it on every visit. */
+  .upgrade-note{max-height:4.6em;overflow:hidden;cursor:pointer}
+  .upgrade-note::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2.1em;
+    background:linear-gradient(to bottom,#0b0a1200,#0b0a12e6 78%);pointer-events:none}
+  .upgrade-note.open{max-height:none}
+  .upgrade-note.open::after{display:none}
+
+  /* "target 120 s · behind by…" and "algo-6 · PALW committ…" were cut mid-word: the tile's caption
+     is a nowrap ellipsis sized for a desktop column. On a phone it wraps instead. */
+  .ovbox .s{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45}
+
+  .footer{padding:14px 12px;font-size:11px}
+}

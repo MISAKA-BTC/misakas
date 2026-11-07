@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_tokenizer_witness::mutation_tests::a_held_operand_changed_after_authentication_never_produces_an_eof_verdict ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 695 filtered out; finished in 0.00s
+

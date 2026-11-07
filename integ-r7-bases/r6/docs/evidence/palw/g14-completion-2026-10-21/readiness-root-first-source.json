@@ -1,0 +1,8 @@
+{
+  "base": "dfb380caee48a6c366e5e733908ce98a0a97ac09",
+  "source_sha256": {
+    "consensus/core/src/palw_court_model_scope_routes_v1/readiness_root.rs": "f4dcf0f2a2607c6709bec4fd17fe0151ef671d7c4e03bde03dabd997cdc7be71",
+    "consensus/core/src/palw_court_model_scope_routes_v1.rs": "188d1c0085132e4f290fb1cc1d1da3585c7715d31ac1af6abe4fc89a74327066"
+  },
+  "status": "initial build; compile error in test bond fixture; no tests counted"
+}

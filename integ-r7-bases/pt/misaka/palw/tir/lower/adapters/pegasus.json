@@ -1,0 +1,27 @@
+{
+  "format": "misaka.palw.model-adapter.v1",
+  "id": "pegasus",
+  "kind": "encdec",
+  "extends": [
+    "mixin-bart-lineage"
+  ],
+  "doc": "Pegasus: pre-norm with a final layer norm per stack, sinusoidal positions (the checkpoint's table), sqrt(d_model) embedding scale, no layernorm_embedding.",
+  "match": {
+    "architectures": [
+      "PegasusForConditionalGeneration"
+    ],
+    "model_types": [
+      "pegasus"
+    ]
+  },
+  "vars": [
+    {
+      "name": "learned_positions",
+      "value": false
+    },
+    {
+      "name": "pre_norm_stack",
+      "value": true
+    }
+  ]
+}

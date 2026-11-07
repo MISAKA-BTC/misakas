@@ -1,0 +1,55 @@
+{
+  "base": "ccb847770",
+  "branch": "codex/palw-behavior-preserving-refactor",
+  "source_pins": "carrier-source-hashes.json",
+  "binary": "carrier-binary.json",
+  "source_contract_inventory": "carrier-contract-audit.json",
+  "patch_reconstruction": "carrier-patch-reconstruction.json",
+  "checks": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo check --release -p kaspad --lib --tests",
+      "exit_code": 0,
+      "log": "carrier-lib-tests-check.log"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspad --lib palw_panel:: -- --skip palw_panel::palw_service_public_e2e:: --skip palw_panel::palw_service_violations_e2e:: --test-threads=2",
+      "exit_code": 0,
+      "passed": 463,
+      "failed": 0,
+      "log": "carrier-unit-and-court-tests.log"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh target/release/deps/kaspad_lib-fd58898685902502 palw_panel::palw_service_public_e2e::fresh_public_bond_service_carries_reserved_da_to_objective_default palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_an_ordinarily_admitted_fp_v3_foreign_job palw_panel::palw_service_public_e2e::fresh_public_bond_service_convicts_fp_v3_after_original_commitment_history_is_pruned --test-threads=2",
+      "exit_code": 0,
+      "passed": 3,
+      "failed": 0,
+      "log": "carrier-selected-service-tests.log"
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only",
+      "exit_code": 0,
+      "passed_by_target": {
+        "palw_the_release_did_not_move": 9,
+        "palw_activation_pool_is_t12_only": 5
+      },
+      "failed": 0,
+      "log": "carrier-t12-identity-and-activation.log"
+    }
+  ],
+  "interrupted_runs": {
+    "carrier-interrupted-build.log": "Exit101 after intentional SIGTERM of rustc to fix a known stale mixed source guard before tests ran. No test result.",
+    "carrier-interrupted-broad-service-tests.log": "Exit143: an unintended 26-case prefix selection was stopped; the exact three-case run above completed. No full service-suite pass claimed."
+  },
+  "scope_limits": [
+    "Targeted source inventory, patch reconstruction and sampled runtime checks do not establish exhaustive execution equivalence.",
+    "Standalone bond-registration collateral transaction remains separate from runtime fee/inflight ownership.",
+    "Typed rules/views and runtime/validator/backend refactoring remain pending.",
+    "No monetary/activation/upper-bound change; no pre merge/push, arming or deployment."
+  ],
+  "documentation_check": {
+    "command": "python3 docs/maintenance/check_docs.py",
+    "log": "carrier-docs-check.log",
+    "exit_code": 1,
+    "result": "Five existing imported missing-reference issues plus 43 baseline-known references; no new authored missing links; baseline unchanged."
+  }
+}

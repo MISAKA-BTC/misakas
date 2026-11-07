@@ -1,0 +1,41 @@
+{
+  "parent": "8b4f12d479b9fa872239b110c3d873bed8c8007a",
+  "scope": "Pre-root single numerical-tree topology and native round-body upper only; original all-leaf reservation/funding/ingress and F02/F03 incomplete",
+  "commands": [
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --lib tree_inventory_v1 -- --nocapture",
+      "exit": 0,
+      "passed": 2
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh target/release/deps/kaspa_consensus_core-cd85ed321316b157 palw_tir_public_fold_v1::",
+      "exit": 0,
+      "passed": 41
+    },
+    {
+      "command": "/Users/wata/.cache/misaka-heavy-lock.sh cargo test --release -p kaspa-consensus-core --test palw_the_release_did_not_move --test palw_activation_pool_is_t12_only",
+      "exit": 0,
+      "passed": 14
+    },
+    {
+      "command": "python3 docs/maintenance/check_docs.py",
+      "exit": 1,
+      "existing_missing": 48,
+      "newly_authored_missing": 0
+    }
+  ],
+  "unique_selected_passes": 57,
+  "initial_compile_failure": "E0560 test field values corrected to existing partials; first run exited101 before tests; not counted",
+  "sha256": {
+    "consensus/core/src/palw_tir_dissect_v1.rs": "98f39478d77a4dcc887d4a098d105333c32413ba25fb5831abd3fbef69cdc6b6",
+    "consensus/core/src/palw_tir_dissect_inventory_v1.rs": "ae1e4c5828c4101409ead04a7340ed917a496c445d855a645fe29bf13bfb3e61",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/tree-inventory-test.log": "b9b70a8d606dc505288de59584028482d59a2862c3732582cf1e316b7cf5c990",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/tree-inventory-native.log": "a6df2992959265c3e1af30bb7a2f46d996c482f011394423123f72f8ef56ee99",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/tree-inventory-t12.log": "c62107be4600c54aebab68337788c6f7acd852ec82cd78b9490e46806c885211",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/tree-inventory-docs.log": "d5831fdb5c317a8b8887cd8749bc2705a77f230386e30b7d959c685660f1196c",
+    "docs/evidence/palw/g14-integration-candidate-2026-10-20/tree-inventory-runtime.patch": "ca6f7b4df78d51b788333968f16c114dc57f8c91ec65b93c903bd8b0472935f8"
+  },
+  "unit_executable_sha256": "9f4cae50aeef7b27a7c2f27de8497ae46095094bb8fc995f36d527a88e55a4d4",
+  "runtime_patch_reconstruction": "git apply in resolved fresh temporary cwd; both source files match byte-for-byte",
+  "intermediate_docs_check": "README link checked before artifact creation: one transient missing artifact; raw before-artifact log retained; final same5 imported plus43 known"
+}

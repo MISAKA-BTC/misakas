@@ -1,0 +1,25 @@
+
+running 1 test
+MEASURE fixture_only=true clock=wall_elapsed op=dissect_bottom_honest n=1000 distinct=96 exemplar_body_bytes=14834 median_wall_ns=1118584 p99_wall_ns=1151125 max_wall_ns=1335041 total_wall_ns=1066494578 observed_expected_outcomes=1000
+test court_verify_cpu_measure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 44.03s
+
+       44.03 real        43.96 user         0.06 sys
+            15499264  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                1279  page reclaims
+                   1  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                 558  involuntary context switches
+        589472609459  instructions retired
+        141929490750  cycles elapsed
+             9847144  peak memory footprint

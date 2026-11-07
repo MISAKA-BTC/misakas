@@ -1,0 +1,150 @@
+   Compiling serde_core v1.0.228
+   Compiling byteorder v1.5.0
+   Compiling log v0.4.22
+   Compiling libc v0.2.186
+   Compiling wasm-bindgen-backend v0.2.100
+   Compiling zerocopy v0.7.35
+   Compiling serde_json v1.0.151
+   Compiling wasm-bindgen-macro-support v0.2.100
+   Compiling futures-core v0.3.31
+   Compiling futures-io v0.3.31
+   Compiling ppv-lite86 v0.2.20
+   Compiling memchr v2.7.4
+   Compiling wasm-bindgen-macro v0.2.100
+   Compiling num-traits v0.2.19
+   Compiling aho-corasick v1.1.3
+   Compiling serde v1.0.228
+   Compiling rustix v0.38.37
+   Compiling regex-automata v0.4.8
+   Compiling futures-lite v2.3.0
+   Compiling wasm-bindgen v0.2.100
+   Compiling tracing-core v0.1.36
+   Compiling futures-sink v0.3.31
+   Compiling futures-channel v0.3.31
+   Compiling tracing v0.1.44
+   Compiling js-sys v0.3.77
+   Compiling regex v1.11.0
+   Compiling async-channel v2.3.1
+   Compiling num_threads v0.1.7
+   Compiling futures-task v0.3.31
+   Compiling subtle v2.6.1
+   Compiling time v0.3.47
+   Compiling piper v0.2.4
+   Compiling cargo_metadata v0.18.1
+   Compiling futures-util v0.3.31
+   Compiling polling v3.7.3
+   Compiling smallvec v1.13.2
+   Compiling cc v1.2.61
+   Compiling console v0.15.8
+   Compiling async-io v2.3.4
+   Compiling chrono v0.4.38
+   Compiling vergen v8.3.2
+   Compiling rand_chacha v0.9.0
+   Compiling blocking v1.6.1
+   Compiling async-executor v1.13.1
+   Compiling digest v0.10.7
+   Compiling rand_chacha v0.3.1
+   Compiling cpufeatures v0.2.14
+   Compiling bytes v1.11.1
+   Compiling tokio v1.42.1
+   Compiling workflow-log v0.18.0
+   Compiling rand v0.8.6
+   Compiling sha2 v0.10.8
+   Compiling async-global-executor v2.4.1
+   Compiling futures-executor v0.3.31
+   Compiling rand v0.9.4
+   Compiling workflow-core v0.18.0
+   Compiling parking_lot_core v0.9.10
+   Compiling async-channel v1.9.0
+   Compiling web-sys v0.3.77
+   Compiling kv-log-macro v1.0.7
+   Compiling shared_child v1.0.1
+   Compiling os_pipe v1.2.1
+   Compiling async-std v1.13.0
+   Compiling duct v0.13.7
+   Compiling parking_lot v0.12.3
+   Compiling workflow-core-macros v0.18.0
+   Compiling futures v0.3.31
+   Compiling wasm-bindgen-futures v0.4.50
+   Compiling serde-wasm-bindgen v0.6.5
+   Compiling faster-hex v0.9.0
+   Compiling hash32 v0.3.1
+   Compiling heapless v0.8.0
+   Compiling workflow-wasm-macros v0.18.0
+   Compiling workflow-panic-hook v0.18.0
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/utils)
+   Compiling faster-hex v0.10.1
+   Compiling uuid v1.18.1
+   Compiling ahash v0.8.11
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/hashes)
+   Compiling workflow-wasm v0.18.0
+   Compiling libm v0.2.8
+   Compiling derive_more-impl v2.1.1
+   Compiling rand v0.10.1
+   Compiling hashbrown v0.14.5
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling ordered-float v2.10.1
+   Compiling half v2.4.1
+   Compiling ciborium-io v0.2.2
+   Compiling regex-syntax v0.8.5
+   Compiling ciborium-ll v0.2.2
+   Compiling malachite-base v0.4.16
+   Compiling clap_builder v4.5.51
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling derive_more v2.1.1
+   Compiling serde-value v0.7.0
+   Compiling libcrux-traits v0.0.8
+   Compiling itertools v0.10.5
+   Compiling same-file v1.0.6
+   Compiling cast v0.3.0
+   Compiling log4rs v1.4.0
+   Compiling criterion-plot v0.5.0
+   Compiling password-hash v0.5.0
+   Compiling walkdir v2.5.0
+   Compiling libcrux-sha3 v0.0.10
+   Compiling malachite-nz v0.4.16
+   Compiling clap v4.5.51
+   Compiling ciborium v0.2.2
+   Compiling misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/gen)
+   Compiling misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/challenge)
+   Compiling blake2 v0.10.6
+   Compiling tinytemplate v1.2.1
+   Compiling is-terminal v0.4.13
+   Compiling wasm-bindgen-test-macro v0.3.50
+   Compiling anes v0.1.6
+   Compiling oorandom v11.1.4
+   Compiling criterion v0.5.1
+   Compiling wasm-bindgen-test v0.3.50
+   Compiling libcrux-ml-dsa v0.0.10
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/math)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling argon2 v0.5.3
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/kernel)
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/core)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/addresses)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/crypto/muhash)
+   Compiling sha3 v0.10.8
+   Compiling workflow-serializer v0.18.0
+   Compiling bincode v1.3.3
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/g14-public-conviction/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 11m 21s
+     Running unittests src/lib.rs (target/debug/deps/kaspa_consensus_core-6e27a7db9d28a156)
+
+running 1 test
+test palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once ... 
+thread 'palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once' (16593797) panicked at consensus/core/src/palw_state_v2/tests/public_prefix_fold_v1.rs:104:9:
+assertion failed: builder.state.bond(&bond(n)).unwrap().collateral <
+    before.bond(&bond(n)).unwrap().collateral
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_state_v2::tests::public_prefix_fold_v1::public_prefix_demand_is_rooted_reversible_and_defaults_collect_from_all_literal_custodians_once
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3918 filtered out; finished in 0.07s
+
+error: test failed, to rerun pass `-p kaspa-consensus-core --lib`

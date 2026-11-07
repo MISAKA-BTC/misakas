@@ -1,0 +1,39 @@
+
+running 21 tests
+test palw_false_valid_filing_v1::tests::a_licences_receipts_keep_the_form_they_were_signed_in ... ok
+test palw_false_valid_filing_v1::tests::one_filing_per_seat_never_the_own_bond_and_only_what_the_chain_convicts ... ok
+test palw_false_valid_filing_v1::tests::policy_declines_the_own_claim_and_names_held_partials_the_rule_reaches ... ok
+test palw_false_valid_filing_v1::tests::only_relied_on_receipts_take_a_slot_and_the_cap_is_per_seat ... ok
+test palw_false_valid_filing_v1::tests::the_evidence_names_its_receipts_seat_and_its_object_carries_its_digest ... ok
+test palw_legacy_answer_chunks_v2::tests::foreign_truncated_tampered_and_unbounded_parts_cannot_complete_an_answer ... ok
+test palw_legacy_answer_chunks_v2::tests::a_large_answer_is_exposed_only_after_all_authenticated_parts_arrive ... ok
+test palw_legacy_answer_chunks_v2::tests::input_and_job_admission_count_the_signed_envelope_and_every_carrier_in_the_existing_window ... ok
+test palw_rule_manifest_v1::tests::a_ruleset_revision_moves_the_manifest_digest ... ok
+test palw_rule_manifest_v1::tests::a_scheduled_rulesets_revision_leaves_the_identity_alone ... ok
+test palw_rule_manifest_v1::tests::every_subsystem_a_verdict_comes_from_is_in_the_manifest ... ok
+test palw_rule_manifest_v1::tests::the_manifest_encoding_is_canonical_and_unambiguous ... ok
+test palw_rule_manifest_v1::tests::the_manifest_is_revisions_and_nothing_else ... ok
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation' (4038856) panicked at consensus/core/src/palw_state_v2/tests/terminal_carriage_v1.rs:22:77:
+ordinary reservation: AccusationExposureCeiling { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000500000000000000, index: 0 }), edge: "dispute reservation", backed: 100, accusation: 20, ceiling: 100 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation ... FAILED
+
+thread 'palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts' (4038857) panicked at consensus/core/src/palw_state_v2/tests/terminal_carriage_v1.rs:22:77:
+ordinary reservation: AccusationExposureCeiling { bond: PalwBondKeyV2(TransactionOutpoint { transaction_id: 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000500000000000000, index: 0 }), edge: "dispute reservation", backed: 100, accusation: 20, ceiling: 100 }
+test palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts ... FAILED
+test palw_legacy_answer_chunks_v2::tests::the_full_32_part_transport_fits_each_carrier_and_refuses_one_byte_less_before_signing ... ok
+test palw_terminal_carriage_v1::tests::exact_reservation_window_has_no_extension_or_overflow ... ok
+test palw_terminal_carriage_v1::tests::oversized_proof_is_refused_before_signing_or_parts_allocation ... ok
+test palw_terminal_carriage_v1::tests::owner_digest_index_duplicate_and_corruption_cannot_complete ... ok
+test palw_terminal_carriage_v1::tests::signature_message_binds_network_reservation_accused_and_original_digest ... ok
+test palw_terminal_carriage_v1::tests::exact_maximum_reverse_arrival_preserves_original_evidence_identity ... ok
+
+failures:
+
+failures:
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_cannot_replace_take_over_corrupt_or_extend_closed_reservation
+    palw_state_v2::tests::terminal_carriage_v1::owned_terminal_fold_partial_restart_final_conviction_and_each_delta_reverts
+
+test result: FAILED. 19 passed; 2 failed; 0 ignored; 0 measured; 3627 filtered out; finished in 0.05s
+
