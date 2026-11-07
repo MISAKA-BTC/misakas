@@ -1232,6 +1232,12 @@ impl PositiveCarrierPhaseTwoV2 {
                     .map_err(|why| NativeCoverageV1::unsupported::<Self>("native Case predecessor owner", &format!("{why:?}")))?,
                 None => action,
             };
+            let action = match case_backing {
+                Some(backing) => action
+                    .with_native_case_backing_v2(backing)
+                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("native Case predecessor owner", &format!("{why:?}")))?,
+                None => action,
+            };
             actions
                 .try_reserve_exact(1)
                 .map_err(|_| NativeCoverageV1::unsupported::<Self>("native Positive raw actions", "allocation refused"))?;

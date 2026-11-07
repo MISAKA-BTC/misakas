@@ -684,6 +684,54 @@ impl VirtualStateProcessor {
         })
     }
 
+    fn check_retained_case_bind_result_v2(
+        &self,
+        state: &PalwChainStateV2,
+        case: CaseJournalRecordView<'_>,
+        boundary: AssignmentCaseBoundaryV2,
+        native_body: &[u8],
+        mut remaining_work: u64,
+    ) -> Result<(), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_continuation_id_v2;
+
+        let assignment = scan_assignment_continuation_id_v2(native_body).map_err(|_| E::Invalid("initial Case Assignment id"))?;
+        let frame = rooted_initial_assigned_case_bind_v2(state, assignment, case, boundary).map_err(|why| match why {
+            PositiveRowErrorV2::MissingRequiredRow | PositiveRowErrorV2::MissingKernelRoute => {
+                E::Unavailable("rooted initial Case bind")
+            }
+            _ => E::Invalid("rooted initial Case bind differs"),
+        })?;
+        let payload_bytes = u64::from(frame.header.payload_bytes);
+        let record_bytes = payload_bytes + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+        // Reserve work for the full fixed framing/hash and byte comparison
+        // before the DB returns even a borrowed record.
+        charge_archive_work_v2(&mut remaining_work, 3 * record_bytes)?;
+        self.palw_state_v2_store
+            .read()
+            .with_positive_assignment_journal_record_v2(frame.header.id(), record_bytes, |raw| {
+                let record = AssignmentJournalRecordViewV2::decode(raw, record_bytes)
+                    .map_err(|_| E::Invalid("retained Case BindResult codec"))?;
+                if record.frame() != frame {
+                    return Err(E::Invalid("retained Case BindResult differs from rooted frame"));
+                }
+                let (other, body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, payload_bytes)
+                    .map_err(|_| E::Invalid("retained Case BindResult carrier framing"))?;
+                if body != native_body
+                    || other.selected_parent != boundary.selected_parent
+                    || other.pre_event_root != boundary.pre_event_root
+                    || other.before_delta_end != boundary.before_delta_end
+                    || other.populated_inputs != boundary.populated_inputs
+                    || other.input_count != boundary.input_count
+                    || other.fee != boundary.fee
+                {
+                    return Err(E::Invalid("Case and Assignment journal boundaries differ"));
+                }
+                Ok(())
+            })
+            .map_err(|_| E::Unavailable("retained Case BindResult bytes"))?
+    }
+
     /// Read original decode rules for a continuation against the actual walk's
     /// selected-parent state. Absence of an Assignment row can be a later
     /// same-block intake. Missing history for an existing row is unavailable.
