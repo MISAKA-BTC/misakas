@@ -1,0 +1,15 @@
+{
+  "command": [
+    "scripts/ci/positive-accounting-node-ci.sh"
+  ],
+  "exit_code": 0,
+  "raw_log": "node-full.log",
+  "base_commit": "9541c92be5cfa0941bc579477ddef4293753b6d7",
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  }
+}

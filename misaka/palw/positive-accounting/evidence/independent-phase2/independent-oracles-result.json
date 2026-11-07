@@ -1,0 +1,26 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "misaka-palw-positive-accounting",
+    "--test",
+    "independent_consumer_routes",
+    "--test",
+    "independent_credit_graph",
+    "--test",
+    "independent_fee_conservation"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "exit_code": 0,
+  "raw_log": "independent-oracles.log",
+  "base_commit": "7cdce10d31c8e2081da0b38990470527971450ba"
+}
