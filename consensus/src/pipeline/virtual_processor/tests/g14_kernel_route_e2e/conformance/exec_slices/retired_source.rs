@@ -170,11 +170,11 @@ async fn rfc23s2_no_seam_exec_retirement_compact_source_restart_and_replay() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
-    let mut cw = active_world_over_with_params(
+    let mut cw = Box::pin(active_world_over_with_params(
         VerificationModeV1::OptimisticPublicVerification,
         |config| TestConsensus::with_db(db.clone(), config, sender),
         profile,
-    )
+    ))
     .await;
     cw.net._keep.push(Box::new(receiver));
     let tier =

@@ -23571,7 +23571,7 @@ pub(crate) fn replay_delta_owned_v1(
     params: &PalwStateParamsV2,
     revert: bool,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
-    palw_claim_local_execution_cohort_census_v15::prepare_compact_replay_activity_v15(&mut state, params, delta.point);
+    palw_claim_local_execution_cohort_census_v15::prepare_compact_replay_activity_v15(&mut state, params, delta);
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as CourtKey, PalwStagedCourtRowV1 as CourtRow};
     // A verified tokenizer may only enter a trusted journal as an immutable
     // insertion. Its prerequisite rows must already exist on the exact parent,

@@ -1568,8 +1568,10 @@ pub(super) fn invalidate_compact_row_v15(s: &mut PalwChainStateV2, table: u8, ke
         s.execution_cohort_census_v15.compact_complete = false;
     }
 }
-pub(super) fn prepare_compact_replay_activity_v15(s: &mut PalwChainStateV2, params: &PalwStateParamsV2, point: PalwBlockContextV2) {
-    if !params.claim_local_settlement_active_at(point.daa_score) {
+pub(super) fn prepare_compact_replay_activity_v15(s: &mut PalwChainStateV2, params: &PalwStateParamsV2, delta: &PalwStateDeltaV2) {
+    if !params.claim_local_settlement_active_at(delta.point.daa_score)
+        && delta.entries.iter().any(|entry| matches!(entry, PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } if old != new && compact_key_v15(*table, key)))
+    {
         s.execution_cohort_census_v15.compact_complete = false;
     }
 }
