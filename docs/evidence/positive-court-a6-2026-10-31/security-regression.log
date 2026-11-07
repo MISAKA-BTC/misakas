@@ -1,0 +1,10 @@
+
+running 5 tests
+test palw_security_certification_v1::kernel_uncertified_split_tests::cert_kernel_uncertified_split_conserves_and_burns_the_v3_share ... ok
+test palw_security_certification_v1::tests::rfc18_cert_closed_model_pass_probability_is_small_and_reported ... ok
+test palw_security_certification_v1::tests::rfc18_cert_design_policy_validates_and_requires_a_majority ... ok
+test palw_security_certification_v1::tests::val_approved_gate_c_policy_is_75_of_41_and_validates ... ok
+test palw_security_certification_v1::tests::p4_u5_decided_m_k_meet_false_certification_and_liveness_at_the_premise ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 5351 filtered out; finished in 0.03s
+

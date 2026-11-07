@@ -3885,6 +3885,12 @@ pub(crate) mod test_support {
         fn param_opening(&self, leaf: u32) -> Option<PalwArtifactOpeningV1> {
             open_artifact_leaf_v1(&self.ops, leaf)
         }
+        fn param_multiproof(&self, leaves: &[u32]) -> Option<PalwArtifactMultiproofV1> {
+            let hashes: Vec<_> = self.ops.iter().map(artifact_leaf_v1).collect();
+            let opened = leaves.iter().map(|leaf| Some((*leaf, self.ops.get(*leaf as usize)?.clone()))).collect::<Option<Vec<_>>>()?;
+            crate::palw_artifact::palw_artifact_multiproof_v1(&hashes, &opened)
+        }
+
         fn prompt_token_ids(&self) -> Option<Vec<u32>> {
             Some(self.prompt.clone())
         }

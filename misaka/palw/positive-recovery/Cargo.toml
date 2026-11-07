@@ -1,0 +1,25 @@
+[package]
+name = "misaka-palw-positive-recovery"
+description = "A6 checked Positive Court recovery transactions and bounded node-local imports"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-database.workspace = true
+misaka-palw-positive-contract.workspace = true
+blake2b_simd.workspace = true
+
+[dev-dependencies]
+borsh.workspace = true
+libcrux-ml-dsa.workspace = true
+misaka-palw-tir.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
