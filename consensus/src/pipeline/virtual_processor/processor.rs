@@ -1618,7 +1618,6 @@ mod dns;
 mod evm;
 mod native_original_input_v19;
 mod native_reserve_v1;
-mod native_original_input_v19;
 mod palw;
 pub(in crate::pipeline::virtual_processor) mod palw_accept;
 mod palw_evm_asof_v2;
@@ -2210,18 +2209,6 @@ impl VirtualStateProcessor {
         self.pruning_sender
             .send(PruningProcessingMessage::Exit)
             .unwrap();
-    }
-
-    fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
-        if self.is_consensus_exiting.load(Ordering::Acquire) { Err(PalwLocalTransitionFaultV1::Shutdown) } else { Ok(()) }
-    }
-
-    fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
-        if self.is_consensus_exiting.load(Ordering::Acquire) { Err(PalwLocalTransitionFaultV1::Shutdown) } else { Ok(()) }
-    }
-
-    fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
-        if self.is_consensus_exiting.load(Ordering::Acquire) { Err(PalwLocalTransitionFaultV1::Shutdown) } else { Ok(()) }
     }
 
     fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
@@ -3752,7 +3739,6 @@ impl VirtualStateProcessor {
                                     // Raw op12 still derives settlement at the executed prefix.
                                     // Compare that outcome with what UTXO acceptance debited.
                                     extras.assignment_settlements = std::mem::take(&mut ctx.palw_assignment_settlements);
-                                    extras.case_source_spends = std::mem::take(&mut ctx.palw_case_source_spends);
                                     extras.positive_assignment_actions = assignment_raw_schedule;
                                     extras.positive_decision_histories = histories;
                                     // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each

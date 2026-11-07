@@ -122,13 +122,39 @@ impl BatchCourtWindowV1 {
         if visited.len() != nodes.len() {
             return Err(CaseGraph);
         }
+        let slots = graph
+            .iter()
+            .map(|node| crate::palw_batch_public_budget_v1::PublicSharedSlotV1 {
+                id: node.packet.id,
+                slot_daa: 1,
+                material_ready_daa: node.packet.release_daa - first_service,
+                predecessors: node.predecessors.clone(),
+            })
+            .collect::<Vec<_>>();
+        // One submission slot per packet. Material-ready offsets and dependency
+        // edges are the order; the retired 306,108 localization span is not a fallback.
+        crate::palw_batch_public_budget_v1::check_reserved_public_graph_v1(NOTICE_WINDOW_DAA, &slots, recovery_daa)
+            .map_err(budget_refusal)?;
 
+        let saved = book.clone();
         book.reserve_causal_checked_v1(graph, service_before, |candidate| check_assignments(candidate, &nodes))
             .map_err(Reservation)?;
-        // The assigned slot is below service_before; the checked window
-        // proves these additions fit and cannot exceed the original hard end.
         let terminal_daa = book.assigned_daa(&terminal).expect("successful case reservation assigns its terminal");
+        let scheduled = terminal_daa.checked_sub(latest_notice).and_then(|span| span.checked_add(recovery_daa)).ok_or(Clock)?;
+        if let Err(refusal) = crate::palw_batch_public_budget_v1::check_scheduled_public_span_v1(scheduled) {
+            *book = saved;
+            return Err(budget_refusal(refusal));
+        }
         Ok(terminal_daa - self.claim_accepted_daa + recovery_daa + 1)
+    }
+}
+
+fn budget_refusal(refusal: crate::palw_batch_public_budget_v1::PublicSharedBudgetRefusalV1) -> BatchCourtErrorV1 {
+    use crate::palw_batch_public_budget_v1::PublicSharedBudgetRefusalV1 as R;
+    match refusal {
+        R::Exceeds { required, allowed } => BatchCourtErrorV1::PublicBudget { required_daa: required, allowed_daa: allowed },
+        R::Notice => BatchCourtErrorV1::Window,
+        R::Graph => BatchCourtErrorV1::CaseGraph,
     }
 }
 
@@ -267,6 +293,8 @@ pub enum BatchCourtErrorV1 {
     Checkpoint,
     Clock,
     OverTarget { required_daa: u64 },
+    /// The ordered public graph does not fit in the 6,880 DAA after the latest legal first notice.
+    PublicBudget { required_daa: u64, allowed_daa: u64 },
 }
 
 fn part_digest(bytes: &[u8]) -> Hash64 {

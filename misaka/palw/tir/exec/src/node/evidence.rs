@@ -362,10 +362,25 @@ impl<'a> TirEvidenceV1<'a> {
 
     /// Dense wide capture: the arithmetic court consumes authenticated IDs and v2 step leaves.
     pub fn dense_wide_q24_v2(
-        runner:&'a TirClassRunnerV1<'a>, capture:&'a super::wide_q24::TirWideCaptureV2,
-        params:&'a dyn TirParamOpenerV1, form:PalwPromptIdsFormV1, cap:u64,
-    )->Result<Self,String>{
-        capture.authenticate(cap)?;
+        runner: &'a TirClassRunnerV1<'a>,
+        capture: &'a super::wide_capture_v2::TirWideCaptureV2,
+        params: &'a dyn TirParamOpenerV1,
+        form: PalwPromptIdsFormV1,
+        cap: u64,
+    ) -> Result<Self, String> {
+        kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(&capture.binding, cap).map_err(|e| e.to_string())?;
+        let program = capture.binding.class.decode_program().map_err(|e| e.to_string())?;
+        let vocab =
+            program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1) as usize;
+        if capture.logits_rows.iter().any(|r| r.len() != vocab)
+            || kaspa_consensus_core::palw_logits_q24_v2::trace_root(
+                &capture.binding.job_context,
+                &capture.logits_rows,
+                &capture.generated,
+            ) != Some(capture.binding.full_logits_trace_root)
+        {
+            return Err("wide capture trace".into());
+        }
         let prompt_root=kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form,&capture.prompt).map_err(|e|e.to_string())?;
         if capture.prompt.len() != capture.binding.job_context.declared_prefill_tokens as usize || prompt_root != capture.binding.job_context.prompt_token_ids_hash { return Err("wide capture prompt identity".into()); }
         let root=kaspa_consensus_core::palw_logits_q24_v2::rows_root(&capture.binding.job_context,&capture.logits_rows).ok_or("wide row roots")?;

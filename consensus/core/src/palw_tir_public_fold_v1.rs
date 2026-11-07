@@ -566,6 +566,23 @@ fn original_plan_mode_v4(
             true,
             diagnostics,
         )
+    } else if crate::palw_tir_frame_cost_v1::is_family_clock_v3(native.clock.version) {
+        // A family material clock is checked by the family quote. The legacy
+        // quote refuses it outright, which would drop a clock-v2 plan whose
+        // collection door already fits the adjudication deadline.
+        derive_tir_public_allocation_native_mode_v3(
+            &geometry,
+            original,
+            header,
+            record,
+            layout,
+            semantics,
+            inventory,
+            native,
+            table.as_ref(),
+            true,
+            diagnostics,
+        )
     } else {
         derive_tir_public_allocation_native_mode_v3(
             &geometry,
@@ -767,6 +784,128 @@ pub fn palw_tir_public_conviction_preflight_v1(
     apply_conviction_v1(&mut builder, &ctx, &frame, filer, evidence)
 }
 
+/// Plan-time and adjudication preflight for one claim-bound evidence package.
+///
+/// Batch clock version 5 only. A package past the admission byte cap is refused
+/// here, and the claim is not admitted. The arguments are the original claim,
+/// the package, and the same size and deadline inputs admission already uses.
+/// A Panel signature or quorum is not an argument.
+pub fn palw_tir_public_evidence_package_preflight_v1(
+    claim: &crate::palw_public_evidence_package_v1::PalwPublicOriginalClaimV1,
+    package: &crate::palw_public_evidence_package_v1::PalwPublicEvidencePackageV1,
+    plan: crate::palw_public_evidence_package_v1::PalwBatchV5EvidencePlanV1<'_>,
+    allocated_proof_bytes: u64,
+) -> Result<crate::palw_tir_objective_v1::PalwTirObjectiveOutcomeV1, PalwStateV2Error> {
+    let admission = crate::palw_public_evidence_package_v1::plan_batch_v5_evidence_package_v1(package, plan).map_err(refused)?;
+    if !admission.admitted {
+        return Err(refused("Batch public evidence package does not fit admission; the claim is not admitted"));
+    }
+    crate::palw_tir_objective_v1::adjudicate_original_package_v1(claim, package, allocated_proof_bytes).map_err(refused)
+}
+
+/// Accept one claim-bound evidence package through the admitted-frame conviction door.
+///
+/// The ORIGINAL frame must already be on `base`. Batch clock version 5 and the
+/// frame's stored collection door are required; neither is rewritten. A package
+/// that misses the admission cap, or whose openings do not match `public_claim`,
+/// is refused before [`crate::palw_tir_objective_v1::adjudicate_original_v1`].
+/// A Panel signature is not an argument. `evidence` is the arithmetic proof the
+/// existing door already adjudicates, and it is read only after the package matches.
+pub fn palw_tir_public_package_conviction_preflight_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    next_daa: u64,
+    filer: PalwBondKeyV2,
+    public_claim: &crate::palw_public_evidence_package_v1::PalwPublicOriginalClaimV1,
+    package: &crate::palw_public_evidence_package_v1::PalwPublicEvidencePackageV1,
+    plan: crate::palw_public_evidence_package_v1::PalwBatchV5EvidencePlanV1<'_>,
+    evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
+) -> Result<crate::palw_tir_objective_v1::PalwTirObjectiveOutcomeV1, PalwStateV2Error> {
+    use crate::palw_public_evidence_package_v1::PalwPublicEvidenceJudgmentV1;
+    use crate::palw_tir_objective_v1::PalwTirObjectiveOutcomeV1;
+    use crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1 as E;
+    let frame = palw_tir_public_claim_v1(base, public_claim.claim_id)
+        .cloned()
+        .ok_or_else(|| refused("TIR conviction preflight: no ORIGINAL frame"))?;
+    frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
+    if !crate::palw_tir_frame_cost_v1::is_batch_public_clock_v5(frame.plan_v1().acquisition.clock.version) {
+        return Err(refused("public package conviction requires the admitted batch clock version 5 frame"));
+    }
+    let mut builder =
+        TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
+    let native = rules(&builder)?;
+    let terms = frame.plan_v1().terms;
+    let collection = terms
+        .collect_until_daa
+        .checked_sub(terms.stream_until_daa)
+        .ok_or_else(|| refused("Batch public collection window underflows"))?;
+    if crate::palw_tir_frame_cost_v1::batch_public_objection_refused_v1(
+        frame.plan_v1().terminal.maximum_witness_bytes,
+        frame.plan_v1().terminal.maximum_root_claim_bytes,
+        &native.court,
+        frame.plan_v1().acquisition.envelope.inclusion_daa,
+        collection,
+        terms.accepted_daa,
+        terms.collect_until_daa,
+    )
+    .is_some()
+    {
+        return Err(refused("Batch public objection artifact does not fit admission size or deadline"));
+    }
+    if !crate::palw_court_clock_v2::palw_route_door_open_v2(
+        params,
+        base.legacy_disputes.get(&public_claim.claim_id),
+        base.claim(&public_claim.claim_id),
+        palw_da_disclose_window_daa_v1(params),
+        terms.accepted_daa,
+        terms.collect_until_daa,
+        next_daa,
+    ) {
+        return Err(refused("TIR public conviction is outside the frame's original collection door"));
+    }
+    conviction_filer_v1(&builder, &frame, filer)?;
+    // Size and openings are decided before the existing door reads `evidence`.
+    let admission = crate::palw_public_evidence_package_v1::plan_batch_v5_evidence_package_v1(package, plan).map_err(refused)?;
+    if !admission.admitted {
+        return Err(refused("Batch public evidence package does not fit admission; the claim is not admitted"));
+    }
+    let allocated = frame.plan_v1().terminal.maximum_witness_bytes;
+    let package_bytes = crate::palw_public_evidence_package_v1::public_evidence_package_bytes_v1(package).map_err(refused)?;
+    if allocated == 0 || package_bytes > allocated {
+        return Err(refused("public evidence package exceeds its original allocated body"));
+    }
+    let judged =
+        crate::palw_public_evidence_package_v1::judge_public_evidence_package_v1(public_claim, package, allocated).map_err(refused)?;
+    let PalwPublicEvidenceJudgmentV1::Mismatch { recomputed, recorded } = judged else {
+        return Err(refused("TIR nominated arithmetic primitive holds: no conviction, and no finding of claim honesty"));
+    };
+    if recomputed == recorded {
+        return Err(refused("TIR nominated arithmetic primitive holds: no conviction, and no finding of claim honesty"));
+    }
+    let proof = match evidence {
+        E::Arithmetic { proof } => proof.as_ref(),
+        _ => return Err(refused("public evidence package conviction uses the original arithmetic door")),
+    };
+    palw_tir_public_conviction_preflight_v1(base, params, extras, next_daa, filer, public_claim.claim_id, evidence)?;
+    match crate::palw_tir_objective_v1::adjudicate_original_v1(
+        &builder.state,
+        public_claim.claim_id,
+        proof,
+        &native.court,
+        frame.descriptor_v1().maximum_leaves,
+        native.prompt_form,
+        allocated,
+    )
+    .map_err(refused)?
+    {
+        outcome @ PalwTirObjectiveOutcomeV1::Convicts(_) => Ok(outcome),
+        PalwTirObjectiveOutcomeV1::PredicateHolds { .. } => {
+            Err(refused("TIR nominated arithmetic primitive holds: no conviction, and no finding of claim honesty"))
+        }
+    }
+}
+
 /// Explicit local dry run of a COMPLETE staged witness. Ordinary control shape
 /// and decoder bounds remain unchanged. The same accepted frame and adjudicator
 /// used by the last witness part decide the outcome; no journal authority exists.
@@ -946,7 +1085,8 @@ pub(super) fn prepare_original_v1(
         object,
         crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
         table.as_ref(),
-        b.params.family_supplier_active_at(ctx.daa_score) && b.extras.family_supplier_active,
+        (b.params.family_supplier_active_at(ctx.daa_score) && b.extras.family_supplier_active)
+            || crate::palw_tir_frame_cost_v1::is_family_clock_v3(native.clock.version),
     )
     .map_err(|why| match why {
         crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
@@ -1007,6 +1147,49 @@ fn install_original_frame_rows_v1(
         && !crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, p.terms.collect_until_daa)
     {
         return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
+    }
+    // Batch public v5 uses the same predicates as the quote. Final still waits
+    // on collect_until (`palw_claim_final_floor_v1`), not on material_until.
+    // A stored deadline is not rewritten here.
+    if crate::palw_tir_frame_cost_v1::is_batch_public_clock_v5(p.acquisition.clock.version) {
+        if crate::palw_tir_frame_cost_v1::batch_collect_door_refusal_v1(p.terms.accepted_daa, p.terms.collect_until_daa).is_some()
+        {
+            return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
+        }
+        let collection = p
+            .terms
+            .collect_until_daa
+            .checked_sub(p.terms.stream_until_daa)
+            .ok_or_else(|| refused("Batch public collection window underflows"))?;
+        let public_span = p
+            .acquisition
+            .envelope
+            .inclusion_daa
+            .checked_add(collection)
+            .ok_or_else(|| refused("Batch public recovery span overflows"))?;
+        if crate::palw_tir_frame_cost_v1::batch_public_span_exceeds_notice_budget_v1(public_span).is_some() {
+            return Err(refused("Batch public recovery does not fit after the last legal first notice"));
+        }
+        if p.terms.material_until_daa < p.terms.collect_until_daa {
+            return Err(refused("Batch public retention ends before its collection door"));
+        }
+        // Same admission predicate as the quote. A stored plan whose objection
+        // artifact fails size or deadline is not installed. Retention stays a
+        // later field and is not used to extend collect_until.
+        let court = native.court;
+        if crate::palw_tir_frame_cost_v1::batch_public_objection_refused_v1(
+            p.terminal.maximum_witness_bytes,
+            p.terminal.maximum_root_claim_bytes,
+            &court,
+            p.acquisition.envelope.inclusion_daa,
+            collection,
+            p.terms.accepted_daa,
+            p.terms.collect_until_daa,
+        )
+        .is_some()
+        {
+            return Err(refused("Batch public objection artifact does not fit admission size or deadline"));
+        }
     }
     // audit B-06 (fix-b): under clock v2 the original's custody / material horizons must already cover the claim's whole extended
     // dispute window (`a + 10,000 + max(W_disclose, reorg)`), or the first dispute's extension would be refused (F07) and the claim
@@ -2204,7 +2387,9 @@ mod conviction_e2e_tests {
         PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T, PalwTirPublicControlV1 as Control,
         PalwTirPublicConvictionEvidenceV1 as Evidence,
     };
-    use crate::palw_tir_public_claim_v1::{PalwTirPublicFrameFixtureV1, palw_tir_public_frame_fixture_v1};
+    use crate::palw_tir_public_claim_v1::{
+        PalwTirPublicFrameFixtureV1, palw_tir_public_batch_public_v5_frame_fixture_v1, palw_tir_public_frame_fixture_v1,
+    };
     use crate::palw_tir_public_custody_v1::{
         PalwTirPublicCustodyGrantV1, PalwTirPublicOriginalCreditV1, PalwTirPublicOriginalPanelV1,
     };
@@ -2692,6 +2877,276 @@ mod conviction_e2e_tests {
     fn rooted_service_hold_does_not_block_streamed_fraud_conviction() {
         staged_witness_with_service_hold(true);
     }
+    /// A Batch version-5 claim whose public door fits is admitted. A bond outside
+    /// the Panel submits the Clamp package (recorded 120, recomputed 100). The
+    /// door accepts that package only when the openings match, then
+    /// `adjudicate_original_v1` convicts. An oversize package stops first.
+    /// No measured class is admitted and the trace names no live block.
+    #[test]
+    fn admitted_batch_v5_package_conviction_reaches_adjudicate_original_v1() {
+        use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA};
+        use crate::palw_public_activation_v1::PublicAdjudicationTraceRecordV1;
+        use crate::palw_public_adjudication_measured_class_v1::PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1;
+        use crate::palw_public_evidence_package_v1::{
+            clamp_public_evidence_package_v1, plan_batch_v5_evidence_package_v1, public_evidence_package_bytes_v1,
+            recompute_committed_primitive_v1, PalwBatchV5EvidencePlanV1,
+        };
+        use crate::palw_tir_frame_cost_v1::{
+            batch_public_objection_refused_v1, is_batch_public_clock_v5, PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1,
+        };
+        use crate::palw_tir_objective_v1::PalwTirObjectiveOutcomeV1;
+        assert_eq!(NOTICE_WINDOW_DAA, 3_120);
+        assert_eq!(DISPUTE_WINDOW_DAA, 10_000);
+        assert_eq!(PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, 6_880);
+        assert!(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1.is_empty());
+        assert!(!crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1);
+        assert!(crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1.is_empty());
+        assert!(crate::config::params::palw_t12_shipped_params().palw_batch_court_v1.is_none());
+
+        let fx = palw_tir_public_batch_public_v5_frame_fixture_v1(Some((FORGED_LEAF, 1)), 4);
+        let frame = credited_frame(&fx);
+        let (state, params, extras) = world(&fx, &frame);
+        let root_before = state.state_root();
+        let claim_id = frame.plan_v1().original_claim;
+        let terms = frame.plan_v1().terms;
+        let clock = frame.plan_v1().acquisition.clock.version;
+        assert!(is_batch_public_clock_v5(clock));
+        let hard = terms.accepted_daa + DISPUTE_WINDOW_DAA;
+        assert!(terms.collect_until_daa <= hard);
+        assert!(crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, terms.collect_until_daa));
+        assert!(!crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, hard + 1));
+        let collection = terms.collect_until_daa - terms.stream_until_daa;
+        assert!(
+            batch_public_objection_refused_v1(
+                frame.plan_v1().terminal.maximum_witness_bytes,
+                frame.plan_v1().terminal.maximum_root_claim_bytes,
+                &fx.rules.court,
+                frame.plan_v1().acquisition.envelope.inclusion_daa,
+                collection,
+                terms.accepted_daa,
+                terms.collect_until_daa,
+            )
+            .is_none(),
+            "the admitted version-5 door fits"
+        );
+        let panel = frame.original_custody_v1().panel_v1().expect("the admitted frame freezes a panel");
+        assert!(!panel.seats.contains(&outsider()), "the filer is outside the Panel");
+        let panel_signature: Vec<u8> = vec![9; 128];
+        assert!(!panel_signature.is_empty());
+
+        let (public_claim, package) = clamp_public_evidence_package_v1(claim_id, 120);
+        assert_eq!(recompute_committed_primitive_v1(&package).unwrap(), 100);
+        assert_eq!(package.recorded_output, 120);
+        let wide = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(4, 10, 1, 1 << 20, 1, 1).unwrap();
+        let plan = PalwBatchV5EvidencePlanV1 {
+            clock_version: clock,
+            court: &wide,
+            localization_daa: frame.plan_v1().acquisition.envelope.inclusion_daa,
+            filing_daa: collection,
+            accepted_daa: terms.accepted_daa,
+            collect_until_daa: terms.collect_until_daa,
+        };
+        let next = at(&frame, 5).daa_score;
+        assert!(next < terms.collect_until_daa);
+        let evidence = cone(&fx);
+        let outcome = palw_tir_public_package_conviction_preflight_v1(
+            &state,
+            &params,
+            &extras,
+            next,
+            outsider(),
+            &public_claim,
+            &package,
+            plan,
+            &evidence,
+        )
+        .expect("matching openings reach adjudicate_original_v1");
+        let PalwTirObjectiveOutcomeV1::Convicts(found) = outcome else { panic!("adjudicate_original_v1 must convict") };
+        assert_eq!(found.target_v1().claim_id, claim_id);
+        assert_eq!(state.state_root(), root_before);
+        let _panel_signature_is_not_an_argument = panel_signature;
+
+        let mut tampered = package.clone();
+        tampered.committed_input.opening.siblings[0] = Hash64::from_u64_word(99);
+        let refused_opening = palw_tir_public_package_conviction_preflight_v1(
+            &state,
+            &params,
+            &extras,
+            next,
+            outsider(),
+            &public_claim,
+            &tampered,
+            plan,
+            &evidence,
+        )
+        .expect_err("a tampered opening is refused before conviction")
+        .to_string();
+        assert!(refused_opening.contains("opening") || refused_opening.contains("Merkle"), "{refused_opening}");
+        assert!(!refused_opening.contains("CourtFraud"));
+
+        let package_bytes = public_evidence_package_bytes_v1(&package).unwrap();
+        let tight = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(4, 10, 1, package_bytes, 1, 1).unwrap();
+        let mut oversize = package.clone();
+        let siblings = oversize.identity_opening.siblings.len();
+        oversize.identity_opening.siblings.resize(siblings + 8, Hash64::from_u64_word(4));
+        assert!(public_evidence_package_bytes_v1(&oversize).unwrap() > package_bytes);
+        let oversize_plan = PalwBatchV5EvidencePlanV1 { court: &tight, ..plan };
+        assert!(!plan_batch_v5_evidence_package_v1(&oversize, oversize_plan).unwrap().admitted);
+        let refused_size = palw_tir_public_package_conviction_preflight_v1(
+            &state,
+            &params,
+            &extras,
+            next,
+            outsider(),
+            &public_claim,
+            &oversize,
+            oversize_plan,
+            &evidence,
+        )
+        .expect_err("an oversize package never reaches conviction")
+        .to_string();
+        assert!(refused_size.contains("does not fit admission"), "{refused_size}");
+        assert_eq!(state.state_root(), root_before);
+        assert_eq!(DISPUTE_WINDOW_DAA, 10_000);
+
+        let trace = PublicAdjudicationTraceRecordV1::fill_from_local_conviction_v1(
+            claim_id,
+            public_claim.output,
+            terms.accepted_daa,
+            next,
+        );
+        assert_eq!(trace.claim_hash, Some(claim_id));
+        assert_eq!(trace.evidence_root, Some(public_claim.output));
+        assert_eq!(trace.acceptance_daa, Some(terms.accepted_daa));
+        assert_eq!(trace.adjudication_daa, Some(next));
+        assert_eq!(trace.binary_hash, [0; 32]);
+        assert!(trace.block_reference.is_none());
+        assert!(!trace.names_a_block());
+        assert!(trace.identity_fields_empty());
+        assert!(trace.signature_payload_hash.is_none());
+        assert!(trace.notice_daa.is_none());
+        assert!(trace.final_daa.is_none());
+        assert!(trace.source_commit == [0; 20]);
+        assert!(crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1.is_empty());
+        assert!(crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1.iter().all(|row| row.block_reference.is_none()));
+        assert!(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1.is_empty());
+        assert!(!crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1);
+        assert!(crate::config::params::palw_t12_shipped_params().palw_batch_court_v1.is_none());
+    }
+
+    /// One local test block. Its header hash is `Header::new_finalized` /
+    /// `finalize`. The one transaction payload is the existing Batch version-5
+    /// Clamp package (input 150, recomputed 100, recorded 120). Applying this
+    /// block's transition through `TransitionBuilder::finalize_claim` writes
+    /// `PalwClaimPhaseV2::Final` into chain state. The trace names that header
+    /// hash as a local test block. The live T12 binary hash stays empty.
+    #[test]
+    fn local_test_block_clamp_conviction_payload_reaches_claim_final_v1() {
+        use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA};
+        use crate::palw_public_activation_v1::PublicAdjudicationTraceRecordV1;
+        use crate::palw_public_adjudication_measured_class_v1::PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1;
+        use crate::palw_public_evidence_package_v1::{
+            clamp_public_evidence_package_v1, recompute_committed_primitive_v1, PalwPublicEvidencePackageV1,
+            PalwPublicExpectedOperationV1,
+        };
+        use crate::palw_tir_frame_cost_v1::PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1;
+        assert_eq!(NOTICE_WINDOW_DAA, 3_120);
+        assert_eq!(DISPUTE_WINDOW_DAA, 10_000);
+        assert_eq!(PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, 6_880);
+        assert!(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1.is_empty());
+        assert!(!crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1);
+        assert!(crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1.is_empty());
+
+        let fx = palw_tir_public_batch_public_v5_frame_fixture_v1(Some((FORGED_LEAF, 1)), 4);
+        let frame = credited_frame(&fx);
+        let (state, params, extras) = world(&fx, &frame);
+        let claim_id = frame.plan_v1().original_claim;
+        let terms = frame.plan_v1().terms;
+        let claim = state.claims.get(&claim_id).unwrap().clone();
+        assert!(matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        let floor = palw_claim_final_floor_v1(&state, &params, &claim_id, &claim, terms.accepted_daa + 3).unwrap();
+        assert!(floor >= terms.collect_until_daa);
+        let block_daa = floor + 1;
+
+        let (public_claim, package) = clamp_public_evidence_package_v1(claim_id, 120);
+        assert_eq!(package.committed_input.value, 150);
+        assert_eq!(recompute_committed_primitive_v1(&package).unwrap(), 100);
+        assert_eq!(package.recorded_output, 120);
+        assert!(matches!(package.expected_operation, PalwPublicExpectedOperationV1::Clamp { lo: 0, hi: 100, .. }));
+        let payload = borsh::to_vec(&package).unwrap();
+        let tx = crate::tx::Transaction::new(
+            0,
+            vec![],
+            vec![],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            payload,
+        );
+        let header = crate::header::Header::new_finalized(
+            crate::constants::BLOCK_VERSION,
+            vec![vec![Hash64::default()]].try_into().unwrap(),
+            Hash64::default(),
+            Hash64::default(),
+            Hash64::default(),
+            0,
+            0,
+            0,
+            crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH,
+            block_daa,
+            0u64.into(),
+            block_daa,
+            Hash64::default(),
+        );
+        let mut recomputed = header.clone();
+        recomputed.hash = Hash64::default();
+        recomputed.finalize();
+        assert_eq!(recomputed.hash, header.hash);
+        assert!(header.palw_commitment.is_empty());
+        let header_hash = header.hash;
+        let block = crate::block::Block::new(header, vec![tx]);
+        assert_eq!(block.header.hash, header_hash);
+        assert_eq!(block.transactions.len(), 1);
+        assert_eq!(*block.evm_payload, crate::evm::EvmExecutionPayload::default());
+        let carried: PalwPublicEvidencePackageV1 = borsh::from_slice(&block.transactions[0].payload).unwrap();
+        assert_eq!(carried, package);
+        assert_eq!(carried.committed_input.value, 150);
+        assert_eq!(recompute_committed_primitive_v1(&carried).unwrap(), 100);
+        assert_eq!(carried.recorded_output, 120);
+
+        let ctx = PalwBlockContextV2 { block: header_hash, daa_score: block_daa, blue_score: block_daa, subsidy: 0 };
+        assert_eq!(ctx.block, block.header.hash);
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        builder.finalize_claim(claim_id, &claim, ctx.daa_score).unwrap();
+        assert!(matches!(
+            builder.state.claims.get(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Final { final_daa } if final_daa == block_daa
+        ));
+
+        let trace = PublicAdjudicationTraceRecordV1 {
+            build_settings: "local test block",
+            block_reference: Some(header_hash),
+            final_daa: Some(block_daa),
+            ..PublicAdjudicationTraceRecordV1::fill_from_local_conviction_v1(
+                claim_id,
+                public_claim.output,
+                terms.accepted_daa,
+                block_daa,
+            )
+        };
+        assert_eq!(trace.block_reference, Some(header_hash));
+        assert_eq!(trace.build_settings, "local test block");
+        assert_eq!(trace.binary_hash, [0; 32]);
+        assert_eq!(trace.claim_hash, Some(claim_id));
+        assert!(trace.names_a_block());
+        assert!(crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1.is_empty());
+        assert!(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1.is_empty());
+        assert!(!crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1);
+        assert_eq!(NOTICE_WINDOW_DAA, 3_120);
+        assert_eq!(DISPUTE_WINDOW_DAA, 10_000);
+        eprintln!("local_test_block_header_hash={header_hash}");
+    }
+
     #[test]
     fn staged_conviction_preflight_uses_actual_terminal_adjudicator_and_keeps_ordinary_bound() {
         let fx = palw_tir_public_frame_fixture_v1(None, 4);

@@ -295,6 +295,34 @@ impl JournaledCoordinatorV2 {
         self.state()?;
         Ok(&self.bytes)
     }
+    /// The clock last applied to this journal. Expiry is re-derived from it;
+    /// it is not a peer-supplied record.
+    pub fn observed_daa(&self) -> Result<u64, RecoveryErrorV2> {
+        self.state()?;
+        Ok(self.last_daa)
+    }
+    /// Project the native clock without consuming a journal record. A full
+    /// input archive cannot pin an unrefunded hold past an authenticated
+    /// deadline. The encoded head stays the input image; restore derives the
+    /// same expiry from the receiving clock.
+    pub fn advance_clock(&mut self, now: u64, authenticate: impl FnOnce(u64) -> bool) -> Result<(), RecoveryErrorV2> {
+        if self.indeterminate {
+            return Err(RecoveryErrorV2::Indeterminate);
+        }
+        if now < self.last_daa || !authenticate(now) {
+            return Err(ErrorV2::Binding.into());
+        }
+        self.coordinator.expire(now);
+        self.last_daa = now;
+        Ok(())
+    }
+    /// Clock projection separated from the store write. The archive head is
+    /// unchanged; publication records the authenticated clock beside it.
+    pub fn prepare_clock(mut self, now: u64, authenticate: impl FnOnce(u64) -> bool) -> Result<PreparedRecoveryUpdateV2, RecoveryErrorV2> {
+        let previous = self.head()?;
+        self.advance_clock(now, authenticate)?;
+        Ok(PreparedRecoveryUpdateV2 { journal: self, previous, outcome: Ok(()) })
+    }
 
     /// `authenticate` must check selected carrier membership, its accepted DAA,
     /// and the event's canonical order (including trusted expiry/revocation).
@@ -381,6 +409,33 @@ impl JournaledCoordinatorV2 {
         restored.image = image;
         restored.bytes = bytes.to_vec();
         Ok(restored)
+    }
+}
+
+/// A clock projection that has been checked and not yet published. It carries
+/// no store write and no Gate C authority.
+pub struct PreparedRecoveryUpdateV2 {
+    journal: JournaledCoordinatorV2,
+    previous: RecoveryHeadV2,
+    outcome: Result<(), ErrorV2>,
+}
+impl PreparedRecoveryUpdateV2 {
+    pub fn observed_daa(&self) -> u64 {
+        self.journal.last_daa
+    }
+    pub fn checked_state(&self) -> &PositiveCoordinatorV2 {
+        &self.journal.coordinator
+    }
+    pub fn commit(
+        self,
+        persist: impl FnOnce(RecoveryHeadV2, RecoveryHeadV2, &[u8], &PositiveCoordinatorV2) -> io::Result<()>,
+    ) -> Result<(JournaledCoordinatorV2, Result<(), ErrorV2>), RecoveryErrorV2> {
+        let PreparedRecoveryUpdateV2 { journal, previous, outcome } = self;
+        let state = journal.state()?;
+        let head = journal.head()?;
+        let archive = journal.encoded()?;
+        persist(previous, head, archive, state).map_err(RecoveryErrorV2::Persistence)?;
+        Ok((journal, outcome))
     }
 }
 

@@ -2056,6 +2056,14 @@
       "title": "RFC-0046 — Positive native原資の先行relay資料と有限custody",
       "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0047",
+      "path": "docs/rfc/0047-batch-court-time-contract.md",
+      "title": "RFC-0047 — Batch court time contract: one door, separate retention, public 6,880",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
     }
   ]
 }

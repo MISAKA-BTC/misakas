@@ -22,6 +22,8 @@ TIR／共有queryのデータ意味は02、通常Panel検査は06、依存伝播
 
 producer、challenger、literal signer、材料provider、支払者、受取先、公開提出者を区別し、それぞれの受付段階で要求される署名と責任を拘束する。Panelの多数決は計算不正の最終裁定ではない。
 
+2026-11-07 の [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md) は、新しい Batch 公開時計について、下の原文に優先する。原文は履歴として残す。古い claim は古い規則のままである。この設計では、合意ノードはモデル計算を端から端まで再実行しない。Panel の署名は署名者を識別し、定足数は評決ではない。止まった Panel や結託した Panel のあとにも、bond 付きの第三者経路が残る。完了 receipt の受理から 10,000 DAA を始めない。`collect_until <= hard` と clock-v2 の排他終端 `hard+1` は別の値であり、原文が排他的な `collect_until` の最大を `a + 10,000 + 1` とする箇所は、この設計では優先しない。306,108 DAA の局所化経路へは戻さない。G14 の batch 予算は測定したモデルではない。原文の「Panel の 3 票は ReceiptLicensed へ進める条件の一部」は履歴であり、新しい経路の評決ではない。異議がないことは、計算全体の正しさの証明ではない。
+
 処理の見取り図は、original受理 → notice／query → 認証済みmaterialの開示 → 局所化 → terminal提出 → nodeの決定論的裁定 → 終了効果と会計 → 保持終了である。これは理解のための流れで、新しいserialized状態名やwireを追加するものではない。
 
 ## 3. 受付時に全分岐を引き受ける

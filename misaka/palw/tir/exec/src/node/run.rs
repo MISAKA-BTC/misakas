@@ -295,7 +295,7 @@ impl<'a> TirClassRunnerV1<'a> {
     /// The explicit v2 result, retaining every natural-unit Q24 lane at 64 bits.
     pub fn run_wide_q24_v2(&self, ctx: &PalwJobContextV2, prompt: &[u32], cap:u64, on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>)) -> Result<TirWideJobRunV2,String> {
         if !self.plan.program.wide_logits_q24() || ctx.trace_scheme_id != kaspa_consensus_core::palw_logits_q24_v2::scheme_id() { return Err("wide runner profile/context scheme mismatch".into()); }
-        let d = self.drive(ctx,prompt,cap,true,None,None,None,on_leaf,None,None)?;
+        let d = self.drive(ctx, prompt, cap, true, None, None, None, on_leaf, None, None, None)?;
         let total = d.hashes.len() as u64;
         let step_merkle_root = step_merkle_root_capped_v1(&d.hashes,cap).map_err(|e|e.to_string())?;
         let trace_root = kaspa_consensus_core::palw_logits_q24_v2::trace_root(ctx,&d.rows,&d.generated).ok_or("wide trace shape")?;
@@ -373,7 +373,12 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirRangeRunV1, String> {
         let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf, None, None, None)?;
-        Ok(TirRangeRunV1 { first_index: d.first_index, leaf_hashes: d.hashes, logits_rows: d.rows, generated: d.generated })
+        Ok(TirRangeRunV1 {
+            first_index: d.first_index,
+            leaf_hashes: d.hashes,
+            logits_rows: narrow_rows(d.rows)?,
+            generated: d.generated,
+        })
     }
 
     /// The same original execution without retaining N step hashes, all selecting
@@ -431,7 +436,28 @@ impl<'a> TirClassRunnerV1<'a> {
         last_resume: Option<&mut Option<TirResumePointV1>>,
         observer: Option<&mut dyn TirRunObserverV1>,
     ) -> Result<Driven, String> {
-        self.drive_reserved(ctx, prompt, cap, verify, start, until, record, on_leaf, stream_rows, last_resume, observer, None)
+        if let Some(narrow_sink) = stream_rows {
+            let mut adapt = |index: u32, row: &[i64]| {
+                let narrow = narrow_row(row)?;
+                narrow_sink(index, &narrow)
+            };
+            self.drive_reserved(
+                ctx,
+                prompt,
+                cap,
+                verify,
+                start,
+                until,
+                record,
+                on_leaf,
+                Some(&mut adapt),
+                last_resume,
+                observer,
+                None,
+            )
+        } else {
+            self.drive_reserved(ctx, prompt, cap, verify, start, until, record, on_leaf, None, last_resume, observer, None)
+        }
     }
     #[allow(clippy::too_many_arguments)]
     fn drive_reserved(
@@ -574,7 +600,7 @@ impl<'a> TirClassRunnerV1<'a> {
             }
             if run_post {
                 let (shape, logits) = exec.logits();
-                let row: Vec<i32> = if observer.is_some() {
+                let row: Vec<i64> = if observer.is_some() {
                     // Views/refinement can leave a declared narrow result in a
                     // wider physical buffer. Check mathematical values rather
                     // than rejecting its storage variant or truncating lanes.
@@ -590,7 +616,7 @@ impl<'a> TirClassRunnerV1<'a> {
                             if !declared.contains(value) {
                                 return Err("observed logits value does not fit its declared dtype".into());
                             }
-                            row.push(i32::try_from(value).map_err(|_| "observed logits value does not fit i32 selection")?);
+                            row.push(i64::try_from(value).map_err(|_| "observed logits value does not fit i64 selection")?);
                         }
                     });
                     row
@@ -598,7 +624,11 @@ impl<'a> TirClassRunnerV1<'a> {
                     if logits.dtype() == DType::Idx {
                         return Err("an idx logits row has no place in the logits schemes".into());
                     }
-                    logits.to_i128s().into_iter().map(|v| v as i32).collect()
+                    logits
+                        .to_i128s()
+                        .into_iter()
+                        .map(|v| i64::try_from(v).map_err(|_| "logits value does not fit i64 selection"))
+                        .collect::<Result<Vec<_>, _>>()?
                 };
                 if row.is_empty() {
                     return Err("an empty logits row selects no token".into());

@@ -870,7 +870,10 @@ pub(crate) fn palw_tir_pursuit_absorb_chain_v1(
                         }
                         let mut checked = disclosure.as_ref().clone();
                         match &mut checked {
-                            E::Flat { binding, .. } | E::Tiled { binding, .. } | E::OutOfRange { binding } => {
+                            E::Flat { binding, .. }
+                            | E::Tiled { binding, .. }
+                            | E::OutOfRange { binding }
+                            | E::WideQ24V2 { binding, .. } => {
                                 **binding = filled(binding);
                             }
                         }

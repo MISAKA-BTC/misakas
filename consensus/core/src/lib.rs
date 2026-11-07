@@ -1029,6 +1029,10 @@ pub mod palw_prefix_state_stream_v1;
 
 pub mod palw_artifact_identity_v1;
 pub mod palw_batch_court_v1;
+pub mod palw_batch_public_budget_v1;
+pub mod palw_public_adjudication_measured_class_v1;
+pub mod palw_public_activation_v1;
+pub mod palw_public_evidence_package_v1;
 pub mod palw_decode_view_v1;
 pub mod palw_flat_constraint_stream_v1;
 pub mod palw_float_constraint_source_v1;

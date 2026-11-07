@@ -1357,7 +1357,7 @@ async fn carry_fp_commitment(
     prompt: &Vec<u32>,
     large: bool,
 ) -> Hash64 {
-    carry_fp_commitment_with_original(chain, floats, commitment, prompt, large, None).await
+    carry_fp_commitment_with_original(chain, floats, commitment, event, prompt, large, None).await
 }
 
 /// **A required-family claim past `palw_staged_public_court_v1`** (lane FPCP, 2026-10-27): the fold's `prepare_required_bundle_v1`
@@ -1369,6 +1369,7 @@ async fn carry_fp_commitment_with_original(
     chain: &mut Chain,
     floats: &mut [Funding],
     commitment: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    event: &kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1,
     prompt: &Vec<u32>,
     large: bool,
     original: Option<&kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
@@ -1426,7 +1427,7 @@ async fn carry_fp_commitment_with_original(
     } else {
         None
     };
-    let pledge = prospective.map(|(_, quote)| {
+    let pledge = prospective.map(|(_, _, quote)| {
         use kaspa_consensus_core::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
         let mut pledge = PalwHistoryCustodyPledgeV1 {
             version: 1,
@@ -1467,24 +1468,6 @@ async fn carry_fp_commitment_with_original(
         }
         if large {
             return large_constraint_transaction(commitment.clone(), carried.clone(), &floats[0], fee);
-        }
-        if let Some((pledge, header)) = &pledge {
-            return signer
-                .build_fp_commitment_tx_original_public_v1(
-                    &chain.config.params,
-                    chain.daa(),
-                    chain.network_domain,
-                    chain.config.params.palw_prompt_ids_form_v1(),
-                    commitment.clone(),
-                    carried.clone(),
-                    kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: quote.quanta, pwu: quote.pwu },
-                    pledge,
-                    header,
-                    floats[0].0,
-                    &floats[0].1,
-                    fee,
-                )
-                .unwrap();
         }
         signer
             .build_fp_commitment_tx_under_params_v1(
@@ -1769,7 +1752,16 @@ async fn fresh_public_service_with_recovery_inner(case: PublicCase, recovery_mod
                 kaspa_consensus_core::palw_public_binding_v1::PalwPublicLegacyBindingHeaderV1::of_binding_v1(event.binding()),
             )
         });
-        carry_fp_commitment_with_original(&mut chain, &mut floats, commitment, prompt, case.large_constraint(), original.as_ref())
+        let (_, event, _) = foreign.as_ref().unwrap();
+        carry_fp_commitment_with_original(
+            &mut chain,
+            &mut floats,
+            commitment,
+            event,
+            prompt,
+            case.large_constraint(),
+            original.as_ref(),
+        )
             .await
     } else {
         let (attempt, claim) = chain.build_attempt_roots(

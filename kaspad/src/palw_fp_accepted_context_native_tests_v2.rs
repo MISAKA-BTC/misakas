@@ -37,8 +37,8 @@ async fn native_context_control(capacity: bool) {
         )
         .unwrap();
         certify_fp_lane(&mut chain, &mut floats, profile, false).await;
-        let (_, _, Some((commitment, prompt))) = public_fp_job(&chain, false, false, None) else { panic!("actual FP job") };
-        let claim = carry_fp_commitment(&mut chain, &mut floats, &commitment, &prompt, false).await;
+        let (_, event, Some((commitment, prompt))) = public_fp_job(&chain, false, false, None) else { panic!("actual FP job") };
+        let claim = carry_fp_commitment(&mut chain, &mut floats, &commitment, &event, &prompt, false).await;
         assert!(chain.view(claim).public_fp_job.is_none(), "fixture intentionally precedes rooted original-job retention");
         let manager = Arc::new(ConsensusManager::new(Arc::new(TestConsensusFactory::new(chain.tc.clone()))).unwrap());
         let session = manager.consensus().unguarded_session();

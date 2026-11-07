@@ -71,4 +71,5 @@
 - [RFC-0042 — (CourtSupplierConsent) — Court全分岐の供給者同意・実原資・native予約](0042-court-family-supplier-consent-and-native-reservation.md)
 - [RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md)
 - [RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路](0045-positive-court-canonical-assignment.md)
+- [RFC-0047 — Batch court time contract: one door, separate retention, public 6,880](0047-batch-court-time-contract.md)。上位は [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md)。debug の局所 door 27 は class の受理ではない
 

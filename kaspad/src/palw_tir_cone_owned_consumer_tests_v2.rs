@@ -116,6 +116,33 @@ fn shape_only_ready(held: Arc<AtomicUsize>) -> PalwTirPublicConeReadyV2 {
     PalwTirPublicConeReadyV2::from_reserved_v2(proof, vec![Box::new(Held(held))], Default::default()).unwrap()
 }
 #[test]
+fn public_worker_incomplete_handoff_retains_case_reservation_and_files_nothing() {
+    let (case, ledger) = case();
+    let filer = PalwTirPublicFilerBookV1::default();
+    let demands = case.demands;
+    let done = case.done;
+    for kind in [
+        super::source_owned::PublicWorkerIncompleteV2::Stopped,
+        super::source_owned::PublicWorkerIncompleteV2::WithheldBody,
+        super::source_owned::PublicWorkerIncompleteV2::TamperedRecord,
+        super::source_owned::PublicWorkerIncompleteV2::DoubleSignature,
+    ] {
+        super::retain_case_after_incomplete_worker_v2(&case, kind);
+        assert!(!kind.attributes_party_default_v2());
+        assert!(kind.leaves_public_submission_v2());
+    }
+    assert_eq!(case.done, done);
+    assert!(!case.done);
+    assert_eq!(case.demands, demands);
+    assert!(case.last_move.is_none());
+    assert!(case.units.is_empty() && case.ids.is_none());
+    assert_eq!(filer.len(), 0);
+    assert_eq!(ledger.reserved_bytes(), 64);
+    drop(case);
+    assert_eq!(ledger.reserved_bytes(), 0);
+}
+
+#[test]
 fn tir_cone_owned_consumer_resource_fault_keeps_case_and_configured_refusal_retires_locally() {
     let (mut case, ledger) = case();
     let mut filer = PalwTirPublicFilerBookV1::default();

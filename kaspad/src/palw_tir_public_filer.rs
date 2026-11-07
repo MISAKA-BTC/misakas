@@ -5,7 +5,10 @@
 //! public material (the arithmetic scheduler's `Ready` cone/logits primitive, an EOF-authenticated ID sequence, or a greedy
 //! decode-token pin) into the one signed object the fold adjudicates. The pre-checks mirror the fold's rules so a node never pays
 //! a conviction rent the fold would refuse for a reason it could have read; they are never a substitute for the fold's verdict,
-//! and a primitive that HOLDS is never filed (it would be refused, and it certifies nothing).
+//! and a primitive that HOLDS is never filed (it would be refused, and it certifies nothing). Panel quorum, a seat signature, and
+//! a private transcript are not inputs of this filing. They do not slash and they do not Final. A stopped worker, a withheld
+//! body, a tampered record, or a double signature does not become a conviction here; a qualified outside verifier still files
+//! through the same public evidence object once it has chain-accepted material.
 //!
 //! Remaining node integration (recorded in docs/design/palw/integration/g14-objective-conviction-remaining-2026-10-15.md): the scheduler that
 //! decides WHEN to file, its queue lane and restart journal, and funding the carrier — this module only builds and signs.

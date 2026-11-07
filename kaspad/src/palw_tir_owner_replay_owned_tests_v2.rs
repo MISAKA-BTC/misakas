@@ -85,7 +85,13 @@ async fn tir_owner_replay_owned_cancelled_open_keeps_worker_and_returned_source_
     });
     wait_started.await.unwrap();
     task.abort();
-    assert!(matches!(task.await,Err(why) if why.is_cancelled()));
+    let Err(stopped) = task.await else { panic!("cancelled waiter") };
+    assert!(stopped.is_cancelled());
+    assert!(matches!(
+        super::super::source_owned::handoff_join_v2::<()>(Err(stopped)),
+        super::super::source_owned::PublicWorkerHandoffV2::Remains(super::super::source_owned::PublicWorkerIncompleteV2::Stopped)
+    ));
+    assert!(!super::super::source_owned::PublicWorkerIncompleteV2::Stopped.attributes_party_default_v2());
     assert_eq!(ledger.reserved_bytes(), 64);
     assert!(ledger.reserve(key(), 1).is_err());
     assert_eq!(drops.load(Ordering::SeqCst), 0);

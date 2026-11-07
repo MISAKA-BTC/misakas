@@ -206,47 +206,6 @@ pub mod fs {
         Ok(bytes)
     }
 
-    #[derive(Debug, thiserror::Error)]
-    pub(crate) enum BoundedFileError {
-        #[error(transparent)]
-        Io(#[from] io::Error),
-        #[error("provider file is at least {0} bytes, above the read limit")]
-        TooLarge(u64),
-    }
-
-    pub(crate) fn open_bounded_file(path: &Path, max: usize) -> Result<(File, u64), BoundedFileError> {
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK);
-        }
-        let file = options.open(path)?;
-        let meta = file.metadata()?;
-        if !meta.is_file() {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "provider path is not a regular file").into());
-        }
-        if meta.len() > max as u64 {
-            return Err(BoundedFileError::TooLarge(meta.len()));
-        }
-        Ok((file, meta.len()))
-    }
-
-    /// Check the opened file before allocating, and never read a growing file to EOF.
-    pub(crate) fn read_bounded_file(path: &Path, max: usize) -> Result<Vec<u8>, BoundedFileError> {
-        let (mut file, len) = open_bounded_file(path, max)?;
-        let mut bytes = vec![0; len as usize];
-        file.read_exact(&mut bytes)?;
-        if file.read(&mut [0])? != 0 {
-            if bytes.len() == max {
-                return Err(BoundedFileError::TooLarge(len.saturating_add(1)));
-            }
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "provider file grew during the read").into());
-        }
-        Ok(bytes)
-    }
-
     pub fn manifest_path(root: &Path, claim_hex: &str) -> PathBuf {
         root.join("claims").join(format!("{claim_hex}.manifest"))
     }

@@ -577,6 +577,20 @@ mod tests {
     }
 
     #[test]
+    fn collection_door_hard_and_clock_v2_exclusive_end_stay_distinct() {
+        let hard = 100 + DISPUTE_WINDOW_DAA;
+        assert_eq!(hard, 10_100);
+        assert!(palw_collection_door_within_route_hard_v1(hard, hard));
+        assert!(!palw_collection_door_within_route_hard_v1(hard, hard + 1));
+        let clocks = palw_court_clocks_v2(100, true, W, hard + W, 0).unwrap();
+        assert_eq!(clocks.hard_deadline, hard);
+        assert_eq!(clocks.collect_until, hard + 1);
+        assert_ne!(clocks.collect_until, hard);
+        assert!(clocks.retention_until > clocks.hard_deadline);
+        assert_ne!(clocks.retention_until, clocks.collect_until);
+    }
+
+    #[test]
     fn court_clock_v2_undisputed_finishes_at_the_normal_window() {
         let c = ok(1_000, false);
         assert_eq!(c.notice_until, 4_120);

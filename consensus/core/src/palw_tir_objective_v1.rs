@@ -514,6 +514,66 @@ fn adjudicate_target_with_v1(
     }
 }
 
+/// Recompute one claim-bound primitive from [`crate::palw_public_evidence_package_v1`].
+///
+/// Success is [`PalwTirObjectiveOutcomeV1::Convicts`] only when the package's
+/// openings match `claim` and the value from `eval_primitive` differs from the
+/// recorded output. A Panel signature or quorum is not a parameter.
+pub fn adjudicate_original_package_v1(
+    claim: &crate::palw_public_evidence_package_v1::PalwPublicOriginalClaimV1,
+    package: &crate::palw_public_evidence_package_v1::PalwPublicEvidencePackageV1,
+    allocated_proof_bytes: u64,
+) -> Result<PalwTirObjectiveOutcomeV1, String> {
+    use crate::palw_public_evidence_package_v1::PalwPublicEvidenceJudgmentV1;
+    let judged = crate::palw_public_evidence_package_v1::judge_public_evidence_package_v1(claim, package, allocated_proof_bytes)?;
+    let bytes = borsh::to_vec(package).map_err(|e| e.to_string())?;
+    let proof_id = Hash64::from_bytes(
+        blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka-palw/tir-objective-proof/v1")
+            .hash(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("64"),
+    );
+    let target = PalwOffenceTargetV1 {
+        claim_id: claim.claim_id,
+        class_id: claim.model,
+        artifact_root: claim.model,
+        executor_bond: crate::palw_state_v2::PALW_BOND_KEY_V2_MIN,
+        execution_root: claim.execution,
+        lane: Some(PalwClaimSourceKindV1::FreePrompt),
+        segment_count: None,
+        phase: None,
+        job_identity: claim.input,
+        trace_root: claim.trace,
+        output_root: claim.output,
+        registered_semantics: None,
+    };
+    match judged {
+        PalwPublicEvidenceJudgmentV1::Mismatch { .. } => {
+            let fault = crate::palw_step_leg::PalwStepFaultV1::ComputationMismatch { value_index: 0 };
+            let verdict = crate::palw_step_leg::PalwStepRefutationVerdictV1 {
+                evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                    &claim.execution,
+                    crate::palw_tir_court_v1::PALW_TIR_EVIDENCE_KIND_CONE,
+                    claim.coordinate,
+                    fault,
+                ),
+                fault,
+            };
+            Ok(PalwTirObjectiveOutcomeV1::Convicts(PalwTirObjectiveFindingV1 {
+                target,
+                proof_id,
+                step_leaf_count: claim.leaf_count,
+                disputed_leaf: claim.coordinate,
+                verdict,
+            }))
+        }
+        PalwPublicEvidenceJudgmentV1::Holds { .. } => Ok(PalwTirObjectiveOutcomeV1::PredicateHolds { claim: claim.claim_id, proof_id }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

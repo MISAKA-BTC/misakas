@@ -11,6 +11,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub mod coordinator;
 pub mod gate;
 pub mod journal;
+pub mod recovery_sync;
 pub mod service;
 pub use gate::AdmissionScopeV2;
 

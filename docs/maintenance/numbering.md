@@ -53,3 +53,7 @@ CourtSupplierConsent と AllModelG14PanelOne は並行 branch で同じ RFC-0042
 ## 2026-11-03 先行relay資料の採択
 
 [RFC-0046](../rfc/0046-positive-native-funded-relay.md) / [ADR-0214](../adr/0214-positive-native-funded-relay.md)を、ユーザーの「両案を採択し、限定実装を進める」により同時採択。ローカル全refの履歴で同番号の主文書が無いことを確認した。先行署名資料・有限custody・条件付き部分精算を実装する。本番有効化・旧原資移行は別承認。未fetch remoteや将来branchの未使用を保証しない。
+
+## 2026-11-07 Batch court time contract
+
+[RFC-0047](../rfc/0047-batch-court-time-contract.md) は、Panel 発行の期限証明を受理経路にする案を不採用としたあとの再検討である。上位は [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md) である。Batch の新しい版だけが、一つの時間契約、収集と保持の分離、6,880 DAA の公開予算を始める。完了 receipt から 10,000 を始めない。306,108 DAA の局所化は代替経路ではない。G14 の batch 予算は測定したモデルではない。`DISPUTE_WINDOW_DAA` は 10,000 のまま。`NOTICE_WINDOW_DAA` は 3,120 のまま。P0–P3 には試験がある。debug の局所 door 27 は class の受理ではない。条件 2–4 を完了とは書かない。出荷 preset は武装しない。main へは push していない。未 fetch remote や将来 branch の未使用は保証しない。

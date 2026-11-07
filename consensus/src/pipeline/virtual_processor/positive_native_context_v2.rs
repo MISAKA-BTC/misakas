@@ -897,7 +897,7 @@ impl PositiveCarrierPhaseTwoV2 {
                 let body = &tx.payload[3..];
                 let Ok(id) = scan_assignment_continuation_id_v2(body) else { continue };
                 if let Some(state) = selected_parent_state {
-                    match processor.original_assignment_rules_v2(carrier.prefix.selected_parent, state, id, body) {
+                    match processor.original_assignment_rules_v2(carrier.prefix.selected_parent, state, id, Some(body)) {
                         Ok(rules) => rules,
                         Err(E::InvalidContinuation) => continue,
                         Err(E::Resource(why)) => return Err(why),
@@ -1227,18 +1227,6 @@ impl PositiveCarrierPhaseTwoV2 {
             };
             let action = match open_carriage {
                 Some((carriage, material)) => action.with_original_open_carriage_v2(carriage, material)?,
-                None => action,
-            };
-            let action = match case_backing {
-                Some(backing) => action
-                    .with_native_case_backing_v2(backing)
-                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("native Case predecessor owner", &format!("{why:?}")))?,
-                None => action,
-            };
-            let action = match case_backing {
-                Some(backing) => action
-                    .with_native_case_backing_v2(backing)
-                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("native Case predecessor owner", &format!("{why:?}")))?,
                 None => action,
             };
             let action = match case_backing {

@@ -269,7 +269,7 @@ enum Gate {
 /// `tir_class_admission_offline_v1`, typed: the object admission v10 judges, built the way the node builds it, and the
 /// gate the acceptance path runs at `daa` (`palw_tir_registration_preflight_at_v1`).
 fn gate(params: &Params, bundle: &PalwConsensusParamsV2, class: &PalwTirClassV1, artifact_root: Hash64, daa: u64) -> Gate {
-    let _program = match class.decode_program() {
+    let program = match class.decode_program() {
         Ok(p) => p,
         Err(e) => return Gate::Unbuildable(format!("the program does not decode: {e}")),
     };

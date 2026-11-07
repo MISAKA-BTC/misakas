@@ -93,6 +93,18 @@ fn request_inner(
         if ctx.daa_score < q.opened_daa {
             return Err(refused("shared replay precedes its accepted opening"));
         }
+        // The second owner joins the same request. The row stays, and the two
+        // owners keep distinct submission opportunities.
+        crate::palw_batch_public_budget_v1::shared_request_coalesce_keeps_opportunities_v1(
+            q.request_id,
+            intent.request_id,
+            &q.opened_by,
+            &intent.signer,
+            frame.plan_v1().allocation_id,
+            source.source_id_v1(),
+            claim,
+        )
+        .map_err(refused)?;
         return Ok(SharedRequestEffectV1::Coalesced);
     }
     // G14 lane court-f02 (RFC-0031 / ADR-0198 A): past the shared lifecycle fences a NEW request row is a native notice — the
@@ -114,6 +126,8 @@ fn request_inner(
     // capacity reserved at acceptance and record its deterministic service slot. All shared deadlines are the original's hard
     // DAA, so earliest-deadline-first is arrival order (in-block: object order); the slot starts after the claim's last slot.
     // Size never refuses; only a slot that cannot end before hard (no reserved capacity left) is refused, with no state change.
+    // Batch originals do not take that per-claim serial cursor. Duplicate shared requests still coalesce above, and material
+    // intake stays non-exclusive. The reserved public graph is checked against the 6,880 DAA after the latest legal first notice.
     let service = if batch_notice {
         let target = shared::BatchNoticeTargetV1::from_request(set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
         check_batch_notice_open_slot_v1(&b.state, c, ctx.daa_score, target.first_open_ordinal()).map_err(refused)?;

@@ -38,6 +38,12 @@
 //!
 //! **Not covered:** a class with no kept prompt ids is not replayed (the frame keeps them since G-T3); a trace-only disagreement
 //! with equal IDs and equal steps is logged.
+//!
+//! **Public handoff when the worker cannot finish.** Fetch, independent replay, and localization stay off-chain. Evidence enters
+//! only through the existing shared-material harvest of chain-accepted rooted chunks. A stopped worker, a withheld body, a
+//! tampered record, or a double signature keeps that public submission path open for a qualified outside verifier. Panel quorum,
+//! a panel signature, and a private transcript are not a slash and are not Final. A missing private response is not `PartyDefault`.
+//! The replay reservation and the shared-material lifetime stay with the case.
 #![allow(dead_code)] // the panel loop calls the tick; the finding rule is consensus-core's (tested there).
 use crate::palw_panel::court_outbox::CourtOutboxV1;
 
@@ -170,6 +176,21 @@ fn owner_acquisition_door_open_v1(now: u64, open_until: u64, owns_here: bool) ->
 
 fn owner_move_can_land_v1(now: u64, due: u64) -> bool {
     now.checked_add(1).is_some_and(|candidate| candidate <= due)
+}
+
+fn note_incomplete_public_handoff_v2(claim: Hash64, kind: source_owned::PublicWorkerIncompleteV2) {
+    let public_path = kind.leaves_public_submission_v2() && !kind.attributes_party_default_v2();
+    debug!(
+        "[{PALW_PANEL}] TIR frame {claim}: worker {kind:?} leaves the public submission path ({public_path}); a missing private response is not a party default"
+    );
+}
+
+/// Keep the live case, its replay reservation, and any rooted material already
+/// shared. Do not finish the case and do not enqueue a move from this miss.
+fn retain_case_after_incomplete_worker_v2(case: &OwnerCaseV1, kind: source_owned::PublicWorkerIncompleteV2) {
+    note_incomplete_public_handoff_v2(case.claim, kind);
+    let _reservation = &case.own;
+    let _material = (&case.units, &case.ids);
 }
 
 // The fold requires the full response span to end strictly before the stream door.
@@ -414,7 +435,10 @@ impl PalwPanelService {
             return;
         }
         if let Err(why) = filer.advance_journal_v2().await {
-            debug!("[{PALW_PANEL}] TIR owner waits for its pending-finding journal: {why}");
+            let kind = source_owned::classify_worker_incomplete_v2(&why.to_string());
+            debug!(
+                "[{PALW_PANEL}] TIR owner waits for its pending-finding journal ({kind:?}; public submission remains, not a party default): {why}"
+            );
             return;
         }
         let form = self.config.prompt_ids_form;
@@ -565,10 +589,28 @@ impl PalwPanelService {
                         for slot in p.slots.values() {
                             let Some(reference) = slot.finished.as_ref() else { continue };
                             let id = reference.hash_v1()?;
-                            if let Err(why) = harvest::harvest_accepted_v2(case, id, || context.finished_material_owned_v2(reference))
-                            {
-                                source_refusal = Some(why);
-                                return Ok(());
+                            let already = case.harvested.contains(&id);
+                            match harvest::harvest_accepted_v2(case, id, || context.finished_material_owned_v2(reference)) {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    // Duplicate publication already holds the rooted body. `None`
+                                    // means this node has no chain-accepted chunk; do not fill it
+                                    // from a private transcript or mark the case finished.
+                                    let handoff = source_owned::rooted_chunk_handoff_v2(already.then_some(()));
+                                    if let source_owned::PublicWorkerHandoffV2::Remains(kind) = handoff {
+                                        retain_case_after_incomplete_worker_v2(case, kind);
+                                    }
+                                }
+                                Err(why @ NativeDecodeErrorV1::Resource(_)) => {
+                                    source_refusal = Some(why);
+                                    return Ok(());
+                                }
+                                Err(NativeDecodeErrorV1::Decode(why)) => {
+                                    let kind = source_owned::classify_worker_incomplete_v2(&why);
+                                    retain_case_after_incomplete_worker_v2(case, kind);
+                                    source_refusal = Some(NativeDecodeErrorV1::Decode(why));
+                                    return Ok(());
+                                }
                             }
                         }
                     }
@@ -793,7 +835,12 @@ impl PalwPanelService {
         if let Some(why) = source_refusal {
             match why {
                 NativeDecodeErrorV1::Resource(why) => debug!("[{PALW_PANEL}] TIR owner Source capacity remains pending: {why}"),
-                NativeDecodeErrorV1::Decode(why) => debug!("[{PALW_PANEL}] TIR owner Source read refused: {why}"),
+                NativeDecodeErrorV1::Decode(why) => {
+                    let kind = source_owned::classify_worker_incomplete_v2(&why);
+                    debug!(
+                        "[{PALW_PANEL}] TIR owner public handoff {kind:?}: submission remains for a qualified outside verifier; not a party default: {why}"
+                    );
+                }
             }
             return;
         }
@@ -844,14 +891,22 @@ impl PalwPanelService {
                             .map_err(|e| e.to_string())?;
                         let cache = self.config.retention_dir.join("tir-public-owner").join(format!("{claim}"));
                         let (header_c, job_c, prompt_c) = (header.clone(), job.clone(), prompt.clone());
-                        let own = tokio::task::spawn_blocking(move || {
+                        let joined = tokio::task::spawn_blocking(move || {
                             OwnedTirReplayV2::open_reserved(memory, || {
                                 std::fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
                                 backend.open_tir_own_step_source_v1(&header_c, &job_c, &prompt_c, &cache)
                             })
                         })
-                        .await
-                        .map_err(|e| format!("TIR owner replay worker failed: {e}"))??;
+                        .await;
+                        let own = match source_owned::handoff_worker_result_v2(joined) {
+                            source_owned::PublicWorkerHandoffV2::Completed(own) => own,
+                            source_owned::PublicWorkerHandoffV2::Remains(kind) => {
+                                // No case yet, so the replay reservation stays inside the worker
+                                // until that worker returns. Do not skip the frame and do not file.
+                                note_incomplete_public_handoff_v2(claim, kind);
+                                return Ok(());
+                            }
+                        };
                         let info = own.info_v1();
                         let steps_differ = info.header.step_merkle_root != header.step_merkle_root
                             || info.header.step_leaf_count != header.step_leaf_count;
@@ -927,14 +982,24 @@ impl PalwPanelService {
                             prompt_form: self.config.prompt_ids_form,
                             limits: kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&court),
                         };
-                        let outcome = cone_inputs_owned::run_owned_inputs_v2(source, inputs, move |source, inputs| {
+                        let joined = cone_inputs_owned::run_owned_inputs_v2(source, inputs, move |source, inputs| {
                             // Force whole-value capture: its pointer Vec ticket
                             // must enter the worker together with these fields.
                             let material = material;
                             owner_cone_probe_v1(source, &inputs.registered, &inputs.layout, &material.units, material.ids.as_ref().map(|ids| &***ids), &inputs.prompt, backend.as_ref(), &rules, leaf)
                         })
-                        .await
-                        .map_err(|e| format!("TIR owner cone worker failed: {e}"))?;
+                        .await;
+                        let outcome = match source_owned::handoff_join_v2(joined) {
+                            source_owned::PublicWorkerHandoffV2::Completed(outcome) => outcome,
+                            source_owned::PublicWorkerHandoffV2::Remains(kind) => {
+                                if let Some(case) = book.cases.get(&claim) {
+                                    retain_case_after_incomplete_worker_v2(case, kind);
+                                } else {
+                                    note_incomplete_public_handoff_v2(claim, kind);
+                                }
+                                return Ok(());
+                            }
+                        };
                         let Some(case) = book.cases.get_mut(&claim) else { return Ok(()) };
                         apply_owner_cone_result_v2(case, filer, claim, now, outcome).map_err(|e|e.to_string())?;
                     }

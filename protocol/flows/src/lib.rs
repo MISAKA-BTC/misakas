@@ -11,6 +11,5 @@ pub mod palw_round_relay;
 mod palw_snapshot_chunks;
 mod snapshot_memory;
 pub mod service;
-mod snapshot_memory;
 pub mod v7;
 pub mod v8;

@@ -232,31 +232,31 @@ impl Monitor {
                 _ => None,
             })
             .collect();
-        if length_fault {
-            assert_eq!((reference.seed_id, reference.reserved_daa), bundle_seed);
-            assert!(seeds.is_empty(), "inventory EOF must convict before tokenizer family activation");
-        } else {
-            assert_eq!(seeds.len(), 1, "restart does not duplicate the accepted tokenizer court");
-            let seed = seeds[0];
-            assert_eq!(Hash64::from_bytes(seed.signing_message().try_into().unwrap()), reference.seed_id);
-            let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
-                raw_tokenizer_bytes,
-                tokenizer_key_events,
-                operand_tokenizer_bytes,
-                ..
-            }) = &seed.auxiliary
-            else {
-                unreachable!()
-            };
-            assert_eq!(
-                (*raw_tokenizer_bytes, *tokenizer_key_events, *operand_tokenizer_bytes),
-                (self.signed_length, self.signed_keys, self.actual_length)
-            );
-            assert_eq!(
-                (job.execution_root, job.trace_root),
-                (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root)
-            );
-        }
+        let view = chain.view(claim);
+        let job = borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(
+            view.public_fp_job.as_deref().expect("the accepted claim retains its public commitment"),
+        )
+        .expect("the public commitment decodes");
+        assert_eq!(seeds.len(), 1, "restart does not duplicate the accepted tokenizer court");
+        let seed = seeds[0];
+        assert_eq!(Hash64::from_bytes(seed.signing_message().try_into().unwrap()), reference.seed_id);
+        let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
+            raw_tokenizer_bytes,
+            tokenizer_key_events,
+            operand_tokenizer_bytes,
+            ..
+        }) = &seed.auxiliary
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            (*raw_tokenizer_bytes, *tokenizer_key_events, *operand_tokenizer_bytes),
+            (self.signed_length, self.signed_keys, self.actual_length)
+        );
+        assert_eq!(
+            (job.execution_root, job.trace_root),
+            (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root)
+        );
         let immutable = view.registered_semantics.as_ref().unwrap();
         assert_eq!(
             (immutable.raw_tokenizer_bytes, immutable.tokenizer_key_events),
@@ -272,7 +272,6 @@ impl Monitor {
                 && movement.claim == claim
                 && movement.reserver == owner
                 && movement.seed_id == reference.seed_id
-                && !length_fault
             {
                 movement.check().unwrap();
                 if matches!(

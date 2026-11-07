@@ -56,3 +56,5 @@ LLMを使う経路は **01（job）→ 03（登録）→ 02（TIR実行）→ 06
 2026-10-31に採択された学習済みLLMの出力表現の追加は [RFC-0043](../rfc/0043-wide-q24-llm-output.md) / [ADR-0211](../adr/0211-wide-q24-llm-output.md)。旧i32 Q24・既存schemeを保持し、別のi64 Q24 profileを追加する。公開有効化は別判断。入力原本へ混ぜず、post-consolidation文書として読む。
 
 2026-10-31に実装指示されたPositive Court R2は [RFC-0044](../rfc/0044-positive-court-full-coverage.md) / [ADR-0212](../adr/0212-positive-court-without-model-prepossession.md)。主担当は14、演算・資料認証は02を共用する。[実装状態](../design/palw/positive-court/IMPLEMENTATION-STATUS.md)。原付録と旧0042／0210は保持し、公開網は未有効化。
+
+2026-11-07の再検討は [RFC-0047](../rfc/0047-batch-court-time-contract.md)。上位は [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md) である。Batch の新しい版だけが時間契約を始める。Panel の署名は署名者の識別であり、定足数は評決ではない。合意ノードはモデル計算を端から端まで再実行しない。完了 receipt から 10,000 を始めない。306,108 DAA の局所化は代替経路ではない。G14 の batch 予算は測定したモデルではない。既存の 3,120 と 10,000 は延ばさない。15本へは混ぜない。P0–P3 には試験がある。debug の局所 door 27 は class の受理ではない。`PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1` は空である。出荷 preset は未武装。T12 の upgrade はなく、main へは push していない。

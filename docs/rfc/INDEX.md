@@ -55,3 +55,4 @@
 | RFC-0044 | [Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md) | 原文と後続改定を参照 |
 | RFC-0045 | [Canonical TIR Assignmentを起点とするPositive Court native経路](0045-positive-court-canonical-assignment.md) | 原文と後続改定を参照 |
 | RFC-0046 | [Positive native原資の先行relay資料と有限custody](0046-positive-native-funded-relay.md) | 原文と後続改定を参照 |
+| RFC-0047 | [Batch court time contract: one door, separate retention, public 6,880](0047-batch-court-time-contract.md) | 上位は [公開裁定方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md)。P0–P3 は試験あり。debug の局所 door 27 は class 受理ではない。記録は空。未武装。main 未 push |

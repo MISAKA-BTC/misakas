@@ -14,7 +14,7 @@ use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationPlanV1, PalwTi
 use crate::palw_tir_public_custody_v1::{PalwTirPublicCustodyContractV1, PalwTirPublicOriginalCustodyV1};
 use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
 use crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1;
-use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
+use crate::{palw_state_v2::PalwBondKeyV2, Hash64};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeSet;
 
@@ -694,6 +694,16 @@ pub(crate) fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, ma
     tests::fixture_in(forge, maximum_custodians)
 }
 
+/// The same tiny original as [`palw_tir_public_frame_fixture_v1`], quoted on Batch clock version 5.
+/// The G14 estimate supplies the clock. A door past 6,880 DAA is not clipped.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_batch_public_v5_frame_fixture_v1(
+    forge: Option<(usize, usize)>,
+    maximum_custodians: u64,
+) -> PalwTirPublicFrameFixtureV1 {
+    tests::fixture_batch_public_v5(forge, maximum_custodians)
+}
+
 /// Golden history-bearing corpus in its actual original FP context; verified-half
 /// original signature/payment assumptions are identical to the other fixtures.
 #[cfg(test)]
@@ -929,6 +939,13 @@ mod tests {
     ) -> super::PalwTirPublicFrameFixtureV1 {
         fixture_with_vocab(forge, maximum_custodians, edit_job, wrong_at, output_root, false)
     }
+    /// [`fixture_in`] on Batch clock version 5. The quote uses the G14 estimate clock.
+    pub(super) fn fixture_batch_public_v5(
+        forge: Option<(usize, usize)>,
+        maximum_custodians: u64,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
+        fixture_with_vocab_clock(forge, maximum_custodians, |_| {}, None, None, false, true)
+    }
     pub(super) fn fixture_with_vocab(
         forge: Option<(usize, usize)>,
         maximum_custodians: u64,
@@ -936,6 +953,17 @@ mod tests {
         wrong_at: Option<u32>,
         output_root: Option<Hash64>,
         wide: bool,
+    ) -> super::PalwTirPublicFrameFixtureV1 {
+        fixture_with_vocab_clock(forge, maximum_custodians, edit_job, wrong_at, output_root, wide, false)
+    }
+    fn fixture_with_vocab_clock(
+        forge: Option<(usize, usize)>,
+        maximum_custodians: u64,
+        edit_job: impl FnOnce(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3),
+        wrong_at: Option<u32>,
+        output_root: Option<Hash64>,
+        wide: bool,
+        batch_public_v5: bool,
     ) -> super::PalwTirPublicFrameFixtureV1 {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
@@ -982,7 +1010,20 @@ mod tests {
         } else {
             crate::palw_tir_court_v1::test_support::tiny_execution_selecting_in(|_, _, _| context.clone(), forge, &select)
         };
-        frame_from_execution(x, job, maximum_custodians, output_root)
+        if batch_public_v5 {
+            frame_from_execution_with_material_form_v1(
+                x,
+                job,
+                maximum_custodians,
+                output_root,
+                None,
+                None,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                true,
+            )
+        } else {
+            frame_from_execution(x, job, maximum_custodians, output_root)
+        }
     }
 
     pub(super) fn two_tile_frame() -> super::PalwTirPublicFrameFixtureV1 {
@@ -1070,6 +1111,7 @@ mod tests {
             semantics,
             inventory,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            false,
         )
     }
     fn frame_from_execution_with_material_form_v1(
@@ -1080,6 +1122,7 @@ mod tests {
         semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
         inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
         prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        clock_v2_material: bool,
     ) -> super::PalwTirPublicFrameFixtureV1 {
         frame_from_execution_with_material_form_stop_v1(
             x,
@@ -1093,6 +1136,7 @@ mod tests {
             100,
             false,
             None,
+            clock_v2_material,
         )
     }
     /// Explicit test-only native quote point for an actual mature genesis
@@ -1120,6 +1164,7 @@ mod tests {
         trace_retention_daa: u64,
         production_family: bool,
         table_witness: Option<&[u8]>,
+        clock_v2_material: bool,
     ) -> super::PalwTirPublicFrameFixtureV1 {
         try_frame_from_execution_with_material_form_stop_v65(
             x,
@@ -1134,6 +1179,7 @@ mod tests {
             production_family,
             table_witness,
             None,
+            clock_v2_material,
         )
         .unwrap_or_else(|incomplete| panic!("fixture requires a real native generic arithmetic quote: {incomplete:?}"))
     }
@@ -1150,6 +1196,7 @@ mod tests {
         production_family: bool,
         table_witness: Option<&[u8]>,
         prospective: Option<super::PalwCompactPairProspectiveContextV67>,
+        clock_v2_material: bool,
     ) -> Result<super::PalwTirPublicFrameFixtureV1, Box<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationQuoteV1>> {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
@@ -1180,28 +1227,37 @@ mod tests {
         let header = PalwPublicTirBindingHeaderV1::of_binding_v1(&binding);
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&binding.class, &binding.artifact_root).unwrap();
         let layout = binding.class.layout.clone();
+        // network_v1 mixed with the test-only clock is the old long door.
+        // That mix stays on fixtures that are not the Batch contract, and a
+        // door past the hard deadline is refused rather than clipped.
+        // The Batch fixture uses the G14 estimate as one contract: same
+        // config and clock for the quote and the frame Studio would sign.
+        // The estimate is not a measured Qwen replay. Batch public v5 is not
+        // a family clock. 3,120 DAA stays the objection notice; 10,000 DAA is
+        // the adjudication deadline, stored as maximum_door, not as a rewritten
+        // collect_until.
+        let mut cost = crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1;
+        if !production_family && clock_v2_material {
+            cost.clock.version = crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5;
+            cost.clock.maximum_door_daa = crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+        } else if !production_family {
+            cost.config = crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1();
+            cost.clock = crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock;
+        }
         let rules = PalwTirPublicAllocationRulesV1 {
             maximum_leaves: 1 << 40,
             maximum_custodians,
             court: crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 40, 45, 2).unwrap(),
             dissection: true,
             prompt_form,
-            config: if production_family {
-                crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1.config
-            } else {
-                crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()
-            },
-            clock: if production_family {
-                crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1.clock
-            } else {
-                crate::palw_tir_frame_cost_v1::palw_tir_frame_test_only_cost_v1().clock
-            },
+            config: cost.config,
+            clock: cost.clock,
         };
         let checked_table = table_witness.map(|bytes| {
             crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(bytes, semantics.unwrap(), record.logits_vocab)
                 .unwrap()
         });
-        let quoted = if production_family {
+        let quoted = if production_family || crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
             crate::palw_tir_public_allocation_v1::derive_tir_public_allocation_family_native_v2(
                 &geometry,
                 &original,
@@ -1286,7 +1342,7 @@ mod tests {
             &object,
             verify,
             checked_table.as_ref(),
-            production_family,
+            production_family || crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version),
         )
         .unwrap();
         Ok(super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object })
@@ -1395,6 +1451,7 @@ mod tests {
             100,
             false,
             None,
+            false,
         );
         assert!(frame.frame.plan_v1().semantic.is_some());
         (frame, semantics, table)
@@ -1503,16 +1560,15 @@ mod tests {
             prefix_state_relation: None,
         };
         let fx = frame_from_execution_with_material(x, job, 1, None, Some(&semantics), Some(&eof));
-        assert!(
-            fx.frame
-                .plan_v1()
-                .semantic
-                .as_ref()
-                .unwrap()
-                .stages
-                .iter()
-                .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer)
-        );
+        assert!(fx
+            .frame
+            .plan_v1()
+            .semantic
+            .as_ref()
+            .unwrap()
+            .stages
+            .iter()
+            .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer));
         (fx, semantics, eof, raw, table)
     }
 
@@ -1599,6 +1655,7 @@ mod tests {
             prompt,
             true,
             prospective,
+            false,
         )
         .unwrap_or_else(|q| panic!("prospective compact native quote incomplete: {q:?}"));
         let (sem, eof, raw, table) = material.unwrap();
@@ -1688,6 +1745,7 @@ mod tests {
             None,
             false,
             None,
+            false,
         );
         let rejected = match oversized {
             Err(quote) => quote,
@@ -1730,11 +1788,21 @@ mod tests {
         (frame, sem, eof, raw, table)
     }
     pub(super) fn signed_material_frame_v1(key: &[u8]) -> super::PalwTirPublicFrameFixtureV1 {
-        history_frame_shape_material_v1(
+        try_history_frame_shape_material_inner_v65(
             HistoryConditionV1::Input,
             crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
-            2, 2, false, Some(key), None, None,
-        ).0
+            2,
+            2,
+            false,
+            Some(key),
+            None,
+            None,
+            false,
+            None,
+            true,
+        )
+        .unwrap_or_else(|incomplete| panic!("fixture requires a real native generic arithmetic quote: {incomplete:?}"))
+        .0
     }
     fn history_frame_shape_material_v1(
         condition: HistoryConditionV1,
@@ -1796,6 +1864,7 @@ mod tests {
             prompt_override,
             compact_pair,
             None,
+            false,
         )
         .unwrap_or_else(|incomplete| panic!("fixture requires a real native generic arithmetic quote: {incomplete:?}"))
     }
@@ -1819,6 +1888,7 @@ mod tests {
         prompt_override: Option<&[u32]>,
         compact_pair: bool,
         prospective: Option<super::PalwCompactPairProspectiveContextV67>,
+        clock_v2_material: bool,
     ) -> Result<FamilyFrameMaterialV66, Box<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationQuoteV1>> {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
@@ -2249,6 +2319,7 @@ mod tests {
                 explicit_network,
                 table_bytes.as_deref(),
                 prospective,
+                clock_v2_material,
             )?;
             return Ok((frame, Some((semantics, eof, raw, table))));
         }
@@ -2270,9 +2341,9 @@ mod tests {
                 tokenizer_key_events: None,
                 prefix_state_relation: None,
             };
-            (frame_from_execution_with_material_form_v1(x, job, 1, None, Some(&semantics), None, prompt_form), None)
+            (frame_from_execution_with_material_form_v1(x, job, 1, None, Some(&semantics), None, prompt_form, clock_v2_material), None)
         } else {
-            (frame_from_execution_with_material_form_v1(x, job, 1, None, None, None, prompt_form), None)
+            (frame_from_execution_with_material_form_v1(x, job, 1, None, None, None, prompt_form, clock_v2_material), None)
         })
     }
 
@@ -2302,8 +2373,6 @@ mod tests {
             );
         }
     }
-
-
 
     #[test]
     fn family_source_and_prefix_consumer_share_real_class_and_prefix_with_only_source_fault() {
@@ -2576,6 +2645,137 @@ mod tests {
         assert_eq!(borsh::to_vec(&Key::TirPreparation(h, h)).unwrap()[0], 8);
         assert_eq!(borsh::to_vec(&Row::TirLayout(Box::new(f.layout))).unwrap()[0], 10);
     }
+
+    #[test]
+    fn batch_public_time_contract_refuses_long_door_and_separates_retention() {
+        use crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+        use crate::palw_tir_frame_cost_v1::{
+            is_batch_public_clock_v5, PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5,
+            PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4,
+        };
+        use crate::palw_tir_public_allocation_v1::{
+            PalwTirPublicAllocationMissingV1 as Miss, PalwTirPublicAllocationQuoteV1 as Quote,
+        };
+        assert_eq!(DISPUTE_WINDOW_DAA, 10_000);
+        assert_eq!(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA, 3_120);
+        assert_eq!(PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, 6_880);
+        let hard = 100 + DISPUTE_WINDOW_DAA;
+        assert!(crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, 10_099));
+        assert!(crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, 10_100));
+        assert!(!crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, 10_101));
+        assert!(!crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, 1_798_149));
+        assert_eq!(1_476_360 + 306_108 + 15_581, 1_798_049);
+        assert!(1_798_149 - 100 > DISPUTE_WINDOW_DAA);
+
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB5; 32]);
+        let key = kp.verification_key.as_ref();
+        let quote_input = |clock_v2_material| {
+            try_history_frame_shape_material_inner_v65(
+                HistoryConditionV1::Input,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                2,
+                2,
+                false,
+                Some(key),
+                None,
+                None,
+                false,
+                None,
+                clock_v2_material,
+            )
+        };
+        let (legacy_fx, _) = quote_input(false).expect("uncapped legacy mix still quotes; the cap is what refuses it");
+        let accepted = legacy_fx.frame.plan_v1().terms.accepted_daa;
+        let collect = legacy_fx.frame.plan_v1().terms.collect_until_daa;
+        assert_eq!(accepted, 100);
+        assert!(collect > accepted + DISPUTE_WINDOW_DAA, "legacy collect_until {collect} must stay past the hard deadline");
+        let original = legacy_fx.frame.original_v1();
+        let geometry = crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1 {
+            class_id: original.job.class_id,
+            producer: crate::palw_state_v2::PalwBondKeyV2(original.job.executor_bond),
+            execution_root: original.execution_root,
+            job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original),
+            accepted_daa: accepted,
+        };
+        let requote = |rules| {
+            crate::palw_tir_public_allocation_v1::derive_tir_public_allocation_native_v2(
+                &geometry,
+                original,
+                legacy_fx.frame.header_v1(),
+                &legacy_fx.record,
+                &legacy_fx.layout,
+                None,
+                None,
+                rules,
+            )
+        };
+        let mut capped = legacy_fx.rules;
+        capped.clock.maximum_door_daa = DISPUTE_WINDOW_DAA;
+        match requote(capped).expect("a door past the hard deadline is Incomplete, not a decode error") {
+            Quote::Incomplete { missing, .. } => assert_eq!(
+                missing,
+                vec![Miss::DoorBeyondLiabilityHorizon { required: collect - accepted, allowed: DISPUTE_WINDOW_DAA }],
+                "the full door is refused; collect_until {collect} is not clipped"
+            ),
+            Quote::Complete(_) => panic!("capped quote emitted a signable plan past the hard deadline"),
+        }
+        let mut two = legacy_fx.rules;
+        two.maximum_custodians = 2;
+        two.clock.maximum_door_daa = DISPUTE_WINDOW_DAA;
+        match requote(two).expect("the reviewed two-custodian door is Incomplete") {
+            Quote::Incomplete { missing, .. } => assert_eq!(
+                missing,
+                vec![Miss::DoorBeyondLiabilityHorizon { required: 1_798_049, allowed: DISPUTE_WINDOW_DAA }],
+                "collect_until 1,798,149 stays the required door; it is not rewritten to the hard deadline"
+            ),
+            Quote::Complete(_) => panic!("the 1,798,149 door was emitted as a signable plan"),
+        }
+        let mut public_rules = legacy_fx.rules;
+        public_rules.clock.version = PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5;
+        public_rules.clock.maximum_door_daa = DISPUTE_WINDOW_DAA;
+        match requote(public_rules).expect("a public span past 6,880 is Incomplete") {
+            Quote::Incomplete { missing, .. } => assert!(
+                matches!(
+                    missing.as_slice(),
+                    [Miss::PublicRecoveryExceedsNoticeBudget { required, allowed }]
+                        if *allowed == PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1 && *required > *allowed
+                ),
+                "shared-path admission must refuse a public worst case past 6,880, got {missing:?}"
+            ),
+            Quote::Complete(_) => panic!("public worst case was admitted"),
+        }
+        let (admitted, _) = quote_input(true).expect("G14 estimate on batch public v5 admits without clipping a signed door");
+        let plan = admitted.frame.plan_v1();
+        assert!(is_batch_public_clock_v5(plan.acquisition.clock.version));
+        assert_ne!(plan.acquisition.clock.version, PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4);
+        let terms = &plan.terms;
+        let reorg = plan.acquisition.config.reorg_retention_daa;
+        let collect = terms.collect_until_daa;
+        let hard = terms.accepted_daa + DISPUTE_WINDOW_DAA;
+        assert!(collect <= hard);
+        assert_ne!(collect, hard + 1, "collect_until is not rewritten to the clock-v2 exclusive end");
+        assert!(crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, collect));
+        assert!(!crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, hard + 1));
+        assert!(terms.material_until_daa >= hard + reorg);
+        assert!(terms.material_until_daa > collect, "retention is later than collect_until");
+        assert_eq!(terms.collect_until_daa, collect, "retention does not move collect_until");
+        assert_ne!(collect, hard + reorg);
+        let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 40, 45, 2).unwrap();
+        let filing = collect - terms.stream_until_daa;
+        assert!(
+            crate::palw_tir_frame_cost_v1::batch_public_objection_refused_v1(
+                plan.terminal.maximum_witness_bytes,
+                plan.terminal.maximum_root_claim_bytes,
+                &court,
+                plan.acquisition.envelope.inclusion_daa,
+                filing,
+                terms.accepted_daa,
+                collect,
+            )
+            .is_none(),
+            "an admitted version-5 plan's objection artifact fits admission"
+        );
+    }
 }
 
 // Exhaustive read-only native input allocation inventory; no consensus encoding change.
@@ -2601,8 +2801,8 @@ pub(crate) type PalwCompactPairMaterialV67 = (
     crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
 );
 #[cfg(test)]
-pub(crate) fn palw_compact_pair_prospective_contexts_v67()
--> (PalwCompactPairProspectiveContextV67, PalwCompactPairProspectiveContextV67) {
+pub(crate) fn palw_compact_pair_prospective_contexts_v67(
+) -> (PalwCompactPairProspectiveContextV67, PalwCompactPairProspectiveContextV67) {
     let parent = tests::family_fixture_accepted_daa_v2();
     // Every existing original/family/archive packet must be assigned strictly
     // before its service_before <= parentHard. This finite bound is independent

@@ -21,6 +21,7 @@
 - [ADR-0172](adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md): versioned kernel。
 - [RFC-0007 Part VI](rfc/0007-palw-verification-certificates-and-algebraic-checks.md): commit 後 challenge。
 - [RFC-0014](rfc/0014-panel-independent-fraud-prosecution.md) と [RFC-0015](rfc/0015-panel-free-permissionless-verification.md): Panel 非依存の訴追と Panel=0。
+- claim の裁定: [公開裁定の方針 v0.1](design/palw/consensus/public-adjudication-policy-v0.1.md)。合意ノードはモデル計算を端から端まで再実行しない。
 - 有効化判断の照合先: [全面有効化の readiness matrix](design/palw/integration/activation-readiness-matrix.md)。
 
 > **MISAKA不可侵原則 —「確率的に検出し、公開証拠で局所化し、決定論的に裁き、被害をbondで有界化する。モデルの非公開は経済的に不利にする。」**
@@ -50,9 +51,11 @@
    - 検証attestation gate（ECON round 2、readiness §3f）により、bondから抽選された検証者が自分のモデルのコピーでclaimを検査し、
      所定数が承認しないmodel-epochにはモデル配分を払わない。誰にも共有されないモデルは検証が成立せず、配分を受けられない。
      理由は「検証が承認されなかった」であり「モデルが配布されなかった」ではない。claim・escrow・Final・weight・slashには触れない。
+     この配分の attestation は claim の裁定ではない。claim の裁定は [公開裁定の方針 v0.1](design/palw/consensus/public-adjudication-policy-v0.1.md) に従い、合意ノードはモデル計算を端から端まで再実行しない。
 2. **共有されたモデルの不正は客観的に裁ける。** 登録モデルが1人にでも共有され、正しいPanel（正直な検証者）を建てられれば、
    そのモデルのclaimの不正は、claim固有の公開・認証済み証拠から局所化し、客観的なcourtで立証してslashできる。これを制度要件とする（§3、
    [ADR-0173](adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md)）。
+   Panel が止まっていても、bond 付きの第三者経路は残る。Panel の定足数は評決ではない。裁定の手順は [公開裁定の方針 v0.1](design/palw/consensus/public-adjudication-policy-v0.1.md) に従う。
 3. **非公開モデルの不正は有界化する残余リスクである。** 誰にもモデルが共有されず実効的な検出確率が0（`p = 0`）になる場合、
    不正の排除は保証しない。これは有効化を止める安全性gateではなく、bond単位のBlock / Reward / Final Weight上限、共通拘束期間、
    Final前の払い出し禁止で被害を有界化する残余リスクとして扱う（[ADR-0176](adr/0176-bond-bounds-palw-production-rewards-and-final-weight.md)）。
@@ -198,7 +201,7 @@ Panelがいなくても裁けることと、誰も検査しなくても必ず不
 1. 全ての報酬対象計算関係に対する検証被覆。
 2. 承認済みの検査器の健全性とgrinding耐性（検出確率の下限の証明は要件にしない、§0）。
 3. 公開・認証済みmaterialの可用性。
-4. モデルを入手できた1人の適格な検証者（正しいPanel）による有界な不正局所化と客観的裁定（§0-2）。
+4. モデルを入手できた1人の適格な公開検証者による有界な不正局所化と客観的裁定（§0-2、[公開裁定の方針 v0.1](design/palw/consensus/public-adjudication-policy-v0.1.md)）。Panel は取得、再実行、局所化、証拠作成をする作業者であり、署名は署名者を識別する。定足数は評決ではない。止まった Panel や結託した Panel のあとにも、bond 付きの第三者経路が残る。
 5. 不正が立証された場合の徴収可能な担保・処罰と、bond単位のBlock / Reward / Final Weight上限による被害の有界化（2026-10-14改定。期待利益が負であることは要件にしない、§0）。
 6. 正直な検証者が期限内に参加できるだけの資源・費用・検証インセンティブ。
 7. 異議申立て、DA/default、Final、reorgの整合性。
@@ -262,6 +265,8 @@ MISAKAは、次の4つによって、計算費用よりも検証費用が重く�
 
 この節はユーザーの決定の記録である。RFC-0016・0017・ADR の実装作業は Claude の担当であり、RFC-0006〜0008・0012 の作業で引き取らない。
 
+> **claim の裁定（2026-11-07）。** §8 と本節は凍結したままである。§8 は、モデル計算の正しさを暗号学的に証明しないことと、抽選検証者の承認を正直な割合の前提の下で合意 credit の認証に用いることを定める。本節は、モデル階層 1.0 / 0.3、モデル単位の検証を行わないこと、claim 単位の検証を残すことを定める。claim をどう裁くかは [公開裁定の方針 v0.1](design/palw/consensus/public-adjudication-policy-v0.1.md) に従う。§8 の検証方法の列挙は、暗号学的証明の禁止を定めるものであり、合意ノードがモデル計算の全体を再実行する規則ではない。Panel の定足数は評決ではない。階層の数値と「claim 単位の検証を省かない」という規則は、このポインタでは変えない。
+
 ---
 
 ## 付録 — この前提が現在の作業をどう縛るか (Lead, 2026-10-09)
@@ -290,9 +295,11 @@ This appendix records where the principle already decides open work. It is a poi
 **ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
 
 * **`Final`と`SecurityCertified`は別状態である。** `Final`は手続きの完了(利用者払いescrowの経済的settlementは既存規則どおり)。合意credit(safe frontier、safe weight、bounded immature/live total、settlement depth、rule E participation、settled anchor、発行由来の報酬leg)は`SecurityCertified`のclaimだけが生む([RFC-0018](rfc/0018-dag-parallel-multi-model-consensus.md) §7、Gate C)。
-* **認証は前提に基づく。** claim固定後の乱数でglobal poolから抽選した検証者のm-of-k肯定承認と、G14公開告発windowの異議なし経過で成立する。「抽選されたverifier stakeのうち正直な割合が閾値以上」を明示的な前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない(PRINCIPLES §8)。認証済みでもG14で反証されたclaimはvoidされ、合意creditは取り消される。
+* **認証は前提に基づく。** 合意 credit の認証は、claim 固定後の乱数で global pool から抽選した検証者の m-of-k 肯定承認を、正直な割合の明示的な前提の下で用いる（§8）。「抽選された verifier stake のうち正直な割合が閾値以上」を前提とし、無条件の数学的証明とは扱わない。暗号学的な計算証明は使わない（§8）。認証済みでも G14 で反証された claim は void され、合意 credit は取り消される。異議がないことは、計算全体の正しさの証明ではない。公開資料、容量、または独立した検証者が欠けるときは、安全な hold または abort であり、通常の Final ではない。hold は 10,000 DAA 以内の成功ではない。
+* **履歴（2026-10-15、この設計では公開裁定の方針が優先する）:** 「m-of-k 肯定承認と、G14 公開告発 window の異議なし経過で成立する。」異議の不在を計算全体の証明とする読みは、[公開裁定の方針 v0.1](design/palw/consensus/public-adjudication-policy-v0.1.md) が置き換える。
 * **DNS-BFTは廃止済みであり、安全性にも収束にも使わない。**
-* **genesisモデルにも認証の免除はない。70Bモデルは、独立した検証(抽選検証者による再実行)が成立するまで合意creditを持たない。**
+* **genesis モデルにも認証の免除はない。** 70B モデルの未認証 claim は合意 credit を持たない。合意ノードはモデル計算を端から端まで再実行しない。claim の検証は、署名、ハッシュ、Merkle opening、および元の claim に束縛した局所化した一つの primitive の決定論的再計算である。ブロック、署名、通常トランザクション、決済の検査は残る。
+* **履歴（2026-10-15、この設計では公開裁定の方針が優先する）:** 「独立した検証（抽選検証者による再実行）が成立するまで合意 credit を持たない。」モデル全体の再実行を全ノードの合意要件とする読みは、公開裁定の方針が置き換える。
 * 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
 
 ## 10. PALW を成り立たせる前提 — bond が時間あたりの claim を制限する(2026-10-16 ユーザー決定)
@@ -316,8 +323,8 @@ MISAKA は、確率的検証と経済によって PALW を実現する。この�
   - これにより、モデルが共有されない攻撃のリスクを大幅に下げる。
 
 ### 10.3 G14 によって正規モデルでの「計算しない提出」を防ぐ
-- **G14 の定義。** 計算をせずに claim を出す miner がいても、Panel に正しい Panel が 1 つでもいて、計算と一致しないことを確認できれば、その不正を客観的に証明できる。そして slash、ブロック生成の拒否、報酬の拒否まで持っていける。
-- この定義が満たされていれば、genesis・フォークのモデルに正しい Panel が 1 つでも立てば、計算しないで提出する不正を防げる。
+- **G14 の定義。** 計算をせずに claim を出す miner がいても、bond 付きの公開提出者が、認証された資料と、元の claim に束縛した局所化した一つの primitive の決定論的再計算で不一致を示せる。native court が有界な局所検証、責任、無効化、bond、報酬、Final を行う。Panel の署名は署名者の識別である。多数も定足数も評決ではない。止まった Panel や結託した Panel のあとにも、bond 付きの第三者経路が残る。
+- この定義が満たされていれば、genesis・フォークのモデルに正しい検証者が 1 人でもいれば、計算しないで提出する不正を公開裁定で扱える。手順は [公開裁定の方針 v0.1](design/palw/consensus/public-adjudication-policy-v0.1.md) に従う。
 
 ### 10.4 設計が満たすべき条件(肝心な点)
 本設計は、次の 2 つを満たすことを前提とする。

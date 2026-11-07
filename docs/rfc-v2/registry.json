@@ -184,6 +184,11 @@
       "kind": "adr",
       "id": "ADR-0212",
       "path": "docs/adr/0212-positive-court-without-model-prepossession.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0047",
+      "path": "docs/rfc/0047-batch-court-time-contract.md"
     }
   ]
 }

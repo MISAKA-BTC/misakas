@@ -102,7 +102,13 @@ pub(super) struct Monitor {
 impl Monitor {
     pub(super) fn new(mut valid_signers: BTreeSet<PalwBondKeyV2>, producer: PalwBondKeyV2) -> Self {
         valid_signers.insert(producer);
-        Self { expected_signers: valid_signers, ..Self::default() }
+        Self {
+            literal_custodians: BTreeSet::new(),
+            seed: None,
+            completed: false,
+            pending_sources: BTreeSet::new(),
+            expected_signers: valid_signers,
+        }
     }
     pub(super) fn observe(&mut self, chain: &Chain, claim: Hash64, owner: PalwBondKeyV2) {
         let Some(progress) = chain.tc.palw_staged_owned_progress_v1((claim, owner)).unwrap() else { return };

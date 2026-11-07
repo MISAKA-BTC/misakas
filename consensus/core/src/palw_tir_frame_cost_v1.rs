@@ -32,9 +32,9 @@
 //! No cryptographic computation proof of any kind is used (PRINCIPLES §8): these are deadlines and prices for public answers, local
 //! recomputation and a deterministic court.
 
-use crate::Hash64;
 use crate::palw_rendering_resources_v1::{PalwRenderingResourcePricesV1, PalwStagedPublicCourtConfigV1};
 use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
+use crate::Hash64;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// The clock / cost-unit format's version.
@@ -48,8 +48,142 @@ pub const PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3: u16 = 3;
 /// Same family owner3 grammar/rates, with the original's adopted maximal
 /// clock-v2 material floor fixed BEFORE initial signatures. No old3 rewrite.
 pub const PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4: u16 = 4;
+/// Batch public path only. Collection ends at the adjudication door.
+/// Material retention is a later field. The per-owner serial queue is not
+/// this door. No shipped preset or cost record selects it, and it is not a
+/// family clock.
+pub const PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5: u16 = 5;
+/// DAA left after the latest legal first notice until the hard deadline.
+/// Same value as `PALW_COURT_CLOCK_V2_RESIDUAL_DAA` (6,880). Not a measured runtime.
+pub const PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1: u64 = crate::palw_court_clock_v2::PALW_COURT_CLOCK_V2_RESIDUAL_DAA;
 pub fn is_family_clock_v3(version: u16) -> bool {
     matches!(version, PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4)
+}
+pub fn is_batch_public_clock_v5(version: u16) -> bool {
+    version == PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5
+}
+/// `Some((required, allowed))` when `collect_until` is past `accepted + 10,000`.
+/// Uses `palw_collection_door_within_route_hard_v1` unchanged. Does not clip.
+pub fn batch_collect_door_refusal_v1(accepted_daa: u64, collect_until_daa: u64) -> Option<(u64, u64)> {
+    let allowed = crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+    let hard = accepted_daa.checked_add(allowed)?;
+    if crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, collect_until_daa) {
+        None
+    } else {
+        Some((collect_until_daa.checked_sub(accepted_daa)?, allowed))
+    }
+}
+/// `Some(allowed)` when localization plus the collection window (filing and
+/// collection already combined with max) does not fit in the 6,880 DAA left
+/// after the latest legal first notice.
+pub fn batch_public_span_exceeds_notice_budget_v1(public_span_daa: u64) -> Option<u64> {
+    (public_span_daa > PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1).then_some(PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1)
+}
+
+/// Admitted span of the retired localization contract (64 retries × acquisition
+/// 4,096, plus the rest of that path). Not a budget, and not a fallback when
+/// 6,880 is too small.
+pub const PALW_RETIRED_LOCALIZATION_PATH_DAA_V1: u64 = 306_108;
+
+/// True when `public_span_daa` is past 6,880 and still inside the retired
+/// 306,108 localization span. Such a span fits only by treating that retired
+/// path as an allowance. Plan time refuses it. The computed span is not
+/// rewritten down to 6,880 or to 306,108.
+pub fn batch_span_fits_only_retired_localization_v1(public_span_daa: u64) -> bool {
+    public_span_daa > PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1 && public_span_daa <= PALW_RETIRED_LOCALIZATION_PATH_DAA_V1
+}
+
+/// Why a Batch version-5 objection artifact cannot be admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BatchPublicObjectionRefusalV1 {
+    /// The witness or its root claim exceeds the admission ceiling.
+    Size { required: u64, allowed: u64 },
+    /// The artifact's public span or collection door misses the time contract.
+    Deadline { required: u64, allowed: u64 },
+}
+
+/// Batch version 5 only, called by the quote and by install.
+///
+/// An admitted plan must not carry an objection artifact that admission itself
+/// would reject. Size uses the same close predicate as class admission
+/// ([`crate::palw_mode_v2::palw_close_fits_court_v1`]) and the carried-close
+/// byte ceiling. Deadline uses the 6,880 public budget and
+/// `collect_until <= hard`. `hard + 1` remains the clock-v2 exclusive end and
+/// is not a signed collection door. The retired 306,108 localization span is
+/// not an alternate allowance.
+pub fn batch_public_objection_refused_v1(
+    witness_bytes: u64,
+    root_claim_bytes: u64,
+    court: &crate::palw_mode_v2::PalwCourtParamsV2,
+    localization_daa: u64,
+    filing_daa: u64,
+    accepted_daa: u64,
+    collect_until_daa: u64,
+) -> Option<BatchPublicObjectionRefusalV1> {
+    let carriable = crate::palw_tir_admission_v1::palw_tir_carriable_close_bytes_v1(court);
+    let byte_ceiling = court.max_close_bytes().min(carriable);
+    if witness_bytes > byte_ceiling || !crate::palw_mode_v2::palw_close_fits_court_v1(witness_bytes, court) {
+        return Some(BatchPublicObjectionRefusalV1::Size { required: witness_bytes, allowed: byte_ceiling });
+    }
+    let root_ceiling = crate::palw_tir_admission_v1::PALW_TIR_DISSECT_CARRIER_BYTES_V1;
+    if root_claim_bytes > root_ceiling {
+        return Some(BatchPublicObjectionRefusalV1::Size { required: root_claim_bytes, allowed: root_ceiling });
+    }
+    let Some(public_span) = localization_daa.checked_add(filing_daa) else {
+        return Some(BatchPublicObjectionRefusalV1::Deadline {
+            required: localization_daa,
+            allowed: PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1,
+        });
+    };
+    if batch_span_fits_only_retired_localization_v1(public_span) || batch_span_fits_only_retired_localization_v1(localization_daa)
+    {
+        return Some(BatchPublicObjectionRefusalV1::Deadline {
+            required: public_span,
+            allowed: PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1,
+        });
+    }
+    if let Some(allowed) = batch_public_span_exceeds_notice_budget_v1(public_span) {
+        return Some(BatchPublicObjectionRefusalV1::Deadline { required: public_span, allowed });
+    }
+    if let Some((required, allowed)) = batch_collect_door_refusal_v1(accepted_daa, collect_until_daa) {
+        return Some(BatchPublicObjectionRefusalV1::Deadline { required, allowed });
+    }
+    None
+}
+
+/// How a Batch version-5 service hold ends. This is not Final, and it is not
+/// adjudication success inside 10,000 DAA. Older clock versions have no row
+/// here. Applying the settlement to a live claim still requires
+/// `public_supply_failure_outcome_v1` (`palw_batch_public_budget_v1`), which
+/// returns `NoSlashHold` and does not abort or settle fees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwBatchPublicHoldEndV5 {
+    /// The hold ends by abort. `unused_reserved_fee_sompi` is reserved minus
+    /// spent. The outcome is not Final.
+    AbortSettleUnused { unused_reserved_fee_sompi: u64 },
+}
+
+/// Batch version 5 only. A hold ends by abort and settlement of the unused
+/// reserved fees. The result is not Final. Version 1–4 return an error so an
+/// old claim row is not reclassified.
+pub fn batch_public_hold_end_v5(
+    clock_version: u16,
+    reserved_fee_sompi: u64,
+    spent_fee_sompi: u64,
+) -> Result<PalwBatchPublicHoldEndV5, &'static str> {
+    if !is_batch_public_clock_v5(clock_version) {
+        return Err("batch public hold end applies only to clock version 5");
+    }
+    let unused = reserved_fee_sompi.checked_sub(spent_fee_sompi).ok_or("spent reserved fees exceed the reservation")?;
+    Ok(PalwBatchPublicHoldEndV5::AbortSettleUnused { unused_reserved_fee_sompi: unused })
+}
+
+/// A hold end is not a within-deadline Final. Absence of an objection is not
+/// this function, and neither is panel quorum.
+pub fn batch_public_hold_reported_as_within_deadline_final_v5(end: &PalwBatchPublicHoldEndV5) -> bool {
+    match end {
+        PalwBatchPublicHoldEndV5::AbortSettleUnused { .. } => false,
+    }
 }
 
 /// WorkDebits on a preparer's serial path per pass: ONE debit carries the whole pass (the fold counts grants, not slices; the
@@ -108,6 +242,7 @@ impl PalwTirFrameClockV1 {
                 | PALW_TIR_FRAME_CLOCK_VERSION_V2
                 | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3
                 | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+                | PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5
         ) || self.action_parser_steps == 0
             || self.frame_passes_per_check == 0
             || self.control_bytes == 0
@@ -339,7 +474,11 @@ fn product(a: u64, b: u64) -> Result<u64, String> {
     a.checked_mul(b).ok_or_else(|| "TIR frame clock product overflow".into())
 }
 fn height(count: u64) -> u64 {
-    if count <= 1 { 0 } else { u64::from(64 - (count - 1).leading_zeros()) }
+    if count <= 1 {
+        0
+    } else {
+        u64::from(64 - (count - 1).leading_zeros())
+    }
 }
 /// Turns of a node descent of a tree of `count` leaves, `DEPTH` levels per node request, plus the leaf level.
 fn descent(count: u64) -> u64 {
@@ -689,6 +828,16 @@ pub fn tir_public_filing_daa_v1(
         {
             witness_moves.max(2)
         }
+        // Batch prices a carried move serially. With no carried move it keeps
+        // V1's two-margin floor; the 6,880 public budget still refuses a door
+        // that cannot fit after the last legal first notice.
+        PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5 => {
+            if witness_moves > 0 {
+                witness_moves.max(2)
+            } else {
+                2
+            }
+        }
         _ => return Err("sequential filing needs at least one carried move".into()),
     };
     sum(&[product(serial, config.prices.inclusion_margin_daa)?, clock.inclusion_daa_v1(witness_moves, parts)?])
@@ -740,7 +889,7 @@ mod tests {
     #[test]
     fn sequential_filing_v2_flows_through_real_plan_and_keeps_door_cap() {
         use crate::palw_tir_public_allocation_v1::{
-            PalwTirPublicAllocationMissingV1, PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_v1,
+            derive_tir_public_allocation_v1, PalwTirPublicAllocationMissingV1, PalwTirPublicAllocationQuoteV1,
         };
         let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
         let frame = &fx.frame;
@@ -788,11 +937,9 @@ mod tests {
 
     #[test]
     fn the_cost_record_list_is_empty_and_refuses_every_network() {
-        assert!(
-            PALW_TIR_FRAME_COST_RECORDS_V1
-                .iter()
-                .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
-        );
+        assert!(PALW_TIR_FRAME_COST_RECORDS_V1
+            .iter()
+            .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
         let cost = palw_tir_frame_test_only_cost_v1();
         cost.check_v1().expect("the test-only config is well formed");
         assert_eq!(
@@ -995,5 +1142,49 @@ mod tests {
         // those opens, so increasing inclusion capacity cannot be used to erase queue latency.
         cost.clock.parallel_bytes_per_daa = 64 << 20;
         assert_eq!(tir_public_owner_queue_wait_v1(open_window, &cost.config, &cost.clock).unwrap(), 40_968);
+    }
+
+    #[test]
+    fn batch_public_span_and_adjudication_use_the_unrelaxed_door() {
+        use crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+        assert_eq!(PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, 6_880);
+        assert_eq!(PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, crate::palw_court_clock_v2::PALW_COURT_CLOCK_V2_RESIDUAL_DAA);
+        assert_eq!(DISPUTE_WINDOW_DAA, 10_000);
+        assert_eq!(batch_collect_door_refusal_v1(100, 10_099), None);
+        assert_eq!(batch_collect_door_refusal_v1(100, 10_100), None);
+        assert_eq!(batch_collect_door_refusal_v1(100, 10_101), Some((10_001, 10_000)));
+        assert_eq!(batch_collect_door_refusal_v1(100, 1_798_149), Some((1_798_049, 10_000)));
+        assert_eq!(batch_public_span_exceeds_notice_budget_v1(6_880), None);
+        assert_eq!(batch_public_span_exceeds_notice_budget_v1(6_881), Some(6_880));
+        assert_eq!(batch_public_span_exceeds_notice_budget_v1(306_108 + 7_104), Some(6_880));
+        assert_eq!(PALW_RETIRED_LOCALIZATION_PATH_DAA_V1, 306_108);
+        assert!(batch_span_fits_only_retired_localization_v1(6_881));
+        assert!(batch_span_fits_only_retired_localization_v1(PALW_RETIRED_LOCALIZATION_PATH_DAA_V1));
+        assert!(!batch_span_fits_only_retired_localization_v1(6_880));
+        assert!(!batch_span_fits_only_retired_localization_v1(PALW_RETIRED_LOCALIZATION_PATH_DAA_V1 + 1));
+        assert_eq!(batch_public_span_exceeds_notice_budget_v1(PALW_RETIRED_LOCALIZATION_PATH_DAA_V1), Some(6_880));
+        // hard and the clock-v2 exclusive end stay different values.
+        let hard = 100 + DISPUTE_WINDOW_DAA;
+        assert!(crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, hard));
+        assert!(!crate::palw_court_clock_v2::palw_collection_door_within_route_hard_v1(hard, hard + 1));
+        let clocks = crate::palw_court_clock_v2::palw_court_clocks_v2(100, true, 600, hard + 600, 0).unwrap();
+        assert_eq!(clocks.hard_deadline, hard);
+        assert_eq!(clocks.collect_until, hard + 1);
+        assert_ne!(clocks.collect_until, hard);
+        let court = crate::palw_mode_v2::PalwCourtParamsV2::new(1 << 40, 45, 2).unwrap();
+        assert!(batch_public_objection_refused_v1(court.max_close_bytes() + 1, 0, &court, 1, 1, 100, hard).is_some());
+        assert!(batch_public_objection_refused_v1(1, 0, &court, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1, 0, 100, hard).is_some());
+        assert!(batch_public_objection_refused_v1(1, 0, &court, 1, 1, 100, 1_798_149).is_some());
+        assert!(batch_public_objection_refused_v1(1, 0, &court, 1, 1, 100, hard).is_none());
+    }
+
+    #[test]
+    fn batch_public_hold_ends_by_abort_and_is_not_within_deadline_final() {
+        let end = batch_public_hold_end_v5(PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 1_000, 250).unwrap();
+        assert_eq!(end, PalwBatchPublicHoldEndV5::AbortSettleUnused { unused_reserved_fee_sompi: 750 });
+        assert!(!batch_public_hold_reported_as_within_deadline_final_v5(&end));
+        assert!(batch_public_hold_end_v5(PALW_TIR_FRAME_CLOCK_VERSION_V1, 1_000, 0).is_err());
+        assert!(batch_public_hold_end_v5(PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4, 1_000, 0).is_err());
+        assert!(batch_public_hold_end_v5(PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 10, 11).is_err());
     }
 }

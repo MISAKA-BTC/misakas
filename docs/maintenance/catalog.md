@@ -1492,6 +1492,7 @@
 - [rfc/0044-positive-court-full-coverage.md](../rfc/0044-positive-court-full-coverage.md)
 - [rfc/0045-positive-court-canonical-assignment.md](../rfc/0045-positive-court-canonical-assignment.md)
 - [rfc/0046-positive-native-funded-relay.md](../rfc/0046-positive-native-funded-relay.md)
+- [rfc/0047-batch-court-time-contract.md](../rfc/0047-batch-court-time-contract.md)
 - [rfc/INDEX.md](../rfc/INDEX.md)
 - [rfc/README.md](../rfc/README.md)
 - [rfc/TOPICS.md](../rfc/TOPICS.md)

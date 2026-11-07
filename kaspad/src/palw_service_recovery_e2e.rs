@@ -143,6 +143,10 @@ async fn launch_on_flow(
 }
 
 impl RecoveryRun {
+    pub(super) fn socket_transport(&self) -> bool {
+        self.network.is_some()
+    }
+
     pub(super) async fn shutdown_network(&mut self) {
         if let Some(network) = self.network.take() {
             network.shutdown().await;
@@ -174,7 +178,6 @@ impl RecoveryRun {
                         &foreign.expect("FP network fixture").2.as_ref().unwrap().0
                     )).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }
                 ));
-            }
         }
         let directory = tempfile::tempdir().unwrap();
         let mut producer_config = panel_config(chain, directory.path(), chain.bonds[0], funding);

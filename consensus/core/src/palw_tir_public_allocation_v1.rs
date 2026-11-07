@@ -10,11 +10,11 @@
 use crate::palw_rendering_resources_v1::{PalwRenderingClaimTermsV1, PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1};
 use crate::palw_staged_preclaim_v1::{PalwPreclaimSourceGeometryV1, PalwStagedClaimGeometryV1};
 use crate::palw_tir_public_owned_v1::{
-    PalwTirPublicOwnedPlanV1, PalwTirPublicPreparationPlanV1, PalwTirPublicWorkAllocationV1, PalwTirPublicWorkRulesV1,
-    derive_tir_public_preparation_plan_v1, derive_tir_public_work_allocation_v1,
+    derive_tir_public_preparation_plan_v1, derive_tir_public_work_allocation_v1, PalwTirPublicOwnedPlanV1,
+    PalwTirPublicPreparationPlanV1, PalwTirPublicWorkAllocationV1, PalwTirPublicWorkRulesV1,
 };
 use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicSourceV1};
-use crate::{Hash64, palw_mode_v2::PalwCourtParamsV2};
+use crate::{palw_mode_v2::PalwCourtParamsV2, Hash64};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 const VERSION: u16 = 1;
@@ -171,6 +171,20 @@ pub enum PalwTirPublicAllocationMissingV1 {
     /// The frame's conviction door (`collect_until − accepted`) exceeds the measured record's longest accepted pursuit
     /// (`PalwTirFrameClockV1::maximum_door_daa`, at most the network's liability horizon): not built, so not accepted (G-03).
     DoorBeyondLiabilityHorizon {
+        required: u64,
+        allowed: u64,
+    },
+    /// Batch public v5 only. Work that must still fit after the latest legal
+    /// first notice exceeds `DISPUTE_WINDOW − NOTICE_WINDOW` (6,880). Admission
+    /// stops. The old localization path is not used as a fallback, and the
+    /// computed door is not clipped into a signable plan.
+    PublicRecoveryExceedsNoticeBudget {
+        required: u64,
+        allowed: u64,
+    },
+    /// Batch public v5 only. The priced objection artifact is one the admission
+    /// path would reject for size or deadline. The plan is not signed.
+    PublicObjectionRejected {
         required: u64,
         allowed: u64,
     },
@@ -1069,7 +1083,13 @@ fn finish_allocation_source_v2(
     // WorkDebit and each move one margin, each turn one `acquisition_daa`, the controls' writes and the executor's carriers after
     // Open too): 6e7–2.4e8 DAA at 6 custodians. Cold work and Ready stay before Open (the preparation door).
     // §11 (c): the owner queue's worst wait (the fair start admits a newcomer within ⌈(q + 1) / K_owner⌉ tenures) precedes it.
-    let queue_wait = if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
+    let batch_public = crate::palw_tir_frame_cost_v1::is_batch_public_clock_v5(rules.clock.version);
+    // Batch v5 does not put the per-owner serial queue on the signed door.
+    // Shared request intake is the public submission opportunity, and the
+    // span after the last legal first notice has to fit in 6,880 DAA.
+    let queue_wait = if batch_public {
+        0
+    } else if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
         crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_family_v3(open_window, &acquisition)?
     } else {
         crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1(open_window, &rules.config, &rules.clock)?
@@ -1089,10 +1109,34 @@ fn finish_allocation_source_v2(
         crate::palw_tir_frame_cost_v1::tir_public_filing_daa_v1(terminal.envelope.maximum_moves, &rules.config, &rules.clock)?;
     let collection = rules.config.collection_daa.max(filing);
     let collect = add(stream, collection)?;
+    // Batch v5: localization plus the collection window (filing and collection
+    // already combined with max) is the priced public work after the latest
+    // legal first notice. A span past 6,880 is Incomplete here. It is not
+    // admitted and then handed the old localization path.
+    if batch_public {
+        let public_span = add(acquisition.envelope.inclusion_daa, collection)?;
+        // A span that fits only inside the retired 306,108 localization path
+        // is the same refusal. The computed span is not replaced by that path.
+        if crate::palw_tir_frame_cost_v1::batch_span_fits_only_retired_localization_v1(public_span)
+            || crate::palw_tir_frame_cost_v1::batch_public_span_exceeds_notice_budget_v1(public_span).is_some()
+        {
+            return incomplete(PalwTirPublicAllocationMissingV1::PublicRecoveryExceedsNoticeBudget {
+                required: public_span,
+                allowed: crate::palw_tir_frame_cost_v1::PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1,
+            });
+        }
+    }
     // External audit 10-17 §7 P0(3): an accepted pursuit ends inside the liability horizon the record pins (validated at arming
     // against `window_challenge + window_court`); a longer door is refused, never accepted with an unbounded Final delay.
+    // Batch v5 also refuses a door past the fixed adjudication span. The
+    // computed door stays in `required`; collect_until is not rewritten down.
+    let allowed_door = if batch_public {
+        rules.clock.maximum_door_daa.min(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+    } else {
+        rules.clock.maximum_door_daa
+    };
     let door = collect.checked_sub(geometry.accepted_daa).ok_or("native TIR door underflow")?;
-    if door > rules.clock.maximum_door_daa {
+    if door > allowed_door {
         #[cfg(test)]
         if table.is_some() {
             eprintln!(
@@ -1154,7 +1198,7 @@ fn finish_allocation_source_v2(
                 filing_daa: filing,
                 collection_daa: collection,
                 total_daa: door,
-                limit_daa: rules.clock.maximum_door_daa,
+                limit_daa: allowed_door,
                 reorg_replay_moves: rules.config.prices.reorg_replay_moves,
                 reorg_reacquire_logical_units: acquisition.maximum_reacquire_logical_units,
                 maximum_fresh_logical_units: acquisition.maximum_fresh_logical_units,
@@ -1168,12 +1212,47 @@ fn finish_allocation_source_v2(
                 maximum_terminal_witness_bytes: terminal.maximum_witness_bytes,
             }));
         }
-        return incomplete(PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon {
-            required: door,
-            allowed: rules.clock.maximum_door_daa,
-        });
+        return incomplete(PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { required: door, allowed: allowed_door });
+    }
+    if batch_public {
+        // A door that already fits can still price an objection artifact the
+        // admission path would reject. That plan is Incomplete. collect_until
+        // is not moved to hard+1, and retention is applied only after this check.
+        if let Some(refusal) = crate::palw_tir_frame_cost_v1::batch_public_objection_refused_v1(
+            terminal.maximum_witness_bytes,
+            terminal.maximum_root_claim_bytes,
+            &rules.court,
+            acquisition.envelope.inclusion_daa,
+            filing,
+            geometry.accepted_daa,
+            collect,
+        ) {
+            let (required, allowed) = match refusal {
+                crate::palw_tir_frame_cost_v1::BatchPublicObjectionRefusalV1::Size { required, allowed }
+                | crate::palw_tir_frame_cost_v1::BatchPublicObjectionRefusalV1::Deadline { required, allowed } => {
+                    (required, allowed)
+                }
+            };
+            return incomplete(PalwTirPublicAllocationMissingV1::PublicObjectionRejected { required, allowed });
+        }
     }
     let mut material = add(collect, rules.config.reorg_retention_daa)?;
+    if batch_public {
+        // Retention is a later field. It does not move collect_until, and it
+        // does not extend the 10,000 DAA dispute window. Old signed claims are
+        // not rewritten: this floor is only for a new batch-public quote.
+        let hard = add(geometry.accepted_daa, crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)?;
+        material = material.max(add(hard, rules.config.reorg_retention_daa)?);
+        if let Some(quote) = &mut semantic {
+            quote.plan.terms.material_until_daa = material;
+            quote.plan.terms.bond_exit_after_daa = material;
+            for stage in &mut quote.plan.stages {
+                stage.terms.material_until_daa = material;
+                stage.terms.bond_exit_after_daa = material;
+            }
+            quote.plan.check_v1()?;
+        }
+    }
     if rules.clock.version == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4 {
         // The full extended claim window, even when the fast original stream
         // finishes earlier. Native selection verifies this unchanged profile's
@@ -1927,36 +2006,32 @@ mod tests {
         plan.resource_plan_id = plan.resource_id_v1().unwrap();
         plan.allocation_id = plan.accepted_id_v1().unwrap();
         plan.check_v1().unwrap(); // A checksum is not a native admission marker.
-        assert!(
-            check_tir_public_allocation_native_v1(
-                &plan,
-                &f.geometry,
-                &f.original,
-                &f.header,
-                &f.record,
-                &f.layout,
-                None,
-                None,
-                f.rules
-            )
-            .is_err()
-        );
+        assert!(check_tir_public_allocation_native_v1(
+            &plan,
+            &f.geometry,
+            &f.original,
+            &f.header,
+            &f.record,
+            &f.layout,
+            None,
+            None,
+            f.rules
+        )
+        .is_err());
         let mut changed = f.rules;
         changed.maximum_custodians += 1;
-        assert!(
-            check_tir_public_allocation_native_v1(
-                &complete(&f, false),
-                &f.geometry,
-                &f.original,
-                &f.header,
-                &f.record,
-                &f.layout,
-                None,
-                None,
-                changed
-            )
-            .is_err()
-        );
+        assert!(check_tir_public_allocation_native_v1(
+            &complete(&f, false),
+            &f.geometry,
+            &f.original,
+            &f.header,
+            &f.record,
+            &f.layout,
+            None,
+            None,
+            changed
+        )
+        .is_err());
         changed.config.prices.rent_per_parser_step = u64::MAX;
         assert!(
             derive_tir_public_allocation_v1(&f.geometry, &f.original, &f.header, &f.record, &f.layout, None, None, changed).is_err()

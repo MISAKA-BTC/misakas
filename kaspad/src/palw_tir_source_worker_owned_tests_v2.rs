@@ -1,6 +1,29 @@
 //! Actual generic production handoff; payload is typed bytes, not a model result.
 use super::*;
 use kaspa_consensus_core::palw_native_resource_v1::*;
+
+#[test]
+fn public_worker_incomplete_handoff_keeps_submission_without_party_default() {
+    for (why, kind) in [
+        ("TIR owner replay worker failed: cancelled", PublicWorkerIncompleteV2::Stopped),
+        ("source IO unavailable", PublicWorkerIncompleteV2::Stopped),
+        ("TIR accepted body lost a rooted chunk", PublicWorkerIncompleteV2::WithheldBody),
+        ("withheld body", PublicWorkerIncompleteV2::WithheldBody),
+        ("TIR reassembled body does not reproduce its accepted checksum/head", PublicWorkerIncompleteV2::TamperedRecord),
+        ("TIR accepted body has more chunks than its canonical split", PublicWorkerIncompleteV2::TamperedRecord),
+        ("TIR rooted chunk substitutes demand/signer/head/offset", PublicWorkerIncompleteV2::DoubleSignature),
+        ("double signature", PublicWorkerIncompleteV2::DoubleSignature),
+    ] {
+        let got = classify_worker_incomplete_v2(why);
+        assert_eq!(got, kind);
+        assert!(got.leaves_public_submission_v2());
+        assert!(!got.attributes_party_default_v2());
+        assert!(matches!(handoff_worker_result_v2::<u8>(Ok(Err(why.into()))), PublicWorkerHandoffV2::Remains(k) if k == kind));
+    }
+    assert!(matches!(rooted_chunk_handoff_v2::<u8>(None), PublicWorkerHandoffV2::Remains(PublicWorkerIncompleteV2::WithheldBody)));
+    assert!(matches!(rooted_chunk_handoff_v2(Some(9u8)), PublicWorkerHandoffV2::Completed(9)));
+    assert!(matches!(handoff_worker_result_v2::<u8>(Ok(Ok(4))), PublicWorkerHandoffV2::Completed(4)));
+}
 #[test]
 fn tir_source_worker_owned_cancel_keeps_actual_reservation_until_worker_returns() {
     const CHILD: &str = "MISAKA_TIR_SOURCE_WORKER_CHILD";

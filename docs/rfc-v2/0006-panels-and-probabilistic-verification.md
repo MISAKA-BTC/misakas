@@ -16,6 +16,8 @@
 
 旧0006のlayer／cell分割、旧0007の確率的検証・post-commit challenge、旧0010のpermissionless Panel bindingを統合する。通常検査と認証receiptを担当し、不一致後の訴追手続きは14に渡す。
 
+2026-11-07 の [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md) は、新しい Batch 公開時計の claim 裁定について、下の原文に優先する。原文は履歴として残す。古い claim は古い規則のままである。原文が Panel の定足数で `ReceiptLicensed` へ進めると書く箇所は、この設計の評決ではない。Panel の署名は署名者を識別する。合意ノードはモデル計算を端から端まで再実行しない。検証は、署名、ハッシュ、Merkle opening、および元の claim に束縛した局所化した一つの primitive の決定論的再計算である。計算の暗号学的証明は、将来の作業としても使わない。
+
 ## 2. 公開参加と抽選
 
 適格なbond、認証済みsnapshot、commit後の乱数、draw policy、担当scope、署名者を拘束する。固定operator名簿やgenesis身分を隠れた参加条件にしない。抽選結果、応答義務、交代条件、受理点は再実行で復元できなければならない。

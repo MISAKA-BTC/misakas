@@ -2335,3 +2335,476 @@ fn closure_bound_on_a_real_class() {
         std::fs::write(o, serde_json::to_string_pretty(&out).unwrap()).unwrap();
     }
 }
+
+/// **Bounded public remedy of one real class.** One localized primitive (the cone refutation and court
+/// recomputation of a single step leaf), the shared inventory material that primitive opens, the public
+/// submission of the rest of that witness, and one recovery re-check. The ordered door is
+/// [`check_reserved_public_graph_v1`] after the latest legal first notice. The retired 64-retry /
+/// 306,108 localization span is not a term and is not a fallback.
+///
+/// The leaf reported is the worst one among the last leaf of each commit node (full block name and
+/// node index) and each state or history tile. CPU is this process's
+/// user+system time for that leaf's build, court check, and recovery check. Peak RSS is `getrusage`
+/// `ru_maxrss` for the whole process when the tool can read it.
+///
+/// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> cargo test -p misaka-palw-tir-exec --features node --test
+/// frame_measure -- --ignored --nocapture public_remedy_on_a_real_class`
+#[test]
+#[ignore = "bounded public-remedy measurement of an external PALWTIR1; set MISAKA_TIR_FRAME_MEASURE_PALWTIR"]
+fn public_remedy_on_a_real_class() {
+    use kaspa_consensus_core::palw_batch_public_budget_v1::{
+        check_reserved_public_graph_v1, PublicSharedBudgetRefusalV1, PublicSharedSlotV1,
+    };
+    use kaspa_consensus_core::palw_court_policy_v1::NOTICE_WINDOW_DAA;
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1;
+    use kaspa_consensus_core::palw_tir_frame_cost_v1::{
+        tir_public_filing_daa_v1, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5,
+    };
+    use kaspa_consensus_core::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
+    use std::collections::BTreeMap;
+
+    /// Nanoseconds in one testnet-12 DAA at the release plan's 21 DAA/h, the rate the candidate
+    /// cost record already uses (~171 s). This converts measured CPU into a slot. It does not resize
+    /// the 6,880 budget.
+    const CPU_NS_PER_DAA: u128 = 3_600_000_000_000 / 21;
+
+    fn host_usage() -> (u128, Option<u64>) {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) }, 0, "getrusage");
+        let usage = unsafe { usage.assume_init() };
+        let nanos = |time: libc::timeval| (time.tv_sec as u128) * 1_000_000_000 + (time.tv_usec as u128) * 1_000;
+        let cpu = nanos(usage.ru_utime) + nanos(usage.ru_stime);
+        let rss = usage.ru_maxrss.max(0) as u64;
+        let rss = if cfg!(target_os = "macos") { rss } else { rss.saturating_mul(1024) };
+        (cpu, Some(rss))
+    }
+    fn cpu_slot_daa(cpu_ns: u128) -> u64 {
+        u64::try_from(cpu_ns.div_ceil(CPU_NS_PER_DAA)).expect("cpu daa fits").max(1)
+    }
+    fn opened_operand_bytes(params: &PalwTirParamOpeningV1) -> u64 {
+        match params {
+            PalwTirParamOpeningV1::None => 0,
+            PalwTirParamOpeningV1::Single(proof) => proof.operand_bytes() as u64,
+            PalwTirParamOpeningV1::Composite(composite) => {
+                composite.parent.as_ref().map(|proof| proof.operand_bytes()).unwrap_or(0) as u64
+                    + composite.adapter.as_ref().map(|proof| proof.operand_bytes()).unwrap_or(0) as u64
+            }
+        }
+    }
+    fn ordered_door(material_daa: u64, primitive_daa: u64, submission_daa: u64, recovery_daa: u64) -> (u64, bool) {
+        let id = |n: u8| [n; 64];
+        let slots = [
+            PublicSharedSlotV1 { id: id(1), slot_daa: material_daa, material_ready_daa: 0, predecessors: Vec::new() },
+            PublicSharedSlotV1 { id: id(2), slot_daa: primitive_daa, material_ready_daa: 0, predecessors: vec![id(1)] },
+            PublicSharedSlotV1 { id: id(3), slot_daa: submission_daa, material_ready_daa: 0, predecessors: vec![id(2)] },
+        ];
+        match check_reserved_public_graph_v1(NOTICE_WINDOW_DAA, &slots, recovery_daa) {
+            Ok(required) => (required, true),
+            Err(PublicSharedBudgetRefusalV1::Exceeds { required, allowed }) => {
+                assert_eq!(allowed, 6_880, "the post-notice budget is 6,880");
+                (required, false)
+            }
+            Err(refusal) => panic!("the public-remedy graph is not checkable: {refusal:?}"),
+        }
+    }
+
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+    let (root, _) = artifact.inventory_root().unwrap();
+    let class = artifact.class().unwrap();
+    let canonical =
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let backend =
+        TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER).unwrap().with_network_id_v1(NET);
+    let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
+    let job = fp_job(&backend, &prompt, 2);
+    let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+    let run = backend.execute_free_prompt(&job, &ids).unwrap();
+    let material = run.outcome.material;
+    let capture = backend.decode_capture(&material).unwrap();
+    let ctx = capture.binding.job_context.clone();
+    let n = capture.binding.step_leaf_count;
+    let space = backend.space();
+    let program = &space.program;
+    drop(capture);
+    let rules =
+        PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+    let prim_name = |p: &misaka_palw_tir::Prim| -> String { format!("{p:?}").chars().take_while(|c| c.is_alphanumeric()).collect() };
+    let mut groups: BTreeMap<String, u64> = BTreeMap::new();
+    for i in 0..n {
+        let leaf = space.leaf_at(&ctx, i).unwrap();
+        let label = match leaf.kind {
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } => {
+                let block_i = block;
+                let block = &program.blocks[block_i as usize];
+                format!(
+                    "commit:{}:{}:{}",
+                    block.name,
+                    node,
+                    prim_name(&block.nodes[node as usize].prim)
+                )
+            }
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::State { state, .. } => format!("state:{state}"),
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::HistTile { state, .. } => format!("hist:{state}"),
+        };
+        groups.insert(label, i);
+    }
+
+    let mut clock = candidate().clock;
+    clock.version = PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5;
+    clock.check_v1().expect("batch public clock v5 accepts the candidate units");
+    let config = candidate().config;
+    let part = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
+    let inclusion = |body: u64| -> u64 {
+        let moves = body.div_ceil(part).max(1);
+        clock.inclusion_daa_v1(moves, body).unwrap().max(1)
+    };
+    let filing = |body: u64| -> u64 {
+        let moves = body.div_ceil(part).max(1);
+        tir_public_filing_daa_v1(moves, &config, &clock).unwrap()
+    };
+
+    eprintln!("[public-remedy] kinds {}", groups.len());
+    let mut best: Option<Value> = None;
+    let mut best_key = (0u64, 0u64, 0u128);
+    let mut refused = 0u64;
+    for (kind, leaf) in &groups {
+        let before = host_usage().0;
+        let Ok(refutation) = backend.cone_refutation(&material, *leaf, &rules) else {
+            refused += 1;
+            continue;
+        };
+        let _ = check_tir_cone_refutation_v1(&refutation, &rules);
+        let after_check = host_usage().0;
+        let _ = check_tir_cone_refutation_v1(&refutation, &rules);
+        let after_recovery = host_usage().0;
+        let primitive_cpu_ns = after_check.saturating_sub(before);
+        let recovery_cpu_ns = after_recovery.saturating_sub(after_check);
+        let evidence_bytes = borsh::to_vec(&refutation).unwrap().len() as u64;
+        let shared_material_bytes = borsh::to_vec(&refutation.params).unwrap().len() as u64;
+        assert!(evidence_bytes >= shared_material_bytes, "the witness carries its shared material");
+        let submission_bytes = evidence_bytes - shared_material_bytes;
+        let io_bytes = opened_operand_bytes(&refutation.params)
+            + refutation.operands.preimages.iter().map(|preimage| preimage.values_le.len() as u64).sum::<u64>()
+            + refutation.output_preimage.values_le.len() as u64
+            + refutation.prompt_token_ids.len() as u64 * 4;
+        let shared_material_daa = inclusion(shared_material_bytes);
+        let primitive_daa = cpu_slot_daa(primitive_cpu_ns);
+        let submission_daa = filing(submission_bytes);
+        let recovery_daa = cpu_slot_daa(recovery_cpu_ns);
+        let (door, fits) = ordered_door(shared_material_daa, primitive_daa, submission_daa, recovery_daa);
+        let key = (door, evidence_bytes, primitive_cpu_ns);
+        if best.is_none() || key > best_key {
+            best_key = key;
+            best = Some(json!({
+                "kind": kind,
+                "leaf": leaf,
+                "cpu_ns": primitive_cpu_ns.saturating_add(recovery_cpu_ns),
+                "primitive_cpu_ns": primitive_cpu_ns,
+                "recovery_cpu_ns": recovery_cpu_ns,
+                "evidence_bytes": evidence_bytes,
+                "io_bytes": io_bytes,
+                "shared_material_bytes": shared_material_bytes,
+                "submission_bytes": submission_bytes,
+                "shared_material_daa": shared_material_daa,
+                "primitive_daa": primitive_daa,
+                "submission_daa": submission_daa,
+                "recovery_daa": recovery_daa,
+                "ordered_public_door_daa": door,
+                "door_fits_6880": fits,
+            }));
+        }
+    }
+    let best = best.expect("one localized primitive was measured");
+    let (_, peak_rss_bytes) = host_usage();
+    let record = json!({
+        "record": "misaka-palw/public-remedy-measure/v1",
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH },
+        "artifact": path.display().to_string(),
+        "class_id": format!("{}", class.class_id(&root)),
+        "step_leaves": n,
+        "kinds_measured": groups.len() as u64 - refused,
+        "kinds_refused": refused,
+        "cpu_ns_per_daa": CPU_NS_PER_DAA,
+        "allowed_daa": 6_880,
+        "peak_rss_bytes": peak_rss_bytes,
+        "public_remedy": best,
+    });
+    println!("[public-remedy] {}", serde_json::to_string(&record).unwrap());
+    if let Ok(out) = std::env::var("MISAKA_TIR_FRAME_MEASURE_OUT") {
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+}
+
+/// **Adversarial public remedy of one real class.** The ordered door is the class-wide case the
+/// policy names, checked after the latest legal first notice ([`NOTICE_WINDOW_DAA`]):
+///
+/// * material withholding — this process's CPU to open the container and derive its inventory root,
+///   then the largest shared opening among the sampled kinds;
+/// * the slowest localized response — the largest court-check CPU among those kinds;
+/// * public submission — the filing allowance of the largest non-material witness remainder;
+/// * recovery — the largest re-check CPU.
+///
+/// The sample is the same last leaf of each kind as [`public_remedy_on_a_real_class`]. The door
+/// uses those measured times. A zero off-chain term is a failed measurement. The retired 306,108
+/// DAA localization span is not a term and is not a fallback. A span past 6,880 is printed as the
+/// checker's `required` and is not rewritten down to 6,880. This test does not write
+/// [`PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1`].
+///
+/// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> cargo test -p misaka-palw-tir-exec --features node --test
+/// frame_measure -- --ignored --nocapture public_remedy_adversarial_on_a_real_class`
+#[test]
+#[ignore = "adversarial public-remedy measurement of an external PALWTIR1; set MISAKA_TIR_FRAME_MEASURE_PALWTIR"]
+fn public_remedy_adversarial_on_a_real_class() {
+    use kaspa_consensus_core::palw_batch_public_budget_v1::{
+        check_reserved_public_graph_v1, PublicSharedBudgetRefusalV1, PublicSharedSlotV1, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1,
+    };
+    use kaspa_consensus_core::palw_court_policy_v1::NOTICE_WINDOW_DAA;
+    use kaspa_consensus_core::palw_public_adjudication_measured_class_v1::PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1;
+    use kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1;
+    use kaspa_consensus_core::palw_tir_frame_cost_v1::{
+        tir_public_filing_daa_v1, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5,
+    };
+    use kaspa_consensus_core::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
+    use std::collections::BTreeMap;
+
+    /// Nanoseconds in one testnet-12 DAA at the release plan's 21 DAA/h (~171 s). Same conversion
+    /// the localized public-remedy measurement uses. It does not resize the 6,880 budget.
+    const CPU_NS_PER_DAA: u128 = 3_600_000_000_000 / 21;
+
+    fn host_usage() -> (u128, Option<u64>) {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        assert_eq!(unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) }, 0, "getrusage");
+        let usage = unsafe { usage.assume_init() };
+        let nanos = |time: libc::timeval| (time.tv_sec as u128) * 1_000_000_000 + (time.tv_usec as u128) * 1_000;
+        let cpu = nanos(usage.ru_utime) + nanos(usage.ru_stime);
+        let rss = usage.ru_maxrss.max(0) as u64;
+        let rss = if cfg!(target_os = "macos") { rss } else { rss.saturating_mul(1024) };
+        (cpu, Some(rss))
+    }
+    fn cpu_slot_daa(cpu_ns: u128) -> u64 {
+        assert!(cpu_ns > 0, "off-chain time printed by this process is not zero");
+        let daa = u64::try_from(cpu_ns.div_ceil(CPU_NS_PER_DAA)).expect("cpu daa fits");
+        assert!(daa >= 1, "a positive off-chain time occupies at least one DAA");
+        assert_ne!(daa, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1, "measured CPU is not the retired localization span");
+        daa
+    }
+    fn opened_operand_bytes(params: &PalwTirParamOpeningV1) -> u64 {
+        match params {
+            PalwTirParamOpeningV1::None => 0,
+            PalwTirParamOpeningV1::Single(proof) => proof.operand_bytes() as u64,
+            PalwTirParamOpeningV1::Composite(composite) => {
+                composite.parent.as_ref().map(|proof| proof.operand_bytes()).unwrap_or(0) as u64
+                    + composite.adapter.as_ref().map(|proof| proof.operand_bytes()).unwrap_or(0) as u64
+            }
+        }
+    }
+    /// Withholding delays the shared opening. The slowest response waits for that opening. Public
+    /// submission waits for the response. Recovery is added after the last slot. The latest legal
+    /// first notice is the notice offset. The retired localization span is not consulted.
+    fn ordered_door(
+        withholding_ready_daa: u64,
+        material_daa: u64,
+        response_daa: u64,
+        submission_daa: u64,
+        recovery_daa: u64,
+    ) -> (u64, bool) {
+        assert_ne!(withholding_ready_daa, 0, "material withholding is real off-chain time, not zero");
+        assert_ne!(response_daa, 0, "the slowest response is real off-chain time, not zero");
+        assert_ne!(recovery_daa, 0, "recovery is real off-chain time, not zero");
+        for term in [withholding_ready_daa, material_daa, response_daa, submission_daa, recovery_daa] {
+            assert_ne!(term, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1, "the retired localization span is not a term");
+        }
+        let id = |n: u8| [n; 64];
+        let slots = [
+            PublicSharedSlotV1 {
+                id: id(1),
+                slot_daa: material_daa,
+                material_ready_daa: withholding_ready_daa,
+                predecessors: Vec::new(),
+            },
+            PublicSharedSlotV1 { id: id(2), slot_daa: response_daa, material_ready_daa: 0, predecessors: vec![id(1)] },
+            PublicSharedSlotV1 { id: id(3), slot_daa: submission_daa, material_ready_daa: 0, predecessors: vec![id(2)] },
+        ];
+        let chain = withholding_ready_daa
+            .checked_add(material_daa)
+            .and_then(|sum| sum.checked_add(response_daa))
+            .and_then(|sum| sum.checked_add(submission_daa))
+            .and_then(|sum| sum.checked_add(recovery_daa))
+            .expect("the adversarial chain fits u64");
+        let (required, fits) = match check_reserved_public_graph_v1(NOTICE_WINDOW_DAA, &slots, recovery_daa) {
+            Ok(required) => (required, true),
+            Err(PublicSharedBudgetRefusalV1::Exceeds { required, allowed }) => {
+                assert_eq!(allowed, 6_880, "the post-notice budget is 6,880");
+                assert!(required > allowed, "a refusal keeps the larger printed door");
+                (required, false)
+            }
+            Err(refusal) => panic!("the adversarial public-remedy graph is not checkable: {refusal:?}"),
+        };
+        assert_eq!(required, chain, "the ordered door is the measured chain, not 6,880 clipped over a larger span");
+        assert_ne!(required, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1, "the door is not the retired localization span");
+        (required, fits)
+    }
+
+    assert!(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1.is_empty(), "this measurement does not admit a class");
+    let path = std::path::PathBuf::from(std::env::var("MISAKA_TIR_FRAME_MEASURE_PALWTIR").expect("a PALWTIR1 file"));
+    let before_open = host_usage().0;
+    let artifact = Arc::new(TirArtifactV1::open(&path).unwrap());
+    let (root, _) = artifact.inventory_root().unwrap();
+    let withholding_cpu_ns = host_usage().0.saturating_sub(before_open);
+    let class = artifact.class().unwrap();
+    let canonical =
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&class, class.class_id(&root), (4, 3)).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let backend =
+        TirBackendV1::new(name.clone(), artifact, root, canonical, PalwPromptIdsFormV1::Flat, LADDER).unwrap().with_network_id_v1(NET);
+    let (_, prompt) = backend.job_for_anchor(Hash64::from_bytes([0x3C; 64])).unwrap();
+    let prompt: Vec<u32> = prompt.into_iter().map(|t| t as u32).collect();
+    let job = fp_job(&backend, &prompt, 2);
+    let ids: Vec<usize> = prompt.iter().map(|t| *t as usize).collect();
+    let run = backend.execute_free_prompt(&job, &ids).unwrap();
+    let material = run.outcome.material;
+    let capture = backend.decode_capture(&material).unwrap();
+    let ctx = capture.binding.job_context.clone();
+    let n = capture.binding.step_leaf_count;
+    let space = backend.space();
+    let program = &space.program;
+    drop(capture);
+    let rules =
+        PalwTirCourtRulesV1 { max_step_leaf_count: LADDER, prompt_form: PalwPromptIdsFormV1::Flat, limits: DemandLimits::UNLIMITED };
+    let prim_name = |p: &misaka_palw_tir::Prim| -> String { format!("{p:?}").chars().take_while(|c| c.is_alphanumeric()).collect() };
+    let mut groups: BTreeMap<String, u64> = BTreeMap::new();
+    for i in 0..n {
+        let leaf = space.leaf_at(&ctx, i).unwrap();
+        let label = match leaf.kind {
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } => {
+                let block_i = block;
+                let block = &program.blocks[block_i as usize];
+                format!("commit:{}:{}:{}", block.name, node, prim_name(&block.nodes[node as usize].prim))
+            }
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::State { state, .. } => format!("state:{state}"),
+            kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::HistTile { state, .. } => format!("hist:{state}"),
+        };
+        groups.insert(label, i);
+    }
+
+    let mut clock = candidate().clock;
+    clock.version = PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5;
+    clock.check_v1().expect("batch public clock v5 accepts the candidate units");
+    let config = candidate().config;
+    let part = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
+    let inclusion = |body: u64| -> u64 {
+        let moves = body.div_ceil(part).max(1);
+        let daa = clock.inclusion_daa_v1(moves, body).unwrap().max(1);
+        assert_ne!(daa, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1);
+        daa
+    };
+    let filing = |body: u64| -> u64 {
+        let moves = body.div_ceil(part).max(1);
+        let daa = tir_public_filing_daa_v1(moves, &config, &clock).unwrap();
+        assert!(daa >= 1, "public submission occupies at least one DAA");
+        assert_ne!(daa, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1);
+        daa
+    };
+
+    eprintln!("[public-remedy-adversarial] kinds {}", groups.len());
+    let mut refused = 0u64;
+    let mut material_best: Option<(u64, String)> = None;
+    let mut response_best: Option<(u128, String)> = None;
+    let mut submission_best: Option<(u64, String)> = None;
+    let mut recovery_best: Option<(u128, String)> = None;
+    let mut evidence_best = 0u64;
+    let mut io_best = 0u64;
+    for (kind, leaf) in &groups {
+        let before = host_usage().0;
+        let Ok(refutation) = backend.cone_refutation(&material, *leaf, &rules) else {
+            refused += 1;
+            continue;
+        };
+        let _ = check_tir_cone_refutation_v1(&refutation, &rules);
+        let after_check = host_usage().0;
+        let _ = check_tir_cone_refutation_v1(&refutation, &rules);
+        let after_recovery = host_usage().0;
+        let primitive_cpu_ns = after_check.saturating_sub(before);
+        let recovery_cpu_ns = after_recovery.saturating_sub(after_check);
+        let evidence_bytes = borsh::to_vec(&refutation).unwrap().len() as u64;
+        let shared_material_bytes = borsh::to_vec(&refutation.params).unwrap().len() as u64;
+        assert!(evidence_bytes >= shared_material_bytes, "the witness carries its shared material");
+        let submission_bytes = evidence_bytes - shared_material_bytes;
+        let io_bytes = opened_operand_bytes(&refutation.params)
+            + refutation.operands.preimages.iter().map(|preimage| preimage.values_le.len() as u64).sum::<u64>()
+            + refutation.output_preimage.values_le.len() as u64
+            + refutation.prompt_token_ids.len() as u64 * 4;
+        if material_best.as_ref().is_none_or(|(bytes, _)| shared_material_bytes > *bytes) {
+            material_best = Some((shared_material_bytes, kind.clone()));
+        }
+        if response_best.as_ref().is_none_or(|(cpu, _)| primitive_cpu_ns > *cpu) {
+            response_best = Some((primitive_cpu_ns, kind.clone()));
+        }
+        if submission_best.as_ref().is_none_or(|(bytes, _)| submission_bytes > *bytes) {
+            submission_best = Some((submission_bytes, kind.clone()));
+        }
+        if recovery_best.as_ref().is_none_or(|(cpu, _)| recovery_cpu_ns > *cpu) {
+            recovery_best = Some((recovery_cpu_ns, kind.clone()));
+        }
+        evidence_best = evidence_best.max(evidence_bytes);
+        io_best = io_best.max(io_bytes);
+    }
+    let (shared_material_bytes, shared_material_kind) = material_best.expect("one shared opening was measured");
+    let (slowest_response_cpu_ns, slowest_response_kind) = response_best.expect("one response was measured");
+    let (submission_bytes, submission_kind) = submission_best.expect("one submission was measured");
+    let (recovery_cpu_ns, recovery_kind) = recovery_best.expect("one recovery was measured");
+    assert!(shared_material_bytes > 0, "withheld shared material has bytes");
+    assert!(submission_bytes > 0, "public submission has bytes");
+    let withholding_ready_daa = cpu_slot_daa(withholding_cpu_ns);
+    let shared_material_daa = inclusion(shared_material_bytes);
+    let slowest_response_daa = cpu_slot_daa(slowest_response_cpu_ns);
+    let submission_daa = filing(submission_bytes);
+    let recovery_daa = cpu_slot_daa(recovery_cpu_ns);
+    let (door, fits) = ordered_door(withholding_ready_daa, shared_material_daa, slowest_response_daa, submission_daa, recovery_daa);
+    let (_, peak_rss_bytes) = host_usage();
+    let cpu_u64 = |cpu: u128| u64::try_from(cpu).expect("cpu ns fits the printed record");
+    let record = json!({
+        "record": "misaka-palw/public-remedy-adversarial-measure/v1",
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "host": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH },
+        "artifact": path.display().to_string(),
+        "class_id": format!("{}", class.class_id(&root)),
+        "step_leaves": n,
+        "kinds_measured": groups.len() as u64 - refused,
+        "kinds_refused": refused,
+        "cpu_ns_per_daa": CPU_NS_PER_DAA,
+        "notice_offset_daa": NOTICE_WINDOW_DAA,
+        "allowed_daa": 6_880,
+        "peak_rss_bytes": peak_rss_bytes,
+        "withholding_cpu_ns": cpu_u64(withholding_cpu_ns),
+        "withholding_ready_daa": withholding_ready_daa,
+        "shared_material_bytes": shared_material_bytes,
+        "shared_material_daa": shared_material_daa,
+        "shared_material_kind": shared_material_kind,
+        "slowest_response_cpu_ns": cpu_u64(slowest_response_cpu_ns),
+        "slowest_response_daa": slowest_response_daa,
+        "slowest_response_kind": slowest_response_kind,
+        "submission_bytes": submission_bytes,
+        "submission_daa": submission_daa,
+        "submission_kind": submission_kind,
+        "recovery_cpu_ns": cpu_u64(recovery_cpu_ns),
+        "recovery_daa": recovery_daa,
+        "recovery_kind": recovery_kind,
+        "evidence_bytes": evidence_best,
+        "io_bytes": io_best,
+        "ordered_public_door_daa": door,
+        "door_fits_6880": fits,
+        "retired_localization_span_used": false,
+        "door_clipped_to_6880": false,
+        "class_admitted": false,
+    });
+    println!("[public-remedy-adversarial] {}", serde_json::to_string(&record).unwrap());
+    if let Ok(out) = std::env::var("MISAKA_TIR_FRAME_MEASURE_OUT") {
+        std::fs::write(out, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+    assert!(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1.is_empty(), "the printed door does not insert a measured-class row");
+}
