@@ -13684,8 +13684,6 @@ struct TransitionBuilder<'a> {
     assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
     assignment_active_raw: Option<PositiveAssignmentRawActionV2>,
     assignment_raw_boundary: Option<(Hash64, usize)>,
-    assignment_case_cache:
-        BTreeMap<misaka_palw_positive_contract::identity::CaseId, positive_assignment_case::NativeAssignedCaseCacheV2>,
     native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     claim_local_gc_undo_v3: BTreeMap<u64, palw_claim_local_context_gc_v3::GcUndoV3>,
     claim_local_gc_sequence_v3: u64,
@@ -14266,6 +14264,7 @@ mod vesting_workspace_v2;
 // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.
 mod funded_escrow;
 mod positive_assignment;
+pub use positive_assignment::CheckedUnconsumedAssignmentCloseV2;
 mod positive_assignment_backing;
 mod positive_assignment_case;
 pub use positive_assignment_case::qualify_worker_payment_candidate_v2;
@@ -15423,12 +15422,23 @@ pub fn apply_palw_transition_retained_v7(
             uncertified_weightless,
             da_court,
             extras,
+            None,
         )
     })?;
     if !materials.is_empty() {
         return Err(PalwStateV2Error::DeltaMismatch("v7 must not drop nonempty Assignment material"));
     }
     Ok((state, delta, skips))
+}
+
+/// The Node supplies original Case history from the selected parent on demand.
+pub struct PositiveCaseReplayInputV2<'a> {
+    pub selected_parent: BlockHash,
+    pub live_case_cap: usize,
+    pub load: &'a mut dyn FnMut(
+        misaka_palw_positive_contract::identity::CaseId,
+        misaka_palw_positive_contract::identity::ResultId,
+    ) -> Result<NativeAssignedCaseBackingV2, PalwStateV2Error>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -15451,6 +15461,7 @@ pub fn apply_palw_transition_retained_v8(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
+    positive_replays: PositiveCaseReplayInputV2<'_>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -15460,24 +15471,6 @@ pub fn apply_palw_transition_retained_v8(
     ),
     PalwStateV2Error,
 > {
-    if extras.positive_assignment_actions.is_empty() {
-        let (state, delta, skips) = apply_palw_transition_retained_v7(
-            parent,
-            params,
-            admission,
-            ctx,
-            accepted_objects,
-            block_work,
-            merged_work,
-            own_execution_key,
-            unavailable_abstains,
-            capability_bound,
-            uncertified_weightless,
-            da_court,
-            extras,
-        )?;
-        return Ok((state, delta, skips, PositiveAssignmentMaterialOutcomeV2::empty_retained_v2()));
-    }
     crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
         apply_palw_transition_v7_inner(
             parent,
@@ -15493,6 +15486,7 @@ pub fn apply_palw_transition_retained_v8(
             uncertified_weightless,
             da_court,
             extras,
+            Some(positive_replays),
         )
     })
 }
@@ -15517,6 +15511,7 @@ fn apply_palw_transition_v7_inner(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
+    positive_replays: Option<PositiveCaseReplayInputV2<'_>>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -15746,6 +15741,12 @@ fn apply_palw_transition_v7_inner(
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
+    builder.decide_due_positive_certification_failures_v2(ctx)?;
+    if let Some(mut input) = positive_replays {
+        builder.draw_due_positive_cases_v2(parent, ctx, &mut input)?;
+        builder.advance_due_positive_cases_v2(parent, ctx, input)?;
+    }
+
     source_bootstrap_v1::settle(&mut builder, ctx)?;
     #[cfg(test)]
     for (table, key, row) in &extras.exec_v2_test_kernel_rows {
@@ -16371,6 +16372,7 @@ fn apply_palw_transition_v7_inner(
         PositiveAssignmentMaterialOutcomeV2 { records: builder.assignment_materials, case_records: builder.assignment_case_materials };
     materials.validate_v2(&delta.entries)?;
     materials.check_utxo_settlements_v2(&delta.entries, &extras.assignment_settlements)?;
+    materials.check_case_source_utxo_settlements_v2(&delta.entries, &extras.case_source_spends)?;
     builder
         .native_reservation
         .finish_transition_with_assignment_materials_v2(builder.state, delta, merged_skips, materials)
@@ -21479,6 +21481,8 @@ pub struct PalwTransitionExtrasV1 {
     /// Ordinary UTXO spends qualified by acceptance. After raw execution, the
     /// fold checks that each has the same funding mutation and journal record.
     pub assignment_settlements: Vec<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
+    /// Qualified Case debits that survived ordinary UTXO acceptance, in order.
+    pub case_source_spends: Vec<crate::palw_state_v2::QualifiedCaseSourceSpendV2>,
     /// Raw native actions replayed at exact positions in the accepted object
     /// fold. This is not a vector of prepared or previously accepted rows.
     pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,

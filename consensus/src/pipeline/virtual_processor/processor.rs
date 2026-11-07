@@ -3752,6 +3752,7 @@ impl VirtualStateProcessor {
                                     // Raw op12 still derives settlement at the executed prefix.
                                     // Compare that outcome with what UTXO acceptance debited.
                                     extras.assignment_settlements = std::mem::take(&mut ctx.palw_assignment_settlements);
+                                    extras.case_source_spends = std::mem::take(&mut ctx.palw_case_source_spends);
                                     extras.positive_assignment_actions = assignment_raw_schedule;
                                     extras.positive_decision_histories = histories;
                                     // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
@@ -3783,6 +3784,26 @@ impl VirtualStateProcessor {
                                         );
                                     extras
                                 })?;
+                                let selected_parent = ctx.ghostdag_data.selected_parent;
+                                let live_case_cap = self
+                                    .palw_positive_assignment_params_v2
+                                    .as_ref()
+                                    .and_then(|params| params.palw_positive_assignment_v2_at(point.daa_score))
+                                    .map_or(0, |fence| fence.policy.live.global as usize);
+                                let mut load_positive_case = |case, result| {
+                                    use kaspa_consensus_core::{
+                                        palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+                                        palw_state_v2::PalwStateV2Error,
+                                    };
+                                    self.prepare_committed_case_history_v2(selected_parent, state, (case, Some(result)))
+                                        .map_err(|error| match error {
+                                            positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => {
+                                                PalwStateV2Error::NativeResource(why)
+                                            }
+                                            _ => PalwStateV2Error::NativeContextUnavailable(HistoryUnavailable),
+                                        })?
+                                        .ok_or(PalwStateV2Error::NativeContextUnavailable(HistoryUnavailable))
+                                };
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
                                     state,
                                     state_params,
@@ -3801,6 +3822,11 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &transition_extras,
+                                    kaspa_consensus_core::palw_state_v2::PositiveCaseReplayInputV2 {
+                                        selected_parent,
+                                        live_case_cap,
+                                        load: &mut load_positive_case,
+                                    },
                                 ) {
                                     Ok((next, delta, merged_skips, assignment_materials)) => {
                                         committed_court_observation = court_observation_guard.finish().map(|outcomes| {

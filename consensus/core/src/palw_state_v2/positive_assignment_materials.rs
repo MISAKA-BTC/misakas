@@ -101,6 +101,91 @@ impl PositiveAssignmentMaterialOutcomeV2 {
         Ok(())
     }
 
+    pub(super) fn check_case_source_utxo_settlements_v2(
+        &self,
+        entries: &[PalwDeltaEntryV2],
+        spends: &[QualifiedCaseSourceSpendV2],
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2;
+        use misaka_palw_positive_contract::{
+            journal::{CaseJournalEventKind, CaseJournalRecordView},
+            native::NativeRowKey,
+        };
+
+        let mismatch = || PalwStateV2Error::DeltaMismatch("accepted Case UTXO debit and native journal/funding differ");
+        let mut spends = spends.iter();
+        for record in &self.case_records {
+            if record.header.kind != CaseJournalEventKind::NativeTransaction || record.header.sequence == 1 {
+                continue;
+            }
+            let spend = spends.next().ok_or_else(mismatch)?;
+            let view = CaseJournalRecordView::decode(&record.raw, record.limits).map_err(|_| mismatch())?;
+            if !spend.matches_payment_journal_v2(record.header, view.payload()) {
+                return Err(mismatch());
+            }
+            let aux = view.aux().next().ok_or_else(mismatch)?;
+            let boundary = AssignmentCaseBoundaryV2::decode(aux.preimage()).map_err(|_| mismatch())?;
+            let start = usize::try_from(boundary.before_delta_end).map_err(|_| mismatch())?;
+            let event = entries.get(start..record.delta_end).ok_or_else(mismatch)?;
+            let funding_key = NativeRowKey::Funding(record.header.case).encode();
+            let relay_key = spend.continuation_v2().map(|point| {
+                use misaka_palw_positive_contract::{
+                    assignment::funding_relay::RelayFundingPurposeV2,
+                    rows::{NativeHash64, NativeOutpoint},
+                };
+                let funding = NativeOutpoint { transaction: NativeHash64(point.transaction_id.as_bytes()), index: point.index };
+                NativeRowKey::FundingRelayCustody { funding, purpose: RelayFundingPurposeV2::CaseC }.encode()
+            });
+            let mut funding = None;
+            let mut relay = None;
+            for entry in event {
+                let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else { continue };
+                if *table != KERNEL_AUX_TABLE {
+                    continue;
+                }
+                let rows = if key == &funding_key {
+                    &mut funding
+                } else if Some(key) == relay_key.as_ref() {
+                    &mut relay
+                } else {
+                    continue;
+                };
+                let (Some(old), Some(new)) = (old.as_deref(), new.as_deref()) else { return Err(mismatch()) };
+                if rows.replace((key.as_slice(), old, new)).is_some() {
+                    return Err(mismatch());
+                }
+            }
+            let (key, old, new) = funding.ok_or_else(mismatch)?;
+            let NativeRowBody::Funding(before) = NativeRowValue::decode(key, old).map_err(|_| mismatch())?.body else {
+                return Err(mismatch());
+            };
+            let NativeRowBody::Funding(after) = NativeRowValue::decode(key, new).map_err(|_| mismatch())?.body else {
+                return Err(mismatch());
+            };
+            if !spend.matches_funding_delta_v2(&before, &after, record.header.origin) {
+                return Err(mismatch());
+            }
+            let relay = if let Some((key, old, new)) = relay {
+                let NativeRowBody::FundingRelayCustody(old) = NativeRowValue::decode(key, old).map_err(|_| mismatch())?.body else {
+                    return Err(mismatch());
+                };
+                let NativeRowBody::FundingRelayCustody(new) = NativeRowValue::decode(key, new).map_err(|_| mismatch())?.body else {
+                    return Err(mismatch());
+                };
+                Some((old, new))
+            } else {
+                None
+            };
+            if !spend.matches_successor_relay_delta_v2(&before, relay.as_ref().map(|(old, new)| (old, new)), record.header.origin) {
+                return Err(mismatch());
+            }
+        }
+        if spends.next().is_some() {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_v2(&self, entries: &[PalwDeltaEntryV2]) -> Result<(), PalwStateV2Error> {
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
         for record in &self.records {
@@ -310,6 +395,7 @@ fn validate_case_materials_v2(
     assignment_records: &[PositiveAssignmentAcceptedMaterialV2],
     entries: &[PalwDeltaEntryV2],
 ) -> Result<(), PalwStateV2Error> {
+    use crate::palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2;
     use misaka_palw_positive_contract::journal::{CaseJournalEventKind, CaseJournalRecordView};
     let failure = |why| PalwStateV2Error::DeltaMismatch(why);
     let mut previous_case_end = 0;
@@ -332,6 +418,14 @@ fn validate_case_materials_v2(
         let checkpoint_entries = &entries[previous_case_end..record.delta_end];
         previous_case_end = record.delta_end;
         let assigned_initial = record.header.kind == CaseJournalEventKind::NativeTransaction && record.header.sequence == 1;
+        if record.header.kind == CaseJournalEventKind::NativeBody
+            && let Some(operation @ (3 | 4)) = view.payload().get(4).copied()
+        {
+            validate_source_case_material_v2(view, operation, event, record.raw.len() as u64)?;
+            source_union_count += 1;
+            source_receipt_count += usize::from(operation == 4);
+            continue;
+        }
         let mut consumed = None;
         let mut case = false;
         let mut head = false;
@@ -421,6 +515,15 @@ fn validate_case_materials_v2(
                 if count != 1 {
                     return Err(failure("AssignmentUse must have exactly one atomic initial Case record"));
                 }
+            }
+            NativeRowBody::ServiceReceipt(_) if old.is_none() => {
+                source_receipt_count = source_receipt_count
+                    .checked_sub(1)
+                    .ok_or_else(|| failure("first source receipt has no atomic response journal"))?;
+            }
+            NativeRowBody::SourceUnion(_) => {
+                source_union_count =
+                    source_union_count.checked_sub(1).ok_or_else(|| failure("source union has no atomic source journal"))?;
             }
             _ => {}
         }
@@ -621,6 +724,51 @@ fn encode_exact_case_material_v2<T: borsh::BorshSerialize>(value: &T, bytes: usi
     Ok(out)
 }
 
+pub(super) fn quote_assigned_case_payment_journal_v2(
+    backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
+    transaction: &crate::tx::Transaction,
+) -> Result<(u64, usize), PalwStateV2Error> {
+    let tx_bytes =
+        borsh::object_length(transaction).map_err(|_| PalwStateV2Error::DeltaMismatch("Case settlement transaction extent"))?;
+    let sequence = quote_assigned_case_followup_journal_v2(backing, tx_bytes)?;
+    Ok((sequence, tx_bytes))
+}
+
+pub(super) fn quote_assigned_case_followup_journal_v2(
+    backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
+    payload_bytes: usize,
+) -> Result<u64, PalwStateV2Error> {
+    use crate::palw_positive_assignment_case_material_v2::{
+        ASSIGNED_CASE_BOUNDARY_BYTES_V2, assigned_case_followup_journal_extent_v2,
+    };
+    use misaka_palw_positive_contract::journal::CaseJournalAux;
+    let failure = |why| PalwStateV2Error::DeltaMismatch(why);
+    let pin = backing.pin();
+    let policy = &backing.material().positive_policy;
+    let sequence = pin.head.sequence.checked_add(1).ok_or_else(|| failure("Case follow-up sequence"))?;
+    if sequence > u64::from(backing.material().assignment_policy.max_history_frames) {
+        return Err(failure("Case follow-up journal exceeds original event count"));
+    }
+    let extent =
+        assigned_case_followup_journal_extent_v2(payload_bytes as u64).ok_or_else(|| failure("Case follow-up record extent"))?;
+    let logical_heap = payload_bytes
+        .checked_add(ASSIGNED_CASE_BOUNDARY_BYTES_V2 + std::mem::size_of::<CaseJournalAux>())
+        .ok_or_else(|| failure("Case settlement journal logical heap"))?;
+    if logical_heap as u64 > policy.max_case_heap_bytes {
+        return Err(failure("Case follow-up exceeds original journal heap"));
+    }
+    let retained = backing
+        .records()
+        .iter()
+        .map(|record| record.raw().len() as u64)
+        .try_fold(extent, u64::checked_add)
+        .ok_or_else(|| failure("Case journal cumulative extent"))?;
+    if retained > policy.max_case_journal_bytes {
+        return Err(failure("Case follow-up exceeds original journal storage"));
+    }
+    Ok(sequence)
+}
+
 impl TransitionBuilder<'_> {
     pub(super) fn unpublished_positive_case_materials_v2(
         &self,
@@ -635,10 +783,11 @@ impl TransitionBuilder<'_> {
         bind: &AssignmentJournalHeaderV2,
         policy: &crate::config::params::PositiveCourtPolicyV2,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
+        use crate::palw_positive_assignment_case_material_v2::{
+            ASSIGNED_CASE_BOUNDARY_BYTES_V2, assigned_case_initial_journal_extent_v2,
+        };
         use misaka_palw_positive_contract::journal::{
-            CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES, CaseJournalAux, CaseJournalEventKind, CaseJournalHeader,
-            CaseJournalLimits, CaseJournalRecord,
+            CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord,
         };
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
         let action = self.assignment_active_raw.clone().ok_or_else(|| failure("initial Case journal has no actual carrier"))?;
@@ -646,13 +795,12 @@ impl TransitionBuilder<'_> {
         let tx = action.transaction();
         let tx_bytes = borsh::object_length(tx).map_err(|_| failure("initial Case native transaction extent"))?;
         let aux_bytes = ASSIGNED_CASE_BOUNDARY_BYTES_V2 + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2;
-        let record_bytes = tx_bytes
-            .checked_add(aux_bytes + CASE_JOURNAL_MIN_RECORD_BYTES + 2 * (CASE_JOURNAL_AUX_MATERIAL_BYTES + 4))
-            .ok_or_else(|| failure("initial Case record extent"))?;
+        let record_bytes =
+            assigned_case_initial_journal_extent_v2(tx_bytes as u64).ok_or_else(|| failure("initial Case record extent"))?;
         let logical = tx_bytes
             .checked_add(aux_bytes + 2 * std::mem::size_of::<CaseJournalAux>())
             .ok_or_else(|| failure("initial Case material extent"))?;
-        if record_bytes as u64 > policy.max_case_journal_bytes || logical as u64 > policy.max_case_heap_bytes {
+        if record_bytes > policy.max_case_journal_bytes || logical as u64 > policy.max_case_heap_bytes {
             return Err(PalwStateV2Error::KernelRouteRefused("initial assigned Case journal exceeds original policy".into()));
         }
         let mut quote = native_writers::NativeWriteQuoteV1::new("initial Case journal literal bytes");
@@ -702,7 +850,7 @@ impl TransitionBuilder<'_> {
         )
     }
 
-    pub(super) fn write_assigned_case_payment_journal_v2(
+    pub(super) fn write_assigned_case_followup_journal_v2(
         &mut self,
         backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
         source_reserve: &super::positive_assignment_case::AssignedSourceJournalReserveV2,

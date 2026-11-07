@@ -89,12 +89,8 @@ impl NativeTransitionReservationV1 {
         self.requests -= requests;
         Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
     }
-    pub(crate) fn finish_state_v1(
-        mut self,
-        state: PalwChainStateV2,
-        component: &str,
-    ) -> Result<NativeChainStateV1, NativeCoverageV1> {
-        let requests = value_requests_v1(&state)?;
+    pub(crate) fn finish_state_v1(mut self, state: PalwChainStateV2, component: &str) -> Result<NativeChainStateV1, NativeCoverageV1> {
+        let requests = if self.is_tracking_v1() { tracked_value_requests_v1(&state)? } else { 0 };
         self.split_owner_v1(state, requests, component)
     }
     pub(crate) fn finish_transition_with_assignment_materials_v2(

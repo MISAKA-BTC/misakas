@@ -45,12 +45,12 @@ use misaka_palw_positive_contract::{
     assignment::{
         AssignmentId,
         control_material::AssignmentControlViewV2,
-        funding_relay::{FundingRelayTermsV2, RelayTargetV2},
+        funding_relay::{FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2},
         funding_relay_policy::FundingRelayPhysicalProfileV2,
         funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2},
         journal::{ASSIGNMENT_JOURNAL_HEADER_BYTES_V2, AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
         open_material::AssignmentOpenLimitsV2,
-        rows::{AssignmentJournalFrameRow, AssignmentNonceRow, AssignmentRow},
+        rows::{AssignmentJournalFrameRow, AssignmentNonceRow, AssignmentRow, AssignmentStatusV2},
     },
     identity::{CaseId, Digest, ResultId},
     journal::{CASE_JOURNAL_AUX_MATERIAL_BYTES, CaseJournalLimits, CaseJournalRecordView},
@@ -155,6 +155,7 @@ struct OriginalAssignmentOpenArchiveV2 {
     carriage: NativeAcceptedCaseCarriageV2,
     lease: NativeDemandLeaseV1,
     heap: u64,
+    work: u64,
 }
 /// The original relay registration pays for its bounded historical reads.
 pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
@@ -849,8 +850,9 @@ impl VirtualStateProcessor {
             &mut remaining_work,
         )?;
         prefix
-            .check_original_assignment_verifier_candidates_v2(&view, anchor_daa, row.bundle.terms.result_before_daa, remaining_work)
+            .check_original_assignment_verifier_candidates_v2(&view, anchor_daa, row.bundle.terms.result_before_daa, funding_remaining)
             .map_err(|_| E::Invalid("original verifier candidates differ or exceed replay budget"))?;
+        let work = view.material.custody.replay_work - funding_remaining;
         Ok(Some(OriginalAssignmentOpenArchiveV2 {
             assignment: row,
             frame,
@@ -860,6 +862,7 @@ impl VirtualStateProcessor {
             carriage: accepted.carriage,
             lease,
             heap: accepted.heap,
+            work,
         }))
     }
 
@@ -1332,6 +1335,22 @@ impl VirtualStateProcessor {
         replay.charge(0, raw.map_or(0, |bytes| bytes.len() as u64))?;
         let (mut nonce, mut case_row) =
             if poster_nonce.is_some() { (read_nonce(raw)?, None) } else { (None, Some(RelayCaseHistoryRowV2::new(raw)?)) };
+        let mut case_funding = if case_continuation {
+            let literal = raw
+                .and_then(|row| row.strip_prefix(&[2, 0, 1, 0, 10]))
+                .ok_or(E::Invalid("Case successor lacks a current Assignment"))?;
+            replay.charge(0, 8 * literal.len() as u64)?;
+            let assignment: AssignmentRow = borsh::from_slice(literal).map_err(|_| E::Invalid("Case successor Assignment codec"))?;
+            let AssignmentStatusV2::Consumed { case, .. } = assignment.status else {
+                return Err(E::Invalid("Case successor Assignment is not consumed"));
+            };
+            let key = (KERNEL_AUX_TABLE, NativeRowKey::Funding(case).encode());
+            let raw = route.aux.get(&key).map(Vec::as_slice);
+            replay.charge(1, (key.1.len() + raw.map_or(0, |bytes| bytes.len())) as u64)?;
+            Some((key, RelayCaseHistoryRowV2::new(raw)?))
+        } else {
+            None
+        };
         let accepting = BlockHash::from_bytes(replay.origin.accepting_block.0);
         let mut cursor = replay.selected_parent;
         // Account for the wire preflights, decode and projected entry walk.
@@ -1352,6 +1371,17 @@ impl VirtualStateProcessor {
                 return Err(E::Invalid("original relay payer delta clock differs"));
             }
             for (index, entry) in delta.entries.iter().enumerate().rev() {
+                if let Some((funding_key, row)) = &mut case_funding
+                    && let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry
+                    && *table == funding_key.0
+                    && *key == funding_key.1
+                {
+                    if row.raw() != new.as_deref() {
+                        return Err(E::Invalid("Case successor funding history differs"));
+                    }
+                    row.replace(old.as_deref())?;
+                    continue;
+                }
                 match entry {
                     PalwDeltaEntryV2::Bond { key, old, new } if *key == payer && continuation_assignment.is_none() => {
                         if bond != project(new.as_ref()) {

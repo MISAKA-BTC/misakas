@@ -257,3 +257,39 @@ fn missing_native_history_aborts_without_advancing_the_raw_schedule() {
     assert_eq!(builder.state.state_root_preimage(), before);
     assert!(builder.entries.is_empty());
 }
+
+#[test]
+fn source_response_for_unknown_case_does_not_stall_other_accepted_transactions() {
+    use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, PositiveNativeOperationV2};
+    use misaka_palw_positive_contract::identity::{CaseId, RequestId};
+
+    let mut payload = vec![1, 0, 176];
+    payload.extend_from_slice(
+        &borsh::to_vec(&PositiveNativeBodyV2 {
+            version: 2,
+            revision: 1,
+            operation: PositiveNativeOperationV2::SourceResponse {
+                case: CaseId(d(42)),
+                request: RequestId(d(43)),
+                response: vec![44],
+            },
+        })
+        .unwrap(),
+    );
+    let state = PalwChainStateV2::genesis();
+    let params = state_params();
+    let extras = PalwTransitionExtrasV1 {
+        positive_assignment_actions: vec![
+            PositiveAssignmentScheduledActionV2 { before_object: 0, action: action_payload(1, payload) },
+            PositiveAssignmentScheduledActionV2 { before_object: 0, action: action(2) },
+        ],
+        ..Default::default()
+    };
+    let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let mut cursor = 0;
+    let mut previous = None;
+    super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, &mut cursor, &mut previous).unwrap();
+    assert_eq!((cursor, previous), (2, Some(2)));
+    assert_eq!(builder.state.state_root_preimage(), state.state_root_preimage());
+    assert!(builder.entries.is_empty());
+}

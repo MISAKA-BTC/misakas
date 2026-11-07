@@ -187,6 +187,32 @@ fn payer_signed_partial_op12_projects_without_inventing_acceptance() {
 }
 
 #[test]
+fn unconsumed_assignment_refund_preserves_service_and_liability_on_the_continuation() {
+    let (row, mut tx, _, fixture_auth) = fixture(&[17; PUBKEY_BYTES]);
+    let receipt = fixture_auth.dues[0].receipt;
+    let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.authorization.refund_payload.0);
+    tx.outputs = vec![TransactionOutput::new(125, spk.clone()), TransactionOutput::new(50, spk)];
+    tx.finalize();
+    let qualify = |tx: &Transaction| qualify_unconsumed_assignment_refund_v2(row.clone(), receipt, tx, &[175, 10], 20, 16000, 100);
+    let plan = qualify(&tx).unwrap();
+    assert_eq!((plan.returned_now, plan.continued_now, plan.burned_now, plan.paid_now), (125, 50, 0, 0));
+    assert_eq!((plan.new.worker.remaining, plan.new.surplus.remaining), (0, 0));
+    assert_eq!((plan.new.fee, plan.new.capital), (row.fee, row.capital));
+    assert_eq!((plan.new.earned_service_due, plan.new.liability_floor), (5, 30));
+    assert_eq!(plan.new.current_outpoint, Some(point(TransactionOutpoint::new(tx.id(), 1))));
+    assert!(plan.matches_cooperative_refund_v2(&row, &tx, &[175, 10], 20));
+    assert!(!plan.matches_cooperative_refund_v2(&row, &tx, &[174, 11], 20));
+    assert!(!plan.matches_cooperative_refund_v2(&row, &tx, &[175, 10], 21));
+
+    let mut wrong = tx.clone();
+    wrong.outputs[0].value += 1;
+    wrong.outputs[1].value -= 1;
+    wrong.finalize();
+    assert!(matches!(qualify(&wrong), Err(AssignmentFundsErrorV2::Output)));
+    assert!(!plan.matches_cooperative_refund_v2(&row, &wrong, &[175, 10], 20));
+}
+
+#[test]
 fn tentative_plan_rejects_changed_payload_duplicate_dues_and_unsafe_debit() {
     let (row, transaction, _, auth) = fixture(&[17; PUBKEY_BYTES]);
     let mut changed = transaction.clone();
@@ -204,4 +230,63 @@ fn tentative_plan_rejects_changed_payload_duplicate_dues_and_unsafe_debit() {
     );
     assert!(qualify_assignment_spend_v2(&row, &auth, &transaction, &[174, 10], 20).is_err());
     assert!(qualify_assignment_spend_v2(&row, &auth, &transaction, &[175, 10], 21).is_err());
+}
+
+#[path = "../../../../misaka/palw/positive-contract/tests/support/assignment.rs"]
+mod assignment_fixture;
+
+#[test]
+fn archived_assignment_coin_rejects_a_conserving_but_different_initial_split() {
+    let (mut funding, _, entries, _) = fixture(&[17; PUBKEY_BYTES]);
+    let money = AssignmentMoneyQuoteV2 {
+        fee: 20,
+        capital: 30,
+        usage: AssignmentPhysicalUsageV2 {
+            admission_bytes: 1,
+            retained_bytes: 1,
+            replay_bytes: 2,
+            heap_bytes: 1,
+            utxo_writes: 1,
+            signatures: 3,
+        },
+        retention_daa: 100,
+        fee_schedule: assignment_fixture::d(71),
+        reserve_schedule: assignment_fixture::d(72),
+        physical_profile: assignment_fixture::d(73),
+    };
+    let mut bundle = assignment_fixture::bundle();
+    bundle.terms.payer = funding.authorization.payer;
+    bundle.terms.refund_payload = funding.authorization.refund_payload;
+    bundle.quote = money.id();
+    bundle.funding.assignment = bundle.terms.id();
+    bundle.funding.quote = bundle.quote;
+    bundle.funding.payer = bundle.terms.payer;
+    bundle.funding.refund_payload = bundle.terms.refund_payload;
+    bundle.future_case.assignment = bundle.terms.id();
+    bundle.future_case.payer = bundle.terms.payer;
+    bundle.future_case.refund_payload = bundle.terms.refund_payload;
+    let tx = Transaction::new(
+        0,
+        vec![TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(90), 0), vec![], 0, 1)],
+        vec![TransactionOutput::new(funding.initial_locked, entries[0].script_public_key.clone())],
+        0,
+        crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        vec![1, 0, 176, 2, 0, 1, 0, 8],
+    );
+    funding.assignment = bundle.terms.id();
+    funding.authorization = bundle.funding;
+    funding.funding_origin = origin(tx.id(), 10);
+    funding.reservation.origin = funding.funding_origin;
+    funding.liability.origin = funding.funding_origin;
+    funding.original_outpoint = point(TransactionOutpoint::new(tx.id(), 0));
+    funding.current_outpoint = Some(funding.original_outpoint);
+    assert_eq!(check_archived_assignment_funding_v2(&bundle, &funding, &tx, &money), Ok(()));
+
+    funding.fee.initial -= 1;
+    funding.fee.remaining -= 1;
+    funding.surplus.initial += 1;
+    funding.surplus.remaining += 1;
+    assert!(funding.validate_shape().is_ok());
+    assert_eq!(check_archived_assignment_funding_v2(&bundle, &funding, &tx, &money), Err(AssignmentFundsErrorV2::Conservation));
 }

@@ -85,7 +85,7 @@ impl TransitionBuilder<'_> {
         result
     }
 
-    fn write_positive_source_row_v2(&mut self, body: NativeRowBody) -> Result<(), PalwStateV2Error> {
+    pub(super) fn write_positive_source_row_v2(&mut self, body: NativeRowBody) -> Result<(), PalwStateV2Error> {
         // Bound and admit the canonical key before its Vec allocation. The
         // existing typed writer admits the value and map/journal copies before
         // serialization. Missing header was rejected at the transaction entry.

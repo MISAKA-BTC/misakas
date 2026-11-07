@@ -295,7 +295,23 @@ while queue or wire_visited is None:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'crate::palw_kernel_route_v1::PalwKernelRouteStateV1','crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={
+    'crate::palw_claim_local_context_gc_v3::ContextGcV3',
+    'crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15',
+    'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1',
+    'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1',
+    'crate::palw_kernel_route_v1::KernelLedgerCacheV1',
+    'crate::palw_kernel_route_v1::PalwKernelRouteStateV1',
+    'crate::palw_state_v2::QualifiedCaseSourceSpendV2',
+    'crate::palw_state_v2::positive_assignment_case::source::QualifiedCaseSourceSpendV2',
+    'kaspa_math::Uint512',
+    'kaspa_math::Uint576',
+    'misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26',
+    'misaka_palw_kernel::ledger::KernelLedgerV1',
+    'misaka_palw_kernel::opv::OpvStateV1',
+    'misaka_palw_panel::PanelCandidatesV1',
+    'misaka_palw_panel::PermissionlessPanelStateV1',
+}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
 # Reviewed NativeHeap implementations already live beside these owners. Keep
 # traversal/visited intact so nested fields and structural wire coverage remain

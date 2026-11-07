@@ -558,6 +558,21 @@ pub(crate) fn check_assignment_funding_carriage_v2(
     current_entry: Option<&UtxoEntry>,
     now: u64,
 ) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
+    let (outpoint, amount) = check_assignment_funding_literal_v2(bundle, transaction, payer_key, now)?;
+    let output = &transaction.outputs[outpoint.index as usize];
+    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
+    if entry.amount != output.value || entry.script_public_key != output.script_public_key || entry.is_coinbase {
+        return Err(AssignmentFundsErrorV2::CurrentUtxo);
+    }
+    Ok((outpoint, amount))
+}
+
+fn check_assignment_funding_literal_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    transaction: &Transaction,
+    payer_key: &[u8; PUBKEY_BYTES],
+    now: u64,
+) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
     bundle.validate_shape()?;
     if principal(payer_key) != bundle.terms.payer
         || Digest(kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes())
@@ -1251,6 +1266,42 @@ impl AssignmentSpendPlanV2 {
         new.validate_shape()?;
         Ok(new)
     }
+}
+
+/// Build the monetary part of a first unconsumed refund. The native caller
+/// has already matched the accepted close, original funding and journal.
+pub(crate) fn qualify_unconsumed_assignment_refund_v2(
+    funding: AssignmentFundingRow,
+    receipt: AcceptedMaterial,
+    tx: &Transaction,
+    amounts: &[u64],
+    now: u64,
+    max_frame_bytes: u64,
+    max_history_frames: u32,
+) -> Result<AssignmentSpendPlanV2, AssignmentFundsErrorV2> {
+    use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2;
+    let dues = [(0, funding.worker.remaining), (3, funding.surplus.remaining)]
+        .into_iter()
+        .filter(|&(_, amount)| amount != 0)
+        .map(|(source_leg, amount)| AssignmentAuthorizedDueV2 {
+            source_leg,
+            kind: AssignmentSettlementLegV2::Refund,
+            party: funding.authorization.payer,
+            recipient: funding.authorization.refund_payload,
+            amount,
+            receipt,
+        })
+        .collect();
+    let authorization = AssignmentSpendAuthorizationV2 {
+        protected_after: [0, funding.earned_service_due, funding.liability_floor, 0],
+        before: funding,
+        dues,
+        daa: now,
+        max_frame_bytes,
+        max_history_frames,
+        payload: tx.payload.clone(),
+    };
+    qualify_assignment_spend_v2(&authorization.before, &authorization, tx, amounts, now)
 }
 
 /// Qualifies exactly one current native Assignment A input at index zero.

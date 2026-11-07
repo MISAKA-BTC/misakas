@@ -217,11 +217,16 @@ impl PalwChainStateV2 {
 }
 
 fn legacy_kernel_claim_alias_v2(table: u8, key: &[u8], value: &[u8]) -> Option<Hash64> {
-    use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1};
+    use misaka_palw_kernel::rows::{
+        TABLE_CLAIMS_V1, TABLE_COURT_SCOPE_V1, TABLE_DEMANDS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1,
+        TABLE_SEG_PROGRESS_V1, TABLE_SERVED_DEMAND_BONDS_V1, TABLE_SERVED_V1,
+    };
     let subject = match table {
-        TABLE_CLAIMS_V1 | TABLE_OPV_CLAIMS_V1 => key,
+        TABLE_CLAIMS_V1 | TABLE_OPV_CLAIMS_V1 | TABLE_COURT_SCOPE_V1 => key,
         TABLE_JOB_CLAIMS_V1 => value,
-        TABLE_PROOF_SEALS_V1 => key.get(..64)?,
+        TABLE_PROOF_SEALS_V1 | TABLE_DEMANDS_V1 | TABLE_SERVED_V1 | TABLE_SERVED_DEMAND_BONDS_V1 | TABLE_SEG_PROGRESS_V1 => {
+            key.get(..64)?
+        }
         _ => return None,
     };
     subject.try_into().ok().map(Hash64::from_bytes)
@@ -297,7 +302,7 @@ impl TransitionBuilder<'_> {
         };
         let compact_native_changed = old != new;
         if compact_native_changed {
-            self.entries.push(PalwDeltaEntryV2::KernelRouteRow { table, key, old, new });
+            self.entries.push(PalwDeltaEntryV2::KernelRouteRow { table, key: map_key.1, old, new });
         }
         if let Some(plan) = member_update {
             super::palw_monetary_material_scope_v8::apply_v8(&mut self.state, &plan);

@@ -16,8 +16,7 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     assignment::{
-        AssignmentId, funding_relay_policy::FundingRelayPhysicalProfileV2, funding_relay_rows::FundingRelayCarrierFeesV2,
-        policy::AssignmentPolicyV2,
+        funding_relay_policy::FundingRelayPhysicalProfileV2, funding_relay_rows::FundingRelayCarrierFeesV2, policy::AssignmentPolicyV2,
     },
     identity::Digest,
     rows::{AcceptedMaterial, AcceptedOrigin},
@@ -44,6 +43,7 @@ pub struct NativeAssignmentRulesV2 {
     preimages: Option<AssignmentNativePreimagesV2>,
     funding_relay_profile: AssignmentFundingRelayProfileV2,
     original_material: Option<(AcceptedMaterial, u64)>,
+    closed_unconsumed: Option<super::CheckedUnconsumedAssignmentCloseV2>,
     network: Digest,
     prompt_form: PalwPromptIdsFormV1,
     gate_c: Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>,
@@ -62,6 +62,7 @@ impl NativeAssignmentRulesV2 {
             preimages: fence.native_preimages.clone(),
             funding_relay_profile: AssignmentFundingRelayProfileV2::capture_at_intake(params, daa).ok()?,
             original_material: None,
+            closed_unconsumed: None,
             network: Digest(network.as_bytes()),
             prompt_form,
             gate_c,
@@ -86,6 +87,7 @@ impl NativeAssignmentRulesV2 {
             preimages: Some(material.native_preimages.clone()),
             funding_relay_profile: material.funding_relay,
             original_material: Some((row.admission_material, material.native_assignment_journal_storage_limit_v2())),
+            closed_unconsumed: None,
             network: material.network,
             prompt_form: material.network_prompt_form,
             gate_c: Some(material.certification_policy),
@@ -455,6 +457,7 @@ impl NativeHeapV1 for NativeAssignmentRulesV2 {
         require_fixed_copy(scope);
         require_fixed_copy(funding_relay_profile);
         require_fixed_copy(original_material);
+        require_fixed_copy(closed_unconsumed);
         require_fixed_copy(policy);
         require_fixed_copy(network);
         require_fixed_copy(prompt_form);
