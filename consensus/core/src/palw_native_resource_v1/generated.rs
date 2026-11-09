@@ -118,9 +118,9 @@ native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1; pr
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1; commit, committer_principal, committed_daa, committed_span, anchor, draws, examined, drawn_daa, deadline_daa, attestations, outcome, inspection_escrow_sompi, inspection_settled);
 native_struct!(crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1; class_id, accepted_daa, units, final_weight);
 native_struct!(crate::palw_security_certification_v1::PalwClaimCertificationRowV1; claim, class_id, producer_bond, producer_principal, attempt, final_daa, committed_daa, committed_span, anchor, draws, drawn_daa, deadline_daa, attestations, held_reward, payout_payload, outcome);
+native_struct!(crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1; version, claim, producer_bond, producer_payload, poster_bond, poster_payload, amount, held_daa);
 native_struct!(crate::palw_security_certification_v1::PalwCertificationClassRowV1; committed, certified, failed);
 native_struct!(crate::palw_security_certification_v1::PalwCertificationNetworkRowV1; epoch, draws);
-native_struct!(crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1; version, claim, producer_bond, producer_payload, poster_bond, poster_payload, amount, held_daa);
 native_struct!(crate::palw_router_binding_v2::PalwRouterBindingRowV2; version, bound_from_daa, readers);
 native_struct!(crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1; version, class_id, block, daa_score, door, admission_digest);
 native_struct!(crate::palw_settlement_once_v1::PalwSettlementOnceRowV1; version, obligation, consumer, amount, debit, settled_daa);
@@ -797,7 +797,6 @@ native_struct!(crate::palw_attn_court_v1::PalwAttnChunkOpeningV1; chunk_index, c
 native_struct!(crate::palw_execution_lane_v1::PalwExecSignedRoundV1; pre_pow_hash, timestamp_ms, nonce, signature);
 native_tuple_struct!(crate::palw_verification_v2::PalwSegmentMaskV2; f0);
 native_enum!(crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2; StepNode { level, index }, CheckpointNode { level, index }, KernelWitness { leaf }, PromptIds { chunk }, FpJob);
-native_struct!(crate::palw_logits_q24_v2::WideLogitsEventV2; row, generated, row_root, row_opening, lanes, tile_opening);
 native_enum!(crate::palw_tir_court_v1::PalwTirTraceEventDisclosureV1; Flat { binding, pin }, Tiled { binding, generated_token_ids, row_root, row_opening, tile_lanes, tile_opening }, OutOfRange { binding }, WideQ24V2 { binding, event });
 native_struct!(crate::palw_tir_court_v1::PalwTirStepLeafDisclosureV1; binding, preimage, opening, decode, row_pin);
 native_struct!(crate::palw_tir_court_v1::PalwTirStepNodeDisclosureV1; binding, frontier, siblings);
@@ -1086,6 +1085,7 @@ native_enum!(crate::palw_step::PalwStepNodeRoleV1; Plain, KCacheWrite, VCacheWri
 native_enum!(crate::palw_step::PalwStepOutLenV1; Fixed { elements }, KvScaled { multiplier });
 native_enum!(crate::palw_step::PalwTranscendentalSiteV1; VectorExpPolynomial, LibmExpf, LibmLogf, LibmSinf, LibmCosf);
 native_enum!(crate::palw_step::PalwContractionSiteV1; RopeRotate, Q6KTail, SsmConvTaps);
+native_struct!(crate::palw_logits_q24_v2::WideLogitsEventV2; row, generated, row_root, row_opening, lanes, tile_opening);
 native_enum!(crate::palw_pipeline_da_v1::PalwPipelineBindingV1; Gen(f0), Eval(f0), Tensor(f0));
 native_struct!(crate::palw_gen_step_v1::PalwGenLeafCoordV1; stage, pos, kind, tile);
 native_struct!(crate::palw_pipeline_da_v1::PalwPipelineStageTreeV1; leaf_count, merkle_root);
