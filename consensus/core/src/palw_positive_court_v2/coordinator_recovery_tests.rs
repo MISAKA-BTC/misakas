@@ -354,6 +354,7 @@ fn archive_limits_and_allocation_preflight_reject_bad_lengths_and_suffixes() {
     assert_eq!(j.head().unwrap(), h);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn real_generation_restart_and_indeterminate_write_fail_closed() {
     let x = tiny_execution(None);

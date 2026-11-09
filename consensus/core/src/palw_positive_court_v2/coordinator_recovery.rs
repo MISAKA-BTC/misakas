@@ -5,7 +5,10 @@
 use super::*;
 use crate::palw_native_resource_v1::wire::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};
 use borsh::{BorshDeserialize, BorshSerialize};
-use std::io::{self, Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
+use std::io::Write;
+use std::io::{self, Read};
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 // Schema 1 remains readable byte-for-byte. New private input variants are
@@ -328,6 +331,22 @@ impl JournaledCoordinatorV2 {
         Ok(PreparedRecoveryUpdateV2 { journal: self, previous, outcome: Ok(()) })
     }
 
+    /// Replay the selected archive into a fresh admission before staging an
+    /// authenticated record for atomic publication with its projected rows.
+    pub fn prepare_record(
+        self,
+        fresh: PositiveCoordinatorV2,
+        admitted_at: u64,
+        origin: EventOriginV2,
+        event: RecoveryEventV2,
+        authenticate: impl Fn(EventOriginV2, &RecoveryEventV2) -> bool,
+    ) -> Result<PreparedRecoveryUpdateV2, RecoveryErrorV2> {
+        let previous = self.head()?;
+        let mut journal = Self::restore(fresh, admitted_at, &self.bytes, previous, self.limits, self.last_daa, &authenticate)?;
+        let outcome = journal.record(origin, event, authenticate, |_, _| Ok(()))?;
+        Ok(PreparedRecoveryUpdateV2 { journal, previous, outcome })
+    }
+
     /// `authenticate` must check selected carrier membership, its accepted DAA,
     /// and the event's canonical order (including trusted expiry/revocation).
     /// A hash selected by the submitting peer is insufficient.
@@ -416,7 +435,7 @@ impl JournaledCoordinatorV2 {
     }
 }
 
-/// A clock projection that has been checked and not yet published. It carries
+/// A recovery update that has been checked and not yet published. It carries
 /// no store write and no Gate C authority.
 pub struct PreparedRecoveryUpdateV2 {
     journal: JournaledCoordinatorV2,
