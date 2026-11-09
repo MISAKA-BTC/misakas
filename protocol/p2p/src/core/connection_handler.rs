@@ -113,6 +113,9 @@ impl ConnectionHandler {
             .timeout(Duration::from_millis(Self::communication_timeout()))
             .connect_timeout(Duration::from_millis(Self::connect_timeout()))
             .tcp_keepalive(Some(Duration::from_millis(Self::keep_alive())))
+            // Leave time for a round trip between probes on high-latency peers.
+            .tcp_keepalive_interval(Some(Duration::from_secs(3)))
+            .tcp_keepalive_retries(Some(3))
             .connect()
             .await?;
 
