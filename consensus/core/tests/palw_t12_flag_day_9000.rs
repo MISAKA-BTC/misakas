@@ -31,10 +31,9 @@ use kaspa_consensus_core::config::drill::{
 use kaspa_consensus_core::config::params::{
     ForkActivation, PALW_T12_G14_17000_FENCES_V1, PALW_T12_INT11_FENCES_V1, PALW_T12_INT11_FLAG_DAY_DAA,
     PALW_T12_INT11_RHO100_FENCES_V1, PALW_T12_INT11_RHO250_FENCES_V1, PALW_T12_INT11_RHO1000_FENCES_V1, PALW_T12_INT13_DAA,
-    PALW_T12_INT13_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1,
-    PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1, PALW_T12_POST_LAUNCH_FENCES_V1, PALW_T12_POST_LAUNCH_FENCES_V2,
-    PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1, Params,
-    palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
+    PALW_T12_INT13_FENCES_V1, PALW_T12_MODEL_COURT_WINDOW_DAA, PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1, PALW_T12_POST_LAUNCH_FENCES_V1,
+    PALW_T12_POST_LAUNCH_FENCES_V2, PALW_T12_POST_LAUNCH_FENCES_V3, PALW_T12_TIR_FENCE2_FENCES_V1, PALW_T12_TIR_FLAG_DAY_FENCES_V1,
+    Params, palw_t12_arm_int11_flag_day_at_v1, palw_t12_arm_int13_flag_day_at_v1, palw_t12_drill_params_v1, palw_t12_launch_params_v1,
     palw_t12_release_v1_params, palw_t12_release_v2_params, palw_t12_release_v3_params, palw_t12_release_v4_params,
     palw_t12_release_v5_params, palw_t12_release_v6_params, palw_t12_shipped_params,
 };
@@ -142,17 +141,16 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
     assert!(schedule.contains(&flag), "int-13 stays on the shipped schedule ({schedule:?})");
     assert_eq!(
         schedule.last().copied(),
-        Some(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1),
-        "the later retention fence follows the historical flag days ({schedule:?})"
+        Some(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1),
+        "the all-model G14 fence follows the historical flag days ({schedule:?})"
     );
     let mut int12 = palw_t12_release_v6_params().fence_schedule_v1();
     int12.push(flag);
     int12.push(18_400);
     int12.push(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1);
-    int12.push(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1);
     int12.sort_unstable();
     int12.dedup();
-    assert_eq!(schedule, int12, "the shipped schedule retains int-13/G14 and includes later ModelOne and retention fences");
+    assert_eq!(schedule, int12, "the shipped schedule retains int-13/G14 and includes the later ModelOne fence");
     for daa in [0, 1, 749, 750, 5_300, H, flag - 1] {
         assert!(!shipped.palw_audit_1004_active_at(daa), "audit 1004 at {daa}");
         assert!(!shipped.palw_gen_range_twin_active_at(daa), "the range twin at {daa}");
@@ -181,8 +179,8 @@ fn the_list_is_tier_one_and_armed_nowhere_on_the_shipped_ruleset() {
     assert!(armed_schedule.contains(&18_400), "the G14 flag day remains scheduled ({armed_schedule:?})");
     assert_eq!(
         armed_schedule.last(),
-        Some(&PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1),
-        "the later retention fence remains last when historical flags are re-armed ({armed_schedule:?})"
+        Some(&PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1),
+        "the all-model G14 fence remains last when historical flags are re-armed ({armed_schedule:?})"
     );
     assert_eq!(armed_schedule.iter().filter(|h| **h == H).count(), 1, "one height for the whole list");
 }

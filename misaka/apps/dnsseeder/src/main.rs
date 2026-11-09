@@ -713,10 +713,7 @@ mod tests {
         let network = NetworkId::with_suffix(NetworkType::Testnet, 12);
         let params = Params::from(network);
         let mut expected_schedule = vec![750, 1000, 1300, 1700, 2000, 3600, 5300, 5395, 5490, 5585, 15500, 18400];
-        expected_schedule.extend([
-            kaspa_consensus_core::config::params::PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1,
-            kaspa_consensus_core::config::params::PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1,
-        ]);
+        expected_schedule.push(kaspa_consensus_core::config::params::PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1);
         assert_eq!(params.fence_schedule_v1(), expected_schedule);
         let expected = AnchorIdentity::from_params(&params);
         let mut peer = Version::new(

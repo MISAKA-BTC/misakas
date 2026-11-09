@@ -11091,7 +11091,7 @@ pub fn palw_t12_shipped_params() -> Params {
 /// All-model producer migration, separately scheduled after the kernel slice.
 /// This height does not reinterpret claims accepted under the DAA-18,400 rules.
 pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_640;
-/// Separate future obligation rule: never reinterpret the old 18,400 activation.
+/// Retention candidate height for historical replay and explicit tests.
 pub const PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1: u64 = 20_000;
 
 /// The live DAA-18,400 ruleset before the all-model migration, for historical
@@ -12310,7 +12310,8 @@ fn palw_t12_params_with_registry_v1(
     full_activation_v1::palw_t12_arm_full_activation_v1(&mut params);
     // RFC-0042 / ADR-0210: the all-model route is a separate future fork.
     params.palw_model_panel_one_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1));
-    params.palw_model_panel_one_retention_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1));
+    // Public t12 crossed 20,000 without this candidate. Keep its live schedule.
+    params.palw_model_panel_one_retention_v1 = None;
     params.sync_palw_g14_gates_v1();
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has

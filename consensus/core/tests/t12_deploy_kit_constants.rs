@@ -232,8 +232,8 @@ fn the_kit_names_the_int13_flag_day_height_the_preset_arms() {
     assert!(schedule.contains(&PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1), "{schedule:?}");
     assert_eq!(
         schedule.last().copied(),
-        Some(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1),
-        "the separate retention repair follows the all-model G14 migration: {schedule:?}"
+        Some(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1),
+        "the live schedule ends at the all-model G14 migration: {schedule:?}"
     );
 }
 

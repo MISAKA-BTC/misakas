@@ -2,17 +2,18 @@
 use super::*;
 use crate::palw_mode_v2::{PalwConsensusMode, palw_ruleset_id_v2};
 
-fn without_retention() -> Params {
+fn with_retention_candidate() -> Params {
     let mut params = palw_t12_shipped_params();
-    params.palw_model_panel_one_retention_v1 = None;
+    params.palw_model_panel_one_retention_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1));
     params.sync_palw_g14_gates_v1();
     params
 }
 
 #[test]
 fn model_panel_one_retention_none_and_never_preserve_the_shipped_old_identities() {
-    let old = without_retention();
+    let old = palw_t12_shipped_params();
     old.validate_palw_v2().unwrap();
+    assert!(old.palw_model_panel_one_retention_v1_fence().is_none());
     assert_eq!(old.consensus_params_id().to_string(), "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189");
     assert_eq!(old.consensus_schedule_id().to_string(), "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04");
     let mut never = old.clone();
@@ -27,8 +28,8 @@ fn model_panel_one_retention_none_and_never_preserve_the_shipped_old_identities(
 
 #[test]
 fn model_panel_one_retention_future_boundary_is_independently_visited_and_mirrored() {
-    let old = without_retention();
-    let scheduled = palw_t12_shipped_params();
+    let old = palw_t12_shipped_params();
+    let scheduled = with_retention_candidate();
     scheduled.validate_palw_v2().unwrap();
     let at = PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1;
     assert_eq!(at, 20_000);
@@ -61,8 +62,8 @@ fn model_panel_one_retention_future_boundary_is_independently_visited_and_mirror
 #[test]
 fn model_panel_one_retention_rollout_keeps_live_peers_until_the_disputed_fence() {
     use crate::fork_id_v1::{ForkIdVerdict, evaluate_fork_id_v1, fork_id_v1};
-    let old = without_retention();
-    let scheduled = palw_t12_shipped_params();
+    let old = palw_t12_shipped_params();
+    let scheduled = with_retention_candidate();
     let at = PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1;
     // The actual public G14 build already crossed 18,640. Merely comparing
     // normalized identity cannot establish that its next-fence gate stays open.
@@ -89,26 +90,26 @@ fn model_panel_one_retention_rollout_keeps_live_peers_until_the_disputed_fence()
 
 #[test]
 fn model_panel_one_retention_requires_preceding_route_court_gate_c_and_an_exact_mirror() {
-    let shipped = palw_t12_shipped_params();
+    let scheduled = with_retention_candidate();
     let at = PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1;
-    let mut missing_route = shipped.clone();
+    let mut missing_route = scheduled.clone();
     missing_route.palw_model_panel_one_v1 = None;
     missing_route.sync_palw_g14_gates_v1();
     assert!(missing_route.validate_palw_model_panel_one_retention_v1().is_err());
-    let mut late_route = shipped.clone();
+    let mut late_route = scheduled.clone();
     late_route.palw_model_panel_one_v1 = Some(ForkActivation::new(at + 1));
     late_route.sync_palw_g14_gates_v1();
     assert!(late_route.validate_palw_model_panel_one_retention_v1().is_err());
-    let mut missing_court = shipped.clone();
+    let mut missing_court = scheduled.clone();
     missing_court.palw_court_capacity_v1 = None;
     missing_court.sync_palw_g14_gates_v1();
     assert!(missing_court.validate_palw_model_panel_one_retention_v1().is_err());
-    let mut missing_gate_c = shipped.clone();
+    let mut missing_gate_c = scheduled.clone();
     missing_gate_c.palw_independently_work_certified_v1 = None;
     missing_gate_c.sync_palw_g14_gates_v1();
     assert!(missing_gate_c.validate_palw_model_panel_one_retention_v1().is_err());
     for dormant in [None, Some(ForkActivation::never())] {
-        let mut stale_mirror = shipped.clone();
+        let mut stale_mirror = scheduled.clone();
         stale_mirror.palw_model_panel_one_retention_v1 = dormant;
         // Deliberately do not sync: an armed mirror under a dormant public
         // identity is invalid, not an implicit hidden consensus policy.
@@ -116,7 +117,7 @@ fn model_panel_one_retention_requires_preceding_route_court_gate_c_and_an_exact_
         stale_mirror.palw_consensus_mode = PalwConsensusMode::Disabled;
         stale_mirror.validate_palw_model_panel_one_retention_v1().unwrap();
     }
-    let mut wrong_mirror = shipped;
+    let mut wrong_mirror = scheduled;
     let PalwConsensusMode::ConsensusV2(bundle) = &mut wrong_mirror.palw_consensus_mode else { unreachable!() };
     bundle.state = bundle.state.clone().with_model_panel_one_retention_v1(None);
     assert!(wrong_mirror.validate_palw_model_panel_one_retention_v1().is_err());

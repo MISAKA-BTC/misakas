@@ -174,14 +174,9 @@ fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
     expected_schedule.extend(PALW_T12_INT13_DAA);
     expected_schedule.push(PALW_T12_G14_17000_DAA_V1);
     expected_schedule.push(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1);
-    expected_schedule.push(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1);
     expected_schedule.sort_unstable();
     expected_schedule.dedup();
-    assert_eq!(
-        release.fence_schedule_v1(),
-        expected_schedule,
-        "historical flag days, the all-model G14 migration and its later retention fence"
-    );
+    assert_eq!(release.fence_schedule_v1(), expected_schedule, "historical flag days, the all-model G14 migration");
     // The DAA-3,600 flag day's one fence: dormant below it, in force from it, on the shipped ruleset only; the
     // model court window rides no flag day (the coordinator's decision of 2026-10-01).
     let flag_day = PALW_T12_TIR_FENCE2_DAA.expect("the DAA-3,600 flag day");
@@ -226,7 +221,6 @@ fn the_shipped_ruleset_arms_every_post_launch_fence_at_750_and_validates() {
             && Some(*height) != PALW_T12_INT11_RHO1000_DAA
             && *height != PALW_T12_G14_17000_DAA_V1
             && *height != PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1
-            && *height != PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1
     });
     assert_eq!(pre_flag_day.fence_schedule_v1(), pre_flag_schedule, "the pre-flag release omits only the later flag days' heights");
     assert_eq!(
