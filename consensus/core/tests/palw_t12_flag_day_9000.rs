@@ -242,6 +242,9 @@ fn testnet12_ships_the_list_dormant_and_arming_it_moves_the_fingerprint_and_noth
         } else if PALW_T12_G14_17000_FENCES_V1.iter().any(|entry| entry.name == name) {
             assert_eq!(was, None, "{name} is later than the int-12 baseline");
             assert_eq!(now.map(|f| f.daa_score()), Some(18_400), "{name} arms at the G14 flag day");
+        } else if name == "palw_model_panel_one_v1" {
+            assert_eq!(was, None, "{name} is later than the int-12 baseline");
+            assert_eq!(now.map(|f| f.daa_score()), Some(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1));
         } else {
             assert_eq!(now, was, "{name}: the flag day moves only its own list");
         }

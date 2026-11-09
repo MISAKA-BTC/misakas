@@ -366,6 +366,8 @@ fn review12_1_a_retired_floor_bond_row_is_permanent() {
     // The idle span runs far past the G14 flag day. The row's permanence is the subject, so the
     // G14 route (which this direct fold does not supply extras for) stays off.
     let mut p = t12();
+    p.palw_model_panel_one_v1 = None;
+    p.sync_palw_g14_gates_v1();
     palw_t12_arm_after_int13_at_v1(&mut p, PALW_T12_G14_17000_FENCES_V1, None);
     let b = bundle_of(&p);
     let extras = t12_extras(&p, &b);
