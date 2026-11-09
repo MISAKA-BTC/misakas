@@ -27,6 +27,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
@@ -54,7 +55,6 @@ use kaspa_consensus_core::{
         utxo_view::{UtxoView, UtxoViewComposition},
     },
 };
-use kaspa_consensus_core::{palw_native_resource_v1::NativeCoverageV1, palw_positive_assignment_funds_v2::AssignmentSpendPlanV2};
 use kaspa_core::{info, trace};
 use kaspa_muhash::MuHash;
 use kaspa_txscript::{script_class::parse_evm_deposit_lock, verify_mldsa87_with_context};

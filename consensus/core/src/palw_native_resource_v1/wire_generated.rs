@@ -3,7 +3,6 @@
 use super::wire::wire_struct;
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 wire_struct!(crate::config::params::ForkActivation; u64);
 wire_struct!(crate::evm::EvmAddress; [u8; crate::evm::EVM_ADDRESS_SIZE]);
 impl NativeWireScanV1 for crate::evm::model_market::PalwEvmMarketActionKindV1 {

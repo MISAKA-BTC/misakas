@@ -11,7 +11,7 @@ use crate::Hash64;
 use crate::palw_public_adjudication_measured_class_v1::{
     PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1, PublicClassMeasurementRecordV1, admit_measured_class_from_records_v1,
 };
-use crate::palw_tir_frame_cost_v1::{PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, batch_public_hold_end_v5, is_batch_public_clock_v5};
+use crate::palw_tir_frame_cost_v1::{batch_public_hold_end_v5, is_batch_public_clock_v5};
 
 /// The new rule is not armed. No preset is selected from this module.
 pub const PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1: bool = false;
@@ -273,6 +273,7 @@ mod tests {
     use super::*;
     use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA};
     use crate::palw_public_adjudication_measured_class_v1::{PublicMeasuredClassRefusalV1, admit_measured_class_v1};
+    use crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5;
     use crate::palw_tir_frame_cost_v1::{
         PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4, PALW_TIR_FRAME_CLOCK_VERSION_V1,
     };

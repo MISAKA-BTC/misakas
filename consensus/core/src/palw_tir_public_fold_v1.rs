@@ -831,8 +831,7 @@ pub fn palw_tir_public_package_conviction_preflight_v1(
     if !crate::palw_tir_frame_cost_v1::is_batch_public_clock_v5(frame.plan_v1().acquisition.clock.version) {
         return Err(refused("public package conviction requires the admitted batch clock version 5 frame"));
     }
-    let mut builder =
-        TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
+    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     let native = rules(&builder)?;
     let terms = frame.plan_v1().terms;
     let collection = terms
