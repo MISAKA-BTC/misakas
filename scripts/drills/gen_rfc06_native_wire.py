@@ -36,6 +36,7 @@ manual.update({
     'crate::palw_state_v2::PalwTransitionExtrasV1',
     'crate::palw_state_v2::positive_assignment_raw::PositiveAssignmentScheduledActionV2',
     'crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2',
+    'crate::palw_state_v2::positive_assignment_case::source::QualifiedCaseSourceSpendV2',
 })
 
 # A newly reached handwritten decoder must be explicitly reviewed. Generic
