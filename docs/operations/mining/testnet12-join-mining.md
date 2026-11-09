@@ -47,11 +47,11 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 1. Build
 
-Use the testnet-12 release commit `0e8ec984e` (current `main`). The public fleet runs the x86_64 Linux
-release build of that commit (kaspad sha256 `5a357623c74f8e786cd244aef783855a81d8490222da15bf1a76e3dab987f149`).
+Build from the current `main` branch for the public testnet-12 ruleset. Check the startup fingerprint
+and fence schedule in §3 before joining. The launch record identifies the historical fleet binary.
 
 ```bash
-cargo build --release -p kaspad -p misaka-cli
+cargo build --locked --release -p kaspad -p misaka-cli
 # only if you will serve a model class:
 cargo build --release --bin qwen25-convert --bin palw-class
 ```
@@ -81,7 +81,11 @@ topped up. For more capacity, create a new key and register a new bond.
 kaspad --testnet --netsuffix=12 --utxoindex --rpclisten-borsh=default
 ```
 
-The node bootstraps from the built-in DNS seeders. `--addpeer` takes IP addresses, not hostnames.
+The node normally discovers peers through the built-in DNS seeders. If discovery returns no peers,
+check [the DNS recovery issue](https://github.com/MISAKA-BTC/misakas/issues/118) for current status.
+`--addpeer` accepts an IP address and port for a known testnet-12 peer. Confirm the local
+fingerprint and fence schedule below before retrying. A clean data directory cannot resolve a
+fork-ID mismatch between binaries with different active rules.
 
 | purpose | port |
 |---|---:|
