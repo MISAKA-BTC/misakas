@@ -36,22 +36,29 @@ impl BatchStopSigningV1 {
         eog_bytes: &[u8],
         sign: impl FnOnce(Hash64, &[u8]) -> Vec<u8>,
     ) -> Result<crate::palw_batch_court_v1::carriage::BatchCourtWireV1, String> {
-        use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchStopControlV1};
         use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+        use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchStopControlV1};
         if self.position == 0 || eog_bytes.len() > batch_payload::MAX_BATCH_STOP_EOG_OPENING_BYTES_V1 {
             return Err("Batch Stop position or EOG opening length".into());
         }
         let mut intent = SignedConstraintStopIntentV1 {
-            version: 1, claim: self.claim, scope_id: self.scope_id, policy_id: self.policy_id, semantics_id: self.semantics_id,
-            material_id: Hash64::default(), position: self.position, stop_reason: self.stop_reason, filer: self.filer,
+            version: 1,
+            claim: self.claim,
+            scope_id: self.scope_id,
+            policy_id: self.policy_id,
+            semantics_id: self.semantics_id,
+            material_id: Hash64::default(),
+            position: self.position,
+            stop_reason: self.stop_reason,
+            filer: self.filer,
             signature: vec![0; MLDSA87_SIGNATURE_LEN],
         };
         let mut operands = borsh::to_vec(&intent).map_err(|why| why.to_string())?;
         operands.extend_from_slice(eog_bytes);
         let empty_renderings: &[crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1] = &[];
         operands.extend_from_slice(&0u32.to_le_bytes());
-        let decoded = batch_payload::BatchStopPayloadV1::decode_v1(&operands, eog_bytes.len() as u64)
-            .map_err(|why| why.to_string())?;
+        let decoded =
+            batch_payload::BatchStopPayloadV1::decode_v1(&operands, eog_bytes.len() as u64).map_err(|why| why.to_string())?;
         if !decoded.eog.verifies(&self.table_root, self.vocab) {
             return Err("Batch Stop EOG opening does not match the quoted token table".into());
         }

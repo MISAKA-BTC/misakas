@@ -541,4 +541,3 @@ pub(super) fn publish_compatible_closed_v18(
     }
     Ok(())
 }
-

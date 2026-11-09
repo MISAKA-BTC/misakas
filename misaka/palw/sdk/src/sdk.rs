@@ -1019,18 +1019,9 @@ mod chain_arm_tests {
         let class_id = profile.shape_profile_id();
         let canonical = rc_job_context(&profile, 4, 2);
         let later_called = Arc::new(AtomicBool::new(false));
-        let refusing = Arc::new(ProbeFamily {
-            family_id: "probe-family-v1",
-            root,
-            called: Arc::new(AtomicBool::new(false)),
-            serve: false,
-        });
-        let later = Arc::new(ProbeFamily {
-            family_id: "probe-family-later",
-            root,
-            called: Arc::clone(&later_called),
-            serve: true,
-        });
+        let refusing =
+            Arc::new(ProbeFamily { family_id: "probe-family-v1", root, called: Arc::new(AtomicBool::new(false)), serve: false });
+        let later = Arc::new(ProbeFamily { family_id: "probe-family-later", root, called: Arc::clone(&later_called), serve: true });
         let armed = PalwClassSdk::with_lineages(
             Vec::new(),
             court(),
@@ -1048,12 +1039,8 @@ mod chain_arm_tests {
         assert!(err.contains("probe-family-v1 owns this root"), "{err}");
         assert!(!later_called.load(Ordering::SeqCst), "a later family must not turn the refusal into success");
 
-        let serving = Arc::new(ProbeFamily {
-            family_id: "probe-family-v1",
-            root,
-            called: Arc::new(AtomicBool::new(false)),
-            serve: true,
-        });
+        let serving =
+            Arc::new(ProbeFamily { family_id: "probe-family-v1", root, called: Arc::new(AtomicBool::new(false)), serve: true });
         let armed = PalwClassSdk::with_lineages(
             Vec::new(),
             court(),
@@ -1069,12 +1056,8 @@ mod chain_arm_tests {
 
         let dense_called = Arc::new(AtomicBool::new(false));
         let dense_root = artifact.artifact_digest();
-        let watcher = Arc::new(ProbeFamily {
-            family_id: "probe-family-v1",
-            root: dense_root,
-            called: Arc::clone(&dense_called),
-            serve: true,
-        });
+        let watcher =
+            Arc::new(ProbeFamily { family_id: "probe-family-v1", root: dense_root, called: Arc::clone(&dense_called), serve: true });
         let armed = PalwClassSdk::builtin_v1(
             court(),
             kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
@@ -1094,12 +1077,14 @@ mod chain_arm_tests {
             crate::chain_registered::PalwRuleMomentKindV1::ClassRegistration,
         );
         assert!(mismatched.is_err());
-        assert!(crate::chain_registered::registration_moment_matches_sdk_v1(
-            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1,
-            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1,
-            crate::chain_registered::PalwRuleMomentKindV1::ClaimOrigin { accepted_daa: 1 },
-        )
-        .is_err());
+        assert!(
+            crate::chain_registered::registration_moment_matches_sdk_v1(
+                kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1,
+                kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1,
+                crate::chain_registered::PalwRuleMomentKindV1::ClaimOrigin { accepted_daa: 1 },
+            )
+            .is_err()
+        );
     }
 
     struct ProbeFamily {

@@ -534,7 +534,8 @@ pub fn tir_class_admission_offline_v1(
     }
     let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class)
         .ok_or_else(|| format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context))?;
-    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, class_id, canonical).ok_or("canonical program decode")?;
+    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, class_id, canonical)
+        .ok_or("canonical program decode")?;
     let bond = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
         kaspa_consensus_core::tx::TransactionId::from_bytes([0; 64]),
         0,

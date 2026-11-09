@@ -5,9 +5,7 @@
 //! can construct the two capabilities in this child.
 use super::*;
 use crate::{
-    palw_native_resource_v1::{
-        NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1,
-    },
+    palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1},
     palw_positive_assignment_case_material_v2::assigned_case_native_carrier_matches_v2,
     palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2,
     palw_positive_common_replay_v2::LocalCheckedCourtFactV2,
@@ -42,24 +40,12 @@ fn refuse(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(format!("assigned Case: {why:?}"))
 }
 fn missing() -> PalwStateV2Error {
-    PalwStateV2Error::NativeContextUnavailable(
-        crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
-    )
+    PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
 }
-fn required(
-    state: &PalwChainStateV2,
-    key: NativeRowKey,
-) -> Result<NativeRowBody, PalwStateV2Error> {
-    PositiveRowsV2::new(state)
-        .read(key)
-        .map_err(refuse)?
-        .map(|row| row.body)
-        .ok_or_else(missing)
+fn required(state: &PalwChainStateV2, key: NativeRowKey) -> Result<NativeRowBody, PalwStateV2Error> {
+    PositiveRowsV2::new(state).read(key).map_err(refuse)?.map(|row| row.body).ok_or_else(missing)
 }
-fn assignment(
-    state: &PalwChainStateV2,
-    id: AssignmentId,
-) -> Result<AssignmentRow, PalwStateV2Error> {
+fn assignment(state: &PalwChainStateV2, id: AssignmentId) -> Result<AssignmentRow, PalwStateV2Error> {
     match required(state, NativeRowKey::Assignment(id))? {
         NativeRowBody::Assignment(row) => Ok(row),
         _ => Err(refuse("Assignment key/value")),
@@ -76,11 +62,8 @@ fn rooted_bundle(
     let NativeRowBody::Result(result_row) = required(state, NativeRowKey::Result(result))? else {
         return Err(refuse("Result row"));
     };
-    let bundle = PositiveRowsV2::new(state)
-        .bundle(result_row.result.claim_id())
-        .map_err(refuse)?;
-    let NativeRowBody::AssignmentUse(use_row) = required(state, NativeRowKey::AssignmentUse(id))?
-    else {
+    let bundle = PositiveRowsV2::new(state).bundle(result_row.result.claim_id()).map_err(refuse)?;
+    let NativeRowBody::AssignmentUse(use_row) = required(state, NativeRowKey::AssignmentUse(id))? else {
         return Err(refuse("Use row"));
     };
     let NativeRowBody::JournalHead(head) = required(state, NativeRowKey::JournalHead(case))? else {
@@ -92,11 +75,7 @@ fn rooted_bundle(
         || use_row.case != case
         || use_row.result != result
         || use_row.origin != bundle.result.origin
-        || bundle.result.role_assignment
-            != (AcceptedMaterial {
-                origin: a.origin,
-                digest: id.0,
-            })
+        || bundle.result.role_assignment != (AcceptedMaterial { origin: a.origin, digest: id.0 })
         || bundle.result.dependencies != a.dependencies
         || head.case != case
         || head.sequence == 0
@@ -104,12 +83,7 @@ fn rooted_bundle(
     {
         return Err(refuse("actual Assignment/Use/Result/Case/head links"));
     }
-    let pin = CaseJournalPinV2 {
-        scope: bundle.result.result.scope,
-        case,
-        result,
-        head,
-    };
+    let pin = CaseJournalPinV2 { scope: bundle.result.result.scope, case, result, head };
     Ok((a, bundle, pin))
 }
 
@@ -134,23 +108,16 @@ impl PalwChainStateV2 {
         if expected_result.is_some_and(|result| result != case_row.result) {
             return Ok(None);
         }
-        let NativeRowBody::Result(result) = required(self, NativeRowKey::Result(case_row.result))?
-        else {
+        let NativeRowBody::Result(result) = required(self, NativeRowKey::Result(case_row.result))? else {
             return Err(refuse("Case Result key/value"));
         };
         let assignment = AssignmentId(result.role_assignment.digest);
-        if rows
-            .read(NativeRowKey::Assignment(assignment))
-            .map_err(refuse)?
-            .is_none()
-        {
+        if rows.read(NativeRowKey::Assignment(assignment)).map_err(refuse)?.is_none() {
             return Ok(None);
         }
         let (_, _, pin) = rooted_bundle(self, assignment)?;
         if pin.case != case || pin.result != case_row.result {
-            return Err(refuse(
-                "Case and original Assignment refer to different subjects",
-            ));
+            return Err(refuse("Case and original Assignment refer to different subjects"));
         }
         Ok(Some((assignment, pin)))
     }
@@ -194,11 +161,7 @@ pub(super) struct AssignedSourceJournalReserveV2 {
 }
 
 impl AssignedSourceJournalReserveV2 {
-    pub(super) const EMPTY: Self = Self {
-        frames: 0,
-        bytes: 0,
-        work: 0,
-    };
+    pub(super) const EMPTY: Self = Self { frames: 0, bytes: 0, work: 0 };
 
     pub(super) fn check_journal_v2(
         &self,
@@ -206,16 +169,10 @@ impl AssignedSourceJournalReserveV2 {
         frames: u64,
         bytes: u64,
     ) -> Result<(), PalwStateV2Error> {
-        if frames
-            .checked_add(self.frames)
-            .is_none_or(|n| n > u64::from(material.assignment_policy.max_history_frames))
-            || bytes
-                .checked_add(self.bytes)
-                .is_none_or(|n| n > material.positive_policy.max_case_journal_bytes)
+        if frames.checked_add(self.frames).is_none_or(|n| n > u64::from(material.assignment_policy.max_history_frames))
+            || bytes.checked_add(self.bytes).is_none_or(|n| n > material.positive_policy.max_case_journal_bytes)
         {
-            return Err(refuse(
-                "Case journal must retain capacity for its outstanding responses",
-            ));
+            return Err(refuse("Case journal must retain capacity for its outstanding responses"));
         }
         Ok(())
     }
@@ -227,18 +184,13 @@ struct NativeAssignedCourtV2 {
     prepared: PreparedCheck,
     record_limits: crate::palw_positive_contract_v2::record::RecordLimits,
     authority: NativeAssignedPanelAuthorityV2,
-    court: ContractCourtV2<
-        TirCourtCheckerV2,
-        PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>,
-    >,
+    court: ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
     facts: Vec<LocalCheckedCourtFactV2>,
     accepted_finish: Option<AcceptedMaterial>,
     check_limits: crate::palw_positive_check_v2::CheckLimits,
     source: crate::palw_positive_assignment_resources_v2::ReservedAssignmentSourceGeometryV2,
-    source_requests: BTreeMap<
-        misaka_palw_positive_contract::identity::RequestId,
-        crate::palw_positive_source_v2::RetainedSourceRequestV2,
-    >,
+    source_requests:
+        BTreeMap<misaka_palw_positive_contract::identity::RequestId, crate::palw_positive_source_v2::RetainedSourceRequestV2>,
     source_responses: BTreeMap<Digest, source::CheckedAssignedSourceResponseV2>,
     source_ledger: Option<crate::palw_positive_source_v2::NativeSourceLedgerV2>,
     settled_source_fee: u64,
@@ -269,11 +221,7 @@ struct NativeAssignedPanelAuthorityV2 {
 }
 impl PanelFrameAuthorityV2 for NativeAssignedPanelAuthorityV2 {
     type Error = PalwStateV2Error;
-    fn authorize(
-        &self,
-        result: &MinerResultCommit,
-        witness: &PanelWitnessCommit,
-    ) -> Result<u64, Self::Error> {
+    fn authorize(&self, result: &MinerResultCommit, witness: &PanelWitnessCommit) -> Result<u64, Self::Error> {
         let step = self.step.borrow();
         let step = step.as_ref().ok_or_else(missing)?;
         if step.result != result.id()
@@ -380,54 +328,18 @@ fn has_legacy_staged_alias_v2<V>(
     let last_side = PalwCourtSideV1::Executor;
     [
         (K::Owner(subject, first_bond), K::Owner(subject, last_bond)),
-        (
-            K::InventoryOpen(subject, first_bond),
-            K::InventoryOpen(subject, last_bond),
-        ),
-        (
-            K::TirAcquisition(subject, first_bond, low),
-            K::TirAcquisition(subject, last_bond, high),
-        ),
-        (
-            K::TirPreparation(subject, low),
-            K::TirPreparation(subject, high),
-        ),
-        (
-            K::TirWitness(subject, first_bond),
-            K::TirWitness(subject, last_bond),
-        ),
-        (
-            K::CourtSharedChunk(subject, 0),
-            K::CourtSharedChunk(subject, u64::MAX),
-        ),
-        (
-            K::CourtSharedResponse(subject, first_bond),
-            K::CourtSharedResponse(subject, last_bond),
-        ),
-        (
-            K::CourtCloseReceipt(subject, first_side),
-            K::CourtCloseReceipt(subject, last_side),
-        ),
-        (
-            K::CourtSharedRoot(subject, 0),
-            K::CourtSharedRoot(subject, u64::MAX),
-        ),
-        (
-            K::CourtArchiveProgress(subject, first_side),
-            K::CourtArchiveProgress(subject, last_side),
-        ),
-        (
-            K::CourtMaterialDraft(subject, low),
-            K::CourtMaterialDraft(subject, high),
-        ),
-        (
-            K::CourtMaterial(subject, low),
-            K::CourtMaterial(subject, high),
-        ),
-        (
-            K::CourtMaterialLedger(subject, first_bond),
-            K::CourtMaterialLedger(subject, last_bond),
-        ),
+        (K::InventoryOpen(subject, first_bond), K::InventoryOpen(subject, last_bond)),
+        (K::TirAcquisition(subject, first_bond, low), K::TirAcquisition(subject, last_bond, high)),
+        (K::TirPreparation(subject, low), K::TirPreparation(subject, high)),
+        (K::TirWitness(subject, first_bond), K::TirWitness(subject, last_bond)),
+        (K::CourtSharedChunk(subject, 0), K::CourtSharedChunk(subject, u64::MAX)),
+        (K::CourtSharedResponse(subject, first_bond), K::CourtSharedResponse(subject, last_bond)),
+        (K::CourtCloseReceipt(subject, first_side), K::CourtCloseReceipt(subject, last_side)),
+        (K::CourtSharedRoot(subject, 0), K::CourtSharedRoot(subject, u64::MAX)),
+        (K::CourtArchiveProgress(subject, first_side), K::CourtArchiveProgress(subject, last_side)),
+        (K::CourtMaterialDraft(subject, low), K::CourtMaterialDraft(subject, high)),
+        (K::CourtMaterial(subject, low), K::CourtMaterial(subject, high)),
+        (K::CourtMaterialLedger(subject, first_bond), K::CourtMaterialLedger(subject, last_bond)),
     ]
     .into_iter()
     .any(|(first, last)| rows.range(first..=last).next().is_some())
@@ -435,77 +347,53 @@ fn has_legacy_staged_alias_v2<V>(
 
 impl TransitionBuilder<'_> {
     pub(super) fn reject_positive_job_alias_v2(&self, job: Hash64) -> Result<(), PalwStateV2Error> {
-        if self.state.kernel_route.as_ref().is_some_and(|route| {
-            route.contains_positive_job_v2(job) || route.contains_open_assignment_job_v2(job)
-        }) {
+        if self
+            .state
+            .kernel_route
+            .as_ref()
+            .is_some_and(|route| route.contains_positive_job_v2(job) || route.contains_open_assignment_job_v2(job))
+        {
             return Err(refuse("legacy ingress overlaps a rooted Positive job"));
         }
         Ok(())
     }
 
     /// The Open row protects this job against old ingress until Bind or close.
-    pub(super) fn require_unowned_assignment_job_v2(
-        &self,
-        job: Hash64,
-    ) -> Result<(), PalwStateV2Error> {
+    pub(super) fn require_unowned_assignment_job_v2(&self, job: Hash64) -> Result<(), PalwStateV2Error> {
         self.reject_positive_job_alias_v2(job)?;
         let route = self.state.kernel_route_state_v1().ok_or_else(missing)?;
         if self.state.has_claim_for_job_v2(job)
             || has_legacy_staged_alias_v2(&self.state.staged_courts, job)
             || route
                 .has_legacy_case_alias_v2(None, &job.as_bytes())
-                .map_err(|why| {
-                    crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(
-                        why,
-                        |_| missing(),
-                    )
-                })?
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing()))?
         {
-            return Err(refuse(
-                "Assignment job already belongs to a legacy claim or Court",
-            ));
+            return Err(refuse("Assignment job already belongs to a legacy claim or Court"));
         }
         Ok(())
     }
 
     /// A rooted Positive claim index owns this claim identity. Check at the
     /// legacy writer before it allocates or publishes a new row.
-    pub(super) fn reject_positive_claim_alias_v2(
-        &self,
-        claim: Hash64,
-    ) -> Result<(), PalwStateV2Error> {
+    pub(super) fn reject_positive_claim_alias_v2(&self, claim: Hash64) -> Result<(), PalwStateV2Error> {
         use crate::palw_native_resource_v1::reserve_native_requests_v1;
-        use misaka_palw_positive_contract::{
-            CONTRACT_REVISION, CONTRACT_VERSION, identity::ClaimId, native::KERNEL_AUX_TABLE,
-        };
+        use misaka_palw_positive_contract::{CONTRACT_REVISION, CONTRACT_VERSION, identity::ClaimId, native::KERNEL_AUX_TABLE};
 
         let Some(route) = self.state.kernel_route.as_ref() else {
             return Ok(());
         };
-        if route
-            .aux
-            .range((KERNEL_AUX_TABLE, Vec::new())..(KERNEL_AUX_TABLE + 1, Vec::new()))
-            .next()
-            .is_none()
-        {
+        if route.aux.range((KERNEL_AUX_TABLE, Vec::new())..(KERNEL_AUX_TABLE + 1, Vec::new())).next().is_none() {
             return Ok(());
         }
-        let key = (
-            CONTRACT_VERSION,
-            CONTRACT_REVISION,
-            NativeRowKey::ClaimIndex(ClaimId(Digest(claim.as_bytes()))),
-        );
+        let key = (CONTRACT_VERSION, CONTRACT_REVISION, NativeRowKey::ClaimIndex(ClaimId(Digest(claim.as_bytes()))));
         let len = borsh::object_length(&key).map_err(refuse)?;
-        let _lease =
-            reserve_native_requests_v1(len as u64).map_err(PalwStateV2Error::NativeResource)?;
+        let _lease = reserve_native_requests_v1(len as u64).map_err(PalwStateV2Error::NativeResource)?;
         let mut encoded = Vec::new();
         encoded.try_reserve_exact(len).map_err(|_| {
-            PalwStateV2Error::NativeResource(
-                crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<NativeRowKey>(
-                    "legacy claim alias key",
-                    "allocator refused the fixed key",
-                ),
-            )
+            PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<NativeRowKey>(
+                "legacy claim alias key",
+                "allocator refused the fixed key",
+            ))
         })?;
         borsh::to_writer(&mut encoded, &key).map_err(refuse)?;
         if route.aux.contains_key(&(KERNEL_AUX_TABLE, encoded)) {
@@ -532,34 +420,23 @@ pub(super) fn reject_legacy_aliases(
         || state.panel_liabilities.contains_key(&claim)
         || state.staged_tir_by_claim.contains_key(&claim)
         || state.staged_court_service_by_claim.contains_key(&claim)
-        || state
-            .open_courts_by_claim
-            .get(&claim)
-            .is_some_and(|n| *n != 0)
+        || state.open_courts_by_claim.get(&claim).is_some_and(|n| *n != 0)
         || state.has_funded_escrow_for_claim_v1(claim)
     {
-        return Err(refuse(
-            "legacy claim/TFO/service/funds alias is not closed initial topology",
-        ));
+        return Err(refuse("legacy claim/TFO/service/funds alias is not closed initial topology"));
     }
-    if has_legacy_staged_alias_v2(&state.staged_courts, claim)
-        || has_legacy_staged_alias_v2(&state.staged_courts, job)
-    {
+    if has_legacy_staged_alias_v2(&state.staged_courts, claim) || has_legacy_staged_alias_v2(&state.staged_courts, job) {
         return Err(refuse("actual staged native alias"));
     }
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
     if route
         .has_legacy_case_alias_v2(Some(&claim.as_bytes()), &job.as_bytes())
-        .map_err(|why| {
-            crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing())
-        })?
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing()))?
     {
         return Err(refuse("kernel job/claim/OPV alias"));
     }
     if a.bundle.terms.empty_dependencies_id() != a.dependencies.digest {
-        return Err(refuse(
-            "initial assigned topology requires exact empty dependencies",
-        ));
+        return Err(refuse("initial assigned topology requires exact empty dependencies"));
     }
     Ok(())
 }
@@ -589,9 +466,7 @@ impl NativeAssignedCourtV2 {
             || fact.result() != pin.result
             || fact.scope() != pin.scope
             || fact.terminal().descriptor() != bundle.case.coverage
-            || bundle.case.positive_witness
-                != (fact.terminal_kind() == TerminalKindV2::PositivePassed)
-                    .then_some(fact.witness())
+            || bundle.case.positive_witness != (fact.terminal_kind() == TerminalKindV2::PositivePassed).then_some(fact.witness())
         {
             return Err(refuse("actual checked terminal/coverage links"));
         }
@@ -607,15 +482,10 @@ impl NativeAssignedCourtV2 {
         // Preserve the entire original refund window after that point.
         let refund_before = latest
             .checked_add(1)
-            .and_then(|daa| {
-                daa.max(bundle.case.maturity_daa)
-                    .checked_add(admission.assignment_policy.refund_window_daa)
-            })
+            .and_then(|daa| daa.max(bundle.case.maturity_daa).checked_add(admission.assignment_policy.refund_window_daa))
             .ok_or_else(|| refuse("finite actual Final refund window"))?;
         if refund_before > a.bundle.terms.reserve_until_daa {
-            return Err(refuse(
-                "actual Final exceeds original liability and refund reservation",
-            ));
+            return Err(refuse("actual Final exceeds original liability and refund reservation"));
         }
         let session = NativeAssignedCaseSessionV2 {
             root: state.state_root(),
@@ -628,10 +498,7 @@ impl NativeAssignedCourtV2 {
             terminal,
             material,
             positive_final: Some(origin),
-            closed: ClosedAssignedFraudV2 {
-                latest_decision_daa: latest,
-                pending: false,
-            },
+            closed: ClosedAssignedFraudV2 { latest_decision_daa: latest, pending: false },
         };
         session.ensure_current(state, ctx)?;
         Ok(session)
@@ -639,10 +506,7 @@ impl NativeAssignedCourtV2 {
 }
 
 fn snapshot(
-    court: &ContractCourtV2<
-        TirCourtCheckerV2,
-        PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>,
-    >,
+    court: &ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
 ) -> crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2 {
     crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2 {
         status: court.status(),
@@ -690,9 +554,7 @@ fn find_prover_step(
     origin: AcceptedOrigin,
     purpose: AssignedProverUseV2,
 ) -> Result<Option<NativeAssignedPanelStepV2>, PalwStateV2Error> {
-    use misaka_palw_positive_contract::assignment::{
-        AssignmentRoleV2, rows::AssignmentRoleAuthorizationV2,
-    };
+    use misaka_palw_positive_contract::assignment::{AssignmentRoleV2, rows::AssignmentRoleAuthorizationV2};
     use misaka_palw_positive_contract::rows::NativeRowValue;
 
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
@@ -700,33 +562,23 @@ fn find_prover_step(
     let mut resolved = None;
     let mut count = 0u32;
     let mut requests = TirNativeRequestsV1::new();
-    requests
-        .exact_v1::<u8>(1024)
-        .map_err(PalwStateV2Error::NativeResource)?;
+    requests.exact_v1::<u8>(1024).map_err(PalwStateV2Error::NativeResource)?;
     requests
         .exact_v1::<u8>(misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES as u64)
         .map_err(PalwStateV2Error::NativeResource)?;
-    let _range_owner = reserve_native_requests_v1(requests.bytes_v1())
-        .map_err(PalwStateV2Error::NativeResource)?
-        .ok_or_else(|| {
+    let _range_owner =
+        reserve_native_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
             PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowKey>(
                 "assigned Case prover role range",
                 "actual checker is not armed",
             ))
         })?;
-    let mut prefix = NativeRowKey::AssignmentRole {
-        assignment,
-        role: AssignmentRoleV2::Prover,
-        bond: a.bundle.terms.prover,
-    }
-    .encode();
+    let mut prefix = NativeRowKey::AssignmentRole { assignment, role: AssignmentRoleV2::Prover, bond: a.bundle.terms.prover }.encode();
     // The canonical last field is the outpoint (64-byte txid and u32 index).
     // Keep AssignmentId AND role in the prefix before entering the ordered map.
     prefix.truncate(prefix.len() - (64 + 4));
     for (key, bytes) in assigned_prover_rows_v2(&route.aux, prefix) {
-        count = count
-            .checked_add(1)
-            .ok_or_else(|| refuse("role count overflow"))?;
+        count = count.checked_add(1).ok_or_else(|| refuse("role count overflow"))?;
         if count > material.assignment_policy.max_role_candidates {
             return Err(refuse("bounded native role candidates"));
         }
@@ -751,31 +603,18 @@ fn find_prover_step(
             return Err(refuse("retired role cannot open a candidate"));
         }
         let registered = state
-            .bond(&PalwBondKeyV2(TransactionOutpoint::new(
-                Hash64::from_bytes(role.bond.transaction.0),
-                role.bond.index,
-            )))
+            .bond(&PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(role.bond.transaction.0), role.bond.index)))
             .ok_or_else(missing)?;
         if registered.pubkey.as_slice() != role.key.as_slice() {
             return Err(refuse("actual registered work key differs"));
         }
         let (before_daa, max_submitted_bytes) = match &role.authorization {
-            AssignmentRoleAuthorizationV2::Initial => (
-                a.prover_consent.build_before_daa,
-                a.prover_consent.max_submitted_bytes,
-            ),
+            AssignmentRoleAuthorizationV2::Initial => (a.prover_consent.build_before_daa, a.prover_consent.max_submitted_bytes),
             AssignmentRoleAuthorizationV2::Joined(join) => {
-                let NativeRowBody::AssignmentProverFunding(funding) = required(
-                    state,
-                    NativeRowKey::AssignmentProverFunding {
-                        assignment: a.id(),
-                        prover: role.bond,
-                    },
-                )?
+                let NativeRowBody::AssignmentProverFunding(funding) =
+                    required(state, NativeRowKey::AssignmentProverFunding { assignment: a.id(), prover: role.bond })?
                 else {
-                    return Err(refuse(
-                        "joined prover has no actual separate purpose account",
-                    ));
+                    return Err(refuse("joined prover has no actual separate purpose account"));
                 };
                 funding.validate_shape().map_err(refuse)?;
                 if funding.consent != *join
@@ -834,19 +673,11 @@ impl NativeAssignedCaseCacheV2 {
             || action.origin().accepting_block.0 != ctx.block.as_bytes()
             || action.origin().accepted_daa != ctx.daa_score
             || action.origin().accepted_blue_score != ctx.blue_score
-            || !canonical_equal(
-                body,
-                action.transaction().payload.get(3..).ok_or_else(missing)?,
-            )
+            || !canonical_equal(body, action.transaction().payload.get(3..).ok_or_else(missing)?)
         {
             return Err(refuse("actual native Case current prefix/raw operation"));
         }
-        self.checker.advance(
-            state,
-            (&self.assignment, &self.material, self.pin),
-            action.origin(),
-            body,
-        )
+        self.checker.advance(state, (&self.assignment, &self.material, self.pin), action.origin(), body)
     }
 }
 
@@ -854,17 +685,11 @@ impl NativeAssignedCourtV2 {
     fn advance(
         &mut self,
         state: &PalwChainStateV2,
-        (assignment, material, pin): (
-            &AssignmentRow,
-            &AssignmentAdmissionMaterialV2,
-            CaseJournalPinV2,
-        ),
+        (assignment, material, pin): (&AssignmentRow, &AssignmentAdmissionMaterialV2, CaseJournalPinV2),
         origin: AcceptedOrigin,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<NativeAssignedCourtAdvanceV2, PalwStateV2Error> {
-        use crate::palw_positive_common_replay_v2::{
-            LocalCourtErrorV2, LocalCourtOutcomeV2 as Outcome,
-        };
+        use crate::palw_positive_common_replay_v2::{LocalCourtErrorV2, LocalCourtOutcomeV2 as Outcome};
         use crate::palw_positive_court_v2::coordinator::{
             carrier::PanelPacketSignatureV2,
             contract::{CandidateOpenV2, CourtErrorV2},
@@ -883,63 +708,29 @@ impl NativeAssignedCourtV2 {
             Ok(Outcome::SemanticError(error))
         };
         let outcome = match &body.operation {
-            Op::WitnessCommit {
-                witness,
-                panel_signature,
-                ..
-            } => {
-                let step = find_prover_step(
-                    state,
-                    assignment,
-                    material,
-                    witness.author,
-                    origin,
-                    AssignedProverUseV2::Witness,
-                )?
-                .ok_or_else(missing)?;
+            Op::WitnessCommit { witness, panel_signature, .. } => {
+                let step = find_prover_step(state, assignment, material, witness.author, origin, AssignedProverUseV2::Witness)?
+                    .ok_or_else(missing)?;
                 let key = step.key;
                 *self.authority.step.borrow_mut() = Some(step);
                 let limits = self.record_limits;
-                let record =
-                    preflight_witness_record_v2(self.court.result(), body, limits.max_record_bytes)
-                        .map_err(refuse)?;
+                let record = preflight_witness_record_v2(self.court.result(), body, limits.max_record_bytes).map_err(refuse)?;
                 let context = self
                     .prepared
-                    .authenticate_record(
-                        witness.clone(),
-                        record.record_bytes(),
-                        limits,
-                        &key,
-                        panel_signature,
-                    )
+                    .authenticate_record(witness.clone(), record.record_bytes(), limits, &key, panel_signature)
                     .map_err(refuse)?;
-                match self.court.open_candidate(
-                    witness.clone(),
-                    &key,
-                    panel_signature,
-                    context,
-                    origin.accepted_daa,
-                ) {
+                match self.court.open_candidate(witness.clone(), &key, panel_signature, context, origin.accepted_daa) {
                     Ok(CandidateOpenV2::Opened) => Outcome::CandidateOpened,
                     Ok(CandidateOpenV2::AlreadyActive) => {
-                        return Err(refuse(
-                            "fully idempotent candidate has no new journal event",
-                        ));
+                        return Err(refuse("fully idempotent candidate has no new journal event"));
                     }
                     Err(error) => semantic(error)?,
                 }
             }
-            Op::ExactFrame {
-                frame,
-                panel_signature,
-            } => {
-                let frame = EvidenceFrame::decode(frame, material.positive_policy.max_frame_bytes)
-                    .map_err(refuse)?;
+            Op::ExactFrame { frame, panel_signature } => {
+                let frame = EvidenceFrame::decode(frame, material.positive_policy.max_frame_bytes).map_err(refuse)?;
                 let header = frame.header();
-                let active = self
-                    .court
-                    .last_attempt()
-                    .ok_or_else(|| refuse("frame without active candidate"))?;
+                let active = self.court.last_attempt().ok_or_else(|| refuse("frame without active candidate"))?;
                 if header.case != pin.case
                     || header.result != pin.result
                     || header.witness != active.witness
@@ -948,59 +739,29 @@ impl NativeAssignedCourtV2 {
                 {
                     return Err(refuse("foreign/future/repeated exact frame"));
                 }
-                let NativeRowBody::Witness(witness) =
-                    required(state, NativeRowKey::Witness(active.witness))?
-                else {
+                let NativeRowBody::Witness(witness) = required(state, NativeRowKey::Witness(active.witness))? else {
                     return Err(refuse("actual witness row"));
                 };
-                witness
-                    .witness
-                    .authenticate(
-                        self.court.result(),
-                        &witness.panel_key,
-                        &witness.panel_signature,
-                    )
-                    .map_err(refuse)?;
-                let step = find_prover_step(
-                    state,
-                    assignment,
-                    material,
-                    witness.witness.author,
-                    origin,
-                    AssignedProverUseV2::Frame,
-                )?
-                .ok_or_else(missing)?;
+                witness.witness.authenticate(self.court.result(), &witness.panel_key, &witness.panel_signature).map_err(refuse)?;
+                let step = find_prover_step(state, assignment, material, witness.witness.author, origin, AssignedProverUseV2::Frame)?
+                    .ok_or_else(missing)?;
                 if step.key != witness.panel_key {
                     return Err(refuse("exact frame work key substitution"));
                 }
-                let signature = PanelPacketSignatureV2 {
-                    key: step.key,
-                    signature: *panel_signature,
-                };
+                let signature = PanelPacketSignatureV2 { key: step.key, signature: *panel_signature };
                 *self.authority.step.borrow_mut() = Some(step);
-                match self
-                    .court
-                    .submit_frame(frame, &signature, origin.accepted_daa)
-                {
+                match self.court.submit_frame(frame, &signature, origin.accepted_daa) {
                     Ok(()) => Outcome::FrameChecked,
                     Err(error) => semantic(error)?,
                 }
             }
-            Op::Finish {
-                case,
-                result,
-                witness,
-            } => {
-                if *case != pin.case
-                    || *result != pin.result
-                    || self.court.last_attempt().map(|a| a.witness) != Some(*witness)
-                {
+            Op::Finish { case, result, witness } => {
+                if *case != pin.case || *result != pin.result || self.court.last_attempt().map(|a| a.witness) != Some(*witness) {
                     return Err(refuse("Finish exact active candidate"));
                 }
                 match self.court.finish(origin.accepted_daa) {
                     Ok(fact) => {
-                        if self.facts.len() as u64
-                            >= u64::from(material.positive_policy.max_attempts)
+                        if self.facts.len() as u64 >= u64::from(material.positive_policy.max_attempts)
                             || self.facts.len() == self.facts.capacity()
                         {
                             return Err(refuse("actual finite fact capacity"));
@@ -1045,11 +806,7 @@ impl NativeAssignedCourtV2 {
         if matches!(outcome, Outcome::SemanticError(_)) && before == after {
             return Err(refuse("uncharged checker refusal is not a native event"));
         }
-        Ok(NativeAssignedCourtAdvanceV2 {
-            before,
-            after,
-            outcome,
-        })
+        Ok(NativeAssignedCourtAdvanceV2 { before, after, outcome })
     }
 }
 
@@ -1069,10 +826,7 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         limits: CaseJournalLimits,
     ) -> Result<Self, PalwStateV2Error> {
         limits.validate().map_err(refuse)?;
-        backing
-            .material()
-            .check_row(backing.assignment())
-            .map_err(refuse)?;
+        backing.material().check_row(backing.assignment()).map_err(refuse)?;
         let count = backing.records().len() as u64;
         if count == 0
             || count != backing.pin().head.sequence
@@ -1081,20 +835,15 @@ impl<'a> NativeAssignedArchiveV2<'a> {
             return Err(refuse("missing/noncomplete native Case archive"));
         }
         let mut q = TirNativeRequestsV1::new();
-        q.exact_v1::<(Digest, usize)>(count)
-            .map_err(PalwStateV2Error::NativeResource)?;
-        let lease = reserve_native_requests_v1(q.bytes_v1())
-            .map_err(PalwStateV2Error::NativeResource)?
-            .ok_or_else(|| {
-                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Self>(
-                    "assigned Case archive",
-                    "actual native replay index lease is absent",
-                ))
-            })?;
+        q.exact_v1::<(Digest, usize)>(count).map_err(PalwStateV2Error::NativeResource)?;
+        let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Self>(
+                "assigned Case archive",
+                "actual native replay index lease is absent",
+            ))
+        })?;
         let mut records = Vec::new();
-        records
-            .try_reserve_exact(backing.records().len())
-            .map_err(|_| refuse("native Case index allocation"))?;
+        records.try_reserve_exact(backing.records().len()).map_err(|_| refuse("native Case index allocation"))?;
         let mut last = Digest([0; 64]);
         let mut total = 0u64;
         let mut previous_origin: Option<AcceptedOrigin> = None;
@@ -1119,13 +868,9 @@ impl<'a> NativeAssignedArchiveV2<'a> {
                     prior.accepted_daa == header.origin.accepted_daa
                         && prior.accepted_blue_score == header.origin.accepted_blue_score
                         && (prior.accepted_tx_ordinal, prior.event_ordinal)
-                            < (
-                                header.origin.accepted_tx_ordinal,
-                                header.origin.event_ordinal,
-                            )
+                            < (header.origin.accepted_tx_ordinal, header.origin.event_ordinal)
                 } else {
-                    prior.accepted_blue_score < header.origin.accepted_blue_score
-                        && prior.accepted_daa <= header.origin.accepted_daa
+                    prior.accepted_blue_score < header.origin.accepted_blue_score && prior.accepted_daa <= header.origin.accepted_daa
                 };
                 if !later {
                     return Err(refuse("archive actual accepted-prefix ordering"));
@@ -1148,12 +893,7 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         if records.windows(2).any(|w| w[0].0 == w[1].0) {
             return Err(refuse("native Case record identity collision/duplicate"));
         }
-        Ok(Self {
-            backing,
-            records,
-            limits,
-            _index_lease: lease,
-        })
+        Ok(Self { backing, records, limits, _index_lease: lease })
     }
     fn check_carriage(
         current: &PalwChainStateV2,
@@ -1189,13 +929,9 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         if boundary.pre_event_root.0 != prefix.state_root().as_bytes()
             || boundary.selected_parent.0 != carriage.selected_parent().as_bytes()
         {
-            return Err(refuse(
-                "native actual executed-prefix boundary root/lineage",
-            ));
+            return Err(refuse("native actual executed-prefix boundary root/lineage"));
         }
-        boundary
-            .check_populated_data(tx, carriage.entries(), carriage.fee())
-            .map_err(refuse)?;
+        boundary.check_populated_data(tx, carriage.entries(), carriage.fee()).map_err(refuse)?;
         if h.sequence == 1 {
             let id = backing.assignment().id();
             let NativeRowBody::AssignmentUse(use_row) = required(current, NativeRowKey::AssignmentUse(id))? else {
@@ -1226,32 +962,19 @@ impl<'a> NativeAssignedArchiveV2<'a> {
                 || pin.head.sequence.checked_add(1) != Some(h.sequence)
                 || bundle.result.result.id() != h.result
             {
-                return Err(refuse(
-                    "actual historical event prefix differs from linked Case",
-                ));
+                return Err(refuse("actual historical event prefix differs from linked Case"));
             }
         }
         Ok(())
     }
     fn archived(&self, head: Digest) -> Result<&NativeCommittedCaseRecordV2, PalwStateV2Error> {
-        let at = self
-            .records
-            .binary_search_by_key(&head, |(id, _)| *id)
-            .map_err(|_| missing())?;
-        self.backing
-            .records()
-            .get(self.records[at].1)
-            .ok_or_else(missing)
+        let at = self.records.binary_search_by_key(&head, |(id, _)| *id).map_err(|_| missing())?;
+        self.backing.records().get(self.records[at].1).ok_or_else(missing)
     }
 }
 impl CaseJournalSourceV2 for NativeAssignedArchiveV2<'_> {
     type Error = PalwStateV2Error;
-    fn with_record<T>(
-        &self,
-        head: Digest,
-        max_bytes: u64,
-        visit: impl FnOnce(&[u8]) -> T,
-    ) -> Result<T, Self::Error> {
+    fn with_record<T>(&self, head: Digest, max_bytes: u64, visit: impl FnOnce(&[u8]) -> T) -> Result<T, Self::Error> {
         let record = self.archived(head)?;
         if record.raw().len() as u64 > max_bytes || max_bytes > self.limits.max_record_bytes {
             return Err(refuse("native Case source byte cap"));
@@ -1271,15 +994,11 @@ fn check_recovered_case_relay_v2(
     (maximum_heap, maximum_work): (u64, u64),
     schedule: &crate::palw_positive_assignment_resources_v2::AssignmentWorkScheduleV2,
 ) -> Result<u64, PalwStateV2Error> {
-    use crate::palw_positive_funding_relay_v2::{
-        FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2,
-    };
+    use crate::palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2};
     use misaka_palw_positive_contract::{
         CONTRACT_REVISION, CONTRACT_VERSION,
         assignment::{
-            funding_relay::{
-                FUNDING_RELAY_OPERATION_V2, FundingRelayRegistrationBodyV2, RelayFundingPurposeV2,
-            },
+            funding_relay::{FUNDING_RELAY_OPERATION_V2, FundingRelayRegistrationBodyV2, RelayFundingPurposeV2},
             funding_relay_rows::FundingRelayBindingV2,
         },
         rows::{MAX_NATIVE_KEY_BYTES, NativeRowValue},
@@ -1290,34 +1009,24 @@ fn check_recovered_case_relay_v2(
         )
     };
     let mut quote = TirNativeRequestsV1::new();
-    quote
-        .exact_v1::<NativeRowValue>(4)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    quote
-        .exact_v1::<FundingRelayRegistrationBodyV2>(1)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    quote
-        .exact_v1::<u8>((2 * MAX_NATIVE_KEY_BYTES) as u64)
-        .map_err(PalwStateV2Error::NativeResource)?;
+    quote.exact_v1::<NativeRowValue>(4).map_err(PalwStateV2Error::NativeResource)?;
+    quote.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
+    quote.exact_v1::<u8>((2 * MAX_NATIVE_KEY_BYTES) as u64).map_err(PalwStateV2Error::NativeResource)?;
     let scratch = quote.bytes_v1();
     let signature_heap = maximum_heap.checked_sub(scratch).ok_or_else(unavailable)?;
-    let _lease = reserve_native_requests_v1(scratch)
-        .map_err(PalwStateV2Error::NativeResource)?
-        .ok_or_else(unavailable)?;
+    let _lease = reserve_native_requests_v1(scratch).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(unavailable)?;
     let account = &bundle.funding;
     let funding = account.original_outpoint;
     let purpose = RelayFundingPurposeV2::CaseC;
     let authorization = NativeRowKey::FundingRelayAuthorization { funding, purpose };
     let custody = NativeRowKey::FundingRelayCustody { funding, purpose };
-    let NativeRowBody::FundingRelayAuthorization(auth) = required(bind_prefix, authorization)?
-    else {
+    let NativeRowBody::FundingRelayAuthorization(auth) = required(bind_prefix, authorization)? else {
         return Err(missing());
     };
     let NativeRowBody::FundingRelayCustody(pending) = required(bind_prefix, custody)? else {
         return Err(missing());
     };
-    let NativeRowBody::FundingRelayAuthorization(current_auth) = required(state, authorization)?
-    else {
+    let NativeRowBody::FundingRelayAuthorization(current_auth) = required(state, authorization)? else {
         return Err(missing());
     };
     let NativeRowBody::FundingRelayCustody(mut current) = required(state, custody)? else {
@@ -1343,9 +1052,7 @@ fn check_recovered_case_relay_v2(
             .checked_sub(auth.policy.rollback_margin_daa)
             .is_none_or(|cutoff| cutoff < minimum_service_cutoff)
     {
-        return Err(refuse(
-            "recovered Case relay differs from the original binding or service horizon",
-        ));
+        return Err(refuse("recovered Case relay differs from the original binding or service horizon"));
     }
     crate::palw_positive_assignment_funds_v2::check_initial_case_relay_target_v2(
         &auth.terms,
@@ -1369,24 +1076,17 @@ fn check_recovered_case_relay_v2(
         .court_body_work(scratch)
         .and_then(|decode| {
             schedule.court_operation_work(2, 4, 0, 0).and_then(|check| {
-                decode.checked_add(check).ok_or(
-                    crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2::Budget,
-                )
+                decode.checked_add(check).ok_or(crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2::Budget)
             })
         })
         .map_err(refuse)?;
-    let remaining_work = maximum_work
-        .checked_sub(work)
-        .ok_or_else(|| refuse("Case relay replay work cap"))?;
-    verify_funding_relay_package_signatures_v2(
-        &body,
-        &auth.payer_key,
-        signature_heap.min(auth.quote.usage.heap_bytes),
-    )
-    .map_err(|why| match why {
-        FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
-        FundingRelayBodyErrorV2::Contract(why) => refuse(why),
-    })?;
+    let remaining_work = maximum_work.checked_sub(work).ok_or_else(|| refuse("Case relay replay work cap"))?;
+    verify_funding_relay_package_signatures_v2(&body, &auth.payer_key, signature_heap.min(auth.quote.usage.heap_bytes)).map_err(
+        |why| match why {
+            FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+            FundingRelayBodyErrorV2::Contract(why) => refuse(why),
+        },
+    )?;
     Ok(remaining_work)
 }
 
@@ -1402,12 +1102,9 @@ fn prepare_initial_case_checker_v2(
     use crate::{
         palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1},
         palw_positive_assignment_material_v2::AssignmentSourceQuoteDescriptorV2,
-        palw_positive_assignment_resources_v2::{
-            AssignmentResourceErrorV2, ReservedAssignmentDerivedResourcesV2,
-        },
+        palw_positive_assignment_resources_v2::{AssignmentResourceErrorV2, ReservedAssignmentDerivedResourcesV2},
         palw_positive_court_v2::coordinator::assignment_body::{
-            PositiveAssignmentNativeOperationV2 as Op, decode_assignment_body_v2,
-            scan_assignment_body_v2,
+            PositiveAssignmentNativeOperationV2 as Op, decode_assignment_body_v2, scan_assignment_body_v2,
         },
         palw_tir_class_v1::PalwTirLayoutV1,
     };
@@ -1417,33 +1114,22 @@ fn prepare_initial_case_checker_v2(
             crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
         )
     };
-    let reserve = |bytes| {
-        reserve_native_requests_v1(bytes)
-            .map_err(PalwStateV2Error::NativeResource)?
-            .ok_or_else(capacity)
-    };
+    let reserve = |bytes| reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity);
     let material = backing.material();
     let row = backing.assignment();
     let policy = &material.assignment_policy;
     let positive = &material.positive_policy;
     let physical = &material.native_preimages;
-    let max_heap = positive
-        .max_case_heap_bytes
-        .min(policy.max_heap_bytes)
-        .min(physical.physical.max_heap_bytes);
+    let max_heap = positive.max_case_heap_bytes.min(policy.max_heap_bytes).min(physical.physical.max_heap_bytes);
     let retained = backing.native_heap_v1("retained initial Case archive");
-    let retained = retained
-        .bytes()
-        .ok_or(PalwStateV2Error::NativeResource(retained))?;
+    let retained = retained.bytes().ok_or(PalwStateV2Error::NativeResource(retained))?;
     let mut heap = max_heap.checked_sub(retained).ok_or_else(capacity)?;
-    let rules =
-        NativeAssignmentRulesV2::from_original_material_data_v2(row, material).map_err(refuse)?;
+    let rules = NativeAssignmentRulesV2::from_original_material_data_v2(row, material).map_err(refuse)?;
     let limits = rules.body_limits().map_err(refuse)?;
     let open = backing.open_carriage();
     let first = backing.records().first().ok_or_else(missing)?.carriage();
     let native_body = |tx: &crate::tx::Transaction| {
-        tx.payload.get(..3) == Some(&[1, 0, 176])
-            && tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+        tx.payload.get(..3) == Some(&[1, 0, 176]) && tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
     };
     if !native_body(open.transaction())
         || !native_body(first.transaction())
@@ -1460,31 +1146,16 @@ fn prepare_initial_case_checker_v2(
     let decode_heap = open_shape
         .heap
         .checked_add(bind_shape.heap)
-        .and_then(|n| {
-            n.checked_add(
-                (2 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64,
-            )
-        })
+        .and_then(|n| n.checked_add((2 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64))
         .ok_or_else(capacity)?;
     heap = heap.checked_sub(decode_heap).ok_or_else(capacity)?;
     let _decode = reserve(decode_heap)?;
     let open_body = decode_assignment_body_v2(open_raw, limits).map_err(refuse)?;
     let bind_body = decode_assignment_body_v2(bind_raw, limits).map_err(refuse)?;
-    let Op::AcceptCanonicalAssignment {
-        bundle: signed,
-        source,
-        prover,
-        signatures,
-        layout,
-    } = &open_body.operation
-    else {
+    let Op::AcceptCanonicalAssignment { bundle: signed, source, prover, signatures, layout } = &open_body.operation else {
         return Err(refuse("original op8 body"));
     };
-    let Op::AdmitAssignedResult {
-        assignment: id,
-        payload,
-    } = &bind_body.operation
-    else {
+    let Op::AdmitAssignedResult { assignment: id, payload } = &bind_body.operation else {
         return Err(refuse("original op9 body"));
     };
     if signed != &row.bundle
@@ -1505,13 +1176,9 @@ fn prepare_initial_case_checker_v2(
         || prior.admission_material != row.admission_material
         || prior.worker_key != row.worker_key
     {
-        return Err(refuse(
-            "original op9 did not consume the same open Assignment",
-        ));
+        return Err(refuse("original op9 did not consume the same open Assignment"));
     }
-    let NativeRowBody::AssignmentFunding(funding) =
-        required(bind_prefix, NativeRowKey::AssignmentFunding(*id))?
-    else {
+    let NativeRowBody::AssignmentFunding(funding) = required(bind_prefix, NativeRowKey::AssignmentFunding(*id))? else {
         return Err(refuse("original Case payer row"));
     };
     if funding.authorization != row.bundle.funding || funding.funding_origin != row.origin {
@@ -1528,51 +1195,39 @@ fn prepare_initial_case_checker_v2(
             &payload.payer_signature,
         )
         .map_err(refuse)?;
-    let qualified =
-        crate::palw_positive_assignment_funds_v2::qualify_accepted_case_funding_output_v2(
-            &prior,
-            &funding,
-            &payload.result,
-            &payload.service,
-            &payload.basis,
-            &payload.consent,
-            &funding.payer_key,
-            first.transaction(),
-            first.origin().accepted_daa,
-        )
-        .map_err(refuse)?;
+    let qualified = crate::palw_positive_assignment_funds_v2::qualify_accepted_case_funding_output_v2(
+        &prior,
+        &funding,
+        &payload.result,
+        &payload.service,
+        &payload.basis,
+        &payload.consent,
+        &funding.payer_key,
+        first.transaction(),
+        first.origin().accepted_daa,
+    )
+    .map_err(refuse)?;
     let rooted_funding = &bundle.funding;
     let [_, fee, capital, surplus] = qualified.initial_legs();
     if rooted_funding.funding_origin != first.origin()
         || rooted_funding.original_outpoint != qualified.outpoint()
         || rooted_funding.initial_locked != qualified.amount()
-        || [
-            rooted_funding.fee.initial,
-            rooted_funding.capital.initial,
-            rooted_funding.surplus.initial,
-        ] != [fee.initial, capital.initial, surplus.initial]
+        || [rooted_funding.fee.initial, rooted_funding.capital.initial, rooted_funding.surplus.initial]
+            != [fee.initial, capital.initial, surplus.initial]
         || rooted_funding.consent != payload.consent
         || rooted_funding.payer_key != funding.payer_key
         || rooted_funding.payer_signature != payload.payer_signature
     {
-        return Err(refuse(
-            "rooted Case funds differ from the actual accepted C output",
-        ));
+        return Err(refuse("rooted Case funds differ from the actual accepted C output"));
     }
-    let layout_quote =
-        preflight_native_value_v1::<PalwTirLayoutV1>(layout.as_slice(), layout.len() as u64)
-            .map_err(refuse)?;
+    let layout_quote = preflight_native_value_v1::<PalwTirLayoutV1>(layout.as_slice(), layout.len() as u64).map_err(refuse)?;
     let layout_heap = layout_quote.logical_requests_v1();
     heap = heap.checked_sub(layout_heap).ok_or_else(capacity)?;
     let _layout = reserve(layout_heap)?;
     let layout: PalwTirLayoutV1 = borsh::from_slice(layout).map_err(refuse)?;
     let open_prefix = open.prefix_state().map_err(|_| missing())?;
-    let registered = open_prefix
-        .tir_class_v1(&Hash64::from_bytes(row.bundle.terms.registered_class.0))
-        .ok_or_else(missing)?;
-    let prompt_form = registered
-        .facts
-        .prompt_ids_form(material.network_prompt_form);
+    let registered = open_prefix.tir_class_v1(&Hash64::from_bytes(row.bundle.terms.registered_class.0)).ok_or_else(missing)?;
+    let prompt_form = registered.facts.prompt_ids_form(material.network_prompt_form);
     if prompt_form != material.class_prompt_form {
         return Err(refuse("original Case prompt commitment form"));
     }
@@ -1588,16 +1243,13 @@ fn prepare_initial_case_checker_v2(
     )
     .map_err(|why| match why {
         AssignmentResourceErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
-        AssignmentResourceErrorV2::MissingNativeLease
-        | AssignmentResourceErrorV2::ConstructionCap { .. } => capacity(),
+        AssignmentResourceErrorV2::MissingNativeLease | AssignmentResourceErrorV2::ConstructionCap { .. } => capacity(),
         other => refuse(other),
     })?;
     let resources = reserved.resources();
     let binding = resources.binding();
     material.job.check_native(binding.job()).map_err(refuse)?;
-    binding
-        .authenticate_bundle_roles(open_prefix, signed, signatures)
-        .map_err(refuse)?;
+    binding.authenticate_bundle_roles(open_prefix, signed, signatures).map_err(refuse)?;
     binding.check_result(&payload.result).map_err(refuse)?;
     if material.source != AssignmentSourceQuoteDescriptorV2::from(resources.source_quote())
         || payload.basis.source_catalog != material.source.digest
@@ -1606,14 +1258,8 @@ fn prepare_initial_case_checker_v2(
     {
         return Err(refuse("original Case source and policy"));
     }
-    let (horizon, source_ledger) = super::positive_assignment::assignment_horizon_v2(
-        &rules,
-        signed,
-        source,
-        prover,
-        resources,
-        row.origin.accepted_daa,
-    )?;
+    let (horizon, source_ledger) =
+        super::positive_assignment::assignment_horizon_v2(&rules, signed, source, prover, resources, row.origin.accepted_daa)?;
     if bundle.case.reservation
         != crate::palw_positive_assignment_material_v2::assigned_case_reservation_v2(
             row,
@@ -1622,9 +1268,7 @@ fn prepare_initial_case_checker_v2(
             &bundle.funding,
         )
     {
-        return Err(refuse(
-            "recovered Case reservation differs from the actual Assignment, Result and original coin",
-        ));
+        return Err(refuse("recovered Case reservation differs from the actual Assignment, Result and original coin"));
     }
     let accepted_daa = first.origin().accepted_daa;
     let gate_c = rules.gate_c_clock(accepted_daa).map_err(refuse)?;
@@ -1634,19 +1278,11 @@ fn prepare_initial_case_checker_v2(
             &gate_c,
             policy.refund_window_daa,
             positive.max_attempts,
-            resources
-                .all_attempt_signed_frame_bytes_v2()
-                .map_err(refuse)?,
+            resources.all_attempt_signed_frame_bytes_v2().map_err(refuse)?,
             source_ledger,
         )
         .map_err(refuse)?;
-    horizon
-        .check_case_maturity_v2(
-            accepted_daa,
-            bundle.case.maturity_daa,
-            policy.refund_window_daa,
-        )
-        .map_err(refuse)?;
+    horizon.check_case_maturity_v2(accepted_daa, bundle.case.maturity_daa, policy.refund_window_daa).map_err(refuse)?;
     let mut remaining_work = positive.max_case_work.min(policy.max_replay_work);
     if material.funding_relay.requires_relay() {
         remaining_work = check_recovered_case_relay_v2(
@@ -1663,34 +1299,20 @@ fn prepare_initial_case_checker_v2(
         || payload.basis.required_fee < horizon.case_money.fee
         || payload.basis.required_capital < horizon.case_money.capital
     {
-        return Err(refuse(
-            "recovered Case funding or maturity differs from its original envelope",
-        ));
+        return Err(refuse("recovered Case funding or maturity differs from its original envelope"));
     }
     // The preparation retains another class, job, and plan while the original
     // derivation is still live. Reuse the typed program/StepSpace quote for
     // that second owner and reserve it before authenticating the Result.
     let derived_heap = reserved.allocation_quote().total_requests;
-    let checker_heap = derived_heap
-        .checked_add(size_of::<PreparedCheck>() as u64)
-        .ok_or_else(capacity)?;
-    let fact_count = usize::try_from(
-        positive
-            .max_attempts
-            .min(payload.service.budget.witness_attempts),
-    )
-    .map_err(|_| capacity())?;
-    let fact_heap = (fact_count as u64)
-        .checked_mul(size_of::<LocalCheckedCourtFactV2>() as u64)
-        .ok_or_else(capacity)?;
+    let checker_heap = derived_heap.checked_add(size_of::<PreparedCheck>() as u64).ok_or_else(capacity)?;
+    let fact_count = usize::try_from(positive.max_attempts.min(payload.service.budget.witness_attempts)).map_err(|_| capacity())?;
+    let fact_heap = (fact_count as u64).checked_mul(size_of::<LocalCheckedCourtFactV2>() as u64).ok_or_else(capacity)?;
     let checker_heap = checker_heap
         .checked_add(fact_heap)
         .and_then(|n| n.checked_add(size_of::<NativeAssignedCourtV2>() as u64))
         .ok_or_else(capacity)?;
-    if heap
-        .checked_sub(derived_heap)
-        .is_none_or(|left| checker_heap > left)
-    {
+    if heap.checked_sub(derived_heap).is_none_or(|left| checker_heap > left) {
         return Err(capacity());
     }
     let lease = reserve(checker_heap)?;
@@ -1711,15 +1333,10 @@ fn prepare_initial_case_checker_v2(
         || coverage.mandatory_relations != payload.basis.mandatory_relations
         || coverage.profile != payload.basis.profile
     {
-        return Err(refuse(
-            "independently prepared Case coverage differs from initial and rooted coverage",
-        ));
+        return Err(refuse("independently prepared Case coverage differs from initial and rooted coverage"));
     }
     use crate::palw_positive_court_v2::coordinator::contract::CourtLimitsV2;
-    let receipt_bytes = coverage
-        .mandatory_relations
-        .checked_mul(64)
-        .ok_or_else(capacity)?;
+    let receipt_bytes = coverage.mandatory_relations.checked_mul(64).ok_or_else(capacity)?;
     let max_generated_heap_bytes = u64::from(payload.result.decode) * size_of::<u32>() as u64;
     let record_limits = crate::palw_positive_contract_v2::record::RecordLimits {
         max_record_bytes: positive
@@ -1727,9 +1344,7 @@ fn prepare_initial_case_checker_v2(
             .min(crate::palw_positive_court_v2::coordinator::native_body::MAX_OPAQUE_BYTES_V2),
         max_generated_heap_bytes,
     };
-    let authority = NativeAssignedPanelAuthorityV2 {
-        step: Rc::new(RefCell::new(None)),
-    };
+    let authority = NativeAssignedPanelAuthorityV2 { step: Rc::new(RefCell::new(None)) };
     let court = ContractCourtV2::new(
         TirCourtCheckerV2,
         PanelSignatureVerifierV2::new(authority.clone()),
@@ -1751,19 +1366,13 @@ fn prepare_initial_case_checker_v2(
     )
     .map_err(refuse)?;
     let mut facts = Vec::new();
-    facts
-        .try_reserve_exact(fact_count)
-        .map_err(|_| capacity())?;
+    facts.try_reserve_exact(fact_count).map_err(|_| capacity())?;
     if facts.capacity() > fact_count {
         return Err(capacity());
     }
     let check_limits = resources.check_limits();
-    let source = reserved
-        .into_source_geometry_v2(&payload.result)
-        .map_err(refuse)?;
-    let checker_heap = checker_heap
-        .checked_add(source.heap_bytes())
-        .ok_or_else(capacity)?;
+    let source = reserved.into_source_geometry_v2(&payload.result).map_err(refuse)?;
+    let checker_heap = checker_heap.checked_add(source.heap_bytes()).ok_or_else(capacity)?;
     Ok(NativeAssignedCourtV2 {
         prepared,
         record_limits,
@@ -1783,13 +1392,9 @@ fn prepare_initial_case_checker_v2(
         available_heap: max_heap - retained,
         remaining_work,
         relay_envelope: match &material.funding_relay {
-            crate::config::params::AssignmentFundingRelayProfileV2::RequiresRelayV2 {
-                policy,
-                ..
-            } => Some((
-                horizon.retention_until_daa,
-                policy.max_account_continuations,
-            )),
+            crate::config::params::AssignmentFundingRelayProfileV2::RequiresRelayV2 { policy, .. } => {
+                Some((horizon.retention_until_daa, policy.max_account_continuations))
+            }
             crate::config::params::AssignmentFundingRelayProfileV2::CooperativeV1 => None,
         },
         candidate_heap: 0,
@@ -1806,50 +1411,32 @@ impl NativeAssignedCourtV2 {
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
         event: &NativeAssignedCourtAdvanceV2,
         origin: AcceptedOrigin,
-    ) -> Result<
-        (
-            misaka_palw_positive_contract::rows::WitnessRow,
-            misaka_palw_positive_contract::rows::CoverageRow,
-        ),
-        PalwStateV2Error,
-    > {
+    ) -> Result<(misaka_palw_positive_contract::rows::WitnessRow, misaka_palw_positive_contract::rows::CoverageRow), PalwStateV2Error>
+    {
         use crate::palw_positive_assignment_case_material_v2::assigned_witness_record_materials_v2;
         use misaka_palw_positive_contract::rows::{CoverageRow, CoverageState, WitnessRow};
         let result = self.court.result();
-        let checked =
-            crate::palw_positive_court_v2::coordinator::record_ingress::preflight_witness_record_v2(result, body, self.record_limits.max_record_bytes)
-                .map_err(refuse)?;
-        let record = checked.execution_record();
-        let [record_header, generated_tokens] = assigned_witness_record_materials_v2(
-            &record.header(),
-            record.generated_bytes(),
-            result.id(),
-            result.decode,
-            origin,
+        let checked = crate::palw_positive_court_v2::coordinator::record_ingress::preflight_witness_record_v2(
+            result,
+            body,
+            self.record_limits.max_record_bytes,
         )
         .map_err(refuse)?;
+        let record = checked.execution_record();
+        let [record_header, generated_tokens] =
+            assigned_witness_record_materials_v2(&record.header(), record.generated_bytes(), result.id(), result.decode, origin)
+                .map_err(refuse)?;
         let role = self.authority.step.borrow();
         let role = role.as_ref().ok_or_else(missing)?;
         let witness = checked.witness();
         let witness_id = witness.id();
         if witness.plan != prior.coverage.plan
             || event.after.cursor != 0
-            || event
-                .after
-                .last_attempt
-                .is_none_or(|attempt| attempt.witness != witness_id)
-            || PositiveRowsV2::new(prefix)
-                .read(NativeRowKey::Witness(witness_id))
-                .map_err(refuse)?
-                .is_some()
-            || PositiveRowsV2::new(prefix)
-                .read(NativeRowKey::Coverage(witness_id))
-                .map_err(refuse)?
-                .is_some()
+            || event.after.last_attempt.is_none_or(|attempt| attempt.witness != witness_id)
+            || PositiveRowsV2::new(prefix).read(NativeRowKey::Witness(witness_id)).map_err(refuse)?.is_some()
+            || PositiveRowsV2::new(prefix).read(NativeRowKey::Coverage(witness_id)).map_err(refuse)?.is_some()
         {
-            return Err(refuse(
-                "checked witness differs from the Case plan or existing attempt",
-            ));
+            return Err(refuse("checked witness differs from the Case plan or existing attempt"));
         }
         let coverage = CoverageRow {
             witness: witness_id,
@@ -1894,25 +1481,13 @@ fn exact_frame_coverage_v2(
     {
         return Err(refuse("exact frame Coverage predecessor differs"));
     }
-    let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(
-        Some(event.before),
-        event.after,
-    )
-    .map_err(refuse)?;
+    let delta =
+        crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(event.before), event.after).map_err(refuse)?;
     coverage.next_relation = event.after.cursor;
-    coverage.frame_bytes = coverage
-        .frame_bytes
-        .checked_add(frame_bytes)
-        .ok_or_else(missing)?;
+    coverage.frame_bytes = coverage.frame_bytes.checked_add(frame_bytes).ok_or_else(missing)?;
     coverage.signatures = coverage.signatures.checked_add(1).ok_or_else(missing)?;
-    coverage.elements = coverage
-        .elements
-        .checked_add(delta.elements)
-        .ok_or_else(missing)?;
-    coverage.terms = coverage
-        .terms
-        .checked_add(delta.terms)
-        .ok_or_else(missing)?;
+    coverage.elements = coverage.elements.checked_add(delta.elements).ok_or_else(missing)?;
+    coverage.terms = coverage.terms.checked_add(delta.terms).ok_or_else(missing)?;
     coverage.last_event = origin;
     Ok(coverage)
 }
@@ -1928,25 +1503,15 @@ fn check_replayed_court_projection_v2(
     };
     let checked = snapshot(&machine.court);
     let status_matches = checked.status == row.status
-        || (checked.status == ClaimStatus::Pending
-            && checked.attempts == 0
-            && row.status == ClaimStatus::ResultCommitted);
-    let witness = if checked.status == ClaimStatus::PositivePassed {
-        Some(checked.last_attempt.ok_or_else(missing)?.witness)
-    } else {
-        None
-    };
+        || (checked.status == ClaimStatus::Pending && checked.attempts == 0 && row.status == ClaimStatus::ResultCommitted);
+    let witness =
+        if checked.status == ClaimStatus::PositivePassed { Some(checked.last_attempt.ok_or_else(missing)?.witness) } else { None };
     if !status_matches
         || checked.attempts != row.usage.witness_attempts
-        || checked
-            .last_attempt
-            .map_or(WitnessStatus::Building, |attempt| attempt.status)
-            != row.witness_status
+        || checked.last_attempt.map_or(WitnessStatus::Building, |attempt| attempt.status) != row.witness_status
         || witness != row.positive_witness
     {
-        return Err(refuse(
-            "replayed arithmetic outcome differs from rooted Case",
-        ));
+        return Err(refuse("replayed arithmetic outcome differs from rooted Case"));
     }
     if checked.status == ClaimStatus::PositivePassed {
         let fact = machine.facts.last().ok_or_else(missing)?;
@@ -1956,18 +1521,11 @@ fn check_replayed_court_projection_v2(
             || Some(fact.witness()) != witness
             || fact.terminal().descriptor() != row.coverage
         {
-            return Err(refuse(
-                "replayed Finish differs from rooted terminal coverage",
-            ));
+            return Err(refuse("replayed Finish differs from rooted terminal coverage"));
         }
     }
-    if let Some(active) = checked
-        .last_attempt
-        .filter(|attempt| attempt.status == WitnessStatus::Checking)
-    {
-        let NativeRowBody::Coverage(coverage) =
-            required(state, NativeRowKey::Coverage(active.witness))?
-        else {
+    if let Some(active) = checked.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) {
+        let NativeRowBody::Coverage(coverage) = required(state, NativeRowKey::Coverage(active.witness))? else {
             return Err(refuse("archived active Coverage row"));
         };
         if coverage.witness != active.witness
@@ -1978,9 +1536,7 @@ fn check_replayed_court_projection_v2(
             || coverage.next_relation != checked.cursor
             || coverage.state != CoverageState::Checking
         {
-            return Err(refuse(
-                "replayed active cursor differs from rooted Coverage",
-            ));
+            return Err(refuse("replayed active cursor differs from rooted Coverage"));
         }
     }
     Ok(())
@@ -1989,20 +1545,11 @@ fn check_replayed_court_projection_v2(
 fn original_verifier_roster_v2<'a>(
     backing: &'a NativeCommittedAssignedCaseV2,
     remaining_work: &mut u64,
-) -> Result<
-    super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2<'a>,
-    PalwStateV2Error,
-> {
+) -> Result<super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2<'a>, PalwStateV2Error> {
     let schedule = &backing.material().native_preimages.source_policy.work;
-    let quote = schedule
-        .court_body_work(backing.open_raw().len() as u64)
-        .map_err(refuse)?;
-    let quote = quote
-        .checked_mul(2)
-        .ok_or_else(|| refuse("source roster wire work overflow"))?;
-    *remaining_work = remaining_work
-        .checked_sub(quote)
-        .ok_or_else(|| refuse("source roster wire work"))?;
+    let quote = schedule.court_body_work(backing.open_raw().len() as u64).map_err(refuse)?;
+    let quote = quote.checked_mul(2).ok_or_else(|| refuse("source roster wire work overflow"))?;
+    *remaining_work = remaining_work.checked_sub(quote).ok_or_else(|| refuse("source roster wire work"))?;
     let roster = original_verifier_roster_bytes_v2(backing)?;
     super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
         roster,
@@ -2011,47 +1558,28 @@ fn original_verifier_roster_v2<'a>(
     )
 }
 
-pub(super) fn original_verifier_roster_bytes_v2(
-    backing: &NativeCommittedAssignedCaseV2,
-) -> Result<&[u8], PalwStateV2Error> {
+pub(super) fn original_verifier_roster_bytes_v2(backing: &NativeCommittedAssignedCaseV2) -> Result<&[u8], PalwStateV2Error> {
     use misaka_palw_positive_contract::assignment::{
         control_material::AssignmentControlViewV2,
         journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
-        open_material::{
-            AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2,
-        },
+        open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
     };
     let material = backing.material();
     let assignment = backing.assignment();
     let raw = backing.open_raw();
-    let open = AssignmentJournalRecordViewV2::decode(
-        raw,
-        material.native_assignment_journal_storage_limit_v2(),
-    )
-    .map_err(refuse)?;
+    let open = AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
     let header = open.header();
-    if header.kind != AssignmentJournalEventKindV2::Open
-        || header.assignment != assignment.id()
-        || header.origin != assignment.origin
+    if header.kind != AssignmentJournalEventKindV2::Open || header.assignment != assignment.id() || header.origin != assignment.origin
     {
         return Err(refuse("source roster must belong to the original Open"));
     }
     let cap = material.assignment_policy.max_frame_bytes;
     let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
-    let open = AssignmentOpenViewV2::decode(
-        envelope.inner(),
-        AssignmentOpenLimitsV2::within_payload(cap),
-    )
-    .map_err(refuse)?;
+    let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
     let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
-    let expected =
-        material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
-    if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster)
-        != expected
-    {
-        return Err(refuse(
-            "source requester roster differs from original custody",
-        ));
+    let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
+    if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
+        return Err(refuse("source requester roster differs from original custody"));
     }
     Ok(roster)
 }
@@ -2069,12 +1597,7 @@ impl NativeAssignedCourtV2 {
     ) -> Result<Option<[u8; PUBKEY_BYTES]>, PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
 
-        let PositiveNativeOperationV2::SourceRequest {
-            request,
-            requester,
-            signature,
-        } = &body.operation
-        else {
+        let PositiveNativeOperationV2::SourceRequest { request, requester, signature } = &body.operation else {
             return Ok(None);
         };
         let result = self.court.result();
@@ -2082,11 +1605,7 @@ impl NativeAssignedCourtV2 {
         if prior.case != result.case_id()
             || prior.result != result.id()
             || prior.service.id() != result.service_contract
-            || origin.accepted_daa
-                >= prior
-                    .service
-                    .deadline
-                    .min(assignment.source_consent.service_before_daa)
+            || origin.accepted_daa >= prior.service.deadline.min(assignment.source_consent.service_before_daa)
         {
             return Err(refuse("source request differs from the accepted Case duty"));
         }
@@ -2095,26 +1614,12 @@ impl NativeAssignedCourtV2 {
         let units = geometry.source_units(request.kind);
 
         let schedule = &material.native_preimages.source_policy.work;
-        let role_work = schedule
-            .court_operation_work(
-                1,
-                u64::from(material.assignment_policy.max_role_candidates),
-                0,
-                0,
-            )
-            .map_err(refuse)?;
-        self.remaining_work = self
-            .remaining_work
-            .checked_sub(role_work)
-            .ok_or_else(|| refuse("source role lookup work"))?;
-        let key = if let Some(step) = find_prover_step(
-            state,
-            assignment,
-            material,
-            *requester,
-            origin,
-            AssignedProverUseV2::SourceRequest,
-        )? {
+        let role_work =
+            schedule.court_operation_work(1, u64::from(material.assignment_policy.max_role_candidates), 0, 0).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(role_work).ok_or_else(|| refuse("source role lookup work"))?;
+        let key = if let Some(step) =
+            find_prover_step(state, assignment, material, *requester, origin, AssignedProverUseV2::SourceRequest)?
+        {
             step.key
         } else {
             let roster = original_verifier_roster_v2(backing, &mut self.remaining_work)?;
@@ -2132,9 +1637,7 @@ impl NativeAssignedCourtV2 {
         if misaka_palw_positive_contract::identity::principal(&key) != *requester {
             return Err(refuse("actual source requester key"));
         }
-        request
-            .authenticate(units, &key, signature)
-            .map_err(refuse)?;
+        request.authenticate(units, &key, signature).map_err(refuse)?;
         Ok(Some(key))
     }
 
@@ -2147,9 +1650,7 @@ impl NativeAssignedCourtV2 {
     ) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
         use crate::{
             palw_positive_assignment_resources_v2::ASSIGNED_COURT_ROLE_SIGNATURES_V2,
-            palw_positive_court_v2::coordinator::native_body::{
-                PositiveNativeBodyV2, scan_native_body_v2,
-            },
+            palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, scan_native_body_v2},
         };
         let capacity = || {
             PalwStateV2Error::NativeContextUnavailable(
@@ -2160,89 +1661,45 @@ impl NativeAssignedCourtV2 {
         let bytes = body_bytes.len() as u64;
         let schedule = &material.native_preimages.source_policy.work;
         let codec_work = schedule.court_body_work(bytes).map_err(refuse)?;
-        self.remaining_work = self
-            .remaining_work
-            .checked_sub(codec_work)
-            .ok_or_else(|| refuse("Case replay codec work"))?;
-        let shape =
-            scan_native_body_v2(body_bytes, case_replay_body_limits_v2(policy)).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(codec_work).ok_or_else(|| refuse("Case replay codec work"))?;
+        let shape = scan_native_body_v2(body_bytes, case_replay_body_limits_v2(policy)).map_err(refuse)?;
         let is_witness = shape.kind == 1;
         let is_frame = shape.kind == 2;
         let check = self.check_limits;
         let authentication_work = schedule
             .court_operation_work(
-                shape.signatures
-                    + u64::from(is_witness || is_frame) * ASSIGNED_COURT_ROLE_SIGNATURES_V2,
-                if is_witness || is_frame {
-                    u64::from(material.assignment_policy.max_role_candidates)
-                } else {
-                    0
-                },
-                if is_frame {
-                    check.max_elements_per_leaf
-                } else {
-                    0
-                },
-                if is_frame {
-                    check.max_terms_per_leaf
-                } else {
-                    0
-                },
+                shape.signatures + u64::from(is_witness || is_frame) * ASSIGNED_COURT_ROLE_SIGNATURES_V2,
+                if is_witness || is_frame { u64::from(material.assignment_policy.max_role_candidates) } else { 0 },
+                if is_frame { check.max_elements_per_leaf } else { 0 },
+                if is_frame { check.max_terms_per_leaf } else { 0 },
             )
             .map_err(refuse)?;
-        self.remaining_work = self
-            .remaining_work
-            .checked_sub(authentication_work)
-            .ok_or_else(|| refuse("Case replay operation work"))?;
+        self.remaining_work =
+            self.remaining_work.checked_sub(authentication_work).ok_or_else(|| refuse("Case replay operation work"))?;
         if is_witness && self.candidate_lease.is_none() {
             // A new candidate can coexist with the old context and progress.
             // Quote both pairs plus the temporary authentication copy.
             self.candidate_heap = self
                 .derived_heap
                 .checked_mul(5)
-                .and_then(|n| {
-                    self.record_limits
-                        .max_generated_heap_bytes
-                        .checked_mul(5)
-                        .and_then(|g| n.checked_add(g))
-                })
-                .and_then(|n| {
-                    self.prepared
-                        .descriptor()
-                        .mandatory_relations
-                        .checked_mul(128)
-                        .and_then(|r| n.checked_add(r))
-                })
+                .and_then(|n| self.record_limits.max_generated_heap_bytes.checked_mul(5).and_then(|g| n.checked_add(g)))
+                .and_then(|n| self.prepared.descriptor().mandatory_relations.checked_mul(128).and_then(|r| n.checked_add(r)))
                 .ok_or_else(capacity)?;
-            if self
-                .available_heap
-                .checked_sub(self.checker_heap)
-                .is_none_or(|left| self.candidate_heap > left)
-            {
+            if self.available_heap.checked_sub(self.checker_heap).is_none_or(|left| self.candidate_heap > left) {
                 return Err(capacity());
             }
-            self.candidate_lease = Some(
-                reserve_native_requests_v1(self.candidate_heap)
-                    .map_err(PalwStateV2Error::NativeResource)?
-                    .ok_or_else(capacity)?,
-            );
+            self.candidate_lease =
+                Some(reserve_native_requests_v1(self.candidate_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?);
         }
         let body_heap = shape
             .opaque_bytes
             .checked_mul(2)
             .and_then(|n| n.checked_add(size_of::<PositiveNativeBodyV2>() as u64))
-            .and_then(|n| {
-                n.checked_add(
-                    (4 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64,
-                )
-            })
+            .and_then(|n| n.checked_add((4 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64))
             .and_then(|n| n.checked_add(if is_frame { policy.max_part_heap } else { 0 }))
             .ok_or_else(capacity)?;
-        let role_heap = if is_witness || is_frame {
-            (1024 + misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES) as u64
-        } else {
-            0
-        };
+        let role_heap =
+            if is_witness || is_frame { (1024 + misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES) as u64 } else { 0 };
         if self
             .available_heap
             .checked_sub(self.checker_heap)
@@ -2252,9 +1709,7 @@ impl NativeAssignedCourtV2 {
         {
             return Err(capacity());
         }
-        reserve_native_requests_v1(body_heap)
-            .map_err(PalwStateV2Error::NativeResource)?
-            .ok_or_else(capacity)
+        reserve_native_requests_v1(body_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)
     }
 }
 
@@ -2262,8 +1717,7 @@ fn case_replay_body_limits_v2(
     policy: &crate::config::params::PositiveCourtPolicyV2,
 ) -> crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {
     use crate::palw_positive_court_v2::coordinator::native_body::{
-        MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2,
-        NativeBodyLimitsV2,
+        MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2,
     };
     NativeBodyLimitsV2 {
         max_body_bytes: policy.max_case_journal_bytes.min(MAX_BODY_BYTES_V2),
@@ -2280,29 +1734,21 @@ fn replay_assigned_court_history_v2(
     backing: &NativeCommittedAssignedCaseV2,
     rooted: &PositiveRowBundleV2,
 ) -> Result<NativeAssignedCourtV2, PalwStateV2Error> {
-    use crate::palw_positive_court_v2::coordinator::native_body::{
-        PositiveNativeOperationV2 as Op, decode_native_body_v2,
-    };
+    use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeOperationV2 as Op, decode_native_body_v2};
     let mut machine = prepare_initial_case_checker_v2(state, backing, rooted)?;
     let material = backing.material();
     let pin = *backing.pin();
     let limits = case_replay_body_limits_v2(&material.positive_policy);
     let mut retained = backing.records().first().ok_or_else(missing)?.raw().len() as u64;
     for (index, record) in backing.records().iter().enumerate().skip(1) {
-        retained = retained
-            .checked_add(record.raw().len() as u64)
-            .ok_or_else(missing)?;
+        retained = retained.checked_add(record.raw().len() as u64).ok_or_else(missing)?;
         let frames = index as u64 + 1;
         let carriage = record.carriage();
         let prefix = carriage.prefix_state().map_err(|_| missing())?;
         let a = assignment(prefix, backing.assignment().id())?;
         if a.bundle != backing.assignment().bundle
             || a.admission_material != backing.assignment().admission_material
-            || a.status
-                != (AssignmentStatusV2::Consumed {
-                    case: pin.case,
-                    result: pin.result,
-                })
+            || a.status != (AssignmentStatusV2::Consumed { case: pin.case, result: pin.result })
         {
             return Err(refuse("archived Court Assignment prefix differs"));
         }
@@ -2316,16 +1762,10 @@ fn replay_assigned_court_history_v2(
                 None => state,
             };
             machine.replay_case_source_payment_v2(backing, prefix, after, &prior, carriage)?;
-            machine
-                .source_reserve
-                .check_journal_v2(material, frames, retained)?;
+            machine.source_reserve.check_journal_v2(material, frames, retained)?;
             continue;
         }
-        let body_bytes = carriage
-            .transaction()
-            .payload
-            .get(3..)
-            .ok_or_else(missing)?;
+        let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
         let work_before = machine.remaining_work;
         let _body = machine.reserve_operation_v2(body_bytes, material)?;
         let body = decode_native_body_v2(body_bytes, limits).map_err(refuse)?;
@@ -2335,29 +1775,12 @@ fn replay_assigned_court_history_v2(
         if case != pin.case || result.is_some_and(|id| id != pin.result) {
             return Err(refuse("archived Court operation subject differs"));
         }
-        let key = machine.check_source_request_v2(
-            backing,
-            prefix,
-            &a,
-            &prior,
-            carriage.origin(),
-            &body,
-        )?;
+        let key = machine.check_source_request_v2(backing, prefix, &a, &prior, carriage.origin(), &body)?;
         let response = if let Op::SourceResponse { .. } = &body.operation {
             Some(
                 machine
-                    .check_source_response_v2(
-                        prefix,
-                        &a,
-                        material,
-                        &prior,
-                        carriage.origin(),
-                        &body,
-                        _body.memory_v1(),
-                    )?
-                    .ok_or_else(|| {
-                        refuse("duplicate source delivery changed the rooted journal")
-                    })?,
+                    .check_source_response_v2(prefix, &a, material, &prior, carriage.origin(), &body, _body.memory_v1())?
+                    .ok_or_else(|| refuse("duplicate source delivery changed the rooted journal"))?,
             )
         } else {
             None
@@ -2380,12 +1803,7 @@ fn replay_assigned_court_history_v2(
             };
             machine.apply_replayed_source_update_v2(after, update)?;
         }
-        machine.remember_source_request_v2(
-            material,
-            carriage.origin(),
-            &body,
-            _body.memory_v1(),
-        )?;
+        machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
         if let Some(response) = response {
             machine.remember_source_response_v2(material, response, _body.memory_v1())?;
         }
@@ -2405,12 +1823,7 @@ fn replay_assigned_court_history_v2(
                 let NativeRowBody::Coverage(previous) = required(prefix, key)? else {
                     return Err(refuse("archived frame requires rooted Coverage"));
                 };
-                let expected = exact_frame_coverage_v2(
-                    previous,
-                    &event,
-                    frame.len() as u64,
-                    carriage.origin(),
-                )?;
+                let expected = exact_frame_coverage_v2(previous, &event, frame.len() as u64, carriage.origin())?;
                 if required(after, key)? != NativeRowBody::Coverage(expected) {
                     return Err(refuse("archived frame differs from accepted Coverage"));
                 }
@@ -2420,28 +1833,16 @@ fn replay_assigned_court_history_v2(
                     Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
                     None => state,
                 };
-                let (witness, coverage) = machine.opened_witness_rows_v2(
-                    prefix,
-                    &prior,
-                    &body,
-                    &event,
-                    carriage.origin(),
-                )?;
-                if required(after, NativeRowKey::Witness(coverage.witness))?
-                    != NativeRowBody::Witness(witness)
-                    || required(after, NativeRowKey::Coverage(coverage.witness))?
-                        != NativeRowBody::Coverage(coverage)
+                let (witness, coverage) = machine.opened_witness_rows_v2(prefix, &prior, &body, &event, carriage.origin())?;
+                if required(after, NativeRowKey::Witness(coverage.witness))? != NativeRowBody::Witness(witness)
+                    || required(after, NativeRowKey::Coverage(coverage.witness))? != NativeRowBody::Coverage(coverage)
                 {
-                    return Err(refuse(
-                        "archived witness material differs from accepted Case rows",
-                    ));
+                    return Err(refuse("archived witness material differs from accepted Case rows"));
                 }
             }
             let terminal_coverage = match event.outcome {
                 LocalCourtOutcomeV2::Expired => Some(CoverageState::EndedUnverified),
-                LocalCourtOutcomeV2::Finished(TerminalKindV2::PositivePassed) => {
-                    Some(CoverageState::Matched)
-                }
+                LocalCourtOutcomeV2::Finished(TerminalKindV2::PositivePassed) => Some(CoverageState::Matched),
                 _ => None,
             };
             if terminal_coverage == Some(CoverageState::Matched) {
@@ -2464,9 +1865,7 @@ fn replay_assigned_court_history_v2(
                     Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
                     None => state,
                 };
-                let NativeRowBody::JournalHead(head) =
-                    required(after, NativeRowKey::JournalHead(pin.case))?
-                else {
+                let NativeRowBody::JournalHead(head) = required(after, NativeRowKey::JournalHead(pin.case))? else {
                     return Err(refuse("archived Finish lacks the accepted journal head"));
                 };
                 NativeAssignedArchiveV2::check_carriage(state, backing, finish, carriage)?;
@@ -2478,17 +1877,12 @@ fn replay_assigned_court_history_v2(
                     || head.head != finish.head()
                     || head.history != history
                 {
-                    return Err(refuse(
-                        "archived Finish differs from accepted journal material",
-                    ));
+                    return Err(refuse("archived Finish differs from accepted journal material"));
                 }
                 machine.accepted_finish = Some(history);
             }
             if let Some(expected_state) = terminal_coverage
-                && let Some(attempt) = event
-                    .before
-                    .last_attempt
-                    .filter(|attempt| attempt.status == WitnessStatus::Checking)
+                && let Some(attempt) = event.before.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking)
             {
                 let after = match backing.records().get(index + 1) {
                     Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
@@ -2501,19 +1895,13 @@ fn replay_assigned_court_history_v2(
                 expected.state = expected_state;
                 expected.last_event = carriage.origin();
                 if required(after, key)? != NativeRowBody::Coverage(expected) {
-                    return Err(refuse(
-                        "archived terminal did not update the active Coverage",
-                    ));
+                    return Err(refuse("archived terminal did not update the active Coverage"));
                 }
             }
         }
-        machine
-            .source_reserve
-            .check_journal_v2(material, frames, retained)?;
+        machine.source_reserve.check_journal_v2(material, frames, retained)?;
         if machine.source_reserve.work > machine.remaining_work {
-            return Err(refuse(
-                "Case replay must retain work for its outstanding responses",
-            ));
+            return Err(refuse("Case replay must retain work for its outstanding responses"));
         }
     }
     check_replayed_court_projection_v2(state, &rooted.case, &machine)?;
@@ -2538,49 +1926,24 @@ pub fn qualify_worker_payment_candidate_v2(
         || transaction.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
         || !transaction.id_is_current()
     {
-        return Err(refuse(
-            "worker candidate differs from its selected-parent archive or carrier",
-        ));
+        return Err(refuse("worker candidate differs from its selected-parent archive or carrier"));
     }
     let original = backing.assignment();
-    let rules =
-        NativeAssignmentRulesV2::from_original_material_data_v2(original, backing.material())
-            .map_err(refuse)?;
+    let rules = NativeAssignmentRulesV2::from_original_material_data_v2(original, backing.material()).map_err(refuse)?;
     let limits = rules.body_limits().map_err(refuse)?;
     let raw = &transaction.payload[3..];
     let summary = scan_assignment_body_v2(raw, limits).map_err(refuse)?;
-    let _decode = reserve_native_requests_v1(summary.heap)
-        .map_err(PalwStateV2Error::NativeResource)?
-        .ok_or_else(missing)?;
+    let _decode = reserve_native_requests_v1(summary.heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(missing)?;
     let body = decode_assignment_body_v2(raw, limits).map_err(refuse)?;
-    let PositiveAssignmentNativeOperationV2::SettleAssignment {
-        assignment,
-        case: Some(case),
-        receipts,
-    } = body.operation
-    else {
-        return Err(refuse(
-            "worker candidate lacks its exact Assignment and Case",
-        ));
+    let PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, case: Some(case), receipts } = body.operation else {
+        return Err(refuse("worker candidate lacks its exact Assignment and Case"));
     };
     let (row, bundle, pin) = rooted_bundle(state, assignment)?;
     if &row != original || &pin != backing.pin() || pin.case != case {
-        return Err(refuse(
-            "worker candidate archive does not match the settlement subject",
-        ));
+        return Err(refuse("worker candidate archive does not match the settlement subject"));
     }
     let machine = replay_assigned_court_history_v2(state, backing, &bundle)?;
-    qualify_checked_worker_payment_v2(
-        state,
-        ctx,
-        backing,
-        &machine,
-        transaction,
-        assignment,
-        case,
-        &receipts,
-        input_amounts,
-    )
+    qualify_checked_worker_payment_v2(state, ctx, backing, &machine, transaction, assignment, case, &receipts, input_amounts)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2595,24 +1958,16 @@ fn qualify_checked_worker_payment_v2(
     receipts: &[AcceptedMaterial],
     input_amounts: &[u64],
 ) -> Result<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2, PalwStateV2Error> {
-    use crate::palw_positive_assignment_funds_v2::{
-        AssignmentSpendAuthorizationV2, qualify_assignment_spend_v2,
-    };
+    use crate::palw_positive_assignment_funds_v2::{AssignmentSpendAuthorizationV2, qualify_assignment_spend_v2};
     let session = machine.certification_session(state, ctx, backing)?;
-    let payment = super::positive_assignment_certification::approve_positive_worker_payment_v2(
-        state, ctx, &session,
-    )?;
+    let payment = super::positive_assignment_certification::approve_positive_worker_payment_v2(state, ctx, &session)?;
     if payment.assignment() != id || payment.case() != case {
-        return Err(refuse(
-            "worker payment differs from the certified Assignment",
-        ));
+        return Err(refuse("worker payment differs from the certified Assignment"));
     }
     let original = backing.records().first().ok_or_else(missing)?.carriage();
     let due = payment.due_v2(original.prefix_state().map_err(|_| missing())?)?;
     if receipts != [due.receipt] {
-        return Err(refuse(
-            "worker payment must name the exact certified Finish receipt",
-        ));
+        return Err(refuse("worker payment must name the exact certified Finish receipt"));
     }
     let rooted = PositiveRowsV2::new(state).assignment(id).map_err(refuse)?;
     let policy = &backing.material().assignment_policy;
@@ -2627,14 +1982,7 @@ fn qualify_checked_worker_payment_v2(
         max_history_frames: policy.max_history_frames,
         payload: transaction.payload.clone(),
     };
-    qualify_assignment_spend_v2(
-        &authorization.before,
-        &authorization,
-        transaction,
-        input_amounts,
-        ctx.daa_score,
-    )
-    .map_err(refuse)
+    qualify_assignment_spend_v2(&authorization.before, &authorization, transaction, input_amounts, ctx.daa_score).map_err(refuse)
 }
 
 impl TransitionBuilder<'_> {
@@ -2645,21 +1993,15 @@ impl TransitionBuilder<'_> {
         input: PositiveCaseReplayInputV2<'_>,
     ) -> Result<(), PalwStateV2Error> {
         let Some(route) = parent.kernel_route_state_v1() else { return Ok(()) };
-        if route
-            .ready_positive_certification_subjects_v2(ctx.daa_score)
-            .take(input.live_case_cap.saturating_add(1))
-            .count()
+        if route.ready_positive_certification_subjects_v2(ctx.daa_score).take(input.live_case_cap.saturating_add(1)).count()
             > input.live_case_cap
         {
             return Err(refuse("due Positive Cases exceed native live capacity"));
         }
         for subject in route.ready_positive_certification_subjects_v2(ctx.daa_score) {
             let subject = Digest(subject.as_bytes());
-            let Some((case, result)) = crate::palw_positive_certification_v2::ready_positive_certification_case_v2(
-                &self.state,
-                subject,
-                ctx.daa_score,
-            )?
+            let Some((case, result)) =
+                crate::palw_positive_certification_v2::ready_positive_certification_case_v2(&self.state, subject, ctx.daa_score)?
             else {
                 continue;
             };
@@ -2698,8 +2040,7 @@ impl TransitionBuilder<'_> {
         if &pin != backing.pin() {
             return Ok(());
         }
-        let subject =
-            misaka_palw_positive_contract::native::certification_subject(&bundle.result.result);
+        let subject = misaka_palw_positive_contract::native::certification_subject(&bundle.result.result);
         self.draw_from_committed_positive_case_v2(ctx, subject, backing)?;
         self.decide_replayed_positive_certification_v2(ctx, backing)
     }
@@ -2718,9 +2059,7 @@ impl TransitionBuilder<'_> {
             return Ok(());
         }
         let subject = certification_subject(&bundle.result.result);
-        if ready_positive_certification_case_v2(&self.state, subject, ctx.daa_score)?
-            != Some((pin.case, pin.result))
-        {
+        if ready_positive_certification_case_v2(&self.state, subject, ctx.daa_score)? != Some((pin.case, pin.result)) {
             return Ok(());
         }
         let machine = replay_assigned_court_history_v2(&self.state, backing, &bundle)?;
@@ -2736,34 +2075,16 @@ impl TransitionBuilder<'_> {
         case: CaseId,
         receipts: &[AcceptedMaterial],
         input_amounts: &[u64],
-    ) -> Result<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2, PalwStateV2Error>
-    {
+    ) -> Result<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2, PalwStateV2Error> {
         let (backing, machine, _) = self.prepare_case_subject_v2(action, case, None)?;
-        qualify_checked_worker_payment_v2(
-            &self.state,
-            ctx,
-            backing,
-            &machine,
-            action.transaction(),
-            id,
-            case,
-            receipts,
-            input_amounts,
-        )
+        qualify_checked_worker_payment_v2(&self.state, ctx, backing, &machine, action.transaction(), id, case, receipts, input_amounts)
     }
 
     fn prepare_case_predecessor_v2<'a>(
         &self,
         action: &'a PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
-    ) -> Result<
-        (
-            &'a NativeCommittedAssignedCaseV2,
-            NativeAssignedCourtV2,
-            CaseRow,
-        ),
-        PalwStateV2Error,
-    > {
+    ) -> Result<(&'a NativeCommittedAssignedCaseV2, NativeAssignedCourtV2, CaseRow), PalwStateV2Error> {
         let Some((case, expected_result)) = body.operation.case_target_v2().map_err(refuse)? else {
             return Err(refuse("a Case follow-up requires an explicit subject"));
         };
@@ -2775,14 +2096,7 @@ impl TransitionBuilder<'_> {
         action: &'a PositiveAssignmentRawActionV2,
         case: CaseId,
         expected_result: Option<ResultId>,
-    ) -> Result<
-        (
-            &'a NativeCommittedAssignedCaseV2,
-            NativeAssignedCourtV2,
-            CaseRow,
-        ),
-        PalwStateV2Error,
-    > {
+    ) -> Result<(&'a NativeCommittedAssignedCaseV2, NativeAssignedCourtV2, CaseRow), PalwStateV2Error> {
         let backing = action.case_backing().map_err(|_| missing())?;
         let NativeAssignedCaseBackingV2::Committed(backing) = backing else {
             return Err(missing());
@@ -2790,20 +2104,11 @@ impl TransitionBuilder<'_> {
         let assignment = backing.assignment().id();
         let pin = *backing.pin();
         let record = backing.records().last().ok_or_else(missing)?;
-        if backing.records().len() as u64 != pin.head.sequence
-            || record.carriage().origin() != pin.head.history.origin
-        {
-            return Err(refuse(
-                "Case archive differs from its rooted journal extent or latest origin",
-            ));
+        if backing.records().len() as u64 != pin.head.sequence || record.carriage().origin() != pin.head.history.origin {
+            return Err(refuse("Case archive differs from its rooted journal extent or latest origin"));
         }
-        if backing.parent() != action.selected_parent()
-            || case != pin.case
-            || expected_result.is_some_and(|id| id != pin.result)
-        {
-            return Err(refuse(
-                "Case follow-up differs from its selected-parent archive subject",
-            ));
+        if backing.parent() != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
+            return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
         }
         let (_, bundle, current) = rooted_bundle(&self.state, assignment)?;
         if current != pin {
@@ -2839,19 +2144,10 @@ impl TransitionBuilder<'_> {
         let work_before = machine.remaining_work;
         let _body = machine.reserve_operation_v2(raw, material)?;
         if !canonical_equal(body, raw) {
-            return Err(refuse(
-                "current Court operation differs from literal carrier",
-            ));
+            return Err(refuse("current Court operation differs from literal carrier"));
         }
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
-        let key = machine.check_source_request_v2(
-            backing,
-            &self.state,
-            &current_assignment,
-            &prior,
-            origin,
-            body,
-        )?;
+        let key = machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
         let response = if matches!(
             &body.operation,
             crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::SourceResponse { .. }
@@ -2872,69 +2168,40 @@ impl TransitionBuilder<'_> {
             (key, response.as_ref()),
             work_before,
         )?;
-        let replayed = machine.advance(
-            &self.state,
-            (&current_assignment, material, *backing.pin()),
-            origin,
-            body,
-        )?;
+        let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
         use crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2;
         let expired = matches!(replayed.outcome, LocalCourtOutcomeV2::Expired);
-        let passed = matches!(
-            replayed.outcome,
-            LocalCourtOutcomeV2::Finished(TerminalKindV2::PositivePassed)
-        );
+        let passed = matches!(replayed.outcome, LocalCourtOutcomeV2::Finished(TerminalKindV2::PositivePassed));
         let witness_opened = matches!(replayed.outcome, LocalCourtOutcomeV2::CandidateOpened);
         let frame_checked = matches!(replayed.outcome, LocalCourtOutcomeV2::FrameChecked);
-        let journal = (witness_opened
-            || frame_checked
-            || expired
-            || passed
-            || source.as_ref().is_some_and(|update| update.changes_case()))
-        .then(|| {
-            self.prepare_assigned_case_journal_v2(
-                backing,
-                misaka_palw_positive_contract::journal::CaseJournalEventKind::NativeBody,
-                &machine.source_reserve,
-            )
-        })
-        .transpose()?;
-        let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(
-            Some(replayed.before),
-            replayed.after,
-        )
-        .map_err(refuse)?;
+        let journal =
+            (witness_opened || frame_checked || expired || passed || source.as_ref().is_some_and(|update| update.changes_case()))
+                .then(|| {
+                    self.prepare_assigned_case_journal_v2(
+                        backing,
+                        misaka_palw_positive_contract::journal::CaseJournalEventKind::NativeBody,
+                        &machine.source_reserve,
+                    )
+                })
+                .transpose()?;
+        let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
+            .map_err(refuse)?;
         if prior
             .usage
             .transmitted_bytes
             .checked_add(delta.signed_wire_bytes)
             .is_none_or(|n| n > prior.service.budget.transmitted_bytes)
-            || prior
-                .usage
-                .witness_attempts
-                .checked_add(delta.attempts)
-                .is_none_or(|n| n > prior.service.budget.witness_attempts)
+            || prior.usage.witness_attempts.checked_add(delta.attempts).is_none_or(|n| n > prior.service.budget.witness_attempts)
         {
-            return Err(refuse(
-                "current Court operation exceeds signed service usage",
-            ));
+            return Err(refuse("current Court operation exceeds signed service usage"));
         }
         if witness_opened {
-            let (witness, coverage) =
-                machine.opened_witness_rows_v2(&self.state, &prior, body, &replayed, origin)?;
+            let (witness, coverage) = machine.opened_witness_rows_v2(&self.state, &prior, body, &replayed, origin)?;
             let mut case = prior;
             case.status = replayed.after.status;
             case.witness_status = replayed.after.last_attempt.ok_or_else(missing)?.status;
-            case.usage.witness_attempts = case
-                .usage
-                .witness_attempts
-                .checked_add(delta.attempts)
-                .ok_or_else(missing)?;
-            case.usage.transmitted_bytes = case
-                .usage
-                .transmitted_bytes
-                .checked_add(delta.signed_wire_bytes)
-                .ok_or_else(missing)?;
+            case.usage.witness_attempts = case.usage.witness_attempts.checked_add(delta.attempts).ok_or_else(missing)?;
+            case.usage.transmitted_bytes = case.usage.transmitted_bytes.checked_add(delta.signed_wire_bytes).ok_or_else(missing)?;
             case.last_event = origin;
             let journal = journal.ok_or_else(missing)?;
             let checkpoint = self.try_checkpoint()?;
@@ -2959,14 +2226,9 @@ impl TransitionBuilder<'_> {
             let NativeRowBody::Coverage(coverage) = required(&self.state, key)? else {
                 return Err(refuse("checked frame requires rooted Coverage"));
             };
-            let coverage =
-                exact_frame_coverage_v2(coverage, &replayed, frame.len() as u64, origin)?;
+            let coverage = exact_frame_coverage_v2(coverage, &replayed, frame.len() as u64, origin)?;
             let mut case = prior;
-            case.usage.transmitted_bytes = case
-                .usage
-                .transmitted_bytes
-                .checked_add(delta.signed_wire_bytes)
-                .ok_or_else(missing)?;
+            case.usage.transmitted_bytes = case.usage.transmitted_bytes.checked_add(delta.signed_wire_bytes).ok_or_else(missing)?;
             case.last_event = origin;
             let journal = journal.ok_or_else(missing)?;
             let checkpoint = self.try_checkpoint()?;
@@ -2984,17 +2246,10 @@ impl TransitionBuilder<'_> {
             use misaka_palw_positive_contract::{messages::WitnessStatus, rows::CoverageState};
             let (positive_witness, coverage_descriptor, coverage_state) = if passed {
                 let fact = machine.facts.last().ok_or_else(missing)?;
-                if fact.case() != prior.case
-                    || fact.result() != prior.result
-                    || fact.scope() != prior.coverage.scope
-                {
+                if fact.case() != prior.case || fact.result() != prior.result || fact.scope() != prior.coverage.scope {
                     return Err(refuse("checked Finish differs from the rooted Case"));
                 }
-                (
-                    Some(fact.witness()),
-                    fact.terminal().descriptor(),
-                    CoverageState::Matched,
-                )
+                (Some(fact.witness()), fact.terminal().descriptor(), CoverageState::Matched)
             } else {
                 (None, prior.coverage, CoverageState::EndedUnverified)
             };
@@ -3002,24 +2257,15 @@ impl TransitionBuilder<'_> {
                 status: replayed.after.status,
                 positive_witness,
                 coverage: coverage_descriptor,
-                witness_status: replayed
-                    .after
-                    .last_attempt
-                    .map_or(WitnessStatus::Building, |attempt| attempt.status),
+                witness_status: replayed.after.last_attempt.map_or(WitnessStatus::Building, |attempt| attempt.status),
                 last_event: origin,
                 ..prior
             };
             let journal = journal.ok_or_else(missing)?;
             let checkpoint = self.try_checkpoint()?;
             let result = (|| {
-                if let Some(attempt) = replayed
-                    .before
-                    .last_attempt
-                    .filter(|attempt| attempt.status == WitnessStatus::Checking)
-                {
-                    let NativeRowBody::Coverage(mut coverage) =
-                        required(&self.state, NativeRowKey::Coverage(attempt.witness))?
-                    else {
+                if let Some(attempt) = replayed.before.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) {
+                    let NativeRowBody::Coverage(mut coverage) = required(&self.state, NativeRowKey::Coverage(attempt.witness))? else {
                         return Err(refuse("Court terminal requires the active Coverage row"));
                     };
                     coverage.state = coverage_state;
@@ -3043,9 +2289,7 @@ impl TransitionBuilder<'_> {
                 || update.fee_intent().is_some() != response.is_some()
                 || receipt.is_some_and(|row| row.settlement.is_some())
             {
-                return Err(refuse(
-                    "source event receipt does not match a checked first response",
-                ));
+                return Err(refuse("source event receipt does not match a checked first response"));
             }
             let case = *update.case_row().ok_or_else(missing)?;
             let union = *update.union().ok_or_else(missing)?;
@@ -3073,11 +2317,7 @@ impl TransitionBuilder<'_> {
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
-        let PositiveNativeOperationV2::PositiveCourtAttestation {
-            attestation,
-            signature,
-        } = &body.operation
-        else {
+        let PositiveNativeOperationV2::PositiveCourtAttestation { attestation, signature } = &body.operation else {
             return Err(refuse("expected an assigned Court attestation"));
         };
         let (backing, mut machine, _) = self.prepare_case_predecessor_v2(action, body)?;
@@ -3085,27 +2325,16 @@ impl TransitionBuilder<'_> {
         if machine.remaining_work < machine.source_reserve.work {
             return Err(refuse("attestation must preserve outstanding source work"));
         }
-        let mut signers = roster.keys().filter(|key| {
-            Digest(crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(key))
-                == attestation.verifier_bond
-        });
-        let signer = signers
-            .next()
-            .ok_or_else(|| refuse("attestor absent from original verifier roster"))?;
+        let mut signers =
+            roster.keys().filter(|key| Digest(crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(key)) == attestation.verifier_bond);
+        let signer = signers.next().ok_or_else(|| refuse("attestor absent from original verifier roster"))?;
         if signers.next().is_some() {
             return Err(refuse("ambiguous attestor in original verifier roster"));
         }
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
             let session = machine.certification_session(&self.state, ctx, backing)?;
-            self.attest_positive_certification_v2(
-                ctx,
-                &signer,
-                attestation,
-                signature,
-                action.origin(),
-                &session,
-            )?;
+            self.attest_positive_certification_v2(ctx, &signer, attestation, signature, action.origin(), &session)?;
             let session = machine.certification_session(&self.state, ctx, backing)?;
             self.advance_positive_certification_session_v2(ctx, &session)
         })();
@@ -3130,33 +2359,15 @@ mod tests {
         let last = Hash64::from_bytes([u8::MAX; 64]);
         let mut state = PalwChainStateV2::genesis();
         let initial_root = state.state_root();
-        let unset =
-            <PalwClaimStateV2 as borsh::BorshDeserialize>::deserialize(&mut &[0u8; 8192][..])
-                .unwrap();
+        let unset = <PalwClaimStateV2 as borsh::BorshDeserialize>::deserialize(&mut &[0u8; 8192][..]).unwrap();
         assert_eq!(unset.job_identity, ZERO_HASH64);
         let mut named = unset.clone();
         named.job_identity = job;
 
-        let one = PalwDeltaEntryV2::Claim {
-            key: first,
-            old: None,
-            new: Some(unset.clone()),
-        };
-        let two = PalwDeltaEntryV2::Claim {
-            key: last,
-            old: None,
-            new: Some(named.clone()),
-        };
-        let rename = PalwDeltaEntryV2::Claim {
-            key: first,
-            old: Some(unset),
-            new: Some(named.clone()),
-        };
-        let remove = PalwDeltaEntryV2::Claim {
-            key: last,
-            old: Some(named),
-            new: None,
-        };
+        let one = PalwDeltaEntryV2::Claim { key: first, old: None, new: Some(unset.clone()) };
+        let two = PalwDeltaEntryV2::Claim { key: last, old: None, new: Some(named.clone()) };
+        let rename = PalwDeltaEntryV2::Claim { key: first, old: Some(unset), new: Some(named.clone()) };
+        let remove = PalwDeltaEntryV2::Claim { key: last, old: Some(named), new: None };
         apply_delta_entry(&mut state, &one, false).unwrap();
         assert!(state.has_claim_for_job_v2(ZERO_HASH64));
         apply_delta_entry(&mut state, &two, false).unwrap();
@@ -3180,9 +2391,7 @@ mod tests {
     #[test]
     fn rooted_positive_claim_refuses_legacy_primary_and_kernel_holder_writes() {
         use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1};
-        use misaka_palw_kernel::rows::{
-            TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1,
-        };
+        use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1};
         use misaka_palw_positive_contract::{identity::ClaimId, native::KERNEL_AUX_TABLE};
 
         let claim = Hash64::from_bytes([13; 64]);
@@ -3193,40 +2402,18 @@ mod tests {
             None,
             misaka_palw_kernel::rows::LedgerScalarsV1::default(),
         ));
-        let params =
-            PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, other, 4, 1000, 100, 1000, 0)
-                .unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, other, 4, 1000, 100, 1000, 0).unwrap();
         let extras = PalwTransitionExtrasV1::default();
         let key = NativeRowKey::ClaimIndex(ClaimId(Digest(claim.as_bytes()))).encode();
-        state
-            .kernel_route
-            .as_mut()
-            .unwrap()
-            .aux
-            .insert((KERNEL_AUX_TABLE, key), vec![1]);
+        state.kernel_route.as_mut().unwrap().aux.insert((KERNEL_AUX_TABLE, key), vec![1]);
         let root = state.state_root();
-        let mut builder =
-            TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         assert!(builder.reject_positive_claim_alias_v2(other).is_ok());
-        let row = <PalwClaimStateV2 as borsh::BorshDeserialize>::deserialize(&mut &[0u8; 8192][..])
-            .unwrap();
-        assert!(matches!(
-            builder.write_claim(claim, Some(row)),
-            Err(PalwStateV2Error::KernelRouteRefused(_))
-        ));
-        let panel = PalwPanelStateV2 {
-            anchor: other,
-            seats: Vec::new(),
-            bound_daa: 12,
-        };
-        assert!(matches!(
-            builder.write_panel(claim, Some(panel)),
-            Err(PalwStateV2Error::KernelRouteRefused(_))
-        ));
-        assert!(matches!(
-            builder.write_legacy_dispute(claim, Some(Default::default())),
-            Err(PalwStateV2Error::KernelRouteRefused(_))
-        ));
+        let row = <PalwClaimStateV2 as borsh::BorshDeserialize>::deserialize(&mut &[0u8; 8192][..]).unwrap();
+        assert!(matches!(builder.write_claim(claim, Some(row)), Err(PalwStateV2Error::KernelRouteRefused(_))));
+        let panel = PalwPanelStateV2 { anchor: other, seats: Vec::new(), bound_daa: 12 };
+        assert!(matches!(builder.write_panel(claim, Some(panel)), Err(PalwStateV2Error::KernelRouteRefused(_))));
+        assert!(matches!(builder.write_legacy_dispute(claim, Some(Default::default())), Err(PalwStateV2Error::KernelRouteRefused(_))));
 
         use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
         let bond = PalwBondKeyV2(TransactionOutpoint::new(other, 0));
@@ -3248,15 +2435,9 @@ mod tests {
             .unwrap(),
             dissection: None,
         };
-        assert!(matches!(
-            builder.write_court(other, Some(court)),
-            Err(PalwStateV2Error::KernelRouteRefused(_))
-        ));
+        assert!(matches!(builder.write_court(other, Some(court)), Err(PalwStateV2Error::KernelRouteRefused(_))));
 
-        use crate::{
-            palw_court_duty_clock_v1::CourtDutyClockV1,
-            palw_staged_court_state_v1::PalwStagedCourtRowV1,
-        };
+        use crate::{palw_court_duty_clock_v1::CourtDutyClockV1, palw_staged_court_state_v1::PalwStagedCourtRowV1};
         let duty = CourtDutyClockV1 {
             version: 1,
             profile_id: other,
@@ -3276,31 +2457,17 @@ mod tests {
             material_until_daa: 30,
         };
         assert!(matches!(
-            builder.write_staged_row_v1(
-                K::CourtDutyClock(other),
-                Some(PalwStagedCourtRowV1::CourtDutyClock(Box::new(duty)))
-            ),
+            builder.write_staged_row_v1(K::CourtDutyClock(other), Some(PalwStagedCourtRowV1::CourtDutyClock(Box::new(duty)))),
             Err(PalwStateV2Error::KernelRouteRefused(_))
         ));
 
         for (table, key, value) in [
             (TABLE_CLAIMS_V1, claim.as_bytes().to_vec(), vec![1]),
             (TABLE_OPV_CLAIMS_V1, claim.as_bytes().to_vec(), vec![1]),
-            (
-                TABLE_JOB_CLAIMS_V1,
-                other.as_bytes().to_vec(),
-                claim.as_bytes().to_vec(),
-            ),
-            (
-                TABLE_PROOF_SEALS_V1,
-                [claim.as_bytes(), other.as_bytes()].concat(),
-                vec![1],
-            ),
+            (TABLE_JOB_CLAIMS_V1, other.as_bytes().to_vec(), claim.as_bytes().to_vec()),
+            (TABLE_PROOF_SEALS_V1, [claim.as_bytes(), other.as_bytes()].concat(), vec![1]),
         ] {
-            assert!(matches!(
-                builder.write_kernel_row(table, key, Some(value)),
-                Err(PalwStateV2Error::KernelRouteRefused(_))
-            ));
+            assert!(matches!(builder.write_kernel_row(table, key, Some(value)), Err(PalwStateV2Error::KernelRouteRefused(_))));
         }
         assert!(builder.entries.is_empty());
         assert_eq!(builder.state.state_root(), root);
@@ -3355,10 +2522,7 @@ mod tests {
             (K::CourtMaterialPart(subject, 0), ()),
         ]);
         assert!(!has_legacy_staged_alias_v2(&rows, subject));
-        assert!(
-            rows.keys()
-                .all(|&key| staged_legacy_alias_subject_v2(key).is_none())
-        );
+        assert!(rows.keys().all(|&key| staged_legacy_alias_subject_v2(key).is_none()));
     }
 }
 
@@ -3367,7 +2531,4 @@ mod archive_tests {
     use super::*;
     use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as K;
     use std::collections::BTreeMap;
-
-
-
 }

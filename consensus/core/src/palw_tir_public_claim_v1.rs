@@ -14,7 +14,7 @@ use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationPlanV1, PalwTi
 use crate::palw_tir_public_custody_v1::{PalwTirPublicCustodyContractV1, PalwTirPublicOriginalCustodyV1};
 use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
 use crate::palw_tir_public_state_v1::PalwTirPublicSourceDescriptorV1;
-use crate::{palw_state_v2::PalwBondKeyV2, Hash64};
+use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::BTreeSet;
 
@@ -1560,15 +1560,16 @@ mod tests {
             prefix_state_relation: None,
         };
         let fx = frame_from_execution_with_material(x, job, 1, None, Some(&semantics), Some(&eof));
-        assert!(fx
-            .frame
-            .plan_v1()
-            .semantic
-            .as_ref()
-            .unwrap()
-            .stages
-            .iter()
-            .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer));
+        assert!(
+            fx.frame
+                .plan_v1()
+                .semantic
+                .as_ref()
+                .unwrap()
+                .stages
+                .iter()
+                .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer)
+        );
         (fx, semantics, eof, raw, table)
     }
 
@@ -2650,8 +2651,8 @@ mod tests {
     fn batch_public_time_contract_refuses_long_door_and_separates_retention() {
         use crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
         use crate::palw_tir_frame_cost_v1::{
-            is_batch_public_clock_v5, PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5,
-            PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4,
+            PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5,
+            PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4, is_batch_public_clock_v5,
         };
         use crate::palw_tir_public_allocation_v1::{
             PalwTirPublicAllocationMissingV1 as Miss, PalwTirPublicAllocationQuoteV1 as Quote,
@@ -2801,8 +2802,8 @@ pub(crate) type PalwCompactPairMaterialV67 = (
     crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
 );
 #[cfg(test)]
-pub(crate) fn palw_compact_pair_prospective_contexts_v67(
-) -> (PalwCompactPairProspectiveContextV67, PalwCompactPairProspectiveContextV67) {
+pub(crate) fn palw_compact_pair_prospective_contexts_v67()
+-> (PalwCompactPairProspectiveContextV67, PalwCompactPairProspectiveContextV67) {
     let parent = tests::family_fixture_accepted_daa_v2();
     // Every existing original/family/archive packet must be assigned strictly
     // before its service_before <= parentHard. This finite bound is independent

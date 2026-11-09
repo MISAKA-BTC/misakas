@@ -61,7 +61,13 @@ fn node(header: &str, parts: &str, report: &str) -> AnyResult<()> {
         return Err("measurement header cap".into());
     }
     let h: Header = borsh::from_slice(&std::fs::read(header)?)?;
-    let scope = AdmissionScopeV2 { network: h.result.network, branch: h.result.branch, ruleset: h.result.ruleset, required_form: gate::ClaimFormV2::MinerResultV2, registered_class_id: h.registered_class_id };
+    let scope = AdmissionScopeV2 {
+        network: h.result.network,
+        branch: h.result.branch,
+        ruleset: h.result.ruleset,
+        required_form: gate::ClaimFormV2::MinerResultV2,
+        registered_class_id: h.registered_class_id,
+    };
     let mut case = ExactCaseV2::admit(
         h.result,
         &SignatureV2(h.miner_signature),

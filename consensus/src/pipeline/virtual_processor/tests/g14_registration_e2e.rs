@@ -242,7 +242,12 @@ fn spec_of(c: &Case, card: usize, activation_daa: u64) -> Spec {
 /// counted against the network's ladder, the chain's own target and slash value), UNSIGNED.
 fn build(env: &Env, state: &PalwChainStateV2, s: &Spec) -> Obj {
     let (target, slash, ladder) = env.terms(state);
-    let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(&s.class,s.class.class_id(&s.root),palw_tir_attempt_canonical_v1(&s.class).expect("wide enough")).expect("decodes");
+    let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(
+        &s.class,
+        s.class.class_id(&s.root),
+        palw_tir_attempt_canonical_v1(&s.class).expect("wide enough"),
+    )
+    .expect("decodes");
     palw_tir_post_genesis_registration_v1(
         s.class.clone(),
         canonical,
@@ -1512,17 +1517,19 @@ async fn g14_downloaded_hf_artifact_registration_mined_and_replayed() {
         case.root
     );
     let mined = if case.class.decode_program().unwrap().wide_logits_q24() {
-        assert_eq!(std::env::var("MISAKA_PRIVATE_WIDE_Q24").as_deref(),Ok("1"),"explicit private wide ruleset required");
-        let (config,_,premine,floats) = t12_tir_config(0);
+        assert_eq!(std::env::var("MISAKA_PRIVATE_WIDE_Q24").as_deref(), Ok("1"), "explicit private wide ruleset required");
+        let (config, _, premine, floats) = t12_tir_config(0);
         let mut params = config.params.clone();
         params.palw_tir_v1.as_mut().unwrap().court_version = kaspa_consensus_core::palw_tir_v1::PALW_TIR_COURT_VERSION_WIDE_Q24_V2;
         params.sync_palw_tir_v1();
         let config = ConfigBuilder::new(params).skip_proof_of_work().build();
         config.params.validate_palw_v2().expect("private wide ruleset validates");
-        let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else {unreachable!()};
+        let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
         let bundle = bundle.clone();
-        mine_registration_on(Env::over((config,bundle,premine,floats)),&case,2).await
-    } else { mine_registration(&case, 2).await };
+        mine_registration_on(Env::over((config, bundle, premine, floats)), &case, 2).await
+    } else {
+        mine_registration(&case, 2).await
+    };
     let (_, state) = mined.env.chain.tip_state();
     let row = state.class(&mined.class_id).expect("registration persisted");
     assert_eq!(row.artifact_root, case.root);

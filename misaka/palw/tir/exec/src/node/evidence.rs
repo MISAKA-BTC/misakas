@@ -370,8 +370,7 @@ impl<'a> TirEvidenceV1<'a> {
     ) -> Result<Self, String> {
         kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(&capture.binding, cap).map_err(|e| e.to_string())?;
         let program = capture.binding.class.decode_program().map_err(|e| e.to_string())?;
-        let vocab =
-            program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1) as usize;
+        let vocab = program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1) as usize;
         if capture.logits_rows.iter().any(|r| r.len() != vocab)
             || kaspa_consensus_core::palw_logits_q24_v2::trace_root(
                 &capture.binding.job_context,
@@ -381,11 +380,18 @@ impl<'a> TirEvidenceV1<'a> {
         {
             return Err("wide capture trace".into());
         }
-        let prompt_root=kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form,&capture.prompt).map_err(|e|e.to_string())?;
-        if capture.prompt.len() != capture.binding.job_context.declared_prefill_tokens as usize || prompt_root != capture.binding.job_context.prompt_token_ids_hash { return Err("wide capture prompt identity".into()); }
-        let root=kaspa_consensus_core::palw_logits_q24_v2::rows_root(&capture.binding.job_context,&capture.logits_rows).ok_or("wide row roots")?;
-        let mut store=Self::dense(runner,&capture.binding,&capture.prompt,&[],&capture.generated,&capture.leaves,params,form,cap)?;
-        store.trace=TirTraceV1::Summary {rows_root:root,generated:&capture.generated,pins:&[]};
+        let prompt_root = kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &capture.prompt)
+            .map_err(|e| e.to_string())?;
+        if capture.prompt.len() != capture.binding.job_context.declared_prefill_tokens as usize
+            || prompt_root != capture.binding.job_context.prompt_token_ids_hash
+        {
+            return Err("wide capture prompt identity".into());
+        }
+        let root = kaspa_consensus_core::palw_logits_q24_v2::rows_root(&capture.binding.job_context, &capture.logits_rows)
+            .ok_or("wide row roots")?;
+        let mut store =
+            Self::dense(runner, &capture.binding, &capture.prompt, &[], &capture.generated, &capture.leaves, params, form, cap)?;
+        store.trace = TirTraceV1::Summary { rows_root: root, generated: &capture.generated, pins: &[] };
         Ok(store)
     }
 
@@ -1099,7 +1105,9 @@ impl PalwTirEvidenceStoreV1 for TirEvidenceV1<'_> {
                     generated_token_ids: generated.to_vec(),
                 }))
             }
-            (TirTraceV1::Summary { rows_root, generated, .. }, s) if s == tiled_logits_scheme_id_v1() || self.runner.space.program.wide_logits_q24() => {
+            (TirTraceV1::Summary { rows_root, generated, .. }, s)
+                if s == tiled_logits_scheme_id_v1() || self.runner.space.program.wide_logits_q24() =>
+            {
                 self.admit_copy((generated.len() as u64).checked_mul(8)?.checked_add(256)?)?;
                 Some(PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated.to_vec() }))
             }

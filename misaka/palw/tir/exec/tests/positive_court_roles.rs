@@ -144,7 +144,13 @@ fn run_case(wide: bool, scenario: Scenario) {
     );
     // The Node has the registered program and authenticated material in parts.
     // No Node runner or params/model object is supplied to ExactCaseV2.
-    let scope = AdmissionScopeV2 { network: result.network, branch: result.branch, ruleset: result.ruleset, required_form: gate::ClaimFormV2::MinerResultV2, registered_class_id: class_id };
+    let scope = AdmissionScopeV2 {
+        network: result.network,
+        branch: result.branch,
+        ruleset: result.ruleset,
+        required_form: gate::ClaimFormV2::MinerResultV2,
+        registered_class_id: class_id,
+    };
     let mut node = ExactCaseV2::admit(
         result.clone(),
         &miner_sig,
@@ -174,17 +180,24 @@ fn run_case(wide: bool, scenario: Scenario) {
             part.cone.output_preimage.values_le[0] ^= 1;
         }
         if wide && part.trace.is_some() {
-            assert!(part.cone.output_preimage.values_le.chunks_exact(8).any(|bytes|
-                i64::from_le_bytes(bytes.try_into().unwrap()).unsigned_abs() > i32::MAX as u64));
+            assert!(
+                part.cone
+                    .output_preimage
+                    .values_le
+                    .chunks_exact(8)
+                    .any(|bytes| i64::from_le_bytes(bytes.try_into().unwrap()).unsigned_abs() > i32::MAX as u64)
+            );
         }
         if matches!(scenario, Scenario::BadPanelTrace) {
             if let Some(event) = &mut part.trace {
                 match event {
                     kaspa_consensus_core::palw_tir_court_v1::PalwTirTraceEventDisclosureV1::Tiled { tile_lanes, .. } => {
-                        let last = tile_lanes.len() - 1; tile_lanes[last] ^= 1;
+                        let last = tile_lanes.len() - 1;
+                        tile_lanes[last] ^= 1;
                     }
                     kaspa_consensus_core::palw_tir_court_v1::PalwTirTraceEventDisclosureV1::WideQ24V2 { event, .. } => {
-                        let last = event.lanes.len() - 1; event.lanes[last] ^= 1;
+                        let last = event.lanes.len() - 1;
+                        event.lanes[last] ^= 1;
                     }
                     _ => unreachable!(),
                 }

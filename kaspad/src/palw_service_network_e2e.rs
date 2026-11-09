@@ -10,20 +10,32 @@ mod rpc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_relay() {
-    run_scoped_socket_test("automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_relay",
-        PublicCase::UnretainedLargeConstraintJob, RecoveryMode::Network).await;
+    run_scoped_socket_test(
+        "automatic_public_job_multipart_is_authenticated_after_socket_p2p_block_relay",
+        PublicCase::UnretainedLargeConstraintJob,
+        RecoveryMode::Network,
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sole_socket_receiver_verifier_acquires_automatic_multipart_and_independently_releases() {
-    run_scoped_socket_test("sole_socket_receiver_verifier_acquires_automatic_multipart_and_independently_releases",
-        PublicCase::UnretainedLargeConstraintJob, RecoveryMode::NetworkVerifier).await;
+    run_scoped_socket_test(
+        "sole_socket_receiver_verifier_acquires_automatic_multipart_and_independently_releases",
+        PublicCase::UnretainedLargeConstraintJob,
+        RecoveryMode::NetworkVerifier,
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to_objective_default() {
-    run_scoped_socket_test("sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to_objective_default",
-        PublicCase::UnretainedWithheldFpV3Binding, RecoveryMode::NetworkVerifier).await;
+    run_scoped_socket_test(
+        "sole_socket_receiver_verifier_carries_requests_through_real_tx_relay_to_objective_default",
+        PublicCase::UnretainedWithheldFpV3Binding,
+        RecoveryMode::NetworkVerifier,
+    )
+    .await;
 }
 
 /// Validate days of native DA time over real socket and consensus flows.
@@ -42,8 +54,11 @@ async fn run_scoped_socket_test(name: &str, case: PublicCase, mode: RecoveryMode
             .args([full.as_str(), "--exact", "--nocapture", "--test-threads=1"])
             .env("MISAKA_SOCKET_CLOCK_CHILD", &full)
             .env("KASPA_TEST_CLOCK_ISOLATED", "1")
-            .status().expect("isolated native socket test starts")
-    }).await.expect("the isolated test process joins");
+            .status()
+            .expect("isolated native socket test starts")
+    })
+    .await
+    .expect("the isolated test process joins");
     assert!(status.success(), "isolated socket scenario failed: {status}");
 }
 
@@ -209,7 +224,9 @@ impl NetworkRun {
     pub(super) async fn relay(&mut self, chain: &Chain) {
         for block in &chain.history[self.relayed..] {
             let deadline = chain.wall_deadline.unwrap_or_else(|| std::time::Instant::now() + Duration::from_secs(360));
-            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), self.primary.broadcast(
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                self.primary.broadcast(
                     pb::KaspadMessage {
                         payload: Some(pb::kaspad_message::Payload::InvRelayBlock(pb::InvRelayBlockMessage {
                             hash: Some(block.hash().into()),
@@ -217,7 +234,10 @@ impl NetworkRun {
                         ..Default::default()
                     },
                     None,
-                )).await.expect("service deadline while broadcasting the actual socket block inventory");
+                ),
+            )
+            .await
+            .expect("service deadline while broadcasting the actual socket block inventory");
             // Bound the source's native relay queue by an independently validated
             // body. This is backpressure over the real socket, not direct insertion
             // or a heartbeat allowance exemption. Each next native slot lets the
@@ -227,16 +247,23 @@ impl NetworkRun {
             loop {
                 if let Some(status) = self.receiver.tc.get_block_status(block.hash()) {
                     assert!(!status.is_invalid(), "the actual receiver rejected the relayed block");
-                    if status.has_block_body() { break; }
+                    if status.has_block_body() {
+                        break;
+                    }
                 }
                 let next = self.receiver.tc.processing_counters().snapshot();
                 if next.body_counts > progress.body_counts || next.chain_block_counts > progress.chain_block_counts {
                     progress = next;
                     stalled = std::time::Instant::now() + Duration::from_secs(30);
                 }
-                assert!(std::time::Instant::now() < stalled,
+                assert!(
+                    std::time::Instant::now() < stalled,
                     "socket body stalled: block {}, receiver DAA {}, source DAA {}, processing {:?}",
-                    block.hash(), self.receiver.daa(), chain.daa(), progress);
+                    block.hash(),
+                    self.receiver.daa(),
+                    chain.daa(),
+                    progress
+                );
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         }

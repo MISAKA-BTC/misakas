@@ -87,11 +87,7 @@ impl PalwRulesForClaimV1<'_> {
     /// Compute-era receipts share the pooled census; an older claim keeps its
     /// class census even when its receipt lands after the canonical-work fence.
     pub fn receipt_census_key(&self, params: &PalwStateParamsV2) -> Hash64 {
-        if self.prices_in_compute(params) {
-            crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1()
-        } else {
-            self.claim.class_id
-        }
+        if self.prices_in_compute(params) { crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1() } else { self.claim.class_id }
     }
     pub fn check_licence_outsider(
         &self,

@@ -156,7 +156,7 @@ pub struct TirClassRunnerV1<'a> {
 /// `idx` as little-endian `u32`.
 fn lanes_le(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
     out.clear();
-    out.reserve(n * if data.dtype() == DType::I64 {8} else {4});
+    out.reserve(n * if data.dtype() == DType::I64 { 8 } else { 4 });
     with_slice!(data, v => lanes_typed(&v[from..from + n], out));
 }
 
@@ -169,7 +169,9 @@ pub(crate) fn lanes_le_v1(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<
 fn lanes_typed<T: Elem>(v: &[T], out: &mut Vec<u8>) {
     // A committed value is i8, i16, i32 or idx (NF-17); each is exactly one 4-byte lane.
     if T::DTYPE == DType::I64 {
-        for x in v { out.extend_from_slice(&x.to_i64().to_le_bytes()); }
+        for x in v {
+            out.extend_from_slice(&x.to_i64().to_le_bytes());
+        }
     } else if T::DTYPE == DType::Idx {
         for x in v {
             out.extend_from_slice(&(x.to_i64() as u32).to_le_bytes());
@@ -200,7 +202,17 @@ impl<'a> TirClassRunnerV1<'a> {
             }
             tiles.push(row);
         }
-        Ok(TirClassRunnerV1 { space, plan, params, class_id, tiles, fused: false, boundary_lie: None, selector: None, wide_sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY })
+        Ok(TirClassRunnerV1 {
+            space,
+            plan,
+            params,
+            class_id,
+            tiles,
+            fused: false,
+            boundary_lie: None,
+            selector: None,
+            wide_sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
+        })
     }
 
     /// **Run with a consistent lie at a shard boundary** (the drill's D-S3; see [`TirBoundaryLieV1`]).
@@ -293,18 +305,38 @@ impl<'a> TirClassRunnerV1<'a> {
     }
 
     /// The explicit v2 result, retaining every natural-unit Q24 lane at 64 bits.
-    pub fn run_wide_q24_v2(&self, ctx: &PalwJobContextV2, prompt: &[u32], cap:u64, on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>)) -> Result<TirWideJobRunV2,String> {
-        if !self.plan.program.wide_logits_q24() || ctx.trace_scheme_id != kaspa_consensus_core::palw_logits_q24_v2::scheme_id() { return Err("wide runner profile/context scheme mismatch".into()); }
+    pub fn run_wide_q24_v2(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+    ) -> Result<TirWideJobRunV2, String> {
+        if !self.plan.program.wide_logits_q24() || ctx.trace_scheme_id != kaspa_consensus_core::palw_logits_q24_v2::scheme_id() {
+            return Err("wide runner profile/context scheme mismatch".into());
+        }
         let d = self.drive(ctx, prompt, cap, true, None, None, None, on_leaf, None, None, None)?;
         let total = d.hashes.len() as u64;
-        let step_merkle_root = step_merkle_root_capped_v1(&d.hashes,cap).map_err(|e|e.to_string())?;
-        let trace_root = kaspa_consensus_core::palw_logits_q24_v2::trace_root(ctx,&d.rows,&d.generated).ok_or("wide trace shape")?;
-        let execution_root = palw_tir_execution_root_v1(&ctx.context_hash(),&trace_root,&self.class_id,total,&step_merkle_root);
-        let output_root = palw_attempt_output_root_v1(ctx,&d.generated);
-        Ok(TirWideJobRunV2 {leaf_count:total,step_merkle_root,logits_rows:d.rows,generated:d.generated,trace_root,execution_root,output_root,leaf_hashes:d.hashes})
+        let step_merkle_root = step_merkle_root_capped_v1(&d.hashes, cap).map_err(|e| e.to_string())?;
+        let trace_root = kaspa_consensus_core::palw_logits_q24_v2::trace_root(ctx, &d.rows, &d.generated).ok_or("wide trace shape")?;
+        let execution_root = palw_tir_execution_root_v1(&ctx.context_hash(), &trace_root, &self.class_id, total, &step_merkle_root);
+        let output_root = palw_attempt_output_root_v1(ctx, &d.generated);
+        Ok(TirWideJobRunV2 {
+            leaf_count: total,
+            step_merkle_root,
+            logits_rows: d.rows,
+            generated: d.generated,
+            trace_root,
+            execution_root,
+            output_root,
+            leaf_hashes: d.hashes,
+        })
     }
 
-    pub fn with_wide_sampling_v2(mut self, sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2) -> Self { self.wide_sampling=sampling; self }
+    pub fn with_wide_sampling_v2(mut self, sampling: kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2) -> Self {
+        self.wide_sampling = sampling;
+        self
+    }
 
     /// [`Self::run`], also recording a [`TirResumePointV1`] after every checkpoint position.
     pub fn run_recording(
@@ -314,7 +346,9 @@ impl<'a> TirClassRunnerV1<'a> {
         cap: u64,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<(TirJobRunV1, Vec<TirResumePointV1>), String> {
-        if self.plan.program.wide_logits_q24() { return Err("wide profile requires wide capture API".into()); }
+        if self.plan.program.wide_logits_q24() {
+            return Err("wide profile requires wide capture API".into());
+        }
         let mut points = Vec::new();
         let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf, None, None, None)?;
         Ok((self.commit(ctx, cap, d)?, points))
@@ -325,7 +359,9 @@ impl<'a> TirClassRunnerV1<'a> {
         debug_assert_eq!(d.first_index, 0);
         let total = d.hashes.len() as u64;
         let step_merkle_root = step_merkle_root_capped_v1(&d.hashes, cap).map_err(|e| e.to_string())?;
-        if self.plan.program.wide_logits_q24() { return Err("wide run requires wide result API".into()); }
+        if self.plan.program.wide_logits_q24() {
+            return Err("wide run requires wide result API".into());
+        }
         let rows = narrow_rows(d.rows)?;
         let trace_root = if d.tiled {
             tiled_logits_trace_root_v1(ctx, &rows, &d.generated).ok_or("the logits rows build no trace")?
@@ -441,20 +477,7 @@ impl<'a> TirClassRunnerV1<'a> {
                 let narrow = narrow_row(row)?;
                 narrow_sink(index, &narrow)
             };
-            self.drive_reserved(
-                ctx,
-                prompt,
-                cap,
-                verify,
-                start,
-                until,
-                record,
-                on_leaf,
-                Some(&mut adapt),
-                last_resume,
-                observer,
-                None,
-            )
+            self.drive_reserved(ctx, prompt, cap, verify, start, until, record, on_leaf, Some(&mut adapt), last_resume, observer, None)
         } else {
             self.drive_reserved(ctx, prompt, cap, verify, start, until, record, on_leaf, None, last_resume, observer, None)
         }
@@ -634,11 +657,17 @@ impl<'a> TirClassRunnerV1<'a> {
                     return Err("an empty logits row selects no token".into());
                 }
                 let id = if self.plan.program.wide_logits_q24() {
-                    if self.selector.is_some() { return Err("legacy selector refuses wide logits".into()); }
-                    kaspa_consensus_core::palw_logits_q24_v2::select(&row,&self.wide_sampling,generated.len() as u32).ok_or("empty wide logits")? as u32
+                    if self.selector.is_some() {
+                        return Err("legacy selector refuses wide logits".into());
+                    }
+                    kaspa_consensus_core::palw_logits_q24_v2::select(&row, &self.wide_sampling, generated.len() as u32)
+                        .ok_or("empty wide logits")? as u32
                 } else {
                     let narrow = narrow_row(&row)?;
-                    match self.selector.as_ref() { Some(select) => select(&generated,&narrow,generated.len() as u32), None => base0_decode_token_select_v1(&narrow) as u32 }
+                    match self.selector.as_ref() {
+                        Some(select) => select(&generated, &narrow, generated.len() as u32),
+                        None => base0_decode_token_select_v1(&narrow) as u32,
+                    }
                 };
                 if let Some(observe) = observer.as_mut() {
                     let dtype = self.plan.program.blocks[self.plan.program.schedule.post as usize].nodes
@@ -923,8 +952,18 @@ fn check_position(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TirWideJobRunV2 {
-    pub leaf_count:u64, pub step_merkle_root:Hash64, pub logits_rows:Vec<Vec<i64>>, pub generated:Vec<u32>,
-    pub trace_root:Hash64, pub execution_root:Hash64, pub output_root:Hash64, pub leaf_hashes:Vec<Hash64>,
+    pub leaf_count: u64,
+    pub step_merkle_root: Hash64,
+    pub logits_rows: Vec<Vec<i64>>,
+    pub generated: Vec<u32>,
+    pub trace_root: Hash64,
+    pub execution_root: Hash64,
+    pub output_root: Hash64,
+    pub leaf_hashes: Vec<Hash64>,
 }
-fn narrow_row(row: &[i64]) -> Result<Vec<i32>,String> { row.iter().map(|v| i32::try_from(*v).map_err(|_| "legacy i32 consumer refuses wide logit".into())).collect() }
-fn narrow_rows(rows: Vec<Vec<i64>>) -> Result<Vec<Vec<i32>>,String> { rows.iter().map(|r|narrow_row(r)).collect() }
+fn narrow_row(row: &[i64]) -> Result<Vec<i32>, String> {
+    row.iter().map(|v| i32::try_from(*v).map_err(|_| "legacy i32 consumer refuses wide logit".into())).collect()
+}
+fn narrow_rows(rows: Vec<Vec<i64>>) -> Result<Vec<Vec<i32>>, String> {
+    rows.iter().map(|r| narrow_row(r)).collect()
+}

@@ -31,9 +31,9 @@ pub mod positive_panel;
 #[cfg(feature = "positive-panel")]
 pub mod positive_typed_adapter;
 #[cfg(feature = "positive-panel")]
-pub mod positive_typed_capture;
-#[cfg(feature = "positive-panel")]
 pub mod positive_typed_adapter;
+#[cfg(feature = "positive-panel")]
+pub mod positive_typed_capture;
 mod public_source;
 pub mod residency;
 pub mod run;

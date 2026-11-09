@@ -1244,7 +1244,12 @@ impl ValidatorKey {
         let mut bytes = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
         borsh::BorshSerialize::serialize(wire, &mut bytes).map_err(|e| format!("Batch Court payload: {e}"))?;
         let tx = self.build_funded_overlay_tx(
-            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, bytes, funding_outpoint, funding, fee, false,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            bytes,
+            funding_outpoint,
+            funding,
+            fee,
+            false,
         )?;
         decode_batch_court_carrier_v1(&tx)?.ok_or("missing Batch Court payload")?;
         Ok(tx)

@@ -41,6 +41,7 @@
 //! The SDK is where a model becomes a class; it is not a wallet and not a deployment tool.
 
 #![cfg_attr(test, allow(warnings))]
+pub mod chain_registered;
 /// RFC-0002 Phase F (F10): `palw-class check-architecture` — IR and legacy verdicts for a config.
 pub mod check_architecture;
 pub mod class_manifest;
@@ -54,7 +55,6 @@ pub mod improve_eval;
 /// RFC-0004's objects (A10), built and signed offline: policy, hard cases, setter sets, datasets, teaching
 /// artifacts, licences, candidates, rollbacks — what `palw-class improve …` writes.
 pub mod improve_objects;
-pub mod chain_registered;
 pub mod lineage;
 pub mod lineages {
     pub mod dense;

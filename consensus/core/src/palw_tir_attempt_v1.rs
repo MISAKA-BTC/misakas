@@ -57,7 +57,8 @@ impl PalwTirJobFactsV1 {
             class_id,
             max_context: class.layout.max_context,
             token_bound: program.token_bound,
-            tiled: program.wide_logits_q24() || Hash64::from_bytes(program.logits_scheme_id) == crate::palw_step_refute::tiled_logits_scheme_id_v1(),
+            tiled: program.wide_logits_q24()
+                || Hash64::from_bytes(program.logits_scheme_id) == crate::palw_step_refute::tiled_logits_scheme_id_v1(),
             held: program.history_bound == misaka_palw_tir::program::HISTORY_BOUND_V1_HELD,
         }
     }
@@ -135,7 +136,9 @@ pub fn palw_tir_job_context_v1(facts: &PalwTirJobFactsV1, canonical: (u32, u32))
 pub fn palw_tir_canonical_context_v1(class: &PalwTirClassV1, class_id: Hash64, canonical: (u32, u32)) -> Option<PalwJobContextV2> {
     let facts = PalwTirJobFactsV1::of_class(class, class_id).ok()?;
     let mut ctx = palw_tir_job_context_v1(&facts, canonical);
-    if class.decode_program().ok()?.wide_logits_q24() { ctx.trace_scheme_id = crate::palw_logits_q24_v2::scheme_id(); }
+    if class.decode_program().ok()?.wide_logits_q24() {
+        ctx.trace_scheme_id = crate::palw_logits_q24_v2::scheme_id();
+    }
     Some(ctx)
 }
 

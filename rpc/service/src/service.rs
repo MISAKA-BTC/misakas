@@ -4038,14 +4038,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 return Err(RpcError::General("Batch Court quotes require operator RPC".into()));
             }
             let target = palw_batch_quote_target(&request)?;
-            let permit = BATCH_QUOTE
-                .try_acquire()
-                .map_err(|_| RpcError::General("Batch Court quote is busy".into()))?;
+            let permit = BATCH_QUOTE.try_acquire().map_err(|_| RpcError::General("Batch Court quote is busy".into()))?;
             (target, Some(permit))
         } else {
             let target = match (
-                request.claim_hex.is_empty(), request.session_hex.is_empty(),
-                request.batch_ordinal.is_empty(), request.batch_target.is_empty(),
+                request.claim_hex.is_empty(),
+                request.session_hex.is_empty(),
+                request.batch_ordinal.is_empty(),
+                request.batch_target.is_empty(),
             ) {
                 (false, true, true, true) => PalwCourtTargetV1::Claim(palw_user_view_hash64("claim", &request.claim_hex)?),
                 (true, false, true, true) => PalwCourtTargetV1::Session(palw_user_view_hash64("session", &request.session_hex)?),
@@ -6237,9 +6237,11 @@ fn palw_batch_view_target(text: &str) -> RpcResult<kaspa_consensus_core::palw_co
 fn palw_batch_quote_target(
     request: &GetPalwCourtStateRequest,
 ) -> RpcResult<kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1> {
-    use kaspa_consensus_core::{palw_batch_court_v1::MAX_BATCH_RANGES_V1, palw_user_views_v1::PalwCourtTargetV1};
     use kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1;
-    let invalid = || RpcError::General("a Batch quote needs a claim and stop or verify-numerical, or a claim, ordinal and notice/leaf/target=bytes or notice/stop-full-ids".into());
+    use kaspa_consensus_core::{palw_batch_court_v1::MAX_BATCH_RANGES_V1, palw_user_views_v1::PalwCourtTargetV1};
+    let invalid = || {
+        RpcError::General("a Batch quote needs a claim and stop or verify-numerical, or a claim, ordinal and notice/leaf/target=bytes or notice/stop-full-ids".into())
+    };
     if !request.session_hex.is_empty() || !request.batch_target.is_empty() || request.batch_open.len() > 4_096 {
         return Err(invalid());
     }
@@ -6284,8 +6286,12 @@ fn palw_batch_quote_target(
 fn numerical_batch_open_selector_is_bounded_and_exclusive() {
     use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1;
     let notice = "cd".repeat(64);
-    let mut request = GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), batch_ordinal: "0".into(),
-        batch_open: format!("{notice}/18446744073709551615/unit:3=8,prompt-flat=4"), ..Default::default() };
+    let mut request = GetPalwCourtStateRequest {
+        claim_hex: "ab".repeat(64),
+        batch_ordinal: "0".into(),
+        batch_open: format!("{notice}/18446744073709551615/unit:3=8,prompt-flat=4"),
+        ..Default::default()
+    };
     assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::NumericalBatchOpen {
         ordinal: 0, leaf: u64::MAX, lengths, ..
     }) if lengths.len() == 2 && lengths[0].1 == 8));

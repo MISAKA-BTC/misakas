@@ -5,8 +5,7 @@ use crate::Hash64;
 use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA, shared_initial_notice_daa_in_window_v1};
 use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1};
 use crate::palw_native_resource_v1::{
-    NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
-    reserve_native_requests_v1,
+    NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1, reserve_native_requests_v1,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::blake2b_512_keyed;
@@ -292,9 +291,14 @@ pub enum BatchCourtErrorV1 {
     VerificationUnavailable,
     Checkpoint,
     Clock,
-    OverTarget { required_daa: u64 },
+    OverTarget {
+        required_daa: u64,
+    },
     /// The ordered public graph does not fit in the 6,880 DAA after the latest legal first notice.
-    PublicBudget { required_daa: u64, allowed_daa: u64 },
+    PublicBudget {
+        required_daa: u64,
+        allowed_daa: u64,
+    },
 }
 
 fn part_digest(bytes: &[u8]) -> Hash64 {
@@ -816,13 +820,18 @@ mod tests {
         let local = NativeCoverageV1::unsupported::<ServiceReservations>("Batch test", "no local workspace");
         let empty_quote = latest_notice_workspace_bytes_v1(&initial, &graph).unwrap();
         assert_eq!(
-            case.reserve_latest_notice_with_v1(&mut book, &graph, terminal, recovery, |_, _| {
-                panic!("local refusal must precede candidate construction")
-            }, |bytes| {
-                assert_eq!(bytes, empty_quote);
-                assert!(bytes > 0);
-                Err(local.clone())
-            }),
+            case.reserve_latest_notice_with_v1(
+                &mut book,
+                &graph,
+                terminal,
+                recovery,
+                |_, _| { panic!("local refusal must precede candidate construction") },
+                |bytes| {
+                    assert_eq!(bytes, empty_quote);
+                    assert!(bytes > 0);
+                    Err(local.clone())
+                }
+            ),
             Err(BatchCourtErrorV1::LocalResource(local)),
         );
         assert_eq!(book, initial);

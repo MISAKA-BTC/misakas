@@ -299,9 +299,15 @@ impl PalwTirPublicSourceV1 {
         budget: StreamingParameterCoverBudgetV1,
         mut size_root: impl FnMut(u64, &[u32]) -> Result<u64, String>,
     ) -> Result<StreamingParameterCoverSummaryV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-        Self::root_cover_streaming_size_v1(source, registered, layout, budget, false, 0..source.leaf_count_v1(), |leaf, parameters, _| {
-            size_root(leaf, parameters)
-        })
+        Self::root_cover_streaming_size_v1(
+            source,
+            registered,
+            layout,
+            budget,
+            false,
+            0..source.leaf_count_v1(),
+            |leaf, parameters, _| size_root(leaf, parameters),
+        )
     }
 
     /// Size the numerical roots with their canonical parameter and dynamic
@@ -332,10 +338,11 @@ impl PalwTirPublicSourceV1 {
         if leaf >= source.leaf_count_v1() {
             return Err(NativeDecodeErrorV1::Decode("selected numerical leaf is outside the original".into()));
         }
-        let summary = Self::root_cover_streaming_size_v1(source, registered, layout, budget, true, leaf..leaf + 1, |_, params, inputs| {
-            visit(params, inputs)?;
-            Ok(0)
-        })?;
+        let summary =
+            Self::root_cover_streaming_size_v1(source, registered, layout, budget, true, leaf..leaf + 1, |_, params, inputs| {
+                visit(params, inputs)?;
+                Ok(0)
+            })?;
         if summary.numerical_roots != 1 {
             return Err(NativeDecodeErrorV1::Decode("selected leaf is not a numerical root".into()));
         }
@@ -430,14 +437,15 @@ impl PalwTirPublicSourceV1 {
     ) -> Result<OriginalParameterCoverV1, CoverErrorV1> {
         let mut roots = Vec::new();
         let mut union = BTreeSet::new();
-        let summary = self.visit_prepared_roots_v1(prepared, budget, budget, inputs.is_some(), 0..self.leaf_count_v1(), |root, boundaries| {
-            if let Some(out) = inputs.as_mut() {
-                out.push(NamedRootInputCoverV1 { leaf: root.leaf, inputs: boundaries.into_iter().collect() });
-            }
-            union.extend(root.parameters.iter().copied());
-            roots.push(root);
-            Ok(())
-        })?;
+        let summary =
+            self.visit_prepared_roots_v1(prepared, budget, budget, inputs.is_some(), 0..self.leaf_count_v1(), |root, boundaries| {
+                if let Some(out) = inputs.as_mut() {
+                    out.push(NamedRootInputCoverV1 { leaf: root.leaf, inputs: boundaries.into_iter().collect() });
+                }
+                union.extend(root.parameters.iter().copied());
+                roots.push(root);
+                Ok(())
+            })?;
         Ok(OriginalParameterCoverV1 {
             source_id: summary.source_id,
             original_leaves: summary.original_leaves,
@@ -832,18 +840,31 @@ mod root_input_tests {
             let selected = cover.roots.len() - 1;
             let mut selected_calls = 0;
             PalwTirPublicSourceV1::visit_selected_root_inputs_v1(
-                &source, &f.record, &f.layout, streaming, cover.roots[selected].leaf, |parameters, inputs| {
+                &source,
+                &f.record,
+                &f.layout,
+                streaming,
+                cover.roots[selected].leaf,
+                |parameters, inputs| {
                     assert_eq!(parameters, cover.parameters.roots[selected].parameters.as_slice());
                     assert!(inputs.iter().eq(cover.roots[selected].inputs.iter()));
                     selected_calls += 1;
                     Ok(())
                 },
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(selected_calls, 1);
-            assert!(PalwTirPublicSourceV1::visit_selected_root_inputs_v1(
-                &source, &f.record, &f.layout, streaming, source.leaf_count_v1(),
-                |_, _| panic!("out-of-range leaf must not visit a root"),
-            ).is_err());
+            assert!(
+                PalwTirPublicSourceV1::visit_selected_root_inputs_v1(
+                    &source,
+                    &f.record,
+                    &f.layout,
+                    streaming,
+                    source.leaf_count_v1(),
+                    |_, _| panic!("out-of-range leaf must not visit a root"),
+                )
+                .is_err()
+            );
             assert!(matches!(
                 PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(
                     &source,

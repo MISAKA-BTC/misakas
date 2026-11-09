@@ -288,7 +288,8 @@ impl TransitionBuilder<'_> {
             kernel.ledger_cache.clear();
         }
         let map_key = (table, key.clone());
-        kernel.update_positive_aux_indexes_v2(&map_key, new.as_deref())
+        kernel
+            .update_positive_aux_indexes_v2(&map_key, new.as_deref())
             .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid Positive indexed row: {error:?}")))?;
         let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
         let old = match &new {

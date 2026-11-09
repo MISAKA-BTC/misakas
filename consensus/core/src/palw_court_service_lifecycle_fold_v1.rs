@@ -102,14 +102,19 @@ pub(super) fn install_shared_frontier_context_v1(
         .map_err(|e| refused(format!("shared frontier install refused: {e}")))?;
     // F03b2 (provisional): Q (in packets, every coordinate at its maximum size) <= c * W, so the schedule serves every coordinate
     // before hard. Over capacity is a production error at original acceptance: the admission is refused (checkpoint restores).
-    let fits = |packets| crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
-        packets, crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
-        derived.hard_daa.saturating_sub(derived.original_accepted_daa),
-    );
+    let fits = |packets| {
+        crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
+            packets,
+            crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
+            derived.hard_daa.saturating_sub(derived.original_accepted_daa),
+        )
+    };
     // Every legal coordinate requires at least one packet.
     if !fits(derived.queries)
-        || !fits(crate::palw_court_shared_tir_state_v1::shared_frontier_universe_packets_v1(&b.state, &derived)
-            .map_err(|e| refused(format!("shared frontier packets: {e}")))?)
+        || !fits(
+            crate::palw_court_shared_tir_state_v1::shared_frontier_universe_packets_v1(&b.state, &derived)
+                .map_err(|e| refused(format!("shared frontier packets: {e}")))?,
+        )
     {
         return Err(refused("shared frontier universe exceeds the reserved service capacity of the hard window"));
     }
@@ -145,7 +150,10 @@ pub(super) fn install_prepared_batch_frontier_v1(
     {
         return Err(refused("Batch frontier requires the original's unchanged admission state"));
     }
-    let profile = b.extras.batch_numerical_profile_v1.filter(|profile| profile.service_profile == book.state.profile_id)
+    let profile = b
+        .extras
+        .batch_numerical_profile_v1
+        .filter(|profile| profile.service_profile == book.state.profile_id)
         .ok_or_else(|| refused("Batch frontier has no matching native profile"))?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim)
         .ok_or_else(|| refused("Batch frontier has no accepted original frame"))?;
@@ -167,10 +175,13 @@ pub(super) fn install_prepared_batch_frontier_v1(
         return Err(refused("Batch frontier is missing a required service slot"));
     };
     let service = profile.budget.service_cost_v1().ok_or_else(|| refused("Batch frontier replay budget is invalid"))?;
-    let first = ctx.daa_score.checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
+    let first = ctx
+        .daa_score
+        .checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
         .ok_or_else(|| refused("Batch frontier notice clock overflows"))?;
     if open_at < first
-        || open_at >= verify_at || verify_at >= terminal_at
+        || open_at >= verify_at
+        || verify_at >= terminal_at
         || terminal_at >= binding.hard_deadline_daa
         || terminal_at.checked_sub(ctx.daa_score).is_none_or(|elapsed| elapsed >= quote.required_daa)
         || quote.required_daa > crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA
@@ -405,9 +416,9 @@ pub(super) fn apply_shared_court_op_v1(
         SharedCourtOpV1::Numerical { manifest, .. } => Some(manifest.claim),
         SharedCourtOpV1::PositionBottom { control } => Some(control.control.claim),
     };
-    if delivery_claim.is_some_and(|claim| {
-        crate::palw_court_shared_tir_state_v1::context(&b.state, claim).is_ok_and(|c| c.batch_notice_only_v1())
-    }) {
+    if delivery_claim
+        .is_some_and(|claim| crate::palw_court_shared_tir_state_v1::context(&b.state, claim).is_ok_and(|c| c.batch_notice_only_v1()))
+    {
         return Err(refused("Batch original requires its reserved delivery or terminal route"));
     }
     let saved = b.try_checkpoint()?;

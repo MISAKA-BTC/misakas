@@ -1022,4 +1022,3 @@ mod scoped_kernel_checkpoint_tests {
         assert_eq!(context(&d.state).unwrap().settlements.len(), 13);
     }
 }
-

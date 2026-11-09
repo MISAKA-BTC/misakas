@@ -694,7 +694,10 @@ impl VirtualStateProcessor {
         state: &PalwChainStateV2,
         assignment: AssignmentId,
         continuation_body: Option<&[u8]>,
-    ) -> Result<Option<(NativeAssignmentRulesV2, NativeAcceptedCaseCarriageV2, AssignmentAdmissionMaterialV2)>, NativeAssignmentArchiveErrorV2> {
+    ) -> Result<
+        Option<(NativeAssignmentRulesV2, NativeAcceptedCaseCarriageV2, AssignmentAdmissionMaterialV2)>,
+        NativeAssignmentArchiveErrorV2,
+    > {
         Ok(self
             .load_original_assignment_open_v2(parent, state, assignment, continuation_body)?
             .map(|open| (open.rules, open.carriage, open.material)))

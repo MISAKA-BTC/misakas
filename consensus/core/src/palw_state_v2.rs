@@ -140,12 +140,12 @@ mod palw_exec_v2_origin_v1;
 mod palw_exec_v2_rewards_v1;
 #[path = "palw_kernel_route_fold_v1.rs"]
 mod palw_kernel_route_fold_v1;
-#[path = "palw_positive_source_apply_v2.rs"]
-mod palw_positive_source_apply_v2;
 #[path = "palw_mesh_fold_v1.rs"]
 mod palw_mesh_fold_v1;
 #[path = "palw_model_panel_one_fold_v1.rs"]
 mod palw_model_panel_one_fold_v1;
+#[path = "palw_positive_source_apply_v2.rs"]
+mod palw_positive_source_apply_v2;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_flat_model_vector_fold_v3.rs"]
 mod palw_flat_model_vector_fold_v3;
@@ -280,8 +280,8 @@ pub use palw_tir_public_fold_v1::{
     palw_family_original_native_quote_v3, palw_funded_original_answer_candidate_v1, palw_funded_original_candidate_v1,
     palw_original_archive_native_quote_v1, palw_original_archive_native_quote_v2, palw_original_archive_status_v1,
     palw_tir_public_conviction_preflight_v1, palw_tir_public_evidence_package_preflight_v1, palw_tir_public_original_quote_v1,
-    palw_tir_public_original_quote_with_diagnostics_v1,
-    palw_tir_public_preclaim_quote_v1, palw_tir_public_staged_conviction_preflight_v2,
+    palw_tir_public_original_quote_with_diagnostics_v1, palw_tir_public_preclaim_quote_v1,
+    palw_tir_public_staged_conviction_preflight_v2,
 };
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;
@@ -332,11 +332,11 @@ pub use palw_model_eligibility_fold_v1::palw_eligibility_status_of_v1;
 mod palw_claim_local_fold_v1;
 #[path = "palw_claim_local_prefix_court_v1.rs"]
 mod palw_claim_local_prefix_court_v1;
+#[path = "palw_claim_local_prefix_reservation_v1.rs"]
+mod palw_claim_local_prefix_reservation_v1;
 #[cfg(test)]
 #[path = "palw_claim_local_prefix_tir_context_v2.rs"]
 mod palw_claim_local_prefix_tir_context_v2;
-#[path = "palw_claim_local_prefix_reservation_v1.rs"]
-mod palw_claim_local_prefix_reservation_v1;
 #[path = "palw_claim_local_rewards_v1.rs"]
 mod palw_claim_local_rewards_v1;
 #[path = "palw_security_certification_fold_v1.rs"]
@@ -14865,7 +14865,18 @@ fn palw_v2_apply_one_object_input_context_inner_v19(
     extras: &PalwTransitionExtrasV1,
     context: Option<&PalwNativeOriginalInputContextV19<'_>>,
 ) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
-    rehearse_palw_object_retained_v1(base, params, ctx, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras, context, |builder| apply_object(builder, ctx, object))
+    rehearse_palw_object_retained_v1(
+        base,
+        params,
+        ctx,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+        context,
+        |builder| apply_object(builder, ctx, object),
+    )
 }
 
 /// Rehearse one BCT1 in the same pre-object state as ordinary acceptance.
@@ -14906,7 +14917,10 @@ pub fn palw_batch_template_slot_v1(
 ) -> Result<(), String> {
     use crate::palw_batch_court_v1::{
         BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
-        carriage::{BATCH_CONVICT_NUMERICAL_TAG_V1, BATCH_COURT_CARRIER_MAGIC_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1, decode_batch_court_carrier_v1},
+        carriage::{
+            BATCH_CONVICT_NUMERICAL_TAG_V1, BATCH_COURT_CARRIER_MAGIC_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1,
+            decode_batch_court_carrier_v1,
+        },
         rooted::reserved_open_slot_v1,
     };
     use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_requests_v1};
@@ -14918,7 +14932,9 @@ pub fn palw_batch_template_slot_v1(
     // Stop does not need an owned wire copy for the template's slot check.
     if payload.first() == Some(&2) {
         return crate::palw_court_shared_material_intake_v1::batch::constraint_stop::check_batch_stop_template_slot_v1(
-            state, at.daa_score, &tx.payload,
+            state,
+            at.daa_score,
+            &tx.payload,
         );
     }
     let mut q = TirNativeRequestsV1::new();
@@ -14973,7 +14989,8 @@ pub fn palw_batch_template_slot_v1(
             reserved_numerical_verification_slot_v1(state, &signed, at.daa_score).map(|_| ())
         }
         BatchCourtWireV1::ConvictNumerical(control) => {
-            let receipt = crate::palw_batch_court_v1::rooted::reserved_numerical_terminal_v1(state, control.claim, control.receipt_digest, at)?;
+            let receipt =
+                crate::palw_batch_court_v1::rooted::reserved_numerical_terminal_v1(state, control.claim, control.receipt_digest, at)?;
             if receipt.fault_evidence.is_none() {
                 return Err("numerical terminal receipt contains no fault".into());
             }
@@ -23538,13 +23555,13 @@ pub(crate) fn apply_delta_prefix_v2(
     for entry in entries {
         apply_delta_entry(&mut state, entry, false)?;
     }
-    palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state,delta,false,params)?;
+    palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, false, params)?;
     palw_claim_local_context_gc_v3::settle_state_v3(&mut state).map_err(palw_claim_local_paid_archive_v2::state_error)?;
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
     rebuild_deadline_free_indices(&mut state);
     rebuild_deadline_index_v2(&mut state, params)?;
     rebuild_capacity_weight_index_v1(&mut state, params);
-    palw_claim_local_execution_cohort_census_v15::settle_replay_boundary_v15(&mut state,params)?;
+    palw_claim_local_execution_cohort_census_v15::settle_replay_boundary_v15(&mut state, params)?;
     Ok(state)
 }
 
@@ -23663,7 +23680,7 @@ pub(crate) fn replay_delta_owned_v1(
             }
         }
     }
-    palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state,delta,true,params)?;
+    palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, true, params)?;
     palw_claim_local_context_gc_v3::settle_state_v3(&mut state).map_err(palw_claim_local_paid_archive_v2::state_error)?;
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
     rebuild_deadline_free_indices(&mut state);
@@ -23705,7 +23722,8 @@ fn apply_kernel_route_row_v1(
     if actual != expected.as_ref() {
         return Err(PalwStateV2Error::DeltaMismatch("a kernel route row does not match the delta's expectation"));
     }
-    kernel.update_positive_aux_indexes_v2(&k, install.as_deref())
+    kernel
+        .update_positive_aux_indexes_v2(&k, install.as_deref())
         .map_err(|_| PalwStateV2Error::DeltaMismatch("a Positive indexed row does not match its canonical key"))?;
     let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
     match install {
@@ -26473,7 +26491,8 @@ impl PalwStateCarriageV2 {
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
         palw_improve_eval_fold_v1::palw_improve_eval_carriage_consistent_v1(&self.improvement_eval_jobs, &self.improvement_epochs)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
-        let claims_by_job = self.claims.iter().filter_map(|(id, row)| (row.job_identity != ZERO_HASH64).then_some((row.job_identity, *id))).collect();
+        let claims_by_job =
+            self.claims.iter().filter_map(|(id, row)| (row.job_identity != ZERO_HASH64).then_some((row.job_identity, *id))).collect();
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,

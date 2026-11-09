@@ -63,10 +63,7 @@ fn scoped_heap_row_noop_and_removal_admit_before_mutation() {
     builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
 
     // Equality does not bypass the historical quote for the replacement clone.
-    assert!(matches!(
-        builder.write_held_leaf_demands(h64(1), Some(demands)),
-        Err(PalwStateV2Error::NativeResource(_))
-    ));
+    assert!(matches!(builder.write_held_leaf_demands(h64(1), Some(demands)), Err(PalwStateV2Error::NativeResource(_))));
     // Removing an existing row still needs its delta slot before the removal.
     assert!(matches!(builder.write_payout(h64(2), None), Err(PalwStateV2Error::NativeResource(_))));
     assert_eq!(builder.state, parent);

@@ -317,11 +317,16 @@ impl PositiveAssignmentRawActionV2 {
     }
 
     /// Retain the original accepted op8 and executed prefix for op9 replay.
-    pub fn with_original_open_carriage_v2(mut self, carriage: NativeAcceptedCaseCarriageV2, admission: AssignmentAdmissionMaterialV2) -> Result<Self, NativeCoverageV1> {
+    pub fn with_original_open_carriage_v2(
+        mut self,
+        carriage: NativeAcceptedCaseCarriageV2,
+        admission: AssignmentAdmissionMaterialV2,
+    ) -> Result<Self, NativeCoverageV1> {
         let error =
             || NativeCoverageV1::unsupported::<Self>("original Assignment carriage", "wrong operation, origin or shared owner");
         let data = Arc::get_mut(&mut self.0).ok_or_else(error)?;
-        if data.original_open.is_some() || data.original_admission.is_some()
+        if data.original_open.is_some()
+            || data.original_admission.is_some()
             || data.rules.original_material().map(|material| material.origin) != Some(carriage.origin())
             || data.body[data.index as usize].payload.get(7) != Some(&9)
         {
@@ -332,8 +337,11 @@ impl PositiveAssignmentRawActionV2 {
             + std::mem::align_of::<NativeAcceptedCaseCarriageV2>()) as u64;
         let coverage = admission.native_heap_v1("original Assignment admission");
         let heap = coverage.bytes().ok_or(coverage)?;
-        let bytes = bytes.checked_add(heap)
-            .and_then(|n| n.checked_add((std::mem::size_of::<AssignmentAdmissionMaterialV2>() + 2 * std::mem::size_of::<usize>()) as u64))
+        let bytes = bytes
+            .checked_add(heap)
+            .and_then(|n| {
+                n.checked_add((std::mem::size_of::<AssignmentAdmissionMaterialV2>() + 2 * std::mem::size_of::<usize>()) as u64)
+            })
             .ok_or_else(error)?;
         Arc::get_mut(&mut data._decode).ok_or_else(error)?.grow_memory_v1(bytes)?;
         data.original_admission = Some(Arc::new(admission));

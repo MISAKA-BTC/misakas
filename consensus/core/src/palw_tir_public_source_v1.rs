@@ -1382,8 +1382,8 @@ mod tests {
             .chunks(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize)
             .flat_map(|ids| borsh::to_vec(&PalwTirPublicResponseV1::Ids { rows_root, ids: ids.to_vec() }).unwrap())
             .collect();
-        let bound = crate::palw_tir_public_owned_v1::request_body_bound_v1(&source, PalwTirPublicRequestV1::Ids { offset: 0 })
-            .unwrap();
+        let bound =
+            crate::palw_tir_public_owned_v1::request_body_bound_v1(&source, PalwTirPublicRequestV1::Ids { offset: 0 }).unwrap();
         assert_eq!(bound.0, body.len() as u64);
         let decode = crate::palw_court_shared_tir_stream_state_v1::decode_ids_body_classified_v1;
         assert_eq!(decode(&source, &body).unwrap().ids_v1(), generated);

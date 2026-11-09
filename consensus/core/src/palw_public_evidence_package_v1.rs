@@ -106,10 +106,7 @@ fn scalar_identity_v1(dtype: DType, value: i128) -> Hash64 {
     let mut body = Vec::with_capacity(1 + 16);
     body.push(dtype.tag());
     body.extend_from_slice(&value.to_le_bytes());
-    let digest = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(b"misaka-palw/public-evidence-scalar/v1")
-        .hash(&body);
+    let digest = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/public-evidence-scalar/v1").hash(&body);
     Hash64::from_bytes(digest.as_bytes().try_into().expect("64"))
 }
 
@@ -119,7 +116,14 @@ fn output_dtype_v1(operation: PalwPublicExpectedOperationV1) -> DType {
     }
 }
 
-fn opening_matches_v1(leaf_count: u64, coordinate: u64, root: Hash64, dtype: DType, value: i128, opening: &PalwStepOpeningV1) -> Result<(), String> {
+fn opening_matches_v1(
+    leaf_count: u64,
+    coordinate: u64,
+    root: Hash64,
+    dtype: DType,
+    value: i128,
+    opening: &PalwStepOpeningV1,
+) -> Result<(), String> {
     if opening.leaf_index != coordinate {
         return Err("public evidence opening names another coordinate".into());
     }
@@ -146,7 +150,8 @@ pub fn recompute_committed_primitive_v1(package: &PalwPublicEvidencePackageV1) -
     let tensor = Tensor::new(input.dtype, vec![1], vec![input.value]).map_err(|e| e.to_string())?;
     let value = match package.expected_operation {
         PalwPublicExpectedOperationV1::Clamp { lo, hi, out } => {
-            let got = misaka_palw_tir::eval::eval_primitive(&Prim::Clamp { lo, hi }, &[tensor], out, &[1]).map_err(|e| e.to_string())?;
+            let got =
+                misaka_palw_tir::eval::eval_primitive(&Prim::Clamp { lo, hi }, &[tensor], out, &[1]).map_err(|e| e.to_string())?;
             *got.data.first().ok_or("public evidence primitive returned no value")?
         }
     };
@@ -251,11 +256,7 @@ pub(crate) fn clamp_public_evidence_package_v1(
             coordinate: claim.coordinate,
             rule_version: claim.rule_version,
         },
-        committed_input: PalwPublicScalarOpeningV1 {
-            dtype,
-            value: INPUT,
-            opening: step_opening_v1(&input_leaves, 0).unwrap(),
-        },
+        committed_input: PalwPublicScalarOpeningV1 { dtype, value: INPUT, opening: step_opening_v1(&input_leaves, 0).unwrap() },
         expected_operation: operation,
         recorded_output: recorded,
         identity_opening: step_opening_v1(&output_leaves, 0).unwrap(),
@@ -330,10 +331,7 @@ mod tests {
         };
         assert_eq!(found.target_v1().claim_id, claim.claim_id);
         assert_eq!(found.disputed_leaf_v1(), claim.coordinate);
-        assert!(matches!(
-            found.verdict_v1().fault,
-            crate::palw_step_leg::PalwStepFaultV1::ComputationMismatch { value_index: 0 }
-        ));
+        assert!(matches!(found.verdict_v1().fault, crate::palw_step_leg::PalwStepFaultV1::ComputationMismatch { value_index: 0 }));
         // The same committed input recorded as itself is still a mismatch:
         // Clamp(150, 0, 100) is 100, so a raw input comparison would have held.
         let (same_input, recorded_as_input) = package_at(INPUT);
@@ -387,12 +385,8 @@ mod tests {
             }
             other => panic!("size refusal required, got {other:?}"),
         }
-        let preflight = crate::palw_state_v2::palw_tir_public_evidence_package_preflight_v1(
-            &claim,
-            &large,
-            fitting_plan(&capped),
-            1 << 22,
-        );
+        let preflight =
+            crate::palw_state_v2::palw_tir_public_evidence_package_preflight_v1(&claim, &large, fitting_plan(&capped), 1 << 22);
         assert!(preflight.is_err());
     }
 

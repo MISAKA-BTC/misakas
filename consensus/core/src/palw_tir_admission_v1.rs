@@ -533,7 +533,8 @@ pub fn verify_class_admission_v10(
         return Err(PalwClassAdmissionError::TirPrimSet { program: prim_set, fence: rules.fence.prim_set_id });
     }
     let scheme = Hash64::from_bytes(program.logits_scheme_id);
-    if scheme != crate::palw_step_refute::flat_logits_scheme_id_v1() && scheme != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+    if scheme != crate::palw_step_refute::flat_logits_scheme_id_v1()
+        && scheme != crate::palw_step_refute::tiled_logits_scheme_id_v1()
         && !(program.wide_logits_q24() && rules.fence.court_version == crate::palw_tir_v1::PALW_TIR_COURT_VERSION_WIDE_Q24_V2)
     {
         return Err(PalwClassAdmissionError::TirLayout(format!(
@@ -664,8 +665,11 @@ pub fn verify_class_admission_v10(
                 }
             }
             exceeds("IR cone evaluation work (tile and state replay)", work, work_limit)?;
-            let extra = if program.wide_logits_q24() { 4u64.saturating_mul(tile_len as u64) } else {0};
-            let close = (class.program.len() as u64).saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1).saturating_add(opened).saturating_add(extra);
+            let extra = if program.wide_logits_q24() { 4u64.saturating_mul(tile_len as u64) } else { 0 };
+            let close = (class.program.len() as u64)
+                .saturating_add(PALW_TIR_CLOSE_FRAME_BYTES_V1)
+                .saturating_add(opened)
+                .saturating_add(extra);
             exceeds("IR close bytes", close, bundle.court.max_close_bytes())?;
             worst_close = worst_close.max(close);
             worst_macs = worst_macs.max(tile.macs);
@@ -682,7 +686,8 @@ pub fn verify_class_admission_v10(
             layout.max_context
         ))
     })?;
-    let expected = crate::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, derived_id, formula).ok_or_else(|| PalwClassAdmissionError::TirLayout("canonical program".into()))?;
+    let expected = crate::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, derived_id, formula)
+        .ok_or_else(|| PalwClassAdmissionError::TirLayout("canonical program".into()))?;
     if *canonical != expected {
         return Err(PalwClassAdmissionError::TirCanonicalNotTheFormula(format!(
             "the canonical job must be the attempt formula's yardstick context at ({}, {})",

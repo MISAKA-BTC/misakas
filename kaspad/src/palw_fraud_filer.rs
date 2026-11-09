@@ -946,7 +946,8 @@ impl PalwFraudFilerCaseV1 {
     fn may_probe_v1(&self) -> bool {
         matches!(self.verdict, PalwFraudFilerVerdictV1::Pending | PalwFraudFilerVerdictV1::DeferredMismatch)
             || (matches!(self.verdict, PalwFraudFilerVerdictV1::SemanticPending)
-                && self.constraint_replay_requested && !self.arithmetic_matched
+                && self.constraint_replay_requested
+                && !self.arithmetic_matched
                 && self.replay_failures < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1)
     }
 
@@ -8706,7 +8707,11 @@ pub(super) mod tests {
             let case = &book.cases[&c.claim_id];
             assert!(!case.may_finish_semantics_v1(true));
             assert!(case.neutral_constraint_plan_v1(&[1]).is_none(), "a refused replay never supplies a neutral completion");
-            assert_eq!(book.next_replay_at(301).is_some(), attempt < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1, "host retries retain their existing bound");
+            assert_eq!(
+                book.next_replay_at(301).is_some(),
+                attempt < PALW_FRAUD_FILER_RUNS_PER_CLAIM_V1,
+                "host retries retain their existing bound"
+            );
         }
     }
 

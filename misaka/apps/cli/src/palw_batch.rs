@@ -6,17 +6,16 @@ use kaspa_consensus_core::{
         BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1,
         MAX_BATCH_RANGES_V1,
         carriage::{
-            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1,
-            BatchCourtWireV1, BatchMaterialControlV1,
-            BatchNumericalTerminalV1,
-            BatchStopSigningV1, MAX_BATCH_STOP_EOG_OPENING_BYTES_V1, SignedBatchDemandV1, SignedNumericalBatchVerificationV1,
+            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1, BatchCourtWireV1,
+            BatchMaterialControlV1, BatchNumericalTerminalV1, BatchStopSigningV1, MAX_BATCH_STOP_EOG_OPENING_BYTES_V1,
+            SignedBatchDemandV1, SignedNumericalBatchVerificationV1,
         },
     },
-    palw_freeprompt_v3::PalwFpStopReasonV3,
     palw_court_shared_material_intake_v1::{
         BATCH_STOP_ORDINAL_V1, MATERIAL_BATCH_CONTEXT_V1, MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1,
         SignedMaterialIntakeV1, batch_stop_full_ids_range_v1, material_batch_carrier_fee_v1, material_batch_draft_id_v1,
     },
+    palw_freeprompt_v3::PalwFpStopReasonV3,
     palw_state_v2::PalwBondKeyV2,
     palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1,
     palw_tokenizer_rendering_v2::{
@@ -220,7 +219,9 @@ pub(crate) async fn open(
         return Err(refused(error));
     }
     if leaf.is_none() {
-        let count = doc["fullIdsCount"].as_u64().and_then(|count| u32::try_from(count).ok())
+        let count = doc["fullIdsCount"]
+            .as_u64()
+            .and_then(|count| u32::try_from(count).ok())
             .ok_or_else(|| refused("the Batch Stop quote omitted its generated ID count"))?;
         ranges.push(batch_stop_full_ids_range_v1(claim, count).map_err(refused)?);
     }
@@ -416,7 +417,8 @@ pub(crate) async fn verify_numerical(
     use crate::palw_user::parse_hash;
     let claim = parse_hash("claim", claim)?;
     let notice = parse_hash("notice", notice)?;
-    let request = GetPalwCourtStateRequest { claim_hex: claim.to_string(), batch_open: "verify-numerical".into(), ..Default::default() };
+    let request =
+        GetPalwCourtStateRequest { claim_hex: claim.to_string(), batch_open: "verify-numerical".into(), ..Default::default() };
     let (nv, key, filer) = crate::palw_user::bond_signer_v1(ctx, key_source, bond).await?;
     let network = crate::bond::network_domain(&nv);
     let (now, raw) = read_quote(&nv, request.clone()).await?;
@@ -435,10 +437,13 @@ pub(crate) async fn verify_numerical(
         }
         nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|err| refused(err.to_string()))?;
     }
-    println!("{}", serde_json::json!({
-        "submitted": submit, "txid": tx.id().to_string(), "claimId": claim.to_string(), "assignedDaa": slot,
-        "observedDaa": now, "feeSompi": fee, "noticeId": notice.to_string(), "leaf": leaf.to_string(),
-    }));
+    println!(
+        "{}",
+        serde_json::json!({
+            "submitted": submit, "txid": tx.id().to_string(), "claimId": claim.to_string(), "assignedDaa": slot,
+            "observedDaa": now, "feeSompi": fee, "noticeId": notice.to_string(), "leaf": leaf.to_string(),
+        })
+    );
     Ok(())
 }
 
@@ -452,8 +457,11 @@ fn checked_numerical_verification_quote(
     now: u64,
 ) -> Result<(SignedNumericalBatchVerificationV1, u64), CliError> {
     use crate::palw_user::parse_hash;
-    if view["version"] != 1 || view["kind"] != "palwBatchVerifyNumerical" || view["claimId"] != claim.to_string()
-        || view["nowDaa"] != now || view["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
+    if view["version"] != 1
+        || view["kind"] != "palwBatchVerifyNumerical"
+        || view["claimId"] != claim.to_string()
+        || view["nowDaa"] != now
+        || view["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
     {
         return Err(refused("the node returned a different numerical verification case"));
     }
@@ -461,16 +469,30 @@ fn checked_numerical_verification_quote(
         return Err(refused(error));
     }
     let quote = &view["verify"];
-    if quote["wireVersion"] != 1 || quote["noticeId"] != notice.to_string() || quote["leaf"] != leaf.to_string()
-        || quote["signer"] != bond_text(filer) || quote["networkDomain"] != network.to_string()
+    if quote["wireVersion"] != 1
+        || quote["noticeId"] != notice.to_string()
+        || quote["leaf"] != leaf.to_string()
+        || quote["signer"] != bond_text(filer)
+        || quote["networkDomain"] != network.to_string()
     {
         return Err(refused("the numerical verification quote substituted the notice, leaf, signer or network"));
     }
-    let read_hash = |key: &str| parse_hash(key, quote[key].as_str().ok_or_else(|| refused("the numerical verification quote omitted an ID"))?);
+    let read_hash =
+        |key: &str| parse_hash(key, quote[key].as_str().ok_or_else(|| refused("the numerical verification quote omitted an ID"))?);
     let slot = quote["assignedDaa"].as_u64().ok_or_else(|| refused("the numerical verification quote omitted the booked DAA"))?;
-    Ok((SignedNumericalBatchVerificationV1 {
-        version: 1, claim, scope: read_hash("scopeId")?, notice, leaf, policy: read_hash("policyId")?, filer, signature: vec![],
-    }, slot))
+    Ok((
+        SignedNumericalBatchVerificationV1 {
+            version: 1,
+            claim,
+            scope: read_hash("scopeId")?,
+            notice,
+            leaf,
+            policy: read_hash("policyId")?,
+            filer,
+            signature: vec![],
+        },
+        slot,
+    ))
 }
 
 pub(crate) async fn convict_numerical(
@@ -496,10 +518,13 @@ pub(crate) async fn convict_numerical(
         }
         nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|err| refused(err.to_string()))?;
     }
-    println!("{}", serde_json::json!({
-        "submitted": submit, "txid": tx.id().to_string(), "claimId": claim.to_string(), "assignedDaa": slot,
-        "observedDaa": now, "feeSompi": fee, "receiptDigest": control.receipt_digest.to_string(), "faultEvidenceId": fault.to_string(),
-    }));
+    println!(
+        "{}",
+        serde_json::json!({
+            "submitted": submit, "txid": tx.id().to_string(), "claimId": claim.to_string(), "assignedDaa": slot,
+            "observedDaa": now, "feeSompi": fee, "receiptDigest": control.receipt_digest.to_string(), "faultEvidenceId": fault.to_string(),
+        })
+    );
     Ok(())
 }
 
@@ -511,18 +536,25 @@ fn checked_numerical_terminal_quote(
 ) -> Result<(BatchNumericalTerminalV1, Hash64, u64), CliError> {
     use crate::palw_user::parse_hash;
     let finding = &view["batchNumericalFinding"];
-    if view["version"] != 1 || view["kind"] != "palwCourtState" || view["claimId"] != claim.to_string()
-        || view["nowDaa"] != now || finding["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
+    if view["version"] != 1
+        || view["kind"] != "palwCourtState"
+        || view["claimId"] != claim.to_string()
+        || view["nowDaa"] != now
+        || finding["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
     {
         return Err(refused("the node did not return a selected-branch numerical finding for this claim"));
     }
-    let fault = parse_hash("fault evidence", finding["faultEvidenceId"].as_str()
-        .ok_or_else(|| refused("this numerical finding contains no fault"))?)?;
-    let receipt_digest = parse_hash("receipt", finding["receiptDigest"].as_str()
-        .ok_or_else(|| refused("the node omitted the numerical receipt digest"))?)?;
-    let slot = finding["terminalDaa"].as_u64()
-        .ok_or_else(|| refused("the claim has no booked numerical terminal"))?;
-    if fault == Hash64::default() || receipt_digest == Hash64::default()
+    let fault = parse_hash(
+        "fault evidence",
+        finding["faultEvidenceId"].as_str().ok_or_else(|| refused("this numerical finding contains no fault"))?,
+    )?;
+    let receipt_digest = parse_hash(
+        "receipt",
+        finding["receiptDigest"].as_str().ok_or_else(|| refused("the node omitted the numerical receipt digest"))?,
+    )?;
+    let slot = finding["terminalDaa"].as_u64().ok_or_else(|| refused("the claim has no booked numerical terminal"))?;
+    if fault == Hash64::default()
+        || receipt_digest == Hash64::default()
         || finding["faultMaterialAvailable"] != true
         || finding["verificationDaa"].as_u64().is_none_or(|daa| daa >= slot)
         || finding["materialUntilDaa"].as_u64().is_none_or(|daa| daa <= slot)
@@ -628,7 +660,10 @@ impl StopQuote {
                 }
                 let statement = PalwTokenizerRenderingStatementV2 {
                     tokenizer_id: crate::palw_user::parse_hash("tokenizer", &tokenizer.id)?,
-                    exact_raw_bytes: tokenizer.raw_bytes, table_root, vocab: self.vocab, rule,
+                    exact_raw_bytes: tokenizer.raw_bytes,
+                    table_root,
+                    vocab: self.vocab,
+                    rule,
                 };
                 let raw = read_exact_stop_file(path, tokenizer.raw_bytes)?;
                 let eog = build_registered_tokenizer_eog_opening_v1(statement, &raw, eog_ids).map_err(refused)?;
@@ -657,7 +692,10 @@ pub(crate) async fn stop(
     let (nv, key, filer) = crate::palw_user::bond_signer_v1(ctx, key_source, bond).await?;
     let (now, raw) = read_quote(&nv, request.clone()).await?;
     let doc: serde_json::Value = serde_json::from_str(&raw).map_err(|why| refused(why.to_string()))?;
-    if doc["version"] != 1 || doc["kind"] != "palwBatchStop" || doc["claimId"] != request.claim_hex || doc["nowDaa"] != now
+    if doc["version"] != 1
+        || doc["kind"] != "palwBatchStop"
+        || doc["claimId"] != request.claim_hex
+        || doc["nowDaa"] != now
         || doc["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
     {
         return Err(refused("the node returned a different Batch Stop case"));
@@ -677,16 +715,22 @@ pub(crate) async fn stop(
     let table_root = parse_hash("table root", &quote.table_root)?;
     let eog = quote.load_eog(eog_source, table_root)?;
     let signing = BatchStopSigningV1 {
-        claim, filer, scope_id: parse_hash("scope", &quote.scope_id)?, policy_id: parse_hash("policy", &quote.policy_id)?,
-        semantics_id: parse_hash("semantics", &quote.semantics_id)?, position: quote.position,
+        claim,
+        filer,
+        scope_id: parse_hash("scope", &quote.scope_id)?,
+        policy_id: parse_hash("policy", &quote.policy_id)?,
+        semantics_id: parse_hash("semantics", &quote.semantics_id)?,
+        position: quote.position,
         stop_reason: match quote.stop_reason.as_str() {
             "exact-budget-reached" => PalwFpStopReasonV3::ExactBudgetReached,
             "end-of-generation" => PalwFpStopReasonV3::EndOfGeneration,
             _ => return Err(refused("unknown native stop reason")),
         },
-        table_root, vocab: quote.vocab,
+        table_root,
+        vocab: quote.vocab,
     };
-    let wire = signing.build_v1(network, &eog, |message, context| key.sign_with_context(message.as_byte_slice(), context).to_vec())
+    let wire = signing
+        .build_v1(network, &eog, |message, context| key.sign_with_context(message.as_byte_slice(), context).to_vec())
         .map_err(refused)?;
     let wire_len = borsh::object_length(&wire).map_err(|why| refused(why.to_string()))? + BATCH_COURT_CARRIER_MAGIC_V1.len();
     if wire_len as u64 != quote.carrier_bytes {
@@ -699,8 +743,11 @@ pub(crate) async fn stop(
         }
         nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|why| refused(why.to_string()))?;
     }
-    println!("{}", serde_json::json!({ "submitted": submit, "txid": tx.id().to_string(), "assignedDaa": assigned_daa,
-        "observedDaa": now, "feeSompi": fee, "storageRentSompi": rent, "claimId": claim.to_string() }));
+    println!(
+        "{}",
+        serde_json::json!({ "submitted": submit, "txid": tx.id().to_string(), "assignedDaa": assigned_daa,
+        "observedDaa": now, "feeSompi": fee, "storageRentSompi": rent, "claimId": claim.to_string() })
+    );
     Ok(())
 }
 

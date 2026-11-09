@@ -871,8 +871,36 @@ pub fn check_text_source_owner_v29(
 
 // Generated source26 native inventory bridge; private fields remain private.
 impl StageSourcePlanRecordV26 {
- pub fn native_inventory_parts_v1(&self)->((&u16,&Digest,&Digest,&Digest,&Digest,&Digest,),(&Digest,&Digest,&Digest,&Digest,&Digest,&u32,),(&u32,&u64,&QuotaQuantitiesV11,&QuotaQuantitiesV11,&QuotaQuantitiesV11,),) {
- let Self { version,class,source,real_parameters,inventory,admission,stage_quota,producer_source,trace_restore,quota_policy,execution_policy,requests,attempts,required_horizon,request,admission_cost,guarantee }=self;
- ((version,class,source,real_parameters,inventory,admission,),(stage_quota,producer_source,trace_restore,quota_policy,execution_policy,requests,),(attempts,required_horizon,request,admission_cost,guarantee,),)
- }
+    pub fn native_inventory_parts_v1(
+        &self,
+    ) -> (
+        (&u16, &Digest, &Digest, &Digest, &Digest, &Digest),
+        (&Digest, &Digest, &Digest, &Digest, &Digest, &u32),
+        (&u32, &u64, &QuotaQuantitiesV11, &QuotaQuantitiesV11, &QuotaQuantitiesV11),
+    ) {
+        let Self {
+            version,
+            class,
+            source,
+            real_parameters,
+            inventory,
+            admission,
+            stage_quota,
+            producer_source,
+            trace_restore,
+            quota_policy,
+            execution_policy,
+            requests,
+            attempts,
+            required_horizon,
+            request,
+            admission_cost,
+            guarantee,
+        } = self;
+        (
+            (version, class, source, real_parameters, inventory, admission),
+            (stage_quota, producer_source, trace_restore, quota_policy, execution_policy, requests),
+            (attempts, required_horizon, request, admission_cost, guarantee),
+        )
+    }
 }

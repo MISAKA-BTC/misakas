@@ -37,6 +37,7 @@ mod ollama;
 mod operator;
 mod pack_gate;
 mod palw_activation_pool;
+mod palw_batch;
 mod palw_capacity_shadow;
 mod palw_claim;
 mod palw_court;
@@ -46,7 +47,6 @@ mod palw_derived;
 mod palw_economics;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
 mod palw_extension;
-mod palw_batch;
 mod palw_fp;
 mod palw_gen;
 mod palw_job;
@@ -3787,16 +3787,32 @@ async fn run_cli() -> std::process::ExitCode {
                 .map(|_| ())
         }),
         Command::Palw(PalwCmd::BatchRespond { key, bond, claim, ordinal, target, step, offset, body, submit, maximum_fee_sompi }) => {
-            Box::pin(async move { palw_batch::respond(ctx, &key.source(), &bond, &claim, ordinal, &target, step, offset, &body,
-                submit, maximum_fee_sompi).await })
+            Box::pin(async move {
+                palw_batch::respond(
+                    ctx,
+                    &key.source(),
+                    &bond,
+                    &claim,
+                    ordinal,
+                    &target,
+                    step,
+                    offset,
+                    &body,
+                    submit,
+                    maximum_fee_sompi,
+                )
+                .await
+            })
         }
         Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi, .. }) => {
-            Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
-                submit, maximum_fee_sompi).await })
+            Box::pin(async move {
+                palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges, submit, maximum_fee_sompi).await
+            })
         }
         Command::Palw(PalwCmd::BatchVerifyNumerical { key, bond, claim, notice, leaf, submit, maximum_fee_sompi }) => {
-            Box::pin(async move { palw_batch::verify_numerical(ctx, &key.source(), &bond, &claim, &notice, leaf,
-                submit, maximum_fee_sompi).await })
+            Box::pin(async move {
+                palw_batch::verify_numerical(ctx, &key.source(), &bond, &claim, &notice, leaf, submit, maximum_fee_sompi).await
+            })
         }
         Command::Palw(PalwCmd::BatchConvict { key, claim, submit, maximum_fee_sompi }) => {
             Box::pin(async move { palw_batch::convict_numerical(ctx, &key.source(), &claim, submit, maximum_fee_sompi).await })

@@ -2353,13 +2353,11 @@ fn closure_bound_on_a_real_class() {
 #[ignore = "bounded public-remedy measurement of an external PALWTIR1; set MISAKA_TIR_FRAME_MEASURE_PALWTIR"]
 fn public_remedy_on_a_real_class() {
     use kaspa_consensus_core::palw_batch_public_budget_v1::{
-        check_reserved_public_graph_v1, PublicSharedBudgetRefusalV1, PublicSharedSlotV1,
+        PublicSharedBudgetRefusalV1, PublicSharedSlotV1, check_reserved_public_graph_v1,
     };
     use kaspa_consensus_core::palw_court_policy_v1::NOTICE_WINDOW_DAA;
     use kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1;
-    use kaspa_consensus_core::palw_tir_frame_cost_v1::{
-        tir_public_filing_daa_v1, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5,
-    };
+    use kaspa_consensus_core::palw_tir_frame_cost_v1::{PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, tir_public_filing_daa_v1};
     use kaspa_consensus_core::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
     use std::collections::BTreeMap;
 
@@ -2439,12 +2437,7 @@ fn public_remedy_on_a_real_class() {
             kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::Commit { block, node, .. } => {
                 let block_i = block;
                 let block = &program.blocks[block_i as usize];
-                format!(
-                    "commit:{}:{}:{}",
-                    block.name,
-                    node,
-                    prim_name(&block.nodes[node as usize].prim)
-                )
+                format!("commit:{}:{}:{}", block.name, node, prim_name(&block.nodes[node as usize].prim))
             }
             kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::State { state, .. } => format!("state:{state}"),
             kaspa_consensus_core::palw_tir_step_v1::PalwTirLeafKindV1::HistTile { state, .. } => format!("hist:{state}"),
@@ -2560,14 +2553,12 @@ fn public_remedy_on_a_real_class() {
 #[ignore = "adversarial public-remedy measurement of an external PALWTIR1; set MISAKA_TIR_FRAME_MEASURE_PALWTIR"]
 fn public_remedy_adversarial_on_a_real_class() {
     use kaspa_consensus_core::palw_batch_public_budget_v1::{
-        check_reserved_public_graph_v1, PublicSharedBudgetRefusalV1, PublicSharedSlotV1, PALW_RETIRED_LOCALIZATION_PATH_DAA_V1,
+        PALW_RETIRED_LOCALIZATION_PATH_DAA_V1, PublicSharedBudgetRefusalV1, PublicSharedSlotV1, check_reserved_public_graph_v1,
     };
     use kaspa_consensus_core::palw_court_policy_v1::NOTICE_WINDOW_DAA;
     use kaspa_consensus_core::palw_public_adjudication_measured_class_v1::PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1;
     use kaspa_consensus_core::palw_tir_court_v1::PalwTirParamOpeningV1;
-    use kaspa_consensus_core::palw_tir_frame_cost_v1::{
-        tir_public_filing_daa_v1, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5,
-    };
+    use kaspa_consensus_core::palw_tir_frame_cost_v1::{PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, tir_public_filing_daa_v1};
     use kaspa_consensus_core::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
     use std::collections::BTreeMap;
 

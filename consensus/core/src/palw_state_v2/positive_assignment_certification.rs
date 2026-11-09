@@ -2,29 +2,20 @@
 //! actual round anchor/global bond pool/shared N queue, literal new attestations.
 //! This never calls old S/K/V/PublicCheckCertified or credits issuance/weight.
 use super::*;
-use super::{
-    positive_assignment_case::NativeAssignedCaseSessionV2,
-    positive_assignment_verifiers::AssignmentVerifierCandidatesV2,
-};
+use super::{positive_assignment_case::NativeAssignedCaseSessionV2, positive_assignment_verifiers::AssignmentVerifierCandidatesV2};
 use crate::{
     palw_kernel_route_v1::palw_kernel_bond_id_v1,
     palw_model_eligibility_v1::PalwEligibilityVerifierV1,
-    palw_native_resource_v1::{
-        NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1,
-    },
-    palw_positive_assignment_certification_v2::{
-        AssignmentGateCDrawEpochsV2, assignment_gate_c_draws_used_v2,
-    },
-    palw_positive_assignment_material_v2::{
-        AssignmentAdmissionMaterialV2, assignment_custody_bytes_id_v2,
-    },
+    palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1},
+    palw_positive_assignment_certification_v2::{AssignmentGateCDrawEpochsV2, assignment_gate_c_draws_used_v2},
+    palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, assignment_custody_bytes_id_v2},
     palw_positive_certification_v2::*,
     palw_positive_check_v2::CheckOutcome,
     palw_positive_court_v2::coordinator::contract::TerminalKindV2,
     palw_positive_rows_v2::PositiveRowsV2,
     palw_security_certification_v1::{
-        PalwCertificationNetworkRowV1, certification_network_key_v1, palw_certification_draw_v1,
-        palw_certification_pool_admits_v1, palw_certification_seed_v1,
+        PalwCertificationNetworkRowV1, certification_network_key_v1, palw_certification_draw_v1, palw_certification_pool_admits_v1,
+        palw_certification_seed_v1,
     },
 };
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -44,15 +35,10 @@ fn refuse(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(format!("Positive P: {why:?}"))
 }
 fn unavailable(_why: &str) -> PalwStateV2Error {
-    PalwStateV2Error::NativeContextUnavailable(
-        crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
-    )
+    PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
 }
 fn bond(point: NativeOutpoint) -> PalwBondKeyV2 {
-    PalwBondKeyV2(TransactionOutpoint::new(
-        Hash64::from_bytes(point.transaction.0),
-        point.index,
-    ))
+    PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(point.transaction.0), point.index))
 }
 fn key(subject: Digest) -> [u8; 65] {
     let mut key = [0; 65];
@@ -73,10 +59,7 @@ fn pool_workspace_bytes(count: u64) -> Result<u64, NativeCoverageV1> {
     q.exact_v1::<([u8; 64], u64)>(count)?;
     Ok(q.bytes_v1())
 }
-pub(super) fn positive_certification_workspace_bytes_v2(
-    m: u16,
-    pool: u64,
-) -> Result<u64, PalwStateV2Error> {
+pub(super) fn positive_certification_workspace_bytes_v2(m: u16, pool: u64) -> Result<u64, PalwStateV2Error> {
     if m == 0 || m > MAX_POSITIVE_DRAW_POSITIONS_V2 {
         return Err(refuse("unsupported actual P draw codec"));
     }
@@ -85,49 +68,33 @@ pub(super) fn positive_certification_workspace_bytes_v2(
     // actual frozen m/k or the old queue's units.
     let positions = u64::from(MAX_POSITIVE_DRAW_POSITIONS_V2);
     let mut q = TirNativeRequestsV1::new();
-    q.exact_v1::<NativeRowValue>(8)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    q.exact_v1::<u8>((8 * MAX_NATIVE_KEY_BYTES * 2) as u64)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    q.exact_v1::<PositiveCertificationRowV2>(2)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    q.exact_v1::<PositiveCertificationVoteV2>(2)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    q.vec_v1::<PositiveCertificationVoteV2>(positions)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    q.vec_v1::<Digest>(positions)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    q.vec_v1::<[u8; 64]>(positions)
-        .map_err(PalwStateV2Error::NativeResource)?;
-    q.add_v1(pool_workspace_bytes(pool).map_err(PalwStateV2Error::NativeResource)?)
-        .map_err(PalwStateV2Error::NativeResource)?;
+    q.exact_v1::<NativeRowValue>(8).map_err(PalwStateV2Error::NativeResource)?;
+    q.exact_v1::<u8>((8 * MAX_NATIVE_KEY_BYTES * 2) as u64).map_err(PalwStateV2Error::NativeResource)?;
+    q.exact_v1::<PositiveCertificationRowV2>(2).map_err(PalwStateV2Error::NativeResource)?;
+    q.exact_v1::<PositiveCertificationVoteV2>(2).map_err(PalwStateV2Error::NativeResource)?;
+    q.vec_v1::<PositiveCertificationVoteV2>(positions).map_err(PalwStateV2Error::NativeResource)?;
+    q.vec_v1::<Digest>(positions).map_err(PalwStateV2Error::NativeResource)?;
+    q.vec_v1::<[u8; 64]>(positions).map_err(PalwStateV2Error::NativeResource)?;
+    q.add_v1(pool_workspace_bytes(pool).map_err(PalwStateV2Error::NativeResource)?).map_err(PalwStateV2Error::NativeResource)?;
     // Exact fixed Borsh maxima: header/finality/outcome/release4823, drawmeta440,
     // 64 per draw position,8348 per literal signed vote; no encoded/RSS guess.
     let encoded = 4823u64
         .checked_add(1 + 440 + 4 + 4)
-        .and_then(|n| {
-            positions
-                .checked_mul(64 + 8348)
-                .and_then(|x| n.checked_add(x))
-        })
+        .and_then(|n| positions.checked_mul(64 + 8348).and_then(|x| n.checked_add(x)))
         .ok_or_else(|| refuse("P codec arithmetic"))?;
-    q.vec_v1::<u8>(encoded.max(1024))
-        .map_err(PalwStateV2Error::NativeResource)?;
+    q.vec_v1::<u8>(encoded.max(1024)).map_err(PalwStateV2Error::NativeResource)?;
     Ok(q.bytes_v1())
 }
 fn lease(m: u16, pool: u64) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
     reserve_p_workspace(positive_certification_workspace_bytes_v2(m, pool)?)
 }
 pub(super) fn reserve_p_workspace(bytes: u64) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
-    reserve_native_requests_v1(bytes)
-        .map_err(PalwStateV2Error::NativeResource)?
-        .ok_or_else(|| {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<
-                PositiveCertificationRowV2,
-            >(
-                "P memory owner", "actual checker is not armed"
-            ))
-        })
+    reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+        PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PositiveCertificationRowV2>(
+            "P memory owner",
+            "actual checker is not armed",
+        ))
+    })
 }
 fn read(state: &PalwChainStateV2, subject: Digest, pool: u64) -> Result<OwnedP, PalwStateV2Error> {
     let bytes = positive_certification_row_bytes_v2(state, subject)
@@ -146,10 +113,7 @@ fn read_encoded(subject: Digest, bytes: &[u8], pool: u64) -> Result<OwnedP, Palw
     let row = PositiveCertificationRowV2::decode(&key(subject), bytes).map_err(refuse)?;
     Ok(OwnedP { row, _lease: owner })
 }
-fn write(
-    builder: &mut TransitionBuilder<'_>,
-    row: &PositiveCertificationRowV2,
-) -> Result<(), PalwStateV2Error> {
+fn write(builder: &mut TransitionBuilder<'_>, row: &PositiveCertificationRowV2) -> Result<(), PalwStateV2Error> {
     row.validate_shape().map_err(refuse)?;
     let bytes = borsh::object_length(row).map_err(refuse)?;
     if bytes > MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2 {
@@ -166,15 +130,8 @@ fn actual_origin(ctx: &PalwBlockContextV2, origin: AcceptedOrigin) -> Result<(),
     }
     Ok(())
 }
-fn assignment(
-    state: &PalwChainStateV2,
-    id: AssignmentId,
-) -> Result<AssignmentRow, PalwStateV2Error> {
-    match PositiveRowsV2::new(state)
-        .read(NativeRowKey::Assignment(id))
-        .map_err(refuse)?
-        .map(|r| r.body)
-    {
+fn assignment(state: &PalwChainStateV2, id: AssignmentId) -> Result<AssignmentRow, PalwStateV2Error> {
+    match PositiveRowsV2::new(state).read(NativeRowKey::Assignment(id)).map_err(refuse)?.map(|r| r.body) {
         Some(NativeRowBody::Assignment(a)) => Ok(a),
         _ => Err(refuse("actual Assignment missing")),
     }
@@ -186,18 +143,12 @@ fn queue_policy(
     policy: &crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let mirror = builder
-        .params
-        .rfc0018_v1()
-        .filter(|m| m.gate_c_at(now))
-        .ok_or_else(|| refuse("actual Gate C policy unavailable"))?;
+    let mirror = builder.params.rfc0018_v1().filter(|m| m.gate_c_at(now)).ok_or_else(|| refuse("actual Gate C policy unavailable"))?;
     if mirror.certification.epoch_daa != policy.epoch_daa
         || mirror.certification.draws_per_epoch != policy.draws_per_epoch
         || mirror.certification.m > MAX_POSITIVE_DRAW_POSITIONS_V2
     {
-        return Err(refuse(
-            "frozen P policy conflicts with actual shared N owner",
-        ));
+        return Err(refuse("frozen P policy conflicts with actual shared N owner"));
     }
     Ok(())
 }
@@ -208,9 +159,7 @@ fn shared_network_draws_v2(
     epoch: u64,
     capacity: u32,
 ) -> Result<u32, PalwStateV2Error> {
-    let route = state
-        .kernel_route_state_v1()
-        .ok_or_else(|| unavailable("actual shared N route"))?;
+    let route = state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
     let network = match route.aux.get(network_key) {
         None => PalwCertificationNetworkRowV1::default(),
         Some(bytes) => borsh::from_slice(bytes).map_err(refuse)?,
@@ -225,27 +174,14 @@ impl TransitionBuilder<'_> {
         now: u64,
     ) -> Result<(), PalwStateV2Error> {
         queue_policy(self, policy, now)?;
-        let route = self
-            .state
-            .kernel_route_state_v1()
-            .ok_or_else(|| unavailable("actual shared N route"))?;
+        let route = self.state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
         // N uses the ordinary certification prefix plus a 64-byte ID.
         let _key = reserve_p_workspace((1 + size_of::<[u8; 64]>()) as u64)?;
-        let key = (
-            POSITIVE_CERTIFICATION_TABLE_V2,
-            certification_network_key_v1(),
-        );
-        let used = shared_network_draws_v2(
-            &self.state,
-            &key,
-            now / policy.epoch_daa,
-            policy.draws_per_epoch,
-        )?;
+        let key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
+        let used = shared_network_draws_v2(&self.state, &key, now / policy.epoch_daa, policy.draws_per_epoch)?;
         let reserved = route.positive_draw_slots_v2(now, policy.draws_per_epoch);
         if u64::from(used) + reserved >= u64::from(policy.draws_per_epoch) {
-            return Err(refuse(
-                "no unreserved capacity in the actual shared N queue",
-            ));
+            return Err(refuse("no unreserved capacity in the actual shared N queue"));
         }
         Ok(())
     }
@@ -259,29 +195,16 @@ impl TransitionBuilder<'_> {
         result_before_daa: u64,
         max_epochs: u64,
     ) -> Result<u64, PalwStateV2Error> {
-        let calendar = AssignmentGateCDrawEpochsV2::from_result_window(
-            policy,
-            intake_daa,
-            result_before_daa,
-            max_epochs,
-        )
-        .map_err(refuse)?;
+        let calendar =
+            AssignmentGateCDrawEpochsV2::from_result_window(policy, intake_daa, result_before_daa, max_epochs).map_err(refuse)?;
         self.require_new_positive_draw_slot_v2(policy, intake_daa)?;
         Ok(calendar.epoch_count())
     }
 }
 
-fn case_live(
-    state: &PalwChainStateV2,
-    h: &PositiveCertificationHeaderV2,
-) -> Result<bool, PalwStateV2Error> {
-    let Some(value) = PositiveRowsV2::new(state)
-        .read(NativeRowKey::Case(h.case))
-        .map_err(refuse)?
-    else {
-        return Err(unavailable(
-            "actual P Case unavailable; missing is not withdrawn",
-        ));
+fn case_live(state: &PalwChainStateV2, h: &PositiveCertificationHeaderV2) -> Result<bool, PalwStateV2Error> {
+    let Some(value) = PositiveRowsV2::new(state).read(NativeRowKey::Case(h.case)).map_err(refuse)? else {
+        return Err(unavailable("actual P Case unavailable; missing is not withdrawn"));
     };
     let NativeRowBody::Case(case) = value.body else {
         return Err(refuse("wrong native Case row"));
@@ -306,26 +229,13 @@ pub(super) fn resolve_drawn_source_key_v2(
         .ok_or_else(|| refuse("missing source requester P row"))?;
     let schedule = &material.native_preimages.source_policy.work;
     let positions = u64::from(MAX_POSITIVE_DRAW_POSITIONS_V2);
-    let scan = schedule
-        .court_body_work(bytes.len() as u64)
-        .map_err(refuse)?;
-    let votes = schedule
-        .court_operation_work(positions, positions, 0, 0)
-        .map_err(refuse)?;
-    let cost = scan
-        .checked_mul(3)
-        .and_then(|n| n.checked_add(votes))
-        .ok_or_else(|| refuse("source requester P work overflow"))?;
-    *remaining_work = remaining_work
-        .checked_sub(cost)
-        .ok_or_else(|| refuse("source requester P work cap"))?;
+    let scan = schedule.court_body_work(bytes.len() as u64).map_err(refuse)?;
+    let votes = schedule.court_operation_work(positions, positions, 0, 0).map_err(refuse)?;
+    let cost = scan.checked_mul(3).and_then(|n| n.checked_add(votes)).ok_or_else(|| refuse("source requester P work overflow"))?;
+    *remaining_work = remaining_work.checked_sub(cost).ok_or_else(|| refuse("source requester P work cap"))?;
     let owned = read_encoded(subject, bytes, 0)?;
     let header = &owned.row.fixed.header;
-    let draw = owned
-        .row
-        .draw
-        .as_ref()
-        .ok_or_else(|| refuse("source requester has no actual P draw"))?;
+    let draw = owned.row.draw.as_ref().ok_or_else(|| refuse("source requester has no actual P draw"))?;
     if header.assignment != assignment.id()
         || header.case != result.case_id()
         || header.result != result.id()
@@ -337,16 +247,11 @@ pub(super) fn resolve_drawn_source_key_v2(
         || draw.meta.origin.blue_score > origin.accepted_blue_score
         || origin.accepted_daa > draw.meta.deadline_daa
     {
-        return Err(refuse(
-            "source requester differs from the actual active P draw",
-        ));
+        return Err(refuse("source requester differs from the actual active P draw"));
     }
     let mut found = None;
     for key in roster.keys() {
-        if !draw
-            .positions
-            .contains(&Digest(palw_kernel_bond_id_v1(&key)))
-        {
+        if !draw.positions.contains(&Digest(palw_kernel_bond_id_v1(&key))) {
             continue;
         }
         let Some(bond) = state.bond(&key) else {
@@ -384,11 +289,7 @@ pub(super) fn live_verifiers<'a>(
             bond.collateral,
             &operator,
         )
-        .then(|| PalwEligibilityVerifierV1 {
-            bond: palw_kernel_bond_id_v1(&key),
-            operator,
-            stake: bond.collateral,
-        })
+        .then(|| PalwEligibilityVerifierV1 { bond: palw_kernel_bond_id_v1(&key), operator, stake: bond.collateral })
     })
 }
 impl TransitionBuilder<'_> {
@@ -421,19 +322,12 @@ impl TransitionBuilder<'_> {
             return Err(refuse("C/Result binding"));
         }
         actual_origin(ctx, bundle.result.origin)?;
-        let worker = self
-            .state
-            .bonds
-            .get(&bond(a.bundle.terms.worker))
-            .ok_or_else(|| refuse("actual worker bond missing"))?;
+        let worker = self.state.bonds.get(&bond(a.bundle.terms.worker)).ok_or_else(|| refuse("actual worker bond missing"))?;
         if worker.pubkey.as_slice() != a.worker_key.as_slice() {
             return Err(refuse("worker key changed"));
         }
         let subject = certification_subject(&bundle.result.result);
-        if positive_certification_row_bytes_v2(&self.state, subject)
-            .map_err(PalwStateV2Error::NativeResource)?
-            .is_some()
-        {
+        if positive_certification_row_bytes_v2(&self.state, subject).map_err(PalwStateV2Error::NativeResource)?.is_some() {
             return Err(refuse("P begin is once only, never resets its clock"));
         }
         let h = PositiveCertificationHeaderV2 {
@@ -463,12 +357,7 @@ impl TransitionBuilder<'_> {
         write(
             self,
             &PositiveCertificationRowV2 {
-                fixed: PositiveCertificationFixedV2 {
-                    header: h,
-                    finality: None,
-                    outcome: None,
-                    liability_release: None,
-                },
+                fixed: PositiveCertificationFixedV2 { header: h, finality: None, outcome: None, liability_release: None },
                 draw: None,
                 votes: Vec::new(),
             },
@@ -486,32 +375,18 @@ impl TransitionBuilder<'_> {
         if row.fixed.outcome.is_some() || row.draw.is_some() || !case_live(&self.state, h)? {
             return Ok(());
         }
-        if h.assignment != backing.assignment().id()
-            || h.case != backing.pin().case
-            || h.result != backing.pin().result
-        {
+        if h.assignment != backing.assignment().id() || h.case != backing.pin().case || h.result != backing.pin().result {
             return Err(refuse("draw archive differs from the committed subject"));
         }
-        let earliest = h
-            .committed_span
-            .unwrap_or(0)
-            .checked_add(h.policy.anchor_delay_spans.max(1));
-        if self
-            .state
-            .round_seed_anchor
-            .is_none_or(|a| earliest.is_none_or(|s| a.span < s))
+        let earliest = h.committed_span.unwrap_or(0).checked_add(h.policy.anchor_delay_spans.max(1));
+        if self.state.round_seed_anchor.is_none_or(|a| earliest.is_none_or(|s| a.span < s))
             || queue_policy(self, &h.policy, ctx.daa_score).is_err()
         {
             return Ok(());
         }
-        let network_key = (
-            POSITIVE_CERTIFICATION_TABLE_V2,
-            certification_network_key_v1(),
-        );
+        let network_key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
         let epoch = ctx.daa_score / h.policy.epoch_daa;
-        if shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?
-            >= h.policy.draws_per_epoch
-        {
+        if shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)? >= h.policy.draws_per_epoch {
             return Ok(());
         }
         drop(owned);
@@ -540,18 +415,11 @@ impl TransitionBuilder<'_> {
         }
         let h = &row.fixed.header;
         queue_policy(self, &h.policy, ctx.daa_score)?;
-        let last = h
-            .commit_origin
-            .accepted_daa
-            .checked_add(h.policy.certify_by_daa)
-            .ok_or_else(|| refuse("draw clock overflow"))?;
+        let last = h.commit_origin.accepted_daa.checked_add(h.policy.certify_by_daa).ok_or_else(|| refuse("draw clock overflow"))?;
         if ctx.daa_score > last {
             return Err(refuse("P draw deadline elapsed"));
         }
-        let anchor = self
-            .state
-            .round_seed_anchor
-            .ok_or_else(|| refuse("actual later execution seed unavailable"))?;
+        let anchor = self.state.round_seed_anchor.ok_or_else(|| refuse("actual later execution seed unavailable"))?;
         let earliest = h
             .committed_span
             .unwrap_or(0)
@@ -560,66 +428,36 @@ impl TransitionBuilder<'_> {
         if anchor.span < earliest {
             return Err(refuse("seed existed too early"));
         }
-        let network_key = (
-            POSITIVE_CERTIFICATION_TABLE_V2,
-            certification_network_key_v1(),
-        );
+        let network_key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
         let epoch = ctx.daa_score / h.policy.epoch_daa;
-        let draws =
-            shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?;
-        let route = self
-            .state
-            .kernel_route_state_v1()
-            .ok_or_else(|| unavailable("actual shared N route"))?;
+        let draws = shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?;
+        let route = self.state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
         let reserved = route.positive_draw_slots_v2(ctx.daa_score, h.policy.draws_per_epoch);
         if !route.owns_undrawn_p_slot_v2(last, Hash64::from_bytes(subject.0))
             || u64::from(draws) + reserved > u64::from(h.policy.draws_per_epoch)
         {
             return Err(refuse("P draw requires its protected shared N slot"));
         }
-        let network = PalwCertificationNetworkRowV1 {
-            epoch,
-            draws: draws + 1,
-        };
+        let network = PalwCertificationNetworkRowV1 { epoch, draws: draws + 1 };
         let a = assignment(&self.state, h.assignment)?;
         material.check_row(&a).map_err(refuse)?;
-        if a.status
-            != (AssignmentStatusV2::Consumed {
-                case: h.case,
-                result: h.result,
-            })
-            || material.certification_policy != h.policy
-        {
-            return Err(refuse(
-                "P draw differs from the original Assignment and Case",
-            ));
+        if a.status != (AssignmentStatusV2::Consumed { case: h.case, result: h.result }) || material.certification_policy != h.policy {
+            return Err(refuse("P draw differs from the original Assignment and Case"));
         }
-        if reservation_preimage.len() as u64
-            > material
-                .money
-                .usage
-                .retained_bytes
-                .min(material.money.usage.replay_bytes)
+        if reservation_preimage.len() as u64 > material.money.usage.retained_bytes.min(material.money.usage.replay_bytes)
             || assignment_custody_bytes_id_v2(reservation_preimage)
-                != material.custody.preimage_bytes
-                    [AssignmentOpenPreimageKindV2::ReservationCustody as usize]
+                != material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize]
         {
-            return Err(unavailable(
-                "original P reservation preimage unavailable or corrupted",
-            ));
+            return Err(unavailable("original P reservation preimage unavailable or corrupted"));
         }
         let candidates = AssignmentVerifierCandidatesV2::decode(reservation_preimage)
             .map_err(|_| unavailable("invalid retained verifier candidates"))?;
         let keys = candidates.keys();
         let count = keys.len();
-        let _pool_lease = reserve_p_workspace(
-            pool_workspace_bytes(count as u64).map_err(PalwStateV2Error::NativeResource)?,
-        )?;
+        let _pool_lease = reserve_p_workspace(pool_workspace_bytes(count as u64).map_err(PalwStateV2Error::NativeResource)?)?;
         let mut pool = Vec::new();
         let allocation = || {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<
-                PalwEligibilityVerifierV1,
-            >(
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwEligibilityVerifierV1>(
                 "P eligible roster",
                 "allocation did not fit the leased capacity",
             ))
@@ -628,13 +466,7 @@ impl TransitionBuilder<'_> {
         if pool.capacity() > count {
             return Err(allocation());
         }
-        pool.extend(live_verifiers(
-            &self.state,
-            &h.policy,
-            h.commit_origin.accepted_daa,
-            h.worker_operator,
-            keys,
-        ));
+        pool.extend(live_verifiers(&self.state, &h.policy, h.commit_origin.accepted_daa, h.worker_operator, keys));
         pool.sort_unstable_by_key(|member| member.bond);
         struct Roster<'a>(&'a [PalwEligibilityVerifierV1]);
         impl BorshSerialize for Roster<'_> {
@@ -646,19 +478,10 @@ impl TransitionBuilder<'_> {
                 Ok(())
             }
         }
-        let roster = p_hash(
-            b"misaka/positive/certification-roster/v2/r1",
-            &Roster(&pool),
-        );
-        let roster_stake = pool
-            .iter()
-            .try_fold(0u128, |n, p| n.checked_add(u128::from(p.stake)))
-            .ok_or_else(|| refuse("roster stake overflow"))?;
-        let seed = Digest(palw_certification_seed_v1(
-            &subject.0,
-            anchor.span,
-            &anchor.execution_key.as_bytes(),
-        ));
+        let roster = p_hash(b"misaka/positive/certification-roster/v2/r1", &Roster(&pool));
+        let roster_stake =
+            pool.iter().try_fold(0u128, |n, p| n.checked_add(u128::from(p.stake))).ok_or_else(|| refuse("roster stake overflow"))?;
+        let seed = Digest(palw_certification_seed_v1(&subject.0, anchor.span, &anchor.execution_key.as_bytes()));
         let positions = if pool.is_empty() {
             Vec::new()
         } else {
@@ -678,10 +501,7 @@ impl TransitionBuilder<'_> {
                 anchor_block: NativeHash64(anchor.block.as_bytes()),
                 execution_key: NativeHash64(anchor.execution_key.as_bytes()),
                 origin,
-                deadline_daa: ctx
-                    .daa_score
-                    .checked_add(h.policy.attest_window_daa)
-                    .ok_or_else(|| refuse("attest clock overflow"))?,
+                deadline_daa: ctx.daa_score.checked_add(h.policy.attest_window_daa).ok_or_else(|| refuse("attest clock overflow"))?,
                 id: Digest([0; 64]),
             },
             positions,
@@ -716,17 +536,9 @@ impl TransitionBuilder<'_> {
         let mut owned = read(&self.state, statement.subject, 0)?;
         let row = &mut owned.row;
         check_session(&self.state, ctx, row, session)?;
-        let fact = session
-            .checked_terminal()
-            .ok_or_else(|| refuse("native checked Court terminal missing"))?;
-        let finish = session
-            .positive_final_origin()
-            .ok_or_else(|| refuse("actual Finish origin missing"))?;
-        let finality = PositiveCertificationFinalV2 {
-            origin: finish,
-            witness: fact.witness(),
-            material: session.court_material(),
-        };
+        let fact = session.checked_terminal().ok_or_else(|| refuse("native checked Court terminal missing"))?;
+        let finish = session.positive_final_origin().ok_or_else(|| refuse("actual Finish origin missing"))?;
+        let finality = PositiveCertificationFinalV2 { origin: finish, witness: fact.witness(), material: session.court_material() };
         if row.fixed.finality.is_some_and(|old| old != finality) {
             return Err(refuse("P Final/material cannot be rebound"));
         }
@@ -740,19 +552,10 @@ impl TransitionBuilder<'_> {
             return Err(refuse("P attestation deadline elapsed"));
         }
         let verifier = Digest(palw_kernel_bond_id_v1(signer));
-        if !draw.positions.contains(&verifier)
-            || row
-                .votes
-                .iter()
-                .any(|v| v.statement.verifier_bond == verifier)
-        {
+        if !draw.positions.contains(&verifier) || row.votes.iter().any(|v| v.statement.verifier_bond == verifier) {
             return Err(refuse("not drawn or duplicate bond vote"));
         }
-        let record = self
-            .state
-            .bonds
-            .get(signer)
-            .ok_or(PalwStateV2Error::MissingBond(*signer))?;
+        let record = self.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
         if !palw_certification_pool_admits_v1(
             &h.policy,
             h.commit_origin.accepted_daa,
@@ -765,9 +568,7 @@ impl TransitionBuilder<'_> {
             return Err(refuse("actual verifier eligibility changed"));
         }
         let key: &[u8; PUBKEY_BYTES] = record.pubkey.as_slice().try_into().map_err(refuse)?;
-        let result = PositiveRowsV2::new(&self.state)
-            .bundle(h.claim)
-            .map_err(refuse)?;
+        let result = PositiveRowsV2::new(&self.state).bundle(h.claim).map_err(refuse)?;
         statement
             .authenticate(
                 &result.result.result,
@@ -785,10 +586,7 @@ impl TransitionBuilder<'_> {
             )
             .map_err(refuse)?;
         let liability_amount = if statement.verdict == PositiveCourtVerdictV2::PositiveChecked {
-            let amount = crate::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(
-                h.worker_gain,
-                h.policy.k as u8,
-            );
+            let amount = crate::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(h.worker_gain, h.policy.k as u8);
             let free = u128::from(record.collateral)
                 .checked_sub(self.committed_at(signer, ctx.daa_score)?)
                 .ok_or_else(|| refuse("verifier already overcommitted"))?;
@@ -800,10 +598,7 @@ impl TransitionBuilder<'_> {
             0
         };
         let vote = PositiveCertificationVoteV2 {
-            bond: NativeOutpoint {
-                transaction: NativeHash64(signer.0.transaction_id.as_bytes()),
-                index: signer.0.index,
-            },
+            bond: NativeOutpoint { transaction: NativeHash64(signer.0.transaction_id.as_bytes()), index: signer.0.index },
             key: *key,
             statement: *statement,
             signature: *signature,
@@ -837,33 +632,23 @@ impl TransitionBuilder<'_> {
         let mut owned = read(&self.state, subject, 0)?;
         let row = &mut owned.row;
         let case = check_session(&self.state, ctx, row, session)?;
-        let fact = session
-            .checked_terminal()
-            .ok_or_else(|| refuse("native checked Court terminal missing"))?;
-        let origin = session
-            .positive_final_origin()
-            .ok_or_else(|| refuse("actual Finish origin missing"))?;
-        let finality = PositiveCertificationFinalV2 {
-            origin,
-            witness: fact.witness(),
-            material: session.court_material(),
-        };
+        let fact = session.checked_terminal().ok_or_else(|| refuse("native checked Court terminal missing"))?;
+        let origin = session.positive_final_origin().ok_or_else(|| refuse("actual Finish origin missing"))?;
+        let finality = PositiveCertificationFinalV2 { origin, witness: fact.witness(), material: session.court_material() };
         if row.fixed.finality.is_some_and(|old| old != finality) {
             return Err(refuse("P Final/material cannot be rebound"));
         }
         row.fixed.finality = Some(finality);
         if row.fixed.outcome.is_none()
             && row.positive_positions() >= u32::from(row.fixed.header.policy.k)
-            && !(row.fixed.header.policy.veto > 0
-                && row.negative_positions() >= u32::from(row.fixed.header.policy.veto))
+            && !(row.fixed.header.policy.veto > 0 && row.negative_positions() >= u32::from(row.fixed.header.policy.veto))
         {
             let prosecution = origin
                 .accepted_daa
                 .checked_add(row.fixed.header.policy.prosecution_window_daa)
                 .ok_or_else(|| refuse("Final prosecution overflow"))?;
             if ctx.daa_score >= prosecution && ctx.daa_score >= case.maturity_daa {
-                row.fixed.outcome =
-                    Some((PositiveCertificationOutcomeV2::Certified, ctx.daa_score));
+                row.fixed.outcome = Some((PositiveCertificationOutcomeV2::Certified, ctx.daa_score));
             }
         }
         write(self, row)
@@ -876,32 +661,22 @@ impl TransitionBuilder<'_> {
         value: &NativeRowValue,
         case: &CaseRow,
     ) -> Result<(), PalwStateV2Error> {
-        let _result_workspace =
-            reserve_p_workspace((size_of::<NativeRowValue>() + 2 * MAX_NATIVE_KEY_BYTES) as u64)?;
-        let stored = PositiveRowsV2::new(&self.state)
-            .read(NativeRowKey::Result(case.result))
-            .map_err(refuse)?;
+        let _result_workspace = reserve_p_workspace((size_of::<NativeRowValue>() + 2 * MAX_NATIVE_KEY_BYTES) as u64)?;
+        let stored = PositiveRowsV2::new(&self.state).read(NativeRowKey::Result(case.result)).map_err(refuse)?;
         let Some(NativeRowBody::Result(result)) = stored.map(|row| row.body) else {
             return Err(unavailable("terminal assigned Case has no original Result"));
         };
         let subject = certification_subject(&result.result);
         let mut owned = read(&self.state, subject, 0)?;
         let row = &mut owned.row;
-        check_positive_certification_result_links_v2(&row.fixed.header, &result, case)
-            .map_err(refuse)?;
+        check_positive_certification_result_links_v2(&row.fixed.header, &result, case).map_err(refuse)?;
         let at = case.last_event.accepted_daa;
-        if at < row.fixed.header.commit_origin.accepted_daa
-            || row.fixed.outcome.is_some_and(|(_, decided)| at < decided)
-        {
+        if at < row.fixed.header.commit_origin.accepted_daa || row.fixed.outcome.is_some_and(|(_, decided)| at < decided) {
             return Err(refuse("Case termination precedes rooted P history"));
         }
         let checkpoint = self.try_checkpoint()?;
         let update = (|| {
-            self.write_kernel_row_encoded_v1(
-                misaka_palw_positive_contract::native::KERNEL_AUX_TABLE,
-                key,
-                Some(value),
-            )?;
+            self.write_kernel_row_encoded_v1(misaka_palw_positive_contract::native::KERNEL_AUX_TABLE, key, Some(value))?;
             if let Some(outcome) = positive_certification_failure_v2(row, at, false) {
                 row.fixed.outcome = Some((outcome, at));
                 write(self, row)?;
@@ -916,15 +691,10 @@ impl TransitionBuilder<'_> {
 
     /// Draw expiry, insufficient votes and veto are decided from rooted P
     /// and Case rows. A k-positive subject still needs its native session.
-    pub(super) fn decide_due_positive_certification_failures_v2(
-        &mut self,
-        ctx: &PalwBlockContextV2,
-    ) -> Result<(), PalwStateV2Error> {
-        while let Some(subject) = self.state.kernel_route.as_ref().and_then(|route| {
-            route
-                .due_positive_certification_subjects_v2(ctx.daa_score)
-                .next()
-        }) {
+    pub(super) fn decide_due_positive_certification_failures_v2(&mut self, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+        while let Some(subject) =
+            self.state.kernel_route.as_ref().and_then(|route| route.due_positive_certification_subjects_v2(ctx.daa_score).next())
+        {
             // The canonical P write removes this subject from the index.
             self.fail_positive_certification_v2(ctx, Digest(subject.as_bytes()))?;
         }
@@ -963,10 +733,7 @@ impl TransitionBuilder<'_> {
         input: &mut PositiveCaseReplayInputV2<'_>,
     ) -> Result<(), PalwStateV2Error> {
         let Some(route) = parent.kernel_route_state_v1() else { return Ok(()) };
-        if route
-            .undrawn_positive_certification_subjects_v2(ctx.daa_score)
-            .take(input.live_case_cap.saturating_add(1))
-            .count()
+        if route.undrawn_positive_certification_subjects_v2(ctx.daa_score).take(input.live_case_cap.saturating_add(1)).count()
             > input.live_case_cap
         {
             return Err(refuse("undrawn Positive Cases exceed native live capacity"));
@@ -1000,19 +767,10 @@ impl TransitionBuilder<'_> {
     pub(super) fn sweep_positive_certification_v2<'a>(
         &mut self,
         ctx: &PalwBlockContextV2,
-        mut original_reservation: impl FnMut(
-            AssignmentId,
-        ) -> Result<
-            (&'a AssignmentAdmissionMaterialV2, &'a [u8]),
-            PalwStateV2Error,
-        >,
+        mut original_reservation: impl FnMut(AssignmentId) -> Result<(&'a AssignmentAdmissionMaterialV2, &'a [u8]), PalwStateV2Error>,
     ) -> Result<PositiveCertificationSweepReportV2, PalwStateV2Error> {
         let count = self.state.kernel_route.as_ref().map_or(0, |route| {
-            route
-                .aux
-                .range((136, Vec::new())..(137, Vec::new()))
-                .filter(|((_, key), _)| key.first() == Some(&b'P'))
-                .count()
+            route.aux.range((136, Vec::new())..(137, Vec::new())).filter(|((_, key), _)| key.first() == Some(&b'P')).count()
         });
         // Existing chains with no P rows perform no P allocation and do not
         // require a resource owner merely to preserve their legacy sweep.
@@ -1020,22 +778,13 @@ impl TransitionBuilder<'_> {
             return Ok(PositiveCertificationSweepReportV2::default());
         }
         let mut q = TirNativeRequestsV1::new();
-        q.vec_v1::<Digest>(count as u64)
-            .map_err(PalwStateV2Error::NativeResource)?;
-        let _keys_owner = reserve_native_requests_v1(q.bytes_v1())
-            .map_err(PalwStateV2Error::NativeResource)?
-            .ok_or_else(|| {
-                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<Digest>>(
-                    "P sweep keys",
-                    "actual checker not armed",
-                ))
-            })?;
+        q.vec_v1::<Digest>(count as u64).map_err(PalwStateV2Error::NativeResource)?;
+        let _keys_owner = reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<Digest>>("P sweep keys", "actual checker not armed"))
+        })?;
         let mut subjects = Vec::new();
         subjects.try_reserve_exact(count).map_err(|_| {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<Digest>>(
-                "P sweep keys",
-                "allocator refusal",
-            ))
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<Digest>>("P sweep keys", "allocator refusal"))
         })?;
         if let Some(route) = self.state.kernel_route.as_ref() {
             for ((_, key), _) in route.aux.range((136, Vec::new())..(137, Vec::new())) {
@@ -1052,13 +801,7 @@ impl TransitionBuilder<'_> {
         for subject in subjects {
             let owned = read(&self.state, subject, 0)?;
             let row = &owned.row;
-            if positive_certification_failure_v2(
-                row,
-                ctx.daa_score,
-                case_live(&self.state, &row.fixed.header)?,
-            )
-            .is_some()
-            {
+            if positive_certification_failure_v2(row, ctx.daa_score, case_live(&self.state, &row.fixed.header)?).is_some() {
                 drop(owned);
                 self.fail_positive_certification_v2(ctx, subject)?;
                 report.failures += 1;
@@ -1072,30 +815,16 @@ impl TransitionBuilder<'_> {
                 continue;
             }
             let h = &row.fixed.header;
-            let earliest = h
-                .committed_span
-                .unwrap_or(0)
-                .checked_add(h.policy.anchor_delay_spans.max(1));
-            let later = self
-                .state
-                .round_seed_anchor
-                .is_some_and(|a| earliest.is_some_and(|s| a.span >= s));
+            let earliest = h.committed_span.unwrap_or(0).checked_add(h.policy.anchor_delay_spans.max(1));
+            let later = self.state.round_seed_anchor.is_some_and(|a| earliest.is_some_and(|s| a.span >= s));
             let policy_ok = queue_policy(self, &h.policy, ctx.daa_score).is_ok();
             if !later || !policy_ok {
                 report.deferred_queue_or_seed += 1;
                 continue;
             }
-            let network_key = (
-                POSITIVE_CERTIFICATION_TABLE_V2,
-                certification_network_key_v1(),
-            );
+            let network_key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
             let epoch = ctx.daa_score / h.policy.epoch_daa;
-            let draws = shared_network_draws_v2(
-                &self.state,
-                &network_key,
-                epoch,
-                h.policy.draws_per_epoch,
-            )?;
+            let draws = shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?;
             if draws == h.policy.draws_per_epoch {
                 report.deferred_queue_or_seed += 1;
                 continue;
@@ -1127,18 +856,10 @@ impl TransitionBuilder<'_> {
         if ctx.daa_score < case.maturity_daa || case.unresolved_fraud != 0 {
             return Err(refuse("actual native Case remains liable"));
         }
-        if matches!(
-            case.status,
-            ClaimStatus::ClaimRefuted | ClaimStatus::Revoked
-        ) {
-            return Err(unavailable(
-                "actual P attestor deterministic charge owner missing; no release",
-            ));
+        if matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked) {
+            return Err(unavailable("actual P attestor deterministic charge owner missing; no release"));
         }
-        if !matches!(
-            case.status,
-            ClaimStatus::PositivePassed | ClaimStatus::EndedUnverified
-        ) {
+        if !matches!(case.status, ClaimStatus::PositivePassed | ClaimStatus::EndedUnverified) {
             return Err(refuse("native Case is not terminal"));
         }
         if row.fixed.liability_release.is_some() {
@@ -1166,21 +887,16 @@ fn bound_session_case(
     let (assignment, bundle) = session.ensure_current(state, ctx)?;
     let h = &row.fixed.header;
     if &h.policy != session.certification_policy() {
-        return Err(refuse(
-            "P policy differs from original authenticated native admission",
-        ));
+        return Err(refuse("P policy differs from original authenticated native admission"));
     }
     if session.assignment() != h.assignment
         || h.worker != assignment.bundle.terms.worker
         || h.worker_key != assignment.worker_key
         || h.worker_gain != assignment.bundle.terms.worker_reward
     {
-        return Err(refuse(
-            "P worker or Assignment differs from the native checked session",
-        ));
+        return Err(refuse("P worker or Assignment differs from the native checked session"));
     }
-    check_positive_certification_result_links_v2(h, &bundle.result, &bundle.case)
-        .map_err(refuse)?;
+    check_positive_certification_result_links_v2(h, &bundle.result, &bundle.case).map_err(refuse)?;
     row.authenticate_votes(session.result()).map_err(refuse)?;
     Ok(bundle.case)
 }
@@ -1193,9 +909,7 @@ fn check_session(
 ) -> Result<CaseRow, PalwStateV2Error> {
     let case = bound_session_case(state, ctx, row, session)?;
     let h = &row.fixed.header;
-    let fact = session
-        .checked_terminal()
-        .ok_or_else(|| refuse("native full checked terminal missing"))?;
+    let fact = session.checked_terminal().ok_or_else(|| refuse("native full checked terminal missing"))?;
     if fact.terminal_kind() != TerminalKindV2::PositivePassed
         || fact.terminal().outcome() != CheckOutcome::Matched
         || fact.result() != h.result
@@ -1209,9 +923,7 @@ fn check_session(
         || case.witness_status != WitnessStatus::Complete
         || case.status != ClaimStatus::PositivePassed
     {
-        return Err(refuse(
-            "current exact Case/coverage differs from checked session",
-        ));
+        return Err(refuse("current exact Case/coverage differs from checked session"));
     }
     // Calling this getter requires a factory-authenticated closed initial
     // topology and actual pending state, not unresolved_fraud==0 as a shortcut.
@@ -1254,29 +966,21 @@ impl PositiveCertifiedWorkerPaymentV2 {
     pub(super) fn due_v2(
         &self,
         accepted_prefix: &PalwChainStateV2,
-    ) -> Result<crate::palw_positive_assignment_funds_v2::AssignmentAuthorizedDueV2, PalwStateV2Error>
-    {
+    ) -> Result<crate::palw_positive_assignment_funds_v2::AssignmentAuthorizedDueV2, PalwStateV2Error> {
         use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2;
         let key = bond(self.worker);
-        let worker = accepted_prefix
-            .bonds
-            .get(&key)
-            .ok_or(PalwStateV2Error::MissingBond(key))?;
+        let worker = accepted_prefix.bonds.get(&key).ok_or(PalwStateV2Error::MissingBond(key))?;
         if worker.pubkey.as_slice() != self.worker_key.as_slice() {
-            return Err(refuse(
-                "original worker payout bond differs from the Assignment signer",
-            ));
+            return Err(refuse("original worker payout bond differs from the Assignment signer"));
         }
-        Ok(
-            crate::palw_positive_assignment_funds_v2::AssignmentAuthorizedDueV2 {
-                source_leg: 0,
-                kind: AssignmentSettlementLegV2::WorkerPayment,
-                party: principal(&self.worker_key),
-                recipient: Digest(worker.payout_payload.as_bytes()),
-                amount: self.amount,
-                receipt: self.receipt,
-            },
-        )
+        Ok(crate::palw_positive_assignment_funds_v2::AssignmentAuthorizedDueV2 {
+            source_leg: 0,
+            kind: AssignmentSettlementLegV2::WorkerPayment,
+            party: principal(&self.worker_key),
+            recipient: Digest(worker.payout_payload.as_bytes()),
+            amount: self.amount,
+            receipt: self.receipt,
+        })
     }
     pub(super) fn subject(&self) -> Digest {
         self.subject
@@ -1290,28 +994,16 @@ pub(super) fn approve_positive_worker_payment_v2(
     let owned = read(state, certification_subject(session.result()), 0)?;
     let row = &owned.row;
     let case = check_session(state, ctx, row, session)?;
-    if !row
-        .fixed
-        .outcome
-        .is_some_and(|(o, _)| o == PositiveCertificationOutcomeV2::Certified)
-    {
+    if !row.fixed.outcome.is_some_and(|(o, _)| o == PositiveCertificationOutcomeV2::Certified) {
         return Err(refuse("actual P outcome is not Certified"));
     }
     if ctx.daa_score <= session.pending_fraud_bound().latest_decision_daa() {
         return Err(refuse("actual native liability/fraud bound is not closed"));
     }
-    let expected_final = session
-        .positive_final_origin()
-        .ok_or_else(|| refuse("actual native Finish missing"))?;
-    let fact = session
-        .checked_terminal()
-        .ok_or_else(|| refuse("full checked session missing"))?;
+    let expected_final = session.positive_final_origin().ok_or_else(|| refuse("actual native Finish missing"))?;
+    let fact = session.checked_terminal().ok_or_else(|| refuse("full checked session missing"))?;
     if row.fixed.finality
-        != Some(PositiveCertificationFinalV2 {
-            origin: expected_final,
-            witness: fact.witness(),
-            material: session.court_material(),
-        })
+        != Some(PositiveCertificationFinalV2 { origin: expected_final, witness: fact.witness(), material: session.court_material() })
     {
         return Err(refuse("P Final/material differs from current session"));
     }
@@ -1323,12 +1015,7 @@ pub(super) fn approve_positive_worker_payment_v2(
         return Err(refuse("current worker payment is immature"));
     }
     let a = assignment(state, row.fixed.header.assignment)?;
-    if a.status
-        != (AssignmentStatusV2::Consumed {
-            case: row.fixed.header.case,
-            result: row.fixed.header.result,
-        })
-    {
+    if a.status != (AssignmentStatusV2::Consumed { case: row.fixed.header.case, result: row.fixed.header.result }) {
         return Err(refuse("Assignment one-use target changed"));
     }
     Ok(PositiveCertifiedWorkerPaymentV2 {
@@ -1357,51 +1044,28 @@ mod tests {
         const CHILD: &str = "MISAKA_TERMINAL_ASSIGNED_CASE_CHILD";
         if std::env::var_os(CHILD).is_none() {
             let module = module_path!().split_once("::").unwrap().1;
-            let selector = format!(
-                "{module}::terminal_assigned_case_withdraws_exact_p_and_rolls_back_together"
-            );
+            let selector = format!("{module}::terminal_assigned_case_withdraws_exact_p_and_rolls_back_together");
             let output = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", &selector, "--nocapture"])
                 .env(CHILD, "1")
                 .output()
                 .unwrap();
             assert!(
-                output.status.success()
-                    && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
                 "{}{}",
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
             return;
         }
-        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 {
-            memory_bytes: 64 << 20,
-            database_bytes: 0,
-        }));
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 64 << 20, database_bytes: 0 }));
         let (_, result, mut case, ..) = signed_bundle();
-        let params = PalwStateParamsV2::new(
-            100,
-            10,
-            10,
-            20,
-            500,
-            1000,
-            ZERO_HASH64,
-            4,
-            1000,
-            100,
-            1000,
-            0,
-        )
-        .unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, ZERO_HASH64, 4, 1000, 100, 1000, 0).unwrap();
         let extras = PalwTransitionExtrasV1::default();
         let mut state = PalwChainStateV2::genesis();
         state.kernel_route = Some(empty_route());
-        let mut builder =
-            TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        builder
-            .write_assignment_aux_v2(NativeRowBody::Case(case.clone()))
-            .unwrap();
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        builder.write_assignment_aux_v2(NativeRowBody::Case(case.clone())).unwrap();
         let subject = certification_subject(&result.result);
         let policy = PalwSecurityCertificationPolicyV1 {
             m: 1,
@@ -1427,10 +1091,7 @@ mod tests {
                     policy_id: positive_certification_policy_id_v2(&policy),
                     commit_origin: result.origin,
                     committed_span: Some(2),
-                    worker: NativeOutpoint {
-                        transaction: NativeHash64([82; 64]),
-                        index: 0,
-                    },
+                    worker: NativeOutpoint { transaction: NativeHash64([82; 64]), index: 0 },
                     worker_operator: Digest([83; 64]),
                     worker_key: result.miner_key,
                     worker_gain: 100,
@@ -1443,9 +1104,7 @@ mod tests {
             draw: None,
             votes: Vec::new(),
         };
-        builder
-            .write_assignment_aux_v2(NativeRowBody::Result(result))
-            .unwrap();
+        builder.write_assignment_aux_v2(NativeRowBody::Result(result)).unwrap();
         write(&mut builder, &p).unwrap();
         let mut before = builder.state.clone();
         let boundary = builder.entries.len();
@@ -1453,34 +1112,15 @@ mod tests {
         case.last_event.accepted_daa += 1;
         let mut foreign = case.clone();
         foreign.liability.digest.0[0] ^= 1;
-        assert!(
-            builder
-                .write_assignment_aux_v2(NativeRowBody::Case(foreign))
-                .is_err()
-        );
+        assert!(builder.write_assignment_aux_v2(NativeRowBody::Case(foreign)).is_err());
         assert_eq!(builder.entries.len(), boundary);
         assert_eq!(builder.state.state_root(), before.state_root());
 
-        builder
-            .write_assignment_aux_v2(NativeRowBody::Case(case.clone()))
-            .unwrap();
+        builder.write_assignment_aux_v2(NativeRowBody::Case(case.clone())).unwrap();
         let withdrawn = read(&builder.state, subject, 0).unwrap().row;
-        assert_eq!(
-            withdrawn.fixed.outcome,
-            Some((
-                PositiveCertificationOutcomeV2::Withdrawn,
-                case.last_event.accepted_daa
-            ))
-        );
+        assert_eq!(withdrawn.fixed.outcome, Some((PositiveCertificationOutcomeV2::Withdrawn, case.last_event.accepted_daa)));
         assert_eq!(withdrawn.fixed.liability_release, None);
-        assert_eq!(
-            builder
-                .state
-                .kernel_route_state_v1()
-                .unwrap()
-                .positive_draw_slots_v2(case.last_event.accepted_daa, 4),
-            0
-        );
+        assert_eq!(builder.state.kernel_route_state_v1().unwrap().positive_draw_slots_v2(case.last_event.accepted_daa, 4), 0);
         let after = builder.state.state_root();
         let entries = &builder.entries[boundary..];
         assert_eq!(entries.len(), 2);
@@ -1492,12 +1132,6 @@ mod tests {
             apply_delta_entry(&mut before, entry, true).unwrap();
         }
         assert_eq!(read(&before, subject, 0).unwrap().row, p);
-        assert_eq!(
-            before
-                .kernel_route_state_v1()
-                .unwrap()
-                .positive_draw_slots_v2(case.last_event.accepted_daa, 4),
-            1
-        );
+        assert_eq!(before.kernel_route_state_v1().unwrap().positive_draw_slots_v2(case.last_event.accepted_daa, 4), 1);
     }
 }

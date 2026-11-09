@@ -201,9 +201,9 @@ fn check_relay_rollback<'a>(
         let common_daa = prefix.last().unwrap().header.daa_score;
         let incumbent_daa = follower.chain.ctx.consensus.get_header(follower.chain.sink()).unwrap().daa_score;
         assert!(
-            incumbent_daa.checked_sub(common_daa).is_some_and(|depth| {
-                depth <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1
-            }),
+            incumbent_daa
+                .checked_sub(common_daa)
+                .is_some_and(|depth| { depth <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1 }),
             "the relay rollback fixture must stay within the actual economic-tie reorg window"
         );
         for block in prefix {

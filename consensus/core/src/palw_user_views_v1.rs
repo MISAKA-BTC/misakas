@@ -381,7 +381,9 @@ pub fn palw_court_state_json_v1(
     let (claim_id, only_session) = match target {
         PalwCourtTargetV1::Claim(c) => (c, None),
         PalwCourtTargetV1::Session(s) => (state.court_session(&s)?.claim, Some(s)),
-        PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => return batch_response_json_v1(state, claim, ordinal, target, now),
+        PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => {
+            return batch_response_json_v1(state, claim, ordinal, target, now);
+        }
         PalwCourtTargetV1::BatchStop { .. } | PalwCourtTargetV1::BatchVerifyNumerical { .. } => return None,
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
             return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
@@ -484,7 +486,9 @@ pub fn palw_batch_numerical_verify_quote_json_v1(
     params: &PalwStateParamsV2,
     claim: Hash64,
     now: u64,
-    rules_at: impl FnOnce(u64) -> Option<(
+    rules_at: impl FnOnce(
+        u64,
+    ) -> Option<(
         crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
         crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1,
     )>,
@@ -517,7 +521,8 @@ fn numerical_batch_open_json_v1(
     // authenticates and accounts for the final signed carrier independently.
     const MAX_QUOTE_RANGES: usize = 4_096;
     let result = quote_numerical_batch_open_v1(state, claim, notice, leaf, ordinal, MAX_QUOTE_RANGES, lengths)
-        .map_err(|error| error.to_string()).and_then(|open| batch_open_body_json_v1(&open));
+        .map_err(|error| error.to_string())
+        .and_then(|open| batch_open_body_json_v1(&open));
     let (open, error) = match result {
         Ok(open) => (open, None),
         Err(error) => (Value::Null, Some(error)),
@@ -558,7 +563,10 @@ fn batch_response_json_v1(
     use crate::palw_court_shared_material_intake_v1::{MaterialTargetV1, quote_batch_response_v1};
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
     let PalwStagedCourtRowV1::CourtBatchDemand(demand) =
-        state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtBatchDemand(claim, ordinal))? else { return None };
+        state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtBatchDemand(claim, ordinal))?
+    else {
+        return None;
+    };
     let tip = state.last_point();
     let target_text = match target {
         MaterialTargetV1::FullIds => "full-ids".into(),
@@ -568,18 +576,21 @@ fn batch_response_json_v1(
         MaterialTargetV1::Unit { ordinal } => format!("unit:{ordinal}"),
     };
     let (response, error) = match quote_batch_response_v1(state, claim, ordinal, target) {
-        Ok(quote) => (json!({
-            "requestRoot": quote.request_root.to_string(), "draftId": quote.draft_id.to_string(),
-            "totalBytes": quote.total_bytes, "beginDaa": quote.begin_daa, "finishDaa": quote.finish_daa,
-            "responseDeadlineDaa": quote.response_deadline_daa,
-            "draftExpiresDaa": quote.draft_expires_daa,
-            "retainedSubmitter": quote.retained_submitter.as_ref().map(palw_bond_key_text_v1),
-            "retainedBodyHash": quote.retained_body_hash.map(|hash| hash.to_string()),
-            "materialAvailable": quote.material_available,
-            "parts": quote.parts.iter().map(|part| json!({
-                "offset": part.offset, "bytes": part.bytes, "assignedDaa": part.assigned_daa, "acceptedDaa": part.accepted_daa,
-            })).collect::<Vec<_>>(),
-        }), None),
+        Ok(quote) => (
+            json!({
+                "requestRoot": quote.request_root.to_string(), "draftId": quote.draft_id.to_string(),
+                "totalBytes": quote.total_bytes, "beginDaa": quote.begin_daa, "finishDaa": quote.finish_daa,
+                "responseDeadlineDaa": quote.response_deadline_daa,
+                "draftExpiresDaa": quote.draft_expires_daa,
+                "retainedSubmitter": quote.retained_submitter.as_ref().map(palw_bond_key_text_v1),
+                "retainedBodyHash": quote.retained_body_hash.map(|hash| hash.to_string()),
+                "materialAvailable": quote.material_available,
+                "parts": quote.parts.iter().map(|part| json!({
+                    "offset": part.offset, "bytes": part.bytes, "assignedDaa": part.assigned_daa, "acceptedDaa": part.accepted_daa,
+                })).collect::<Vec<_>>(),
+            }),
+            None,
+        ),
         Err(error) => (Value::Null, Some(error)),
     };
     Some(json!({

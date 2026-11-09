@@ -1273,11 +1273,7 @@ pub fn palw_staged_owned_progress_v1(
                     pending: row.pending_progress_v1(),
                     // A live public acquisition returns no certificate yet; that
                     // is an incomplete court, not an honest terminal verdict.
-                    completed: if row.pending_progress_v1().is_some() {
-                        None
-                    } else {
-                        row.certificate().ok().map(|r| r.is_some())
-                    },
+                    completed: if row.pending_progress_v1().is_some() { None } else { row.certificate().ok().map(|r| r.is_some()) },
                 }),
             )
         }

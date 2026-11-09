@@ -118,8 +118,12 @@ fn pending_public_prefix_acquisition_reports_incomplete_and_retains_its_custodia
     let PalwStagedCourtRowV1::PublicPrefix(row) = &builder.state.staged_courts[&key] else { unreachable!() };
     let demand = row.next_demand_v1(102).unwrap().unwrap();
     let movement = PalwConstraintStreamMoveV1 {
-        version: 1, claim: seed.claim, reserver: seed.reserver, reserved_daa: seed.reserved_daa,
-        seed_id: row.seed_id(), phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt,
+        version: 1,
+        claim: seed.claim,
+        reserver: seed.reserver,
+        reserved_daa: seed.reserved_daa,
+        seed_id: row.seed_id(),
+        phase: crate::palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1::PrefixCourt,
         action: Action::PrefixPublicDemand(demand.clone()),
         signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
     };

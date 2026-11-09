@@ -388,12 +388,8 @@ impl Consensus {
         if (config.process_genesis || db_has_history)
             && matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
         {
-            let installed = storage
-                .palw_state_v2_store
-                .read()
-                .tip_key()
-                .expect("read the persisted PALW state tip identity")
-                .is_some();
+            let installed =
+                storage.palw_state_v2_store.read().tip_key().expect("read the persisted PALW state tip identity").is_some();
             assert!(
                 installed,
                 "this is a PALW ConsensusV2 network ({}) and the PALW state store holds no tip — every PALW consensus rule \

@@ -213,7 +213,8 @@ impl PendingCourtArchiveV1 {
             CourtEndEvidenceV1::DeadlineSweep { point } => Some(point),
             CourtEndEvidenceV1::BatchStop { receipt } => {
                 receipt.check(&Key::CourtBatchStopReceipt(receipt.claim))?;
-                if receipt.operands.is_none() || receipt.fault_position.is_none()
+                if receipt.operands.is_none()
+                    || receipt.fault_position.is_none()
                     || (receipt.claim == self.session.claim
                         && (receipt.source_id != self.source_id || receipt.material_until_daa > self.material_until_daa))
                 {

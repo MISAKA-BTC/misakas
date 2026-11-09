@@ -704,4 +704,3 @@ pub fn palw_claim_local_owned_checkpoint_with_checker_v20(
     let checkpoint = palw_claim_local_owned_checkpoint_v1(state, params, point)?;
     Ok(PalwLocallyAdmittedClaimCheckpointV20 { checkpoint, _local_lease: lease })
 }
-

@@ -124,8 +124,9 @@ pub(super) fn checked_batch_response_slot_v1(
     };
     // This is an exact slot lookup. Batch-only Opens already bind the
     // native target ceiling; subsequent steps use the retained draft.
-    let delivery = m::batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand.demand, ordinal, declaration, total_bytes)
-        .map_err(refused)?;
+    let delivery =
+        m::batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand.demand, ordinal, declaration, total_bytes)
+            .map_err(refused)?;
     if delivery.request_root_v1() != request_root {
         return Err(refused("Batch material delivery root differs from the retained demand"));
     }
@@ -221,8 +222,7 @@ fn material_intake_inner(
                         return Err(refused("material Begin replay predates accepted draft"));
                     }
                     if let Some(root) = request_root
-                        && (old.head, old.submitter, old.total_bytes, old.body_hash)
-                            != (root, s.submitter, *total_bytes, *body_hash)
+                        && (old.head, old.submitter, old.total_bytes, old.body_hash) != (root, s.submitter, *total_bytes, *body_hash)
                     {
                         return Err(refused("Batch range already has another signed declaration"));
                     }
@@ -257,7 +257,9 @@ fn material_intake_inner(
                     claim: s.claim,
                     submitter: s.submitter,
                     budget_bytes: match &legacy {
-                        Some((source, program, leaves)) => m::claim_budget_v1(&b.state, &c, source, program, leaves).map_err(refused)?,
+                        Some((source, program, leaves)) => {
+                            m::claim_budget_v1(&b.state, &c, source, program, leaves).map_err(refused)?
+                        }
                         None => m::batch::booked_material_ledger_ceiling_v1(&b.state, &c).map_err(refused)?,
                     },
                     reserved_bytes: 0,
@@ -330,9 +332,7 @@ fn material_intake_inner(
                 )
             }
             .map_err(refused)?;
-            use crate::palw_native_resource_v1::{
-                NativeCoverageV1, reserve_native_pending_requests_v1, reserve_native_requests_v1,
-            };
+            use crate::palw_native_resource_v1::{NativeCoverageV1, reserve_native_pending_requests_v1, reserve_native_requests_v1};
             let reserve = if request_root.is_some() { reserve_native_pending_requests_v1 } else { reserve_native_requests_v1 };
             let raw = reserve(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
             let mut retained_bytes = Vec::new();
@@ -376,9 +376,9 @@ fn material_intake_inner(
                 return Err(refused("material Finish of an expired or incomplete draft"));
             }
             use super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2;
-            let (body, _body_lease) = draft.body_reserved(&b.state).map_err(|error| {
-                if request_root.is_some() { shared_ids_auth_fault_v2(error) } else { refused(error.to_string()) }
-            })?;
+            let (body, _body_lease) = draft
+                .body_reserved(&b.state)
+                .map_err(|error| if request_root.is_some() { shared_ids_auth_fault_v2(error) } else { refused(error.to_string()) })?;
             if crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) != draft.body_hash {
                 return Err(refused("material body checksum mismatch"));
             }

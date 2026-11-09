@@ -346,10 +346,7 @@ pub(crate) fn target_bound(
 }
 /// Exact typed owners for the provisional sequence and per-chunk decode work.
 /// This adds no authenticated flag: the original outer root is checked at EOF.
-pub(crate) fn decode_ids_body(
-    source: &Source,
-    body: &[u8],
-) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
+pub(crate) fn decode_ids_body(source: &Source, body: &[u8]) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
     decode_ids_body_reserved_v1(source, body, reserve_native_requests_v1).map_err(|error| error.to_string())
 }
 
@@ -376,9 +373,8 @@ fn decode_ids_body_reserved_v1(
     q.exact_v1::<u32>(u64::from(count)).map_err(E::Resource)?;
     let lease = reserve(q.bytes_v1()).map_err(E::Resource)?;
     let mut ids = Vec::new();
-    ids.try_reserve_exact(count as usize).map_err(|_| {
-        E::Resource(NativeCoverageV1::unsupported::<Vec<u32>>("shared original IDs", "ID allocation refused"))
-    })?;
+    ids.try_reserve_exact(count as usize)
+        .map_err(|_| E::Resource(NativeCoverageV1::unsupported::<Vec<u32>>("shared original IDs", "ID allocation refused")))?;
     let mut at = 0usize;
     let mut rows = None;
     for offset in (0..count).step_by(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
@@ -386,8 +382,7 @@ fn decode_ids_body_reserved_v1(
         let tokens = (count - offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1);
         let end = at + full_ids_wire_bytes_v1(tokens) as usize;
         let response = source.decode_response_native_v2(&request, &body[at..end])?;
-        let PalwTirPublicResponseV1::Ids { rows_root, ids: chunk } = &*response
-        else {
+        let PalwTirPublicResponseV1::Ids { rows_root, ids: chunk } = &*response else {
             return Err(bad("shared ID body type"));
         };
         if chunk.len() != tokens as usize || rows.is_some_and(|r| r != *rows_root) {

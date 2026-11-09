@@ -175,7 +175,10 @@ mod tests {
         assert_eq!(finished.state_root(), state.state_root());
         let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 1 << 20, database_bytes: 0 });
         let tracked = NativeTransitionReservationV1::for_checker_v1(&checker);
-        assert!(tracked.finish_state_v1(state, "tracked test state").is_err(), "a zero-sized explicit ticket cannot approve an unreserved output");
+        assert!(
+            tracked.finish_state_v1(state, "tracked test state").is_err(),
+            "a zero-sized explicit ticket cannot approve an unreserved output"
+        );
         assert_eq!(checker.outstanding(), (0, 0));
     }
 

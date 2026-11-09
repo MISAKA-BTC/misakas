@@ -34,9 +34,9 @@ use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Query, PalwTirP
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub(crate) mod batch;
-pub use batch::numerical_verification::{NumericalBatchReplayBudgetV1, NumericalBatchReplayProfileV1};
 pub use batch::constraint_stop::{BATCH_STOP_ORDINAL_V1, batch_stop_full_ids_range_v1};
 pub use batch::native_ranges::quote_numerical_batch_open_v1;
+pub use batch::numerical_verification::{NumericalBatchReplayBudgetV1, NumericalBatchReplayProfileV1};
 pub use batch::{BatchResponsePartSlotV1, BatchResponseQuoteV1, quote_batch_response_v1};
 mod storage_rent;
 pub use storage_rent::{
@@ -471,9 +471,9 @@ impl MaterialDraftV1 {
             .map_err(|_| Resource(NativeCoverageV1::overflow::<Vec<u8>>("material body address space")))?;
         let lease = reserve(self.accepted_bytes).map_err(Resource)?;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(n).map_err(|_| {
-            Resource(NativeCoverageV1::unsupported::<Vec<u8>>("material body", "prefix allocation refused"))
-        })?;
+        bytes
+            .try_reserve_exact(n)
+            .map_err(|_| Resource(NativeCoverageV1::unsupported::<Vec<u8>>("material body", "prefix allocation refused")))?;
         let (mut at, mut head) = (0u64, Hash64::default());
         while at < self.accepted_bytes {
             let Some(Row::CourtMaterialPart(part)) = state.staged_court_row_v1(&Key::CourtMaterialPart(self.draft_id, at)) else {
@@ -913,8 +913,11 @@ impl RootedMaterialV1 {
         claim: Hash64,
         targets: &[MaterialTargetV1],
         verify_daa: u64,
-    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, TirNativeRequestsV1, reserve_native_requests_v1};
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    {
+        use crate::palw_native_resource_v1::{
+            NativeDecodeErrorV1 as E, NativeRetainedV1, TirNativeRequestsV1, reserve_native_requests_v1,
+        };
         use crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1 as Unit;
         let c = shared::context(state, claim).map_err(E::Decode)?;
         if !c.batch_notice_only_v1()
@@ -924,8 +927,12 @@ impl RootedMaterialV1 {
             return Err(E::Decode("selected Batch material has a foreign scope, count or verification point".into()));
         }
         let source = c.source(state).map_err(E::Decode)?;
-        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, claim).map_err(E::Decode)?, &source, c.profile_id)
-            .map_err(E::Decode)?;
+        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(
+            frame_of(state, claim).map_err(E::Decode)?,
+            &source,
+            c.profile_id,
+        )
+        .map_err(E::Decode)?;
         let mut quote = TirNativeRequestsV1::new();
         quote.exact_v1::<Self>(1).map_err(E::Resource)?;
         let mut previous = None;
@@ -953,7 +960,8 @@ impl RootedMaterialV1 {
                 }
                 MaterialTargetV1::Parameter { .. } => param_count += 1,
                 MaterialTargetV1::PromptFlat | MaterialTargetV1::PromptTile { .. } => {
-                    quote.add_v1(TirNativeRequestsV1::product_v1(row.bytes.len() as u64, 2).map_err(E::Resource)?)
+                    quote
+                        .add_v1(TirNativeRequestsV1::product_v1(row.bytes.len() as u64, 2).map_err(E::Resource)?)
                         .map_err(E::Resource)?;
                     tile_count += u64::from(matches!(target, MaterialTargetV1::PromptTile { .. }));
                 }
@@ -1042,7 +1050,9 @@ impl RootedMaterialV1 {
     fn from_decoded_v1(
         units: Vec<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1>,
         mut params: Vec<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_artifact::PalwArtifactOpeningV1>>,
-        ids: Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1>>,
+        ids: Option<
+            crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1>,
+        >,
         flat: Option<Vec<u32>>,
         mut tiles: Vec<PalwPromptIdsOpeningV1>,
     ) -> Result<Self, String> {
@@ -1088,7 +1098,11 @@ impl RootedMaterialV1 {
 }
 
 fn selected_batch_row_v1<'a>(
-    state: &'a PalwChainStateV2, c: &shared::SharedTirContextV1, target: MaterialTargetV1, id: Hash64, verify_daa: u64,
+    state: &'a PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    target: MaterialTargetV1,
+    id: Hash64,
+    verify_daa: u64,
 ) -> Result<&'a MaterialRowV1, String> {
     let Some(Row::CourtMaterial(row)) = state.staged_court_row_v1(&Key::CourtMaterial(c.claim, id)) else {
         return Err("selected Batch material is missing".into());
@@ -1103,7 +1117,9 @@ fn selected_batch_row_v1<'a>(
 }
 
 fn selected_batch_ids_v1<'a>(
-    state: &'a PalwChainStateV2, c: &shared::SharedTirContextV1, verify_daa: u64,
+    state: &'a PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    verify_daa: u64,
 ) -> Result<&'a shared::SharedTirIdsV1, String> {
     let key = Key::CourtSharedIds(c.claim);
     let Some(Row::CourtSharedIds(row)) = state.staged_court_row_v1(&key) else {

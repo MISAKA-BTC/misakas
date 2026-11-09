@@ -141,7 +141,9 @@ pub fn network(raw: &str) -> Result<kaspa_consensus_core::config::params::Params
     // An explicitly named private ruleset; never aliases a public preset's identity.
     if raw == "private-wide-q24" {
         let mut params = network("testnet-12")?;
-        let mut fence = kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1::testnet12_v1(kaspa_consensus_core::config::params::ForkActivation::new(0));
+        let mut fence = kaspa_consensus_core::palw_tir_v1::PalwTirFenceV1::testnet12_v1(
+            kaspa_consensus_core::config::params::ForkActivation::new(0),
+        );
         fence.court_version = kaspa_consensus_core::palw_tir_v1::PALW_TIR_COURT_VERSION_WIDE_Q24_V2;
         params.palw_tir_v1 = Some(fence);
         params.sync_palw_tir_v1();

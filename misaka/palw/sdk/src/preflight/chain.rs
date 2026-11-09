@@ -280,7 +280,8 @@ fn gate(params: &Params, bundle: &PalwConsensusParamsV2, class: &PalwTirClassV1,
     let Some(canonical) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class) else {
         return Gate::Unbuildable(format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context));
     };
-    let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, class_id, canonical).expect("decoded program");
+    let job =
+        kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_canonical_context_v1(class, class_id, canonical).expect("decoded program");
     let object = match palw_tir_post_genesis_registration_v1(
         class.clone(),
         job,

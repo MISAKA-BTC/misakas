@@ -4,8 +4,8 @@ mod shutdown_tests;
 use crate::{
     consensus::{
         services::{
-            ConsensusServices, DbBlockDepthManager, DbDagTraversalManager, DbGhostdagManager,
-            DbParentsManager, DbPruningPointManager, DbWindowManager,
+            ConsensusServices, DbBlockDepthManager, DbDagTraversalManager, DbGhostdagManager, DbParentsManager, DbPruningPointManager,
+            DbWindowManager,
         },
         storage::ConsensusStorage,
     },
@@ -24,14 +24,11 @@ use crate::{
             daa::DbDaaStore,
             depth::{DbDepthStore, DepthStoreReader},
             dns_state::{DbDnsStateStore, DnsStateStoreReader},
-            epoch_accumulator::{
-                DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore,
-            },
+            epoch_accumulator::{DbBlockQualityPoolStore, DbEpochAccumulatorStore, DbReserveBalanceStore},
             evm::{
-                DbEvmCanonicalHeadsStore, DbEvmDepositLockStore, DbEvmHeaderStore,
-                DbEvmPayloadStore, DbEvmStateStore, EvmCanonicalHeadsStoreReader,
-                EvmDepositLockStore, EvmDepositLockStoreReader, EvmHeaderStore,
-                EvmHeaderStoreReader, EvmStateStore, EvmStateStoreReader,
+                DbEvmCanonicalHeadsStore, DbEvmDepositLockStore, DbEvmHeaderStore, DbEvmPayloadStore, DbEvmStateStore,
+                EvmCanonicalHeadsStoreReader, EvmDepositLockStore, EvmDepositLockStoreReader, EvmHeaderStore, EvmHeaderStoreReader,
+                EvmStateStore, EvmStateStoreReader,
             },
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
@@ -39,41 +36,29 @@ use crate::{
             past_pruning_points::DbPastPruningPointsStore,
             pruning::{DbPruningStore, PruningStoreReader},
             pruning_meta::PruningMetaStores,
-            pruning_overlay_snapshot::{
-                DbPruningPointOverlaySnapshotStore, PruningPointOverlaySnapshotStoreReader,
-            },
+            pruning_overlay_snapshot::{DbPruningPointOverlaySnapshotStore, PruningPointOverlaySnapshotStoreReader},
             pruning_samples::DbPruningSamplesStore,
             reachability::DbReachabilityStore,
             relations::{DbRelationsStore, RelationsStoreReader},
-            rewarded_epochs::{
-                DbRewardedEpochsStore, RewardedEpochKeys, RewardedEpochsStoreReader,
-            },
+            rewarded_epochs::{DbRewardedEpochsStore, RewardedEpochKeys, RewardedEpochsStoreReader},
             selected_chain::{DbSelectedChainStore, SelectedChainStore, SelectedChainStoreReader},
             stake_bonds::{DbStakeBondsStore, StakeBondsStoreReader},
-            statuses::{
-                DbStatusesStore, StatusesStore, StatusesStoreBatchExtensions, StatusesStoreReader,
-            },
+            statuses::{DbStatusesStore, StatusesStore, StatusesStoreBatchExtensions, StatusesStoreReader},
             tips::{DbTipsStore, TipsStoreReader},
             utxo_diffs::{DbUtxoDiffsStore, UtxoDiffsStoreReader},
             utxo_multisets::{DbUtxoMultisetsStore, UtxoMultisetsStoreReader},
-            virtual_state::{
-                LkgVirtualState, VirtualState, VirtualStateStoreReader, VirtualStores,
-            },
+            virtual_state::{LkgVirtualState, VirtualState, VirtualStateStoreReader, VirtualStores},
         },
     },
     params::Params,
     pipeline::{
-        ProcessingCounters, deps_manager::VirtualStateProcessingMessage,
-        pruning_processor::processor::PruningProcessingMessage,
+        ProcessingCounters, deps_manager::VirtualStateProcessingMessage, pruning_processor::processor::PruningProcessingMessage,
         virtual_processor::utxo_validation::UtxoProcessingContext,
     },
     processes::{
         coinbase::CoinbaseManager,
         ghostdag::ordering::SortableBlock,
-        transaction_validator::{
-            TransactionValidator, errors::TxResult,
-            tx_validation_in_utxo_context::TxValidationFlags,
-        },
+        transaction_validator::{TransactionValidator, errors::TxResult, tx_validation_in_utxo_context::TxValidationFlags},
         window::WindowManager,
     },
 };
@@ -83,26 +68,22 @@ use kaspa_consensus_core::{
     acceptance_data::AcceptanceData,
     api::args::{TransactionValidationArgs, TransactionValidationBatchArgs},
     block::{
-        BlockTemplate, EvmClaimStaleKind, MutableBlock, TemplateBuildMode,
-        TemplateTransactionSelector, TemplateTransactionSelectorFactory,
+        BlockTemplate, EvmClaimStaleKind, MutableBlock, TemplateBuildMode, TemplateTransactionSelector,
+        TemplateTransactionSelectorFactory,
     },
     blockstatus::BlockStatus::{StatusDisqualifiedFromChain, StatusUTXOValid},
     coinbase::MinerData,
     config::genesis::GenesisBlock,
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution,
-        BlockEpochContribution, BlockOverlayContribution, BondMutation, CanonicalLaggedEpochAnchor,
-        DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
-        OverlaySnapshot, PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs,
-        StakeScore, UNBOND_REQUEST_CONTEXT, advance_dns_confirmation, aggregate_epoch_tallies,
-        anchor_cutoff_blue_score, apply_bond_stamp, attestations_from_accepted_txs,
-        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule,
-        compute_stake_score, derive_dns_health, dns_finality_fresh_for_bridge,
-        effective_bond_status, is_bond_active_at, is_dns_confirmed,
-        ready_epoch_from_tip_blue_score, recompute_epoch_tallies,
-        reorg_inputs_since_common_ancestor, revert_bond_stamp, stake_attestation_message,
-        stake_preference_verdict, total_active_stake_by_epoch, unbond_request_message,
-        unbond_requests_from_accepted_txs, validator_id_from_pubkey,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, AttestationContribution, BlockEpochContribution, BlockOverlayContribution,
+        BondMutation, CanonicalLaggedEpochAnchor, DnsCoinbaseSettlement, DnsParams, DnsReorgMode, DnsReorgOutcome, DnsRolloutStage,
+        OverlaySnapshot, PruningPointOverlaySnapshot, StakeBondRecord, StakePreferenceInputs, StakeScore, UNBOND_REQUEST_CONTEXT,
+        advance_dns_confirmation, aggregate_epoch_tallies, anchor_cutoff_blue_score, apply_bond_stamp, attestations_from_accepted_txs,
+        bond_mutations_from_accepted_txs, canonical_lagged_epoch_anchor, check_dns_reorg_rule, compute_stake_score, derive_dns_health,
+        dns_finality_fresh_for_bridge, effective_bond_status, is_bond_active_at, is_dns_confirmed, ready_epoch_from_tip_blue_score,
+        recompute_epoch_tallies, reorg_inputs_since_common_ancestor, revert_bond_stamp, stake_attestation_message,
+        stake_preference_verdict, total_active_stake_by_epoch, unbond_request_message, unbond_requests_from_accepted_txs,
+        validator_id_from_pubkey,
     },
     header::Header,
     merkle::calc_hash_merkle_root,
@@ -116,11 +97,10 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensus_notify::{
     notification::{
-        NewBlockTemplateNotification, Notification, PalwClassReadinessChangedNotification,
-        PalwPanelAssignmentNotification, PalwPanelAssignmentSeatNotification,
-        PalwPanelEligibilityChangedNotification, PalwPanelReceiptNotification,
-        SinkBlueScoreChangedNotification, UtxosChangedNotification,
-        VirtualChainChangedNotification, VirtualDaaScoreChangedNotification,
+        NewBlockTemplateNotification, Notification, PalwClassReadinessChangedNotification, PalwPanelAssignmentNotification,
+        PalwPanelAssignmentSeatNotification, PalwPanelEligibilityChangedNotification, PalwPanelReceiptNotification,
+        SinkBlueScoreChangedNotification, UtxosChangedNotification, VirtualChainChangedNotification,
+        VirtualDaaScoreChangedNotification,
     },
     root::ConsensusNotificationRoot,
 };
@@ -177,15 +157,9 @@ impl EvmLaneKpi {
     pub(super) fn record(&self, mergeset_size: usize, gas_used: u64, claims_applied: usize) {
         use std::sync::atomic::Ordering;
         let n = self.chain_blocks.fetch_add(1, Ordering::Relaxed) + 1;
-        let ms = self
-            .mergeset_blocks
-            .fetch_add(mergeset_size as u64, Ordering::Relaxed)
-            + mergeset_size as u64;
+        let ms = self.mergeset_blocks.fetch_add(mergeset_size as u64, Ordering::Relaxed) + mergeset_size as u64;
         let gas = self.accepted_gas.fetch_add(gas_used, Ordering::Relaxed) + gas_used;
-        let claims = self
-            .applied_claims
-            .fetch_add(claims_applied as u64, Ordering::Relaxed)
-            + claims_applied as u64;
+        let claims = self.applied_claims.fetch_add(claims_applied as u64, Ordering::Relaxed) + claims_applied as u64;
         if n.is_multiple_of(256) {
             let cap = kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK as f64;
             info!(
@@ -221,9 +195,8 @@ pub const PALW_STATE_PROOF_MAX_BYTES: usize = 24 * 1024 * 1024;
 /// EXACTLY the worst case the object cap already permitted — `PALW_CERTIFICATION_MAX_PER_BLOCK`
 /// objects each carrying the per-object maximum `PALW_CERTIFICATION_MAX_VECTORS` — so nothing a
 /// node may be asked to compute grows; what changes is who pays.
-const PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK: usize =
-    kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
-        * kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS;
+const PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK: usize = kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
+    * kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS;
 
 /// **Why this node cannot weigh a PALW candidate — and the two reasons are not one reason.**
 ///
@@ -299,12 +272,8 @@ impl From<&str> for PalwAttemptAdmissionFaultV1 {
         Self::Invalid(value.into())
     }
 }
-impl From<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4>
-    for PalwAttemptAdmissionFaultV1
-{
-    fn from(
-        value: kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4,
-    ) -> Self {
+impl From<kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4> for PalwAttemptAdmissionFaultV1 {
+    fn from(value: kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4) -> Self {
         use kaspa_consensus_core::palw_attempt_material_v3::PalwNativeReadyVerificationErrorV4 as E;
         match value {
             E::Invalid(why) => Self::Invalid(why),
@@ -321,9 +290,7 @@ impl std::fmt::Display for PalwAttemptAdmissionFaultV1 {
         }
     }
 }
-impl From<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>
-    for PalwLocalTransitionFaultV1
-{
+impl From<kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> for PalwLocalTransitionFaultV1 {
     fn from(e: kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1) -> Self {
         Self::Resource(e)
     }
@@ -407,14 +374,10 @@ fn kernel_route_test_adjudication_cap_v1() -> u32 {
 /// each from a DAA. Height-gated and append-only so every node of one test, replaying the same blocks, folds the same attestation
 /// at the same block; never derived from a declaration.
 #[cfg(test)]
-static KERNEL_ROUTE_TEST_ATTESTATIONS_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> =
-    std::sync::Mutex::new(Vec::new());
+static KERNEL_ROUTE_TEST_ATTESTATIONS_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-pub(crate) fn kernel_route_test_attest_artifact_v1(
-    artifact_root: kaspa_hashes::Hash64,
-    from_daa: u64,
-) {
+pub(crate) fn kernel_route_test_attest_artifact_v1(artifact_root: kaspa_hashes::Hash64, from_daa: u64) {
     let mut list = KERNEL_ROUTE_TEST_ATTESTATIONS_V1.lock().unwrap();
     if !list.iter().any(|(root, _)| *root == artifact_root) {
         list.push((artifact_root, from_daa));
@@ -427,8 +390,7 @@ pub(crate) fn kernel_route_test_attest_artifact_v1(
 /// `cfg(test)`: the extras field it fills is `Vec::new()` in every build that can run a network (pinned by
 /// `opv_test_eligibility_hook_is_test_only`). Append-only and process-wide, so every node of one test folds the same set.
 #[cfg(test)]
-static KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1: std::sync::Mutex<Vec<kaspa_hashes::Hash64>> =
-    std::sync::Mutex::new(Vec::new());
+static KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1: std::sync::Mutex<Vec<kaspa_hashes::Hash64>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
 pub(crate) fn kernel_route_test_opv_eligible_v1(class: kaspa_hashes::Hash64) {
@@ -442,10 +404,7 @@ pub(crate) fn kernel_route_test_opv_eligible_v1(class: kaspa_hashes::Hash64) {
 /// class derived from it registered (lane G14C: the commit-time re-gate of typed claims).
 #[cfg(test)]
 pub(crate) fn kernel_route_test_opv_ineligible_v1(class: kaspa_hashes::Hash64) {
-    KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1
-        .lock()
-        .unwrap()
-        .retain(|c| *c != class);
+    KERNEL_ROUTE_TEST_OPV_ELIGIBLE_V1.lock().unwrap().retain(|c| *c != class);
 }
 
 #[cfg(test)]
@@ -477,8 +436,7 @@ fn kernel_route_test_attestations_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64
 /// append-only, so every node of one test, replaying the same blocks, waives the same gates at the same block; empty in every build
 /// that is not a test (`PalwKernelRouteExtrasV1::test_admitted_classes`).
 #[cfg(test)]
-static EXEC_V2_TEST_ADMITTED_CLASSES_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> =
-    std::sync::Mutex::new(Vec::new());
+static EXEC_V2_TEST_ADMITTED_CLASSES_V1: std::sync::Mutex<Vec<(kaspa_hashes::Hash64, u64)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
 pub(crate) fn exec_v2_test_admit_class_v1(class_id: kaspa_hashes::Hash64, from_daa: u64) {
@@ -491,11 +449,7 @@ pub(crate) fn exec_v2_test_admit_class_v1(class_id: kaspa_hashes::Hash64, from_d
 #[cfg(test)]
 fn exec_v2_test_admitted_classes_v1(daa_score: u64) -> Vec<kaspa_hashes::Hash64> {
     let list = EXEC_V2_TEST_ADMITTED_CLASSES_V1.lock().unwrap();
-    let mut classes: Vec<_> = list
-        .iter()
-        .filter(|(_, from)| *from <= daa_score)
-        .map(|(class, _)| *class)
-        .collect();
+    let mut classes: Vec<_> = list.iter().filter(|(_, from)| *from <= daa_score).map(|(class, _)| *class).collect();
     classes.sort();
     classes
 }
@@ -518,10 +472,7 @@ fn native_store_capacity_v1(
 /// either EXEC anchoring or UTXO acceptance can use it.
 fn virtual_palw_parent_from_tip_v2(
     loaded: kaspa_database::prelude::StoreResult<
-        Option<(
-            BlockHash,
-            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
-        )>,
+        Option<(BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>,
     >,
     parent: BlockHash,
     required: bool,
@@ -530,15 +481,11 @@ fn virtual_palw_parent_from_tip_v2(
     match loaded {
         Ok(Some((block, state))) if block == parent => Ok(Some(state)),
         _ if !required => Ok(None),
-        Ok(_) => Err(RuleError::LocalNativeStateContextUnavailable(
-            Fault::HistoryUnavailable,
-        )),
-        Err(error @ StoreError::LocalResourceUnavailable(_)) => Err(
-            RuleError::LocalNativeCapacityUnavailable(native_store_capacity_v1(error)),
-        ),
-        Err(_) => Err(RuleError::LocalNativeStateContextUnavailable(
-            Fault::StoreUnreadable,
-        )),
+        Ok(_) => Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable)),
+        Err(error @ StoreError::LocalResourceUnavailable(_)) => {
+            Err(RuleError::LocalNativeCapacityUnavailable(native_store_capacity_v1(error)))
+        }
+        Err(_) => Err(RuleError::LocalNativeStateContextUnavailable(Fault::StoreUnreadable)),
     }
 }
 
@@ -546,55 +493,27 @@ fn virtual_palw_parent_from_tip_v2(
 #[test]
 fn virtual_palw_parent_requires_the_matching_tip_for_armed_money() {
     use kaspa_consensus_core::{
-        palw_native_resource_v1::NativeChainStateV1,
-        palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault,
+        palw_native_resource_v1::NativeChainStateV1, palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault,
         palw_state_v2::PalwChainStateV2,
     };
     let parent = BlockHash::from_u64_word(1);
     let other = BlockHash::from_u64_word(2);
     let genesis = PalwChainStateV2::genesis();
     let state = || NativeChainStateV1::try_from_clone_v1(&genesis).unwrap();
-    assert!(
-        virtual_palw_parent_from_tip_v2(Ok(Some((parent, state()))), parent, true)
-            .unwrap()
-            .is_some()
-    );
-    assert!(
-        virtual_palw_parent_from_tip_v2(Ok(Some((other, state()))), parent, false)
-            .unwrap()
-            .is_none()
-    );
+    assert!(virtual_palw_parent_from_tip_v2(Ok(Some((parent, state()))), parent, true).unwrap().is_some());
+    assert!(virtual_palw_parent_from_tip_v2(Ok(Some((other, state()))), parent, false).unwrap().is_none());
     for loaded in [Ok(None), Ok(Some((other, state())))] {
         assert!(matches!(
             virtual_palw_parent_from_tip_v2(loaded, parent, true),
-            Err(RuleError::LocalNativeStateContextUnavailable(
-                Fault::HistoryUnavailable
-            ))
+            Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable))
         ));
     }
-    let no_capacity = || {
-        Err(StoreError::LocalResourceUnavailable(
-            "test parent restore demand".into(),
-        ))
-    };
-    assert!(
-        virtual_palw_parent_from_tip_v2(no_capacity(), parent, false)
-            .unwrap()
-            .is_none()
-    );
+    let no_capacity = || Err(StoreError::LocalResourceUnavailable("test parent restore demand".into()));
+    assert!(virtual_palw_parent_from_tip_v2(no_capacity(), parent, false).unwrap().is_none());
+    assert!(matches!(virtual_palw_parent_from_tip_v2(no_capacity(), parent, true), Err(RuleError::LocalNativeCapacityUnavailable(_))));
     assert!(matches!(
-        virtual_palw_parent_from_tip_v2(no_capacity(), parent, true),
-        Err(RuleError::LocalNativeCapacityUnavailable(_))
-    ));
-    assert!(matches!(
-        virtual_palw_parent_from_tip_v2(
-            Err(StoreError::DataInconsistency("test bad PALW tip".into())),
-            parent,
-            true
-        ),
-        Err(RuleError::LocalNativeStateContextUnavailable(
-            Fault::StoreUnreadable
-        ))
+        virtual_palw_parent_from_tip_v2(Err(StoreError::DataInconsistency("test bad PALW tip".into())), parent, true),
+        Err(RuleError::LocalNativeStateContextUnavailable(Fault::StoreUnreadable))
     ));
 }
 
@@ -607,12 +526,8 @@ struct PalwUtxoCommitV2 {
         kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2,
     >,
     genesis: Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
-    _native_genesis_carriages_lease:
-        Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
-    genesis_carriages: Vec<(
-        Hash64,
-        crate::model::stores::palw_class_carriage::PalwClassCarriageRecord,
-    )>,
+    _native_genesis_carriages_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    genesis_carriages: Vec<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>,
 }
 
 pub struct VirtualStateProcessor {
@@ -637,8 +552,7 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_heartbeat_width_fence`). `Some` = templates keep their mergesets within
     /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeat members, chunking sibling floods exactly as
     /// `mergeset_size_limit` chunks size.
-    pub(super) palw_heartbeat_width_fence:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_heartbeat_width_fence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The deepest reorg the sink search will ever offer — ADR-0065 D2's ancestor horizon.
     pub(super) finality_depth: u64,
     /// **G14 r5 (lane r5-escrow-settlement):** the network's pruning depth, read only to date the retirement of settled funded-escrow
@@ -682,8 +596,7 @@ pub struct VirtualStateProcessor {
     /// outlives the credit window by three orders of magnitude, so a walk-scoped copy vanishes
     /// while it is still in force and takes the certificate's whole committee with it.
     /// ADR-0067: accepted registrations' declarations, for the serve-from-chain arm.
-    pub(super) palw_class_carriage_store:
-        Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
+    pub(super) palw_class_carriage_store: Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
     /// ADR-0042 Decision 5 / ADR-0044 Unit C: per-chain-block `PalwStateDeltaV2` rows and the
     /// materialized tip. Written in the same `WriteBatch` as the block's UTXO data by the walk in
     /// `calculate_utxo_state_relatively`, so the two can never be half-written relative to each
@@ -707,11 +620,9 @@ pub struct VirtualStateProcessor {
     >,
     /// ADR-0044's free-prompt bundle, `Some` on the same networks as `palw_state_params_v2`. It is
     /// what turns an accepted transaction into a consensus object (Unit C step 3).
-    pub(super) palw_freeprompt_params_v3:
-        Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3>,
+    pub(super) palw_freeprompt_params_v3: Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3>,
     /// ADR-0042 Decision 6's params, `Some` on the same networks as `palw_state_params_v2`.
-    pub(super) palw_admission_params_v2:
-        Option<kaspa_consensus_core::palw_admission_v2::PalwAdmissionParamsV2>,
+    pub(super) palw_admission_params_v2: Option<kaspa_consensus_core::palw_admission_v2::PalwAdmissionParamsV2>,
     /// The V2 bond policy — read for one thing: the withdrawal delay a retiring bond's collateral
     /// stays locked for (audit C-08's spend gate).
     pub(super) palw_bond_params_v2: Option<kaspa_consensus_core::palw_mode_v2::PalwBondParamsV2>,
@@ -729,8 +640,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_court_params_v2: Option<kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2>,
     /// The bundle's genesis registration list — what the genesis block applies (Decision 11: the
     /// ruleset id covers it, so two networks sharing an id register the same classes).
-    pub(super) palw_genesis_objects_v2:
-        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    pub(super) palw_genesis_objects_v2: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
     /// The network's own name bytes — the ONE source `palw_network_domain_v2` is derived from, so
     /// the domain a payload must bind and the domain the Layer-0 digest binds are one fact.
     pub(super) network_id_bytes: Vec<u8>,
@@ -746,26 +656,22 @@ pub struct VirtualStateProcessor {
     /// in it is consensus.
     pub(super) dns_bft_runtime: super::dns_bft::DnsBftRuntime,
     /// ADR-0038 Decision A: the network's PALW commitment fence. `None` on every shipped preset.
-    pub(super) palw_block_commitment:
-        Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
+    pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0064's fence, `None` on every shipped preset. See
     /// [`Self::palw_v2_check_attempt_admission`] for what it admits and, more to the point, for
     /// what it deliberately does not.
-    pub(super) palw_bootstrap_activation:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_bootstrap_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0065 D4's fence, `None` on every shipped preset. Past it an `Unavailable` receipt
     /// decides neither quorum and is never charged as a dissent — see
     /// [`Self::palw_unavailable_abstains_at`], which is the ONE place this is resolved.
-    pub(super) palw_unavailable_abstains:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_unavailable_abstains: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
     /// Lane maturity's fence (post-launch, 2026-09-26: ADR-0065 D1 brought forward), MODE-folded
     /// (`Params::palw_bond_maturity_early_fence`), `None` on every shipped preset. Read only through
     /// [`Self::palw_bond_maturity_at`], beside the field above whose window it applies.
-    pub(super) palw_bond_maturity_early:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_bond_maturity_early: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0071 SA-1..SA-4's fence, `None` on every shipped preset. Past it a capability
     /// declaration is bounded, priced and refused for a retiring bond, and a seat is drawn for a
     /// class only after a production fact. See [`Self::palw_capability_bound_at`], which is the
@@ -778,8 +684,7 @@ pub struct VirtualStateProcessor {
     /// their occupancy costs. See [`Self::palw_certification_rent_at`], the ONE place it is
     /// resolved — the fee collection in `calculate_utxo_state` and the acceptance filter that
     /// spends it must agree, or the filter reads an empty map and silently admits everything.
-    pub(super) palw_certification_rent:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_certification_rent: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0082 Decision 3's fence, `None` on every shipped preset.** Past it a block may carry
     /// the three moves of a fused-attention dissection, and the court a session is judged under
     /// takes the DERIVED arity instead of the bundle's binary one. Resolved in exactly one place
@@ -789,8 +694,7 @@ pub struct VirtualStateProcessor {
     /// does not.
     pub(super) palw_kary_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Per-model finite adjudication horizons, activated independently at the fleet flag day.
-    pub(super) palw_model_court_window:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_court_window: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0081 Decision 3 / ADR-0082 Decision 5's fence, `None` on every shipped preset** —
     /// and un-armable on this build (`Params::validate_palw_v2` refuses it, audit D M-2). Held
     /// here so the `ClassRegistered` arm reads the form from the ONE place that decides it
@@ -812,8 +716,7 @@ pub struct VirtualStateProcessor {
     /// without a conviction, because no party in the field can file the move it is being clocked
     /// for; before it, it convicts exactly as it does today. Resolved in exactly one place,
     /// `palw_court_responder_coverage_at`, at the BLOCK's own DAA.
-    pub(super) palw_court_responder_coverage:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_court_responder_coverage: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0072 Decision 8's free-prompt half, `None` on every shipped preset** (mainnet audit
     /// 2026-09-06, M-3). Past it the transition DERIVES a free-prompt claim's retention obligation
     /// from this block's DAA and its chunk count from the run's own shape; before it both are the
@@ -822,8 +725,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_fp_da_pins: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0107: share growth counts Final work. Resolved in exactly one place,
     /// [`Self::palw_share_growth_final_at`], at the BLOCK's own DAA.
-    pub(super) palw_share_growth_final:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_share_growth_final: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0087 Decision 6's fence, `None` on every shipped preset.** Past it `ModelBuy` and
     /// `ModelSell` are accepted (a sell's signature checked here, at acceptance); before it both
     /// are refused by name and the fold never sees them. Resolved at the BLOCK's DAA.
@@ -833,31 +735,21 @@ pub struct VirtualStateProcessor {
     /// to) and the fold attributes claims to versions; before it all ten are refused by name.
     /// Resolved at the BLOCK's DAA.
     pub(super) palw_model_lines: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_model_immutable_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_class_semantics_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_court_commitment_scope_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_staged_public_court_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_staged_tir_route_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_tir_public_conviction_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_immutable_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_class_semantics_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_court_commitment_scope_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_staged_public_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_staged_tir_route_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_tir_public_conviction_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// RFC-0002 02-A: the TIR container identity's effective fence; `None` on every shipped preset.
-    pub(super) palw_tir_container_identity_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_tir_container_identity_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Compute-claim audit CX-01/CX-02: `palw_fp_answer_accounting_v1` (dormant; refused when armed until its carriage is built).
     pub(super) palw_fp_answer_accounting_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_court_family_supplier_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The TIR frame's measured cost model (G14 audit §10); `None` on every shipped preset, so the frame route resolves no rules.
-    pub(super) palw_tir_frame_cost_v1:
-        Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
-    pub(super) palw_tir_bounded_door_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_staged_float_constraint_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_tir_frame_cost_v1: Option<kaspa_consensus_core::palw_tir_frame_cost_v1::PalwTirFrameCostV1>,
+    pub(super) palw_tir_bounded_door_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_staged_float_constraint_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0095 §4.11 as corrected: the membership's own fence.
     pub(super) palw_model_benefits: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0114: `Params::palw_model_leg_v2_fence` — the five-percent owner leg's height.
@@ -872,11 +764,9 @@ pub struct VirtualStateProcessor {
     /// for the draw (the panel is a pure function of the claim).
     pub(super) palw_panel_economy: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0124 Decision 6: `Params::palw_work_priced_reward_fence` — the work price's height.
-    pub(super) palw_work_priced_reward:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0125: `Params::palw_execution_lane_fence` — the execution lane's activation and shape.
-    pub(super) palw_execution_lane:
-        Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
+    pub(super) palw_execution_lane: Option<kaspa_consensus_core::config::params::PalwExecutionLaneV1>,
     /// ADR-0126: `Params::palw_overlay_carve_fence` — the height from which the overlay's full split
     /// pays validators a fifth and a claim escrows the tenth they gave up.
     pub(super) palw_native_ruleset_id: kaspa_consensus_core::Hash,
@@ -889,19 +779,14 @@ pub struct VirtualStateProcessor {
     /// `Params::fence_schedule_v1()` (the fork id's schedule), once: a tag-108 envelope names the fork-id fired digest at a DAA, and
     /// this node recomputes it at the inclusion block without cloning the params (F-C4R3-01(b)).
     pub(super) palw_fence_schedule: Vec<u64>,
-    pub(super) palw_dns_retirement:
-        Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
+    pub(super) palw_dns_retirement: Option<kaspa_consensus_core::palw_native_settlement_v1::PalwDnsRetirementV1>,
     /// RFC-0012: the per-block rows of the native settlement walk. Memory only and rebuildable; see `native_settlement`.
     pub(super) native_rows: parking_lot::Mutex<super::native_settlement::NativeRowCache>,
     /// RFC-0012 D1: the last `safe`-readiness explanation served (memory only, advisory). Reused only when both
     /// sink and its contained pruning point agree, including context changes without a virtual change.
     /// See `native_settlement::native_safe_readiness`.
-    pub(super) native_readiness_memo: parking_lot::Mutex<
-        Option<(
-            BlockHash,
-            kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1,
-        )>,
-    >,
+    pub(super) native_readiness_memo:
+        parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_native_readiness_v1::NativeSafeReadinessV1)>>,
     /// Serializes session begin and every pruning-import mutation. No network
     /// wait holds this lock; durable epochs reject delayed/reopened callers.
     pub(crate) pruning_import_session_lock: parking_lot::Mutex<()>,
@@ -913,8 +798,7 @@ pub struct VirtualStateProcessor {
     /// LIVE-R1 N2: the consensus half of the partition watchdog — the run of resolves that settled after
     /// refusing a heavier, fully validated candidate on the PALW deep-reorg rule
     /// ([`Self::palw_partition_refusal_v1`]). Memory only; node-local; no verdict reads it.
-    pub(super) palw_refusal_streak:
-        parking_lot::Mutex<Option<kaspa_consensus_core::api::PalwPartitionRefusalV1>>,
+    pub(super) palw_refusal_streak: parking_lot::Mutex<Option<kaspa_consensus_core::api::PalwPartitionRefusalV1>>,
     /// **Liveness hotfix (L-LC-02 / L-COURT-01): the H-1 gate's guard** — verdict / refused-txid / invalid-object memories and the
     /// rehearsal budget (`palw_h1_guard`). Memory only; node-local; no verdict of any block reads it.
     pub(super) palw_h1_guard: parking_lot::Mutex<palw_h1_guard::PalwH1GateGuardV1>,
@@ -933,21 +817,16 @@ pub struct VirtualStateProcessor {
     /// Test-only: facts a test places at a chain block, as if its PALW delta had carried that work.
     #[cfg(test)]
     pub(super) native_fact_override: parking_lot::Mutex<
-        std::collections::HashMap<
-            BlockHash,
-            Vec<kaspa_consensus_core::palw_native_settlement_v1::MatureUsefulWorkV1>,
-        >,
+        std::collections::HashMap<BlockHash, Vec<kaspa_consensus_core::palw_native_settlement_v1::MatureUsefulWorkV1>>,
     >,
     pub(super) palw_overlay_carve: Option<kaspa_consensus_core::config::params::PalwOverlayCarveV1>,
     /// ADR-0130: `Params::palw_panel_exposure_floor_fence` — the seat exposure floor's height and
     /// reward multiple. Resolved at the claim's ANCHOR for the draw and at the BLOCK's DAA for the
     /// fold's reservation, which the duty row stores.
-    pub(super) palw_panel_exposure_floor:
-        Option<kaspa_consensus_core::config::params::PalwPanelExposureFloorV1>,
+    pub(super) palw_panel_exposure_floor: Option<kaspa_consensus_core::config::params::PalwPanelExposureFloorV1>,
     /// ADR-0134: `Params::palw_compute_overlay_retired` — past it the compute overlay's five
     /// subnetworks are refused, in blocks and in the mempool.
-    pub(super) palw_compute_overlay_retired:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_compute_overlay_retired: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0135: `Params::palw_model_registry` — past it the fold walks every class's lifecycle,
     /// seats judge by possession proofs, and the class shares come from admission.
     pub(super) palw_model_registry: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -955,12 +834,10 @@ pub struct VirtualStateProcessor {
     pub(super) palw_work_target: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0143: `Params::palw_artifact_root_ownership` — dormant everywhere; past it an artifact
     /// root has one owner and a duplicate is refused where it enters state.
-    pub(super) palw_artifact_root_ownership:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_artifact_root_ownership: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-19 audit: `Params::palw_operator_id_unique` — dormant everywhere; past it one
     /// operator identity backs one bond.
-    pub(super) palw_operator_id_unique:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_operator_id_unique: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0145: `Params::palw_canonical_work_daa()` — the fence's HEIGHT, dormant everywhere.**
     /// Past it a claim's fork-choice weight, its exposure and its work price read the work the
     /// chain DERIVED from its class's graph instead of the step-leaf count the class's registrant
@@ -971,8 +848,7 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-19 audit (F3): `Params::palw_admission_independence` — dormant everywhere; past
     /// it a registered class's panel and its licensing quorum must each name a seat the registrant
     /// does not hold, and a registered class is a `Candidate` until one is ready for it.
-    pub(super) palw_admission_independence:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_admission_independence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0145 §5/§6: `Params::palw_fp_derived_work` — dormant everywhere; past it a free-prompt
     /// claim's work is derived from the class's graph and a prefix already paid for is not paid
     /// again.
@@ -982,8 +858,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_objective_offence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 §7: `Params::palw_seat_gate_possession` — past it `required_ready_seats` is the
     /// possession floor and a class heavier than its fleet is admitted rarely, not refused.
-    pub(super) palw_seat_gate_possession:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_seat_gate_possession: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Spend-once execution-round quanta: `Params::palw_execution_quanta`. Past it a Final mints
     /// N unique 1-second permits from CanonicalWork instead of drawing the ADR-0125 lottery.
     /// ADR-0151: the block cadence in milliseconds, for the economic-safety fold. The transition
@@ -1006,29 +881,21 @@ pub struct VirtualStateProcessor {
     pub(super) palw_readiness_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 Upgrade C: `Params::palw_economic_payout` — past it a claim snapshots its economics
     /// at acceptance and is paid at the rate; the registry reads the cap ceiling.
-    pub(super) palw_economic_payout:
-        Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
+    pub(super) palw_economic_payout: Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
     /// ADR-0135: the genesis classes' work, derived once from the bundle's registrations that carry
     /// an admission carriage (every node derives the same map from `Params`). A genesis class that
     /// carries none — every shipped one: its profile lives in the catalog, not the bundle — is
     /// described through the canonical class table instead ([`Self::palw_known_model_works_v1`]).
-    pub(super) palw_genesis_model_works: std::collections::BTreeMap<
-        kaspa_hashes::Hash64,
-        kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1,
-    >,
+    pub(super) palw_genesis_model_works:
+        std::collections::BTreeMap<kaspa_hashes::Hash64, kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1>,
     /// ADR-0135: the work of every class this node can describe, derived once per class and kept —
     /// genesis classes through the canonical class table the binary compiles, registered classes
     /// through the carriage the chain carried (`palw_class_carriage_store`). `None` is a class the
     /// node cannot describe, which the registry leaves as a legacy row.
     pub(super) palw_model_work_cache: std::sync::Mutex<
-        std::collections::BTreeMap<
-            kaspa_hashes::Hash64,
-            Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1>,
-        >,
+        std::collections::BTreeMap<kaspa_hashes::Hash64, Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1>>,
     >,
-    palw_panel_notify_snapshot: std::sync::Mutex<
-        Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNotifySnapshotV1>,
-    >,
+    palw_panel_notify_snapshot: std::sync::Mutex<Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNotifySnapshotV1>>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -1046,15 +913,13 @@ pub struct VirtualStateProcessor {
     /// `EpochBudgetUnspecified` and orphaned with its mergeset's claims. Resolved in exactly one
     /// place, `palw_v2_check_attempt_admission`, at the BLOCK's own DAA, which is the same score
     /// admission divides by `epoch_length`.
-    pub(super) palw_epoch_boundary_budget:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_epoch_boundary_budget: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0123's budget release, `None` on every shipped preset.** Resolved in exactly one
     /// place, [`Self::palw_epoch_budget_release_at`], and read by all three sites that judge an
     /// attempt against its budget — admission, the fold (through the transition extras) and the
     /// producer's own readiness — because three readings of one block's DAA is how a block gets
     /// accepted by one and dropped by another.
-    pub(super) palw_epoch_budget_release:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_epoch_budget_release: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0044 Decision 9's advertised free-prompt caps, `None` on every shipped preset**
     /// (mainnet audit 2026-09-06, L-2). Past it the extraction walk gives the lane's validation the
     /// two numbers the ruleset advertises — `max_prompt_tokens` and `max_decode_tokens`, both
@@ -1064,8 +929,7 @@ pub struct VirtualStateProcessor {
     /// ADR-0069 Decision 7's fence, `None` on every shipped preset. Past it a block whose class
     /// holds no granted share contributes zero pwu to both chain weights — see
     /// [`Self::palw_uncertified_weightless_at`], which is the ONE place this is resolved.
-    pub(super) palw_uncertified_weightless:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_uncertified_weightless: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0062's fence, `None` on every shipped preset. Past it a block may carry a
     /// `DefaultAccused` / `MaterialDisclosed` and a claim may hold `DefaultDisputed`. See
     /// [`Self::palw_da_court_at`], which is the ONE place this is resolved — the acceptance
@@ -1077,11 +941,9 @@ pub struct VirtualStateProcessor {
     /// gives — the acceptance rehearsal, the fold (through the extras' ladder) and the state walk
     /// must get the same answer for the same block.
     pub(super) palw_shard_court: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_memory_routing_court_v2:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_memory_routing_court_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0191 step B: `palw_tir_designated_answers_v1`'s mirror (None on every shipped network).
-    pub(super) palw_tir_designated_answers_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_tir_designated_answers_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_selected_source_bootstrap_v1:
         Option<kaspa_consensus_core::palw_source_bootstrap_v1::PalwSelectedSourceBootstrapFenceV1>,
     /// `Params::palw_shard_licensing` (ADR-0100 Decision 4). Resolved in ONE place,
@@ -1100,36 +962,26 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_probabilistic_constraints_v1` (RFC-0011 §15.7; G14 lane D): may a kernel route object be folded on this chain.
     /// Resolved in ONE place, [`Self::palw_kernel_route_at`]. Never armable by a real network (its validation refuses every
     /// height); a test builds the config without that validation.
-    pub(super) palw_probabilistic_constraints_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_funded_execution_v11:
-        Option<kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
-    pub(super) palw_stage_execution_v14:
-        Option<kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
-    pub(super) palw_native_final_v27:
-        Option<kaspa_consensus_core::palw_native_final_v27::PalwNativeFinalFenceV27>,
-    pub(super) palw_stage_execution_v28:
-        Option<kaspa_consensus_core::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
+    pub(super) palw_probabilistic_constraints_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_funded_execution_v11: Option<kaspa_consensus_core::palw_funded_execution_v11::PalwFundedExecutionFenceV11>,
+    pub(super) palw_stage_execution_v14: Option<kaspa_consensus_core::palw_flat_stage_v14::PalwStageExecutionFenceV14>,
+    pub(super) palw_native_final_v27: Option<kaspa_consensus_core::palw_native_final_v27::PalwNativeFinalFenceV27>,
+    pub(super) palw_stage_execution_v28: Option<kaspa_consensus_core::palw_flat_stage_v28::PalwStageExecutionFenceV28>,
     /// `Params::palw_native_execution_v39` (owning39 source/class/job lanes, stage actions 41–72).
-    pub(super) palw_native_execution_v39:
-        Option<kaspa_consensus_core::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
+    pub(super) palw_native_execution_v39: Option<kaspa_consensus_core::palw_native_execution_v39::PalwNativeExecutionFenceV39>,
     /// `Params::palw_native_mining_v39` (stage actions 73–79 and the `PNR9` receipt-block carriage). Dormant everywhere.
-    pub(super) palw_native_mining_v39:
-        Option<kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39>,
-    pub(super) native_carriage_mass:
-        kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22,
+    pub(super) palw_native_mining_v39: Option<kaspa_consensus_core::palw_native_mining_v39::PalwNativeMiningFenceV39>,
+    pub(super) native_carriage_mass: kaspa_consensus_core::palw_native_carriage_v22::NativeCarriageMassParamsV22,
     /// Immutable owning ruleset for independent native proof exporters.
     pub(super) native_redemption_params_v33: Arc<Params>,
     /// `Params::palw_fork_choice_commitment_v1` (RFC-0009 L2): past it a header commits its selected parent's post-state as
     /// `BLAKE2b(fork-choice leaf ‖ ADR-0043 root)`. Every site that produces or checks a header root goes through
     /// [`Self::palw_committed_root_v1`]; `None` everywhere, where that is `state.state_root()` byte for byte.
-    pub(super) palw_fork_choice_commitment_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_fork_choice_commitment_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_panel_free_v1` (RFC-0015): the OPV fence, the network's admission list and the policy's terms. Resolved in ONE place
     /// ([`Self::palw_kernel_opv_fence`]). Never armable by a real network (its validation refuses every height); a test builds the
     /// config without that validation.
-    pub(super) palw_panel_free_v1:
-        Option<kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1>,
+    pub(super) palw_panel_free_v1: Option<kaspa_consensus_core::palw_panel_free_v1::PalwPanelFreeFenceV1>,
     /// `Params::palw_typed_roots_v1` (RFC-0004 Part II): may a typed-root route object (inner kind 19) be carried, and from which height
     /// the route's schedule holds `K2-TR-v1` Active. Resolved in ONE place ([`Self::palw_kernel_typed_roots_at`]). Never armable by a
     /// real network (its validation refuses every height); a test builds the config without that validation.
@@ -1137,18 +989,14 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_verifier_pay_v1` (G14R round 3): M*-49 verifier pay and the held default share on the kernel route.
     pub(super) palw_verifier_pay_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_model_refutation_seal_v1` (RFC-0002 P0, RFC02-T): candidate refutations only as sealed reveals (inner 36 / 37).
-    pub(super) palw_model_refutation_seal_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_refutation_seal_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_window_class_v37` (RFC-0002 §II.14.60): the typed window class, funded action 45.
     pub(super) palw_window_class_v37: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_beacon_source_opt_in_v1:
-        Option<kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
-    pub(super) palw_beacon_source_fee_v1:
-        Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
+    pub(super) palw_beacon_source_opt_in_v1: Option<kaspa_consensus_core::palw_beacon_source_opt_in_v1::PalwBeaconSourceFenceV1>,
+    pub(super) palw_beacon_source_fee_v1: Option<kaspa_consensus_core::palw_beacon_source_fee_v1::PalwBeaconSourceFeeFenceV1>,
     /// `Params::palw_signed_registration_v1` (RFC-0009 G-EXPIRY / G-RULESET): may a class registration arrive in a signed-expiry envelope
     /// (tag 108). Resolved in ONE place, [`Self::palw_signed_registration_at`]. Never armable by a real network.
-    pub(super) palw_signed_registration_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_signed_registration_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_provider_court_v1` (lane DA16, RFC-0009 §4.2): may the provider court's objects (tags 150–153) be folded. Resolved in
     /// ONE place, [`Self::palw_provider_court_at`]. Never armable by a real network.
     pub(super) palw_provider_court_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1159,15 +1007,13 @@ pub struct VirtualStateProcessor {
     /// capital assignment (tag 140) be folded. Resolved in ONE place, [`Self::palw_model_bond_allocation_at`]. Never armable by a real
     /// network.
     pub(super) palw_bond_budget_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    pub(super) palw_model_bond_allocation_v1:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_model_bond_allocation_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_gen_v1` (RFC-0003): may a class be a pipeline of PALW-TIR version-2 programs on
     /// this chain. Resolved in ONE place, [`Self::palw_gen_at`], at the block.
     pub(super) palw_gen_v1: Option<kaspa_consensus_core::palw_gen_v1::PalwGenFenceV1>,
     /// `Params::palw_task_heads_v1` (the `Head` profile, `kaspa_consensus_core::palw_task_heads_v1`): may a generative class be a task
     /// head. Resolved in ONE place, [`Self::palw_task_heads_at`]. `None` on every shipped preset.
-    pub(super) palw_task_heads_v1:
-        Option<kaspa_consensus_core::palw_task_heads_v1::PalwTaskHeadsFenceV1>,
+    pub(super) palw_task_heads_v1: Option<kaspa_consensus_core::palw_task_heads_v1::PalwTaskHeadsFenceV1>,
     /// `Params::palw_tir_only_v1` (RFC-0002 Phase H): is a new class admitted only as an IR program or pipeline. Resolved in ONE place,
     /// [`Self::palw_tir_only_at`], at the block the registration is judged in. `None` on every shipped preset.
     pub(super) palw_tir_only_v1: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1180,8 +1026,7 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_attn_anchored_root` (ADR-0093 Decision 8): may a root claim carry its anchor,
     /// and must it. Resolved in ONE place, [`Self::palw_attn_anchored_root_at`]; the acceptance arm
     /// and the fold's extras both read it through that.
-    pub(super) palw_attn_anchored_root:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_attn_anchored_root: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_held_context` (ADR-0103). Resolved in ONE place, [`Self::palw_held_context_at`];
     /// the acceptance rehearsal, the fold (through the extras' ladder) and the court's shape all
     /// read it through that, so a node cannot admit a move its fold refuses.
@@ -1202,26 +1047,22 @@ pub struct VirtualStateProcessor {
     pub(super) palw_fp_prefix_inherit: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0096 Decision 8: `Params::palw_fp_decode_constraint_fence()`** — the height from which a constrained claim (FP
     /// job version 6) may be accepted. `None` on every shipped preset.
-    pub(super) palw_fp_decode_constraint:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_fp_decode_constraint: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **RFC-0001 §2.5: `Params::palw_fp_constraint_v2_fence()`** — the height from which a constraint of the second form
     /// is admitted. `None` on every shipped preset.
     pub(super) palw_fp_constraint_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **RFC-0001 §2.9: `Params::palw_fp_tokenizer_match_fence()`** — the height from which a commitment's tokenizer must be its
     /// class's listed one. `None` on every shipped preset.
-    pub(super) palw_fp_tokenizer_match:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_fp_tokenizer_match: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit fence, resolved once in [`Self::palw_audit_2026_09_11_at`]; the
     /// acceptance arm (A-1, AC-SLOT) and the fold's extras both read it there.
     pub(super) palw_audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The liveness fix L-COURT-01's fence, resolved once in [`Self::palw_court_completion_attempt_at`].
-    pub(super) palw_court_completion_attempt:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_court_completion_attempt: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-11 audit DEEP fence (B-1/C-01/B-4/court cluster), resolved once in
     /// [`Self::palw_audit_2026_09_11_deep_at`]; the fold's extras read it there. A later flag day
     /// than the shallow fence above.
-    pub(super) palw_audit_2026_09_11_deep:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_audit_2026_09_11_deep: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// The 2026-09-23 economic audit's fence, resolved once in [`Self::palw_audit_2026_09_23_at`];
     /// the fold's extras and the registration gate read it there.
     pub(super) palw_audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -1234,8 +1075,7 @@ pub struct VirtualStateProcessor {
     /// **A-2 uniformity: the lifecycle kinds' owning fences** (`Params::palw_lifecycle_kind_fences_v1`). A kind whose fence is not in
     /// force at a block is the live build's undecodable payload there: the objects-of-block walk drops it before the acceptance walk,
     /// a chunk group assembling to it is undecodable to the walk, and the UTXO walk burns no rent for it.
-    pub(super) palw_lifecycle_kind_fences:
-        kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
+    pub(super) palw_lifecycle_kind_fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
     /// Complete immutable native policy preimages, retained only for the new
     /// Assignment profile. The fired resolver must not hash heights alone.
     pub(super) palw_positive_assignment_params_v2: Option<Arc<Params>>,
@@ -1243,13 +1083,11 @@ pub struct VirtualStateProcessor {
     /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
     /// the other way.
-    pub(super) palw_offence_attribution:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_offence_attribution: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): `Params::palw_activation_pool`
     /// (`Some` at genesis on testnet-12 alone), resolved once in [`Self::palw_activation_pool_at`];
     /// the fold's R1, R2 and pool rules and the mempool's pool gate read it there.
-    pub(super) palw_activation_pool:
-        Option<kaspa_consensus_core::config::params::PalwActivationPoolParamsV1>,
+    pub(super) palw_activation_pool: Option<kaspa_consensus_core::config::params::PalwActivationPoolParamsV1>,
     /// **ADR-0152 R-core+: `Params::palw_rcore_plus`** (`Some(0)` on testnet-12 alone; genesis-only
     /// by `validate_palw_rcore_plus_v1`), resolved once in [`Self::palw_rcore_plus_at`]. M4 reads it
     /// at a claim's ANCHOR for the stake-weighted draw (`palw_panel_draw_policy_at`, SW-1) and at the
@@ -1261,20 +1099,17 @@ pub struct VirtualStateProcessor {
     /// claim's ANCHOR DAA) the panel is drawn from the anchor attempt's execution commitment, not the
     /// anchor block's identity. Dormant on every shipped preset; resolved once in
     /// [`Self::palw_panel_seed_execution_at`].
-    pub(super) palw_panel_seed_execution:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_panel_seed_execution: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **Lane A (post-launch, 2026-09-26): `Params::palw_operator_anchor`, resolved** — the fence and
     /// each operator bond's genesis key. Past it (at a candidate anchor block's own DAA) a chain block
     /// anchors a claim only if it is, or merges, an operator's attempt at or past the claim's slot, and
     /// that attempt seeds the draw ([`Self::palw_chain_block_as_anchor_v1`]). `None` on every shipped
     /// preset.
-    pub(super) palw_operator_anchor:
-        Option<kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1>,
+    pub(super) palw_operator_anchor: Option<kaspa_consensus_core::palw_operator_anchor_v1::PalwOperatorAnchorRuleV1>,
     /// **RFC-0007 §I.6: the vertices this node has seen, to catch a seat that signed a round twice** — fed by the acceptance walk past
     /// `palw_verification_vertex_v1` (after the signature is checked), read by the node's panel, which carries the evidence. Node
     /// policy; nothing here decides a block.
-    pub(super) palw_vertex_watch:
-        std::sync::Mutex<kaspa_consensus_core::palw_vertex_v1::PalwVertexWatchV1>,
+    pub(super) palw_vertex_watch: std::sync::Mutex<kaspa_consensus_core::palw_vertex_v1::PalwVertexWatchV1>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -1301,8 +1136,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_maturity_warn_last_band: std::sync::atomic::AtomicU64,
     /// ADR-0065 D2's fence, `None` on every shipped preset. See
     /// [`Self::palw_frontier_provenance_outcome`].
-    pub(super) palw_frontier_provenance:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// lane: rcore/f1-forkchoice-attacks — the deep-reorg strict-economic-win fence, `None` on
     /// every shipped preset. Past it `dns_reorg_outcome` allows a deep reorg only on a strict
@@ -1310,14 +1144,12 @@ pub struct VirtualStateProcessor {
     /// except a SHALLOW tie (lane rcore/f1-strictwin-tie: at most `PALW_REORG_SHALLOW_TIE_DAA_V1` DAA
     /// ticks on the incumbent's side), which GHOSTDAG's own order decides
     /// ([`Self::palw_reorg_shallow_ghostdag_win_v1`]), so honest slot races converge.
-    pub(super) palw_reorg_strict_economic_win:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_reorg_strict_economic_win: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// **ADR-0178: rule E** (`Params::palw_fork_choice_rule_e_v1`), `None` on every preset. Past it — at the incumbent's DAA — the
     /// deep-reorg gate weighs the two tips' exclusive pasts ([`Self::palw_rule_e_gate_v1`]) and the sink search takes the best of the
     /// candidates it admits rather than the first ([`Self::sink_search_algorithm`]).
-    pub(super) palw_fork_choice_rule_e:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_fork_choice_rule_e: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rule E's search cost, node-local: the most candidates one search's continuation has UTXO-validated past its first, and how
     /// many continuations ran (`palw_rule_e_finish_search_v1`). Read by the cost tests and the log; no rule reads it.
     pub(crate) palw_rule_e_max_extra_validated: std::sync::atomic::AtomicUsize,
@@ -1327,31 +1159,24 @@ pub struct VirtualStateProcessor {
     /// `None` on testnet-11, devnet and simnet; `always()` on a card. Resolved at the BLOCK's DAA
     /// on both the coinbase construction and the validation path — they must agree, or every node
     /// builds a different coinbase.
-    pub(super) palw_validator_payout_bounds:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_validator_payout_bounds: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **MSK-26A: the slashing-evidence UTXO genuineness fence.** Past it, `apply_slashing_side_effects`
     /// removes an accused bond's stake only for evidence proved genuine (`proved_slash_targets`),
     /// closing the merge-blue forgery that burns an honest bond. `None`/dormant on every shipped
     /// preset — the side-effect is byte-identical to before the field existed.
-    pub(super) palw_slashing_evidence_utxo_genuine:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_slashing_evidence_utxo_genuine: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **Lane accept-order** (`Params::palw_lane_accept_parents_first_fence`): past it a merging block
     /// applies its mergeset parents-first ([`Self::acceptance_ordered_mergeset_without_selected_parent`]).
     /// `None` on every shipped preset — every order below is the consensus order, byte for byte.
-    pub(super) palw_lane_accept_parents_first:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_lane_accept_parents_first: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **RFC-0008 v2**: `Params::palw_exec_payload_v2_fence`. Past it the EXEC blocks a chain block accepts are the ones its coinbase
     /// anchor covers, not its mergeset's reds. `None` on every shipped preset.
     pub(super) palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// RFC-0008 v2: the anchor the virtual state was resolved with, keyed by the virtual's selected parent. The template that virtual
     /// becomes must carry exactly this anchor in its coinbase, or its UTXO commitment (which includes the covered blocks' effects)
     /// would not be the one its own validation recomputes.
-    pub(super) palw_exec_v2_virtual_anchor: parking_lot::Mutex<
-        Option<(
-            BlockHash,
-            kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1,
-        )>,
-    >,
+    pub(super) palw_exec_v2_virtual_anchor:
+        parking_lot::Mutex<Option<(BlockHash, kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1)>>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0138: `Params::palw_anchor_clock` and ADR-0083's receipt fence — the heartbeat miner's
@@ -1370,8 +1195,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
-    pub(super) palw_attempt_activation:
-        Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0073 SA-1: the free-prompt beacon's fold width and its fence.** `None` on every
     /// shipped preset, which is the pre-SA-1 single-block beacon. Resolved in exactly ONE place,
     /// [`Self::palw_beacon_fold_k_at`], so the producer's walk and the validator's cannot pick
@@ -1397,8 +1221,7 @@ pub struct VirtualStateProcessor {
     /// ADR-0109 Decision 3: the PALW bond gate the mempool asks — the locked set it refuses spends
     /// of and the burn obligations a released bond's spend must pay — memoised per (registry tip,
     /// DAA) so a burst of admissions does not rebuild it per transaction.
-    pub(super) palw_mempool_locked_cache:
-        parking_lot::Mutex<Option<(BlockHash, u64, Arc<PalwMempoolBondGate>)>>,
+    pub(super) palw_mempool_locked_cache: parking_lot::Mutex<Option<(BlockHash, u64, Arc<PalwMempoolBondGate>)>>,
     pub(super) evm_receipts_store: Arc<crate::model::stores::evm::DbEvmReceiptsStore>,
     pub(super) evm_tx_index_store: Arc<crate::model::stores::evm::DbEvmTxIndexStore>,
     pub(super) evm_block_hash_map_store: Arc<crate::model::stores::evm::DbEvmBlockHashMapStore>,
@@ -1409,8 +1232,7 @@ pub struct VirtualStateProcessor {
     // code (222) — written alongside the per-block result so an archive/recent node can
     // reconstruct any canonical block's state. RPC/archive data only, never committed.
     pub(super) evm_state_diff_store: Arc<crate::model::stores::evm::DbEvmStateDiffStore>,
-    pub(super) evm_state_checkpoint_store:
-        Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
+    pub(super) evm_state_checkpoint_store: Arc<crate::model::stores::evm::DbEvmStateCheckpointStore>,
     pub(super) evm_code_store: Arc<crate::model::stores::evm::DbEvmCodeStore>,
     // C-01 state-backend (design v0.1, Stage 1, slice S4): the flat latest-canonical
     // state (234) + block→root index (232) + canonical pointer (231). Written ONLY
@@ -1419,8 +1241,7 @@ pub struct VirtualStateProcessor {
     // `&mut self`); the lock is taken only while shadow is on.
     pub(super) evm_flat_account_store: Arc<crate::model::stores::evm::DbEvmFlatAccountStore>,
     pub(super) evm_block_state_root_store: Arc<crate::model::stores::evm::DbEvmBlockStateRootStore>,
-    pub(super) evm_latest_state_ptr_store:
-        Arc<RwLock<crate::model::stores::evm::DbEvmLatestStatePtrStore>>,
+    pub(super) evm_latest_state_ptr_store: Arc<RwLock<crate::model::stores::evm::DbEvmLatestStatePtrStore>>,
     // C-01 slice S4: node-local shadow dual-write of the flat state backend +
     // per-block live differential vs the committed snapshot. `false` on every
     // current network and by default — purely a pre-cutover validation aid.
@@ -1548,20 +1369,14 @@ pub(super) struct PalwCarriedObjectV1 {
         >,
     >,
     /// Original transaction-local companion, never borrowed from another carrier.
-    pub(super) history_pledge:
-        Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
-    pub(super) tir_public_original:
-        Option<kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
+    pub(super) history_pledge: Option<kaspa_consensus_core::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>,
+    pub(super) tir_public_original: Option<kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>,
     /// **G14 item 1 (RFC-0035 A): the same carrier's funded TFO1 pairing** (its own actual transaction). `Some` only for a TFO1
     /// carrier past `palw_tir_public_conviction_v1`; its object is admitted only through the funded-original coordinator.
-    pub(super) funded_original: Option<
-        kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
-    >,
-    pub(super) original_binding:
-        Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
+    pub(super) funded_original: Option<kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1>,
+    pub(super) original_binding: Option<kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>,
     /// The same carrier's optional producer custody delegation (HFP1 version 2).
-    pub(super) custody_delegation:
-        Option<kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
+    pub(super) custody_delegation: Option<kaspa_consensus_core::palw_history_custody_v1::PalwProducerCustodyDelegationV1>,
     /// **The 2026-09-23 Position route matrix, P-B1: what this object's carrier is owed if acceptance
     /// refuses it.** `Some` only for a carrier-borne `ModelBuy`/`ModelSeed` past
     /// `palw_audit_2026_09_23`, resolved in `palw_v2_objects_of_block` where the carrier is in hand;
@@ -1608,10 +1423,7 @@ pub(super) enum PalwMergedOwnedWorkV1 {
         /// The exact header admitted above, retained for the native keys and original EXEC clock.
         Arc<Header>,
     ),
-    Spend(
-        BlockHash,
-        kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3,
-    ),
+    Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
 
 mod dns;
@@ -1634,8 +1446,7 @@ pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
 impl VirtualStateProcessor {
     #[cfg(test)]
     pub(crate) fn set_template_time_for_test(&self, now: u64) {
-        self.template_clock
-            .fetch_max(now, std::sync::atomic::Ordering::Relaxed);
+        self.template_clock.fetch_max(now, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1671,9 +1482,7 @@ impl VirtualStateProcessor {
         // longer reads 206). Without it, dropping 206 would leave the executor's selected-parent read
         // (and the O12 pipeline) with no seed → a stall. Demote to a no-op + warn rather than enable a
         // half-configured retirement: keep writing 206 so the node stays correct.
-        let evm_retire_206 = if evm_retire_206
-            && !(evm_flat_authoritative && evm_shadow_state_backend)
-        {
+        let evm_retire_206 = if evm_retire_206 && !(evm_flat_authoritative && evm_shadow_state_backend) {
             warn!(
                 "[C-01] --evm-retire-206 is set WITHOUT --evm-flat-authoritative (+ --evm-shadow-state-backend); it is a no-op (the per-block 206 snapshot keeps being written). Enable the flat-authoritative seed first."
             );
@@ -1697,10 +1506,7 @@ impl VirtualStateProcessor {
         // --evm-materialize-pp-anchor for a datadir where the anchor is already
         // missing). testnet-10 ran retire-206+recent with no anchor and silently
         // could not serve pruned IBD to any peer — warn instead of staying quiet.
-        if evm_retire_206
-            && evm_history_mode.writes_state_history()
-            && !evm_history_mode.retains_state_history_past_pruning()
-        {
+        if evm_retire_206 && evm_history_mode.writes_state_history() && !evm_history_mode.retains_state_history_past_pruning() {
             warn!(
                 "[C-01] --evm-retire-206 with --evm-history-mode=recent: serving the IBD pruning-point export relies on a state anchor AT the pruning point (kept checkpoint/snapshot). If this node's anchor is missing (e.g. the datadir predates the pp-anchor step), run --evm-materialize-pp-anchor once; otherwise peers cannot pruned-IBD from this node."
             );
@@ -2033,11 +1839,7 @@ impl VirtualStateProcessor {
     }
 
     fn bridge_finality_is_fresh(&self, sink: BlockHash) -> bool {
-        if self
-            .headers_store
-            .get_daa_score(sink)
-            .is_ok_and(|daa| self.dns_retired_at(daa))
-        {
+        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
             return true;
         }
         let Some(dns_params) = self.dns_params.as_ref() else {
@@ -2049,34 +1851,17 @@ impl VirtualStateProcessor {
         let Ok(sink_blue_score) = self.headers_store.get_blue_score(sink) else {
             return false;
         };
-        let dns_confirmed = is_dns_confirmed(
-            state.work_depth,
-            state.stake_depth,
-            dns_params.required_work_depth,
-            dns_params.required_stake_depth,
-        );
-        let anchor_blue_score = self
-            .headers_store
-            .get_blue_score(state.last_dns_confirmed_anchor)
-            .ok();
-        dns_finality_fresh_for_bridge(
-            dns_confirmed,
-            state.last_dns_confirmed_anchor,
-            anchor_blue_score,
-            sink_blue_score,
-            dns_params,
-        )
+        let dns_confirmed =
+            is_dns_confirmed(state.work_depth, state.stake_depth, dns_params.required_work_depth, dns_params.required_stake_depth);
+        let anchor_blue_score = self.headers_store.get_blue_score(state.last_dns_confirmed_anchor).ok();
+        dns_finality_fresh_for_bridge(dns_confirmed, state.last_dns_confirmed_anchor, anchor_blue_score, sink_blue_score, dns_params)
     }
 
     /// **ADR-0109 Decision 1: the deposit-lock index follows the virtual UTXO set, in its batch.**
     /// Removed lock outputs leave, added lock outputs enter; a non-lock output on either side costs
     /// one script-class check and touches nothing. Unconditional — a lock output is consensus-legal
     /// on every network, and the template path is what gates on EVM activation.
-    pub(super) fn stage_evm_deposit_locks(
-        &self,
-        batch: &mut WriteBatch,
-        diff: &impl ImmutableUtxoDiff,
-    ) {
+    pub(super) fn stage_evm_deposit_locks(&self, batch: &mut WriteBatch, diff: &impl ImmutableUtxoDiff) {
         let mut store = self.evm_deposit_lock_store.write();
         for (outpoint, entry) in diff.removed().iter() {
             if deposit_lock_record(entry).is_some() {
@@ -2092,10 +1877,7 @@ impl VirtualStateProcessor {
 
     /// ADR-0109 Decision 1: (re)build the index from the virtual UTXO set — once for a database from
     /// before the index, and whenever the set is replaced wholesale (a pruning-point import).
-    pub(super) fn rebuild_evm_deposit_lock_index(
-        &self,
-        utxo_set: &crate::model::stores::utxo_set::DbUtxoSetStore,
-    ) {
+    pub(super) fn rebuild_evm_deposit_lock_index(&self, utxo_set: &crate::model::stores::utxo_set::DbUtxoSetStore) {
         let mut store = self.evm_deposit_lock_store.write();
         store.clear().unwrap();
         let mut locks = 0usize;
@@ -2107,9 +1889,7 @@ impl VirtualStateProcessor {
             }
         }
         store.set_built().unwrap();
-        info!(
-            "[evm-bridge] deposit-lock index built from the virtual UTXO set: {locks} unclaimed lock(s)"
-        );
+        info!("[evm-bridge] deposit-lock index built from the virtual UTXO set: {locks} unclaimed lock(s)");
     }
 
     /// **ADR-0109 Decision 1 — the template's claims: the index's, oldest lock first, then whatever
@@ -2128,27 +1908,18 @@ impl VirtualStateProcessor {
         let mut locks = match self.evm_deposit_lock_store.read().all() {
             Ok(locks) => locks,
             Err(e) => {
-                warn!(
-                    "[evm-bridge] deposit-lock index unreadable ({e}); this template carries only queued claims"
-                );
+                warn!("[evm-bridge] deposit-lock index unreadable ({e}); this template carries only queued claims");
                 return data;
             }
         };
         locks.retain(|(_, record)| daa_score < record.timeout_daa_score);
         locks.sort_by(|(a_op, a), (b_op, b)| {
-            (a.block_daa_score, a_op.transaction_id, a_op.index).cmp(&(
-                b.block_daa_score,
-                b_op.transaction_id,
-                b_op.index,
-            ))
+            (a.block_daa_score, a_op.transaction_id, a_op.index).cmp(&(b.block_daa_score, b_op.transaction_id, b_op.index))
         });
-        let mut seen: std::collections::HashSet<TransactionOutpoint> =
-            locks.iter().map(|(outpoint, _)| *outpoint).collect();
+        let mut seen: std::collections::HashSet<TransactionOutpoint> = locks.iter().map(|(outpoint, _)| *outpoint).collect();
         let queued = std::mem::take(&mut data.system_ops);
-        let mut system_ops: Vec<kaspa_consensus_core::evm::DepositClaim> = locks
-            .into_iter()
-            .map(|(outpoint, record)| record.claim(outpoint))
-            .collect();
+        let mut system_ops: Vec<kaspa_consensus_core::evm::DepositClaim> =
+            locks.into_iter().map(|(outpoint, record)| record.claim(outpoint)).collect();
         for claim in queued {
             if seen.insert(claim.deposit_outpoint) {
                 system_ops.push(claim);
@@ -2190,10 +1961,7 @@ impl VirtualStateProcessor {
             for msg in messages {
                 match msg {
                     VirtualStateProcessingMessage::Exit => break 'outer,
-                    VirtualStateProcessingMessage::Process(
-                        task,
-                        virtual_state_result_transmitter,
-                    ) => {
+                    VirtualStateProcessingMessage::Process(task, virtual_state_result_transmitter) => {
                         // We don't care if receivers were dropped
                         let result = match &resolution {
                             Ok(()) => Ok(statuses_read.get(task.block().hash()).unwrap()),
@@ -2206,9 +1974,7 @@ impl VirtualStateProcessor {
         }
 
         // Pass the exit signal on to the following processor
-        self.pruning_sender
-            .send(PruningProcessingMessage::Exit)
-            .unwrap();
+        self.pruning_sender.send(PruningProcessingMessage::Exit).unwrap();
     }
 
     fn check_shutdown_boundary(&self) -> Result<(), PalwLocalTransitionFaultV1> {
@@ -2281,20 +2047,15 @@ impl VirtualStateProcessor {
         assert_eq!(virtual_ghostdag_data.selected_parent, new_sink);
 
         let sink_multiset = self.utxo_multisets_store.get(new_sink).unwrap();
-        let chain_path = self
-            .dag_traversal_manager
-            .calculate_chain_path(prev_sink, new_sink, None);
+        let chain_path = self.dag_traversal_manager.calculate_chain_path(prev_sink, new_sink, None);
         let sink_ghostdag_data = Lazy::new(|| self.ghostdag_store.get_data(new_sink).unwrap());
         // Cache the DAA and Median time windows of the sink for future use, as well as prepare for virtual's window calculations
         self.cache_sink_windows(new_sink, prev_sink, &sink_ghostdag_data);
         // The lead cap's local policy (`palw_clock_lead_cap`): a granted beat whose step every template
         // would have to stamp past this node's clock plus 132 s is not merged yet. Asked after the sink's
         // windows are cached, so the virtual windows it computes build on them.
-        let (virtual_parents, virtual_ghostdag_data) = self.palw_lead_cap_virtual_parents(
-            virtual_parents,
-            virtual_ghostdag_data,
-            pruning_point,
-        );
+        let (virtual_parents, virtual_ghostdag_data) =
+            self.palw_lead_cap_virtual_parents(virtual_parents, virtual_ghostdag_data, pruning_point);
         assert_eq!(
             virtual_ghostdag_data.selected_parent, new_sink,
             "the lead cap's policy leaves only merged tips out, never the sink"
@@ -2322,89 +2083,57 @@ impl VirtualStateProcessor {
             Err(error) => panic!("all possible rule errors are unexpected here: {error}"),
         };
 
-        let compact_sink_ghostdag_data =
-            if let Some(sink_ghostdag_data) = Lazy::get(&sink_ghostdag_data) {
-                // If we had to retrieve the full data, we convert it to compact
-                sink_ghostdag_data.to_compact()
-            } else {
-                // Else we query the compact data directly.
-                self.ghostdag_store.get_compact_data(new_sink).unwrap()
-            };
+        let compact_sink_ghostdag_data = if let Some(sink_ghostdag_data) = Lazy::get(&sink_ghostdag_data) {
+            // If we had to retrieve the full data, we convert it to compact
+            sink_ghostdag_data.to_compact()
+        } else {
+            // Else we query the compact data directly.
+            self.ghostdag_store.get_compact_data(new_sink).unwrap()
+        };
 
         // Update the pruning processor about the virtual state change
         // Empty the channel before sending the new message. If pruning processor is busy, this step makes sure
         // the internal channel does not grow with no need (since we only care about the most recent message)
         let _consume = self.pruning_receiver.try_iter().count();
-        self.pruning_sender
-            .send(PruningProcessingMessage::Process {
-                sink_ghostdag_data: compact_sink_ghostdag_data,
-            })
-            .unwrap();
+        self.pruning_sender.send(PruningProcessingMessage::Process { sink_ghostdag_data: compact_sink_ghostdag_data }).unwrap();
 
         // Emit notifications
         let accumulated_diff = Arc::new(accumulated_diff);
         let virtual_parents = Arc::new(new_virtual_state.parents.clone());
         self.notification_root
-            .notify(Notification::NewBlockTemplate(
-                NewBlockTemplateNotification {},
-            ))
+            .notify(Notification::NewBlockTemplate(NewBlockTemplateNotification {}))
             .expect("expecting an open unbounded channel");
         self.notification_root
-            .notify(Notification::UtxosChanged(UtxosChangedNotification::new(
-                accumulated_diff,
-                virtual_parents,
-            )))
+            .notify(Notification::UtxosChanged(UtxosChangedNotification::new(accumulated_diff, virtual_parents)))
             .expect("expecting an open unbounded channel");
         self.notification_root
-            .notify(Notification::SinkBlueScoreChanged(
-                SinkBlueScoreChangedNotification::new(compact_sink_ghostdag_data.blue_score),
-            ))
+            .notify(Notification::SinkBlueScoreChanged(SinkBlueScoreChangedNotification::new(compact_sink_ghostdag_data.blue_score)))
             .expect("expecting an open unbounded channel");
         self.notification_root
-            .notify(Notification::VirtualDaaScoreChanged(
-                VirtualDaaScoreChangedNotification::new(new_virtual_state.daa_score),
-            ))
+            .notify(Notification::VirtualDaaScoreChanged(VirtualDaaScoreChangedNotification::new(new_virtual_state.daa_score)))
             .expect("expecting an open unbounded channel");
         self.emit_palw_panel_notifications();
-        if self
-            .notification_root
-            .has_subscription(EventType::VirtualChainChanged)
-        {
+        if self.notification_root.has_subscription(EventType::VirtualChainChanged) {
             // check for subscriptions before the heavy lifting
-            let added_chain_blocks_acceptance_data = chain_path
-                .added
-                .iter()
-                .copied()
-                .map(|added| self.acceptance_data_store.get(added).unwrap())
-                .collect_vec();
+            let added_chain_blocks_acceptance_data =
+                chain_path.added.iter().copied().map(|added| self.acceptance_data_store.get(added).unwrap()).collect_vec();
             self.notification_root
-                .notify(Notification::VirtualChainChanged(
-                    VirtualChainChangedNotification::new(
-                        chain_path.added.into(),
-                        chain_path.removed.into(),
-                        Arc::new(added_chain_blocks_acceptance_data),
-                    ),
-                ))
+                .notify(Notification::VirtualChainChanged(VirtualChainChangedNotification::new(
+                    chain_path.added.into(),
+                    chain_path.removed.into(),
+                    Arc::new(added_chain_blocks_acceptance_data),
+                )))
                 .expect("expecting an open unbounded channel");
         }
         Ok(())
     }
 
-    pub(crate) fn virtual_finality_point(
-        &self,
-        virtual_ghostdag_data: &GhostdagData,
-        pruning_point: BlockHash,
-    ) -> BlockHash {
-        let finality_point = self
-            .depth_manager
-            .calc_finality_point(virtual_ghostdag_data, pruning_point);
+    pub(crate) fn virtual_finality_point(&self, virtual_ghostdag_data: &GhostdagData, pruning_point: BlockHash) -> BlockHash {
+        let finality_point = self.depth_manager.calc_finality_point(virtual_ghostdag_data, pruning_point);
         // QR reachability hardening: a half-pruned DB can transiently miss the finality point's
         // reachability until pruning recovery completes; treat a missing row as below-pruning-point
         // and fall back to the pruning point (identical to the IBD-start else branch). Consensus-neutral.
-        let fp_reachable = match self
-            .reachability_service
-            .try_is_chain_ancestor_of(pruning_point, finality_point)
-        {
+        let fp_reachable = match self.reachability_service.try_is_chain_ancestor_of(pruning_point, finality_point) {
             Ok(v) => v,
             Err(_) => {
                 debug!(
@@ -2490,9 +2219,7 @@ impl VirtualStateProcessor {
                     None => None,
                     Some((tip_block, tip_state)) if tip_block == from => Some(tip_state),
                     Some((tip_block, tip_state)) => {
-                        let path = self
-                            .dag_traversal_manager
-                            .calculate_chain_path(tip_block, from, None);
+                        let path = self.dag_traversal_manager.calculate_chain_path(tip_block, from, None);
                         let removed: Vec<BlockHash> = path.removed.to_vec();
                         let added: Vec<BlockHash> = path.added.to_vec();
                         let store = self.palw_state_v2_store.read();
@@ -2650,19 +2377,14 @@ impl VirtualStateProcessor {
                 // The backward twin of the forward leg's rule: a row this node does not have is a
                 // gap in this node. Stopping returns the last point actually established, which is
                 // what every other unfinished walk in this function returns.
-                let params = self
-                    .palw_state_params_v2
-                    .as_ref()
-                    .expect("palw_state is Some only when the params are");
+                let params = self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
                 let reverted = self
                     .palw_state_v2_store
                     .read()
                     .delta_of_retained_v1(current)
                     .map_err(crate::processes::palw_state_walk::PalwStateWalkError::Store)
                     .and_then(|(_, delta)| {
-                        state
-                            .try_delta_v1(&delta, params, true)
-                            .map_err(crate::processes::palw_state_walk::PalwStateWalkError::from)
+                        state.try_delta_v1(&delta, params, true).map_err(crate::processes::palw_state_walk::PalwStateWalkError::from)
                     });
                 match reverted {
                     Ok(previous) => *state = previous,
@@ -2684,8 +2406,7 @@ impl VirtualStateProcessor {
             }
             let mergeset_diff = self.utxo_diffs_store.get(current).unwrap();
             // Apply the diff in reverse
-            diff.with_diff_in_place(&mergeset_diff.as_reversed())
-                .unwrap();
+            diff.with_diff_in_place(&mergeset_diff.as_reversed()).unwrap();
             if track_bonds {
                 // Mirror the reverse on the bond view. `current` is leaving the
                 // selected chain, so its acceptance data is committed.
@@ -2693,8 +2414,7 @@ impl VirtualStateProcessor {
             }
         }
 
-        let split_point =
-            split_point.expect("chain iterator was expected to reach the reorg split point");
+        let split_point = split_point.expect("chain iterator was expected to reach the reorg split point");
         debug!("VIRTUAL PROCESSOR, found split point: {split_point}");
 
         // O12 (IBD catch-up): when the walk ahead contains a long run of
@@ -2718,9 +2438,7 @@ impl VirtualStateProcessor {
                 // This indicates that the selected parent is disqualified, propagate up and continue
                 let statuses_guard = self.statuses_store.upgradable_read();
                 if statuses_guard.get(current).unwrap() != StatusDisqualifiedFromChain {
-                    RwLockUpgradableReadGuard::upgrade(statuses_guard)
-                        .set(current, StatusDisqualifiedFromChain)
-                        .unwrap();
+                    RwLockUpgradableReadGuard::upgrade(statuses_guard).set(current, StatusDisqualifiedFromChain).unwrap();
                     chain_disqualified_counter += 1;
                 }
                 continue;
@@ -2759,19 +2477,16 @@ impl VirtualStateProcessor {
                         // and returns the last point it did establish, which is the same shape as
                         // every other "this candidate cannot be taken further" answer in this
                         // function; the caller holds virtual where it is and says so.
-                        let params = self
-                            .palw_state_params_v2
-                            .as_ref()
-                            .expect("palw_state is Some only when the params are");
+                        let params = self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
                         let applied = self
                             .palw_state_v2_store
                             .read()
                             .delta_of_retained_v1(current)
                             .map_err(crate::processes::palw_state_walk::PalwStateWalkError::Store)
                             .and_then(|(_, delta)| {
-                                state.try_delta_v1(&delta, params, false).map_err(
-                                    crate::processes::palw_state_walk::PalwStateWalkError::from,
-                                )
+                                state
+                                    .try_delta_v1(&delta, params, false)
+                                    .map_err(crate::processes::palw_state_walk::PalwStateWalkError::from)
                             });
                         match applied {
                             Ok(next) => *state = next,
@@ -2796,22 +2511,16 @@ impl VirtualStateProcessor {
                     if track_bonds {
                         // `current` is an already-validated chain block joining
                         // the diff; its acceptance data is committed.
-                        bond_view
-                            .apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
+                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
                     }
                 }
                 Err(StoreError::KeyNotFound(_)) => {
-                    if self.statuses_store.read().get(current).unwrap()
-                        == StatusDisqualifiedFromChain
-                    {
+                    if self.statuses_store.read().get(current).unwrap() == StatusDisqualifiedFromChain {
                         // A persisted disqualified status is only a cache of a past validation result. Re-run the
                         // deterministic checks when the block becomes a selected-chain candidate again so nodes can
                         // recover after liveness-first rule changes without wiping their local DAG state. Blocks that
                         // are still invalid will be marked disqualified again below.
-                        debug!(
-                            "Revalidating previously disqualified selected-chain block {}",
-                            current
-                        );
+                        debug!("Revalidating previously disqualified selected-chain block {}", current);
                     }
 
                     let header = self.headers_store.get_header(current).unwrap();
@@ -2820,35 +2529,21 @@ impl VirtualStateProcessor {
                     // RFC-0008 v2: past the EXEC payload fence the EXEC blocks this block accepts are the ones its coinbase anchor
                     // covers. A wrong count or root, a malformed trailer or an anchor on a lane block disqualifies the block from the
                     // chain like any commitment fault. A block without a trailer, and every block below the fence, is unchanged.
-                    let (mergeset_data, exec_resolved) = match self.palw_exec_v2_augment(
-                        current,
-                        &header,
-                        palw_state.as_deref(),
-                        mergeset_data,
-                    ) {
-                        Ok(pair) => pair,
-                        Err(exec_error) => {
-                            info!(
-                                "Block {} is disqualified from virtual chain (EXEC anchor): {}",
-                                current, exec_error
-                            );
-                            self.statuses_store
-                                .write()
-                                .set(current, StatusDisqualifiedFromChain)
-                                .unwrap();
-                            chain_disqualified_counter += 1;
-                            continue;
-                        }
-                    };
+                    let (mergeset_data, exec_resolved) =
+                        match self.palw_exec_v2_augment(current, &header, palw_state.as_deref(), mergeset_data) {
+                            Ok(pair) => pair,
+                            Err(exec_error) => {
+                                info!("Block {} is disqualified from virtual chain (EXEC anchor): {}", current, exec_error);
+                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                chain_disqualified_counter += 1;
+                                continue;
+                            }
+                        };
 
-                    let selected_parent_multiset_hash =
-                        self.utxo_multisets_store.get(selected_parent).unwrap();
+                    let selected_parent_multiset_hash = self.utxo_multisets_store.get(selected_parent).unwrap();
                     let selected_parent_utxo_view = (&stores.utxo_set).compose(&*diff);
 
-                    let mut ctx = UtxoProcessingContext::new(
-                        mergeset_data.into(),
-                        selected_parent_multiset_hash,
-                    );
+                    let mut ctx = UtxoProcessingContext::new(mergeset_data.into(), selected_parent_multiset_hash);
 
                     // `bond_view` currently equals the bond set as-of `selected_parent`
                     // (the verify point's selected-parent view — Addendum B §B.3),
@@ -2858,11 +2553,8 @@ impl VirtualStateProcessor {
                     // walk currently holds — which IS this block's selected parent, since the
                     // transition below has not run yet. Set before `calculate_utxo_state` because
                     // that is where the coinbase is verified against it.
-                    ctx.palw_v2_payout_outputs = palw_state
-                        .as_ref()
-                        .map(|s| self.palw_v2_payout_outputs(s))
-                        .transpose()?
-                        .unwrap_or_default();
+                    ctx.palw_v2_payout_outputs =
+                        palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).transpose()?.unwrap_or_default();
                     // Audit C-08: and the collateral this block may not let anyone spend, from the
                     // same parent state and for the same reason — PLUS every bond this block's own
                     // mergeset declares.
@@ -2891,15 +2583,12 @@ impl VirtualStateProcessor {
                         .transpose()?
                         .unwrap_or_default();
                     if palw_state.is_some() {
-                        ctx.palw_v2_locked_bonds
-                            .extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
+                        ctx.palw_v2_locked_bonds.extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
                     }
                     // ADR-0042 Decision 10: and what the selected parent's own claim already
                     // spent of its worker reward, so this coinbase does not pay it twice.
-                    ctx.palw_v2_escrow_withheld = palw_state
-                        .as_ref()
-                        .map(|s| self.palw_v2_escrow_withheld_at(s, selected_parent, pov_daa_score))
-                        .unwrap_or(0);
+                    ctx.palw_v2_escrow_withheld =
+                        palw_state.as_ref().map(|s| self.palw_v2_escrow_withheld_at(s, selected_parent, pov_daa_score)).unwrap_or(0);
                     // Launch blockers §8: and which of the OTHER merged blues this block may not
                     // pay at all, from the same parent state and for the same reason.
                     ctx.palw_v2_unentitled_blues = palw_state
@@ -2981,10 +2670,8 @@ impl VirtualStateProcessor {
                         .transpose()?
                         .unwrap_or_default();
                     // G14 lane escrow-rfc08 (RFC-0035 A): and which funded-escrow outpoints are locked, from the same parent state.
-                    ctx.palw_escrow_locks.rows = palw_state
-                        .as_ref()
-                        .map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score))
-                        .unwrap_or_default();
+                    ctx.palw_escrow_locks.rows =
+                        palw_state.as_ref().map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score)).unwrap_or_default();
                     ctx.palw_escrow_locks.assignment = palw_state
                         .as_ref()
                         .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
@@ -3023,14 +2710,7 @@ impl VirtualStateProcessor {
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts = palw_state
                         .as_ref()
-                        .map(|s| {
-                            self.palw_round_verdicts_at_v1(
-                                s,
-                                &ctx.ghostdag_data,
-                                pov_daa_score,
-                                current,
-                            )
-                        })
+                        .map(|s| self.palw_round_verdicts_at_v1(s, &ctx.ghostdag_data, pov_daa_score, current))
                         .transpose()?
                         .flatten();
                     // Lane SCAN: node-local telemetry of each judged round block (never read by consensus).
@@ -3048,11 +2728,7 @@ impl VirtualStateProcessor {
                         blue_score: header.blue_score,
                         subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                     };
-                    if palw_state.is_some()
-                        && self
-                            .palw_lifecycle_kind_fences
-                            .positive_court_reserved_active_at_v2(pov_daa_score)
-                    {
+                    if palw_state.is_some() && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(pov_daa_score) {
                         ctx.positive_accepting_point = Some(positive_point);
                     }
                     if self.palw_lifecycle_kind_fences.batch_court_in_force_at(pov_daa_score) {
@@ -3065,32 +2741,17 @@ impl VirtualStateProcessor {
                         pov_daa_score,
                         palw_state.as_deref(),
                     )?;
-                    let mut assignment_raw_actions = self.take_assignment_actions_v2(
-                        &mut ctx,
-                        positive_point,
-                        &selected_parent_utxo_view,
-                        palw_state.as_deref(),
-                    )?;
+                    let mut assignment_raw_actions =
+                        self.take_assignment_actions_v2(&mut ctx, positive_point, &selected_parent_utxo_view, palw_state.as_deref())?;
                     if let Some(state) = palw_state.as_deref()
-                        && let Some(plan) = self.preview_candidate_relay_fees_v2(
-                            &ctx,
-                            state,
-                            &positive_point,
-                            &header,
-                            &assignment_raw_actions,
-                        )?
+                        && let Some(plan) =
+                            self.preview_candidate_relay_fees_v2(&ctx, state, &positive_point, &header, &assignment_raw_actions)?
                     {
                         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
                         drop(assignment_raw_actions);
-                        let parent_multiset = self
-                            .utxo_multisets_store
-                            .get(selected_parent)
-                            .map_err(|why| {
-                                NativeCoverageV1::unsupported::<Self>(
-                                    "relay fee replay parent MuHash",
-                                    &why.to_string(),
-                                )
-                            })?;
+                        let parent_multiset = self.utxo_multisets_store.get(selected_parent).map_err(|why| {
+                            NativeCoverageV1::unsupported::<Self>("relay fee replay parent MuHash", &why.to_string())
+                        })?;
                         self.replay_relay_utxo_fees_v2(
                             &mut ctx,
                             &selected_parent_utxo_view,
@@ -3112,40 +2773,25 @@ impl VirtualStateProcessor {
                     // native (payment) transactions are counted apart from PALW carriers and the first
                     // few named, so a payment can be traced to the lane rather than inferred from a
                     // balance that a chain block could equally have moved.
-                    if let Some(verdicts) = ctx
-                        .palw_round_verdicts
-                        .as_ref()
-                        .filter(|v| !v.round_blocks.is_empty())
-                    {
+                    if let Some(verdicts) = ctx.palw_round_verdicts.as_ref().filter(|v| !v.round_blocks.is_empty()) {
                         let mut carried = 0usize;
                         let mut native: Vec<kaspa_consensus_core::tx::TransactionId> = Vec::new();
-                        for entry in ctx
-                            .mergeset_acceptance_data
-                            .iter()
-                            .filter(|entry| verdicts.permitted.contains(&entry.block_hash))
+                        for entry in ctx.mergeset_acceptance_data.iter().filter(|entry| verdicts.permitted.contains(&entry.block_hash))
                         {
                             let txs = self.block_transactions_store.get(entry.block_hash).ok();
-                            for accepted in entry
-                                .accepted_transactions
-                                .iter()
-                                .filter(|tx| tx.index_within_block != 0)
-                            {
+                            for accepted in entry.accepted_transactions.iter().filter(|tx| tx.index_within_block != 0) {
                                 carried += 1;
                                 if txs
                                     .as_ref()
                                     .and_then(|txs| txs.get(accepted.index_within_block as usize))
-                                    .is_some_and(|tx| {
-                                        tx.subnetwork_id
-                                            == kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE
-                                    })
+                                    .is_some_and(|tx| tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE)
                                 {
                                     native.push(accepted.transaction_id);
                                 }
                             }
                         }
                         const NAMED: usize = 4;
-                        let mut named: Vec<String> =
-                            native.iter().take(NAMED).map(|id| id.to_string()).collect();
+                        let mut named: Vec<String> = native.iter().take(NAMED).map(|id| id.to_string()).collect();
                         if native.len() > NAMED {
                             named.push(format!("+{}", native.len() - NAMED));
                         }
@@ -3182,25 +2828,14 @@ impl VirtualStateProcessor {
                         Ok(staged) => staged,
                         Err(evm::EvmChainContextFaultV2::Local(why)) => return Err(why),
                         Err(evm::EvmChainContextFaultV2::Invalid(evm_error)) => {
-                            info!(
-                                "Block {} is disqualified from virtual chain (EVM): {}",
-                                current, evm_error
-                            );
-                            self.statuses_store
-                                .write()
-                                .set(current, StatusDisqualifiedFromChain)
-                                .unwrap();
+                            info!("Block {} is disqualified from virtual chain (EVM): {}", current, evm_error);
+                            self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
                             chain_disqualified_counter += 1;
                             continue;
                         }
                     };
 
-                    let res = self.verify_expected_utxo_state(
-                        &mut ctx,
-                        &selected_parent_utxo_view,
-                        &*bond_view,
-                        &header,
-                    );
+                    let res = self.verify_expected_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, &header);
 
                     // Local storage/admission faults do not establish a rule
                     // violation. Preserve the candidate for a later retry.
@@ -3214,14 +2849,8 @@ impl VirtualStateProcessor {
                         other => other,
                     };
                     if let Err(rule_error) = res {
-                        info!(
-                            "Block {} is disqualified from virtual chain: {}",
-                            current, rule_error
-                        );
-                        self.statuses_store
-                            .write()
-                            .set(current, StatusDisqualifiedFromChain)
-                            .unwrap();
+                        info!("Block {} is disqualified from virtual chain: {}", current, rule_error);
+                        self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
                         chain_disqualified_counter += 1;
                     } else {
                         debug!("VIRTUAL PROCESSOR, UTXO validated for {current}");
@@ -3238,10 +2867,8 @@ impl VirtualStateProcessor {
                                 // nested rehearsals and final fold, despite other threads' work.
                                 let _prompt_roots =
                                     kaspa_consensus_core::palw_attempt_rules_v1::PalwPromptRootBlockGuardV2::enter(current);
-                                let state_params = self
-                                    .palw_state_params_v2
-                                    .as_ref()
-                                    .expect("palw_state is Some only when the params are");
+                                let state_params =
+                                    self.palw_state_params_v2.as_ref().expect("palw_state is Some only when the params are");
                                 // Unit C step 5: the header commits to the state this block's
                                 // transition STARTS from — the parent's root — so it is checked
                                 // BEFORE the transition runs, against the state this node's own
@@ -3257,25 +2884,19 @@ impl VirtualStateProcessor {
                                         "Block {} is disqualified from virtual chain (PALW state root): committed {}, this chain is at {}",
                                         current, header.palw_state_root, parent_root
                                     );
-                                    self.statuses_store
-                                        .write()
-                                        .set(current, StatusDisqualifiedFromChain)
-                                        .unwrap();
+                                    self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
                                     chain_disqualified_counter += 1;
                                     continue;
                                 }
-                                let point =
-                                    kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                                        block: current,
-                                        daa_score: header.daa_score,
-                                        blue_score: header.blue_score,
-                                        // The pool this block's claims escrow from (ADR-0042
-                                        // Decision 10), taken from the ONE emission schedule rather
-                                        // than a second copy of it.
-                                        subsidy: self
-                                            .coinbase_manager
-                                            .calc_block_subsidy(header.daa_score),
-                                    };
+                                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                                    block: current,
+                                    daa_score: header.daa_score,
+                                    blue_score: header.blue_score,
+                                    // The pool this block's claims escrow from (ADR-0042
+                                    // Decision 10), taken from the ONE emission schedule rather
+                                    // than a second copy of it.
+                                    subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                                };
                                 // Unit C step 3: the block's own objects, in its own acceptance
                                 // order. Read from the acceptance data this validation just
                                 // produced rather than from the store — the store row is written
@@ -3314,9 +2935,7 @@ impl VirtualStateProcessor {
                                             .history_pledge
                                             .as_ref()
                                             .zip(carried.custody_delegation.as_ref())
-                                            .map(|(pledge, delegation)| {
-                                                (pledge.claim, delegation.clone())
-                                            })
+                                            .map(|(pledge, delegation)| (pledge.claim, delegation.clone()))
                                     })
                                     .collect();
                                 // Decisions 7/8: every lifecycle object meets its own validator
@@ -3343,8 +2962,7 @@ impl VirtualStateProcessor {
                                 // The class of this block's own attempt, read off its header, for the
                                 // rehearsal's reservation (2026-09-24 DoS audit review of #11). An
                                 // undecodable commitment reserves nothing — admission refuses it below.
-                                let own_attempt_class =
-                                    Self::palw_own_attempt_class_of_header_v1(&header);
+                                let own_attempt_class = Self::palw_own_attempt_class_of_header_v1(&header);
                                 //
                                 // **Except that a dropped market move's carrier stays accepted with
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
@@ -3418,9 +3036,8 @@ impl VirtualStateProcessor {
                                     &batch_candidates,
                                     &mut accepted_batch,
                                 )?;
-                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(
-                                    assignment_raw_schedule,
-                                ) = assignment_rehearsal
+                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(assignment_raw_schedule) =
+                                    assignment_rehearsal
                                 else {
                                     return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
                                         "Assignment final fold",
@@ -3505,10 +3122,7 @@ impl VirtualStateProcessor {
                                             "Block {} is disqualified from virtual chain (PALW receipt spend): {}",
                                             current, fp_error
                                         );
-                                        self.statuses_store
-                                            .write()
-                                            .set(current, StatusDisqualifiedFromChain)
-                                            .unwrap();
+                                        self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
                                         chain_disqualified_counter += 1;
                                         continue;
                                     }
@@ -3593,41 +3207,25 @@ impl VirtualStateProcessor {
                                 // the job identity the claim records. Both `default` when the block
                                 // carries no attempt.
                                 let (own_execution_key, own_job_anchor) = match attempt.as_ref() {
-                                    Some(envelope) => self.palw_attempt_keys_v1(
-                                        Some(header.as_ref()),
-                                        &envelope.attempt,
-                                    ),
-                                    None => (
-                                        kaspa_hashes::Hash64::default(),
-                                        kaspa_hashes::Hash64::default(),
-                                    ),
+                                    Some(envelope) => self.palw_attempt_keys_v1(Some(header.as_ref()), &envelope.attempt),
+                                    None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
                                 };
                                 use kaspa_consensus_core::{
-                                    palw_native_resource_v1::{
-                                        NativeCoverageV1, reserve_native_requests_v1,
-                                    },
+                                    palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1},
                                     palw_positive_certification_v2::{
-                                        ready_positive_certification_case_v2,
-                                        ready_positive_certification_subjects_v2,
-                                        undrawn_positive_certification_case_v2,
-                                        undrawn_positive_certification_subjects_v2,
+                                        ready_positive_certification_case_v2, ready_positive_certification_subjects_v2,
+                                        undrawn_positive_certification_case_v2, undrawn_positive_certification_subjects_v2,
                                     },
-                                    palw_state_v2::{
-                                        NativeAssignedCaseBackingV2,
-                                        NativePositiveDecisionHistoryV2,
-                                    },
+                                    palw_state_v2::{NativeAssignedCaseBackingV2, NativePositiveDecisionHistoryV2},
                                 };
-                                let unavailable = |why| {
-                                    NativeCoverageV1::unsupported::<Self>(
-                                        "Gate C selected-parent history",
-                                        why,
-                                    )
-                                };
+                                let unavailable = |why| NativeCoverageV1::unsupported::<Self>("Gate C selected-parent history", why);
                                 let scheduled = || {
                                     undrawn_positive_certification_subjects_v2(state, point.daa_score)
                                         .map(|subject| (subject, true))
-                                        .chain(ready_positive_certification_subjects_v2(state, point.daa_score)
-                                            .map(|subject| (subject, false)))
+                                        .chain(
+                                            ready_positive_certification_subjects_v2(state, point.daa_score)
+                                                .map(|subject| (subject, false)),
+                                        )
                                 };
                                 let count = scheduled().count();
                                 let mut histories = Vec::new();
@@ -3637,46 +3235,34 @@ impl VirtualStateProcessor {
                                     let unit = size_of::<NativePositiveDecisionHistoryV2>()
                                         + size_of::<kaspa_consensus_core::palw_state_v2::NativeCommittedAssignedCaseV2>()
                                         + 2 * size_of::<usize>();
-                                    let bytes = count
-                                        .checked_mul(unit)
-                                        .ok_or_else(|| unavailable("history list size overflow"))?;
+                                    let bytes = count.checked_mul(unit).ok_or_else(|| unavailable("history list size overflow"))?;
                                     let owner = reserve_native_requests_v1(bytes as u64)?
-                                        .ok_or_else(|| {
-                                            unavailable("history list capacity unavailable")
-                                        })?;
-                                    histories.try_reserve_exact(count).map_err(|_| {
-                                        unavailable("history list allocation refused")
-                                    })?;
+                                        .ok_or_else(|| unavailable("history list capacity unavailable"))?;
+                                    histories.try_reserve_exact(count).map_err(|_| unavailable("history list allocation refused"))?;
                                     for (subject, needs_draw) in scheduled() {
-                                        let Some((case, result)) =
-                                            (if needs_draw { undrawn_positive_certification_case_v2(state, subject) } else { ready_positive_certification_case_v2(state, subject, point.daa_score) }).map_err(
-                                                |error| match error {
-                                                    kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => why,
-                                                    _ => unavailable("rooted certification subject unavailable"),
-                                                },
-                                            )?
+                                        let Some((case, result)) = (if needs_draw {
+                                            undrawn_positive_certification_case_v2(state, subject)
+                                        } else {
+                                            ready_positive_certification_case_v2(state, subject, point.daa_score)
+                                        })
+                                        .map_err(|error| match error {
+                                            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => why,
+                                            _ => unavailable("rooted certification subject unavailable"),
+                                        })?
                                         else {
                                             continue;
                                         };
-                                        let Some(NativeAssignedCaseBackingV2::Committed(backing)) =
-                                            self.prepare_committed_case_history_v2(
+                                        let Some(NativeAssignedCaseBackingV2::Committed(backing)) = self
+                                            .prepare_committed_case_history_v2(
                                                 ctx.ghostdag_data.selected_parent,
                                                 state,
                                                 (case, Some(result)),
                                             )
-                                            .map_err(
-                                                |_| {
-                                                    unavailable(
-                                                        "committed Case archive unavailable",
-                                                    )
-                                                },
-                                            )?
+                                            .map_err(|_| unavailable("committed Case archive unavailable"))?
                                         else {
                                             return Err(unavailable("committed Case archive absent").into());
                                         };
-                                        histories.push(NativePositiveDecisionHistoryV2(
-                                            std::sync::Arc::new(backing),
-                                        ));
+                                        histories.push(NativePositiveDecisionHistoryV2(std::sync::Arc::new(backing)));
                                     }
                                     Some(owner)
                                 };
@@ -3689,15 +3275,12 @@ impl VirtualStateProcessor {
                                     extras.history_custody_pledges = history_custody_pledges;
                                     extras.tir_public_originals = tir_public_originals;
                                     extras.tir_funded_originals = tir_funded_originals;
-                                        extras.batch_court_carriers_v1 = accepted_batch;
+                                    extras.batch_court_carriers_v1 = accepted_batch;
                                     extras.carrier_input_spends = carrier_input_spends;
                                     extras.public_original_bindings = public_original_bindings;
-                                    extras.producer_custody_delegations =
-                                        producer_custody_delegations;
+                                    extras.producer_custody_delegations = producer_custody_delegations;
                                     if state_params.exec_v2_active_at(point.daa_score)
-                                        || state_params
-                                            .monetary_material_at_v1(point.daa_score)
-                                            .is_some()
+                                        || state_params.monetary_material_at_v1(point.daa_score).is_some()
                                     {
                                         if attempt.is_some()
                                             && let Ok(bytes) = borsh::to_vec(header.as_ref())
@@ -3705,20 +3288,10 @@ impl VirtualStateProcessor {
                                             extras.exec_v2_origin_headers.insert(current, bytes);
                                         }
                                         for owned in &merged_owned {
-                                            if let PalwMergedOwnedWorkV1::Attempt(
-                                                source,
-                                                _,
-                                                _,
-                                                _,
-                                                _,
-                                                origin_header,
-                                            ) = owned
-                                                && let Ok(bytes) =
-                                                    borsh::to_vec(origin_header.as_ref())
+                                            if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned
+                                                && let Ok(bytes) = borsh::to_vec(origin_header.as_ref())
                                             {
-                                                extras
-                                                    .exec_v2_origin_headers
-                                                    .insert(*source, bytes);
+                                                extras.exec_v2_origin_headers.insert(*source, bytes);
                                             }
                                         }
                                     }
@@ -3744,8 +3317,7 @@ impl VirtualStateProcessor {
                                     // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                     // re-judged by the fold against its own running state) and the covered set itself.
                                     if let Some(resolved) = exec_resolved.as_ref() {
-                                        let (anchor, slices) = self
-                                            .palw_exec_v2_fold_inputs(resolved, point.daa_score);
+                                        let (anchor, slices) = self.palw_exec_v2_fold_inputs(resolved, point.daa_score);
                                         extras.exec_v2_anchor = Some(anchor);
                                         extras.exec_v2_covered = slices;
                                     }
@@ -3755,19 +3327,14 @@ impl VirtualStateProcessor {
                                     // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
                                     extras.merged_reds = ctx
                                         .ghostdag_data
-                                        .classify_palw_mergeset_v1(|member| {
-                                            self.ghostdag_manager.is_round_block(member)
-                                        })
+                                        .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member))
                                         .genuine_reds()
                                         .iter()
                                         .copied()
                                         .collect();
                                     // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
-                                    extras.audit_1004_draw_seed_source = self
-                                        .palw_audit_1004_draw_seed_source(
-                                            ctx.ghostdag_data.selected_parent,
-                                            point.daa_score,
-                                        );
+                                    extras.audit_1004_draw_seed_source =
+                                        self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                     extras
                                 })?;
                                 let selected_parent = ctx.ghostdag_data.selected_parent;
@@ -3958,24 +3525,16 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged.map(
-                                |(
-                                    root,
-                                    delta,
-                                    delta_lease,
-                                    assignment_materials,
-                                    relay_carriers,
-                                )| PalwUtxoCommitV2 {
-                                    relay_carriers,
-                                    root,
-                                    delta,
-                                    _native_delta_lease: delta_lease,
-                                    assignment_materials,
-                                    genesis: None,
-                                    _native_genesis_carriages_lease: None,
-                                    genesis_carriages: Vec::new(),
-                                },
-                            ),
+                            palw_v2_staged.map(|(root, delta, delta_lease, assignment_materials, relay_carriers)| PalwUtxoCommitV2 {
+                                relay_carriers,
+                                root,
+                                delta,
+                                _native_delta_lease: delta_lease,
+                                assignment_materials,
+                                genesis: None,
+                                _native_genesis_carriages_lease: None,
+                                genesis_carriages: Vec::new(),
+                            }),
                         )?;
                         if let Some(observation) = committed_court_observation {
                             self.palw_court_observations.lock().publish_after_commit(observation);
@@ -4016,21 +3575,15 @@ impl VirtualStateProcessor {
         if let Some(state) = palw_state.as_ref() {
             let mut batch = WriteBatch::default();
             let mut store = self.palw_state_v2_store.write();
-            let _native_tip_write = store
-                .set_tip_batch_tracked_v1(&mut batch, diff_point, state)
-                .map_err(native_store_capacity_v1)?;
+            let _native_tip_write = store.set_tip_batch_tracked_v1(&mut batch, diff_point, state).map_err(native_store_capacity_v1)?;
             drop(store);
             self.db.write(batch).unwrap();
         }
 
         // Report counters
-        self.counters
-            .chain_block_counts
-            .fetch_add(chain_block_counter, Ordering::Relaxed);
+        self.counters.chain_block_counts.fetch_add(chain_block_counter, Ordering::Relaxed);
         if chain_disqualified_counter > 0 {
-            self.counters
-                .chain_disqualified_counts
-                .fetch_add(chain_disqualified_counter, Ordering::Relaxed);
+            self.counters.chain_disqualified_counts.fetch_add(chain_disqualified_counter, Ordering::Relaxed);
         }
 
         Ok(diff_point)
@@ -4071,14 +3624,9 @@ impl VirtualStateProcessor {
     fn validated_flat_parent_seed(
         &self,
         selected_parent: BlockHash,
-    ) -> Option<(
-        kaspa_consensus_core::evm::EvmExecutionHeader,
-        kaspa_consensus_core::evm::EvmStateSnapshot,
-    )> {
+    ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
         use crate::model::stores::evm::{EvmHeaderStoreReader, EvmStateStoreReader};
-        use crate::processes::evm::{
-            ParentSeedError, ParentSeedSource, flat_or_reconstruct_parent_snapshot,
-        };
+        use crate::processes::evm::{ParentSeedError, ParentSeedSource, flat_or_reconstruct_parent_snapshot};
 
         // An EVM-active parent always persists its header; a parent with no EVM header is
         // pre-activation (empty genesis state) — nothing to validate, and the executor's
@@ -4087,9 +3635,7 @@ impl VirtualStateProcessor {
             Ok(h) => h,
             Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => return None,
             Err(e) => {
-                warn!(
-                    "[evm-shadow-seed] header read failed for {selected_parent}: {e}; falling back to 206"
-                );
+                warn!("[evm-shadow-seed] header read failed for {selected_parent}: {e}; falling back to 206");
                 return None;
             }
         };
@@ -4100,9 +3646,7 @@ impl VirtualStateProcessor {
             Ok(s) => Some(s),
             Err(kaspa_database::prelude::StoreError::KeyNotFound(_)) => None,
             Err(e) => {
-                warn!(
-                    "[evm-shadow-seed] 206 read failed for {selected_parent}: {e}; falling back to 206"
-                );
+                warn!("[evm-shadow-seed] 206 read failed for {selected_parent}: {e}; falling back to 206");
                 return None;
             }
         };
@@ -4113,9 +3657,7 @@ impl VirtualStateProcessor {
         let (flat_head, flat_head_root) = match self.evm_latest_state_ptr_store.read().get() {
             Ok(opt) => (opt.map(|p| p.canonical_head), opt.map(|p| p.state_root)),
             Err(e) => {
-                warn!(
-                    "[evm-shadow-seed] flat pointer read failed for {selected_parent}: {e}; falling back to 206"
-                );
+                warn!("[evm-shadow-seed] flat pointer read failed for {selected_parent}: {e}; falling back to 206");
                 return None;
             }
         };
@@ -4130,11 +3672,7 @@ impl VirtualStateProcessor {
             &self.evm_state_diff_store,
             // Pre-activation is judged by the L1 DAA score, never by EVM-row
             // presence (pruning erases rows; see gather_reconstruction_inputs).
-            |b| {
-                self.headers_store
-                    .get_compact_header_data(b)
-                    .map(|c| c.daa_score < self.evm_activation_daa_score)
-            },
+            |b| self.headers_store.get_compact_header_data(b).map(|c| c.daa_score < self.evm_activation_daa_score),
         ) {
             Ok((snapshot_flat, source)) => {
                 match &snapshot_206 {
@@ -4157,9 +3695,7 @@ impl VirtualStateProcessor {
                     // wrong pointer — the flat CONTENTS were already proven == the executor's
                     // post-state at the parent's commit by the S4 write-side differential).
                     None => {
-                        if source == ParentSeedSource::FlatHead
-                            && flat_head_root != Some(parent_header.state_root)
-                        {
+                        if source == ParentSeedSource::FlatHead && flat_head_root != Some(parent_header.state_root) {
                             panic!(
                                 "C-01 S9b retired-206 seed DIVERGENCE: the flat head pointer root ({flat_head_root:?}) for {selected_parent} \
                                  does not equal the committed parent state_root ({:?}). The flat pointer is stale/wrong and would seed the \
@@ -4175,9 +3711,7 @@ impl VirtualStateProcessor {
             // parent's §12 history GC'd past retention): NOT a divergence — the caller
             // falls back to 206 (S9) or HALTs for an EVM-active parent (S9b retired).
             Err(ParentSeedError::Unavailable(m)) => {
-                debug!(
-                    "[evm-shadow-seed] seed unavailable for {selected_parent}: {m}; falling back to 206"
-                );
+                debug!("[evm-shadow-seed] seed unavailable for {selected_parent}: {m}; falling back to 206");
                 None
             }
             // A broken §12 reconstruction (root mismatch / diff inconsistency / bad
@@ -4205,11 +3739,7 @@ impl VirtualStateProcessor {
     /// Steady-state walks (a handful of blocks) skip the pipeline — the thread
     /// + channel overhead outweighs overlapping a single block.
     #[cfg(feature = "evm")]
-    fn maybe_spawn_evm_pipeline(
-        &self,
-        split_point: BlockHash,
-        to: BlockHash,
-    ) -> Option<crate::processes::evm::EvmPipeline> {
+    fn maybe_spawn_evm_pipeline(&self, split_point: BlockHash, to: BlockHash) -> Option<crate::processes::evm::EvmPipeline> {
         use crate::processes::evm::{EvmPipeline, EvmPipelineItem};
         const MIN_PIPELINE_RUN: usize = 8;
         if self.evm_activation_daa_score == u64::MAX {
@@ -4225,11 +3755,7 @@ impl VirtualStateProcessor {
         let statuses = self.statuses_store.read();
         let mut pending: Vec<EvmPipelineItem> = Vec::new();
         let mut prev_pending: Option<BlockHash> = None;
-        for (selected_parent, current) in self
-            .reachability_service
-            .forward_chain_iterator(split_point, to, true)
-            .tuple_windows()
-        {
+        for (selected_parent, current) in self.reachability_service.forward_chain_iterator(split_point, to, true).tuple_windows() {
             // Mirror the walk's KeyNotFound arm: only blocks without a committed
             // UTXO diff and not already disqualified will be validated.
             if self.utxo_diffs_store.get(current).is_ok() {
@@ -4242,11 +3768,7 @@ impl VirtualStateProcessor {
                 continue; // pre-activation block: the step is inert for it
             }
             let chain_from_prev = prev_pending == Some(selected_parent);
-            pending.push(EvmPipelineItem {
-                block: current,
-                selected_parent,
-                chain_from_prev,
-            });
+            pending.push(EvmPipelineItem { block: current, selected_parent, chain_from_prev });
             prev_pending = Some(current);
         }
         drop(statuses);
@@ -4271,11 +3793,7 @@ impl VirtualStateProcessor {
 
     /// Non-`evm` builds never pipeline (the step itself is a panic-guard there).
     #[cfg(not(feature = "evm"))]
-    fn maybe_spawn_evm_pipeline(
-        &self,
-        _split_point: BlockHash,
-        _to: BlockHash,
-    ) -> Option<crate::processes::evm::EvmPipeline> {
+    fn maybe_spawn_evm_pipeline(&self, _split_point: BlockHash, _to: BlockHash) -> Option<crate::processes::evm::EvmPipeline> {
         None
     }
 
@@ -4291,59 +3809,39 @@ impl VirtualStateProcessor {
         if self.evm_activation_daa_score == u64::MAX {
             return;
         }
-        if self
-            .headers_store
-            .get_daa_score(sink)
-            .is_ok_and(|daa| self.dns_retired_at(daa))
-        {
-            let policy = self
-                .palw_dns_retirement
-                .expect("retirement is active")
-                .settlement
-                .id();
+        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
+            let policy = self.palw_dns_retirement.expect("retirement is active").settlement.id();
             let previous_finalized = match self.evm_heads_store.read().native_snapshot() {
                 Ok(Some(s))
                     if s.version != 1
                         || s.policy_id != policy
                         || s.ruleset_id != self.palw_native_ruleset_id
-                        || s.retirement_daa
-                            != self.palw_dns_retirement.unwrap().activation.daa_score() =>
+                        || s.retirement_daa != self.palw_dns_retirement.unwrap().activation.daa_score() =>
                 {
-                    error!(
-                        "[native-settlement] incompatible persisted evidence; preserving it for resync"
-                    );
+                    error!("[native-settlement] incompatible persisted evidence; preserving it for resync");
                     return;
                 }
                 Ok(previous) => previous.and_then(|s| s.finalized),
                 Err(StoreError::KeyNotFound(_)) => None,
                 Err(e) => {
-                    error!(
-                        "[native-settlement] unreadable persisted evidence: {e}; preserving it for resync"
-                    );
+                    error!("[native-settlement] unreadable persisted evidence: {e}; preserving it for resync");
                     return;
                 }
             };
             let mut publication = match self.native_finalized_publication() {
                 Ok(s) => s,
                 Err(()) => {
-                    error!(
-                        "[native-settlement] incompatible or unreadable finalized publication; preserving it for resync"
-                    );
+                    error!("[native-settlement] incompatible or unreadable finalized publication; preserving it for resync");
                     return;
                 }
             };
             let snapshot = self.native_evm_settlement_snapshot(sink);
             if let Some(finalized) = snapshot.finalized {
                 // Never replace the alarm anchor with an older publication. This cannot veto selection.
-                let advances =
-                    publication
-                        .as_ref()
-                        .and_then(|s| s.finalized)
-                        .is_none_or(|previous| {
-                            self.reachability_service
-                                .try_is_chain_ancestor_of(previous, finalized)
-                                .unwrap_or(false)
-                        });
+                let advances = publication
+                    .as_ref()
+                    .and_then(|s| s.finalized)
+                    .is_none_or(|previous| self.reachability_service.try_is_chain_ancestor_of(previous, finalized).unwrap_or(false));
                 if advances {
                     publication = Some(snapshot.clone());
                 }
@@ -4355,9 +3853,7 @@ impl VirtualStateProcessor {
                 finalized: snapshot.finalized.unwrap_or_default(),
             };
             let mut store = self.evm_heads_store.write();
-            store
-                .set_native_finalized_publication_batch(batch, publication)
-                .unwrap();
+            store.set_native_finalized_publication_batch(batch, publication).unwrap();
             store.set_native_batch(batch, Some(snapshot)).unwrap();
             store.set_batch(batch, heads).unwrap();
             return;
@@ -4372,11 +3868,8 @@ impl VirtualStateProcessor {
         }
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
         let prev_finalized = self.evm_heads_store.read().get().ok().map(|h| h.finalized);
-        let finalized = if self.evm_header_store.has(pruning_point).unwrap_or(false) {
-            pruning_point
-        } else {
-            prev_finalized.unwrap_or(sink)
-        };
+        let finalized =
+            if self.evm_header_store.has(pruning_point).unwrap_or(false) { pruning_point } else { prev_finalized.unwrap_or(sink) };
         // ADR-0109 Decision 4: `safe` is the DNS-confirmed anchor when it is in the sink's chain past
         // and carries an EVM result — the two-resource-confirmed prefix a reader asks for by tag —
         // and the sink otherwise (as before).
@@ -4389,20 +3882,11 @@ impl VirtualStateProcessor {
             .filter(|anchor| {
                 *anchor != BlockHash::default()
                     && self.evm_header_store.has(*anchor).unwrap_or(false)
-                    && self
-                        .reachability_service
-                        .is_chain_ancestor_of(*anchor, sink)
+                    && self.reachability_service.is_chain_ancestor_of(*anchor, sink)
             })
             .unwrap_or(sink);
-        let heads = kaspa_consensus_core::evm::CanonicalEvmHeads {
-            latest: sink,
-            safe,
-            finalized,
-        };
-        self.evm_heads_store
-            .write()
-            .set_batch(batch, heads)
-            .unwrap();
+        let heads = kaspa_consensus_core::evm::CanonicalEvmHeads { latest: sink, safe, finalized };
+        self.evm_heads_store.write().set_batch(batch, heads).unwrap();
     }
 
     /// kaspa-pq EVM Lane v0.4 (§16 RPC / canonical-index fix): drive the
@@ -4425,17 +3909,13 @@ impl VirtualStateProcessor {
         // number iff the row still points to it.
         for removed in chain_path.removed.iter().rev().copied() {
             if let Some(h) = self.evm_header_store.get(removed).optional().unwrap() {
-                self.evm_number_store
-                    .delete_if_matches_batch(batch, h.evm_number, removed)
-                    .unwrap();
+                self.evm_number_store.delete_if_matches_batch(batch, h.evm_number, removed).unwrap();
             }
         }
         // Attach: each added chain block claims its number (canonical-only write).
         for added in chain_path.added.iter().copied() {
             if let Some(h) = self.evm_header_store.get(added).optional().unwrap() {
-                self.evm_number_store
-                    .write_batch(batch, h.evm_number, added)
-                    .unwrap();
+                self.evm_number_store.write_batch(batch, h.evm_number, added).unwrap();
             }
         }
     }
@@ -4478,9 +3958,7 @@ impl VirtualStateProcessor {
     ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         // Carriage source/serialization storage stays reserved until the batch
         // commit even though the staged records move into their store writer.
-        let _native_genesis_carriages = palw_v2_staged
-            .as_mut()
-            .and_then(|staged| staged._native_genesis_carriages_lease.take());
+        let _native_genesis_carriages = palw_v2_staged.as_mut().and_then(|staged| staged._native_genesis_carriages_lease.take());
         let mut batch = WriteBatch::default();
         // Pruning -> PALW matches pruning/import lock order. A long-running
         // candidate must recheck irreversible ancestry at its actual commit.
@@ -4501,30 +3979,17 @@ impl VirtualStateProcessor {
         // A stale fork's block is never archived, whatever its DAA. The pruning clock read
         // under the same lock also freezes already-expired leases inside the store writer.
         let public_irreversible = public_pruning_guard.as_ref().map(|guard| {
-            let pruning = guard
-                .pruning_point()
-                .expect("native public archive pruning point");
-            let pruning_daa = self
-                .headers_store
-                .get_daa_score(pruning)
-                .expect("native public archive pruning clock");
-            let on_irreversible_chain = self
-                .reachability_service
-                .try_is_chain_ancestor_of(pruning, current)
-                .unwrap_or(false)
-                || self
-                    .reachability_service
-                    .try_is_chain_ancestor_of(current, pruning)
-                    .unwrap_or(false);
+            let pruning = guard.pruning_point().expect("native public archive pruning point");
+            let pruning_daa = self.headers_store.get_daa_score(pruning).expect("native public archive pruning clock");
+            let on_irreversible_chain = self.reachability_service.try_is_chain_ancestor_of(pruning, current).unwrap_or(false)
+                || self.reachability_service.try_is_chain_ancestor_of(current, pruning).unwrap_or(false);
             (on_irreversible_chain, pruning_daa)
         });
         let archive_public_material = public_irreversible.is_some_and(|(on_chain, _)| on_chain);
         let public_irreversible_daa = public_irreversible.map_or(0, |(_, daa)| daa);
         // Native archive/lease GC must not race a prepared but uncommitted union.
         // Hold the same store exclusion through the atomic DB commit below.
-        let mut palw_archive_guard = palw_v2_staged
-            .as_ref()
-            .map(|_| self.palw_state_v2_store.write());
+        let mut palw_archive_guard = palw_v2_staged.as_ref().map(|_| self.palw_state_v2_store.write());
         // Lock order: pruning -> PALW -> class index (the ordinary and the import commits agree).
         let mut genesis_class_store = None;
         let mut native_delta_write = None;
@@ -4535,9 +4000,7 @@ impl VirtualStateProcessor {
         let mut native_relay_carriers_hold = None;
         let mut native_assignment_materials_hold = None;
         if let Some(staged) = palw_v2_staged {
-            let store = palw_archive_guard
-                .as_mut()
-                .expect("PALW accepted archive guard");
+            let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
             // Keep the native typed material owner alive through the exact same
             // WriteBatch commit as UTXOs, state root and this delta. A missing
             // material outcome is a local failed preparation, never a partial
@@ -4547,18 +4010,14 @@ impl VirtualStateProcessor {
                 .stage_positive_assignment_material_outcome_v2(
                     &mut batch,
                     &staged.delta,
-                    native_assignment_materials_hold
-                        .as_ref()
-                        .expect("retained Assignment material outcome"),
+                    native_assignment_materials_hold.as_ref().expect("retained Assignment material outcome"),
                 )
                 .map_err(native_store_capacity_v1)?;
             native_case_material_write = store
                 .stage_positive_case_material_outcome_v2(
                     &mut batch,
                     &staged.delta,
-                    native_assignment_materials_hold
-                        .as_ref()
-                        .expect("retained original Case material outcome"),
+                    native_assignment_materials_hold.as_ref().expect("retained original Case material outcome"),
                 )
                 .map_err(native_store_capacity_v1)?;
             native_relay_carriers_hold = Some(staged.relay_carriers);
@@ -4566,14 +4025,13 @@ impl VirtualStateProcessor {
                 .stage_funding_relay_material_v2(
                     &mut batch,
                     &staged.delta,
-                    native_relay_carriers_hold
-                        .as_deref()
-                        .expect("retained relay carriers"),
+                    native_relay_carriers_hold.as_deref().expect("retained relay carriers"),
                 )
                 .map_err(|why| {
-                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
-                        PalwUtxoCommitV2,
-                    >("native relay material staging", &why.to_string())
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwUtxoCommitV2>(
+                        "native relay material staging",
+                        &why.to_string(),
+                    )
                 })?;
             native_delta_write = Some(
                 store
@@ -4581,36 +4039,24 @@ impl VirtualStateProcessor {
                     .map_err(native_store_capacity_v1)?,
             );
             if let Some(genesis) = staged.genesis {
-                assert_eq!(
-                    current, self.genesis.hash,
-                    "only genesis can install the initial PALW tip"
-                );
-                native_genesis_write = Some(
-                    store
-                        .set_tip_batch_tracked_v1(&mut batch, current, &genesis)
-                        .map_err(native_store_capacity_v1)?,
-                );
+                assert_eq!(current, self.genesis.hash, "only genesis can install the initial PALW tip");
+                native_genesis_write =
+                    Some(store.set_tip_batch_tracked_v1(&mut batch, current, &genesis).map_err(native_store_capacity_v1)?);
             }
             if !staged.genesis_carriages.is_empty() {
-                assert_eq!(
-                    current, self.genesis.hash,
-                    "only genesis declarations use this initial commit"
-                );
+                assert_eq!(current, self.genesis.hash, "only genesis declarations use this initial commit");
                 let mut class_store = self.palw_class_carriage_store.write();
                 for (class_id, record) in staged.genesis_carriages {
-                    class_store
-                        .insert_batch(&mut batch, class_id, record)
-                        .unwrap();
+                    class_store.insert_batch(&mut batch, class_id, record).unwrap();
                 }
                 genesis_class_store = Some(class_store);
             }
             let delta = &staged.delta;
             if archive_public_material
                 && delta.entries.iter().any(|entry| match entry {
-                    kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove {
-                        old,
-                        ..
-                    } => old.public_prefix_checkpoint_v1().is_some(),
+                    kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::StagedCourtMove { old, .. } => {
+                        old.public_prefix_checkpoint_v1().is_some()
+                    }
                     _ => false,
                 })
             {
@@ -4622,9 +4068,7 @@ impl VirtualStateProcessor {
                             .get(accepted.index_within_block as usize)
                             .filter(|tx| tx.id() == accepted.transaction_id)
                             .expect("accepted native transaction identity");
-                        if transaction.subnetwork_id
-                            != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-                        {
+                        if transaction.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
                             continue;
                         }
                         if let Ok(payload) = borsh::from_slice::<
@@ -4639,21 +4083,11 @@ impl VirtualStateProcessor {
                 }
                 // Same commit batch as the rooted successful transitions. Public wire
                 // bytes are retained under their native head, independent of body pruning.
-                store
-                    .archive_prefix_movements_batch_v1(&mut batch, delta, &movements)
-                    .unwrap();
+                store.archive_prefix_movements_batch_v1(&mut batch, delta, &movements).unwrap();
             }
             if archive_public_material {
-                store
-                    .archive_recovered_prefix_history_batch_v1(&mut batch, delta)
-                    .unwrap();
-                store
-                    .archive_staged_cache_leases_batch_v1(
-                        &mut batch,
-                        delta,
-                        public_irreversible_daa,
-                    )
-                    .unwrap();
+                store.archive_recovered_prefix_history_batch_v1(&mut batch, delta).unwrap();
+                store.archive_staged_cache_leases_batch_v1(&mut batch, delta, public_irreversible_daa).unwrap();
             }
         }
         if let Some(mut staged) = evm_staged {
@@ -4664,9 +4098,7 @@ impl VirtualStateProcessor {
             if !self.evm_history_mode.writes_state_history() {
                 staged.state_diff = None;
             }
-            self.evm_header_store
-                .insert_batch(&mut batch, current, staged.result.header.clone())
-                .unwrap();
+            self.evm_header_store.insert_batch(&mut batch, current, staged.result.header.clone()).unwrap();
             // §16: receipts + tx-lookup index rows (store/RPC data only) commit
             // in the SAME batch — atomic with the result and the UTXO diff.
             crate::processes::evm::stage_evm_index_rows(
@@ -4716,9 +4148,7 @@ impl VirtualStateProcessor {
                         info!("[evm-shadow] flat state backend (re)seeded to block {current}");
                     }
                     Ok(crate::processes::evm::ShadowOutcome::Rebased) => {
-                        info!(
-                            "[evm-shadow] flat state backend re-based across a reorg to block {current}"
-                        );
+                        info!("[evm-shadow] flat state backend re-based across a reorg to block {current}");
                     }
                     Ok(_) => {}
                     // A divergence (or store error) is fatal: never let a node that
@@ -4736,9 +4166,7 @@ impl VirtualStateProcessor {
             if self.evm_retire_206 {
                 drop(staged.snapshot);
             } else {
-                self.evm_state_store
-                    .insert_batch(&mut batch, current, staged.snapshot)
-                    .unwrap();
+                self.evm_state_store.insert_batch(&mut batch, current, staged.snapshot).unwrap();
             }
             // §16 eth-rpc: map the 32-byte eth block id (first 32 bytes of the
             // 64-byte L1 hash — the truncation `eth_getTransactionReceipt`
@@ -4747,13 +4175,7 @@ impl VirtualStateProcessor {
             // (a given L1 block's first-32 is stable). RPC index only.
             let mut rpc_block_id = [0u8; 32];
             rpc_block_id.copy_from_slice(&current.as_bytes()[..32]);
-            self.evm_block_hash_map_store
-                .write_batch(
-                    &mut batch,
-                    kaspa_hashes::EvmH256::from_bytes(rpc_block_id),
-                    current,
-                )
-                .unwrap();
+            self.evm_block_hash_map_store.write_batch(&mut batch, kaspa_hashes::EvmH256::from_bytes(rpc_block_id), current).unwrap();
             // NOTE (canonical-index fix): the `evm_number → L1 hash` map is NOT
             // written here. It is the only EVM RPC row keyed by a value shared
             // across DAG side branches, so a UTXO-valid sink-search loser (a
@@ -4764,47 +4186,25 @@ impl VirtualStateProcessor {
             // at virtual commit. The immutable rows above stay L1-hash-keyed, so
             // detached side branches remain queryable by hash.
         }
-        self.utxo_diffs_store
-            .insert_batch(&mut batch, current, Arc::new(mergeset_diff))
-            .unwrap();
-        self.utxo_multisets_store
-            .insert_batch(&mut batch, current, multiset)
-            .unwrap();
-        self.acceptance_data_store
-            .insert_batch(&mut batch, current, Arc::new(acceptance_data))
-            .unwrap();
+        self.utxo_diffs_store.insert_batch(&mut batch, current, Arc::new(mergeset_diff)).unwrap();
+        self.utxo_multisets_store.insert_batch(&mut batch, current, multiset).unwrap();
+        self.acceptance_data_store.insert_batch(&mut batch, current, Arc::new(acceptance_data)).unwrap();
         let rewarded_commit = if !rewarded_keys.is_empty() {
-            Some(
-                self.rewarded_epochs_store
-                    .insert_batch_tracked(&mut batch, current, Arc::new(rewarded_keys))
-                    .unwrap(),
-            )
+            Some(self.rewarded_epochs_store.insert_batch_tracked(&mut batch, current, Arc::new(rewarded_keys)).unwrap())
         } else {
             None
         };
         let quality_commit = if quality_subpool > 0 {
-            Some(
-                self.block_quality_pool_store
-                    .insert_batch_tracked(&mut batch, current, quality_subpool)
-                    .unwrap(),
-            )
+            Some(self.block_quality_pool_store.insert_batch_tracked(&mut batch, current, quality_subpool).unwrap())
         } else {
             None
         };
         if reserve_balance > 0 {
-            self.reserve_balance_store
-                .insert_batch(&mut batch, current, reserve_balance)
-                .unwrap();
+            self.reserve_balance_store.insert_batch(&mut batch, current, reserve_balance).unwrap();
         }
         // Note we call idempotent since this field can be populated during IBD with headers proof
-        self.pruning_samples_store
-            .insert_batch(&mut batch, current, pruning_sample_from_pov)
-            .idempotent()
-            .unwrap();
-        let write_guard = self
-            .statuses_store
-            .set_batch(&mut batch, current, StatusUTXOValid)
-            .unwrap();
+        self.pruning_samples_store.insert_batch(&mut batch, current, pruning_sample_from_pov).idempotent().unwrap();
+        let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
         drop(native_delta_write);
         drop(native_assignment_write);
@@ -4849,12 +4249,7 @@ impl VirtualStateProcessor {
             accumulated_diff,
             selected_parent_bond_view,
         )?;
-        self.commit_virtual_state(
-            virtual_read,
-            new_virtual_state.clone(),
-            accumulated_diff,
-            chain_path,
-        );
+        self.commit_virtual_state(virtual_read, new_virtual_state.clone(), accumulated_diff, chain_path);
         Ok(new_virtual_state)
     }
 
@@ -4873,23 +4268,9 @@ impl VirtualStateProcessor {
             return Err(fault);
         }
         let actions = std::mem::take(&mut ctx.positive_native_carriers)
-            .into_phase_two(
-                &ctx.mergeset_acceptance_data,
-                &ctx.accepted_tx_ids,
-                point,
-                ctx.selected_parent(),
-            )
-            .map_err(|why| {
-                NativeCoverageV1::unsupported::<Self>(
-                    "Positive carrier phase-two provenance",
-                    &format!("{why:?}"),
-                )
-            })?
-            .into_assignment_raw_actions_v2(
-                self,
-                &selected_parent_utxo_view.compose(&ctx.mergeset_diff),
-                state,
-            )?;
+            .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, point, ctx.selected_parent())
+            .map_err(|why| NativeCoverageV1::unsupported::<Self>("Positive carrier phase-two provenance", &format!("{why:?}")))?
+            .into_assignment_raw_actions_v2(self, &selected_parent_utxo_view.compose(&ctx.mergeset_diff), state)?;
         for (outpoint, entry) in &ctx.mergeset_diff.remove {
             if !ctx.palw_escrow_locks.positive_case.contains_key(outpoint) {
                 continue;
@@ -4897,10 +4278,7 @@ impl VirtualStateProcessor {
             let mut matching = actions.iter().filter(|action| {
                 let tx = action.transaction();
                 tx.payload.get(7) == Some(&12)
-                    && tx
-                        .inputs
-                        .first()
-                        .is_some_and(|input| input.previous_outpoint == *outpoint)
+                    && tx.inputs.first().is_some_and(|input| input.previous_outpoint == *outpoint)
                     && action.entries().first() == Some(entry)
                     && action.case_backing().is_ok()
             });
@@ -4925,49 +4303,24 @@ impl VirtualStateProcessor {
         plan: palw_accept::NativeRelayFeePlanV2,
     ) -> Result<(), PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
-        let fault = |why| {
-            PalwLocalTransitionFaultV1::Resource(NativeCoverageV1::unsupported::<Self>(
-                "relay fee replay",
-                why,
-            ))
-        };
-        if let Some(round) = ctx
-            .palw_round_verdicts
-            .as_mut()
-            .filter(|round| round.has_fee_gated_body())
-        {
+        let fault = |why| PalwLocalTransitionFaultV1::Resource(NativeCoverageV1::unsupported::<Self>("relay fee replay", why));
+        if let Some(round) = ctx.palw_round_verdicts.as_mut().filter(|round| round.has_fee_gated_body()) {
             if round.relay_plan_changes_fee_admission(&plan) {
                 return Err(fault("fee-gated Round carrier requires prefix replanning"));
             }
             round.fee_budget = Some(
-                self.palw_round_fee_admission_at_v1(
-                    parent_state,
-                    &ctx.ghostdag_data,
-                    point.daa_score,
-                    point.block,
-                )?
-                .ok_or_else(|| fault("original Round fee budget unavailable"))?,
+                self.palw_round_fee_admission_at_v1(parent_state, &ctx.ghostdag_data, point.daa_score, point.block)?
+                    .ok_or_else(|| fault("original Round fee budget unavailable"))?,
             );
         }
         let round_incomes = std::mem::take(&mut ctx.palw_round_fee_incomes);
         let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan);
-        self.calculate_utxo_state(
-            ctx,
-            selected_parent_utxo_view,
-            bond_view,
-            point.daa_score,
-            Some(parent_state),
-        )?;
+        self.calculate_utxo_state(ctx, selected_parent_utxo_view, bond_view, point.daa_score, Some(parent_state))?;
         if round_incomes != ctx.palw_round_fee_incomes {
             return Err(fault("Round income changed during replay"));
         }
-        if !super::utxo_validation::relay_acceptance_matches(
-            &original,
-            &ctx.mergeset_acceptance_data,
-        ) {
-            return Err(fault(
-                "accepted blocks, transactions or carrier positions changed",
-            ));
+        if !super::utxo_validation::relay_acceptance_matches(&original, &ctx.mergeset_acceptance_data) {
+            return Err(fault("accepted blocks, transactions or carrier positions changed"));
         }
         Ok(())
     }
@@ -4987,9 +4340,7 @@ impl VirtualStateProcessor {
         let selected_parent_utxo_view = (&virtual_stores.utxo_set).compose(&*accumulated_diff);
 
         // Calc virtual DAA score, difficulty bits and past median time
-        let virtual_daa_window = self
-            .window_manager
-            .block_daa_window(&virtual_ghostdag_data)?;
+        let virtual_daa_window = self.window_manager.block_daa_window(&virtual_ghostdag_data)?;
         let daa = virtual_daa_window.daa_score;
         let assignment = self.palw_positive_assignment_params_v2.as_ref().filter(|params| {
             self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
@@ -5010,22 +4361,12 @@ impl VirtualStateProcessor {
             Some((augmented, anchor)) => (augmented, Some(anchor)),
             None => (virtual_ghostdag_data, None),
         };
-        *self.palw_exec_v2_virtual_anchor.lock() =
-            exec_anchor.map(|anchor| (virtual_ghostdag_data.selected_parent, anchor));
-        let virtual_non_daa = self.palw_exec_v2_non_daa(
-            &virtual_daa_window.mergeset_non_daa,
-            &virtual_ghostdag_data,
-            virtual_daa_window.daa_score,
-        );
-        let mut ctx =
-            UtxoProcessingContext::new((&virtual_ghostdag_data).into(), selected_parent_multiset);
-        let virtual_bits = self
-            .window_manager
-            .calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window);
-        let virtual_past_median_time = self
-            .window_manager
-            .calc_past_median_time(&virtual_ghostdag_data)?
-            .0;
+        *self.palw_exec_v2_virtual_anchor.lock() = exec_anchor.map(|anchor| (virtual_ghostdag_data.selected_parent, anchor));
+        let virtual_non_daa =
+            self.palw_exec_v2_non_daa(&virtual_daa_window.mergeset_non_daa, &virtual_ghostdag_data, virtual_daa_window.daa_score);
+        let mut ctx = UtxoProcessingContext::new((&virtual_ghostdag_data).into(), selected_parent_multiset);
+        let virtual_bits = self.window_manager.calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window);
+        let virtual_past_median_time = self.window_manager.calc_past_median_time(&virtual_ghostdag_data)?.0;
 
         ctx.palw_v2_locked_bonds = virtual_palw_state
             .as_ref()
@@ -5039,8 +4380,7 @@ impl VirtualStateProcessor {
         // from the smaller set includes a spend every validating node refuses, so the block this
         // node mines is invalid on arrival and the work is thrown away.
         if virtual_palw_state.is_some() {
-            ctx.palw_v2_locked_bonds
-                .extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
+            ctx.palw_v2_locked_bonds.extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
         }
         ctx.palw_v2_bond_burns = virtual_palw_state
             .as_ref()
@@ -5049,10 +4389,8 @@ impl VirtualStateProcessor {
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
             .unwrap_or_default();
         // G14 lane escrow-rfc08: virtual locks the funded-escrow rows exactly as the chain walk does.
-        ctx.palw_escrow_locks.rows = virtual_palw_state
-            .as_ref()
-            .map(|state| self.palw_escrow_locked_rows_v1(state, daa))
-            .unwrap_or_default();
+        ctx.palw_escrow_locks.rows =
+            virtual_palw_state.as_ref().map(|state| self.palw_escrow_locked_rows_v1(state, daa)).unwrap_or_default();
         ctx.palw_escrow_locks.assignment = virtual_palw_state
             .as_ref()
             .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
@@ -5106,42 +4444,25 @@ impl VirtualStateProcessor {
         if virtual_palw_state.is_some()
             && self.palw_execution_lane_at(daa).is_none()
             && !self.dns_retired_at(daa)
-            && assignment
-                .is_some_and(|params| params.palw_positive_funding_relay_v2_at(daa).is_some())
+            && assignment.is_some_and(|params| params.palw_positive_funding_relay_v2_at(daa).is_some())
         {
-            ctx.positive_relay_preview_point =
-                Some(kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                    block: kaspa_consensus_core::blockhash::ORIGIN,
-                    daa_score: daa,
-                    blue_score: virtual_ghostdag_data.blue_score,
-                    subsidy: self.coinbase_manager.calc_block_subsidy(daa),
-                });
+            ctx.positive_relay_preview_point = Some(kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: kaspa_consensus_core::blockhash::ORIGIN,
+                daa_score: daa,
+                blue_score: virtual_ghostdag_data.blue_score,
+                subsidy: self.coinbase_manager.calc_block_subsidy(daa),
+            });
         }
-        let relay_parent_multiset = ctx
-            .positive_relay_preview_point
-            .map(|_| ctx.multiset_hash.clone());
+        let relay_parent_multiset = ctx.positive_relay_preview_point.map(|_| ctx.multiset_hash.clone());
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(
-            &mut ctx,
-            &selected_parent_utxo_view,
-            selected_parent_bond_view,
-            daa,
-            virtual_palw_state.as_deref(),
-        )
-        .map_err(RuleError::LocalNativeCapacityUnavailable)?;
-        if let (Some(point), Some(parent_multiset), Some(state)) = (
-            ctx.positive_relay_preview_point,
-            relay_parent_multiset,
-            virtual_palw_state.as_ref(),
-        ) {
+        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, daa, virtual_palw_state.as_deref())
+            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+        if let (Some(point), Some(parent_multiset), Some(state)) =
+            (ctx.positive_relay_preview_point, relay_parent_multiset, virtual_palw_state.as_ref())
+        {
             let actions = self
-                .take_assignment_actions_v2(
-                    &mut ctx,
-                    point,
-                    &selected_parent_utxo_view,
-                    Some(state),
-                )
+                .take_assignment_actions_v2(&mut ctx, point, &selected_parent_utxo_view, Some(state))
                 .map_err(RuleError::LocalNativeCapacityUnavailable)?;
             let plan = self
                 .preview_template_relay_fees_v2(&ctx, state, virtual_bits, &actions)
@@ -5165,9 +4486,7 @@ impl VirtualStateProcessor {
         }
 
         // Update the accumulated diff
-        accumulated_diff
-            .with_diff_in_place(&ctx.mergeset_diff)
-            .unwrap();
+        accumulated_diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
 
         // Build the new virtual state
         Ok(Arc::new(VirtualState::new(
@@ -5196,25 +4515,17 @@ impl VirtualStateProcessor {
         let mut selected_chain_write = self.selected_chain_store.write();
 
         // Apply the accumulated diff to the virtual UTXO set
-        virtual_write
-            .utxo_set
-            .write_diff_batch(&mut batch, accumulated_diff)
-            .unwrap();
+        virtual_write.utxo_set.write_diff_batch(&mut batch, accumulated_diff).unwrap();
         // ADR-0109 Decision 1: the deposit-lock index follows the set, from the same diff, in the
         // same batch — so a template never sees a lock the set does not hold, or misses one it does.
         self.stage_evm_deposit_locks(&mut batch, accumulated_diff);
 
         // Update virtual state (capture the new sink first — `set_batch` moves the Arc).
         let dns_sink = new_virtual_state.ghostdag_data.selected_parent;
-        virtual_write
-            .state
-            .set_batch(&mut batch, new_virtual_state)
-            .unwrap();
+        virtual_write.state.set_batch(&mut batch, new_virtual_state).unwrap();
 
         // Update the virtual selected chain
-        selected_chain_write
-            .apply_changes(&mut batch, chain_path)
-            .unwrap();
+        selected_chain_write.apply_changes(&mut batch, chain_path).unwrap();
 
         // kaspa-pq Phase 10 (ADR-0009 A.4): stage the DNS stake-bond set
         // changes into the same batch so they commit atomically with the
@@ -5245,11 +4556,7 @@ impl VirtualStateProcessor {
         // Served native publication history must survive loss of the page cache
         // together with its selected-chain/UTXO generation. Below retirement
         // preserve the historical asynchronous write policy.
-        if self
-            .headers_store
-            .get_daa_score(dns_sink)
-            .is_ok_and(|daa| self.dns_retired_at(daa))
-        {
+        if self.headers_store.get_daa_score(dns_sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
             self.write_pruning_import_barrier(batch);
         } else {
             self.db.write(batch).unwrap();
@@ -5306,13 +4613,8 @@ impl VirtualStateProcessor {
         // newest-first against the same starting view: their mutations were derived under it when
         // they were applied, so re-deriving under it is what makes revert the exact inverse.
         let mut evidence_view = self.initial_active_bond_view();
-        let removed_muts: Vec<Vec<BondMutation>> = chain_path
-            .removed
-            .iter()
-            .rev()
-            .copied()
-            .map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view))
-            .collect();
+        let removed_muts: Vec<Vec<BondMutation>> =
+            chain_path.removed.iter().rev().copied().map(|h| self.dns_bond_mutations_for_chain_block(h, &evidence_view)).collect();
         let mut added_muts: Vec<Vec<BondMutation>> = Vec::with_capacity(chain_path.added.len());
         for h in chain_path.added.iter().copied() {
             let muts = self.dns_bond_mutations_for_chain_block(h, &evidence_view);
@@ -5337,9 +4639,7 @@ impl VirtualStateProcessor {
                         if let Ok(record) = store.get(&outpoint) {
                             let mut record = (*record).clone();
                             revert_bond_stamp(&mut record, &mutation);
-                            store
-                                .insert_batch(batch, outpoint, Arc::new(record))
-                                .unwrap();
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                         }
                     }
                 }
@@ -5351,17 +4651,13 @@ impl VirtualStateProcessor {
             for mutation in muts {
                 match mutation {
                     BondMutation::Insert(outpoint, record) => {
-                        store
-                            .insert_batch(batch, outpoint, Arc::new(record))
-                            .unwrap();
+                        store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                     }
                     BondMutation::Slash(outpoint, _) | BondMutation::Unbond(outpoint, _, _) => {
                         if let Ok(record) = store.get(&outpoint) {
                             let mut record = (*record).clone();
                             apply_bond_stamp(&mut record, &mutation);
-                            store
-                                .insert_batch(batch, outpoint, Arc::new(record))
-                                .unwrap();
+                            store.insert_batch(batch, outpoint, Arc::new(record)).unwrap();
                         }
                     }
                 }
@@ -5374,124 +4670,89 @@ impl VirtualStateProcessor {
             return ActiveBondView::new();
         }
         ActiveBondView::from_records(
-            self.stake_bonds_store
-                .read()
-                .iterator()
-                .filter_map(|r| r.ok().map(|(_, rec)| (rec.bond_outpoint, (*rec).clone()))),
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (rec.bond_outpoint, (*rec).clone()))),
         )
     }
 
     fn emit_palw_panel_notifications(&self) {
-        let want = self
-            .notification_root
-            .has_subscription(EventType::PalwClassReadinessChanged)
-            || self
-                .notification_root
-                .has_subscription(EventType::PalwPanelAssignment)
-            || self
-                .notification_root
-                .has_subscription(EventType::PalwPanelReceipt)
-            || self
-                .notification_root
-                .has_subscription(EventType::PalwPanelEligibilityChanged);
+        let want = self.notification_root.has_subscription(EventType::PalwClassReadinessChanged)
+            || self.notification_root.has_subscription(EventType::PalwPanelAssignment)
+            || self.notification_root.has_subscription(EventType::PalwPanelReceipt)
+            || self.notification_root.has_subscription(EventType::PalwPanelEligibilityChanged);
         if !want {
             return;
         }
         let Some(view) = self.palw_panel_network_view_v1_impl() else {
             return;
         };
-        let mut snap = self
-            .palw_panel_notify_snapshot
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let (next, diff) = kaspa_consensus_core::palw_panel_view_v1::palw_panel_notify_diff_v1(
-            snap.as_ref(),
-            &view,
-        );
+        let mut snap = self.palw_panel_notify_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        let (next, diff) = kaspa_consensus_core::palw_panel_view_v1::palw_panel_notify_diff_v1(snap.as_ref(), &view);
         *snap = Some(next);
         drop(snap);
         for row in diff.readiness {
             self.notification_root
-                .notify(Notification::PalwClassReadinessChanged(
-                    PalwClassReadinessChangedNotification {
-                        class_id: row.class_id.to_string(),
-                        model_name: row.model_name,
-                        registry_state: row.registry_state,
-                        previous_registry_state: row.previous_registry_state,
-                        ready_seats: row.ready_seats,
-                        previous_ready_seats: row.previous_ready_seats,
-                        required_ready_seats: row.required_ready_seats,
-                        bonded_seats: row.bonded_seats,
-                    },
-                ))
+                .notify(Notification::PalwClassReadinessChanged(PalwClassReadinessChangedNotification {
+                    class_id: row.class_id.to_string(),
+                    model_name: row.model_name,
+                    registry_state: row.registry_state,
+                    previous_registry_state: row.previous_registry_state,
+                    ready_seats: row.ready_seats,
+                    previous_ready_seats: row.previous_ready_seats,
+                    required_ready_seats: row.required_ready_seats,
+                    bonded_seats: row.bonded_seats,
+                }))
                 .expect("expecting an open unbounded channel");
         }
         for row in diff.assignments {
             self.notification_root
-                .notify(Notification::PalwPanelAssignment(
-                    PalwPanelAssignmentNotification {
-                        claim_id: row.claim_id.to_string(),
-                        class_id: row.class_id.to_string(),
-                        licensed_state: row.licensed_state.to_string(),
-                        deadline_daa: row.deadline_daa,
-                        coverage_mask: row.coverage_mask,
-                        full_seat: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(
-                            row.full_seat,
-                        ),
-                        valid_receipt_seats: row.valid_receipt_seats,
-                        selected_panel_seats: row.selected_panel_seats,
-                        seats: row
-                            .seats
-                            .into_iter()
-                            .map(|s| PalwPanelAssignmentSeatNotification {
-                                seat_id:
-                                    kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(
-                                        s.seat_id,
-                                    ),
-                                seat_index: s.seat_index,
-                                full_seat: s.full_seat,
-                                segment_index: s.segment_index,
-                                mask: s.mask,
-                                receipt_status: s.receipt_status.to_string(),
-                            })
-                            .collect(),
-                    },
-                ))
+                .notify(Notification::PalwPanelAssignment(PalwPanelAssignmentNotification {
+                    claim_id: row.claim_id.to_string(),
+                    class_id: row.class_id.to_string(),
+                    licensed_state: row.licensed_state.to_string(),
+                    deadline_daa: row.deadline_daa,
+                    coverage_mask: row.coverage_mask,
+                    full_seat: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(row.full_seat),
+                    valid_receipt_seats: row.valid_receipt_seats,
+                    selected_panel_seats: row.selected_panel_seats,
+                    seats: row
+                        .seats
+                        .into_iter()
+                        .map(|s| PalwPanelAssignmentSeatNotification {
+                            seat_id: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id),
+                            seat_index: s.seat_index,
+                            full_seat: s.full_seat,
+                            segment_index: s.segment_index,
+                            mask: s.mask,
+                            receipt_status: s.receipt_status.to_string(),
+                        })
+                        .collect(),
+                }))
                 .expect("expecting an open unbounded channel");
         }
         for row in diff.receipts {
             self.notification_root
-                .notify(Notification::PalwPanelReceipt(
-                    PalwPanelReceiptNotification {
-                        claim_id: row.claim_id.to_string(),
-                        class_id: row.class_id.to_string(),
-                        coverage_mask: row.coverage_mask,
-                        previous_coverage_mask: row.previous_coverage_mask,
-                        valid_receipt_seats: row.valid_receipt_seats,
-                        previous_valid_receipt_seats: row.previous_valid_receipt_seats,
-                        selected_panel_seats: row.selected_panel_seats,
-                    },
-                ))
+                .notify(Notification::PalwPanelReceipt(PalwPanelReceiptNotification {
+                    claim_id: row.claim_id.to_string(),
+                    class_id: row.class_id.to_string(),
+                    coverage_mask: row.coverage_mask,
+                    previous_coverage_mask: row.previous_coverage_mask,
+                    valid_receipt_seats: row.valid_receipt_seats,
+                    previous_valid_receipt_seats: row.previous_valid_receipt_seats,
+                    selected_panel_seats: row.selected_panel_seats,
+                }))
                 .expect("expecting an open unbounded channel");
         }
         for row in diff.eligibility {
-            let (hold_code, hold_message) = row
-                .hold
-                .map(|h| (h.code().to_string(), h.message().to_string()))
-                .unwrap_or_default();
+            let (hold_code, hold_message) = row.hold.map(|h| (h.code().to_string(), h.message().to_string())).unwrap_or_default();
             self.notification_root
-                .notify(Notification::PalwPanelEligibilityChanged(
-                    PalwPanelEligibilityChangedNotification {
-                        seat_id: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(
-                            row.seat_id,
-                        ),
-                        class_id: row.class_id.to_string(),
-                        eligible: row.eligible,
-                        ready: row.ready,
-                        hold_code,
-                        hold_message,
-                    },
-                ))
+                .notify(Notification::PalwPanelEligibilityChanged(PalwPanelEligibilityChangedNotification {
+                    seat_id: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(row.seat_id),
+                    class_id: row.class_id.to_string(),
+                    eligible: row.eligible,
+                    ready: row.ready,
+                    hold_code,
+                    hold_message,
+                }))
                 .expect("expecting an open unbounded channel");
         }
     }
@@ -5501,44 +4762,28 @@ impl VirtualStateProcessor {
     /// weighed when rule E weighed the pair over the two exclusive pasts and the refused tip does not
     /// outrank `sink` (ADR-0178); below it, when both absolute orders were read and the refused one is not
     /// strictly ahead.
-    fn note_palw_refusal_streak(
-        &self,
-        sink: BlockHash,
-        refused: Option<(BlockHash, DnsReorgOutcome)>,
-        rule_e: bool,
-    ) {
+    fn note_palw_refusal_streak(&self, sink: BlockHash, refused: Option<(BlockHash, DnsReorgOutcome)>, rule_e: bool) {
         use kaspa_consensus_core::api::PalwPartitionRefusalV1;
         let weighed = refused.and_then(|(refused, reason)| {
             (reason == DnsReorgOutcome::DominanceViolation
                 && self.palw_state_params_v2.is_some()
-                && !matches!(
-                    self.reachability_service
-                        .try_is_chain_ancestor_of(sink, refused),
-                    Ok(true)
-                ))
+                && !matches!(self.reachability_service.try_is_chain_ancestor_of(sink, refused), Ok(true)))
             .then_some(refused)
             .and_then(|refused| {
                 if rule_e {
                     let mut states = super::palw_rule_e::PalwRuleEStatesV1::default();
                     let (pair, counts) = self.palw_rule_e_pair_v1(&mut states, refused, sink)?;
                     // RFC-0018 §6: the v2 order past its fence at the sink's DAA (the v1 order exactly below it).
-                    let capital_v2 = self
-                        .headers_store
-                        .get_daa_score(sink)
-                        .is_ok_and(|daa| self.palw_rule_e_participation_v2_at(daa));
+                    let capital_v2 = self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.palw_rule_e_participation_v2_at(daa));
                     return (kaspa_consensus_core::palw_fork_choice_rule_e_v1::palw_rule_e_order_v2(
                         &pair.a, &pair.b, counts, capital_v2,
                     ) != std::cmp::Ordering::Greater)
                         .then_some(refused);
                 }
-                let (incumbent, challenger) = (
-                    self.palw_candidate_order_v2(sink)?,
-                    self.palw_candidate_order_v2(refused)?,
-                );
-                let economic =
-                    |o: &kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1| {
-                        (o.safe_frontier_blue_score, o.safe_weight, o.live_total)
-                    };
+                let (incumbent, challenger) = (self.palw_candidate_order_v2(sink)?, self.palw_candidate_order_v2(refused)?);
+                let economic = |o: &kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1| {
+                    (o.safe_frontier_blue_score, o.safe_weight, o.live_total)
+                };
                 (economic(&challenger) <= economic(&incumbent)).then_some(refused)
             })
         });
@@ -5547,10 +4792,7 @@ impl VirtualStateProcessor {
             *streak = None;
             return;
         };
-        let refused_daa = self
-            .headers_store
-            .get_daa_score(refused)
-            .unwrap_or_default();
+        let refused_daa = self.headers_store.get_daa_score(refused).unwrap_or_default();
         let own_daa = self.headers_store.get_daa_score(sink).unwrap_or_default();
         *streak = Some(match *streak {
             Some(prev) => PalwPartitionRefusalV1 {
@@ -5561,14 +4803,7 @@ impl VirtualStateProcessor {
                 first_refused_daa: prev.first_refused_daa.min(refused_daa),
                 resolves: prev.resolves.saturating_add(1),
             },
-            None => PalwPartitionRefusalV1 {
-                sink,
-                refused,
-                own_daa,
-                refused_daa,
-                first_refused_daa: refused_daa,
-                resolves: 1,
-            },
+            None => PalwPartitionRefusalV1 { sink, refused, own_daa, refused_daa, first_refused_daa: refused_daa, resolves: 1 },
         });
     }
 
@@ -5600,12 +4835,7 @@ impl VirtualStateProcessor {
             .collect()
     }
 
-    fn verify_mldsa87_with_context_bool(
-        key: &[u8],
-        message: &[u8],
-        sig: &[u8],
-        context: &[u8],
-    ) -> bool {
+    fn verify_mldsa87_with_context_bool(key: &[u8], message: &[u8], sig: &[u8], context: &[u8]) -> bool {
         verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
     }
 
@@ -5656,12 +4886,8 @@ impl VirtualStateProcessor {
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return (0, 0);
         };
-        let pricing = kaspa_consensus_core::palw_state_v2::PalwFpPricingV1::of(
-            params,
-            self.palw_canonical_work_daa,
-        );
-        let classified = ghostdag
-            .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
+        let pricing = kaspa_consensus_core::palw_state_v2::PalwFpPricingV1::of(params, self.palw_canonical_work_daa);
+        let classified = ghostdag.classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member));
         for member in classified.blues().iter().chain(classified.genuine_reds()) {
             if non_daa.contains(member) {
                 continue;
@@ -5678,31 +4904,20 @@ impl VirtualStateProcessor {
             if unentitled.contains(member) {
                 continue;
             }
-            let attempt = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(
-                &header.palw_commitment,
-            )
-            .ok()
-            .is_some_and(|e| e.attempt.class_id != params.base_class_id());
-            let receipt = if header.pow_algo_id
-                == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3
-            {
-                let envelope =
-                    if kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(
-                        &header.palw_commitment,
-                    ) {
-                        kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(
-                            &header.palw_commitment,
-                        )
+            let attempt = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment)
+                .ok()
+                .is_some_and(|e| e.attempt.class_id != params.base_class_id());
+            let receipt = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
+                let envelope = if kaspa_consensus_core::palw_receipt_v4::palw_receipt_v4_carriage_is_v4(&header.palw_commitment) {
+                    kaspa_consensus_core::palw_receipt_v4::PalwReceiptSpendEnvelopeV4::decode(&header.palw_commitment)
                         .ok()
                         .map(|e| e.to_fold_envelope())
-                    } else {
-                        kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok()
-                    };
+                } else {
+                    kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment).ok()
+                };
                 envelope
                     .and_then(|e| state.claim(&e.spend.claim_id))
-                    .is_some_and(|c| {
-                        c.class_id != params.base_class_id() && pricing.prices_in_compute(c)
-                    })
+                    .is_some_and(|c| c.class_id != params.base_class_id() && pricing.prices_in_compute(c))
             } else {
                 false
             };
@@ -5713,10 +4928,7 @@ impl VirtualStateProcessor {
         (eligible, total)
     }
 
-    pub(super) fn fee_split_at(
-        &self,
-        daa_score: u64,
-    ) -> Option<kaspa_consensus_core::dns_finality::FeeSplitParams> {
+    pub(super) fn fee_split_at(&self, daa_score: u64) -> Option<kaspa_consensus_core::dns_finality::FeeSplitParams> {
         let mut split = kaspa_consensus_core::config::params::palw_overlay_fee_split_at_v1(
             self.dns_params.as_ref()?,
             self.palw_overlay_carve,
@@ -5756,11 +4968,7 @@ impl VirtualStateProcessor {
     /// [`Self::acceptance_ordered_mergeset_without_selected_parent`] behind the selected parent (the EVM
     /// lane's `sorted_mergeset`; its readers are `evm`-only).
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
-    pub(super) fn acceptance_ordered_mergeset(
-        &self,
-        ghostdag_data: &GhostdagData,
-        daa_score: u64,
-    ) -> Vec<BlockHash> {
+    pub(super) fn acceptance_ordered_mergeset(&self, ghostdag_data: &GhostdagData, daa_score: u64) -> Vec<BlockHash> {
         ghostdag_data.acceptance_ordered_mergeset(
             self.ghostdag_store.as_ref(),
             self.headers_store.as_ref(),
@@ -5777,9 +4985,7 @@ impl VirtualStateProcessor {
                 );
                 Vec::new()
             }
-            Err(e) => panic!(
-                "accepted_txs_of_chain_block: acceptance_data_store.get({chain_block}) failed: {e}"
-            ),
+            Err(e) => panic!("accepted_txs_of_chain_block: acceptance_data_store.get({chain_block}) failed: {e}"),
         }
     }
 
@@ -5788,10 +4994,7 @@ impl VirtualStateProcessor {
     /// per-block bond-view walk (ADR-0009 Addendum B) can derive a *not-yet-
     /// committed* block's mutations from the in-memory `ctx.mergeset_acceptance_data`,
     /// whose `acceptance_data_store` entry does not exist until `commit_utxo_state`.
-    pub(super) fn accepted_txs_from_acceptance_data(
-        &self,
-        acceptance_data: &AcceptanceData,
-    ) -> Vec<Transaction> {
+    pub(super) fn accepted_txs_from_acceptance_data(&self, acceptance_data: &AcceptanceData) -> Vec<Transaction> {
         let mut txs = Vec::new();
         for mergeset in acceptance_data.iter() {
             // **A missing entry stops this node, not this walk.** `unwrap()` here turned an absent
@@ -5836,11 +5039,7 @@ impl VirtualStateProcessor {
     /// pure aggregation core. No new store; recompute is reorg-safe.
     fn update_dns_state(&self, batch: &mut WriteBatch, sink: BlockHash) {
         // Preserve historical anchors for replay; no new live DNS confirmations after retirement.
-        if self
-            .headers_store
-            .get_daa_score(sink)
-            .is_ok_and(|daa| self.dns_retired_at(daa))
-        {
+        if self.headers_store.get_daa_score(sink).is_ok_and(|daa| self.dns_retired_at(daa)) {
             return;
         }
         let Some(dns_params) = self.dns_params.as_ref() else {
@@ -5862,17 +5061,9 @@ impl VirtualStateProcessor {
                 // where the sink IS the imported pruning point. Anywhere else it signals a store
                 // inconsistency, so surface it loudly (still skip rather than panic, but never
                 // silently): a genuine bug must be visible in the logs, not swallowed.
-                let pp = self
-                    .pruning_point_store
-                    .read()
-                    .pruning_point()
-                    .optional()
-                    .ok()
-                    .flatten();
+                let pp = self.pruning_point_store.read().pruning_point().optional().ok().flatten();
                 if pp == Some(sink) {
-                    trace!(
-                        "update_dns_state: skipping recompute during pruning-point import (sink == pruning point {sink})"
-                    );
+                    trace!("update_dns_state: skipping recompute during pruning-point import (sink == pruning point {sink})");
                 } else {
                     warn!(
                         "update_dns_state: acceptance data missing for sink {sink} (pruning point {pp:?}) — skipping DNS recompute; this is UNEXPECTED outside pruning-point import"
@@ -5908,32 +5099,19 @@ impl VirtualStateProcessor {
         let sink_blue = self.headers_store.get_blue_score(sink).unwrap();
         let epoch_len_blue = dns_params.attestation_epoch_length_blue_score.max(1);
         if let Some(prev) = prev_dns_state.as_ref() {
-            let prev_blue = self
-                .headers_store
-                .get_blue_score(prev.selected_chain_anchor)
-                .unwrap_or(0);
+            let prev_blue = self.headers_store.get_blue_score(prev.selected_chain_anchor).unwrap_or(0);
             if sink_blue / epoch_len_blue == prev_blue / epoch_len_blue {
                 return;
             }
         }
 
         // Snapshot the bond set (bounded by the active validator count).
-        let bonds: Vec<StakeBondRecord> = self
-            .stake_bonds_store
-            .read()
-            .iterator()
-            .filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone()))
-            .collect();
+        let bonds: Vec<StakeBondRecord> =
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
 
         // Current total active stake + validator count at the sink (rollout gating).
-        let active_stakes_at_sink: Vec<_> = bonds
-            .iter()
-            .filter(|b| is_bond_active_at(b, sink_daa))
-            .map(|b| b.amount)
-            .collect();
-        let total_active = active_stakes_at_sink
-            .iter()
-            .fold(0u64, |acc, amount| acc.saturating_add(*amount));
+        let active_stakes_at_sink: Vec<_> = bonds.iter().filter(|b| is_bond_active_at(b, sink_daa)).map(|b| b.amount).collect();
+        let total_active = active_stakes_at_sink.iter().fold(0u64, |acc, amount| acc.saturating_add(*amount));
         // **DISTINCT validators, not bonds** (audit 2026-08-30). Nothing binds a key to a single
         // bond, and every other counter in this file dedups (`min_anchor_attesters`,
         // `aggregate_epoch_tallies`). This
@@ -5966,13 +5144,8 @@ impl VirtualStateProcessor {
         // non-duplicate) epoch, with the per-epoch denominator keyed by the canonical anchor
         // DAA and zero-attestation ready epochs included (`collect_stake_contributions_v2`).
         let credit_rule = dns_params.epoch_credit_rule();
-        let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(
-            sink,
-            None,
-            &bonds,
-            net_id.as_byte_slice(),
-            dns_params,
-        );
+        let (contributions, epoch_anchor_daa) =
+            self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params);
         let totals = total_active_stake_by_epoch(&bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         let stake_depth = compute_stake_score(&per_epoch, credit_rule);
@@ -6035,19 +5208,9 @@ impl VirtualStateProcessor {
         // support has aged out, and `advance_dns_confirmation` then carries the previous confirmed
         // anchor forward unchanged. The value stays a deterministic function of the selected chain
         // (`contributions` is derived from it), so nodes still agree.
-        let latest_ready_epoch = ready_epoch_from_tip_blue_score(
-            sink_blue,
-            epoch_len_blue,
-            dns_params.attestation_lag_blue_score,
-        );
+        let latest_ready_epoch = ready_epoch_from_tip_blue_score(sink_blue, epoch_len_blue, dns_params.attestation_lag_blue_score);
         let confirmable = latest_ready_epoch
-            .and_then(|ready| {
-                contributions
-                    .iter()
-                    .map(|c| c.epoch)
-                    .filter(|&e| e <= ready)
-                    .max()
-            })
+            .and_then(|ready| contributions.iter().map(|c| c.epoch).filter(|&e| e <= ready).max())
             .and_then(|epoch| self.canonical_anchor_by_blue_score(epoch, sink, dns_params));
         let confirmable_anchor = confirmable.map(|a| (a.anchor_hash, a.anchor_daa_score));
 
@@ -6061,12 +5224,7 @@ impl VirtualStateProcessor {
         // (`att.validator_id != bond.validator_pubkey_hash` is rejected in the credit walk), so it
         // cannot be varied to fake breadth.
         let anchor_epoch_attesters = confirmable.map_or(0, |a| {
-            contributions
-                .iter()
-                .filter(|c| c.epoch == a.epoch)
-                .map(|c| c.validator_id)
-                .collect::<HashSet<_>>()
-                .len() as u32
+            contributions.iter().filter(|c| c.epoch == a.epoch).map(|c| c.validator_id).collect::<HashSet<_>>().len() as u32
         });
 
         // true WorkDepth (audit H-02 Option A): WorkDepth(B) is the blue work accumulated SINCE the
@@ -6082,11 +5240,7 @@ impl VirtualStateProcessor {
                 self.ghostdag_store
                     .get_blue_work(sink)
                     .unwrap_or_default()
-                    .saturating_sub(
-                        self.ghostdag_store
-                            .get_blue_work(anchor_hash)
-                            .unwrap_or_default(),
-                    )
+                    .saturating_sub(self.ghostdag_store.get_blue_work(anchor_hash).unwrap_or_default())
             })
             .unwrap_or_default();
         let depth_state = advance_dns_confirmation(
@@ -6109,24 +5263,11 @@ impl VirtualStateProcessor {
         // ADR-0128 Decision 5: past the BFT fence (at the sink) the confirmed anchor is the newest
         // DNS-final one instead of the depth rule's; every other field above is kept as computed.
         // Below the fence, and wherever the fence is unset, the depth rule's state is written as is.
-        let new_state = match self
-            .dns_bft_gate
-            .filter(|gate| gate.activation.is_active(sink_daa) && !self.dns_retired_at(sink_daa))
-        {
-            Some(gate) => self.dns_bft_confirmed_state(
-                depth_state,
-                prev_dns_state.as_ref(),
-                sink,
-                &bonds,
-                dns_params,
-                &gate,
-            ),
+        let new_state = match self.dns_bft_gate.filter(|gate| gate.activation.is_active(sink_daa) && !self.dns_retired_at(sink_daa)) {
+            Some(gate) => self.dns_bft_confirmed_state(depth_state, prev_dns_state.as_ref(), sink, &bonds, dns_params, &gate),
             None => depth_state,
         };
-        self.dns_state_store
-            .write()
-            .set_batch(batch, new_state)
-            .unwrap();
+        self.dns_state_store.write().set_batch(batch, new_state).unwrap();
     }
 
     /// kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 1): recompute the per-epoch
@@ -6172,9 +5313,7 @@ impl VirtualStateProcessor {
         }
 
         let epoch_len = dns_params.epoch_length_blocks.max(1);
-        let finalization_depth = dns_params
-            .reward_uniqueness_window_blocks
-            .saturating_add(dns_params.max_reorg_horizon_blocks);
+        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
         let walk_bound = self.overlay_window_walk_bound(dns_params);
 
         // Gather this selected chain's per-block contributions within the window, oldest →
@@ -6193,33 +5332,16 @@ impl VirtualStateProcessor {
             .collect();
 
         // Snapshot the bond set (bounded by the active validator count), as update_dns_state does.
-        let bonds: Vec<StakeBondRecord> = self
-            .stake_bonds_store
-            .read()
-            .iterator()
-            .filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone()))
-            .collect();
+        let bonds: Vec<StakeBondRecord> =
+            self.stake_bonds_store.read().iterator().filter_map(|r| r.ok().map(|(_, rec)| (*rec).clone())).collect();
 
-        for (epoch, tally) in recompute_epoch_tallies(
-            sink_daa,
-            epoch_len,
-            finalization_depth,
-            &contributions,
-            &bonds,
-        ) {
+        for (epoch, tally) in recompute_epoch_tallies(sink_daa, epoch_len, finalization_depth, &contributions, &bonds) {
             // Never re-derive a finalized epoch — it is immutable and its blocks may
             // already lie partly outside the walk window (an incomplete recompute).
-            if self
-                .epoch_accumulator_store
-                .get(epoch)
-                .map(|t| t.finalized)
-                .unwrap_or(false)
-            {
+            if self.epoch_accumulator_store.get(epoch).map(|t| t.finalized).unwrap_or(false) {
                 continue;
             }
-            self.epoch_accumulator_store
-                .set_batch(batch, epoch, tally)
-                .unwrap();
+            self.epoch_accumulator_store.set_batch(batch, epoch, tally).unwrap();
         }
     }
 
@@ -6265,11 +5387,7 @@ impl VirtualStateProcessor {
         let walk_bound = self.overlay_window_walk_bound(dns_params);
         let window = self.selected_chain_overlay_window(selected_parent, anchor_daa, walk_bound);
 
-        Ok(OverlaySnapshot {
-            bonds,
-            reserve_balance,
-            window,
-        })
+        Ok(OverlaySnapshot { bonds, reserve_balance, window })
     }
 
     /// ADR-0022: `reward_uniqueness_window + max_reorg_horizon + 2·epoch_length` — the
@@ -6278,9 +5396,7 @@ impl VirtualStateProcessor {
     /// accumulator, and the reward dedup so all three see the same span.
     pub(super) fn overlay_window_walk_bound(&self, dns_params: &DnsParams) -> u64 {
         let epoch_len = dns_params.epoch_length_blocks.max(1);
-        let finalization_depth = dns_params
-            .reward_uniqueness_window_blocks
-            .saturating_add(dns_params.max_reorg_horizon_blocks);
+        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
         finalization_depth.saturating_add(epoch_len.saturating_mul(2))
     }
 
@@ -6307,10 +5423,7 @@ impl VirtualStateProcessor {
 
         // Above-pruning-point part, collected newest → oldest by the chain walk.
         let mut above: Vec<BlockOverlayContribution> = Vec::new();
-        for ancestor in std::iter::once(anchor).chain(
-            self.reachability_service
-                .default_backward_chain_iterator(anchor),
-        ) {
+        for ancestor in std::iter::once(anchor).chain(self.reachability_service.default_backward_chain_iterator(anchor)) {
             if Some(ancestor) == stop_at {
                 break;
             }
@@ -6318,11 +5431,7 @@ impl VirtualStateProcessor {
             if anchor_daa.saturating_sub(ancestor_daa) > walk_bound {
                 break;
             }
-            let rewarded_keys = self
-                .rewarded_epochs_store
-                .get(ancestor)
-                .map(|k| (*k).clone())
-                .unwrap_or_default();
+            let rewarded_keys = self.rewarded_epochs_store.get(ancestor).map(|k| (*k).clone()).unwrap_or_default();
             let quality_subpool = self.block_quality_pool_store.get(ancestor).unwrap_or(0);
             if rewarded_keys.is_empty() && quality_subpool == 0 {
                 continue;
@@ -6381,8 +5490,7 @@ impl VirtualStateProcessor {
         dns_params: &DnsParams,
         net_id: &[u8],
     ) -> StakeScore {
-        let (contributions, epoch_anchor_daa) =
-            self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params);
+        let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params);
         let totals = total_active_stake_by_epoch(bonds, &epoch_anchor_daa);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.epoch_credit_rule())
@@ -6403,29 +5511,17 @@ impl VirtualStateProcessor {
     ///
     /// [`Self::chain_common_ancestor_within`] computes the identical answer in O(log horizon) and
     /// is what the gate calls; this walk is its fallback when the chain index is unavailable.
-    pub(crate) fn chain_common_ancestor_walk(
-        &self,
-        candidate: BlockHash,
-        canonical: BlockHash,
-        horizon: u64,
-    ) -> Option<BlockHash> {
+    pub(crate) fn chain_common_ancestor_walk(&self, candidate: BlockHash, canonical: BlockHash, horizon: u64) -> Option<BlockHash> {
         // `default_backward_chain_iterator` YIELDS `canonical` first, so `walked` is exactly the
         // number of chain blocks that would be rewound and the bound is inclusive of `horizon`
         // (matching the binary search's `canonical_index − horizon` floor). The previous
         // `once(a).chain(iterator(a))` form double-counted the start block, quietly costing one
         // step of the budget.
-        for (walked, block) in (0_u64..).zip(
-            self.reachability_service
-                .default_backward_chain_iterator(canonical),
-        ) {
+        for (walked, block) in (0_u64..).zip(self.reachability_service.default_backward_chain_iterator(canonical)) {
             if walked > horizon {
                 return None;
             }
-            if matches!(
-                self.reachability_service
-                    .try_is_chain_ancestor_of(block, candidate),
-                Ok(true)
-            ) {
+            if matches!(self.reachability_service.try_is_chain_ancestor_of(block, candidate), Ok(true)) {
                 return Some(block);
             }
         }
@@ -6452,24 +5548,12 @@ impl VirtualStateProcessor {
     /// Falls back to the walk when the index is unavailable for these blocks (a freshly-imported or
     /// partially-pruned chain store); both measure the same canonical-side horizon, so the verdict
     /// never depends on which path answered.
-    pub(crate) fn chain_common_ancestor_within(
-        &self,
-        candidate: BlockHash,
-        canonical: BlockHash,
-        horizon: u64,
-    ) -> Option<BlockHash> {
+    pub(crate) fn chain_common_ancestor_within(&self, candidate: BlockHash, canonical: BlockHash, horizon: u64) -> Option<BlockHash> {
         let index_lookup = |idx: u64| self.selected_chain_store.read().get_by_index(idx).ok();
-        let is_ancestor_of_candidate = |hash: BlockHash| {
-            matches!(
-                self.reachability_service
-                    .try_is_chain_ancestor_of(hash, candidate),
-                Ok(true)
-            )
-        };
+        let is_ancestor_of_candidate =
+            |hash: BlockHash| matches!(self.reachability_service.try_is_chain_ancestor_of(hash, candidate), Ok(true));
 
-        let Ok(canonical_index): Result<u64, _> =
-            self.selected_chain_store.read().get_by_hash(canonical)
-        else {
+        let Ok(canonical_index): Result<u64, _> = self.selected_chain_store.read().get_by_hash(canonical) else {
             return self.chain_common_ancestor_walk(candidate, canonical, horizon);
         };
         let floor_index = canonical_index.saturating_sub(horizon);
@@ -6544,10 +5628,7 @@ impl VirtualStateProcessor {
         // configured stake-score window. Position is read from blue_score, never the index.
         let needed = anchor_cutoff_blue_score(epoch.saturating_sub(1), epoch_len, backoff);
         let mut ancestors: Vec<(BlockHash, u64, u64)> = Vec::new();
-        for hash in std::iter::once(tip).chain(
-            self.reachability_service
-                .default_backward_chain_iterator(tip),
-        ) {
+        for hash in std::iter::once(tip).chain(self.reachability_service.default_backward_chain_iterator(tip)) {
             let compact = self.headers_store.get_compact_header_data(hash).ok()?;
             if tip_blue_score.saturating_sub(compact.blue_score) > window {
                 break; // out of the stake-score window
@@ -6597,10 +5678,7 @@ impl VirtualStateProcessor {
 
         // One walk: collect the selected chain tip-first down to the window bound.
         let mut ancestors: Vec<(BlockHash, u64, u64)> = Vec::new();
-        for hash in std::iter::once(tip).chain(
-            self.reachability_service
-                .default_backward_chain_iterator(tip),
-        ) {
+        for hash in std::iter::once(tip).chain(self.reachability_service.default_backward_chain_iterator(tip)) {
             let Ok(c) = self.headers_store.get_compact_header_data(hash) else {
                 break;
             };
@@ -6621,8 +5699,7 @@ impl VirtualStateProcessor {
             if prev_cutoff < oldest_blue {
                 break;
             }
-            if let Some(anchor) =
-                canonical_lagged_epoch_anchor(epoch, epoch_len, backoff, &ancestors)
+            if let Some(anchor) = canonical_lagged_epoch_anchor(epoch, epoch_len, backoff, &ancestors)
                 && !anchor.duplicate_of_previous_anchor
             {
                 anchors.insert(epoch, anchor);
@@ -6664,38 +5741,23 @@ impl VirtualStateProcessor {
         dns_params: &DnsParams,
     ) -> (Vec<AttestationContribution>, BTreeMap<u64, u64>) {
         // Canonical anchors for the creditable epoch window, computed from THIS chain's tip.
-        let anchors = self.canonical_anchors_in_window(
-            tip,
-            dns_params,
-            dns_params.stake_score_window_blue_score,
-        );
+        let anchors = self.canonical_anchors_in_window(tip, dns_params, dns_params.stake_score_window_blue_score);
         // For a branch segment (`stop_at = Some(I)`), credit only epochs anchored strictly
         // above `I`; the sink-side path (`None`) keeps them all.
         let creditable: BTreeMap<u64, CanonicalLaggedEpochAnchor> = anchors
             .into_iter()
             .filter(|(_, a)| match stop_at {
-                Some(i) => {
-                    a.anchor_hash != i
-                        && !self
-                            .reachability_service
-                            .is_chain_ancestor_of(a.anchor_hash, i)
-                }
+                Some(i) => a.anchor_hash != i && !self.reachability_service.is_chain_ancestor_of(a.anchor_hash, i),
                 None => true,
             })
             .collect();
-        let epoch_anchor_daa: BTreeMap<u64, u64> = creditable
-            .iter()
-            .map(|(&e, a)| (e, a.anchor_daa_score))
-            .collect();
+        let epoch_anchor_daa: BTreeMap<u64, u64> = creditable.iter().map(|(&e, a)| (e, a.anchor_daa_score)).collect();
 
         let mut contributions: Vec<AttestationContribution> = Vec::new();
         let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else {
             return (contributions, epoch_anchor_daa);
         };
-        for chain_block in self
-            .reachability_service
-            .default_backward_chain_iterator(tip)
-        {
+        for chain_block in self.reachability_service.default_backward_chain_iterator(tip) {
             if Some(chain_block) == stop_at {
                 break;
             }
@@ -6713,9 +5775,7 @@ impl VirtualStateProcessor {
                 let Some(anchor) = creditable.get(&att.epoch) else {
                     continue;
                 };
-                if att.target_hash != anchor.anchor_hash
-                    || att.target_daa_score != anchor.anchor_daa_score
-                {
+                if att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
                     continue;
                 }
                 let Some(bond) = bonds.iter().find(|b| b.bond_outpoint == att.bond_outpoint) else {
@@ -6747,12 +5807,7 @@ impl VirtualStateProcessor {
                 )
                 .as_bytes();
                 if matches!(
-                    verify_mldsa87_with_context(
-                        &bond.validator_pubkey,
-                        &digest,
-                        &att.signature,
-                        ATTESTATION_MLDSA87_CONTEXT
-                    ),
+                    verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
                     Ok(true)
                 ) {
                     contributions.push(AttestationContribution {
@@ -6780,30 +5835,14 @@ impl VirtualStateProcessor {
         if new_sink != prev_sink {
             // this is only important for ibd performance, as we incur expensive cache misses otherwise.
             // this occurs because we cannot rely on header processing to pre-cache in this scenario.
-            if !self
-                .block_window_cache_for_difficulty
-                .contains_key(&new_sink)
-            {
-                self.block_window_cache_for_difficulty.insert(
-                    new_sink,
-                    self.window_manager
-                        .block_daa_window(sink_ghostdag_data.deref())
-                        .unwrap()
-                        .window,
-                );
+            if !self.block_window_cache_for_difficulty.contains_key(&new_sink) {
+                self.block_window_cache_for_difficulty
+                    .insert(new_sink, self.window_manager.block_daa_window(sink_ghostdag_data.deref()).unwrap().window);
             };
 
-            if !self
-                .block_window_cache_for_past_median_time
-                .contains_key(&new_sink)
-            {
-                self.block_window_cache_for_past_median_time.insert(
-                    new_sink,
-                    self.window_manager
-                        .calc_past_median_time(sink_ghostdag_data.deref())
-                        .unwrap()
-                        .1,
-                );
+            if !self.block_window_cache_for_past_median_time.contains_key(&new_sink) {
+                self.block_window_cache_for_past_median_time
+                    .insert(new_sink, self.window_manager.calc_past_median_time(sink_ghostdag_data.deref()).unwrap().1);
             };
         }
     }
@@ -6874,10 +5913,7 @@ impl VirtualStateProcessor {
         // heap key that ranked candidates by the overlay's bond view is gone with the V1 lineage.
         let mut heap = tips
             .into_iter()
-            .map(|block| SortableBlock {
-                hash: block,
-                blue_work: self.ghostdag_store.get_blue_work(block).unwrap(),
-            })
+            .map(|block| SortableBlock { hash: block, blue_work: self.ghostdag_store.get_blue_work(block).unwrap() })
             .collect::<BinaryHeap<_>>();
 
         // Self-wedge diagnostics (incident 2026-07-19 §2-1): the heaviest candidate the DNS gate
@@ -6892,8 +5928,7 @@ impl VirtualStateProcessor {
         // field report of three identical crashes (2026-09-07, `testnet-main-65e6a80e`) is what
         // this counts for. Cheap: three counters and one hash on a path that ends the search.
         let tips_searched = heap.len();
-        let (mut rejected_utxo, mut rejected_finality, mut rejected_gate) =
-            (0usize, 0usize, 0usize);
+        let (mut rejected_utxo, mut rejected_finality, mut rejected_gate) = (0usize, 0usize, 0usize);
         let mut first_utxo_invalid: Option<BlockHash> = None;
 
         // We maintain the following invariant: `heap` is an antichain.
@@ -6930,9 +5965,7 @@ impl VirtualStateProcessor {
                         None => String::new(),
                     }
                 );
-                let restored = self.calculate_utxo_state_relatively(
-                    stores, diff, bond_view, diff_point, prev_sink,
-                )?;
+                let restored = self.calculate_utxo_state_relatively(stores, diff, bond_view, diff_point, prev_sink)?;
                 assert_eq!(
                     restored, prev_sink,
                     "the previous sink {prev_sink} is not UTXO-valid — virtual cannot hold anywhere, which is a corrupted store rather than a rejected chain"
@@ -6942,10 +5975,7 @@ impl VirtualStateProcessor {
             let candidate = popped.hash;
             // QR reachability hardening: skip a candidate whose reachability is missing (half-pruned)
             // instead of panicking; it is below finality and recovery will complete the prune. Consensus-neutral.
-            let candidate_at_or_above_finality = match self
-                .reachability_service
-                .try_is_chain_ancestor_of(finality_point, candidate)
-            {
+            let candidate_at_or_above_finality = match self.reachability_service.try_is_chain_ancestor_of(finality_point, candidate) {
                 Ok(v) => v,
                 Err(_) => {
                     debug!(
@@ -6976,9 +6006,7 @@ impl VirtualStateProcessor {
                         // only way to notice was comparing DAA against a peer by hand. Emitting
                         // this at the point virtual settles — once per search, not per candidate —
                         // keeps a healthy node quiet while making a wedged one impossible to miss.
-                        let rule_e = self.palw_rule_e_active_at(
-                            self.headers_store.get_daa_score(prev_sink).unwrap_or(0),
-                        );
+                        let rule_e = self.palw_rule_e_active_at(self.headers_store.get_daa_score(prev_sink).unwrap_or(0));
                         if !rule_e {
                             self.note_palw_refusal_streak(
                                 candidate,
@@ -6990,9 +6018,7 @@ impl VirtualStateProcessor {
                             warn!(
                                 "DNS reorg gate: virtual settled on sink {} (blue_work {}) after refusing the heavier candidate {} (blue_work {}, reason {:?}{}). If this repeats on every resolve, this node is wedged off the network's chain — compare DAA against a peer.",
                                 candidate,
-                                self.ghostdag_store
-                                    .get_blue_work(candidate)
-                                    .unwrap_or_default(),
+                                self.ghostdag_store.get_blue_work(candidate).unwrap_or_default(),
                                 rejected,
                                 rejected_work,
                                 reason,
@@ -7004,10 +6030,7 @@ impl VirtualStateProcessor {
                         // 2. will be removed eventually by the bounded merge check.
                         // Hence as an optimization we prefer removing such blocks in advance to allow valid tips to be considered.
                         let filtering_root = self.depth_store.merge_depth_root(candidate).unwrap();
-                        let filtering_blue_work = self
-                            .ghostdag_store
-                            .get_blue_work(filtering_root)
-                            .unwrap_or_default();
+                        let filtering_blue_work = self.ghostdag_store.get_blue_work(filtering_root).unwrap_or_default();
                         // **ADR-0178: past rule E's fence (at the incumbent's DAA) the search goes on** for a bounded number of
                         // lighter candidates and keeps the best over the exclusive pasts (`palw_rule_e_finish_search_v1`); where the
                         // first stays best its answer is this one.
@@ -7024,31 +6047,19 @@ impl VirtualStateProcessor {
                                 diff_point,
                                 finality_point,
                             )?;
-                            self.note_palw_refusal_streak(
-                                sink,
-                                gate_rejected.map(|(rejected, reason, _)| (rejected, reason)),
-                                true,
-                            );
+                            self.note_palw_refusal_streak(sink, gate_rejected.map(|(rejected, reason, _)| (rejected, reason)), true);
                             return Ok((sink, parents));
                         }
                         // The heap is GHOSTDAG's own order, so the sink is the maximum of every
                         // candidate left in it and `pick_virtual_parents`' assumption holds as is.
                         return Ok((
                             candidate,
-                            heap.into_sorted_iter()
-                                .take_while(|s| s.blue_work >= filtering_blue_work)
-                                .map(|s| s.hash)
-                                .collect(),
+                            heap.into_sorted_iter().take_while(|s| s.blue_work >= filtering_blue_work).map(|s| s.hash).collect(),
                         ));
                     }
                     if gate_rejected.is_none() {
-                        gate_rejected = Some((
-                            candidate,
-                            dns_outcome,
-                            self.ghostdag_store
-                                .get_blue_work(candidate)
-                                .unwrap_or_default(),
-                        ));
+                        gate_rejected =
+                            Some((candidate, dns_outcome, self.ghostdag_store.get_blue_work(candidate).unwrap_or_default()));
                     }
                     rejected_gate += 1;
                     debug!(
@@ -7058,18 +6069,12 @@ impl VirtualStateProcessor {
                 } else {
                     rejected_utxo += 1;
                     first_utxo_invalid.get_or_insert(candidate);
-                    debug!(
-                        "Block candidate {} has invalid UTXO state and is ignored from Virtual chain.",
-                        candidate
-                    )
+                    debug!("Block candidate {} has invalid UTXO state and is ignored from Virtual chain.", candidate)
                 }
             } else if finality_point != pruning_point {
                 rejected_finality += 1;
                 // `finality_point == pruning_point` indicates we are at IBD start hence no warning required
-                warn!(
-                    "Finality Violation Detected. Block {} violates finality and is ignored from Virtual chain.",
-                    candidate
-                );
+                warn!("Finality Violation Detected. Block {} violates finality and is ignored from Virtual chain.", candidate);
             } else {
                 // IBD start (`finality_point == pruning_point`): no warning, but it is still a
                 // rejection, and the exhaustion report is the only place it is ever counted.
@@ -7077,26 +6082,13 @@ impl VirtualStateProcessor {
             }
             // PRUNE SAFETY: see comment within [`resolve_virtual`]
             let prune_guard = self.pruning_lock.blocking_read();
-            for parent in self
-                .relations_service
-                .get_parents(candidate)
-                .unwrap()
-                .iter()
-                .copied()
-            {
+            for parent in self.relations_service.get_parents(candidate).unwrap().iter().copied() {
                 // ADR-0125: a round parent stands for its anchor, which is on the candidate's chain.
                 let parent = self.palw_project_round_block(parent);
-                if self
-                    .reachability_service
-                    .is_dag_ancestor_of(finality_point, parent)
-                    && !self
-                        .reachability_service
-                        .is_dag_ancestor_of_any(parent, &mut heap.iter().map(|sb| sb.hash))
+                if self.reachability_service.is_dag_ancestor_of(finality_point, parent)
+                    && !self.reachability_service.is_dag_ancestor_of_any(parent, &mut heap.iter().map(|sb| sb.hash))
                 {
-                    heap.push(SortableBlock {
-                        hash: parent,
-                        blue_work: self.ghostdag_store.get_blue_work(parent).unwrap(),
-                    });
+                    heap.push(SortableBlock { hash: parent, blue_work: self.ghostdag_store.get_blue_work(parent).unwrap() });
                 }
             }
             drop(prune_guard);
@@ -7173,9 +6165,7 @@ impl VirtualStateProcessor {
             if sp.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
                 heartbeat_set.push((sp.blue_score, selected_parent, sp.timestamp));
             }
-            paced = self
-                .palw_clock_floor
-                .is_some_and(|fence| fence.is_active(sp.daa_score.saturating_add(1)));
+            paced = self.palw_clock_floor.is_some_and(|fence| fence.is_active(sp.daa_score.saturating_add(1)));
         }
 
         // ADR-0125: one parent slot is kept for the round lane while it has a tip to offer, so a DAG
@@ -7183,21 +6173,11 @@ impl VirtualStateProcessor {
         let round_reserve = usize::from(!round_tips.is_empty() && max_block_parents > 1);
         // Try adding parents as long as mergeset size and number of parents limits are not reached
         while let Some(candidate) = candidates.pop_front() {
-            if mergeset_size >= mergeset_size_limit
-                || virtual_parents.len() >= max_block_parents - round_reserve
-            {
+            if mergeset_size >= mergeset_size_limit || virtual_parents.len() >= max_block_parents - round_reserve {
                 break;
             }
-            match self.mergeset_increase(
-                &virtual_parents,
-                candidate,
-                mergeset_size_limit - mergeset_size,
-                track_heartbeats,
-            ) {
-                MergesetIncreaseResult::Accepted {
-                    increase_size,
-                    heartbeat_members,
-                } => {
+            match self.mergeset_increase(&virtual_parents, candidate, mergeset_size_limit - mergeset_size, track_heartbeats) {
+                MergesetIncreaseResult::Accepted { increase_size, heartbeat_members } => {
                     if !heartbeat_members.is_empty() {
                         let mut combined = heartbeat_set.clone();
                         combined.extend_from_slice(&heartbeat_members);
@@ -7214,30 +6194,18 @@ impl VirtualStateProcessor {
                 }
                 MergesetIncreaseResult::Rejected { new_candidate } => {
                     // If we already have a candidate in the past of new candidate then skip.
-                    if self
-                        .reachability_service
-                        .is_any_dag_ancestor(&mut candidates.iter().copied(), new_candidate)
-                    {
+                    if self.reachability_service.is_any_dag_ancestor(&mut candidates.iter().copied(), new_candidate) {
                         continue; // TODO (optimization): not sure this check is needed if candidates invariant as antichain is kept
                     }
                     // Remove all candidates which are in the future of the new candidate
-                    candidates.retain(|&h| {
-                        !self
-                            .reachability_service
-                            .is_dag_ancestor_of(new_candidate, h)
-                    });
+                    candidates.retain(|&h| !self.reachability_service.is_dag_ancestor_of(new_candidate, h));
                     candidates.push_back(new_candidate);
                 }
             }
         }
         assert!(mergeset_size <= mergeset_size_limit);
         assert!(virtual_parents.len() <= max_block_parents);
-        self.palw_add_round_parents(
-            &mut virtual_parents,
-            selected_parent,
-            round_tips,
-            max_block_parents,
-        );
+        self.palw_add_round_parents(&mut virtual_parents, selected_parent, round_tips, max_block_parents);
         self.remove_bounded_merge_breaking_parents(virtual_parents, pruning_point)
     }
 
@@ -7266,8 +6234,7 @@ impl VirtualStateProcessor {
                 return;
             }
             let header = self.headers_store.get_header(hash).unwrap();
-            if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-            {
+            if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
                 heartbeat_members.push((header.blue_score, hash, header.timestamp));
             }
         };
@@ -7279,17 +6246,12 @@ impl VirtualStateProcessor {
         let mut mergeset_increase = 1u64; // Starts with 1 to count for the candidate itself
 
         while let Some(current) = queue.pop_front() {
-            if self
-                .reachability_service
-                .is_dag_ancestor_of_any(current, &mut selected_parents.iter().copied())
-            {
+            if self.reachability_service.is_dag_ancestor_of_any(current, &mut selected_parents.iter().copied()) {
                 continue;
             }
             mergeset_increase += 1;
             if mergeset_increase > budget {
-                return MergesetIncreaseResult::Rejected {
-                    new_candidate: current,
-                };
+                return MergesetIncreaseResult::Rejected { new_candidate: current };
             }
             note_heartbeat(current);
 
@@ -7300,10 +6262,7 @@ impl VirtualStateProcessor {
                 }
             }
         }
-        MergesetIncreaseResult::Accepted {
-            increase_size: mergeset_increase,
-            heartbeat_members,
-        }
+        MergesetIncreaseResult::Accepted { increase_size: mergeset_increase, heartbeat_members }
     }
 
     /// **The width rule's answer, template-side** (ADR-0068 Phase 1, F3a with F5's chain
@@ -7326,16 +6285,9 @@ impl VirtualStateProcessor {
         if !one_chain || !paced {
             return one_chain;
         }
-        let (oldest, newest) = set
-            .iter()
-            .fold((u64::MAX, 0u64), |(lo, hi), (_, _, timestamp)| {
-                (lo.min(*timestamp), hi.max(*timestamp))
-            });
-        set.len() as u64
-            <= kaspa_consensus_core::palw_heartbeat_v1::heartbeat_chain_capacity_v1(
-                newest.saturating_sub(oldest),
-                bound,
-            )
+        let (oldest, newest) =
+            set.iter().fold((u64::MAX, 0u64), |(lo, hi), (_, _, timestamp)| (lo.min(*timestamp), hi.max(*timestamp)));
+        set.len() as u64 <= kaspa_consensus_core::palw_heartbeat_v1::heartbeat_chain_capacity_v1(newest.saturating_sub(oldest), bound)
     }
 
     fn remove_bounded_merge_breaking_parents(
@@ -7344,21 +6296,13 @@ impl VirtualStateProcessor {
         current_pruning_point: BlockHash,
     ) -> (Vec<BlockHash>, GhostdagData) {
         let mut ghostdag_data = self.ghostdag_manager.ghostdag(&virtual_parents);
-        let merge_depth_root = self
-            .depth_manager
-            .calc_merge_depth_root(&ghostdag_data, current_pruning_point);
+        let merge_depth_root = self.depth_manager.calc_merge_depth_root(&ghostdag_data, current_pruning_point);
         // Find red blocks violating the merge bound and which are not kosherized by any blue (the validator's own predicate).
-        let bad_reds = self
-            .depth_manager
-            .merge_breaking_reds(&ghostdag_data, merge_depth_root);
+        let bad_reds = self.depth_manager.merge_breaking_reds(&ghostdag_data, merge_depth_root);
 
         if !bad_reds.is_empty() {
             // Remove all parents which lead to merging a bad red
-            virtual_parents.retain(|&h| {
-                !self
-                    .reachability_service
-                    .is_any_dag_ancestor(&mut bad_reds.iter().copied(), h)
-            });
+            virtual_parents.retain(|&h| !self.reachability_service.is_any_dag_ancestor(&mut bad_reds.iter().copied(), h));
             // Recompute ghostdag data since parents changed
             ghostdag_data = self.ghostdag_manager.ghostdag(&virtual_parents);
         }
@@ -7374,14 +6318,12 @@ impl VirtualStateProcessor {
         virtual_past_median_time: u64,
         args: &TransactionValidationArgs,
     ) -> TxResult<()> {
-        self.transaction_validator
-            .validate_tx_in_isolation(&mutable_tx.tx)?;
-        self.transaction_validator
-            .validate_tx_in_header_context_with_args(
-                &mutable_tx.tx,
-                virtual_daa_score,
-                virtual_past_median_time,
-            )?;
+        self.transaction_validator.validate_tx_in_isolation(&mutable_tx.tx)?;
+        self.transaction_validator.validate_tx_in_header_context_with_args(
+            &mutable_tx.tx,
+            virtual_daa_score,
+            virtual_past_median_time,
+        )?;
         // ADR-0109 Decision 3: a spend of a PALW bond the registry holds locked at the virtual tip is
         // refused here, with the merge's own error, instead of being carried by a block and skipped
         // at the merge where nobody hears it. The same set the acceptance path builds
@@ -7393,29 +6335,19 @@ impl VirtualStateProcessor {
         if let Some(gate) = bond_gate.as_ref()
             && let Some(outpoint) = first_locked_input(&mutable_tx.tx, &gate.locked)
         {
-            return Err(
-                kaspa_consensus_core::errors::tx::TxRuleError::SpendsNonReleasableBond(outpoint),
-            );
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::SpendsNonReleasableBond(outpoint));
         }
         // **The 2026-09-23 Position route matrix, P-B3:** a seed or a buy the fold would refuse on its
         // class's registry lifecycle is refused here, before it relays; the template asks again
         // (`validate_block_template_transaction`), because the lifecycle can move after admission.
         if let Some(refusal) = self.palw_mempool_market_refusal(&mutable_tx.tx, virtual_daa_score) {
-            return Err(
-                kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal),
-            );
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
         }
         // **MSK-26A: this fleet never relays a DNS slashing/precommit evidence that is not genuine at
         // the tip** — a forged one merged into a block burns an honest validator's staked UTXO until
         // `palw_slashing_evidence_utxo_genuine` is armed. Node policy, not a block rule.
-        if let Some(refusal) =
-            self.palw_slashing_evidence_mempool_refusal(&mutable_tx.tx, virtual_daa_score)
-        {
-            return Err(
-                kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(
-                    refusal,
-                ),
-            );
+        if let Some(refusal) = self.palw_slashing_evidence_mempool_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(refusal));
         }
         self.validate_mempool_transaction_in_utxo_context(
             mutable_tx,
@@ -7424,10 +6356,7 @@ impl VirtualStateProcessor {
             args,
             bond_gate.as_ref().map(|gate| &gate.burns),
             bond_gate.as_ref().map(|gate| &gate.escrow),
-            bond_gate
-                .as_ref()
-                .and_then(|gate| gate.case_source_parent.as_ref())
-                .map(|(parent, state)| (*parent, &***state)),
+            bond_gate.as_ref().and_then(|gate| gate.case_source_parent.as_ref()).map(|(parent, state)| (*parent, &***state)),
         )?;
         // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
         // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
@@ -7437,18 +6366,12 @@ impl VirtualStateProcessor {
         // guard — a refused txid or object is not rehearsed again on the same tip, an every-tip-invalid object not again within its
         // window, and every rehearsal the memories do not answer takes from a work budget — and a refusal that holds at every tip is
         // `PalwH1CarrierInvalid`, which the relay flow penalises (`palw_h1_guard`).
-        if let Some(refusal) =
-            self.palw_mempool_h1_admission_refusal_v1(&mutable_tx.tx, virtual_daa_score)
-        {
+        if let Some(refusal) = self.palw_mempool_h1_admission_refusal_v1(&mutable_tx.tx, virtual_daa_score) {
             return Err(refusal);
         }
         // **G14 GAP 10:** a kernel route carrier the acceptance gate refuses is refused here too (and at the template).
-        if let Some(refusal) =
-            self.palw_mempool_kernel_route_refusal(&mutable_tx.tx, virtual_daa_score)
-        {
-            return Err(
-                kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal),
-            );
+        if let Some(refusal) = self.palw_mempool_kernel_route_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal));
         }
         Ok(())
     }
@@ -7475,11 +6398,7 @@ impl VirtualStateProcessor {
         )
     }
 
-    pub fn validate_mempool_transaction(
-        &self,
-        mutable_tx: &mut MutableTransaction,
-        args: &TransactionValidationArgs,
-    ) -> TxResult<()> {
+    pub fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, args: &TransactionValidationArgs) -> TxResult<()> {
         let virtual_read = self.virtual_stores.read();
         let virtual_state = virtual_read.state.get().unwrap();
         let virtual_utxo_view = &virtual_read.utxo_set;
@@ -7487,13 +6406,7 @@ impl VirtualStateProcessor {
         let virtual_past_median_time = virtual_state.past_median_time;
         // Run within the thread pool since par_iter might be internally applied to inputs
         self.thread_pool.install(|| {
-            self.validate_mempool_transaction_impl(
-                mutable_tx,
-                virtual_utxo_view,
-                virtual_daa_score,
-                virtual_past_median_time,
-                args,
-            )
+            self.validate_mempool_transaction_impl(mutable_tx, virtual_utxo_view, virtual_daa_score, virtual_past_median_time, args)
         })
     }
 
@@ -7533,19 +6446,13 @@ impl VirtualStateProcessor {
         Ok(())
     }
 
-    pub fn populate_mempool_transaction(
-        &self,
-        mutable_tx: &mut MutableTransaction,
-    ) -> TxResult<()> {
+    pub fn populate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction) -> TxResult<()> {
         let virtual_read = self.virtual_stores.read();
         let virtual_utxo_view = &virtual_read.utxo_set;
         self.populate_mempool_transaction_impl(mutable_tx, virtual_utxo_view)
     }
 
-    pub fn populate_mempool_transactions_in_parallel(
-        &self,
-        mutable_txs: &mut [MutableTransaction],
-    ) -> Vec<TxResult<()>> {
+    pub fn populate_mempool_transactions_in_parallel(&self, mutable_txs: &mut [MutableTransaction]) -> Vec<TxResult<()>> {
         let virtual_read = self.virtual_stores.read();
         let virtual_utxo_view = &virtual_read.utxo_set;
         self.thread_pool.install(|| {
@@ -7569,15 +6476,9 @@ impl VirtualStateProcessor {
     /// rebuilds) or when the re-run would carry a different payload (a claim that went stale in
     /// between). Inert below the lane's activation, which covers every build without the `evm`
     /// feature: such a build cannot produce an EVM-active template at all.
-    fn heartbeat_recommit_evm_for_stamp(
-        &self,
-        template: &mut BlockTemplate,
-        built_at: u64,
-    ) -> Result<(), RuleError> {
+    fn heartbeat_recommit_evm_for_stamp(&self, template: &mut BlockTemplate, built_at: u64) -> Result<(), RuleError> {
         let header = &template.block.header;
-        if header.daa_score < self.evm_activation_daa_score
-            || header.timestamp / 1000 == built_at / 1000
-        {
+        if header.daa_score < self.evm_activation_daa_score || header.timestamp / 1000 == built_at / 1000 {
             return Ok(());
         }
         let virtual_read = self.virtual_stores.read();
@@ -7585,10 +6486,7 @@ impl VirtualStateProcessor {
         let built_on_this_virtual = virtual_state.daa_score == header.daa_score
             && virtual_state.ghostdag_data.selected_parent == template.selected_parent_hash
             && virtual_state.parents.len() == header.direct_parents().len()
-            && virtual_state
-                .parents
-                .iter()
-                .all(|p| header.direct_parents().contains(p));
+            && virtual_state.parents.iter().all(|p| header.direct_parents().contains(p));
         if !built_on_this_virtual {
             return Err(RuleError::EvmTemplateExecutionFailed(format!(
                 "the heartbeat adapter stamped this template for its slot ({built_at} -> {}), which moves its EVM commitment, and \
@@ -7605,11 +6503,7 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::evm::EvmSystemOp::MarketSettle(_) => None,
             })
             .collect();
-        let prepared_claims = crate::processes::evm::prepare_deposit_claims(
-            &claims,
-            &virtual_read.utxo_set,
-            virtual_state.daa_score,
-        );
+        let prepared_claims = crate::processes::evm::prepare_deposit_claims(&claims, &virtual_read.utxo_set, virtual_state.daa_score);
         drop(virtual_read);
         let evm_template_data = kaspa_consensus_core::evm::EvmTemplateData {
             evm_coinbase: payload.evm_coinbase,
@@ -7620,12 +6514,8 @@ impl VirtualStateProcessor {
         // effects in (`evm_template_fields` re-folds them when there are any).
         let mut restamped = template.block.header.clone();
         restamped.utxo_commitment = virtual_state.multiset.clone().finalize();
-        let (restamped, payload, stale_claims) = self.evm_template_fields(
-            restamped,
-            &virtual_state,
-            evm_template_data,
-            prepared_claims,
-        )?;
+        let (restamped, payload, stale_claims) =
+            self.evm_template_fields(restamped, &virtual_state, evm_template_data, prepared_claims)?;
         if payload != template.block.evm_payload || !stale_claims.is_empty() {
             return Err(RuleError::EvmTemplateExecutionFailed(format!(
                 "the heartbeat adapter stamped this template for its slot ({built_at} -> {}), and the EVM payload it carries no longer \
@@ -7652,24 +6542,16 @@ impl VirtualStateProcessor {
     /// future** (the 2026-09-24 heartbeat audit, H1): the clock has already advanced into the slot a
     /// beat minted now would claim, so the beat could earn nothing. The miner waits for `next`
     /// instead of grinding a block that weighs ε, adds a blue score and ticks no DAA.
-    pub fn heartbeat_yield_hint(
-        &self,
-    ) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+    pub fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
         self.heartbeat_yield_hint_at(unix_now())
     }
 
     /// [`Self::heartbeat_yield_hint`] at an explicit wall clock — the node passes `unix_now()`, a
     /// test passes its simulated time.
-    pub fn heartbeat_yield_hint_at(
-        &self,
-        now_ms: u64,
-    ) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+    pub fn heartbeat_yield_hint_at(&self, now_ms: u64) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
         use kaspa_consensus_core::palw_heartbeat_v1 as hb;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
-        if !self
-            .palw_heartbeat_lane
-            .is_some_and(|fence| fence.is_active(virtual_state.daa_score))
-        {
+        if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
             return hb::HeartbeatYieldHintV1::NothingToYieldTo;
         }
         let ghostdag = &virtual_state.ghostdag_data;
@@ -7678,19 +6560,12 @@ impl VirtualStateProcessor {
         };
         let merged: Vec<(u8, u64)> = ghostdag
             .unordered_mergeset_without_selected_parent()
-            .filter_map(|hash| {
-                self.headers_store
-                    .get_header(hash)
-                    .ok()
-                    .map(|header| (header.pow_algo_id, header.timestamp))
-            })
+            .filter_map(|hash| self.headers_store.get_header(hash).ok().map(|header| (header.pow_algo_id, header.timestamp)))
             .collect();
         // ADR-0138 §3c: the same question the slot rule asks — is someone else pacing the clock?
         // A miner that kept the old hint would answer "bonded parent, sleep an hour" to every
         // attempt-lane parent past the fence, on a chain where nothing else advances the DAA.
-        let anchor_clock_active = self
-            .palw_anchor_clock
-            .is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
             selected_parent.pow_algo_id,
             selected_parent.daa_score,
@@ -7714,14 +6589,8 @@ impl VirtualStateProcessor {
         );
         // H1: the virtual's own clock decision — the one the next block's DAA score will be
         // computed from. A failure to read it is a node-local fact and answers as before.
-        let clock = if self
-            .palw_clock_cursor
-            .is_some_and(|fence| fence.is_active(virtual_state.daa_score))
-        {
-            self.window_manager
-                .block_daa_window(ghostdag)
-                .ok()
-                .map(|window| window.clock)
+        let clock = if self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
+            self.window_manager.block_daa_window(ghostdag).ok().map(|window| window.clock)
         } else {
             None
         };
@@ -7731,31 +6600,15 @@ impl VirtualStateProcessor {
     /// Make sure pruning point-related stores are initialized
     pub fn init(self: &Arc<Self>) {
         let pruning_point_read = self.pruning_point_store.upgradable_read();
-        if pruning_point_read
-            .pruning_point()
-            .optional()
-            .unwrap()
-            .is_none()
-        {
+        if pruning_point_read.pruning_point().optional().unwrap().is_none() {
             let mut pruning_point_write = RwLockUpgradableReadGuard::upgrade(pruning_point_read);
             let mut pruning_meta_write = self.pruning_meta_stores.write();
             let mut batch = WriteBatch::default();
-            self.past_pruning_points_store
-                .insert_batch(&mut batch, 0, self.genesis.hash)
-                .idempotent()
-                .unwrap();
-            pruning_point_write
-                .set_batch(&mut batch, self.genesis.hash, 0)
-                .unwrap();
-            pruning_point_write
-                .set_retention_checkpoint(&mut batch, self.genesis.hash)
-                .unwrap();
-            pruning_point_write
-                .set_retention_period_root(&mut batch, self.genesis.hash)
-                .unwrap();
-            pruning_meta_write
-                .set_utxoset_position(&mut batch, self.genesis.hash)
-                .unwrap();
+            self.past_pruning_points_store.insert_batch(&mut batch, 0, self.genesis.hash).idempotent().unwrap();
+            pruning_point_write.set_batch(&mut batch, self.genesis.hash, 0).unwrap();
+            pruning_point_write.set_retention_checkpoint(&mut batch, self.genesis.hash).unwrap();
+            pruning_point_write.set_retention_period_root(&mut batch, self.genesis.hash).unwrap();
+            pruning_meta_write.set_utxoset_position(&mut batch, self.genesis.hash).unwrap();
             self.db.write(batch).unwrap();
             drop(pruning_point_write);
             drop(pruning_meta_write);
@@ -7771,9 +6624,7 @@ impl VirtualStateProcessor {
 
     /// Initializes UTXO state of genesis and points virtual at genesis.
     /// Note that pruning point-related stores are initialized by `init`
-    pub fn process_genesis(
-        self: &Arc<Self>,
-    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+    pub fn process_genesis(self: &Arc<Self>) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         // ADR-0042 Decision 5 / Unit C: the V2 state's zero point. Installed beside the genesis
         // UTXO commit so a fresh database has a tip to walk from, and skipped entirely on a
         // network with no V2 bundle (every shipped preset), where the store stays empty.
@@ -7920,19 +6771,14 @@ impl VirtualStateProcessor {
         // Init the virtual selected chain store
         let mut batch = WriteBatch::default();
         let mut selected_chain_write = self.selected_chain_store.write();
-        selected_chain_write
-            .init_with_pruning_point(&mut batch, self.genesis.hash)
-            .unwrap();
+        selected_chain_write.init_with_pruning_point(&mut batch, self.genesis.hash).unwrap();
         self.db.write(batch).unwrap();
         drop(selected_chain_write);
 
         // Init virtual state
         self.commit_virtual_state(
             self.virtual_stores.upgradable_read(),
-            Arc::new(VirtualState::from_genesis(
-                &self.genesis,
-                self.ghostdag_manager.ghostdag(&[self.genesis.hash]),
-            )),
+            Arc::new(VirtualState::from_genesis(&self.genesis, self.ghostdag_manager.ghostdag(&[self.genesis.hash]))),
             &Default::default(),
             &Default::default(),
         );
@@ -7948,9 +6794,7 @@ impl VirtualStateProcessor {
     pub(crate) fn write_pruning_import_barrier(&self, batch: WriteBatch) {
         let mut options = WriteOptions::default();
         options.set_sync(true);
-        self.db
-            .write_opt(batch, &options)
-            .expect("persisting a pruning import recovery barrier cannot fail");
+        self.db.write_opt(batch, &options).expect("persisting a pruning import recovery barrier cannot fail");
     }
 
     /// Test-only OS-kill rendezvous — and (RFC-0012 acceptance, checkbox 3) in the unpublished private-integration build the drill
@@ -7958,11 +6802,7 @@ impl VirtualStateProcessor {
     /// no environment switch or pause path. The exact child process owns the rendezvous directory.
     #[cfg(any(test, feature = "private-integration-config"))]
     fn pruning_import_crash_checkpoint(&self, label: &str) {
-        if std::env::var("MISAKA_RFC12_IMPORT_CRASH_STAGE")
-            .ok()
-            .as_deref()
-            != Some(label)
-        {
+        if std::env::var("MISAKA_RFC12_IMPORT_CRASH_STAGE").ok().as_deref() != Some(label) {
             return;
         }
         let Ok(root) = std::env::var("MISAKA_RFC12_IMPORT_CRASH_DIRECTORY") else {
@@ -7970,11 +6810,7 @@ impl VirtualStateProcessor {
         };
         // Genesis startup also imports its premine. The worker arms only after
         // its baseline and expected cold-recovery manifest are durable.
-        if std::fs::read(std::path::Path::new(&root).join("armed"))
-            .ok()
-            .as_deref()
-            != Some(label.as_bytes())
-        {
+        if std::fs::read(std::path::Path::new(&root).join("armed")).ok().as_deref() != Some(label.as_bytes()) {
             return;
         }
         let mut file = std::fs::File::create(std::path::Path::new(&root).join("ready")).unwrap();
@@ -7987,38 +6823,19 @@ impl VirtualStateProcessor {
         }
     }
 
-    pub fn pruning_import_session(
-        &self,
-    ) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionStateV1> {
-        self.pruning_meta_stores
-            .read()
-            .import_session()
-            .map_err(|e| {
-                PruningImportError::PruningPointImportContextUnavailable(
-                    BlockHash::default(),
-                    format!("import session: {e}"),
-                )
-            })
+    pub fn pruning_import_session(&self) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionStateV1> {
+        self.pruning_meta_stores.read().import_session().map_err(|e| {
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
+        })
     }
 
-    pub fn pruning_import_status(
-        &self,
-    ) -> PruningImportResult<(
-        kaspa_consensus_core::pruning::PruningImportSessionStateV1,
-        bool,
-    )> {
+    pub fn pruning_import_status(&self) -> PruningImportResult<(kaspa_consensus_core::pruning::PruningImportSessionStateV1, bool)> {
         let meta = self.pruning_meta_stores.read();
         let state = meta.import_session().map_err(|e| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                BlockHash::default(),
-                format!("import session: {e}"),
-            )
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import session: {e}"))
         })?;
         let stable = meta.try_pruning_utxoset_stable_flag().map_err(|e| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                BlockHash::default(),
-                format!("import stable marker: {e}"),
-            )
+            PruningImportError::PruningPointImportContextUnavailable(BlockHash::default(), format!("import stable marker: {e}"))
         })?;
         Ok((state, stable))
     }
@@ -8029,12 +6846,8 @@ impl VirtualStateProcessor {
     ) -> PruningImportResult<kaspa_consensus_core::pruning::PruningImportSessionV1> {
         use kaspa_consensus_core::pruning::{PruningImportSessionStateV1, PruningImportSessionV1};
         let _mutation = self.pruning_import_session_lock.lock();
-        let unavailable = |e: StoreError| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                point,
-                format!("begin session: {e}"),
-            )
-        };
+        let unavailable =
+            |e: StoreError| PruningImportError::PruningPointImportContextUnavailable(point, format!("begin session: {e}"));
         let pruning = self.pruning_point_store.read();
         if pruning.pruning_point().map_err(unavailable)? != point {
             return Err(PruningImportError::PruningImportSessionRefused {
@@ -8046,25 +6859,16 @@ impl VirtualStateProcessor {
         self.headers_store.get_header(point).map_err(unavailable)?;
         let mut meta = self.pruning_meta_stores.write();
         let old = meta.import_session().map_err(unavailable)?;
-        let epoch = old.epoch.checked_add(1).ok_or_else(|| {
-            PruningImportError::PruningImportSessionRefused {
-                point,
-                epoch: old.epoch,
-                reason: "durable import epoch exhausted".into(),
-            }
+        let epoch = old.epoch.checked_add(1).ok_or_else(|| PruningImportError::PruningImportSessionRefused {
+            point,
+            epoch: old.epoch,
+            reason: "durable import epoch exhausted".into(),
         })?;
         let token = PruningImportSessionV1 { point, epoch };
-        let state = PruningImportSessionStateV1 {
-            epoch,
-            active: Some(token),
-            utxos_started: false,
-            utxos_imported: false,
-        };
+        let state = PruningImportSessionStateV1 { epoch, active: Some(token), utxos_started: false, utxos_imported: false };
         let mut batch = WriteBatch::default();
-        meta.set_import_session(&mut batch, &state)
-            .map_err(unavailable)?;
-        meta.set_pruning_utxoset_stable_flag(&mut batch, false)
-            .map_err(unavailable)?;
+        meta.set_import_session(&mut batch, &state).map_err(unavailable)?;
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(unavailable)?;
         self.write_pruning_import_barrier(batch);
         Ok(token)
     }
@@ -8074,9 +6878,7 @@ impl VirtualStateProcessor {
     pub(crate) fn with_pruning_import_session<T>(
         &self,
         token: Option<kaspa_consensus_core::pruning::PruningImportSessionV1>,
-        operation: impl FnOnce(
-            &kaspa_consensus_core::pruning::PruningImportSessionStateV1,
-        ) -> PruningImportResult<T>,
+        operation: impl FnOnce(&kaspa_consensus_core::pruning::PruningImportSessionStateV1) -> PruningImportResult<T>,
     ) -> PruningImportResult<T> {
         let _mutation = self.pruning_import_session_lock.lock();
         let state = self.pruning_import_session()?;
@@ -8094,15 +6896,9 @@ impl VirtualStateProcessor {
             });
         }
         if let Some(token) = token {
-            let target = self
-                .pruning_point_store
-                .read()
-                .pruning_point()
-                .map_err(|e| {
-                    PruningImportError::PruningPointImportContextUnavailable(
-                        point,
-                        format!("session pruning point: {e}"),
-                    )
+            let target =
+                self.pruning_point_store.read().pruning_point().map_err(|e| {
+                    PruningImportError::PruningPointImportContextUnavailable(point, format!("session pruning point: {e}"))
                 })?;
             if target != point {
                 return Err(PruningImportError::PruningImportSessionRefused {
@@ -8122,12 +6918,8 @@ impl VirtualStateProcessor {
         let point = state.active.map(|t| t.point).unwrap_or_default();
         let mut meta = self.pruning_meta_stores.write();
         let mut batch = WriteBatch::default();
-        meta.set_import_session(&mut batch, state).map_err(|e| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                point,
-                format!("import phase: {e}"),
-            )
-        })?;
+        meta.set_import_session(&mut batch, state)
+            .map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, format!("import phase: {e}")))?;
         self.write_pruning_import_barrier(batch);
         Ok(())
     }
@@ -8141,9 +6933,8 @@ impl VirtualStateProcessor {
         use crate::model::stores::utxo_set::UtxoSetStore;
         let pruning = self.pruning_point_store.read();
         if let Some(point) = point
-            && pruning.pruning_point().map_err(|e| {
-                PruningImportError::PruningPointImportContextUnavailable(point, e.to_string())
-            })? != point
+            && pruning.pruning_point().map_err(|e| PruningImportError::PruningPointImportContextUnavailable(point, e.to_string()))?
+                != point
         {
             return Err(PruningImportError::PruningImportSessionRefused {
                 point,
@@ -8152,17 +6943,12 @@ impl VirtualStateProcessor {
             });
         }
         let mut meta = self.pruning_meta_stores.write();
-        meta.utxo_set
-            .write_many(chunk)
-            .expect("writing an authorized UTXO import chunk cannot fail");
+        meta.utxo_set.write_many(chunk).expect("writing an authorized UTXO import chunk cannot fail");
         let inner = self.install(|| {
-            chunk
-                .par_iter()
-                .map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry))
-                .reduce(MuHash::new, |mut a, b| {
-                    a.combine(&b);
-                    a
-                })
+            chunk.par_iter().map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry)).reduce(MuHash::new, |mut a, b| {
+                a.combine(&b);
+                a
+            })
         });
         multiset.combine(&inner);
         Ok(())
@@ -8174,9 +6960,10 @@ impl VirtualStateProcessor {
     ) -> PruningImportResult<()> {
         let pruning = self.pruning_point_store.read();
         if let Some(token) = state.and_then(|s| s.active)
-            && pruning.pruning_point().map_err(|e| {
-                PruningImportError::PruningPointImportContextUnavailable(token.point, e.to_string())
-            })? != token.point
+            && pruning
+                .pruning_point()
+                .map_err(|e| PruningImportError::PruningPointImportContextUnavailable(token.point, e.to_string()))?
+                != token.point
         {
             return Err(PruningImportError::PruningImportSessionRefused {
                 point: token.point,
@@ -8187,17 +6974,13 @@ impl VirtualStateProcessor {
         let mut meta = self.pruning_meta_stores.write();
         let mut batch = WriteBatch::default();
         if let Some(state) = state {
-            meta.set_import_session(&mut batch, state)
-                .expect("staging the UTXO import phase cannot fail");
+            meta.set_import_session(&mut batch, state).expect("staging the UTXO import phase cannot fail");
         }
-        meta.set_pruning_utxoset_stable_flag(&mut batch, false)
-            .expect("staging an incomplete UTXO import cannot fail");
+        meta.set_pruning_utxoset_stable_flag(&mut batch, false).expect("staging an incomplete UTXO import cannot fail");
         self.write_pruning_import_barrier(batch);
         #[cfg(any(test, feature = "private-integration-config"))]
         self.pruning_import_crash_checkpoint("utxo-before-clear");
-        meta.utxo_set
-            .clear()
-            .expect("clearing an authorized UTXO import cannot fail");
+        meta.utxo_set.clear().expect("clearing an authorized UTXO import cannot fail");
         #[cfg(any(test, feature = "private-integration-config"))]
         self.pruning_import_crash_checkpoint("utxo-after-clear");
         Ok(())
@@ -8209,36 +6992,19 @@ impl VirtualStateProcessor {
         new_pruning_point: BlockHash,
         mut imported_utxo_multiset: MuHash,
     ) -> PruningImportResult<()> {
-        info!(
-            "Importing the UTXO set of the pruning point {}",
-            new_pruning_point
-        );
+        info!("Importing the UTXO set of the pruning point {}", new_pruning_point);
         let unavailable = |where_: &str, e: StoreError| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                new_pruning_point,
-                format!("UTXO {where_}: {e}"),
-            )
+            PruningImportError::PruningPointImportContextUnavailable(new_pruning_point, format!("UTXO {where_}: {e}"))
         };
         let require_target = |established: BlockHash| {
             if new_pruning_point == established {
                 Ok(())
             } else {
-                Err(PruningImportError::ImportedUtxoPruningPointMismatch(
-                    new_pruning_point,
-                    established,
-                ))
+                Err(PruningImportError::ImportedUtxoPruningPointMismatch(new_pruning_point, established))
             }
         };
-        require_target(
-            self.pruning_point_store
-                .read()
-                .pruning_point()
-                .map_err(|e| unavailable("pruning-point store", e))?,
-        )?;
-        let new_pruning_point_header = self
-            .headers_store
-            .get_header(new_pruning_point)
-            .map_err(|e| unavailable("L1 header", e))?;
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
+        let new_pruning_point_header = self.headers_store.get_header(new_pruning_point).map_err(|e| unavailable("L1 header", e))?;
         let imported_utxo_multiset_hash = imported_utxo_multiset.finalize();
         if imported_utxo_multiset_hash != new_pruning_point_header.utxo_commitment {
             return Err(PruningImportError::ImportedMultisetHashMismatch(
@@ -8250,19 +7016,11 @@ impl VirtualStateProcessor {
         {
             // Persist incomplete recovery with the position BEFORE a virtual UTXO copy.
             let pruning_point_read = self.pruning_point_store.read();
-            require_target(
-                pruning_point_read
-                    .pruning_point()
-                    .map_err(|e| unavailable("pruning-point store", e))?,
-            )?;
+            require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
             let mut batch = WriteBatch::default();
             let mut pruning_meta_write = self.pruning_meta_stores.write();
-            pruning_meta_write
-                .set_utxoset_position(&mut batch, new_pruning_point)
-                .unwrap();
-            pruning_meta_write
-                .set_pruning_utxoset_stable_flag(&mut batch, false)
-                .unwrap();
+            pruning_meta_write.set_utxoset_position(&mut batch, new_pruning_point).unwrap();
+            pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
             self.write_pruning_import_barrier(batch);
         }
 
@@ -8276,11 +7034,7 @@ impl VirtualStateProcessor {
                 "UTXO pruning target is changing; retry import".into(),
             )
         })?;
-        require_target(
-            pruning_point_read
-                .pruning_point()
-                .map_err(|e| unavailable("pruning-point store", e))?,
-        )?;
+        require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
         // The supplied incremental hash describes a stream, not necessarily the
         // shared staging table after another append stream interleaved. Verify the
         // actual locked table before clearing a single virtual UTXO. Memory stays
@@ -8298,21 +7052,16 @@ impl VirtualStateProcessor {
                 })
                 .collect::<PruningImportResult<_>>()?;
             let chunk_multiset = self.install(|| {
-                rows.par_iter()
-                    .map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry))
-                    .reduce(MuHash::new, |mut a, b| {
-                        a.combine(&b);
-                        a
-                    })
+                rows.par_iter().map(|(outpoint, entry)| MuHash::from_utxo(outpoint, entry)).reduce(MuHash::new, |mut a, b| {
+                    a.combine(&b);
+                    a
+                })
             });
             staged_multiset.combine(&chunk_multiset);
         }
         let staged_hash = staged_multiset.finalize();
         if staged_hash != new_pruning_point_header.utxo_commitment {
-            return Err(PruningImportError::ImportedMultisetHashMismatch(
-                new_pruning_point_header.utxo_commitment,
-                staged_hash,
-            ));
+            return Err(PruningImportError::ImportedMultisetHashMismatch(new_pruning_point_header.utxo_commitment, staged_hash));
         }
         {
             // Copy the pruning-point UTXO set into virtual's UTXO set.
@@ -8321,16 +7070,8 @@ impl VirtualStateProcessor {
             virtual_write.utxo_set.clear().unwrap();
             #[cfg(any(test, feature = "private-integration-config"))]
             self.pruning_import_crash_checkpoint("utxo-after-virtual-clear");
-            for chunk in &pruning_meta_read
-                .utxo_set
-                .iterator()
-                .map(|iter_result| iter_result.unwrap())
-                .chunks(1000)
-            {
-                virtual_write
-                    .utxo_set
-                    .write_from_iterator_without_cache(chunk)
-                    .unwrap();
+            for chunk in &pruning_meta_read.utxo_set.iterator().map(|iter_result| iter_result.unwrap()).chunks(1000) {
+                virtual_write.utxo_set.write_from_iterator_without_cache(chunk).unwrap();
                 #[cfg(any(test, feature = "private-integration-config"))]
                 self.pruning_import_crash_checkpoint("utxo-mid-virtual-copy");
             }
@@ -8343,10 +7084,8 @@ impl VirtualStateProcessor {
         drop(pruning_meta_read);
 
         // Validate transactions of the pruning point itself while its target stays pinned.
-        let new_pruning_point_transactions = self
-            .block_transactions_store
-            .get(new_pruning_point)
-            .map_err(|e| unavailable("block transactions", e))?;
+        let new_pruning_point_transactions =
+            self.block_transactions_store.get(new_pruning_point).map_err(|e| unavailable("block transactions", e))?;
         let validated_transactions = self.validate_transactions_in_parallel(
             &new_pruning_point_transactions,
             &virtual_write.utxo_set,
@@ -8362,18 +7101,9 @@ impl VirtualStateProcessor {
             // Submit partial UTXO state for the pruning point.
             // Note we only have and need the multiset; acceptance data and utxo-diff are irrelevant.
             let mut batch = WriteBatch::default();
-            self.utxo_multisets_store
-                .set_batch(
-                    &mut batch,
-                    new_pruning_point,
-                    imported_utxo_multiset.clone(),
-                )
-                .unwrap();
+            self.utxo_multisets_store.set_batch(&mut batch, new_pruning_point, imported_utxo_multiset.clone()).unwrap();
 
-            let statuses_write = self
-                .statuses_store
-                .set_batch(&mut batch, new_pruning_point, StatusUTXOValid)
-                .unwrap();
+            let statuses_write = self.statuses_store.set_batch(&mut batch, new_pruning_point, StatusUTXOValid).unwrap();
             self.write_pruning_import_barrier(batch);
             drop(statuses_write);
         }
@@ -8403,8 +7133,7 @@ impl VirtualStateProcessor {
 
         // Genesis initialization imports its pinned premine directly, without a
         // later IBD completion stage or non-genesis sidecars.
-        if new_pruning_point == self.genesis.hash && self.pruning_import_session()?.active.is_none()
-        {
+        if new_pruning_point == self.genesis.hash && self.pruning_import_session()?.active.is_none() {
             self.complete_pruning_point_import(new_pruning_point)?;
         }
         Ok(())
@@ -8415,108 +7144,52 @@ impl VirtualStateProcessor {
     /// a true marker for a mixed generation; transient lock contention is retryable.
     pub fn complete_pruning_point_import(&self, point: BlockHash) -> PruningImportResult<()> {
         let unavailable = |where_: &str, e: StoreError| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                point,
-                format!("completion {where_}: {e}"),
-            )
+            PruningImportError::PruningPointImportContextUnavailable(point, format!("completion {where_}: {e}"))
         };
-        let mismatch = |what: &str| {
-            PruningImportError::PruningPointImportGenerationMismatch(point, what.into())
-        };
+        let mismatch = |what: &str| PruningImportError::PruningPointImportGenerationMismatch(point, what.into());
         let virtual_read = self.virtual_stores.read();
-        let virtual_state = virtual_read
-            .state
-            .get()
-            .map_err(|e| unavailable("virtual state", e))?;
+        let virtual_state = virtual_read.state.get().map_err(|e| unavailable("virtual state", e))?;
         if virtual_state.ghostdag_data.selected_parent != point {
             return Err(mismatch("virtual sink does not match the import target"));
         }
         // Use try guards below virtual: a writer may itself need virtual. A busy
         // generation is incomplete, not permission to publish a stale import.
-        let pruning_read = self
-            .pruning_point_store
-            .try_read()
-            .ok_or_else(|| mismatch("pruning target is changing; retry"))?;
-        if pruning_read
-            .pruning_point()
-            .map_err(|e| unavailable("pruning-point store", e))?
-            != point
-        {
+        let pruning_read = self.pruning_point_store.try_read().ok_or_else(|| mismatch("pruning target is changing; retry"))?;
+        if pruning_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))? != point {
             return Err(mismatch("established pruning target changed"));
         }
-        let palw_read = self
-            .palw_state_v2_store
-            .try_read()
-            .ok_or_else(|| mismatch("PALW sidecar is changing; retry"))?;
+        let palw_read = self.palw_state_v2_store.try_read().ok_or_else(|| mismatch("PALW sidecar is changing; retry"))?;
         if self.palw_state_params_v2.is_some()
-            && palw_read
-                .tip_key()
-                .map_err(|e| unavailable("PALW tip", e))?
-                .map(|(at, _)| at)
-                != Some(point)
+            && palw_read.tip_key().map_err(|e| unavailable("PALW tip", e))?.map(|(at, _)| at) != Some(point)
         {
             return Err(mismatch("PALW tip does not match the import target"));
         }
-        let overlay_read = self
-            .pruning_overlay_snapshot_store
-            .try_read()
-            .ok_or_else(|| mismatch("overlay sidecar is changing; retry"))?;
+        let overlay_read =
+            self.pruning_overlay_snapshot_store.try_read().ok_or_else(|| mismatch("overlay sidecar is changing; retry"))?;
         if point != self.genesis.hash
             && self.dns_params.is_some()
-            && overlay_read
-                .get()
-                .optional()
-                .map_err(|e| unavailable("overlay snapshot", e))?
-                .map(|row| row.pruning_point)
+            && overlay_read.get().optional().map_err(|e| unavailable("overlay snapshot", e))?.map(|row| row.pruning_point)
                 != Some(point)
         {
-            return Err(mismatch(
-                "overlay snapshot does not match the import target",
-            ));
+            return Err(mismatch("overlay snapshot does not match the import target"));
         }
-        let heads_read = self
-            .evm_heads_store
-            .try_read()
-            .ok_or_else(|| mismatch("EVM heads are changing; retry"))?;
-        let header = self
-            .headers_store
-            .get_header(point)
-            .map_err(|e| unavailable("L1 header", e))?;
+        let heads_read = self.evm_heads_store.try_read().ok_or_else(|| mismatch("EVM heads are changing; retry"))?;
+        let header = self.headers_store.get_header(point).map_err(|e| unavailable("L1 header", e))?;
         if point != self.genesis.hash && header.daa_score >= self.evm_activation_daa_score {
-            let execution = self
-                .evm_header_store
-                .get(point)
-                .map_err(|e| unavailable("EVM execution", e))?;
+            let execution = self.evm_header_store.get(point).map_err(|e| unavailable("EVM execution", e))?;
             if execution.commitment_root() != header.evm_commitment_root
-                || heads_read
-                    .get()
-                    .map_err(|e| unavailable("EVM heads", e))?
-                    .latest
-                    != point
+                || heads_read.get().map_err(|e| unavailable("EVM heads", e))?.latest != point
             {
-                return Err(mismatch(
-                    "EVM execution or latest head does not match the import target",
-                ));
+                return Err(mismatch("EVM execution or latest head does not match the import target"));
             }
-            self.evm_state_store
-                .get(point)
-                .map_err(|e| unavailable("EVM snapshot", e))?;
+            self.evm_state_store.get(point).map_err(|e| unavailable("EVM snapshot", e))?;
         }
-        let mut meta_write = self
-            .pruning_meta_stores
-            .try_write()
-            .ok_or_else(|| mismatch("UTXO import is changing; retry"))?;
-        if meta_write
-            .utxoset_position()
-            .map_err(|e| unavailable("UTXO position", e))?
-            != point
-        {
+        let mut meta_write = self.pruning_meta_stores.try_write().ok_or_else(|| mismatch("UTXO import is changing; retry"))?;
+        if meta_write.utxoset_position().map_err(|e| unavailable("UTXO position", e))? != point {
             return Err(mismatch("UTXO position does not match the import target"));
         }
         let mut batch = WriteBatch::default();
-        let mut session = meta_write
-            .import_session()
-            .map_err(|e| unavailable("import session", e))?;
+        let mut session = meta_write.import_session().map_err(|e| unavailable("import session", e))?;
         if let Some(token) = session.active {
             if token.point != point || !session.utxos_started || !session.utxos_imported {
                 return Err(mismatch("session has not finalized this UTXO import"));
@@ -8524,13 +7197,9 @@ impl VirtualStateProcessor {
             session.active = None;
             session.utxos_started = false;
             session.utxos_imported = false;
-            meta_write
-                .set_import_session(&mut batch, &session)
-                .map_err(|e| unavailable("closing import session", e))?;
+            meta_write.set_import_session(&mut batch, &session).map_err(|e| unavailable("closing import session", e))?;
         }
-        meta_write
-            .set_pruning_utxoset_stable_flag(&mut batch, true)
-            .map_err(|e| unavailable("stable marker", e))?;
+        meta_write.set_pruning_utxoset_stable_flag(&mut batch, true).map_err(|e| unavailable("stable marker", e))?;
         // Store writers update caches as they stage the batch. A failed durable
         // commit is fatal, like the other consensus writes; returning would expose
         // the cached true marker without its durable completion.
@@ -8561,46 +7230,25 @@ impl VirtualStateProcessor {
         evm_header: kaspa_consensus_core::evm::EvmExecutionHeader,
         snapshot: kaspa_consensus_core::evm::EvmStateSnapshot,
     ) -> PruningImportResult<()> {
-        info!(
-            "Importing the EVM state of the pruning point {}",
-            pruning_point
-        );
+        info!("Importing the EVM state of the pruning point {}", pruning_point);
         let context_error = |where_: &str, e: StoreError| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                pruning_point,
-                format!("{where_}: {e}"),
-            )
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("{where_}: {e}"))
         };
         let require_target = |established: BlockHash| {
             if pruning_point == established {
                 Ok(())
             } else {
-                Err(PruningImportError::ImportedEvmPruningPointMismatch(
-                    pruning_point,
-                    established,
-                ))
+                Err(PruningImportError::ImportedEvmPruningPointMismatch(pruning_point, established))
             }
         };
         // Root validity is not import authority. The IBD proof/catch-up installs this target first.
-        require_target(
-            self.pruning_point_store
-                .read()
-                .pruning_point()
-                .map_err(|e| context_error("pruning-point store", e))?,
-        )?;
-        let l1_header = self
-            .headers_store
-            .get_header(pruning_point)
-            .map_err(|e| context_error("L1 header", e))?;
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| context_error("pruning-point store", e))?)?;
+        let l1_header = self.headers_store.get_header(pruning_point).map_err(|e| context_error("L1 header", e))?;
 
         // (1) The EVM header must reproduce the L1 commitment (pure; works on any build).
         let got = evm_header.commitment_root();
         if got != l1_header.evm_commitment_root {
-            return Err(PruningImportError::ImportedEvmCommitmentMismatch(
-                pruning_point,
-                got,
-                l1_header.evm_commitment_root,
-            ));
+            return Err(PruningImportError::ImportedEvmCommitmentMismatch(pruning_point, got, l1_header.evm_commitment_root));
         }
 
         // (2) The state snapshot must reproduce the EVM header's keccak-MPT state root.
@@ -8609,16 +7257,11 @@ impl VirtualStateProcessor {
         // skipping this on a non-evm build never weakens a chain it actually follows.
         #[cfg(feature = "evm")]
         {
-            let db = kaspa_evm::snapshot::seed_cachedb(&snapshot).map_err(|e| {
-                PruningImportError::ImportedEvmSnapshotInvalid(pruning_point, e.to_string())
-            })?;
+            let db = kaspa_evm::snapshot::seed_cachedb(&snapshot)
+                .map_err(|e| PruningImportError::ImportedEvmSnapshotInvalid(pruning_point, e.to_string()))?;
             let computed = kaspa_hashes::EvmH256::from_bytes(kaspa_evm::state::state_root(&db).0);
             if computed != evm_header.state_root {
-                return Err(PruningImportError::ImportedEvmStateRootMismatch(
-                    pruning_point,
-                    computed,
-                    evm_header.state_root,
-                ));
+                return Err(PruningImportError::ImportedEvmStateRootMismatch(pruning_point, computed, evm_header.state_root));
             }
         }
 
@@ -8627,41 +7270,23 @@ impl VirtualStateProcessor {
         // validation of every existing row; a retry reuses identical immutable data, never overwrites it.
         let mut readiness_memo = self.native_readiness_memo.lock();
         let pruning_point_read = self.pruning_point_store.read();
-        require_target(
-            pruning_point_read
-                .pruning_point()
-                .map_err(|e| context_error("pruning-point store", e))?,
-        )?;
-        let insert_header = match self
-            .evm_header_store
-            .get(pruning_point)
-            .optional()
-            .map_err(|e| context_error("existing execution header", e))?
-        {
-            None => true,
-            Some(existing) if existing == evm_header => false,
-            Some(_) => {
-                return Err(PruningImportError::ImportedEvmExistingStateMismatch(
-                    pruning_point,
-                    "execution header".into(),
-                ));
-            }
-        };
-        let insert_snapshot = match self
-            .evm_state_store
-            .get(pruning_point)
-            .optional()
-            .map_err(|e| context_error("existing snapshot", e))?
-        {
-            None => true,
-            Some(existing) if existing == snapshot => false,
-            Some(_) => {
-                return Err(PruningImportError::ImportedEvmExistingStateMismatch(
-                    pruning_point,
-                    "snapshot".into(),
-                ));
-            }
-        };
+        require_target(pruning_point_read.pruning_point().map_err(|e| context_error("pruning-point store", e))?)?;
+        let insert_header =
+            match self.evm_header_store.get(pruning_point).optional().map_err(|e| context_error("existing execution header", e))? {
+                None => true,
+                Some(existing) if existing == evm_header => false,
+                Some(_) => {
+                    return Err(PruningImportError::ImportedEvmExistingStateMismatch(pruning_point, "execution header".into()));
+                }
+            };
+        let insert_snapshot =
+            match self.evm_state_store.get(pruning_point).optional().map_err(|e| context_error("existing snapshot", e))? {
+                None => true,
+                Some(existing) if existing == snapshot => false,
+                Some(_) => {
+                    return Err(PruningImportError::ImportedEvmExistingStateMismatch(pruning_point, "snapshot".into()));
+                }
+            };
         use crate::model::stores::evm::EvmStateCheckpointStoreReader;
         let checkpoint = kaspa_consensus_core::evm::EvmStateCheckpointV1::build(
             pruning_point,
@@ -8669,20 +7294,14 @@ impl VirtualStateProcessor {
             evm_header.state_root,
             &snapshot,
         );
-        let insert_checkpoint = match self
-            .evm_state_checkpoint_store
-            .get(pruning_point)
-            .map_err(|e| context_error("existing checkpoint", e))?
-        {
-            None => true,
-            Some(existing) if existing == checkpoint => false,
-            Some(_) => {
-                return Err(PruningImportError::ImportedEvmExistingStateMismatch(
-                    pruning_point,
-                    "checkpoint".into(),
-                ));
-            }
-        };
+        let insert_checkpoint =
+            match self.evm_state_checkpoint_store.get(pruning_point).map_err(|e| context_error("existing checkpoint", e))? {
+                None => true,
+                Some(existing) if existing == checkpoint => false,
+                Some(_) => {
+                    return Err(PruningImportError::ImportedEvmExistingStateMismatch(pruning_point, "checkpoint".into()));
+                }
+            };
         let state_root = evm_header.state_root; // captured before `evm_header` is moved below
         let mut batch = WriteBatch::default();
         // C-01 S8 (audit M-01): also seed the flat latest-canonical state from the verified
@@ -8703,17 +7322,10 @@ impl VirtualStateProcessor {
                 state_root,
                 &snapshot,
             )
-            .map_err(|e| {
-                PruningImportError::ImportedEvmSnapshotInvalid(
-                    pruning_point,
-                    format!("flat seed: {e}"),
-                )
-            })?;
+            .map_err(|e| PruningImportError::ImportedEvmSnapshotInvalid(pruning_point, format!("flat seed: {e}")))?;
         }
         if insert_header {
-            self.evm_header_store
-                .insert_batch(&mut batch, pruning_point, evm_header)
-                .unwrap();
+            self.evm_header_store.insert_batch(&mut batch, pruning_point, evm_header).unwrap();
         }
         // F2a (t10 recovery): the imported, root-verified snapshot is also this
         // node's FIRST pruning-point state anchor — persist it as a checkpoint so
@@ -8721,24 +7333,17 @@ impl VirtualStateProcessor {
         // a base once the pp advances, even on a retired-206 node (which writes no
         // per-block 206 rows of its own; §12 gathering anchors on checkpoints).
         if insert_checkpoint {
-            self.evm_state_checkpoint_store
-                .insert_batch(&mut batch, pruning_point, checkpoint)
-                .unwrap();
+            self.evm_state_checkpoint_store.insert_batch(&mut batch, pruning_point, checkpoint).unwrap();
         }
         if insert_snapshot {
-            self.evm_state_store
-                .insert_batch(&mut batch, pruning_point, snapshot)
-                .unwrap();
+            self.evm_state_store.insert_batch(&mut batch, pruning_point, snapshot).unwrap();
         }
         {
             let mut heads_write = self.evm_heads_store.write();
             let prev = heads_write.get().ok();
             let latest = prev.as_ref().map(|h| h.latest).unwrap_or(pruning_point);
             let safe = prev.as_ref().map(|h| h.safe).unwrap_or(pruning_point);
-            let retired = self
-                .headers_store
-                .get_daa_score(pruning_point)
-                .is_ok_and(|daa| self.dns_retired_at(daa));
+            let retired = self.headers_store.get_daa_score(pruning_point).is_ok_and(|daa| self.dns_retired_at(daa));
             let heads = if retired {
                 kaspa_consensus_core::evm::CanonicalEvmHeads {
                     latest: pruning_point,
@@ -8746,15 +7351,9 @@ impl VirtualStateProcessor {
                     finalized: BlockHash::default(),
                 }
             } else {
-                kaspa_consensus_core::evm::CanonicalEvmHeads {
-                    latest,
-                    safe,
-                    finalized: pruning_point,
-                }
+                kaspa_consensus_core::evm::CanonicalEvmHeads { latest, safe, finalized: pruning_point }
             };
-            heads_write
-                .set_native_finalized_publication_batch(&mut batch, None)
-                .unwrap();
+            heads_write.set_native_finalized_publication_batch(&mut batch, None).unwrap();
             heads_write.set_native_batch(&mut batch, None).unwrap();
             heads_write.set_batch(&mut batch, heads).unwrap();
         }
@@ -8762,9 +7361,7 @@ impl VirtualStateProcessor {
         // incomplete marker WITH the state, before any UTXO clear/copy can occur. A
         // crash here must make IBD retry all sidecars, never reuse old stable UTXOs.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
-        pruning_meta_write
-            .set_pruning_utxoset_stable_flag(&mut batch, false)
-            .unwrap();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
         *readiness_memo = None;
@@ -8778,10 +7375,7 @@ impl VirtualStateProcessor {
     pub fn pruning_point_evm_state(
         &self,
         pruning_point: BlockHash,
-    ) -> Option<(
-        kaspa_consensus_core::evm::EvmExecutionHeader,
-        kaspa_consensus_core::evm::EvmStateSnapshot,
-    )> {
+    ) -> Option<(kaspa_consensus_core::evm::EvmExecutionHeader, kaspa_consensus_core::evm::EvmStateSnapshot)> {
         // EvmHeaderStoreReader / EvmStateStoreReader are in module scope.
         let header = self.evm_header_store.get(pruning_point).ok()?;
         // Hot path: the persisted 206[pp] snapshot.
@@ -8810,24 +7404,17 @@ impl VirtualStateProcessor {
         // serve path through the persisted 206 row above, which returns before this block.
         #[cfg(feature = "evm")]
         {
-            use crate::model::stores::evm::{
-                EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader,
-            };
+            use crate::model::stores::evm::{EvmCodeStoreReader, EvmStateCheckpointStoreReader, EvmStateDiffStoreReader};
             if self.pruning_point_store.read().pruning_point().ok() != Some(pruning_point) {
                 return None;
             }
             if let Ok(Some(ptr)) = self.evm_latest_state_ptr_store.read().get()
                 && ptr.canonical_head == pruning_point
             {
-                return match crate::processes::evm::materialize_snapshot(
-                    &self.evm_flat_account_store,
-                    &self.evm_code_store,
-                ) {
+                return match crate::processes::evm::materialize_snapshot(&self.evm_flat_account_store, &self.evm_code_store) {
                     Ok(snapshot) => Some((header, snapshot)),
                     Err(e) => {
-                        warn!(
-                            "[evm] pruning-point flat materialize failed for {pruning_point}: {e}"
-                        );
+                        warn!("[evm] pruning-point flat materialize failed for {pruning_point}: {e}");
                         None
                     }
                 };
@@ -8839,17 +7426,11 @@ impl VirtualStateProcessor {
                 // Pre-activation is judged by the L1 DAA score. Sub-pruning-point
                 // blocks have no EVM rows (pruned), and reading that absence as
                 // pre-activation is exactly the t10 empty-seed bug — fail closed.
-                |b| {
-                    self.headers_store
-                        .get_compact_header_data(b)
-                        .map(|c| c.daa_score < self.evm_activation_daa_score)
-                },
+                |b| self.headers_store.get_compact_header_data(b).map(|c| c.daa_score < self.evm_activation_daa_score),
             ) {
                 Ok(v) => v,
                 Err(e) => {
-                    warn!(
-                        "[evm] pruning-point §12 reconstruct gather failed for {pruning_point}: {e}"
-                    );
+                    warn!("[evm] pruning-point §12 reconstruct gather failed for {pruning_point}: {e}");
                     return None;
                 }
             };
@@ -8914,13 +7495,9 @@ impl VirtualStateProcessor {
             return Ok(()); // not a ConsensusV2 network — nothing reads this store.
         };
         let declaration_rows = if let Some((offered, complete)) = declarations {
-            self.palw_validate_snapshot_declarations_v1_impl(&carriage, &offered, complete)
-                .map_err(|why| {
-                    PruningImportError::PruningPointImportContextUnavailable(
-                        pruning_point,
-                        format!("snapshot declarations: {why}"),
-                    )
-                })?;
+            self.palw_validate_snapshot_declarations_v1_impl(&carriage, &offered, complete).map_err(|why| {
+                PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("snapshot declarations: {why}"))
+            })?;
             offered
                 .into_iter()
                 .map(|(id, bytes)| {
@@ -8938,8 +7515,7 @@ impl VirtualStateProcessor {
         } else {
             Vec::new()
         };
-        let context_error = |e: StoreError| {
-            match e {
+        let context_error = |e: StoreError| match e {
             StoreError::LocalResourceUnavailable(reason) => PruningImportError::PruningImportRuleError(
                 kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(
                     kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
@@ -8950,26 +7526,17 @@ impl VirtualStateProcessor {
             other => {
                 PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("PALW pruning-point store: {other}"))
             }
-        }
         };
         let require_target = |established: BlockHash| {
             if pruning_point == established {
                 Ok(())
             } else {
-                Err(PruningImportError::ImportedPalwPruningPointMismatch(
-                    pruning_point,
-                    established,
-                ))
+                Err(PruningImportError::ImportedPalwPruningPointMismatch(pruning_point, established))
             }
         };
         // A valid historic root is not permission to replace the live PALW tip.
         // Every IBD caller establishes this target through its pruning history first.
-        require_target(
-            self.pruning_point_store
-                .read()
-                .pruning_point()
-                .map_err(context_error)?,
-        )?;
+        require_target(self.pruning_point_store.read().pruning_point().map_err(context_error)?)?;
         // **Which header commits this state.** `Header::palw_state_root` commits the root of the
         // state as-of the block's SELECTED PARENT — the chain walk compares exactly that
         // (`header.palw_state_root != parent_root` disqualifies). This carriage is the state as-of
@@ -9006,9 +7573,7 @@ impl VirtualStateProcessor {
         // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
         // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
         // child header is in hand.
-        let (expected_root, witness_daa) = witness.ok_or(
-            PruningImportError::ImportedPalwStateHeaderMissing(pruning_point),
-        )?;
+        let (expected_root, witness_daa) = witness.ok_or(PruningImportError::ImportedPalwStateHeaderMissing(pruning_point))?;
         // **A frontier above the point it is the state of is a lie on its face** (mainnet audit,
         // 2026-09-05). `safe_frontier_blue_score` is fork choice's FIRST key and the frontier only
         // ever advances (`claim.accepted_blue_score > old_frontier`), so a carriage declaring one
@@ -9036,11 +7601,7 @@ impl VirtualStateProcessor {
         // (every shipped network): the carriage's own check against the flat root, exactly as before. Armed: the carriage is decoded and
         // checked for consistency, and the committed form of the decoded state is compared with the witness — the same helper the
         // chain walk uses, so an import and a validation cannot disagree about one state.
-        let flat_check = if self.palw_fork_choice_commitment_v1.is_none() {
-            Some(expected_root)
-        } else {
-            None
-        };
+        let flat_check = if self.palw_fork_choice_commitment_v1.is_none() { Some(expected_root) } else { None };
         // Direct callers may supply a typed carriage without the protocol-107
         // receiver's decode lease. Reserve canonical intake and actual schema
         // reconstruction before into_state, then retain its owner to commit.
@@ -9055,17 +7616,11 @@ impl VirtualStateProcessor {
         .map_err(|e| match e {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
                 PruningImportError::PruningImportRuleError(
-                    kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(
-                        why,
-                    ),
+                    kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(why),
                 )
             }
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(other) => {
-                PruningImportError::ImportedPalwStateInvalid(
-                    pruning_point,
-                    expected_root,
-                    other.to_string(),
-                )
+                PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, other.to_string())
             }
         })?;
         kaspa_consensus_core::palw_native39_frontier_v1::validate_native39_frontier_context_v1(
@@ -9095,28 +7650,23 @@ impl VirtualStateProcessor {
                 return Err(PruningImportError::ImportedPalwStateInvalid(
                     pruning_point,
                     expected_root,
-                    format!(
-                        "carriage state commits {got} in the header form, not the witness's {expected_root}"
-                    ),
+                    format!("carriage state commits {got} in the header form, not the witness's {expected_root}"),
                 ));
             }
         }
         // Install uses the actual typed, authenticated state and its rebuilt
         // indices, never the sender's byte length or local Serve metadata. Keep
         // this operation's demand reserved through the durable WAL barrier.
-        let _native_install_lease =
-            kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
-                pruning_point,
-                &state,
-                self.db.native_single_directory_quota_path_v1(),
-            )
-            .map_err(|why| {
-                PruningImportError::PruningImportRuleError(
-                    kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(
-                        why,
-                    ),
-                )
-            })?;
+        let _native_install_lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
+            pruning_point,
+            &state,
+            self.db.native_single_directory_quota_path_v1(),
+        )
+        .map_err(|why| {
+            PruningImportError::PruningImportRuleError(kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(
+                why,
+            ))
+        })?;
         // Pin the established target after validation and through the durable batch.
         // Pruning -> PALW -> metadata matches pruning advancement's lock order.
         let pruning_point_read = self.pruning_point_store.read();
@@ -9130,13 +7680,9 @@ impl VirtualStateProcessor {
         let mut store = self.palw_state_v2_store.write();
         let mut class_store = self.palw_class_carriage_store.write();
         for (id, row) in declaration_rows {
-            class_store
-                .insert_batch(&mut batch, id, row)
-                .map_err(context_error)?;
+            class_store.insert_batch(&mut batch, id, row).map_err(context_error)?;
         }
-        let _native_tip_write = store
-            .set_tip_batch_tracked_v1(&mut batch, pruning_point, &state)
-            .map_err(context_error)?;
+        let _native_tip_write = store.set_tip_batch_tracked_v1(&mut batch, pruning_point, &state).map_err(context_error)?;
         // Live claim/owner holds come from the verified state itself, written in the same batch
         // as its tip. Holds already below this imported irreversible clock are not recreated.
         let imported_irreversible_daa = self
@@ -9145,26 +7691,17 @@ impl VirtualStateProcessor {
             .ok()
             .or_else(|| state.last_point().map(|point| point.daa_score))
             .unwrap_or(0);
-        store
-            .archive_staged_cache_leases_state_batch_v1(
-                &mut batch,
-                &state,
-                imported_irreversible_daa,
-            )
-            .map_err(context_error)?;
+        store.archive_staged_cache_leases_state_batch_v1(&mut batch, &state, imported_irreversible_daa).map_err(context_error)?;
         // The same state, also as this node's servable snapshot. Without it a node that just
         // joined by a pruned sync holds the pruning-point state but cannot HAND it on until
         // its own pruning point next advances — so the fix would not propagate past the first
         // hop, and a young network would have exactly one node able to serve.
-        let _native_snapshot_write = store
-            .set_pruning_snapshot_batch_tracked_v1(&mut batch, pruning_point, &state)
-            .map_err(context_error)?;
+        let _native_snapshot_write =
+            store.set_pruning_snapshot_batch_tracked_v1(&mut batch, pruning_point, &state).map_err(context_error)?;
         // The PALW sidecar is installed before IBD replaces the UTXO set. An OS
         // crash between those steps must leave a durable incomplete-import flag.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
-        pruning_meta_write
-            .set_pruning_utxoset_stable_flag(&mut batch, false)
-            .map_err(context_error)?;
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).map_err(context_error)?;
         self.write_pruning_import_barrier(batch);
         drop(pruning_meta_write);
         drop(class_store);
@@ -9194,17 +7731,8 @@ impl VirtualStateProcessor {
         // whether the block it had just rebuilt was the one the peer named. Forty bytes from any
         // peer past the handshake, no operator opt-in, on the blocking pool block processing
         // shares. The store now holds the check and the memo; the answer is the same bytes.
-        let carriage = self
-            .palw_state_v2_store
-            .read()
-            .load_pruning_snapshot_carriage_cached(params, pruning_point)
-            .ok()
-            .flatten()?;
-        carriage
-            .try_clone_v1()
-            .ok()?
-            .into_unreserved_legacy_v1()
-            .ok()
+        let carriage = self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, pruning_point).ok().flatten()?;
+        carriage.try_clone_v1().ok()?.into_unreserved_legacy_v1().ok()
     }
 
     /// **The child of `pruning_point` whose header is allowed to witness the pruning point's own
@@ -9249,15 +7777,12 @@ impl VirtualStateProcessor {
     /// retried.
     fn pruning_point_witness_child(&self, pruning_point: BlockHash) -> Option<BlockHash> {
         let Ok(tip) = self.headers_selected_tip_store.read().get() else {
-            warn!(
-                "no header selected tip yet: refusing to pick a pruning-point witness on anything an attacker can grind"
-            );
+            warn!("no header selected tip yet: refusing to pick a pruning-point witness on anything an attacker can grind");
             return None;
         };
-        let children: Vec<BlockHash> =
-            RelationsStoreReader::get_children(&self.relations_service, pruning_point)
-                .map(|c| c.read().iter().copied().collect())
-                .unwrap_or_default();
+        let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
+            .map(|c| c.read().iter().copied().collect())
+            .unwrap_or_default();
         let mut witness = None;
         for child in children {
             if self.headers_store.get_header(child).is_err() {
@@ -9271,11 +7796,7 @@ impl VirtualStateProcessor {
             }
             // On the selected chain to the tip. `is_chain_ancestor_of` is inclusive, so a child
             // that IS the tip qualifies.
-            if !self
-                .reachability_service
-                .try_is_chain_ancestor_of(child, tip.hash)
-                .unwrap_or(false)
-            {
+            if !self.reachability_service.try_is_chain_ancestor_of(child, tip.hash).unwrap_or(false) {
                 continue;
             }
             match witness {
@@ -9283,9 +7804,7 @@ impl VirtualStateProcessor {
                 Some(seen) => {
                     // Two children of one block cannot both be on one selected chain. If the stores
                     // ever say otherwise, that is corruption, not a choice to make quietly.
-                    warn!(
-                        "pruning point {pruning_point} has two selected-chain children ({seen}, {child}); refusing to witness"
-                    );
+                    warn!("pruning point {pruning_point} has two selected-chain children ({seen}, {child}); refusing to witness");
                     return None;
                 }
             }
@@ -9302,27 +7821,16 @@ impl VirtualStateProcessor {
             return Ok(()); // overlay dormant — the snapshot is empty and nothing reads it
         }
         let unavailable = |where_: &str, e: StoreError| {
-            PruningImportError::PruningPointImportContextUnavailable(
-                pruning_point,
-                format!("legacy overlay {where_}: {e}"),
-            )
+            PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("legacy overlay {where_}: {e}"))
         };
         let require_target = |established: BlockHash| {
             if pruning_point == established {
                 Ok(())
             } else {
-                Err(PruningImportError::ImportedOverlayPruningPointMismatch(
-                    pruning_point,
-                    established,
-                ))
+                Err(PruningImportError::ImportedOverlayPruningPointMismatch(pruning_point, established))
             }
         };
-        require_target(
-            self.pruning_point_store
-                .read()
-                .pruning_point()
-                .map_err(|e| unavailable("pruning-point store", e))?,
-        )?;
+        require_target(self.pruning_point_store.read().pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
 
         // TRUSTLESS GATE — this runs BEFORE the write, and the write is to the LIVE consensus
         // store (all three IBD call sites hand this a live session; the headers-proof one
@@ -9350,17 +7858,9 @@ impl VirtualStateProcessor {
         // fails against the heaviest-child rule with the attacker's planted root demanded.
         let verified_against = self.pruning_point_witness_child(pruning_point);
         if let Some(child) = verified_against {
-            let committed = self
-                .headers_store
-                .get_header(child)
-                .map(|h| h.overlay_commitment_root)
-                .unwrap_or_default();
+            let committed = self.headers_store.get_header(child).map(|h| h.overlay_commitment_root).unwrap_or_default();
             if committed != got {
-                return Err(PruningImportError::ImportedOverlayCommitmentMismatch(
-                    pruning_point,
-                    got,
-                    committed,
-                ));
+                return Err(PruningImportError::ImportedOverlayCommitmentMismatch(pruning_point, got, committed));
             }
         }
         if verified_against.is_none() {
@@ -9371,11 +7871,7 @@ impl VirtualStateProcessor {
                 "[overlay-import] refusing the pruning-point overlay snapshot for {pruning_point}: no header whose selected parent is \
                  the pruning point is available to verify its commitment {got} against"
             );
-            return Err(PruningImportError::ImportedOverlayCommitmentMismatch(
-                pruning_point,
-                got,
-                Hash64::default(),
-            ));
+            return Err(PruningImportError::ImportedOverlayCommitmentMismatch(pruning_point, got, Hash64::default()));
         }
         info!(
             "Importing the overlay snapshot of the pruning point {} ({} bonds, {} window blocks, reserve {})",
@@ -9387,18 +7883,9 @@ impl VirtualStateProcessor {
         // Historic monetary state is installed only for the authorized import target.
         // Recheck and hold that target before acquiring any monetary store write lock.
         let pruning_point_read = self.pruning_point_store.read();
-        require_target(
-            pruning_point_read
-                .pruning_point()
-                .map_err(|e| unavailable("pruning-point store", e))?,
-        )?;
-        let mismatch = |what: String| {
-            PruningImportError::ImportedOverlayExistingStateMismatch(pruning_point, what)
-        };
-        let anchor_daa = self
-            .headers_store
-            .get_daa_score(pruning_point)
-            .map_err(|e| unavailable("anchor header", e))?;
+        require_target(pruning_point_read.pruning_point().map_err(|e| unavailable("pruning-point store", e))?)?;
+        let mismatch = |what: String| PruningImportError::ImportedOverlayExistingStateMismatch(pruning_point, what);
+        let anchor_daa = self.headers_store.get_daa_score(pruning_point).map_err(|e| unavailable("anchor header", e))?;
         let mut canonical = snapshot;
         canonical.canonicalize();
         let mut bonds_write = self.stake_bonds_store.write();
@@ -9411,26 +7898,16 @@ impl VirtualStateProcessor {
             if !seen_bonds.insert((rec.bond_outpoint.transaction_id, rec.bond_outpoint.index)) {
                 return Err(mismatch(format!("duplicate bond {}", rec.bond_outpoint)));
             }
-            match bonds_write
-                .get(&rec.bond_outpoint)
-                .optional()
-                .map_err(|e| unavailable("bond row", e))?
-            {
+            match bonds_write.get(&rec.bond_outpoint).optional().map_err(|e| unavailable("bond row", e))? {
                 None => new_bonds.push(rec.clone()),
                 Some(existing) => {
                     // A historic snapshot omits later canonical mutations; keep
                     // those mutations when the as-of-anchor facts agree.
                     let mut at_anchor = (*existing).clone();
-                    if at_anchor
-                        .slashed_at_daa_score
-                        .is_some_and(|d| d > anchor_daa)
-                    {
+                    if at_anchor.slashed_at_daa_score.is_some_and(|d| d > anchor_daa) {
                         at_anchor.slashed_at_daa_score = None;
                     }
-                    if at_anchor
-                        .unbond_request_daa_score
-                        .is_some_and(|d| d > anchor_daa)
-                    {
+                    if at_anchor.unbond_request_daa_score.is_some_and(|d| d > anchor_daa) {
                         at_anchor.unbond_request_daa_score = None;
                     }
                     at_anchor.status = effective_bond_status(&at_anchor, anchor_daa);
@@ -9440,20 +7917,13 @@ impl VirtualStateProcessor {
                 }
             }
         }
-        let insert_reserve = match self
-            .reserve_balance_store
-            .get(pruning_point)
-            .optional()
-            .map_err(|e| unavailable("reserve row", e))?
-        {
-            None => canonical.reserve_balance > 0,
-            Some(existing) if existing == canonical.reserve_balance => false,
-            Some(_) => return Err(mismatch("reserve balance".into())),
-        };
-        if let Some(existing) = overlay_write
-            .get()
-            .optional()
-            .map_err(|e| unavailable("snapshot", e))?
+        let insert_reserve =
+            match self.reserve_balance_store.get(pruning_point).optional().map_err(|e| unavailable("reserve row", e))? {
+                None => canonical.reserve_balance > 0,
+                Some(existing) if existing == canonical.reserve_balance => false,
+                Some(_) => return Err(mismatch("reserve balance".into())),
+            };
+        if let Some(existing) = overlay_write.get().optional().map_err(|e| unavailable("snapshot", e))?
             && existing.pruning_point == pruning_point
             && existing.snapshot.commitment_preimage() != canonical.commitment_preimage()
         {
@@ -9461,30 +7931,17 @@ impl VirtualStateProcessor {
         }
         let mut batch = WriteBatch::default();
         for rec in new_bonds {
-            bonds_write
-                .insert_batch(&mut batch, rec.bond_outpoint, std::sync::Arc::new(rec))
-                .unwrap();
+            bonds_write.insert_batch(&mut batch, rec.bond_outpoint, std::sync::Arc::new(rec)).unwrap();
         }
         if insert_reserve {
-            self.reserve_balance_store
-                .insert_batch(&mut batch, pruning_point, canonical.reserve_balance)
-                .unwrap();
+            self.reserve_balance_store.insert_batch(&mut batch, pruning_point, canonical.reserve_balance).unwrap();
         }
-        let overlay_commit = overlay_write
-            .set_batch_tracked(
-                &mut batch,
-                PruningPointOverlaySnapshot {
-                    pruning_point,
-                    snapshot: canonical,
-                },
-            )
-            .unwrap();
+        let overlay_commit =
+            overlay_write.set_batch_tracked(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot: canonical }).unwrap();
         // Legacy monetary/bond rights are another sidecar of the same import.
         // Mark recovery incomplete in its batch, even if no UTXOs were cleared yet.
         let mut pruning_meta_write = self.pruning_meta_stores.write();
-        pruning_meta_write
-            .set_pruning_utxoset_stable_flag(&mut batch, false)
-            .unwrap();
+        pruning_meta_write.set_pruning_utxoset_stable_flag(&mut batch, false).unwrap();
         self.write_pruning_import_barrier(batch);
         overlay_commit.committed();
         drop(pruning_meta_write);
@@ -9540,38 +7997,22 @@ impl VirtualStateProcessor {
     ///
     /// Must run BEFORE `prune` deletes the below-pruning-point delta rows — the walk back from the
     /// tip is what needs them — which is why the call site sits beside the overlay one.
-    pub fn capture_pruning_point_palw_state(
-        &self,
-        pruning_point: BlockHash,
-    ) -> Result<(), PalwPruningCaptureFaultV1> {
+    pub fn capture_pruning_point_palw_state(&self, pruning_point: BlockHash) -> Result<(), PalwPruningCaptureFaultV1> {
         self.capture_pruning_point_palw_state_checked_v1(pruning_point)
     }
 
-    pub fn capture_pruning_point_overlay_snapshot(
-        &self,
-        pruning_point: BlockHash,
-    ) -> BlockProcessResult<()> {
+    pub fn capture_pruning_point_overlay_snapshot(&self, pruning_point: BlockHash) -> BlockProcessResult<()> {
         if self.dns_params.is_none() {
             return Ok(());
         }
         let pp_daa = self.headers_store.get_daa_score(pruning_point).unwrap();
-        let view = ActiveBondView::from_records(
-            self.bonds_as_of(pp_daa)
-                .into_iter()
-                .map(|r| (r.bond_outpoint, r)),
-        );
+        let view = ActiveBondView::from_records(self.bonds_as_of(pp_daa).into_iter().map(|r| (r.bond_outpoint, r)));
         let snapshot = self.compute_overlay_snapshot(pruning_point, &view)?;
         let mut batch = WriteBatch::default();
         let overlay_commit = self
             .pruning_overlay_snapshot_store
             .write()
-            .set_batch_tracked(
-                &mut batch,
-                PruningPointOverlaySnapshot {
-                    pruning_point,
-                    snapshot,
-                },
-            )
+            .set_batch_tracked(&mut batch, PruningPointOverlaySnapshot { pruning_point, snapshot })
             .unwrap();
         self.db.write(batch).unwrap();
         overlay_commit.committed();
@@ -9589,23 +8030,16 @@ impl VirtualStateProcessor {
         // finality_point.finality_point), meaning this function can only detect finality violations
         // in depth of 2*finality_depth, and can give false negatives for smaller finality violations.
         let current_pp = self.pruning_point_store.read().pruning_point().unwrap();
-        let vf =
-            self.virtual_finality_point(&self.lkg_virtual_state.load().ghostdag_data, current_pp);
-        let vff = self
-            .depth_manager
-            .calc_finality_point(&self.ghostdag_store.get_data(vf).unwrap(), current_pp);
+        let vf = self.virtual_finality_point(&self.lkg_virtual_state.load().ghostdag_data, current_pp);
+        let vff = self.depth_manager.calc_finality_point(&self.ghostdag_store.get_data(vf).unwrap(), current_pp);
 
-        let last_known_pp = pp_list.iter().rev().find(|pp| {
-            match self.statuses_store.read().get(pp.hash).optional().unwrap() {
-                Some(status) => status.is_valid(),
-                None => false,
-            }
+        let last_known_pp = pp_list.iter().rev().find(|pp| match self.statuses_store.read().get(pp.hash).optional().unwrap() {
+            Some(status) => status.is_valid(),
+            None => false,
         });
 
         if let Some(last_known_pp) = last_known_pp {
-            !self
-                .reachability_service
-                .is_chain_ancestor_of(vff, last_known_pp.hash)
+            !self.reachability_service.is_chain_ancestor_of(vff, last_known_pp.hash)
         } else {
             // If no pruning point is known, there's definitely a finality violation
             // (normally at least genesis should be known).
@@ -9644,9 +8078,7 @@ enum MergesetIncreaseResult {
 /// Total on purpose — no catch-all — so a new object kind has to decide what it is called here
 /// rather than disappear into "lifecycle object", which is exactly the shape that made a live
 /// court drill unreadable on the panel side.
-fn palw_object_kind_name(
-    object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-) -> &'static str {
+fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> &'static str {
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
     match object {
         O::CourtFamilyMaterialV1 { .. } => "CourtFamilyMaterialV1",
@@ -9819,9 +8251,7 @@ fn palw_object_kind_name(
 /// ADR-0109 Decision 1: the index row of `entry` if its script is an `EVM_DEPOSIT_LOCK`, decided
 /// with the parser the claim's validity uses (`validate_one_deposit_claim`) — so what the index
 /// calls a lock and what the chain calls one cannot diverge.
-pub(super) fn deposit_lock_record(
-    entry: &UtxoEntry,
-) -> Option<kaspa_consensus_core::evm::EvmDepositLockRecord> {
+pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_core::evm::EvmDepositLockRecord> {
     let lock = kaspa_txscript::script_class::parse_evm_deposit_lock(&entry.script_public_key)?;
     Some(kaspa_consensus_core::evm::EvmDepositLockRecord {
         evm_address: kaspa_consensus_core::evm::EvmAddress::from_bytes(lock.evm_address),
@@ -9843,10 +8273,7 @@ pub(super) struct PalwMempoolBondGate {
     pub(super) burns: std::collections::HashMap<TransactionOutpoint, u64>,
     /// **G14 lane escrow-rfc08 round 2: the funded-escrow locks at the tip** (rooted rows only — a mempool has no mergeset, so no
     /// provisional lock; a chained spend of a not-yet-accepted TFO1 output is refused at the merge by the provisional lock).
-    pub(super) case_source_parent: Option<(
-        BlockHash,
-        Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
-    )>,
+    pub(super) case_source_parent: Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>,
     pub(super) escrow: super::utxo_validation::PalwEscrowSpendLocksV1,
 }
 
@@ -9855,10 +8282,7 @@ pub(super) fn first_locked_input(
     tx: &Transaction,
     locked: &std::collections::HashSet<TransactionOutpoint>,
 ) -> Option<TransactionOutpoint> {
-    tx.inputs
-        .iter()
-        .map(|input| input.previous_outpoint)
-        .find(|outpoint| locked.contains(outpoint))
+    tx.inputs.iter().map(|input| input.previous_outpoint).find(|outpoint| locked.contains(outpoint))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -9881,37 +8305,23 @@ struct ExecV2DagViewV1<'a> {
 }
 
 impl kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2DagV1 for ExecV2DagViewV1<'_> {
-    fn node(
-        &self,
-        hash: &BlockHash,
-    ) -> Option<kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2NodeV1> {
+    fn node(&self, hash: &BlockHash) -> Option<kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2NodeV1> {
         use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_exec_v2_anchor::{PalwExecV2MemberKeyV1, PalwExecV2NodeV1};
         use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
         let p = self.processor;
         let header = p.headers_store.get_header(*hash).ok()?;
-        let chain = PalwExecV2NodeV1 {
-            is_lane: false,
-            legacy: false,
-            key: None,
-            anchor_span: 0,
-            anchor_on_chain: true,
-            parents: Vec::new(),
-        };
-        let is_lane = header.pow_algo_id
-            == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
-            && p.palw_execution_lane
-                .is_some_and(|lane| lane.activation.is_active(header.daa_score));
+        let chain =
+            PalwExecV2NodeV1 { is_lane: false, legacy: false, key: None, anchor_span: 0, anchor_on_chain: true, parents: Vec::new() };
+        let is_lane = header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1
+            && p.palw_execution_lane.is_some_and(|lane| lane.activation.is_active(header.daa_score));
         if !is_lane {
             return Some(chain);
         }
         let anchor = p.ghostdag_store.get_selected_parent(*hash).ok()?;
         let anchor_daa = p.headers_store.get_daa_score(anchor).ok()?;
         let anchor_span = palw_execution_span_v1(anchor_daa, self.span_daa);
-        let anchor_on_chain = p
-            .reachability_service
-            .try_is_chain_ancestor_of(anchor, self.selected_parent)
-            .unwrap_or(false);
+        let anchor_on_chain = p.reachability_service.try_is_chain_ancestor_of(anchor, self.selected_parent).unwrap_or(false);
         let parents = header.direct_parents().to_vec();
         let lane_node = |legacy: bool, key: Option<PalwExecV2MemberKeyV1>| PalwExecV2NodeV1 {
             is_lane: true,
@@ -9928,14 +8338,10 @@ impl kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2DagV1 for ExecV2DagVie
             return Some(lane_node(true, None));
         };
         let key = match (&envelope.tx_permit, &envelope.work_slice) {
-            (Some(permit), None) => Some(PalwExecV2MemberKeyV1::Tx {
-                round: permit.round,
-                permit_index: permit.permit_index,
-            }),
-            (None, Some(slice)) => Some(PalwExecV2MemberKeyV1::Slice {
-                root_claim_id: slice.root_claim_id,
-                slice_index: slice.slice_index,
-            }),
+            (Some(permit), None) => Some(PalwExecV2MemberKeyV1::Tx { round: permit.round, permit_index: permit.permit_index }),
+            (None, Some(slice)) => {
+                Some(PalwExecV2MemberKeyV1::Slice { root_claim_id: slice.root_claim_id, slice_index: slice.slice_index })
+            }
             _ => None,
         };
         Some(lane_node(false, key))
@@ -9945,8 +8351,7 @@ impl kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2DagV1 for ExecV2DagVie
 impl VirtualStateProcessor {
     /// **RFC-0008 v2: is the EXEC payload in force for a block at `daa_score`?**
     pub(super) fn palw_exec_v2_active_at(&self, daa_score: u64) -> bool {
-        self.palw_exec_v2
-            .is_some_and(|fence| fence.is_active(daa_score))
+        self.palw_exec_v2.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **RFC-0008 v2: the closure an anchor with `heads` covers for a block at `daa_score` whose selected parent is
@@ -9962,16 +8367,12 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1,
     > {
         use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
-        let lane = self.palw_execution_lane_at(daa_score).ok_or(
-            kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1::BeforeFence,
-        )?;
+        let lane = self
+            .palw_execution_lane_at(daa_score)
+            .ok_or(kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorErrorV1::BeforeFence)?;
         let span_daa = lane.schedule_span_daa_at(daa_score);
         let span_now = palw_execution_span_v1(daa_score, span_daa);
-        let view = ExecV2DagViewV1 {
-            processor: self,
-            selected_parent,
-            span_daa,
-        };
+        let view = ExecV2DagViewV1 { processor: self, selected_parent, span_daa };
         kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_closure_v1(
             &view,
             heads,
@@ -10017,24 +8418,14 @@ impl VirtualStateProcessor {
         }
         // No PALW state means no lane to cover: the anchor is refused rather than ignored.
         let state = state.ok_or(PalwExecV2AnchorErrorV1::BeforeFence)?;
-        let closure = self.palw_exec_v2_closure(
-            state,
-            mergeset_data.selected_parent,
-            header.daa_score,
-            &anchor.heads,
-        )?;
+        let closure = self.palw_exec_v2_closure(state, mergeset_data.selected_parent, header.daa_score, &anchor.heads)?;
         palw_exec_v2_anchor_verify(&anchor, &closure)?;
         let mut augmented = (*mergeset_data).clone();
         {
-            let reds = kaspa_consensus_core::blockhash::BlockHashes::make_mut(
-                &mut augmented.mergeset_reds,
-            );
+            let reds = kaspa_consensus_core::blockhash::BlockHashes::make_mut(&mut augmented.mergeset_reds);
             reds.extend(closure.members.iter().map(|member| member.hash));
         }
-        Ok((
-            std::sync::Arc::new(augmented),
-            Some(PalwExecV2ResolvedV1 { closure, anchor }),
-        ))
+        Ok((std::sync::Arc::new(augmented), Some(PalwExecV2ResolvedV1 { closure, anchor })))
     }
 
     /// **RFC-0008 v2: the mergeset's non-DAA set with the covered EXEC blocks in it.** The window manager stores the set for the DAG's
@@ -10043,12 +8434,7 @@ impl VirtualStateProcessor {
     ///
     /// Below the fence (and where it is not armed) this is the stored set, untouched — the read of the build before RFC-0008 v2 (the
     /// X8R review: gated on the block's own DAA, not on the fence being armed, so an armed node agrees with an unarmed one below it).
-    pub(super) fn palw_exec_v2_non_daa(
-        &self,
-        stored: &BlockHashSet,
-        ghostdag_data: &GhostdagData,
-        daa_score: u64,
-    ) -> BlockHashSet {
+    pub(super) fn palw_exec_v2_non_daa(&self, stored: &BlockHashSet, ghostdag_data: &GhostdagData, daa_score: u64) -> BlockHashSet {
         if !self.palw_exec_v2_active_at(daa_score) {
             return stored.clone();
         }
@@ -10070,11 +8456,7 @@ impl VirtualStateProcessor {
         use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2MemberKeyV1;
         use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
-        let span_daa = self
-            .palw_execution_lane_at(daa_score)
-            .map(|lane| lane.schedule_span_daa_at(daa_score))
-            .unwrap_or(1)
-            .max(1);
+        let span_daa = self.palw_execution_lane_at(daa_score).map(|lane| lane.schedule_span_daa_at(daa_score)).unwrap_or(1).max(1);
         let anchor_span = |hash: BlockHash| {
             self.ghostdag_store
                 .get_selected_parent(hash)
@@ -10095,23 +8477,16 @@ impl VirtualStateProcessor {
                 continue;
             };
             if let Some(slice) = envelope.work_slice {
-                slices.push(
-                    kaspa_consensus_core::palw_work_slice_v2::PalwExecV2CoveredSliceV1 {
-                        carrier: member.hash,
-                        slice,
-                        pubkey: envelope.pubkey,
-                    },
-                );
+                slices.push(kaspa_consensus_core::palw_work_slice_v2::PalwExecV2CoveredSliceV1 {
+                    carrier: member.hash,
+                    slice,
+                    pubkey: envelope.pubkey,
+                });
             }
         }
         (
             kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1 {
-                members: resolved
-                    .closure
-                    .members
-                    .iter()
-                    .map(|member| (member.hash, anchor_span(member.hash)))
-                    .collect(),
+                members: resolved.closure.members.iter().map(|member| (member.hash, anchor_span(member.hash))).collect(),
                 span_now: palw_execution_span_v1(daa_score, span_daa),
             },
             slices,
@@ -10129,12 +8504,7 @@ impl VirtualStateProcessor {
             .iter()
             .copied()
             .filter(|tip| self.ghostdag_manager.is_round_block(*tip))
-            .filter_map(|tip| {
-                self.headers_store
-                    .get_header(tip)
-                    .ok()
-                    .map(|header| (header.timestamp, tip))
-            })
+            .filter_map(|tip| self.headers_store.get_header(tip).ok().map(|header| (header.timestamp, tip)))
             .collect();
         tips.sort_by_key(|(timestamp, tip)| std::cmp::Reverse((*timestamp, *tip)));
         tips
@@ -10155,16 +8525,11 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         let mut heads: Vec<BlockHash> = Vec::new();
-        for (_, tip) in self
-            .palw_exec_v2_lane_tips()
-            .into_iter()
-            .take(4 * PALW_EXEC_V2_MAX_HEADS)
-        {
+        for (_, tip) in self.palw_exec_v2_lane_tips().into_iter().take(4 * PALW_EXEC_V2_MAX_HEADS) {
             if heads.len() >= PALW_EXEC_V2_MAX_HEADS {
                 break;
             }
-            let Ok(alone) = self.palw_exec_v2_closure(state, selected_parent, daa_score, &[tip])
-            else {
+            let Ok(alone) = self.palw_exec_v2_closure(state, selected_parent, daa_score, &[tip]) else {
                 continue;
             };
             if alone.members.is_empty() {
@@ -10173,9 +8538,7 @@ impl VirtualStateProcessor {
             let mut tentative = heads.clone();
             tentative.push(tip);
             match self.palw_exec_v2_closure(state, selected_parent, daa_score, &tentative) {
-                Ok(union) if union.members.len() <= lane.max_per_mergeset as usize => {
-                    heads = tentative
-                }
+                Ok(union) if union.members.len() <= lane.max_per_mergeset as usize => heads = tentative,
                 _ => {}
             }
         }
@@ -10191,24 +8554,16 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         daa_score: u64,
-    ) -> Option<(
-        GhostdagData,
-        kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1,
-    )> {
+    ) -> Option<(GhostdagData, kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1)> {
         let heads = self.palw_exec_v2_pick_heads(state, ghostdag_data.selected_parent, daa_score);
         if heads.is_empty() {
             return None;
         }
-        let closure = self
-            .palw_exec_v2_closure(state, ghostdag_data.selected_parent, daa_score, &heads)
-            .ok()?;
+        let closure = self.palw_exec_v2_closure(state, ghostdag_data.selected_parent, daa_score, &heads).ok()?;
         if closure.members.is_empty() {
             return None;
         }
-        let anchor = kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1::of_closure(
-            &heads, &closure,
-        )
-        .ok()?;
+        let anchor = kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2AnchorV1::of_closure(&heads, &closure).ok()?;
         let mut augmented = ghostdag_data.clone();
         kaspa_consensus_core::blockhash::BlockHashes::make_mut(&mut augmented.mergeset_reds)
             .extend(closure.members.iter().map(|member| member.hash));
@@ -10226,8 +8581,7 @@ impl VirtualStateProcessor {
         if !self.palw_exec_v2_active_at(daa_score) {
             return None;
         }
-        let mut health =
-            kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2LaneHealthV1::default();
+        let mut health = kaspa_consensus_core::palw_exec_v2_anchor::PalwExecV2LaneHealthV1::default();
         if let Some((_, head)) = self.palw_exec_v2_lane_tips().first().copied() {
             health.latest_head = Some(head);
             if let Ok(closure) = self.palw_exec_v2_closure(state, sink, daa_score, &[head]) {

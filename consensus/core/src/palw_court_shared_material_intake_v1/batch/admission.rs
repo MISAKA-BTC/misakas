@@ -1,7 +1,7 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
+use super::numerical_verification::NumericalBatchReplayBudgetV1;
 use super::{BatchResponsePositionV1, MaterialIntakeScheduleV1, PART, Stage};
 use super::{constraint_stop::ConstraintStopBatchOperandsV1, native_ranges::NumericalBatchEnvelopeV1};
-use super::numerical_verification::NumericalBatchReplayBudgetV1;
 use crate::{
     Hash64,
     palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1, MAX_BATCH_PARTS_V1, MAX_BATCH_RANGES_V1},
@@ -83,14 +83,25 @@ impl borsh::BorshSerialize for BatchRelativeGraphV1<'_> {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         let plan = self.plan;
         let a = plan.window.claim_accepted_daa;
-        let relative = |daa: u64| daa.checked_sub(a).ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::InvalidData, "Batch packet predates its original",
-        ));
-        let rank = |packet| self.ranks.get(packet).copied().ok_or_else(|| std::io::Error::new(
-            std::io::ErrorKind::InvalidData, "Batch funding edge has no relative node",
-        ));
-        (plan.claim, rank(&plan.terminal)?, plan.recovery_daa, relative(plan.window.collect_until_daa)?,
-            self.storage.sompi_per_byte, self.storage.draft_ttl_daa).serialize(writer)?;
+        let relative = |daa: u64| {
+            daa.checked_sub(a)
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Batch packet predates its original"))
+        };
+        let rank = |packet| {
+            self.ranks
+                .get(packet)
+                .copied()
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "Batch funding edge has no relative node"))
+        };
+        (
+            plan.claim,
+            rank(&plan.terminal)?,
+            plan.recovery_daa,
+            relative(plan.window.collect_until_daa)?,
+            self.storage.sompi_per_byte,
+            self.storage.draft_ttl_daa,
+        )
+            .serialize(writer)?;
         (plan.demands.len() as u64).serialize(writer)?;
         for demand in plan.demands {
             (demand.ordinal, demand.range_maximums, rank(&demand.verification)?).serialize(writer)?;
@@ -98,7 +109,10 @@ impl borsh::BorshSerialize for BatchRelativeGraphV1<'_> {
         (self.nodes.len() as u64).serialize(writer)?;
         for node in self.nodes {
             let packet = &node.packet;
-            let retained = plan.retained_controls.binary_search_by_key(&packet.id, |control| control.packet).ok()
+            let retained = plan
+                .retained_controls
+                .binary_search_by_key(&packet.id, |control| control.packet)
+                .ok()
                 .map_or(0, |index| plan.retained_controls[index].payload_bytes);
             (relative(packet.release_daa)?, relative(packet.service_before)?, packet.cost, retained).serialize(writer)?;
             (node.predecessors.len() as u64).serialize(writer)?;
@@ -232,8 +246,7 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         parts: take_service_window_v1(&mut cursor, timing.parts_daa, before)?,
         finish: take_service_window_v1(&mut cursor, timing.finish_daa, before)?,
     };
-    let expires = storage.draft_expires_v1(windows.begin.start, hard, original.terms.material_until_daa)
-        .map_err(|_| Window)?;
+    let expires = storage.draft_expires_v1(windows.begin.start, hard, original.terms.material_until_daa).map_err(|_| Window)?;
     if windows.finish.end > expires {
         return Err(Window);
     }
@@ -259,8 +272,11 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     q.vec_v1::<[u8; 64]>(2).map_err(LocalResource)?;
     let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(LocalResource)?;
     let mut demands = Vec::with_capacity(demand_capacity);
-    demands.extend(envelope.demand_ranges_v1().enumerate().map(|(ordinal, range_maximums)| {
-        MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification }
+    demands.extend(envelope.demand_ranges_v1().enumerate().map(|(ordinal, range_maximums)| MaximumBatchDemandV1 {
+        ordinal: ordinal as u64,
+        range_maximums,
+        predecessors: &[],
+        verification,
     }));
     let mut graph = Vec::with_capacity(if stop.is_some() { 4 } else { 2 });
     graph.push(CausalServicePacketV1 {
@@ -335,7 +351,8 @@ impl BatchAdmissionV1<'_> {
         {
             return Err(BatchCourtErrorV1::Window);
         }
-        let (quote, graph) = self.reserve_with_v1(&mut candidate.state.book, graph, storage, cost, reserve_native_requests_v1, windows)?;
+        let (quote, graph) =
+            self.reserve_with_v1(&mut candidate.state.book, graph, storage, cost, reserve_native_requests_v1, windows)?;
         let (graph, _graph_lease) = graph.into_parts_v1();
         for node in graph {
             binding.packet_ids.insert(node.packet.id);
@@ -491,7 +508,8 @@ impl BatchAdmissionV1<'_> {
         let relative_graph_id = crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/batch-funding-graph/v1",
             &BatchRelativeGraphV1 { plan: self, nodes: &graph, ranks: &ranks, storage },
-        ).map_err(|_| CaseGraph)?;
+        )
+        .map_err(|_| CaseGraph)?;
         drop(ranks);
         let service = graph.iter().try_fold(ServiceCost::default(), |sum, node| {
             let cost = node.packet.cost;
@@ -655,7 +673,10 @@ mod tests {
         ));
         assert_eq!(book, empty);
         let capped = BatchAdmissionV1 { maximum_packets: 6, ..plan };
-        assert!(matches!(capped.reserve_v1(&mut book, graph(3_129), schedule, |_, bytes| Ok(cost(bytes))), Err(BatchCourtErrorV1::CaseGraph)));
+        assert!(matches!(
+            capped.reserve_v1(&mut book, graph(3_129), schedule, |_, bytes| Ok(cost(bytes))),
+            Err(BatchCourtErrorV1::CaseGraph)
+        ));
         assert_eq!(book, empty);
         for invalid in [terminal, fallback_verification] {
             let demands = [MaximumBatchDemandV1 { verification: invalid, ..demands[0] }];
@@ -670,10 +691,7 @@ mod tests {
             BatchDeliveryV1::Open { .. } => Ok(ServiceCost { work: 0, ..cost(bytes) }),
             _ => Ok(cost(bytes)),
         };
-        assert!(matches!(
-            plan.reserve_v1(&mut book, graph(3_129), schedule, bad_open),
-            Err(BatchCourtErrorV1::DeliveryCost)
-        ));
+        assert!(matches!(plan.reserve_v1(&mut book, graph(3_129), schedule, bad_open), Err(BatchCourtErrorV1::DeliveryCost)));
         assert_eq!(book, empty);
         let project = |finish_work| {
             move |delivery, bytes| match delivery {
@@ -695,11 +713,15 @@ mod tests {
             crate::palw_court_shared_tir_stream_v1::stream_digest(
                 b"misaka-palw/batch-funding-graph/v1",
                 &BatchRelativeGraphV1 { plan, nodes: graph, ranks: &ranks, storage: schedule },
-            ).unwrap()
+            )
+            .unwrap()
         };
         assert_eq!(quote.relative_graph_id, graph_id(&plan, &graph));
         let mut shifted = graph.to_vec();
-        let rename = |mut packet: [u8; 64]| { packet[0] ^= 1; packet };
+        let rename = |mut packet: [u8; 64]| {
+            packet[0] ^= 1;
+            packet
+        };
         for node in &mut shifted {
             node.packet.release_daa += 100;
             node.packet.service_before += 100;

@@ -32,9 +32,9 @@
 //! No cryptographic computation proof of any kind is used (PRINCIPLES §8): these are deadlines and prices for public answers, local
 //! recomputation and a deterministic court.
 
+use crate::Hash64;
 use crate::palw_rendering_resources_v1::{PalwRenderingResourcePricesV1, PalwStagedPublicCourtConfigV1};
 use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
-use crate::Hash64;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 /// The clock / cost-unit format's version.
@@ -135,8 +135,7 @@ pub fn batch_public_objection_refused_v1(
             allowed: PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1,
         });
     };
-    if batch_span_fits_only_retired_localization_v1(public_span) || batch_span_fits_only_retired_localization_v1(localization_daa)
-    {
+    if batch_span_fits_only_retired_localization_v1(public_span) || batch_span_fits_only_retired_localization_v1(localization_daa) {
         return Some(BatchPublicObjectionRefusalV1::Deadline {
             required: public_span,
             allowed: PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1,
@@ -474,11 +473,7 @@ fn product(a: u64, b: u64) -> Result<u64, String> {
     a.checked_mul(b).ok_or_else(|| "TIR frame clock product overflow".into())
 }
 fn height(count: u64) -> u64 {
-    if count <= 1 {
-        0
-    } else {
-        u64::from(64 - (count - 1).leading_zeros())
-    }
+    if count <= 1 { 0 } else { u64::from(64 - (count - 1).leading_zeros()) }
 }
 /// Turns of a node descent of a tree of `count` leaves, `DEPTH` levels per node request, plus the leaf level.
 fn descent(count: u64) -> u64 {
@@ -889,7 +884,7 @@ mod tests {
     #[test]
     fn sequential_filing_v2_flows_through_real_plan_and_keeps_door_cap() {
         use crate::palw_tir_public_allocation_v1::{
-            derive_tir_public_allocation_v1, PalwTirPublicAllocationMissingV1, PalwTirPublicAllocationQuoteV1,
+            PalwTirPublicAllocationMissingV1, PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_v1,
         };
         let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
         let frame = &fx.frame;
@@ -937,9 +932,11 @@ mod tests {
 
     #[test]
     fn the_cost_record_list_is_empty_and_refuses_every_network() {
-        assert!(PALW_TIR_FRAME_COST_RECORDS_V1
-            .iter()
-            .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash));
+        assert!(
+            PALW_TIR_FRAME_COST_RECORDS_V1
+                .iter()
+                .all(|r| r.activation_daa == 18_400 && r.genesis == crate::config::genesis::PALW_T12_GENESIS.hash)
+        );
         let cost = palw_tir_frame_test_only_cost_v1();
         cost.check_v1().expect("the test-only config is well formed");
         assert_eq!(

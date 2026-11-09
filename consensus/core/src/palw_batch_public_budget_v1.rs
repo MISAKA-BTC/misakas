@@ -193,10 +193,7 @@ pub fn public_supply_failure_outcome_v1(
 /// Canonical shared-request identity. The owner, the queue, and the relayer are not inputs.
 pub fn shared_canonical_request_id_v1(claim: Hash64, allocation: Hash64, source_id: Hash64, ordinal: u64) -> Hash64 {
     let bytes = borsh::to_vec(&(1u16, claim, allocation, source_id, ordinal)).expect("canonical shared request id");
-    let digest = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(b"misaka-palw/public-shared-reservation/request/v1")
-        .hash(&bytes);
+    let digest = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/public-shared-reservation/request/v1").hash(&bytes);
     Hash64::from_bytes(digest.as_bytes().try_into().expect("64-byte digest"))
 }
 
@@ -347,10 +344,11 @@ impl SharedPublicReservationBookV1 {
         let packet = opportunity_packet(opportunity);
         self.opportunities.reserve(std::slice::from_ref(&packet), DISPUTE_WINDOW_DAA).map_err(reservation_refusal)?;
         let fresh = !self.claims.contains_key(&claim);
-        self.claims.entry(claim).or_insert_with(|| SharedClaimHoldV1 { request_id, owners: BTreeMap::new(), graph: None }).owners.insert(
-            owner,
-            SharedOwnerSeatV1 { opportunity, ledger },
-        );
+        self.claims
+            .entry(claim)
+            .or_insert_with(|| SharedClaimHoldV1 { request_id, owners: BTreeMap::new(), graph: None })
+            .owners
+            .insert(owner, SharedOwnerSeatV1 { opportunity, ledger });
         Ok(if fresh { SharedReservationEffectV1::Opened } else { SharedReservationEffectV1::Coalesced })
     }
 
@@ -361,7 +359,8 @@ impl SharedPublicReservationBookV1 {
             return Err(Intake);
         }
         let seat = self.claims.get_mut(&claim).and_then(|held| held.owners.get_mut(owner)).ok_or(Owner)?;
-        let next = seat.ledger.reserved_bytes.checked_add(bytes).filter(|reserved| *reserved <= seat.ledger.budget_bytes).ok_or(Intake)?;
+        let next =
+            seat.ledger.reserved_bytes.checked_add(bytes).filter(|reserved| *reserved <= seat.ledger.budget_bytes).ok_or(Intake)?;
         let mut ledger = seat.ledger.clone();
         ledger.reserved_bytes = next;
         ledger.check(&PalwStagedCourtKeyV1::CourtMaterialLedger(claim, *owner)).map_err(|_| Intake)?;
@@ -415,7 +414,8 @@ impl SharedPublicReservationBookV1 {
         for id in normalized.keys() {
             self.graph_slots.insert(*id, claim);
         }
-        self.claims.get_mut(&claim).ok_or(Owner)?.graph = Some(ReservedGraphV1 { slots: normalized, recovery_daa, required_daa: required });
+        self.claims.get_mut(&claim).ok_or(Owner)?.graph =
+            Some(ReservedGraphV1 { slots: normalized, recovery_daa, required_daa: required });
         Ok(required)
     }
 }
@@ -606,18 +606,14 @@ mod tests {
         let seat_a = shared_party_opportunity_id_v1(claim, allocation, source, &owner_a);
         let seat_b = shared_party_opportunity_id_v1(claim, allocation, source, &owner_b);
         assert_ne!(seat_a, seat_b);
-        assert!(shared_request_coalesce_keeps_opportunities_v1(request, request, &owner_a, &owner_b, allocation, source, claim).is_ok());
+        assert!(
+            shared_request_coalesce_keeps_opportunities_v1(request, request, &owner_a, &owner_b, allocation, source, claim).is_ok()
+        );
 
         let mut book = SharedPublicReservationBookV1::new();
         let budget = 32;
-        assert_eq!(
-            book.admit_owner_v1(claim, request, owner_a, allocation, source, budget),
-            Ok(SharedReservationEffectV1::Opened)
-        );
-        assert_eq!(
-            book.admit_owner_v1(claim, request, owner_b, allocation, source, budget),
-            Ok(SharedReservationEffectV1::Coalesced)
-        );
+        assert_eq!(book.admit_owner_v1(claim, request, owner_a, allocation, source, budget), Ok(SharedReservationEffectV1::Opened));
+        assert_eq!(book.admit_owner_v1(claim, request, owner_b, allocation, source, budget), Ok(SharedReservationEffectV1::Coalesced));
         assert_eq!(book.admit_owner_v1(claim, request, owner_a, allocation, source, budget), Ok(SharedReservationEffectV1::Coalesced));
         let held = &book.claims[&claim];
         assert_eq!(held.request_id, request);
@@ -682,12 +678,10 @@ mod tests {
         let held = book.clone();
         let other = shared_canonical_request_id_v1(claim, allocation, source, 1);
         assert!(shared_request_coalesce_keeps_opportunities_v1(request, other, &owner, &bond(2), allocation, source, claim).is_err());
-        assert_eq!(
-            book.admit_owner_v1(claim, other, bond(2), allocation, source, 8),
-            Err(SharedReservationRefusalV1::ForeignRequest)
-        );
+        assert_eq!(book.admit_owner_v1(claim, other, bond(2), allocation, source, 8), Err(SharedReservationRefusalV1::ForeignRequest));
         let oversize = slot(8, 6_881, 0, &[]);
-        let exceeds = Err(SharedReservationRefusalV1::Budget(PublicSharedBudgetRefusalV1::Exceeds { required: 6_881, allowed: 6_880 }));
+        let exceeds =
+            Err(SharedReservationRefusalV1::Budget(PublicSharedBudgetRefusalV1::Exceeds { required: 6_881, allowed: 6_880 }));
         assert_eq!(book.reserve_dependency_graph_v1(claim, NOTICE_WINDOW_DAA, &[oversize.clone()], 0), exceeds);
         assert_eq!(book.reserve_dependency_graph_v1(claim, 0, &[oversize], 0), exceeds);
         let ordered = vec![slot(3, 3_440, 0, &[]), slot(4, 3_440, 3_441, &[3])];
@@ -726,7 +720,10 @@ mod tests {
         let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
         let still_undecided = public_supply_failure_outcome_v1(&service, h(1), &[&clock(bond(1))], &unpaid, clock_v1(), 0, 0);
         assert!(still_undecided.is_err());
-        assert!(!matches!(still_undecided, Ok(PublicSupplyFailureOutcomeV1 { attribution: CourtServiceAttributionV1::PartyDefault, .. })));
+        assert!(!matches!(
+            still_undecided,
+            Ok(PublicSupplyFailureOutcomeV1 { attribution: CourtServiceAttributionV1::PartyDefault, .. })
+        ));
     }
 
     fn clock_v1() -> u16 {
@@ -746,8 +743,9 @@ mod tests {
         let unpaid: BTreeSet<_> = [bond(1)].into_iter().collect();
         let duty = clock(bond(1));
         let before = service.clone();
-        let outcome = public_supply_failure_outcome_v1(&service, h(1), &[&duty], &unpaid, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 1_000, 250)
-            .unwrap();
+        let outcome =
+            public_supply_failure_outcome_v1(&service, h(1), &[&duty], &unpaid, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 1_000, 250)
+                .unwrap();
         assert!(matches!(outcome.attribution, CourtServiceAttributionV1::NoSlashHold(_)));
         let end = outcome.batch_v5_end.expect("version 5 supply failure ends the hold");
         assert_eq!(end, PalwBatchPublicHoldEndV5::AbortSettleUnused { unused_reserved_fee_sompi: 750 });
@@ -757,26 +755,22 @@ mod tests {
         let old = public_supply_failure_outcome_v1(&service, h(1), &[&duty], &unpaid, clock_v1(), 1_000, 250).unwrap();
         assert!(matches!(old.attribution, CourtServiceAttributionV1::NoSlashHold(_)));
         assert!(old.batch_v5_end.is_none());
-        let family = public_supply_failure_outcome_v1(
-            &service,
-            h(1),
-            &[&duty],
-            &unpaid,
-            PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4,
-            1_000,
-            0,
-        )
-        .unwrap();
+        let family =
+            public_supply_failure_outcome_v1(&service, h(1), &[&duty], &unpaid, PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4, 1_000, 0)
+                .unwrap();
         assert!(matches!(family.attribution, CourtServiceAttributionV1::NoSlashHold(_)));
         assert!(family.batch_v5_end.is_none());
         assert_eq!(service, before);
-        assert!(public_supply_failure_outcome_v1(&service, h(1), &[&duty], &unpaid, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 10, 11).is_err());
+        assert!(
+            public_supply_failure_outcome_v1(&service, h(1), &[&duty], &unpaid, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 10, 11).is_err()
+        );
 
         let mut supplied = court_service_binding_candidate_v1(None, h(1), h(2), h(3), 1_000, &signers, &profile()).unwrap();
         observe_all(&mut supplied.book, 1_001, 1_101, None);
         let supplied_before = supplied.clone();
         assert!(
-            public_supply_failure_outcome_v1(&supplied, h(1), &[&duty], &unpaid, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 1_000, 250).is_err()
+            public_supply_failure_outcome_v1(&supplied, h(1), &[&duty], &unpaid, PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, 1_000, 250)
+                .is_err()
         );
         assert_eq!(supplied, supplied_before);
     }

@@ -5190,5 +5190,3 @@ fn exec_material_reverse_index_counts_shared_prefix_and_slices_and_replays_each_
     assert_eq!(reverted.exec_v2_source_roots, state.exec_v2_source_roots);
     super::super::palw_exec_v2_material_scope_v7::assert_consistent_v7(&reverted).unwrap();
 }
-
-

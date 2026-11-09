@@ -618,7 +618,9 @@ impl TirDeviceV1 for TirProcessDeviceV1 {
         params: &'a TirParams<'a>,
         occ: Range<usize>,
     ) -> Result<Box<dyn TirCellStepperV1 + 'a>, String> {
-        if plan.program.wide_logits_q24() { return Err("legacy device IPC refuses wide Q24".into()); }
+        if plan.program.wide_logits_q24() {
+            return Err("legacy device IPC refuses wide Q24".into());
+        }
         if self.poisoned() {
             return Err("the device helper is out of service (an error or a mirror difference)".to_string());
         }

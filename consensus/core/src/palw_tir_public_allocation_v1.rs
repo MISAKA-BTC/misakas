@@ -10,11 +10,11 @@
 use crate::palw_rendering_resources_v1::{PalwRenderingClaimTermsV1, PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1};
 use crate::palw_staged_preclaim_v1::{PalwPreclaimSourceGeometryV1, PalwStagedClaimGeometryV1};
 use crate::palw_tir_public_owned_v1::{
-    derive_tir_public_preparation_plan_v1, derive_tir_public_work_allocation_v1, PalwTirPublicOwnedPlanV1,
-    PalwTirPublicPreparationPlanV1, PalwTirPublicWorkAllocationV1, PalwTirPublicWorkRulesV1,
+    PalwTirPublicOwnedPlanV1, PalwTirPublicPreparationPlanV1, PalwTirPublicWorkAllocationV1, PalwTirPublicWorkRulesV1,
+    derive_tir_public_preparation_plan_v1, derive_tir_public_work_allocation_v1,
 };
 use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicSourceV1};
-use crate::{palw_mode_v2::PalwCourtParamsV2, Hash64};
+use crate::{Hash64, palw_mode_v2::PalwCourtParamsV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 const VERSION: u16 = 1;
@@ -1229,9 +1229,7 @@ fn finish_allocation_source_v2(
         ) {
             let (required, allowed) = match refusal {
                 crate::palw_tir_frame_cost_v1::BatchPublicObjectionRefusalV1::Size { required, allowed }
-                | crate::palw_tir_frame_cost_v1::BatchPublicObjectionRefusalV1::Deadline { required, allowed } => {
-                    (required, allowed)
-                }
+                | crate::palw_tir_frame_cost_v1::BatchPublicObjectionRefusalV1::Deadline { required, allowed } => (required, allowed),
             };
             return incomplete(PalwTirPublicAllocationMissingV1::PublicObjectionRejected { required, allowed });
         }
@@ -2006,32 +2004,36 @@ mod tests {
         plan.resource_plan_id = plan.resource_id_v1().unwrap();
         plan.allocation_id = plan.accepted_id_v1().unwrap();
         plan.check_v1().unwrap(); // A checksum is not a native admission marker.
-        assert!(check_tir_public_allocation_native_v1(
-            &plan,
-            &f.geometry,
-            &f.original,
-            &f.header,
-            &f.record,
-            &f.layout,
-            None,
-            None,
-            f.rules
-        )
-        .is_err());
+        assert!(
+            check_tir_public_allocation_native_v1(
+                &plan,
+                &f.geometry,
+                &f.original,
+                &f.header,
+                &f.record,
+                &f.layout,
+                None,
+                None,
+                f.rules
+            )
+            .is_err()
+        );
         let mut changed = f.rules;
         changed.maximum_custodians += 1;
-        assert!(check_tir_public_allocation_native_v1(
-            &complete(&f, false),
-            &f.geometry,
-            &f.original,
-            &f.header,
-            &f.record,
-            &f.layout,
-            None,
-            None,
-            changed
-        )
-        .is_err());
+        assert!(
+            check_tir_public_allocation_native_v1(
+                &complete(&f, false),
+                &f.geometry,
+                &f.original,
+                &f.header,
+                &f.record,
+                &f.layout,
+                None,
+                None,
+                changed
+            )
+            .is_err()
+        );
         changed.config.prices.rent_per_parser_step = u64::MAX;
         assert!(
             derive_tir_public_allocation_v1(&f.geometry, &f.original, &f.header, &f.record, &f.layout, None, None, changed).is_err()

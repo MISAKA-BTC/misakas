@@ -243,9 +243,10 @@ impl OriginalFundingScopeV1 {
         self.relative_graph_id = crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/funded-original-batch-scope/v1",
             &(self.claim, self.relative_graph_id, batch.relative_graph_id, batch.numerical_fault_storage_rent_sompi),
-        ).map_err(|_| FundingRefusalV1::Scope)?;
-        self.required_amount_sompi = self.required_amount_sompi.checked_add(batch.numerical_fault_storage_rent_sompi)
-            .ok_or(FundingRefusalV1::Coverage)?;
+        )
+        .map_err(|_| FundingRefusalV1::Scope)?;
+        self.required_amount_sompi =
+            self.required_amount_sompi.checked_add(batch.numerical_fault_storage_rent_sompi).ok_or(FundingRefusalV1::Coverage)?;
         self.required_material_until_daa = self.required_material_until_daa.max(batch.material_until_daa);
         Ok(self)
     }
@@ -455,9 +456,15 @@ mod tests {
         use crate::palw_court_shared_material_intake_v1::batch::admission::BatchAdmissionQuoteV1;
         let (public, mut consent, tx, base) = fixture();
         let mut quote = BatchAdmissionQuoteV1 {
-            claim: base.claim, relative_graph_id: h(98), required_daa: 10_000, material_until_daa: 11_500,
-            retained_numerical_fault_bytes: 10, retained_numerical_fault_byte_daa: 80_000,
-            numerical_fault_storage_rent_sompi: 25, carrier_storage_rent_sompi: 90, ..Default::default()
+            claim: base.claim,
+            relative_graph_id: h(98),
+            required_daa: 10_000,
+            material_until_daa: 11_500,
+            retained_numerical_fault_bytes: 10,
+            retained_numerical_fault_byte_daa: 80_000,
+            numerical_fault_storage_rent_sompi: 25,
+            carrier_storage_rent_sompi: 90,
+            ..Default::default()
         };
         let expected = base.clone().with_native_batch_v1(&quote).unwrap();
         assert_eq!(expected.required_amount_sompi, 125);
@@ -470,8 +477,14 @@ mod tests {
         assert!(prepare(&consent, &expected, 10).is_err(), "the new graph must be signed");
         let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
         consent.signature = libcrux_ml_dsa::ml_dsa_87::sign(
-            &keys.signing_key, consent.terms.id_v1().as_byte_slice(), COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1, [94; 32],
-        ).unwrap().as_ref().to_vec();
+            &keys.signing_key,
+            consent.terms.id_v1().as_byte_slice(),
+            COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,
+            [94; 32],
+        )
+        .unwrap()
+        .as_ref()
+        .to_vec();
         for daa in [10, 20] {
             assert!(prepare(&consent, &expected, daa).is_ok());
         }

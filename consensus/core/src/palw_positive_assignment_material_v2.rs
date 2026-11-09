@@ -7,9 +7,7 @@
 //! data. This module supplies no native admission, fund or credit capability.
 use crate::{
     Hash64,
-    config::params::{
-        AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, PositiveCourtPolicyV2,
-    },
+    config::params::{AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, PositiveCourtPolicyV2},
     palw_positive_assignment_certification_v2::AssignmentGateCDrawEpochsV2,
     palw_positive_assignment_funds_v2::{AssignmentMoneyQuoteV2, quote_assignment_money_v2},
     palw_positive_assignment_horizon_v2::AssignmentLiabilityHorizonV2,
@@ -23,10 +21,7 @@ use misaka_palw_positive_contract::{
     ContractError,
     assignment::{
         AssignmentId,
-        open_material::{
-            ASSIGNMENT_OPEN_PREIMAGES_V2, AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2,
-            AssignmentOpenViewV2,
-        },
+        open_material::{ASSIGNMENT_OPEN_PREIMAGES_V2, AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
         policy::AssignmentPolicyV2,
         rows::AssignmentRow,
     },
@@ -45,23 +40,9 @@ fn digest<T: BorshSerialize>(domain: &[u8], value: &T) -> Digest {
             Ok(())
         }
     }
-    let mut writer = Writer(
-        blake2b_simd::Params::new()
-            .hash_length(64)
-            .key(domain)
-            .to_state(),
-    );
-    value
-        .serialize(&mut writer)
-        .expect("fixed retained material serialization");
-    Digest(
-        writer
-            .0
-            .finalize()
-            .as_bytes()
-            .try_into()
-            .expect("64-byte digest"),
-    )
+    let mut writer = Writer(blake2b_simd::Params::new().hash_length(64).key(domain).to_state());
+    value.serialize(&mut writer).expect("fixed retained material serialization");
+    Digest(writer.0.finalize().as_bytes().try_into().expect("64-byte digest"))
 }
 pub fn assignment_custody_bytes_id_v2(bytes: &[u8]) -> Digest {
     digest(b"misaka/positive/assignment-custody-bytes/v2/r1", &bytes)
@@ -130,10 +111,7 @@ impl AssignmentJobDescriptorV2 {
             || self.declared_prefill_tokens == 0
             || self.exact_decode_tokens == 0
             || self.max_context_tokens == 0
-            || self
-                .declared_prefill_tokens
-                .checked_add(self.exact_decode_tokens)
-                .is_none_or(|n| n > self.max_context_tokens)
+            || self.declared_prefill_tokens.checked_add(self.exact_decode_tokens).is_none_or(|n| n > self.max_context_tokens)
         {
             return Err(ContractError::NonCanonical);
         }
@@ -161,26 +139,17 @@ pub struct AssignmentRegisteredDescriptorV2 {
 }
 impl AssignmentRegisteredDescriptorV2 {
     pub fn id(&self) -> Digest {
-        digest(
-            b"misaka/positive/assignment-registered-metadata/v2/r1",
-            self,
-        )
+        digest(b"misaka/positive/assignment-registered-metadata/v2/r1", self)
     }
 
-    pub(crate) fn check_rooted_class_v2(
-        &self,
-        state: &crate::palw_state_v2::PalwChainStateV2,
-    ) -> Result<(), ContractError> {
+    pub(crate) fn check_rooted_class_v2(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), ContractError> {
         use crate::palw_class_registration_origin_v1::{
-            PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1, PalwClassRegistrationDoorV1,
-            palw_class_registration_origin_row_v1,
+            PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1, PalwClassRegistrationDoorV1, palw_class_registration_origin_row_v1,
         };
 
         let class_id = Hash64::from_bytes(self.class.0);
         let class = state.class(&class_id).ok_or(ContractError::Identity)?;
-        let tir = state
-            .tir_class_v1(&class_id)
-            .ok_or(ContractError::Identity)?;
+        let tir = state.tir_class_v1(&class_id).ok_or(ContractError::Identity)?;
         let origin = self.registration.origin;
         if tir.facts.class_id != class_id
             || class.artifact_root.as_bytes() != self.artifact.0
@@ -191,17 +160,13 @@ impl AssignmentRegisteredDescriptorV2 {
         {
             return Err(ContractError::Identity);
         }
-        if let Some(saved) =
-            palw_class_registration_origin_row_v1(state.kernel_route_state_v1(), &class_id)
+        if let Some(saved) = palw_class_registration_origin_row_v1(state.kernel_route_state_v1(), &class_id)
             && (saved.version != PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1
                 || saved.door != PalwClassRegistrationDoorV1::Tir
                 || saved.class_id != class_id
                 || saved.daa_score != origin.accepted_daa
                 || saved.block.as_bytes() != origin.accepting_block.0
-                || saved
-                    .admission_digest
-                    .map(|digest| Digest(digest.as_bytes()))
-                    != Some(self.registration.digest))
+                || saved.admission_digest.map(|digest| Digest(digest.as_bytes())) != Some(self.registration.digest))
         {
             return Err(ContractError::Identity);
         }
@@ -277,10 +242,7 @@ impl AssignmentAdmissionMaterialV2 {
         class_prompt_form: PalwPromptIdsFormV1,
         replay_work: u64,
     ) -> Result<Self, ContractError> {
-        let native_preimages = rules
-            .native_preimages()
-            .ok_or(ContractError::Scope)?
-            .clone();
+        let native_preimages = rules.native_preimages().ok_or(ContractError::Scope)?.clone();
         let certification_policy = *rules.certification_policy().ok_or(ContractError::Scope)?;
         let terms = &row.bundle.terms;
         let job = AssignmentJobDescriptorV2::from_native(resources.binding().job())?;
@@ -335,15 +297,11 @@ impl AssignmentAdmissionMaterialV2 {
     }
     /// Fixed bounded decoder; there is no arbitrary Params or collection decode.
     pub fn decode(raw: &[u8], max_bytes: u64) -> Result<Self, ContractError> {
-        if max_bytes == 0 || max_bytes == u64::MAX || raw.is_empty() || raw.len() as u64 > max_bytes
-        {
+        if max_bytes == 0 || max_bytes == u64::MAX || raw.is_empty() || raw.len() as u64 > max_bytes {
             return Err(ContractError::Budget);
         }
-        let structural = crate::palw_native_resource_v1::preflight_native_value_v1::<Self>(
-            raw,
-            raw.len() as u64,
-        )
-        .map_err(|_| ContractError::NonCanonical)?;
+        let structural = crate::palw_native_resource_v1::preflight_native_value_v1::<Self>(raw, raw.len() as u64)
+            .map_err(|_| ContractError::NonCanonical)?;
         if structural.logical_requests_v1() != std::mem::size_of::<Self>() as u64 {
             return Err(ContractError::Budget);
         }
@@ -352,23 +310,15 @@ impl AssignmentAdmissionMaterialV2 {
     }
     /// Unique retained history must also fit two complete reads during replay.
     pub fn native_assignment_journal_storage_limit_v2(&self) -> u64 {
-        self.assignment_policy
-            .max_history_bytes
-            .min(self.money.usage.retained_bytes)
-            .min(self.money.usage.replay_bytes / 2)
+        self.assignment_policy.max_history_bytes.min(self.money.usage.retained_bytes).min(self.money.usage.replay_bytes / 2)
     }
 
     /// The framed native record includes the actual control envelope and
     /// journal header. Both retention and replay must pay for those bytes.
-    pub fn check_native_open_record_extent_v2(
-        &self,
-        payload_bytes: u64,
-    ) -> Result<(), ContractError> {
+    pub fn check_native_open_record_extent_v2(&self, payload_bytes: u64) -> Result<(), ContractError> {
         use misaka_palw_positive_contract::assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2;
 
-        let record_bytes = payload_bytes
-            .checked_add(ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64)
-            .ok_or(ContractError::Budget)?;
+        let record_bytes = payload_bytes.checked_add(ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64).ok_or(ContractError::Budget)?;
         if payload_bytes == 0
             || payload_bytes > self.assignment_policy.max_frame_bytes
             || record_bytes > self.native_assignment_journal_storage_limit_v2()
@@ -379,11 +329,7 @@ impl AssignmentAdmissionMaterialV2 {
     }
 
     /// Reprice the literal native operation under its original policy.
-    pub fn check_native_open_quote_v2(
-        &self,
-        row: &AssignmentRow,
-        body: &[u8],
-    ) -> Result<(), ContractError> {
+    pub fn check_native_open_quote_v2(&self, row: &AssignmentRow, body: &[u8]) -> Result<(), ContractError> {
         let (quote, _) = crate::palw_positive_assignment_funds_v2::quote_native_assignment_open_v2(
             &self.assignment_policy,
             &row.bundle.terms,
@@ -402,10 +348,7 @@ impl AssignmentAdmissionMaterialV2 {
     /// Compare the retained class descriptor with the actual original registry.
     /// If the original chain has an aux141 origin, it also pins the accepting
     /// block and admission digest. The carrier reader owns the transaction proof.
-    pub fn check_registered_class_v2(
-        &self,
-        state: &crate::palw_state_v2::PalwChainStateV2,
-    ) -> Result<(), ContractError> {
+    pub fn check_registered_class_v2(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), ContractError> {
         if self.registered.registration.origin.accepted_daa > self.origin.accepted_daa {
             return Err(ContractError::Identity);
         }
@@ -414,20 +357,11 @@ impl AssignmentAdmissionMaterialV2 {
 
     pub fn check_row(&self, row: &AssignmentRow) -> Result<(), ContractError> {
         row.validate_shape()?;
-        self.assignment_policy
-            .check_terms(&row.bundle.terms, self.origin.accepted_daa)?;
-        self.positive_policy
-            .validate_shape()
-            .map_err(|_| ContractError::Scope)?;
-        self.native_preimages
-            .validate(&self.assignment_policy)
-            .map_err(|_| ContractError::Scope)?;
-        self.funding_relay
-            .validate_original_scope(self.fired_rules)
-            .map_err(|_| ContractError::Scope)?;
-        self.certification_policy
-            .validate()
-            .map_err(|_| ContractError::Scope)?;
+        self.assignment_policy.check_terms(&row.bundle.terms, self.origin.accepted_daa)?;
+        self.positive_policy.validate_shape().map_err(|_| ContractError::Scope)?;
+        self.native_preimages.validate(&self.assignment_policy).map_err(|_| ContractError::Scope)?;
+        self.funding_relay.validate_original_scope(self.fired_rules).map_err(|_| ContractError::Scope)?;
+        self.certification_policy.validate().map_err(|_| ContractError::Scope)?;
         self.job.validate()?;
         if self.version != 2 || self.revision != 1 {
             return Err(ContractError::Version);
@@ -442,10 +376,8 @@ impl AssignmentAdmissionMaterialV2 {
             || self.assignment_policy.id() != row.assignment_policy
             || self.positive_policy.root().as_bytes() != row.positive_policy.0
             || self.assignment_policy.positive_policy != row.positive_policy
-            || self.positive_policy.service_profile_id.as_bytes()
-                != self.native_preimages.source_policy.id().0
-            || self.positive_policy.funding_schedule_id.as_bytes()
-                != self.native_preimages.case_fees.id().0
+            || self.positive_policy.service_profile_id.as_bytes() != self.native_preimages.source_policy.id().0
+            || self.positive_policy.funding_schedule_id.as_bytes() != self.native_preimages.case_fees.id().0
             || self.job.job_id.as_bytes() != row.job.0
             || self.job.prompt_token_ids_hash.as_bytes() != row.input.0
             || self.job.context_hash.as_bytes() != row.context.0
@@ -463,11 +395,7 @@ impl AssignmentAdmissionMaterialV2 {
                 .retention_until_daa
                 .checked_sub(row.origin.accepted_daa)
                 .is_none_or(|n| n > self.native_preimages.physical.max_retention_daa)
-            || row.admission_material
-                != (AcceptedMaterial {
-                    origin: row.origin,
-                    digest: self.id(),
-                })
+            || row.admission_material != (AcceptedMaterial { origin: row.origin, digest: self.id() })
         {
             return Err(ContractError::Identity);
         }
@@ -484,8 +412,7 @@ impl AssignmentAdmissionMaterialV2 {
         {
             return Err(ContractError::Budget);
         }
-        let fixed_bytes =
-            borsh::object_length(self).map_err(|_| ContractError::NonCanonical)? as u64;
+        let fixed_bytes = borsh::object_length(self).map_err(|_| ContractError::NonCanonical)? as u64;
         if self.money.usage.retained_bytes < fixed_bytes
             || self.money.usage.replay_bytes < fixed_bytes
             || self.money.usage.heap_bytes < (std::mem::size_of::<Self>() as u64)
@@ -514,26 +441,14 @@ pub(crate) const ASSIGNMENT_COHORT_KEY_BYTES_V2: usize = 64 + 4;
 pub(crate) fn split_assignment_reservation_v2(
     bytes: &[u8],
 ) -> Result<(&[[u8; ASSIGNMENT_COHORT_KEY_BYTES_V2]], &[u8]), ContractError> {
-    let header = bytes
-        .get(..ASSIGNMENT_COHORT_HEADER_V2)
-        .ok_or(ContractError::NonCanonical)?;
+    let header = bytes.get(..ASSIGNMENT_COHORT_HEADER_V2).ok_or(ContractError::NonCanonical)?;
     if !header.starts_with(ASSIGNMENT_COHORT_MAGIC_V2) {
         return Err(ContractError::NonCanonical);
     }
-    let count = u32::from_le_bytes(
-        header[ASSIGNMENT_COHORT_MAGIC_V2.len()..]
-            .try_into()
-            .expect("fixed count width"),
-    );
-    let keys_bytes = (count as usize)
-        .checked_mul(ASSIGNMENT_COHORT_KEY_BYTES_V2)
-        .ok_or(ContractError::Budget)?;
-    let (keys, reservation) = bytes[ASSIGNMENT_COHORT_HEADER_V2..]
-        .split_at_checked(keys_bytes)
-        .ok_or(ContractError::NonCanonical)?;
-    let (keys, []) = keys.as_chunks::<ASSIGNMENT_COHORT_KEY_BYTES_V2>() else {
-        unreachable!("fixed key width")
-    };
+    let count = u32::from_le_bytes(header[ASSIGNMENT_COHORT_MAGIC_V2.len()..].try_into().expect("fixed count width"));
+    let keys_bytes = (count as usize).checked_mul(ASSIGNMENT_COHORT_KEY_BYTES_V2).ok_or(ContractError::Budget)?;
+    let (keys, reservation) = bytes[ASSIGNMENT_COHORT_HEADER_V2..].split_at_checked(keys_bytes).ok_or(ContractError::NonCanonical)?;
+    let (keys, []) = keys.as_chunks::<ASSIGNMENT_COHORT_KEY_BYTES_V2>() else { unreachable!("fixed key width") };
     Ok((keys, reservation))
 }
 
@@ -586,41 +501,23 @@ pub(crate) fn encode_native_assignment_open_v2(
     if !remainder.is_empty() {
         return Err(ContractError::NonCanonical);
     }
-    let reservation = borsh::to_vec(&AssignmentReservationCustodyV2::derive(&row, &material))
-        .map_err(|_| ContractError::NonCanonical)?;
-    let reservation_len = cohort
-        .len()
-        .checked_add(reservation.len())
-        .ok_or(ContractError::Budget)?;
+    let reservation =
+        borsh::to_vec(&AssignmentReservationCustodyV2::derive(&row, &material)).map_err(|_| ContractError::NonCanonical)?;
+    let reservation_len = cohort.len().checked_add(reservation.len()).ok_or(ContractError::Budget)?;
     if reservation_len as u64 > limits.max_preimage_bytes {
         return Err(ContractError::Budget);
     }
     let mut combined = Vec::new();
-    combined
-        .try_reserve_exact(reservation_len)
-        .map_err(|_| ContractError::Budget)?;
+    combined.try_reserve_exact(reservation_len).map_err(|_| ContractError::Budget)?;
     combined.extend_from_slice(cohort);
     combined.extend_from_slice(&reservation);
-    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &material)?)
-        .map_err(|_| ContractError::NonCanonical)?;
-    material.custody.preimage_bytes = [
-        assignment_custody_bytes_id_v2(&combined),
-        assignment_custody_bytes_id_v2(&liability),
-    ];
-    material.custody.reservation = AcceptedMaterial {
-        origin: row.origin,
-        digest: material.custody.preimage_bytes[0],
-    };
-    material.custody.liability = AcceptedMaterial {
-        origin: row.origin,
-        digest: material.custody.preimage_bytes[1],
-    };
+    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &material)?).map_err(|_| ContractError::NonCanonical)?;
+    material.custody.preimage_bytes = [assignment_custody_bytes_id_v2(&combined), assignment_custody_bytes_id_v2(&liability)];
+    material.custody.reservation = AcceptedMaterial { origin: row.origin, digest: material.custody.preimage_bytes[0] };
+    material.custody.liability = AcceptedMaterial { origin: row.origin, digest: material.custody.preimage_bytes[1] };
     row.reservation = material.custody.reservation;
     row.liability = material.custody.liability;
-    row.admission_material = AcceptedMaterial {
-        origin: row.origin,
-        digest: material.id(),
-    };
+    row.admission_material = AcceptedMaterial { origin: row.origin, digest: material.id() };
     let encoded = borsh::to_vec(&material).map_err(|_| ContractError::NonCanonical)?;
     let open = encode_assignment_open_v2(&encoded, native_body, [&combined, &liability], limits)?;
     AssignmentAdmissionMaterialViewV2::decode(&row, &open, native_body, limits)?;
@@ -647,13 +544,7 @@ pub(crate) fn assigned_case_reservation_v2(
         funding.original_outpoint,
         origin,
     );
-    AcceptedMaterial {
-        origin,
-        digest: digest(
-            b"misaka/positive/assignment-custody-bytes/v2/r1",
-            &commitment,
-        ),
-    }
+    AcceptedMaterial { origin, digest: digest(b"misaka/positive/assignment-custody-bytes/v2/r1", &commitment) }
 }
 
 /// Literal liability custody in the Open journal. The epoch interval and
@@ -671,13 +562,9 @@ pub struct AssignmentLiabilityCustodyV2 {
 }
 
 impl AssignmentLiabilityCustodyV2 {
-    pub fn derive(
-        row: &AssignmentRow,
-        material: &AssignmentAdmissionMaterialV2,
-    ) -> Result<Self, ContractError> {
+    pub fn derive(row: &AssignmentRow, material: &AssignmentAdmissionMaterialV2) -> Result<Self, ContractError> {
         row.source_consent.check(&row.bundle)?;
-        row.prover_consent
-            .check(&row.bundle, material.assignment_policy.positive_policy)?;
+        row.prover_consent.check(&row.bundle, material.assignment_policy.positive_policy)?;
         let controls = material
             .assignment_policy
             .max_replay_work
@@ -731,8 +618,7 @@ impl<'a> AssignmentAdmissionMaterialViewV2<'a> {
         if open.native_body() != actual_native_op8 {
             return Err(ContractError::Identity);
         }
-        let material =
-            AssignmentAdmissionMaterialV2::decode(open.material(), limits.max_material_bytes)?;
+        let material = AssignmentAdmissionMaterialV2::decode(open.material(), limits.max_material_bytes)?;
         material.check_row(row)?;
         if material.money.usage.retained_bytes < raw.len() as u64
             || material.money.usage.replay_bytes < raw.len() as u64
@@ -747,25 +633,18 @@ impl<'a> AssignmentAdmissionMaterialViewV2<'a> {
         }
         let reservation_kind = AssignmentOpenPreimageKindV2::ReservationCustody;
         let (_, reservation) = split_assignment_reservation_v2(open.preimage(reservation_kind))?;
-        let actual = borsh::from_slice::<AssignmentReservationCustodyV2>(reservation)
-            .map_err(|_| ContractError::NonCanonical)?;
+        let actual = borsh::from_slice::<AssignmentReservationCustodyV2>(reservation).map_err(|_| ContractError::NonCanonical)?;
         let expected = AssignmentReservationCustodyV2::derive(row, &material);
-        let reservation_pin = AcceptedMaterial {
-            origin: row.origin,
-            digest: material.custody.preimage_bytes[reservation_kind as usize],
-        };
+        let reservation_pin =
+            AcceptedMaterial { origin: row.origin, digest: material.custody.preimage_bytes[reservation_kind as usize] };
         if actual != expected || material.custody.reservation != reservation_pin {
             return Err(ContractError::Identity);
         }
         let liability_kind = AssignmentOpenPreimageKindV2::LiabilityCustody;
-        let actual =
-            borsh::from_slice::<AssignmentLiabilityCustodyV2>(open.preimage(liability_kind))
-                .map_err(|_| ContractError::NonCanonical)?;
+        let actual = borsh::from_slice::<AssignmentLiabilityCustodyV2>(open.preimage(liability_kind))
+            .map_err(|_| ContractError::NonCanonical)?;
         let expected = AssignmentLiabilityCustodyV2::derive(row, &material)?;
-        let liability_pin = AcceptedMaterial {
-            origin: row.origin,
-            digest: material.custody.preimage_bytes[liability_kind as usize],
-        };
+        let liability_pin = AcceptedMaterial { origin: row.origin, digest: material.custody.preimage_bytes[liability_kind as usize] };
         if actual != expected || material.custody.liability != liability_pin {
             return Err(ContractError::Identity);
         }
@@ -780,9 +659,7 @@ impl<'a> AssignmentAdmissionMaterialViewV2<'a> {
         source: SourceCatalogQuoteV2,
     ) -> Result<(), ContractError> {
         self.material.job.check_native(job)?;
-        if registered != self.material.registered
-            || AssignmentSourceQuoteDescriptorV2::from(source) != self.material.source
-        {
+        if registered != self.material.registered || AssignmentSourceQuoteDescriptorV2::from(source) != self.material.source {
             return Err(ContractError::Identity);
         }
         Ok(())

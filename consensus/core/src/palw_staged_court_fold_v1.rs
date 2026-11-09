@@ -1316,7 +1316,11 @@ impl TransitionBuilder<'_> {
             BatchCourtWireV1::Open(open) => self.install_batch_demand_v1(at, open),
             BatchCourtWireV1::Respond(control) => {
                 super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
-                    self, at, &control.intake, control.demand_ordinal, storage_debit,
+                    self,
+                    at,
+                    &control.intake,
+                    control.demand_ordinal,
+                    storage_debit,
                 )?;
                 Ok(())
             }
@@ -1329,17 +1333,31 @@ impl TransitionBuilder<'_> {
     fn batch_numerical_rules_v1(
         &self,
         at: &PalwBlockContextV2,
-    ) -> Result<(
-        crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
-        crate::palw_court_shared_material_intake_v1::NumericalBatchReplayBudgetV1,
-    ), PalwStateV2Error> {
-        let rules = self.extras.native_court_rules_v1.filter(|rules| {
-            self.extras.batch_court_active_v1 && &rules.at == at
-                && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
-        }).ok_or_else(|| PalwStateV2Error::CarriageInconsistent("numerical Batch requires active native rules at the accepting point".into()))?;
-        let profile = self.extras.batch_numerical_profile_v1.filter(|profile| {
-            self.state.court_service_state_v1().is_some_and(|service| service.profile_id == profile.service_profile)
-        }).ok_or_else(|| PalwStateV2Error::CarriageInconsistent("numerical Batch receipt has no matching native replay profile".into()))?;
+    ) -> Result<
+        (
+            crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+            crate::palw_court_shared_material_intake_v1::NumericalBatchReplayBudgetV1,
+        ),
+        PalwStateV2Error,
+    > {
+        let rules = self
+            .extras
+            .native_court_rules_v1
+            .filter(|rules| {
+                self.extras.batch_court_active_v1
+                    && &rules.at == at
+                    && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+            })
+            .ok_or_else(|| {
+                PalwStateV2Error::CarriageInconsistent("numerical Batch requires active native rules at the accepting point".into())
+            })?;
+        let profile = self
+            .extras
+            .batch_numerical_profile_v1
+            .filter(|profile| self.state.court_service_state_v1().is_some_and(|service| service.profile_id == profile.service_profile))
+            .ok_or_else(|| {
+                PalwStateV2Error::CarriageInconsistent("numerical Batch receipt has no matching native replay profile".into())
+            })?;
         Ok((rules, profile.budget))
     }
 
@@ -1358,17 +1376,21 @@ impl TransitionBuilder<'_> {
             .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?
             .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("numerical terminal receipt contains no fault".into()))?;
         let mut quote = super::native_writers::NativeWriteQuoteV1::new("numerical Batch court end evidence");
-        quote.exact::<PalwTirConeRefutationV1>(1)?.copy(&*cone)?
-            .exact::<PalwCourtVerdictProofV2>(1)?.exact::<PalwTirPublicConvictionEvidenceV1>(1)?
-            .exact::<CourtEndEvidenceV1>(2)?.exact::<usize>(3)?;
+        quote
+            .exact::<PalwTirConeRefutationV1>(1)?
+            .copy(&*cone)?
+            .exact::<PalwCourtVerdictProofV2>(1)?
+            .exact::<PalwTirPublicConvictionEvidenceV1>(1)?
+            .exact::<CourtEndEvidenceV1>(2)?
+            .exact::<usize>(3)?;
         self.admit_native_write_v1(quote)?;
         let (cone, _lease) = cone.into_parts_v1();
         let evidence = PalwTirPublicConvictionEvidenceV1::Arithmetic {
             proof: Box::new(PalwCourtVerdictProofV2::TirCone { refutation: Box::new(cone) }),
         };
-        let ending = Box::new(CourtEndEvidenceV1::TirConviction {
-            point: *at, claim: control.claim, filer, evidence: Box::new(evidence),
-        }).into();
+        let ending =
+            Box::new(CourtEndEvidenceV1::TirConviction { point: *at, claim: control.claim, filer, evidence: Box::new(evidence) })
+                .into();
         let saved = self.try_checkpoint()?;
         let previous = self.court_end_evidence.replace(ending);
         let result = super::palw_court_service_lifecycle_fold_v1::apply_shared_bottom_conviction_v1(self, at, control.claim, filer);
@@ -1446,17 +1468,15 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
-    fn install_batch_stop_receipt_v1(
-        &mut self,
-        at: &PalwBlockContextV2,
-        operands: &[u8],
-    ) -> Result<(), PalwStateV2Error> {
+    fn install_batch_stop_receipt_v1(&mut self, at: &PalwBlockContextV2, operands: &[u8]) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::{carriage::BatchStopControlV1, rooted::RootedBatchStopReceiptV1};
         use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{batch_payload, verify_rooted_batch_stop_v1};
         let refused = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
-        let rules = self.extras.native_court_rules_v1.filter(|rules| {
-            &rules.at == at && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
-        }).ok_or_else(|| refused("Batch Stop requires native rules at the accepting point and network"))?;
+        let rules = self
+            .extras
+            .native_court_rules_v1
+            .filter(|rules| &rules.at == at && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain))
+            .ok_or_else(|| refused("Batch Stop requires native rules at the accepting point and network"))?;
         let (claim, filer) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| refused(&why.to_string()))?;
         let key = PalwStagedCourtKeyV1::CourtBatchStopReceipt(claim);
         let digest = RootedBatchStopReceiptV1::digest_operands(operands).map_err(PalwStateV2Error::CarriageInconsistent)?;
@@ -1468,8 +1488,8 @@ impl TransitionBuilder<'_> {
         }
         let finding = verify_rooted_batch_stop_v1(&self.state, self.params, &rules, operands)
             .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
-        let context = crate::palw_court_shared_tir_state_v1::context(&self.state, claim)
-            .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let context =
+            crate::palw_court_shared_tir_state_v1::context(&self.state, claim).map_err(PalwStateV2Error::CarriageInconsistent)?;
         if finding.as_ref().is_some_and(|fault| {
             fault.claim_id != claim || fault.reservation_owner != filer || fault.reserved_daa != context.original_accepted_daa
         }) {
@@ -1486,7 +1506,8 @@ impl TransitionBuilder<'_> {
         let mut retained = Vec::new();
         retained.try_reserve_exact(operands.len()).map_err(|why| {
             PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<BatchStopControlV1>(
-                "retain Batch Stop operands", &why.to_string(),
+                "retain Batch Stop operands",
+                &why.to_string(),
             ))
         })?;
         retained.extend_from_slice(operands);

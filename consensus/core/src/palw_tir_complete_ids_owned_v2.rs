@@ -130,7 +130,10 @@ impl PalwTirPublicSourceV1 {
         lease: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
     ) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, Fault> {
         self.validate_complete_ids_classified_v2(rows_root, &ids)?;
-        Ok(NativeRetainedV1::from_owner_reserved_v1(PalwTirPublicAuthenticatedIdsV1 { source_id: self.source_id, rows_root, ids }, lease))
+        Ok(NativeRetainedV1::from_owner_reserved_v1(
+            PalwTirPublicAuthenticatedIdsV1 { source_id: self.source_id, rows_root, ids },
+            lease,
+        ))
     }
 }
 

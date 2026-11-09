@@ -1860,4 +1860,3 @@ fn rfc0038_actual_carrier_geometry_postwrite_resource_rollback() {
         );
     }
 }
-

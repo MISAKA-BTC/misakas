@@ -387,8 +387,9 @@ pub fn funded_admission_book_candidate_v1(
     derivation: &FundedAdmissionDerivationV1,
     schedule: &FundedAdmissionScheduleV1,
 ) -> Result<(CourtServiceStateV2, CourtServiceStateV2), FundedAdmissionRefusalV1> {
-    let after_signer = court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service)
-        .map_err(FundedAdmissionRefusalV1::Binding)?;
+    let after_signer =
+        court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service)
+            .map_err(FundedAdmissionRefusalV1::Binding)?;
     let full = reserve_original_obligations_v1(after_signer.clone(), claim, Some(graph), derivation)?;
     Ok((after_signer, full))
 }
@@ -437,8 +438,15 @@ pub(crate) fn funded_batch_base_candidate_v1(
     let signers = frame.custody_v1().liable_signers_v1();
     let base = derive_original_obligations_v1(claim, allocation, source, accepted, &signers, None, schedule)?;
     let signer_book = court_service_binding_candidate_v1(
-        state.court_service_state_v1(), claim, allocation, source, accepted, &signers, &schedule.service,
-    ).map_err(R::Binding)?;
+        state.court_service_state_v1(),
+        claim,
+        allocation,
+        source,
+        accepted,
+        &signers,
+        &schedule.service,
+    )
+    .map_err(R::Binding)?;
     let mut book = reserve_original_obligations_v1(signer_book, claim, None, &base)?;
     let previous = state.court_service_row_v3_v1();
     book.version = COURT_SERVICE_ROW_VERSION_V3;
@@ -459,9 +467,18 @@ pub(crate) fn funded_batch_base_candidate_v1(
     );
     let scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
         b"misaka-palw/funded-batch-base/v1",
-        &(claim, source, schedule.service.id(), &signers, holding_terms, base.capital_sompi,
-            base.resources.heap_bytes, base.resources.retention_bytes),
-    ).map_err(|error| R::SourceGraph(error.to_string()))?;
+        &(
+            claim,
+            source,
+            schedule.service.id(),
+            &signers,
+            holding_terms,
+            base.capital_sompi,
+            base.resources.heap_bytes,
+            base.resources.retention_bytes,
+        ),
+    )
+    .map_err(|error| R::SourceGraph(error.to_string()))?;
     Ok((base, row, scope))
 }
 

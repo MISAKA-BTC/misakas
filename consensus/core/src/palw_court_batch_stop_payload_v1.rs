@@ -138,8 +138,8 @@ mod tests {
     #[test]
     fn stop_payload_preflights_geometry_and_classifies_capacity() {
         use crate::palw_batch_court_v1::carriage::{
-            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_STOP_WIRE_OVERHEAD_V1, BatchCourtWireV1, BatchStopControlV1,
-            batch_stop_wire_shape_v1, decode_batch_court_payload_v1,
+            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_STOP_WIRE_OVERHEAD_V1, BatchCourtWireV1, BatchStopControlV1, batch_stop_wire_shape_v1,
+            decode_batch_court_payload_v1,
         };
         let h = Hash64::from_u64_word;
         let sig = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
@@ -200,8 +200,10 @@ mod tests {
                 let handoff = ValidatedBatchCarrierV1::prepare_v1(&validated, preceding, point).unwrap().unwrap();
                 let split = material_batch_carrier_fee_v1(&tx, remaining).unwrap();
                 assert_eq!(handoff.fee_v1(), split);
-                assert_eq!((split.required_storage_rent, split.withheld_storage_rent, split.collectible_fee),
-                    (amount, remaining.min(amount), collectible));
+                assert_eq!(
+                    (split.required_storage_rent, split.withheld_storage_rent, split.collectible_fee),
+                    (amount, remaining.min(amount), collectible)
+                );
                 assert_eq!(handoff.storage_debit_v1(None).is_ok(), remaining >= amount);
                 assert!(handoff.storage_debit_v1(Some(h(13))).is_err());
             }

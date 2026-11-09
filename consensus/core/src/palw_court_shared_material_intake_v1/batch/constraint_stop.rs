@@ -93,9 +93,15 @@ pub(crate) fn quote_batch_stop_v1(
     if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
         return Err("Batch Stop filer is no longer eligible".into());
     }
-    let rules = rules_at(at).filter(|rules| rules.at.daa_score == at && rules.tir_active && rules.constraint_active
-        && rules.step_ladder == frame.plan_v1().owner_work.rules.max_step_leaf_count
-        && plan.carrier_bytes_v1() <= rules.court.max_close_bytes()).ok_or("Batch Stop lacks native rules at the reserved DAA")?;
+    let rules = rules_at(at)
+        .filter(|rules| {
+            rules.at.daa_score == at
+                && rules.tir_active
+                && rules.constraint_active
+                && rules.step_ladder == frame.plan_v1().owner_work.rules.max_step_leaf_count
+                && plan.carrier_bytes_v1() <= rules.court.max_close_bytes()
+        })
+        .ok_or("Batch Stop lacks native rules at the reserved DAA")?;
     let facts = registration.facts_v1();
     let semantics = state.claim_semantics_v1(&claim).ok_or("Batch Stop immutable semantics absent")?;
     Ok(serde_json::json!({
@@ -416,7 +422,8 @@ mod tests {
         let mut book = ServiceReservations::new(cost(64 * 1024)).unwrap();
         let verify_id = verification.packet.id;
         let stop_id = stop.packet.id;
-        let (quote, graph) = plan.reserve_v1(&mut book, vec![terminal, stop, verification], storage, |_, bytes| Ok(cost(bytes))).unwrap();
+        let (quote, graph) =
+            plan.reserve_v1(&mut book, vec![terminal, stop, verification], storage, |_, bytes| Ok(cost(bytes))).unwrap();
         let verify_daa = book.assigned_daa(&verify_id).unwrap();
         let stop_daa = book.assigned_daa(&stop_id).unwrap();
         let finish = graph.iter().find(|node| node.packet.id == verify_id).unwrap().predecessors[0];

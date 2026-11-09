@@ -229,8 +229,10 @@ fn rfc0038_answer_fold_indexes_the_settled_carrier_and_not_another_same_claim_tx
     let replayed = apply_delta_v2(&chain, &delta, &p).unwrap();
     assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&replayed)).unwrap(), raw_carriage);
     let parent = revert_delta_v2(&restored, &delta, &p).unwrap();
-    assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&parent)).unwrap(),
-        borsh::to_vec(&PalwStateCarriageV2::from_state(&chain)).unwrap());
+    assert_eq!(
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&parent)).unwrap(),
+        borsh::to_vec(&PalwStateCarriageV2::from_state(&chain)).unwrap()
+    );
     assert!(
         !parent
             .kernel_route

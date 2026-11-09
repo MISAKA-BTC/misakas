@@ -962,8 +962,10 @@ fn signed_ordinary_consent_converts_reserved_fee_without_reusing_other_principal
             let held: HeldVerifierFeeV1 = borsh::from_slice(&b.state.kernel_route.as_ref().unwrap().aux[&(TABLE, key)]).unwrap();
             assert_eq!(held.amount, 17);
             let paid_root = b.state.state_root();
-            assert!(super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(
-                &mut b, &ctx(90, 90, 90), &bytes, &bond_key(2)).is_err());
+            assert!(
+                super::super::palw_kernel_route_fold_v1::apply_kernel_route_object_v1(&mut b, &ctx(90, 90, 90), &bytes, &bond_key(2))
+                    .is_err()
+            );
             assert_eq!(b.state.state_root(), paid_root, "same signed slot cannot debit twice");
         }
     }

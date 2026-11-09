@@ -233,10 +233,7 @@ fn the_registered_class_path_admits_by_a_computed_digest() {
     assert!(source.contains("fn resolve_chain_registered"), "the registered-class path still exists");
     let step = source.split("fn resolve_chain_registered").nth(1).expect("checked above");
     let body = &step[..step.len().min(8_000)];
-    assert!(
-        admits_by_computed_digest(body),
-        "the registered-class path must call the dense and Qwen3.6 computed-root lookups"
-    );
+    assert!(admits_by_computed_digest(body), "the registered-class path must call the dense and Qwen3.6 computed-root lookups");
     assert!(
         !admits_by_computed_digest("pub fn resolve_chain_registered(artifact_root: Hash64) { let _ = artifact_root; }"),
         "a parameter named artifact_root is not a computed digest"

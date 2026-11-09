@@ -461,9 +461,8 @@ impl VirtualStateProcessor {
         PalwLocalTransitionFaultV1,
     > {
         let params = self.palw_state_params_v2.as_ref().expect("PALW V2 test network");
-        let (carried, batch) = self.palw_v2_objects_of_block(
-            acceptance, state, point.block, point.daa_score, raw_fees, rent_fees, &Default::default(),
-        )?;
+        let (carried, batch) =
+            self.palw_v2_objects_of_block(acceptance, state, point.block, point.daa_score, raw_fees, rent_fees, &Default::default())?;
         let (objects, folded, _, _, funded, _, _, _) = self.palw_v2_accepted_objects_and_originals(
             (state, params, point),
             carried,
@@ -835,7 +834,7 @@ impl VirtualStateProcessor {
         Ok((legacy, raw.result))
     }
 
-    #[allow(clippy::type_complexity,clippy::too_many_arguments)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub(super) fn palw_v2_accepted_objects_with_native_original_context_v19(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -1208,7 +1207,15 @@ impl VirtualStateProcessor {
                         raw.before(self, state_params, point, carried.native_carrier, accepted.len(), &mut folded, &fee_extras)?;
                     }
                     AcceptedCourtItemV1::Batch(handoff) => {
-                        raw.through(self, state_params, point, handoff.accepted_ordinal_v1(), accepted.len(), &mut folded, &fee_extras)?;
+                        raw.through(
+                            self,
+                            state_params,
+                            point,
+                            handoff.accepted_ordinal_v1(),
+                            accepted.len(),
+                            &mut folded,
+                            &fee_extras,
+                        )?;
                     }
                 }
             }
@@ -3617,7 +3624,8 @@ impl VirtualStateProcessor {
                 return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<IndexedBatchHandoffsV1>(
                     "Batch carrier indexing",
                     "Batch handoff does not name an accepted carrier",
-                ).into());
+                )
+                .into());
             }
             indexed
         };
@@ -3769,7 +3777,9 @@ impl VirtualStateProcessor {
             for (before, handoff) in &mut batch {
                 let position = handoff.accepted_ordinal_v1();
                 *before = carried.partition_point(|object| {
-                    object.native_carrier.is_none_or(|id| txs.iter().position(|tx| tx.id() == id).is_some_and(|index| index < position))
+                    object
+                        .native_carrier
+                        .is_none_or(|id| txs.iter().position(|tx| tx.id() == id).is_some_and(|index| index < position))
                 });
             }
         } else {

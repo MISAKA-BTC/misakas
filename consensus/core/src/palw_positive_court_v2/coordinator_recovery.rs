@@ -318,7 +318,11 @@ impl JournaledCoordinatorV2 {
     }
     /// Clock projection separated from the store write. The archive head is
     /// unchanged; publication records the authenticated clock beside it.
-    pub fn prepare_clock(mut self, now: u64, authenticate: impl FnOnce(u64) -> bool) -> Result<PreparedRecoveryUpdateV2, RecoveryErrorV2> {
+    pub fn prepare_clock(
+        mut self,
+        now: u64,
+        authenticate: impl FnOnce(u64) -> bool,
+    ) -> Result<PreparedRecoveryUpdateV2, RecoveryErrorV2> {
         let previous = self.head()?;
         self.advance_clock(now, authenticate)?;
         Ok(PreparedRecoveryUpdateV2 { journal: self, previous, outcome: Ok(()) })

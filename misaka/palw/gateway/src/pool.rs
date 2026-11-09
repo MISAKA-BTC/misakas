@@ -111,10 +111,7 @@ impl<T> SlotPool<T> {
                 self.freed.notify_all();
                 return Ok(SlotGuard { pool: self, index, worker });
             }
-            let (next, _) = self
-                .freed
-                .wait_timeout(state, Duration::from_millis(20))
-                .expect("the pool lock is never poisoned");
+            let (next, _) = self.freed.wait_timeout(state, Duration::from_millis(20)).expect("the pool lock is never poisoned");
             state = next;
         }
     }
@@ -358,16 +355,15 @@ mod tests {
         let waiting_cancel = Arc::clone(&cancel);
         let took = Arc::new(AtomicUsize::new(0));
         let took_flag = Arc::clone(&took);
-        let handle = std::thread::spawn(move || {
-            match waiting_pool.acquire_unless_cancelled(&|| waiting_cancel.load(Ordering::Acquire)) {
+        let handle =
+            std::thread::spawn(move || match waiting_pool.acquire_unless_cancelled(&|| waiting_cancel.load(Ordering::Acquire)) {
                 Ok(guard) => {
                     took_flag.fetch_add(1, Ordering::SeqCst);
                     std::thread::sleep(Duration::from_millis(30));
                     drop(guard);
                 }
                 Err(SlotWaitError::CancelledWhileWaiting) => {}
-            }
-        });
+            });
         while pool.waiting() == 0 {
             std::thread::sleep(Duration::from_millis(2));
         }

@@ -57,10 +57,7 @@ impl Candidate {
 /// serialized opening and the bounded scan of the original ID sequence.
 pub(crate) fn eog_stop_work_v1(eog_ids: u32) -> Work {
     let count = u64::from(eog_ids);
-    Work {
-        material_bytes: count * 4,
-        calls: count.div_ceil(crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1 as u64) + 1,
-    }
+    Work { material_bytes: count * 4, calls: count.div_ceil(crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1 as u64) + 1 }
 }
 
 fn charge(work: &mut Work, budget: WorkBudget, bytes: u64, calls: u64) -> Result<(), Refusal> {
@@ -143,5 +140,12 @@ pub(crate) fn build(base: &Court, material: &impl Material, budget: WorkBudget) 
 
 fn finish_candidate(c: Court, work: Work) -> Result<Candidate, Refusal> {
     let finding = native(c.fault())?;
-    Ok(Candidate { context: c.seed_id(), execution_root: c.execution_root_v1(), table_root: c.table_root, job: c.job_id, finding, work })
+    Ok(Candidate {
+        context: c.seed_id(),
+        execution_root: c.execution_root_v1(),
+        table_root: c.table_root,
+        job: c.job_id,
+        finding,
+        work,
+    })
 }

@@ -664,9 +664,8 @@ pub fn palw_tir_public_original_quote_with_diagnostics_v1(
     if let Some(Some(breakdown)) = diagnostics
         && breakdown.semantic_families.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer)
     {
-        breakdown.batch_tokenizer_openings = crate::palw_tokenizer_rendering_v2::palw_rooted_tokenizer_opening_bounds_v1(
-            base, extras, now_daa, original, header,
-        );
+        breakdown.batch_tokenizer_openings =
+            crate::palw_tokenizer_rendering_v2::palw_rooted_tokenizer_opening_bounds_v1(base, extras, now_daa, original, header);
     }
     let (plan, _, _, geometry) = quoted?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
@@ -1152,8 +1151,7 @@ fn install_original_frame_rows_v1(
     // on collect_until (`palw_claim_final_floor_v1`), not on material_until.
     // A stored deadline is not rewritten here.
     if crate::palw_tir_frame_cost_v1::is_batch_public_clock_v5(p.acquisition.clock.version) {
-        if crate::palw_tir_frame_cost_v1::batch_collect_door_refusal_v1(p.terms.accepted_daa, p.terms.collect_until_daa).is_some()
-        {
+        if crate::palw_tir_frame_cost_v1::batch_collect_door_refusal_v1(p.terms.accepted_daa, p.terms.collect_until_daa).is_some() {
             return Err(refused("TIR original collection door outlives the claim's fixed X3 hard deadline"));
         }
         let collection = p
@@ -2888,11 +2886,11 @@ mod conviction_e2e_tests {
         use crate::palw_public_activation_v1::PublicAdjudicationTraceRecordV1;
         use crate::palw_public_adjudication_measured_class_v1::PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1;
         use crate::palw_public_evidence_package_v1::{
-            clamp_public_evidence_package_v1, plan_batch_v5_evidence_package_v1, public_evidence_package_bytes_v1,
-            recompute_committed_primitive_v1, PalwBatchV5EvidencePlanV1,
+            PalwBatchV5EvidencePlanV1, clamp_public_evidence_package_v1, plan_batch_v5_evidence_package_v1,
+            public_evidence_package_bytes_v1, recompute_committed_primitive_v1,
         };
         use crate::palw_tir_frame_cost_v1::{
-            batch_public_objection_refused_v1, is_batch_public_clock_v5, PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1,
+            PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1, batch_public_objection_refused_v1, is_batch_public_clock_v5,
         };
         use crate::palw_tir_objective_v1::PalwTirObjectiveOutcomeV1;
         assert_eq!(NOTICE_WINDOW_DAA, 3_120);
@@ -3009,12 +3007,8 @@ mod conviction_e2e_tests {
         assert_eq!(state.state_root(), root_before);
         assert_eq!(DISPUTE_WINDOW_DAA, 10_000);
 
-        let trace = PublicAdjudicationTraceRecordV1::fill_from_local_conviction_v1(
-            claim_id,
-            public_claim.output,
-            terms.accepted_daa,
-            next,
-        );
+        let trace =
+            PublicAdjudicationTraceRecordV1::fill_from_local_conviction_v1(claim_id, public_claim.output, terms.accepted_daa, next);
         assert_eq!(trace.claim_hash, Some(claim_id));
         assert_eq!(trace.evidence_root, Some(public_claim.output));
         assert_eq!(trace.acceptance_daa, Some(terms.accepted_daa));
@@ -3028,7 +3022,11 @@ mod conviction_e2e_tests {
         assert!(trace.final_daa.is_none());
         assert!(trace.source_commit == [0; 20]);
         assert!(crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1.is_empty());
-        assert!(crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1.iter().all(|row| row.block_reference.is_none()));
+        assert!(
+            crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_TRACE_RECORDS_V1
+                .iter()
+                .all(|row| row.block_reference.is_none())
+        );
         assert!(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1.is_empty());
         assert!(!crate::palw_public_activation_v1::PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1);
         assert!(crate::config::params::palw_t12_shipped_params().palw_batch_court_v1.is_none());
@@ -3046,8 +3044,8 @@ mod conviction_e2e_tests {
         use crate::palw_public_activation_v1::PublicAdjudicationTraceRecordV1;
         use crate::palw_public_adjudication_measured_class_v1::PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1;
         use crate::palw_public_evidence_package_v1::{
-            clamp_public_evidence_package_v1, recompute_committed_primitive_v1, PalwPublicEvidencePackageV1,
-            PalwPublicExpectedOperationV1,
+            PalwPublicEvidencePackageV1, PalwPublicExpectedOperationV1, clamp_public_evidence_package_v1,
+            recompute_committed_primitive_v1,
         };
         use crate::palw_tir_frame_cost_v1::PALW_BATCH_PUBLIC_BUDGET_AFTER_NOTICE_DAA_V1;
         assert_eq!(NOTICE_WINDOW_DAA, 3_120);
@@ -3074,15 +3072,7 @@ mod conviction_e2e_tests {
         assert_eq!(package.recorded_output, 120);
         assert!(matches!(package.expected_operation, PalwPublicExpectedOperationV1::Clamp { lo: 0, hi: 100, .. }));
         let payload = borsh::to_vec(&package).unwrap();
-        let tx = crate::tx::Transaction::new(
-            0,
-            vec![],
-            vec![],
-            0,
-            crate::subnets::SUBNETWORK_ID_NATIVE,
-            0,
-            payload,
-        );
+        let tx = crate::tx::Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_NATIVE, 0, payload);
         let header = crate::header::Header::new_finalized(
             crate::constants::BLOCK_VERSION,
             vec![vec![Hash64::default()]].try_into().unwrap(),
@@ -8187,15 +8177,26 @@ mod conviction_e2e_tests {
         let (state, params, extras) = world(&fx, frame);
         let point = at(frame, 6);
         let intent = SignedConstraintStopIntentV1 {
-            version: 1, claim, scope_id: h(2), policy_id: h(3), semantics_id: semantics.commitment(), material_id: h(4),
-            position: frame.original_v1().decode_tokens_executed, stop_reason: frame.original_v1().stop_reason,
-            filer: outsider(), signature: vec![7; SIG],
+            version: 1,
+            claim,
+            scope_id: h(2),
+            policy_id: h(3),
+            semantics_id: semantics.commitment(),
+            material_id: h(4),
+            position: frame.original_v1().decode_tokens_executed,
+            stop_reason: frame.original_v1().stop_reason,
+            filer: outsider(),
+            signature: vec![7; SIG],
         };
         let operands = borsh::to_vec(&(&intent, table.eog_opening().unwrap(), Vec::<u8>::new())).unwrap();
         let receipt = RootedBatchStopReceiptV1 {
-            version: 2, claim, source_id: plan.source_id,
-            operands_digest: RootedBatchStopReceiptV1::digest_operands(&operands).unwrap(), at: point,
-            material_until_daa: plan.terms.material_until_daa, fault_position: Some(0),
+            version: 2,
+            claim,
+            source_id: plan.source_id,
+            operands_digest: RootedBatchStopReceiptV1::digest_operands(&operands).unwrap(),
+            at: point,
+            material_until_daa: plan.terms.material_until_daa,
+            fault_position: Some(0),
             operands: Some(Box::new(BatchStopControlV1 { operands }).into()),
         };
         let mut clean = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
@@ -8215,8 +8216,7 @@ mod conviction_e2e_tests {
         let settled = b.state.state_root();
         assert!(b.commit_batch_stop_finding_for_tests_v1(receipt.clone(), outsider()).is_err());
         assert_eq!(b.state.state_root(), settled);
-        assert!(matches!(b.state.claim(&claim).unwrap().phase,
-            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+        assert!(matches!(b.state.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
         let archive = b.state.court_end_archive_v1(session).unwrap();
         assert_eq!(archive.adjudication(), CourtEndDispositionV1::TirClaimFault);
         assert_eq!(archive.evidence.as_ref(), &CourtEndEvidenceV1::BatchStop { receipt: Box::new(receipt) });

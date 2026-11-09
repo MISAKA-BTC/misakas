@@ -263,7 +263,6 @@ impl<'a> TransitionBuilder<'a> {
         self.weight_cap_retotal(before, self.weight_cap_term(&bond));
     }
 
-
     /// **One exposure ceiling for both arms that ACCUSE** (ADR-0062 SA-7(c)).
     ///
     /// A `DefaultAccused` and a `CourtOpened` are one act priced twice: a bonded party freezes
@@ -375,7 +374,6 @@ impl<'a> TransitionBuilder<'a> {
         }
         Ok(())
     }
-
 
     /// Reserve this writer's actual row copy, absent membership and journal
     /// replacement before either collection changes. This accounts requested
@@ -1044,7 +1042,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-
     /// **ADR-0095 §4.5 — the tenure clock, moved from the one place a balance changes.**
     ///
     /// It starts when a balance rises from zero, is PRESERVED when a holder buys more, and is
@@ -1080,7 +1077,6 @@ impl<'a> TransitionBuilder<'a> {
         }
         Ok(())
     }
-
 
     pub(super) fn write_model_version(
         &mut self,
@@ -1139,7 +1135,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-
     pub(super) fn write_class_shard_plan(
         &mut self,
         key: Hash64,
@@ -1167,7 +1162,6 @@ impl<'a> TransitionBuilder<'a> {
         }
         Ok(())
     }
-
 
     pub(super) fn write_class_step_ladder(&mut self, key: Hash64, new: Option<u64>) -> Result<(), PalwStateV2Error> {
         self.reserve_map_journal_v1(&key, &new, !self.state.class_step_ladders.contains_key(&key), "native class_step_ladder writer")?;
@@ -1346,7 +1340,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-
     pub(super) fn write_panel_reserve(&mut self, new: u64) -> Result<(), PalwStateV2Error> {
         self.reserve_journal_slots_v1(1, "native panel_reserve writer")?;
         let old = self.state.panel_reserve_sompi;
@@ -1366,7 +1359,6 @@ impl<'a> TransitionBuilder<'a> {
         }
         Ok(())
     }
-
 
     pub(super) fn write_round_seed_anchor(
         &mut self,
@@ -1398,7 +1390,6 @@ impl<'a> TransitionBuilder<'a> {
         }
         Ok(())
     }
-
 
     pub(super) fn write_work_target_shadow(
         &mut self,
@@ -1760,7 +1751,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-
     /// **RFC-0002 Phase F: the one writer of `tir_classes`**, journaled `TirClass` (88).
     pub(super) fn write_tir_class(
         &mut self,
@@ -2108,7 +2098,6 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-
     /// **ADR-0160 F-N: register the attempt's bond's unmet demand for its class** through `now + H_L`, when
     /// `refused` is a refusal for want of a unit — lane N's `NetworkRoomExhausted`, or the class room's
     /// `FloorRoomExhausted` / `BondClassShareExceeded` (which past F-N divides the room by lane N's rule) —
@@ -2165,7 +2154,6 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<(), PalwStateV2Error> {
         self.read().check_network_room_v1(bond, claim, now_daa)
     }
-
 
     /// **4-ter.3 step 6 (the forger's race): the acquitting close's record** — past
     /// `palw_offence_attribution`, a PROVEN `ChallengerDefeated` on a dissection whose bottom read an
@@ -8942,7 +8930,6 @@ impl<'a> TransitionBuilder<'a> {
         self.write_court_close_group(key, None)?;
         Ok(())
     }
-
 
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 

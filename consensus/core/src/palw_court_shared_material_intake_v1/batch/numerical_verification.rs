@@ -41,16 +41,24 @@ pub struct NumericalBatchReplayProfileV1 {
 
 impl NumericalBatchReplayBudgetV1 {
     pub(crate) fn service_cost_v1(self) -> Option<ServiceCost> {
-        if self.workspace_bytes == 0 || self.base_work == 0 || self.io == 0
+        if self.workspace_bytes == 0
+            || self.base_work == 0
+            || self.io == 0
             || !(1..=crate::palw_batch_court_v1::rooted::MAX_NUMERICAL_FAULT_BYTES_V1 as u64).contains(&self.max_fault_bytes)
-            || self.work.max_source_reads == 0 || self.work.max_target_requests == 0
-            || self.work.evaluation.max_elements == 0 || self.work.evaluation.max_terms == 0
+            || self.work.max_source_reads == 0
+            || self.work.max_target_requests == 0
+            || self.work.evaluation.max_elements == 0
+            || self.work.evaluation.max_terms == 0
         {
             return None;
         }
         // Both the construction pass and the independent adjudicator can
         // reach the supplied evaluation ceilings.
-        let work = self.work.evaluation.max_elements.checked_add(self.work.evaluation.max_terms)?
+        let work = self
+            .work
+            .evaluation
+            .max_elements
+            .checked_add(self.work.evaluation.max_terms)?
             .checked_mul(2)?
             .checked_add(self.work.max_target_requests)?
             .checked_add(self.work.max_source_reads)?
@@ -64,7 +72,9 @@ impl NumericalBatchReplayBudgetV1 {
     pub(crate) fn covers_terminal_recheck_v1(self, terminal: ServiceCost) -> bool {
         self.service_cost_v1().is_some_and(|replay| {
             terminal.bytes >= crate::palw_batch_court_v1::carriage::BATCH_NUMERICAL_TERMINAL_BYTES_V1
-                && terminal.work >= replay.work && terminal.io >= replay.io && terminal.controls == 1
+                && terminal.work >= replay.work
+                && terminal.io >= replay.io
+                && terminal.controls == 1
         })
     }
 
@@ -161,7 +171,9 @@ pub(crate) fn reserved_numerical_verification_slot_v1<'a>(
     if signed.scope != context.scope_id || !binding.packet_ids.contains(&packet) || service.book.assigned_daa(&packet) != Some(daa) {
         return Err("numerical Batch verification is outside its reserved slot".into());
     }
-    service.book.packet(&packet)
+    service
+        .book
+        .packet(&packet)
         .filter(|packet| packet.cost.bytes > VERIFICATION_CARRIER_BYTES)
         .ok_or_else(|| "numerical Batch verification has no correctly sized slot".into())
 }
@@ -171,10 +183,7 @@ pub(crate) fn quote_numerical_verification_v1(
     params: &crate::palw_state_v2::PalwStateParamsV2,
     claim: Hash64,
     now: u64,
-    rules_at: impl FnOnce(u64) -> Option<(
-        crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
-        NumericalBatchReplayProfileV1,
-    )>,
+    rules_at: impl FnOnce(u64) -> Option<(crate::palw_court_close_receipt_v1::NativeCourtRulesV1, NumericalBatchReplayProfileV1)>,
 ) -> Result<serde_json::Value, String> {
     use crate::palw_court_shared_tir_state_v1::context;
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
@@ -203,7 +212,14 @@ pub(crate) fn quote_numerical_verification_v1(
         return Err("numerical Batch has no accepted notice".into());
     };
     let signed = SignedNumericalBatchVerificationV1 {
-        version: 1, claim, scope, notice: prepared.notice, leaf: prepared.leaf, policy, filer: notice.opened_by, signature: vec![],
+        version: 1,
+        claim,
+        scope,
+        notice: prepared.notice,
+        leaf: prepared.leaf,
+        policy,
+        filer: notice.opened_by,
+        signature: vec![],
     };
     let frame = super::super::frame_of(state, claim)?;
     super::check_external_batch_filer_v1(frame, signed.filer)?;
@@ -275,13 +291,25 @@ mod tests {
         let h = Hash64::from_u64_word;
         let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([123; 32]);
         let mut intent = SignedNumericalBatchVerificationV1 {
-            version: 1, claim: h(1), scope: h(2), notice: h(3), leaf: 4, policy: h(5),
-            filer: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(6), 7)), signature: vec![],
+            version: 1,
+            claim: h(1),
+            scope: h(2),
+            notice: h(3),
+            leaf: 4,
+            policy: h(5),
+            filer: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(6), 7)),
+            signature: vec![],
         };
         let net = h(8);
         intent.signature = libcrux_ml_dsa::ml_dsa_87::sign(
-            &keys.signing_key, intent.signing_message_v1(net).unwrap().as_byte_slice(), BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1, [124; 32],
-        ).unwrap().as_ref().to_vec();
+            &keys.signing_key,
+            intent.signing_message_v1(net).unwrap().as_byte_slice(),
+            BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1,
+            [124; 32],
+        )
+        .unwrap()
+        .as_ref()
+        .to_vec();
         let bytes = borsh::to_vec(&intent).unwrap();
         assert_eq!(bytes.len() as u64, SIGNED_BODY_BYTES);
         assert_eq!(borsh::from_slice::<SignedNumericalBatchVerificationV1>(&bytes).unwrap(), intent);
@@ -296,13 +324,18 @@ mod tests {
         assert_eq!(decode_batch_court_payload_v1(&payload).unwrap(), Some(wire.clone()));
         use crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1;
         use crate::palw_state_v2::PalwBlockContextV2;
-        use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint,
-            TransactionOutput, UtxoEntry, ValidatedTransaction};
+        use crate::tx::{
+            PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
+            ValidatedTransaction,
+        };
         let tx = Transaction::new(
             0,
             vec![TransactionInput::new(TransactionOutpoint::new(h(10), 0), vec![], 0, 0)],
             vec![TransactionOutput::new(1, ScriptPublicKey::default())],
-            0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload.clone(),
+            0,
+            crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload.clone(),
         );
         let utxo = UtxoEntry::new(4, ScriptPublicKey::default(), 1, false);
         let tx = ValidatedTransaction::new(PopulatedTransaction::new(&tx, vec![utxo]), 3);
@@ -323,7 +356,8 @@ mod tests {
             SignedNumericalBatchVerificationV1 { policy: h(9), ..intent.clone() },
             SignedNumericalBatchVerificationV1 { scope: h(9), ..intent.clone() },
             SignedNumericalBatchVerificationV1 {
-                filer: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(6), 8)), ..intent.clone()
+                filer: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(6), 8)),
+                ..intent.clone()
             },
         ] {
             assert!(altered.verify_signature_v1(net, key).is_err());
@@ -347,9 +381,7 @@ mod tests {
     fn numerical_replay_quotes_both_passes_and_rejects_unfunded_work() {
         let mut budget = NumericalBatchReplayBudgetV1::test_only_v1();
         let cost = budget.service_cost_v1().unwrap();
-        assert_eq!(cost, ServiceCost {
-            bytes: VERIFICATION_CARRIER_BYTES + budget.max_fault_bytes, work: 18, io: 6, controls: 1,
-        });
+        assert_eq!(cost, ServiceCost { bytes: VERIFICATION_CARRIER_BYTES + budget.max_fault_bytes, work: 18, io: 6, controls: 1 });
         assert!(budget.covers_terminal_recheck_v1(cost));
         assert!(!budget.covers_terminal_recheck_v1(ServiceCost { work: cost.work - 1, ..cost }));
         assert!(!budget.covers_terminal_recheck_v1(ServiceCost { io: cost.io - 1, ..cost }));

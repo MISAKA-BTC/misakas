@@ -388,8 +388,8 @@ fn derive_with_native_scratch(
     check_operands(statement, raw, eog.ids.len(), budget).map_err(Evidence)?;
     // Same conservative parser multiplier as the existing Node tokenizer
     // check. Includes separate EOG-sort scratch and bounded tree overhead.
-    let scratch = tokenizer_scratch_bytes_v2(statement, eog.ids.len())
-        .ok_or_else(|| Evidence("tokenizer scratch estimate overflow".into()))?;
+    let scratch =
+        tokenizer_scratch_bytes_v2(statement, eog.ids.len()).ok_or_else(|| Evidence("tokenizer scratch estimate overflow".into()))?;
     let _lease = memory.try_reserve(MemoryClass::Native, scratch)?;
     derive_tokenizer_rendering_v2(statement, raw, eog, budget).map_err(Evidence)
 }
@@ -708,7 +708,6 @@ mod tests {
         oversized.rendering = Some(b"unregistered".to_vec());
         assert!(!facts.verifies_rendering(0, &oversized));
     }
-
 
     #[test]
     fn rejects_wrong_table_even_with_its_own_valid_eog_opening() {
@@ -1195,8 +1194,7 @@ pub(crate) fn palw_rooted_tokenizer_opening_bounds_v1(
     }
     let mut bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(row.record_id_v1(), facts);
     if record.facts.tiled && original.decode_tokens_executed > 0 {
-        bounds.full_ids_body_bytes =
-            Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(original.decode_tokens_executed));
+        bounds.full_ids_body_bytes = Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(original.decode_tokens_executed));
     }
     Some(bounds)
 }

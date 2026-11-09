@@ -44,8 +44,8 @@
 #![cfg_attr(test, allow(warnings))]
 pub mod cellproc;
 pub mod cellproc_v2;
-pub mod cellstep_v2;
 pub mod cellstep;
+pub mod cellstep_v2;
 pub mod cone;
 pub mod elem;
 pub mod exec;

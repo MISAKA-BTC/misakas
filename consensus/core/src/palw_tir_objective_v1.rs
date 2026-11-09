@@ -570,7 +570,9 @@ pub fn adjudicate_original_package_v1(
                 verdict,
             }))
         }
-        PalwPublicEvidenceJudgmentV1::Holds { .. } => Ok(PalwTirObjectiveOutcomeV1::PredicateHolds { claim: claim.claim_id, proof_id }),
+        PalwPublicEvidenceJudgmentV1::Holds { .. } => {
+            Ok(PalwTirObjectiveOutcomeV1::PredicateHolds { claim: claim.claim_id, proof_id })
+        }
     }
 }
 

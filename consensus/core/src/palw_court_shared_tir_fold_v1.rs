@@ -133,7 +133,8 @@ fn request_inner(
         check_batch_notice_open_slot_v1(&b.state, c, ctx.daa_score, target.first_open_ordinal()).map_err(refused)?;
         None
     } else {
-        let packets = shared::shared_coordinate_packets_v1(&source, &set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
+        let packets =
+            shared::shared_coordinate_packets_v1(&source, &set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
         let cursor = shared_service_cursor_v1(&b.state, claim);
         let start = ctx.daa_score.max(cursor.map_or(c.original_accepted_daa, |end| end.saturating_add(1)));
         let per = crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1;
@@ -168,7 +169,9 @@ fn check_batch_notice_open_slot_v1(
     ordinal: u64,
 ) -> Result<(), String> {
     use crate::palw_batch_court_v1::{carriage::batch_open_wire_bytes_v1, rooted::reserved_open_slot_v1};
-    let first = c.original_accepted_daa.checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
+    let first = c
+        .original_accepted_daa
+        .checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
         .ok_or("Batch initial notice clock overflows")?;
     let bytes = batch_open_wire_bytes_v1(1)?;
     let (_, _, slot) = reserved_open_slot_v1(state, c.claim, c.scope_id, ordinal, bytes)?;

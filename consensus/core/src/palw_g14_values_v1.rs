@@ -470,7 +470,10 @@ mod tests {
         assert!(shipped.palw_batch_court_v1_fence().is_none());
         shipped.validate_palw_batch_court_v1().unwrap();
         let mut armed_params = crate::palw_g14_gates_v1::palw_g14_genesis_test_params_v1();
-        let floor = armed_params.palw_tir_public_conviction_v1_fence().expect("conviction").daa_score()
+        let floor = armed_params
+            .palw_tir_public_conviction_v1_fence()
+            .expect("conviction")
+            .daa_score()
             .max(armed_params.palw_audit_2026_09_11_fence().expect("audit").daa_score());
         armed_params.palw_batch_court_v1 = Some(crate::config::params::ForkActivation::new(floor));
         assert_eq!(armed_params.palw_batch_court_v1_fence().expect("batch").daa_score(), floor);

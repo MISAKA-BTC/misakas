@@ -151,9 +151,8 @@ pub(crate) fn check_open_response_slots_v1(
     schedule: MaterialIntakeScheduleV1,
     phased: bool,
 ) -> Result<(), String> {
-    let deadline = batch_open_response_deadline_v1(
-        rooted.claim, rooted.scope_id, rooted.ordinal, &rooted.demand, book, owned, schedule, phased,
-    )?;
+    let deadline =
+        batch_open_response_deadline_v1(rooted.claim, rooted.scope_id, rooted.ordinal, &rooted.demand, book, owned, schedule, phased)?;
     // A later deadline would advertise response time with no corresponding
     // slots and could extend the wait into a reserved fallback turn.
     if rooted.demand.response_deadline_daa != deadline {
@@ -177,9 +176,7 @@ pub(crate) fn batch_open_response_deadline_v1(
     phased: bool,
 ) -> Result<u64, String> {
     use crate::palw_batch_court_v1::BatchRangeAuthenticationV1;
-    if u64::from(demand.part_bytes) != PART
-        || !(1..=crate::palw_batch_court_v1::MAX_BATCH_RANGES_V1).contains(&demand.ranges.len())
-    {
+    if u64::from(demand.part_bytes) != PART || !(1..=crate::palw_batch_court_v1::MAX_BATCH_RANGES_V1).contains(&demand.ranges.len()) {
         return Err("Batch native demand has an invalid part width or range count".into());
     }
     let parts: u64 = demand.ranges.iter().map(|range| u64::from(range.bytes).div_ceil(PART)).sum();
@@ -209,9 +206,8 @@ pub(crate) fn batch_open_response_deadline_v1(
             return Err("Batch native demand requires whole range authentication".into());
         }
         let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: range_index as u32 };
-        let span = checked_response_span_v1(
-            position, claim, scope, u64::from(range.bytes), service.clone(), book, owned, open_before,
-        )?;
+        let span =
+            checked_response_span_v1(position, claim, scope, u64::from(range.bytes), service.clone(), book, owned, open_before)?;
         let expires = schedule
             .draft_expires_v1(span.earliest_begin, hard, demand.case_window.material_until_daa)
             .map_err(|_| "Batch response draft expiry cannot be derived")?;
@@ -244,8 +240,9 @@ fn checked_response_span_v1(
     owned: &std::collections::BTreeSet<[u8; 64]>,
     open_before: Option<u64>,
 ) -> Result<ResponseSpanV1, String> {
-    let graph = position
-        .reservation_graph_v1(claim, scope, bytes, service.clone(), |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 }))?;
+    let graph = position.reservation_graph_v1(claim, scope, bytes, service.clone(), |_, bytes| {
+        Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 })
+    })?;
     let slot = |id| {
         book.assigned_daa(&id)
             .filter(|daa| service.contains(daa))
@@ -730,10 +727,7 @@ pub(crate) fn reserve_rooted_batch_repair_v1(
     for binding in service.claims.values().filter(|binding| service.book.has_missed_slot_v1(&binding.packet_ids)) {
         let claim = binding.claim;
         let count = binding.packet_ids.len() as u64;
-        if state
-            .staged_court_range_v1(&Key::CourtBatchDemand(claim, 0), &Key::CourtBatchDemand(claim, u64::MAX))
-            .next().is_some()
-        {
+        if state.staged_court_range_v1(&Key::CourtBatchDemand(claim, 0), &Key::CourtBatchDemand(claim, u64::MAX)).next().is_some() {
             largest = largest.max(count);
         }
         if state.court_shared_initial_notice_v1(claim).is_some()
@@ -962,8 +956,7 @@ fn exclude_inactive_batch_route_v1(
         _ => return Err(InvalidState),
     };
     let numerical_open = batch_open_packet_v1(claim, scope, 0).map_err(|_| InvalidState)?.as_bytes();
-    let stop_open = batch_open_packet_v1(claim, scope, constraint_stop::BATCH_STOP_ORDINAL_V1)
-        .map_err(|_| InvalidState)?.as_bytes();
+    let stop_open = batch_open_packet_v1(claim, scope, constraint_stop::BATCH_STOP_ORDINAL_V1).map_err(|_| InvalidState)?.as_bytes();
     let mut pending = Vec::with_capacity(owned.len());
     let mut ancestors = |root| {
         let mut seen = std::collections::BTreeSet::from([root]);
@@ -985,8 +978,10 @@ fn exclude_inactive_batch_route_v1(
     };
     let numerical_route = ancestors(numerical)?;
     let stop_route = ancestors(stop)?;
-    if !numerical_route.contains(&numerical_open) || !stop_route.contains(&stop_open)
-        || numerical_route.contains(&stop_open) || stop_route.contains(&numerical_open)
+    if !numerical_route.contains(&numerical_open)
+        || !stop_route.contains(&stop_open)
+        || numerical_route.contains(&stop_open)
+        || stop_route.contains(&numerical_open)
     {
         return Err(InvalidState);
     }
@@ -1081,7 +1076,8 @@ mod tests {
     #[test]
     fn draft_ceiling_counts_only_owned_immutable_packet_costs() {
         let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
-        let packet = |id, release_daa, bytes| ServicePacket { id: [id; 64], release_daa, service_before: release_daa + 1, cost: cost(bytes) };
+        let packet =
+            |id, release_daa, bytes| ServicePacket { id: [id; 64], release_daa, service_before: release_daa + 1, cost: cost(bytes) };
         let mut book = ServiceReservations::new(cost(u64::MAX)).unwrap();
         book.reserve(&[packet(1, 1, 50), packet(2, 2, 60), packet(3, 3, u64::MAX)], 5).unwrap();
         let mut owned = std::collections::BTreeSet::from([[1; 64], [2; 64]]);
@@ -1387,7 +1383,8 @@ mod tests {
         let (finish, stop, unrelated) = (h(73).as_bytes(), h(74).as_bytes(), h(75).as_bytes());
         let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
         let node = |id, release_daa, service_before, predecessors| CausalServicePacketV1 {
-            packet: ServicePacket { id, release_daa, service_before, cost }, predecessors,
+            packet: ServicePacket { id, release_daa, service_before, cost },
+            predecessors,
         };
         let graph = [
             node(numerical_open, 10, 12, vec![]),
@@ -1409,7 +1406,8 @@ mod tests {
         assert_eq!(book.repair_missing_ordered_v1(&owned, 25, &edges), Err(ServiceRefusal::DeadlineExhausted));
         assert_eq!(book, original);
         let mut selected = owned.clone();
-        exclude_inactive_batch_route_v1(claim, scope, BatchNoticeTargetV1::Numerical { leaf: 0 }, &owned, &edges, &mut selected).unwrap();
+        exclude_inactive_batch_route_v1(claim, scope, BatchNoticeTargetV1::Numerical { leaf: 0 }, &owned, &edges, &mut selected)
+            .unwrap();
         assert!(selected.contains(&terminal) && selected.contains(&unrelated));
         assert!(!selected.contains(&stop_open) && !selected.contains(&stop));
         assert_eq!(book.repair_missing_ordered_v1(&selected, 25, &edges), Ok(1));
@@ -1464,8 +1462,16 @@ mod tests {
         let mut earliest = rooted.clone();
         earliest.demand.response_deadline_daa = finish;
         let deadline = batch_open_response_deadline_v1(
-            earliest.claim, earliest.scope_id, earliest.ordinal, &earliest.demand, &book, &owned, schedule, false,
-        ).unwrap();
+            earliest.claim,
+            earliest.scope_id,
+            earliest.ordinal,
+            &earliest.demand,
+            &book,
+            &owned,
+            schedule,
+            false,
+        )
+        .unwrap();
         assert_eq!(deadline, finish + 1);
         assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule, false).is_err());
         earliest.demand.response_deadline_daa = deadline;

@@ -5,9 +5,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub fn unix_now() -> u64 {
     let real = real_unix_now();
     #[cfg(feature = "test-clock")]
-    { test_clock::read(real) }
+    {
+        test_clock::read(real)
+    }
     #[cfg(not(feature = "test-clock"))]
-    { real }
+    {
+        real
+    }
 }
 
 #[inline]
@@ -31,11 +35,16 @@ pub mod test_clock {
         wall: Instant,
     }
 
-    pub fn active() -> bool { ACTIVE.load(Ordering::SeqCst) }
+    pub fn active() -> bool {
+        ACTIVE.load(Ordering::SeqCst)
+    }
 
     pub fn start_at(initial_ms: u64) -> ClockGuard {
-        assert_eq!(std::env::var("KASPA_TEST_CLOCK_ISOLATED").as_deref(), Ok("1"),
-            "the simulated wall clock requires an isolated test process");
+        assert_eq!(
+            std::env::var("KASPA_TEST_CLOCK_ISOLATED").as_deref(),
+            Ok("1"),
+            "the simulated wall clock requires an isolated test process"
+        );
         assert!(!ACTIVE.load(Ordering::SeqCst), "only one wall-clock scope per test process");
         let real = super::real_unix_now();
         OFFSET_MS.store(i64::try_from(initial_ms as i128 - real as i128).expect("test clock offset fits"), Ordering::SeqCst);
@@ -68,7 +77,10 @@ pub mod test_clock {
             let elapsed_ms = super::unix_now().saturating_sub(self.initial_ms);
             ACTIVE.store(false, Ordering::SeqCst);
             OFFSET_MS.store(0, Ordering::SeqCst);
-            eprintln!("[test-clock] simulated elapsed {elapsed_ms}ms; actual monotonic elapsed {:?}; scope released", self.wall.elapsed());
+            eprintln!(
+                "[test-clock] simulated elapsed {elapsed_ms}ms; actual monotonic elapsed {:?}; scope released",
+                self.wall.elapsed()
+            );
         }
     }
 }

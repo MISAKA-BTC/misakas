@@ -241,10 +241,7 @@ impl Monitor {
         let seed = seeds[0];
         assert_eq!(Hash64::from_bytes(seed.signing_message().try_into().unwrap()), reference.seed_id);
         let Some(PalwAuxiliaryPublicCourtSeedV1::Tokenizer {
-            raw_tokenizer_bytes,
-            tokenizer_key_events,
-            operand_tokenizer_bytes,
-            ..
+            raw_tokenizer_bytes, tokenizer_key_events, operand_tokenizer_bytes, ..
         }) = &seed.auxiliary
         else {
             unreachable!()
@@ -253,10 +250,7 @@ impl Monitor {
             (*raw_tokenizer_bytes, *tokenizer_key_events, *operand_tokenizer_bytes),
             (self.signed_length, self.signed_keys, self.actual_length)
         );
-        assert_eq!(
-            (job.execution_root, job.trace_root),
-            (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root)
-        );
+        assert_eq!((job.execution_root, job.trace_root), (seed.binding.committed_execution_root, seed.binding.full_logits_trace_root));
         let immutable = view.registered_semantics.as_ref().unwrap();
         assert_eq!(
             (immutable.raw_tokenizer_bytes, immutable.tokenizer_key_events),

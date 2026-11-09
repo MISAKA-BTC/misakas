@@ -175,8 +175,11 @@ fn values_of_lanes(dtype: DType, le: &[u8]) -> Vec<i128> {
 }
 
 fn lanes_of(data: Slice<'_>, from: usize, n: usize, out: &mut Vec<u8>) {
-    if data.dtype() == DType::I64 { super::run::lanes_le_v1(data,from,n,out); }
-    else { crate::cellstep::lanes_le_of_v1(data, from, n, out); }
+    if data.dtype() == DType::I64 {
+        super::run::lanes_le_v1(data, from, n, out);
+    } else {
+        crate::cellstep::lanes_le_of_v1(data, from, n, out);
+    }
 }
 
 /// What the cell's sink collected at one position: every committed tile, by `(node slot, tile)`.
@@ -1032,8 +1035,13 @@ pub fn tir_kernel_backend_registered_v1() -> bool {
     DEVICE_V1.get().is_some()
 }
 
-pub fn verify_cell_stepping_wide_q24_v2(req: &TirCellRequestV1<'_>, exec: &mut dyn crate::cellstep_v2::TirCellStepperV2) -> TirCellVerdictV1 {
-    if !req.plan.program.wide_logits_q24() { return TirCellVerdictV1::Refused("v2 cell requires wide Q24".into()); }
+pub fn verify_cell_stepping_wide_q24_v2(
+    req: &TirCellRequestV1<'_>,
+    exec: &mut dyn crate::cellstep_v2::TirCellStepperV2,
+) -> TirCellVerdictV1 {
+    if !req.plan.program.wide_logits_q24() {
+        return TirCellVerdictV1::Refused("v2 cell requires wide Q24".into());
+    }
     let (space, ctx, cell) = (req.space, req.ctx, req.cell);
     let job = match space.job_shape(ctx) {
         Ok(job) => job,
@@ -1145,7 +1153,11 @@ pub fn verify_cell_stepping_wide_q24_v2(req: &TirCellRequestV1<'_>, exec: &mut d
                     continue;
                 }
                 let leaf = PalwStepTileLeafV1 {
-                    version: if space.leaf_at(ctx,index).is_some_and(|l|l.dtype==misaka_palw_tir::DType::I64) {2} else {PALW_TIR_STEP_LEAF_VERSION_V1},
+                    version: if space.leaf_at(ctx, index).is_some_and(|l| l.dtype == misaka_palw_tir::DType::I64) {
+                        2
+                    } else {
+                        PALW_TIR_STEP_LEAF_VERSION_V1
+                    },
                     coord: PalwStepCoordinateV1 { call_index: call, node_slot: *slot, position, tile_index: *tile },
                     value_count: *count,
                     values_le: lanes.clone(),
@@ -1170,7 +1182,12 @@ pub fn verify_cell_stepping_wide_q24_v2(req: &TirCellRequestV1<'_>, exec: &mut d
             if end == n_occ && runs_post {
                 let row: Vec<i64> = exec.logits_lanes();
                 if !row.is_empty() && a + 1 < job.positions && a + 1 >= job.prefill {
-                    let want = kaspa_consensus_core::palw_logits_q24_v2::select(&row,&kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY, a+1-job.prefill).unwrap_or(0) as u32;
+                    let want = kaspa_consensus_core::palw_logits_q24_v2::select(
+                        &row,
+                        &kaspa_consensus_core::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
+                        a + 1 - job.prefill,
+                    )
+                    .unwrap_or(0) as u32;
                     if want != req.tokens[(a + 1) as usize] {
                         return TirCellVerdictV1::TokenFault { position: a };
                     }

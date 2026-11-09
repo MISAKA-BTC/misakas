@@ -1,5 +1,7 @@
 //! Branch-retained Batch demand and its original's reserved opening slot.
-use super::{BatchCourtWindowV1, BatchDemandV1, BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1, carriage::BatchStopControlV1};
+use super::{
+    BatchCourtWindowV1, BatchDemandV1, BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1, carriage::BatchStopControlV1,
+};
 use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload;
 use crate::palw_court_shared_tir_state_v1 as shared;
 use crate::palw_native_resource_v1::wire::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, wire_bad};
@@ -27,9 +29,8 @@ pub struct RootedBatchNumericalReceiptV1 {
     pub fault_bytes: Option<PalwSharedCourtV1<Vec<u8>>>,
 }
 
-pub(crate) const MAX_NUMERICAL_FAULT_BYTES_V1: usize = crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(
-    crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64,
-) as usize;
+pub(crate) const MAX_NUMERICAL_FAULT_BYTES_V1: usize =
+    crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64) as usize;
 
 impl RootedBatchNumericalReceiptV1 {
     pub(crate) fn digest_v1(&self) -> Result<Hash64, String> {
@@ -39,8 +40,10 @@ impl RootedBatchNumericalReceiptV1 {
     pub(crate) fn check(&self, key: &Key) -> Result<(), String> {
         let valid_fault_shape = match self.version {
             1 => self.fault_bytes.is_none(),
-            2 => self.fault_evidence.is_some() == self.fault_bytes.is_some()
-                && self.fault_bytes.as_ref().is_none_or(|bytes| !bytes.is_empty() && bytes.len() <= MAX_NUMERICAL_FAULT_BYTES_V1),
+            2 => {
+                self.fault_evidence.is_some() == self.fault_bytes.is_some()
+                    && self.fault_bytes.as_ref().is_none_or(|bytes| !bytes.is_empty() && bytes.len() <= MAX_NUMERICAL_FAULT_BYTES_V1)
+            }
             _ => false,
         };
         if !valid_fault_shape
@@ -59,8 +62,7 @@ impl RootedBatchNumericalReceiptV1 {
         let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(self.notice)) else {
             return Err("numerical Batch receipt has no accepted notice".into());
         };
-        if (context.scope_id, context.source_id, context.material_until_daa)
-            != (self.scope, self.source, self.material_until_daa)
+        if (context.scope_id, context.source_id, context.material_until_daa) != (self.scope, self.source, self.material_until_daa)
             || (notice.claim, notice.scope_id) != (self.claim, self.scope)
             || checked_initial_notice_target_v1(state, context, notice, self.notice)?
                 != Some(shared::BatchNoticeTargetV1::Numerical { leaf: self.leaf })
@@ -101,9 +103,9 @@ pub(crate) fn reserved_numerical_terminal_v1<'a>(
     let service = state.court_service_row_v3_v1().ok_or("numerical terminal has no causal service book")?;
     context.check_binding(&service.state)?;
     let binding = service.state.claims.get(&claim).ok_or("numerical terminal has no original booking")?;
-    let (verification, terminal) = crate::palw_court_shared_material_intake_v1::batch::admission::batch_numerical_service_ids_v1(
-        claim, receipt.scope,
-    ).map_err(|_| "numerical terminal packet identities are invalid")?;
+    let (verification, terminal) =
+        crate::palw_court_shared_material_intake_v1::batch::admission::batch_numerical_service_ids_v1(claim, receipt.scope)
+            .map_err(|_| "numerical terminal packet identities are invalid")?;
     if receipt.digest_v1()? != receipt_digest
         || !binding.packet_ids.contains(&verification)
         || !binding.packet_ids.contains(&terminal)
@@ -121,8 +123,19 @@ pub(crate) fn reserved_numerical_terminal_v1<'a>(
 impl BorshSerialize for RootedBatchNumericalReceiptV1 {
     fn serialize<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
         self.check(&Key::CourtBatchNumericalReceipt(self.claim)).map_err(|why| wire_bad(&why))?;
-        (self.version, self.claim, self.scope, self.source, self.notice, self.leaf, self.intent_digest, self.at,
-            self.material_until_daa, self.fault_evidence).serialize(writer)?;
+        (
+            self.version,
+            self.claim,
+            self.scope,
+            self.source,
+            self.notice,
+            self.leaf,
+            self.intent_digest,
+            self.at,
+            self.material_until_daa,
+            self.fault_evidence,
+        )
+            .serialize(writer)?;
         if self.version == 2 {
             self.fault_bytes.as_ref().map_or(&[][..], |bytes| bytes.as_slice()).serialize(writer)?;
         }
@@ -381,7 +394,10 @@ impl RootedBatchDemandV1 {
     }
 
     pub(crate) fn check_adoption(
-        &self, state: &PalwChainStateV2, at: &PalwBlockContextV2, signed_bytes: u64,
+        &self,
+        state: &PalwChainStateV2,
+        at: &PalwBlockContextV2,
+        signed_bytes: u64,
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1;
         use crate::palw_state_v2::PalwStateV2Error::{CarriageInconsistent as Invalid, NativeResource};
@@ -390,23 +406,25 @@ impl RootedBatchDemandV1 {
         if (self.opened_block, self.demand.opened_daa) != (at.block, at.daa_score) {
             return Err(Invalid("Batch demand differs from the accepting point".into()));
         }
-        let (book, binding, opened_daa) = reserved_open_slot_v1(state, self.claim, self.scope_id, self.ordinal, signed_bytes)
-            .map_err(Invalid)?;
+        let (book, binding, opened_daa) =
+            reserved_open_slot_v1(state, self.claim, self.scope_id, self.ordinal, signed_bytes).map_err(Invalid)?;
         if opened_daa != at.daa_score {
             return Err(Invalid("Batch demand opening differs from its reserved DAA".into()));
         }
         use crate::palw_court_shared_material_intake_v1 as material;
-        let schedule = material::material_intake_schedule_v1().map_err(|_| Invalid("Batch material storage schedule missing".into()))?;
+        let schedule =
+            material::material_intake_schedule_v1().map_err(|_| Invalid("Batch material storage schedule missing".into()))?;
         material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule, target.is_some()).map_err(Invalid)?;
         if let Some(shared::BatchNoticeTargetV1::Numerical { leaf }) = target {
             use material::batch::native_ranges::{MAX_BOOKED_NUMERICAL_RANGES_V1, numerical_demand_from_source_v1};
             let ordinal = usize::try_from(self.ordinal).map_err(|_| Invalid("numerical Batch demand ordinal overflows".into()))?;
             let context = shared::context(state, self.claim).map_err(Invalid)?;
-            let expected = numerical_demand_from_source_v1(state, context, &binding.packet_ids, leaf, ordinal, MAX_BOOKED_NUMERICAL_RANGES_V1)
-                .map_err(|why| match why {
-                    NativeDecodeErrorV1::Decode(why) => Invalid(why),
-                    NativeDecodeErrorV1::Resource(why) => NativeResource(why),
-                })?;
+            let expected =
+                numerical_demand_from_source_v1(state, context, &binding.packet_ids, leaf, ordinal, MAX_BOOKED_NUMERICAL_RANGES_V1)
+                    .map_err(|why| match why {
+                        NativeDecodeErrorV1::Decode(why) => Invalid(why),
+                        NativeDecodeErrorV1::Resource(why) => NativeResource(why),
+                    })?;
             expected.check_signed_ranges_v1(&self.demand.ranges).map_err(Invalid)?;
         }
         Ok(())
@@ -421,7 +439,8 @@ pub(crate) fn checked_initial_notice_target_v1(
 ) -> Result<Option<shared::BatchNoticeTargetV1>, String> {
     let key = Key::CourtSharedQuery(notice_id);
     notice.check(&key)?;
-    let (daa, initial_key) = state.court_shared_initial_notice_v1(context.claim).ok_or("Batch original has no accepted initial notice")?;
+    let (daa, initial_key) =
+        state.court_shared_initial_notice_v1(context.claim).ok_or("Batch original has no accepted initial notice")?;
     if daa != notice.opened_daa || (context.batch_notice_only_v1() && *initial_key != key) {
         return Err("Batch demand must use the original's accepted initial notice".into());
     }
@@ -444,7 +463,8 @@ fn check_notice_route_v1(
         None => Ok(()),
         Some(Numerical { .. }) if ordinal != BATCH_STOP_ORDINAL_V1 => Ok(()),
         Some(StopFullIds) if ordinal == BATCH_STOP_ORDINAL_V1 => {
-            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
+            let frame =
+                crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
             let range = batch_stop_full_ids_range_v1(claim, frame.original_v1().decode_tokens_executed)?;
             if ranges != [range] {
                 return Err("Batch Stop notice requires its canonical FullIds range".into());
@@ -461,7 +481,8 @@ pub(crate) fn reserved_open_slot_v1(
     scope: Hash64,
     ordinal: u64,
     signed_bytes: u64,
-) -> Result<(&crate::palw_court_service_v1::ServiceReservations, &crate::palw_court_service_state_v2::ServiceClaimBinding, u64), String> {
+) -> Result<(&crate::palw_court_service_v1::ServiceReservations, &crate::palw_court_service_state_v2::ServiceClaimBinding, u64), String>
+{
     let service = state.court_service_state_v1().ok_or("Batch demand has no rooted service book")?;
     shared::context(state, claim)?.check_binding(service)?;
     let binding = service.claims.get(&claim).ok_or("Batch demand has no original binding")?;
@@ -519,11 +540,26 @@ pub(super) fn quote_open_v1(
     };
     let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
     demand.response_deadline_daa = material::batch::batch_open_response_deadline_v1(
-        claim, scope, ordinal, &demand, book, &binding.packet_ids, schedule, context.batch_notice_only_v1(),
+        claim,
+        scope,
+        ordinal,
+        &demand,
+        book,
+        &binding.packet_ids,
+        schedule,
+        context.batch_notice_only_v1(),
     )?;
     demand.checked_request_root_v1().map_err(|why| format!("Batch quote shape: {why:?}"))?;
-    Ok(super::carriage::SignedBatchDemandV1 { version: 1, claim, scope_id: scope, ordinal, notice_id, signer: notice.opened_by,
-        demand, signature: Vec::new() })
+    Ok(super::carriage::SignedBatchDemandV1 {
+        version: 1,
+        claim,
+        scope_id: scope,
+        ordinal,
+        notice_id,
+        signer: notice.opened_by,
+        demand,
+        signature: Vec::new(),
+    })
 }
 
 pub(crate) fn batch_case_id_v1(
@@ -594,20 +630,39 @@ mod tests {
     fn numerical_receipt_wire_checks_original_key_and_version() {
         let h = Hash64::from_u64_word;
         let receipt = RootedBatchNumericalReceiptV1 {
-            version: 1, claim: h(1), scope: h(2), source: h(3), notice: h(4),
-            leaf: 7, intent_digest: h(5),
+            version: 1,
+            claim: h(1),
+            scope: h(2),
+            source: h(3),
+            notice: h(4),
+            leaf: 7,
+            intent_digest: h(5),
             at: PalwBlockContextV2 { block: h(6), daa_score: 4_000, blue_score: 5_000, subsidy: 0 },
-            material_until_daa: 12_000, fault_evidence: Some(h(8)), fault_bytes: None,
+            material_until_daa: 12_000,
+            fault_evidence: Some(h(8)),
+            fault_bytes: None,
         };
         let key = Key::CourtBatchNumericalReceipt(receipt.claim);
         assert_eq!(borsh::to_vec(&key).unwrap()[0], 34);
         let row = Row::CourtBatchNumericalReceipt(Box::new(receipt.clone()));
         let bytes = borsh::to_vec(&row).unwrap();
         assert_eq!(bytes[0], 41);
-        assert_eq!(&bytes[1..], borsh::to_vec(&(
-            1u16, receipt.claim, receipt.scope, receipt.source, receipt.notice, receipt.leaf, receipt.intent_digest,
-            receipt.at, receipt.material_until_daa, receipt.fault_evidence,
-        )).unwrap());
+        assert_eq!(
+            &bytes[1..],
+            borsh::to_vec(&(
+                1u16,
+                receipt.claim,
+                receipt.scope,
+                receipt.source,
+                receipt.notice,
+                receipt.leaf,
+                receipt.intent_digest,
+                receipt.at,
+                receipt.material_until_daa,
+                receipt.fault_evidence,
+            ))
+            .unwrap()
+        );
         assert_eq!(borsh::from_slice::<Row>(&bytes).unwrap(), row);
         assert!(receipt.check(&key).is_ok());
         assert!(receipt.check(&Key::CourtBatchNumericalReceipt(h(9))).is_err());
@@ -653,10 +708,19 @@ mod tests {
         assert_eq!(borsh::to_vec(&key).unwrap()[0], 33);
         assert_eq!(borsh::to_vec(&Row::CourtBatchStopReceipt(Box::new(receipt.clone()))).unwrap()[0], 40);
         let bytes = borsh::to_vec(&receipt).unwrap();
-        assert_eq!(bytes, borsh::to_vec(&(
-            1u16, receipt.claim, receipt.source_id, receipt.operands_digest, receipt.at,
-            receipt.material_until_daa, receipt.fault_position,
-        )).unwrap());
+        assert_eq!(
+            bytes,
+            borsh::to_vec(&(
+                1u16,
+                receipt.claim,
+                receipt.source_id,
+                receipt.operands_digest,
+                receipt.at,
+                receipt.material_until_daa,
+                receipt.fault_position,
+            ))
+            .unwrap()
+        );
         let restored: RootedBatchStopReceiptV1 = borsh::from_slice(&bytes).unwrap();
         assert_eq!(restored, receipt);
         assert!(restored.check(&key).is_ok());

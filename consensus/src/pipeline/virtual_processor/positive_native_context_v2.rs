@@ -1008,16 +1008,12 @@ impl PositiveCarrierPhaseTwoV2 {
                     if body.terms.funding_purpose == RelayFundingPurposeV2::CaseC
                         && let Some(state) = selected_parent_state
                     {
-                        let original = processor.case_relay_original_contract_v2(
-                            carrier.prefix.selected_parent,
-                            state,
-                            &body.terms,
-                            &physical,
-                            bytes,
-                        ).map_err(|why| match why {
-                            E::Resource(why) => why,
-                            why => NativeCoverageV1::unsupported::<Self>("Case relay original contract", &format!("{why:?}")),
-                        })?;
+                        let original = processor
+                            .case_relay_original_contract_v2(carrier.prefix.selected_parent, state, &body.terms, &physical, bytes)
+                            .map_err(|why| match why {
+                                E::Resource(why) => why,
+                                why => NativeCoverageV1::unsupported::<Self>("Case relay original contract", &format!("{why:?}")),
+                            })?;
                         case_relay_contract = original.map(|(material, _)| (body.terms.assignment, material));
                     }
                 }

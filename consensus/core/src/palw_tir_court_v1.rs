@@ -62,7 +62,6 @@ use exact_geometry::{ExactBindingGeometry, ExactGeometry};
 #[doc(hidden)]
 pub mod source_only;
 
-
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
@@ -606,7 +605,8 @@ fn check_binding(binding: &PalwTirStepBindingV1) -> Result<BindingOutcome, PalwS
     if binding.version != PALW_TIR_STEP_BINDING_VERSION_V1 {
         return Err(bad("unsupported IR binding version"));
     }
-    crate::palw_tir_step_v1::check_tir_context_profile_v2(&binding.job_context, &binding.class).map_err(|_| bad("the job context is not well formed"))?;
+    crate::palw_tir_step_v1::check_tir_context_profile_v2(&binding.job_context, &binding.class)
+        .map_err(|_| bad("the job context is not well formed"))?;
     let class_id = binding.class.class_id(&binding.artifact_root);
     if binding.job_context.shape_profile_id != class_id {
         return Err(bad("the job context names another class"));
@@ -669,9 +669,15 @@ fn check_output_leaf(
     }
     let leaf = v.space.leaf_at(&binding.job_context, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
     let (version, width) = if leaf.dtype == DType::I64 { (2, 8) } else { (PALW_TIR_STEP_LEAF_VERSION_V1, 4) };
-    if preimage.version != version { return structural(PalwStepFaultV1::StepCoordinatesNotCanonical); }
+    if preimage.version != version {
+        return structural(PalwStepFaultV1::StepCoordinatesNotCanonical);
+    }
     if preimage.values_le.len() != width * preimage.value_count as usize {
-        return structural(if leaf.dtype == DType::I64 { PalwStepFaultV1::WideStepBytesNotEightPerValue } else { PalwStepFaultV1::StepBytesNotFourPerValue });
+        return structural(if leaf.dtype == DType::I64 {
+            PalwStepFaultV1::WideStepBytesNotEightPerValue
+        } else {
+            PalwStepFaultV1::StepBytesNotFourPerValue
+        });
     }
     if leaf.value_count != preimage.value_count {
         return structural(PalwStepFaultV1::StepValueCountNotCanonical);
@@ -714,7 +720,9 @@ fn leaf_interval_geometry(space: &dyn ExactGeometry, intervals: &[Vec<Interval>]
 }
 
 fn lane(dtype: DType, bytes: &[u8], i: usize) -> Option<i128> {
-    if dtype == DType::I64 { return Some(i64::from_le_bytes(bytes.get(i.checked_mul(8)?..i.checked_mul(8)?.checked_add(8)?)?.try_into().ok()?) as i128); }
+    if dtype == DType::I64 {
+        return Some(i64::from_le_bytes(bytes.get(i.checked_mul(8)?..i.checked_mul(8)?.checked_add(8)?)?.try_into().ok()?) as i128);
+    }
     let b = bytes.get(i * 4..i * 4 + 4)?;
     let q = [b[0], b[1], b[2], b[3]];
     Some(if dtype == DType::Idx { u32::from_le_bytes(q) as i128 } else { i32::from_le_bytes(q) as i128 })
@@ -722,7 +730,9 @@ fn lane(dtype: DType, bytes: &[u8], i: usize) -> Option<i128> {
 
 /// The first lane of `bytes` outside `interval`.
 fn first_outside(dtype: DType, bytes: &[u8], interval: Interval) -> Option<u32> {
-    (0..bytes.len() / if dtype == DType::I64 {8} else {4}).find(|i| lane(dtype, bytes, *i).is_none_or(|v| !interval.contains(v))).map(|i| i as u32)
+    (0..bytes.len() / if dtype == DType::I64 { 8 } else { 4 })
+        .find(|i| lane(dtype, bytes, *i).is_none_or(|v| !interval.contains(v)))
+        .map(|i| i as u32)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1051,7 +1061,7 @@ fn authenticate_operands(
         let leaf = v.space().leaf_at(&binding.job_context, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
         if preimage.version != PALW_TIR_STEP_LEAF_VERSION_V1
             || preimage.value_count != leaf.value_count
-            || preimage.values_le.len() != (if leaf.dtype == DType::I64 {8} else {4}) * leaf.value_count as usize
+            || preimage.values_le.len() != (if leaf.dtype == DType::I64 { 8 } else { 4 }) * leaf.value_count as usize
         {
             return Err(bad("an operand leaf is not well formed"));
         }
@@ -1380,7 +1390,11 @@ fn authenticate_decode_pin(
             if d.generated_token_ids.len() != decode {
                 return Err(bad("the pin's id count is not the context's decode count"));
             }
-            let root = if space.program.wide_logits_q24() { crate::palw_logits_q24_v2::outer_root(ctx, decode as u64, &d.rows_root, &d.generated_token_ids) } else { tiled_logits_outer_root_v1(ctx, decode as u64, &d.rows_root, &d.generated_token_ids) };
+            let root = if space.program.wide_logits_q24() {
+                crate::palw_logits_q24_v2::outer_root(ctx, decode as u64, &d.rows_root, &d.generated_token_ids)
+            } else {
+                tiled_logits_outer_root_v1(ctx, decode as u64, &d.rows_root, &d.generated_token_ids)
+            };
             if root != binding.full_logits_trace_root {
                 return Err(bad("the carried ids and rows root do not reproduce the claim's own tiled trace root"));
             }
@@ -2881,7 +2895,10 @@ impl PalwTirTraceEventDisclosureV1 {
     /// The IR binding every variant carries — what the identity rule (J-5) reads.
     pub fn binding(&self) -> &PalwTirStepBindingV1 {
         match self {
-            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } | Self::WideQ24V2 { binding, .. } => binding,
+            Self::Flat { binding, .. }
+            | Self::Tiled { binding, .. }
+            | Self::OutOfRange { binding }
+            | Self::WideQ24V2 { binding, .. } => binding,
         }
     }
 
@@ -2892,7 +2909,10 @@ impl PalwTirTraceEventDisclosureV1 {
 
     fn binding_mut(&mut self) -> &mut PalwTirStepBindingV1 {
         match self {
-            Self::Flat { binding, .. } | Self::Tiled { binding, .. } | Self::OutOfRange { binding } | Self::WideQ24V2 { binding, .. } => binding,
+            Self::Flat { binding, .. }
+            | Self::Tiled { binding, .. }
+            | Self::OutOfRange { binding }
+            | Self::WideQ24V2 { binding, .. } => binding,
         }
     }
 
@@ -2986,7 +3006,9 @@ pub fn check_tir_trace_event_disclosure_v1(
             )
         }
         PalwTirTraceEventDisclosureV1::WideQ24V2 { event, .. } => {
-            if !v.space.program.wide_logits_q24() || event.row != row || event.tile_opening.leaf_index != tile as u64 { return Err(bad("wide event identity/scheme")); }
+            if !v.space.program.wide_logits_q24() || event.row != row || event.tile_opening.leaf_index != tile as u64 {
+                return Err(bad("wide event identity/scheme"));
+            }
             event.authenticate(ctx, &binding.full_logits_trace_root, vocab, max_step_leaf_count).map_err(bad)
         }
         PalwTirTraceEventDisclosureV1::OutOfRange { .. } => {
@@ -4255,8 +4277,12 @@ pub(crate) mod test_support {
             recheck_retained_tir_cone_v1(decoded, forged.binding.clone(), leaf, fault.evidence_id, &rules, work).unwrap(),
             retained,
         );
-        assert!(recheck_retained_tir_cone_v1(retained.clone(), honest.binding.clone(), leaf, fault.evidence_id, &rules, work).is_err());
-        assert!(recheck_retained_tir_cone_v1(retained.clone(), forged.binding.clone(), leaf + 1, fault.evidence_id, &rules, work).is_err());
+        assert!(
+            recheck_retained_tir_cone_v1(retained.clone(), honest.binding.clone(), leaf, fault.evidence_id, &rules, work).is_err()
+        );
+        assert!(
+            recheck_retained_tir_cone_v1(retained.clone(), forged.binding.clone(), leaf + 1, fault.evidence_id, &rules, work).is_err()
+        );
         assert!(recheck_retained_tir_cone_v1(retained, forged.binding.clone(), leaf, Hash64::default(), &rules, work).is_err());
         let blocked = PalwTirBuilderWorkLimitsV1 { max_target_requests: 0, ..work };
         assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, blocked, bytes + 1).is_err());

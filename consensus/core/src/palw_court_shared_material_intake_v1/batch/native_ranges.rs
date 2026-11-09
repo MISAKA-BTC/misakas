@@ -74,10 +74,7 @@ impl NumericalBatchRootDemandV1 {
     }
 
     pub(crate) fn check_signed_ranges_v1(&self, ranges: &[BatchRangeV1]) -> Result<(), String> {
-        check_declared_ranges_v1(
-            self.ranges.iter().map(|(target, bound)| Ok((target.id_v1(self.claim)?, *bound))),
-            ranges,
-        )
+        check_declared_ranges_v1(self.ranges.iter().map(|(target, bound)| Ok((target.id_v1(self.claim)?, *bound))), ranges)
     }
 
     /// Build the unsigned carrier for the accepted notice. Actual encoded
@@ -119,7 +116,9 @@ fn check_declared_ranges_v1(
     }
     for (expected, range) in planned.zip(ranges) {
         let (id, maximum) = expected?;
-        if id != range.id || range.bytes == 0 || u64::from(range.bytes) > maximum
+        if id != range.id
+            || range.bytes == 0
+            || u64::from(range.bytes) > maximum
             || range.authentication != BatchRangeAuthenticationV1::WholeRange
         {
             return Err("numerical Batch Open substitutes a target, length or authentication".into());
@@ -201,11 +200,21 @@ pub(crate) fn numerical_demand_from_source_v1(
             let ranges = booked_root_ranges_v1(context, frame, source, record, layout, program, streaming, leaf, maximum_ranges)?;
             let span = booked_range_span_v1(ranges.len(), demand_index, |ordinal, index| {
                 owned_begin_v1(claim, context.scope_id, owned, ordinal, index)
-            }).map_err(E::Decode)?;
+            })
+            .map_err(E::Decode)?;
             retain_root_demand_v1(claim, context.scope_id, &ranges, demand_index, span)
         } else {
             numerical_batch_streaming_demand_v1(
-                frame, source, record, layout, program, context.profile_id, streaming, maximum_ranges, leaf, demand_index,
+                frame,
+                source,
+                record,
+                layout,
+                program,
+                context.profile_id,
+                streaming,
+                maximum_ranges,
+                leaf,
+                demand_index,
             )
         }
     })
@@ -324,35 +333,37 @@ pub(crate) fn replay_numerical_batch_v1(
         return Err(E::Decode("numerical replay prompt form differs from the original".into()));
     }
     let mut q = TirNativeRequestsV1::new();
-    q.add_v1(PalwTirPublicSourceV1::native_construction_requests_v1(record, layout, frame.header_v1())?)
-        .map_err(E::Resource)?;
+    q.add_v1(PalwTirPublicSourceV1::native_construction_requests_v1(record, layout, frame.header_v1())?).map_err(E::Resource)?;
     q.add_v1(budget.workspace_bytes).map_err(E::Resource)?;
     let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
-    let binding = frame.header_v1().resolve_registered_layout_v1(
-        record, layout, frame.original_v1().execution_root, frame.descriptor_v1().maximum_leaves.min(rules.step_ladder),
-    ).map_err(E::Decode)?;
+    let binding = frame
+        .header_v1()
+        .resolve_registered_layout_v1(
+            record,
+            layout,
+            frame.original_v1().execution_root,
+            frame.descriptor_v1().maximum_leaves.min(rules.step_ladder),
+        )
+        .map_err(E::Decode)?;
     let store = prepared.material.store_v1(state, claim, prepared.scope).map_err(E::Decode)?;
     let court = PalwTirCourtRulesV1 {
         max_step_leaf_count: rules.step_ladder,
         prompt_form,
         limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court),
     };
-    let finding = replay_tir_cone_from_store_v1(
-        &binding, prepared.leaf, &store, &court, budget.work, rules.court.max_close_bytes(),
-    ).map_err(E::Decode)?;
+    let finding = replay_tir_cone_from_store_v1(&binding, prepared.leaf, &store, &court, budget.work, rules.court.max_close_bytes())
+        .map_err(E::Decode)?;
     let fault = if let Some((fault, mut cone)) = finding {
         crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut cone.binding);
         let len = borsh::object_length(&cone).map_err(|why| E::Decode(why.to_string()))?;
-        if len == 0 || len as u64 > budget.max_fault_bytes
-            || len > crate::palw_batch_court_v1::rooted::MAX_NUMERICAL_FAULT_BYTES_V1
-        {
+        if len == 0 || len as u64 > budget.max_fault_bytes || len > crate::palw_batch_court_v1::rooted::MAX_NUMERICAL_FAULT_BYTES_V1 {
             return Err(E::Decode("numerical Batch fault exceeds its reserved retention".into()));
         }
         let lease = reserve_native_requests_v1(len as u64).map_err(E::Resource)?;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(len).map_err(|why| E::Resource(
-            NativeCoverageV1::unsupported::<Vec<u8>>("retain numerical Batch fault", &why.to_string()),
-        ))?;
+        bytes
+            .try_reserve_exact(len)
+            .map_err(|why| E::Resource(NativeCoverageV1::unsupported::<Vec<u8>>("retain numerical Batch fault", &why.to_string())))?;
         borsh::BorshSerialize::serialize(&cone, &mut bytes).map_err(|why| E::Decode(why.to_string()))?;
         Some((fault.evidence_id, NativeRetainedV1::from_owner_reserved_v1(bytes, lease)))
     } else {
@@ -373,7 +384,9 @@ pub(crate) fn recheck_numerical_terminal_v1(
     use crate::palw_tir_court_v1::{PalwTirConeRefutationV1, PalwTirCourtRulesV1, recheck_retained_tir_cone_v1};
     let invalid = |why: &str| E::Decode(why.into());
     rules.check().map_err(E::Decode)?;
-    let verification_cost = budget.service_cost_v1().filter(|_| rules.tir_active)
+    let verification_cost = budget
+        .service_cost_v1()
+        .filter(|_| rules.tir_active)
         .ok_or_else(|| invalid("numerical terminal has no active TIR rules or admitted budget"))?;
     let receipt = crate::palw_batch_court_v1::rooted::reserved_numerical_terminal_v1(state, claim, receipt_digest, &rules.at)
         .map_err(E::Decode)?;
@@ -395,9 +408,9 @@ pub(crate) fn recheck_numerical_terminal_v1(
     if bytes.len() as u64 > budget.max_fault_bytes || bytes.len() as u64 >= rules.court.max_close_bytes() {
         return Err(invalid("numerical terminal fault exceeds its admitted bytes"));
     }
-    let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<PalwTirConeRefutationV1>(
-        bytes.as_slice(), bytes.len() as u64,
-    ).map_err(|why| E::Decode(why.to_string()))?;
+    let shape =
+        crate::palw_native_resource_v1::preflight_native_value_v1::<PalwTirConeRefutationV1>(bytes.as_slice(), bytes.len() as u64)
+            .map_err(|why| E::Decode(why.to_string()))?;
     if shape.logical_requests_v1() > budget.workspace_bytes {
         return Err(invalid("numerical terminal fault exceeds its admitted workspace"));
     }
@@ -415,9 +428,15 @@ pub(crate) fn recheck_numerical_terminal_v1(
     quote.add_v1(shape.logical_requests_v1()).map_err(E::Resource)?;
     quote.add_v1(budget.workspace_bytes).map_err(E::Resource)?;
     let lease = reserve_native_requests_v1(quote.bytes_v1()).map_err(E::Resource)?;
-    let original = frame.header_v1().resolve_registered_layout_v1(
-        record, layout, frame.original_v1().execution_root, frame.descriptor_v1().maximum_leaves.min(rules.step_ladder),
-    ).map_err(E::Decode)?;
+    let original = frame
+        .header_v1()
+        .resolve_registered_layout_v1(
+            record,
+            layout,
+            frame.original_v1().execution_root,
+            frame.descriptor_v1().maximum_leaves.min(rules.step_ladder),
+        )
+        .map_err(E::Decode)?;
     let cone: PalwTirConeRefutationV1 = borsh::from_slice(bytes.as_slice()).map_err(|why| E::Decode(why.to_string()))?;
     let court = PalwTirCourtRulesV1 {
         max_step_leaf_count: rules.step_ladder,
@@ -456,10 +475,11 @@ pub(crate) fn prepare_numerical_batch_material_v1(
     context.check_binding(&service.state).map_err(E::Decode)?;
     let owned = &service.state.claims.get(&claim).ok_or_else(|| invalid("numerical verification has no original booking"))?.packet_ids;
     let book = &service.state.book;
-    let (verification, terminal) = batch_numerical_service_ids_v1(claim, scope)
-        .map_err(|_| invalid("numerical verification packet identities are invalid"))?;
+    let (verification, terminal) =
+        batch_numerical_service_ids_v1(claim, scope).map_err(|_| invalid("numerical verification packet identities are invalid"))?;
     let predecessors = service.causal.get(&verification).ok_or_else(|| invalid("numerical verification has no reserved inputs"))?;
-    if !owned.contains(&verification) || !owned.contains(&terminal)
+    if !owned.contains(&verification)
+        || !owned.contains(&terminal)
         || book.assigned_daa(&verification) != Some(verify_daa)
         || verify_daa >= context.hard_daa
         || book.assigned_daa(&terminal).is_none_or(|daa| daa <= verify_daa || daa >= context.hard_daa)
@@ -475,35 +495,44 @@ pub(crate) fn prepare_numerical_batch_material_v1(
     let _targets = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
     let mut targets = Vec::with_capacity(ranges.len());
     let mut expected = ranges.iter();
-    visit_booked_range_groups_v1(ranges.len(), |ordinal, index| owned_begin_v1(claim, scope, owned, ordinal, index), |ordinal, count| {
-        let ordinal = ordinal as u64;
-        let key = Key::CourtBatchDemand(claim, ordinal);
-        let Some(Row::CourtBatchDemand(open)) = state.staged_court_row_v1(&key) else {
-            return Err("numerical verification is missing a required Open".into());
-        };
-        open.check(&key)?;
-        let open_packet = batch_open_packet_v1(claim, scope, ordinal)?.as_bytes();
-        if open.scope_id != scope || open.notice_id != notice_id || !owned.contains(&open_packet)
-            || book.assigned_daa(&open_packet) != Some(open.demand.opened_daa)
-        {
-            return Err("numerical verification Open changes its original reservation or notice".into());
-        }
-        let group = expected.clone().take(count);
-        check_declared_ranges_v1(group.map(|(id, (_, maximum))| Ok((*id, *maximum))), &open.demand.ranges)?;
-        for (index, ((_, (target, _)), declared)) in expected.by_ref().take(count).zip(&open.demand.ranges).enumerate() {
-            let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: index as u32 };
-            let finish = position.packet_id(claim, scope, Stage::Finish)?;
-            let daa = book.assigned_daa(&finish).ok_or("numerical verification has an unbooked Finish")?;
-            if !owned.contains(&finish) || predecessors.binary_search(&finish).is_err() || daa >= verify_daa
-                || daa >= open.demand.response_deadline_daa
+    visit_booked_range_groups_v1(
+        ranges.len(),
+        |ordinal, index| owned_begin_v1(claim, scope, owned, ordinal, index),
+        |ordinal, count| {
+            let ordinal = ordinal as u64;
+            let key = Key::CourtBatchDemand(claim, ordinal);
+            let Some(Row::CourtBatchDemand(open)) = state.staged_court_row_v1(&key) else {
+                return Err("numerical verification is missing a required Open".into());
+            };
+            open.check(&key)?;
+            let open_packet = batch_open_packet_v1(claim, scope, ordinal)?.as_bytes();
+            if open.scope_id != scope
+                || open.notice_id != notice_id
+                || !owned.contains(&open_packet)
+                || book.assigned_daa(&open_packet) != Some(open.demand.opened_daa)
             {
-                return Err("numerical verification Finish falls outside its causal reservation".into());
+                return Err("numerical verification Open changes its original reservation or notice".into());
             }
-            super::super::check_selected_batch_delivery_v1(state, context, *target, declared.bytes, daa)?;
-            targets.push(*target);
-        }
-        Ok(())
-    }).map_err(E::Decode)?;
+            let group = expected.clone().take(count);
+            check_declared_ranges_v1(group.map(|(id, (_, maximum))| Ok((*id, *maximum))), &open.demand.ranges)?;
+            for (index, ((_, (target, _)), declared)) in expected.by_ref().take(count).zip(&open.demand.ranges).enumerate() {
+                let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: index as u32 };
+                let finish = position.packet_id(claim, scope, Stage::Finish)?;
+                let daa = book.assigned_daa(&finish).ok_or("numerical verification has an unbooked Finish")?;
+                if !owned.contains(&finish)
+                    || predecessors.binary_search(&finish).is_err()
+                    || daa >= verify_daa
+                    || daa >= open.demand.response_deadline_daa
+                {
+                    return Err("numerical verification Finish falls outside its causal reservation".into());
+                }
+                super::super::check_selected_batch_delivery_v1(state, context, *target, declared.bytes, daa)?;
+                targets.push(*target);
+            }
+            Ok(())
+        },
+    )
+    .map_err(E::Decode)?;
     let material = super::super::RootedMaterialV1::load_selected_batch_v1(state, claim, &targets, verify_daa)?;
     Ok(PreparedNumericalBatchMaterialV1 { leaf, scope, notice: notice_id, material })
 }
@@ -599,9 +628,8 @@ pub(crate) fn numerical_batch_streaming_demand_v1(
     leaf: u64,
     demand_index: usize,
 ) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
-    let (envelope, selected) = project_numerical_batch_streaming_v1(
-        frame, source, record, layout, program, profile, streaming, maximum_ranges, Some(leaf),
-    )?;
+    let (envelope, selected) =
+        project_numerical_batch_streaming_v1(frame, source, record, layout, program, profile, streaming, maximum_ranges, Some(leaf))?;
     let selected = selected.ok_or_else(|| E::Decode("numerical Batch root is absent from the original".into()))?;
     finish_root_demand_v1(frame.plan_v1().original_claim, envelope.scope, &envelope.maximums, &selected, demand_index)
 }
@@ -645,21 +673,20 @@ fn project_numerical_batch_streaming_v1(
     let mut selected = None;
     let mut callback_error = None;
     let mut ids_bytes = None;
-    let summary = PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(
-        source, record, layout, streaming, |root, params, inputs| {
-            let ranges = root_ranges_v1(
-                frame, source, &set, root, inputs.iter().copied(), params, program, maximum_ranges, &mut ids_bytes,
-            ).map_err(|error| {
-                callback_error = Some(error);
-                "numerical Batch range projection failed".to_string()
-            })?;
+    let summary =
+        PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(source, record, layout, streaming, |root, params, inputs| {
+            let ranges =
+                root_ranges_v1(frame, source, &set, root, inputs.iter().copied(), params, program, maximum_ranges, &mut ids_bytes)
+                    .map_err(|error| {
+                        callback_error = Some(error);
+                        "numerical Batch range projection failed".to_string()
+                    })?;
             fold_maximums(&mut maximums, ranges.values().map(|(_, bytes)| *bytes), maximum_ranges)?;
             if Some(root) == leaf {
                 selected = Some(ranges);
             }
             Ok(0)
-        },
-    );
+        });
     if let Some(error) = callback_error {
         return Err(error);
     }
@@ -746,7 +773,15 @@ pub(crate) fn numerical_batch_envelope_v1(
 
     for (root, params) in roots.iter().zip(&parameters.roots) {
         let ranges = root_ranges_v1(
-            frame, source, &set, root.leaf, root.inputs.iter().copied(), &params.parameters, program, maximum_ranges, &mut ids_bytes,
+            frame,
+            source,
+            &set,
+            root.leaf,
+            root.inputs.iter().copied(),
+            &params.parameters,
+            program,
+            maximum_ranges,
+            &mut ids_bytes,
         )?;
         fold_maximums(&mut maximums, ranges.values().map(|(_, bytes)| *bytes), maximum_ranges).map_err(E::Decode)?;
     }
@@ -785,7 +820,15 @@ pub(crate) fn numerical_batch_root_demand_v1(
         .filter(|params| params.leaf == leaf)
         .ok_or_else(|| E::Decode("numerical Batch parameter cover differs from the original".into()))?;
     let ranges = root_ranges_v1(
-        frame, source, &set, leaf, roots[index].inputs.iter().copied(), &params.parameters, program, envelope.maximums.len(), &mut None,
+        frame,
+        source,
+        &set,
+        leaf,
+        roots[index].inputs.iter().copied(),
+        &params.parameters,
+        program,
+        envelope.maximums.len(),
+        &mut None,
     )?;
     finish_root_demand_v1(frame.plan_v1().original_claim, envelope.scope, &envelope.maximums, &ranges, demand_index)
 }
@@ -815,12 +858,7 @@ fn retain_root_demand_v1(
     let mut demand = Vec::with_capacity(span.len());
     demand.extend(ranges.values().skip(span.start).take(span.len()).copied());
     Ok(NativeRetainedV1::from_owner_reserved_v1(
-        NumericalBatchRootDemandV1 {
-            claim,
-            scope,
-            ordinal: demand_index as u64,
-            ranges: demand,
-        },
+        NumericalBatchRootDemandV1 { claim, scope, ordinal: demand_index as u64, ranges: demand },
         lease,
     ))
 }
@@ -945,11 +983,17 @@ fn root_ranges_v1(
 
 #[cfg(test)]
 mod tests {
-    use super::{booked_range_span_v1, check_declared_ranges_v1, check_material_lengths_v1, fold_maximums, partition_maximums_v1, root_demand_span_v1};
+    use super::{
+        booked_range_span_v1, check_declared_ranges_v1, check_material_lengths_v1, fold_maximums, partition_maximums_v1,
+        root_demand_span_v1,
+    };
 
     #[test]
     fn signed_ranges_bind_the_target_identity_size_and_authentication() {
-        use crate::{Hash64, palw_batch_court_v1::{BatchRangeAuthenticationV1, BatchRangeV1}};
+        use crate::{
+            Hash64,
+            palw_batch_court_v1::{BatchRangeAuthenticationV1, BatchRangeV1},
+        };
         let id = Hash64::from_u64_word(1);
         let good = BatchRangeV1 { id, bytes: 7, authentication: BatchRangeAuthenticationV1::WholeRange };
         let check = |ranges: &[BatchRangeV1]| check_declared_ranges_v1([Ok((id, 8))].into_iter(), ranges);
@@ -1031,15 +1075,25 @@ mod tests {
     fn verification_visits_every_required_group_and_ignores_the_reserved_tail() {
         use super::visit_booked_range_groups_v1;
         let mut visited = Vec::new();
-        visit_booked_range_groups_v1(5, |ordinal, index| Ok(index < [2, 4, 8][ordinal]), |ordinal, count| {
-            visited.push((ordinal, count));
-            Ok(())
-        }).unwrap();
+        visit_booked_range_groups_v1(
+            5,
+            |ordinal, index| Ok(index < [2, 4, 8][ordinal]),
+            |ordinal, count| {
+                visited.push((ordinal, count));
+                Ok(())
+            },
+        )
+        .unwrap();
         assert_eq!(visited, [(0, 2), (1, 3)]);
         assert!(visit_booked_range_groups_v1(5, |ordinal, index| Ok(ordinal == 0 && index < 2), |_, _| Ok(())).is_err());
-        assert_eq!(visit_booked_range_groups_v1(5, |_, index| Ok(index < 2), |ordinal, _| {
-            if ordinal == 1 { Err("required Open missing".into()) } else { Ok(()) }
-        }), Err("required Open missing".into()));
+        assert_eq!(
+            visit_booked_range_groups_v1(
+                5,
+                |_, index| Ok(index < 2),
+                |ordinal, _| { if ordinal == 1 { Err("required Open missing".into()) } else { Ok(()) } }
+            ),
+            Err("required Open missing".into())
+        );
     }
 
     #[test]

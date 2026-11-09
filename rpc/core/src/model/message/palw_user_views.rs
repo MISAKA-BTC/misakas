@@ -128,11 +128,8 @@ impl Deserializer for GetPalwCourtStateRequest {
         }
         let claim_hex = load!(String, reader)?;
         let session_hex = load!(String, reader)?;
-        let (batch_ordinal, batch_target) = if version >= 2 {
-            (load!(String, reader)?, load!(String, reader)?)
-        } else {
-            (String::new(), String::new())
-        };
+        let (batch_ordinal, batch_target) =
+            if version >= 2 { (load!(String, reader)?, load!(String, reader)?) } else { (String::new(), String::new()) };
         let batch_open = if version == 3 { load!(String, reader)? } else { String::new() };
         Ok(Self { claim_hex, session_hex, batch_ordinal, batch_target, batch_open })
     }
@@ -233,7 +230,8 @@ mod tests {
 
     #[test]
     fn user_view_messages_round_trip_on_the_borsh_wire() {
-        let req = round_trip(&GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), session_hex: String::new(), ..Default::default() });
+        let req =
+            round_trip(&GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), session_hex: String::new(), ..Default::default() });
         assert_eq!(req.claim_hex, "ab".repeat(64));
         assert!(req.session_hex.is_empty());
         assert!(req.batch_ordinal.is_empty() && req.batch_target.is_empty());
@@ -248,8 +246,12 @@ mod tests {
         let restored = round_trip(&batch);
         assert_eq!((restored.batch_ordinal, restored.batch_target), (batch.batch_ordinal, batch.batch_target));
         assert!(restored.batch_open.is_empty());
-        let open = GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), batch_ordinal: "0".into(),
-            batch_open: format!("{}/18446744073709551615/unit:0=1", "cd".repeat(64)), ..Default::default() };
+        let open = GetPalwCourtStateRequest {
+            claim_hex: "ab".repeat(64),
+            batch_ordinal: "0".into(),
+            batch_open: format!("{}/18446744073709551615/unit:0=1", "cd".repeat(64)),
+            ..Default::default()
+        };
         let mut open_wire = Vec::new();
         Serializer::serialize(&open, &mut open_wire).unwrap();
         assert_eq!(&open_wire[..2], &3u16.to_le_bytes());

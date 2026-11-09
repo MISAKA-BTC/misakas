@@ -4,11 +4,11 @@ use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{self, Read};
 
-pub use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{
-    BatchStopSigningV1, batch_payload::MAX_BATCH_STOP_EOG_OPENING_BYTES_V1,
-};
 pub use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::{
     BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1, SignedNumericalBatchVerificationV1,
+};
+pub use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{
+    BatchStopSigningV1, batch_payload::MAX_BATCH_STOP_EOG_OPENING_BYTES_V1,
 };
 
 const SIG: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;

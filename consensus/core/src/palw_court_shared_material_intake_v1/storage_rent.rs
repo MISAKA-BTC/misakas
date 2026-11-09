@@ -7,8 +7,7 @@ use crate::palw_batch_court_v1::{
     BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
     carriage::{
         BATCH_CONVICT_NUMERICAL_TAG_V1, BATCH_COURT_CARRIER_MAGIC_V1, BATCH_STOP_WIRE_OVERHEAD_V1, BATCH_VERIFY_NUMERICAL_TAG_V1,
-        BatchCourtWireV1, BatchMaterialControlV1, batch_stop_wire_shape_v1,
-        decode_batch_court_payload_v1,
+        BatchCourtWireV1, BatchMaterialControlV1, batch_stop_wire_shape_v1, decode_batch_court_payload_v1,
     },
 };
 use crate::palw_court_carrier_fee_v1::CarrierFeeBudgetV1;
@@ -158,7 +157,9 @@ impl ValidatedBatchCarrierV1 {
         Self::prepare_at_ordinal_v1(validated, preceding_fee, at, 0)
     }
 
-    pub fn accepted_ordinal_v1(&self) -> usize { self.accepted_ordinal }
+    pub fn accepted_ordinal_v1(&self) -> usize {
+        self.accepted_ordinal
+    }
 
     pub fn prepare_at_ordinal_v1(
         validated: &ValidatedTransaction<'_>,
@@ -343,52 +344,26 @@ mod tests {
         ValidatedTransaction,
     };
 
-    fn assert_batch_lease_lifetime_v1(
-        validated: &ValidatedTransaction<'_>,
-        at: PalwBlockContextV2,
-        retained: u64,
-        scratch: u64,
-    ) {
-        use crate::palw_native_resource_v1::{
-            NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1,
-        };
-        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
-            memory_bytes: retained + scratch,
-            database_bytes: 0,
-        });
-        let owner = ValidatedBatchCarrierV1::prepare_reserved_v1(validated, 1, at, 0, |bytes| {
-            checker.reserve_requests_v1(bytes, 0).map(Some)
-        })
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            checker.outstanding(),
-            (retained, 0),
-            "temporary input set charge is released"
-        );
+    fn assert_batch_lease_lifetime_v1(validated: &ValidatedTransaction<'_>, at: PalwBlockContextV2, retained: u64, scratch: u64) {
+        use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1};
+        let checker =
+            NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: retained + scratch, database_bytes: 0 });
+        let owner =
+            ValidatedBatchCarrierV1::prepare_reserved_v1(validated, 1, at, 0, |bytes| checker.reserve_requests_v1(bytes, 0).map(Some))
+                .unwrap()
+                .unwrap();
+        assert_eq!(checker.outstanding(), (retained, 0), "temporary input set charge is released");
         let shared = Arc::clone(&owner);
         drop(owner);
-        assert_eq!(
-            checker.outstanding(),
-            (retained, 0),
-            "the remaining owner holds the same lease"
-        );
+        assert_eq!(checker.outstanding(), (retained, 0), "the remaining owner holds the same lease");
         drop(shared);
         assert_eq!(checker.outstanding(), (0, 0));
 
-        let limited = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
-            memory_bytes: retained,
-            database_bytes: 0,
-        });
-        let blocked = ValidatedBatchCarrierV1::prepare_reserved_v1(validated, 1, at, 0, |bytes| {
-            limited.reserve_requests_v1(bytes, 0).map(Some)
-        });
+        let limited = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: retained, database_bytes: 0 });
+        let blocked =
+            ValidatedBatchCarrierV1::prepare_reserved_v1(validated, 1, at, 0, |bytes| limited.reserve_requests_v1(bytes, 0).map(Some));
         assert!(matches!(blocked, Err(NativeDecodeErrorV1::Resource(_))));
-        assert_eq!(
-            limited.outstanding(),
-            (0, 0),
-            "the first reservation rolls back on scratch refusal"
-        );
+        assert_eq!(limited.outstanding(), (0, 0), "the first reservation rolls back on scratch refusal");
     }
 
     #[test]
@@ -459,10 +434,8 @@ mod tests {
         let mut malformed = tx.clone();
         malformed.payload[BATCH_COURT_CARRIER_MAGIC_V1.len()] = u8::MAX;
         malformed.finalize();
-        let malformed = ValidatedTransaction::new(
-            PopulatedTransaction::new(&malformed, native.entries.clone()),
-            native.calculated_fee,
-        );
+        let malformed =
+            ValidatedTransaction::new(PopulatedTransaction::new(&malformed, native.entries.clone()), native.calculated_fee);
         let malformed = ValidatedBatchCarrierV1::prepare_reserved_v1(&malformed, 1, at, 0, |_| {
             panic!("an unknown carrier kind must be rejected before reservation")
         });

@@ -25,8 +25,8 @@ use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_kernel::descriptor::{
-    KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor,
-    k2_tir_v3_descriptor, k2_tir_v4_descriptor, k2_tir_v5_descriptor,
+    KernelScheduleV1, KernelStatusV1, k2_tir_v1_descriptor, k2_tir_v2_descriptor, k2_tir_v3_descriptor, k2_tir_v4_descriptor,
+    k2_tir_v5_descriptor,
 };
 use misaka_palw_kernel::gate::ProsecutionPolicyV1;
 use misaka_palw_kernel::hash::Digest;
@@ -41,8 +41,7 @@ use crate::palw_state_v2::PalwBondKeyV2;
 
 /// Local projection capacity and invalid persisted kernel rows are distinct.
 /// A local reservation refusal cannot be a verdict against a block or peer.
-pub type PalwKernelLedgerProjectionErrorV1 =
-    crate::palw_native_resource_v1::NativeDecodeErrorV1<String>;
+pub type PalwKernelLedgerProjectionErrorV1 = crate::palw_native_resource_v1::NativeDecodeErrorV1<String>;
 
 pub(crate) fn kernel_ledger_projection_state_error_v1(
     why: PalwKernelLedgerProjectionErrorV1,
@@ -50,32 +49,25 @@ pub(crate) fn kernel_ledger_projection_state_error_v1(
 ) -> crate::palw_state_v2::PalwStateV2Error {
     use crate::palw_native_resource_v1::NativeDecodeErrorV1;
     match why {
-        NativeDecodeErrorV1::Resource(why) => {
-            crate::palw_state_v2::PalwStateV2Error::NativeResource(why)
-        }
+        NativeDecodeErrorV1::Resource(why) => crate::palw_state_v2::PalwStateV2Error::NativeResource(why),
         NativeDecodeErrorV1::Decode(why) => invalid(why),
     }
 }
 
 /// The ML-DSA-87 context a signer's bond signs a [`KernelRouteV1`](crate::palw_state_v2::PalwConsensusObjectV2) under.
-pub const PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1: &[u8] =
-    b"misaka-palw/kernel-route/object/v1";
+pub const PALW_KERNEL_ROUTE_OBJECT_MLDSA87_CONTEXT_V1: &[u8] = b"misaka-palw/kernel-route/object/v1";
 /// The domain of the signed message (network, signer, the kernel object's bytes).
 pub const PALW_KERNEL_ROUTE_OBJECT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/object-message/v1";
 /// The domain of the bond-digest mapping: the kernel sees a bond only as this digest.
 pub const PALW_KERNEL_ROUTE_BOND_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/bond-id/v1";
 /// **INTERIM** seat assignment (not a production beacon, grindable): the seed's domain (`H(domain; claim id)`).
-pub const PALW_KERNEL_ROUTE_INTERIM_ASSIGNMENT_DOMAIN_V1: &[u8] =
-    b"misaka-palw/kernel-route/interim-assignment/v1";
+pub const PALW_KERNEL_ROUTE_INTERIM_ASSIGNMENT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/interim-assignment/v1";
 /// The domain of an interim seat's lottery entry.
-pub const PALW_KERNEL_ROUTE_INTERIM_TICKET_DOMAIN_V1: &[u8] =
-    b"misaka-palw/kernel-route/interim-ticket/v1";
+pub const PALW_KERNEL_ROUTE_INTERIM_TICKET_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/interim-ticket/v1";
 /// The domain of the interim challenge anchor and sample seed a seat's receipt is bound to.
-pub const PALW_KERNEL_ROUTE_INTERIM_CHALLENGE_DOMAIN_V1: &[u8] =
-    b"misaka-palw/kernel-route/interim-challenge/v1";
+pub const PALW_KERNEL_ROUTE_INTERIM_CHALLENGE_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/interim-challenge/v1";
 /// The domain of the interim challenge policy id the ledger policy names.
-pub const PALW_KERNEL_ROUTE_INTERIM_POLICY_DOMAIN_V1: &[u8] =
-    b"misaka-palw/kernel-route/interim-challenge-policy/v1";
+pub const PALW_KERNEL_ROUTE_INTERIM_POLICY_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/interim-challenge-policy/v1";
 /// The domain of a kernel payout's row key (`0xFD` prefix, keyed by payee).
 pub const PALW_KERNEL_ROUTE_PAYOUT_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/payout/v1";
 /// The first byte of every kernel payout row's key: `0xFD`, after the claims' escrows (uniform hashes) and BEFORE the panel seats'
@@ -132,20 +124,11 @@ pub const PALW_KERNEL_ROUTE_PANEL_ONE_QUORUM_V1: u8 = 1;
 
 /// **The seat policy at `daa_score`**: `(seats, quorum)`, Panel=1 from `panel_one_from` (the mirror of
 /// `Params::palw_kernel_route_panel_one_v1`), the interim 3-of-3 otherwise (and always when `None`).
-pub fn palw_kernel_route_seats_and_quorum_v1(
-    panel_one_from: Option<u64>,
-    daa_score: u64,
-) -> (usize, u8) {
+pub fn palw_kernel_route_seats_and_quorum_v1(panel_one_from: Option<u64>, daa_score: u64) -> (usize, u8) {
     if panel_one_from.is_some_and(|from| daa_score >= from) {
-        (
-            PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1,
-            PALW_KERNEL_ROUTE_PANEL_ONE_QUORUM_V1,
-        )
+        (PALW_KERNEL_ROUTE_PANEL_ONE_SEATS_V1, PALW_KERNEL_ROUTE_PANEL_ONE_QUORUM_V1)
     } else {
-        (
-            PALW_KERNEL_ROUTE_INTERIM_SEATS_V1,
-            PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1,
-        )
+        (PALW_KERNEL_ROUTE_INTERIM_SEATS_V1, PALW_KERNEL_ROUTE_INTERIM_QUORUM_V1)
     }
 }
 
@@ -155,17 +138,12 @@ pub fn palw_kernel_route_seats_and_quorum_v1(
 /// registration of a class is refused unless its worst filing, response and commitments fit this
 /// ([`misaka_palw_kernel::ledger::carrier_fit_v1`]).
 pub const PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1: usize =
-    crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
-        * crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as usize
-        - (16 << 10);
+    crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES * crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as usize - (16 << 10);
 
 /// **The one mapping from a V2 bond to the kernel's bond digest** — used for the producer, the accuser, the demander and the seat
 /// everywhere: `H(domain; txid ‖ index)`.
 pub fn palw_kernel_bond_id_v1(bond: &PalwBondKeyV2) -> Digest {
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(PALW_KERNEL_ROUTE_BOND_DOMAIN_V1)
-        .to_state();
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_BOND_DOMAIN_V1).to_state();
     s.update(bond.0.transaction_id.as_byte_slice());
     s.update(&bond.0.index.to_le_bytes());
     let mut out = [0u8; 64];
@@ -175,15 +153,8 @@ pub fn palw_kernel_bond_id_v1(bond: &PalwBondKeyV2) -> Digest {
 
 /// **The message a signer's bond signs**: `H(domain; network ‖ signer ‖ len ‖ bytes)`. The network separates chains, the signer
 /// the object from every other bond's, and the bytes ARE the object (strictly decoded by the consumer).
-pub fn palw_kernel_route_message_v1(
-    network_domain: Hash64,
-    signer: &PalwBondKeyV2,
-    bytes: &[u8],
-) -> Hash64 {
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(PALW_KERNEL_ROUTE_OBJECT_DOMAIN_V1)
-        .to_state();
+pub fn palw_kernel_route_message_v1(network_domain: Hash64, signer: &PalwBondKeyV2, bytes: &[u8]) -> Hash64 {
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_OBJECT_DOMAIN_V1).to_state();
     s.update(network_domain.as_byte_slice());
     s.update(signer.0.transaction_id.as_byte_slice());
     s.update(&signer.0.index.to_le_bytes());
@@ -245,8 +216,7 @@ pub struct PalwKernelRouteExtrasV1 {
     pub native_carriage_mass: Option<crate::palw_native_carriage_v22::NativeCarriageMassParamsV22>,
     /// Original physical service declaration. The current consumer publishes
     /// only an unimplemented probe; capacity admission cannot infer a scheduler.
-    pub native_carriage_service:
-        Option<crate::palw_flat_execution_capacity_v22::NativeCarriageServiceV22>,
+    pub native_carriage_service: Option<crate::palw_flat_execution_capacity_v22::NativeCarriageServiceV22>,
     /// **Lane DA16: `Params::palw_provider_court_v1`'s activation DAA, where that fence is in force at the block** (`None` below it and on
     /// every network). The provider court's objects fold only with it; a claim committed below it can never move its DA responsibility.
     pub provider_court: Option<u64>,
@@ -308,15 +278,9 @@ pub const PALW_KERNEL_REPORTER_SHARE_PERMILLE_V1: u16 = 490;
 
 /// **The INTERIM ledger policy.** Windows are short so a drill crosses them; the amounts are sompi. Values are consensus constants
 /// of the (never-armed) fence, written once here: a real activation would revisit every one.
-pub fn palw_kernel_route_policy_v1(
-    network_domain: Hash64,
-    ruleset_digest: Hash64,
-) -> LedgerPolicyV1 {
+pub fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash64) -> LedgerPolicyV1 {
     let policy_id = {
-        let mut s = blake2b_simd::Params::new()
-            .hash_length(64)
-            .key(PALW_KERNEL_ROUTE_INTERIM_POLICY_DOMAIN_V1)
-            .to_state();
+        let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_INTERIM_POLICY_DOMAIN_V1).to_state();
         s.update(network_domain.as_byte_slice());
         let mut out = [0u8; 64];
         out.copy_from_slice(s.finalize().as_bytes());
@@ -369,32 +333,21 @@ pub fn palw_kernel_route_policy_v1(
 }
 
 /// [`palw_kernel_route_template_v1`] over a network that declares an OPV policy.
-pub fn palw_kernel_route_template_opv_v1(
-    policy: LedgerPolicyV1,
-    opv: Option<OpvPolicyV1>,
-) -> KernelLedgerV1 {
+pub fn palw_kernel_route_template_opv_v1(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>) -> KernelLedgerV1 {
     let template = palw_kernel_route_template_v1(policy);
     match opv {
-        Some(p) => template
-            .with_opv_policy(p)
-            .expect("the interim OPV policy validates against the interim ledger policy"),
+        Some(p) => template.with_opv_policy(p).expect("the interim OPV policy validates against the interim ledger policy"),
         None => template,
     }
 }
 
 /// [`palw_kernel_route_template_opv_v1`] with the typed-roots extension `K2-TR-v1` Active from `typed` (RFC-0004 Part II). `None` is the
 /// template byte for byte — the same schedule, the same `config_root`, the same roots.
-pub fn palw_kernel_route_template_typed_v1(
-    policy: LedgerPolicyV1,
-    opv: Option<OpvPolicyV1>,
-    typed: Option<u64>,
-) -> KernelLedgerV1 {
+pub fn palw_kernel_route_template_typed_v1(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, typed: Option<u64>) -> KernelLedgerV1 {
     let mut template = palw_kernel_route_template_opv_v1(policy, opv);
     if let Some(since_daa) = typed {
         let tr = misaka_palw_kernel::spec::k2_tr_v1_descriptor();
-        template.schedule = template
-            .schedule
-            .with(tr.digest(), KernelStatusV1::Active { since_daa });
+        template.schedule = template.schedule.with(tr.digest(), KernelStatusV1::Active { since_daa });
     }
     template
 }
@@ -406,12 +359,7 @@ pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
     // DA, prompt tiles; its classes register only under OptimisticPublicVerification. Like v1–v3 it is armed here and nowhere else:
     // the fence refuses every real height.
     // K2-TIR-v5 (§12 of the same design): K2-TIR-v4 for encoders and heads, ONE position whose ids are the job's; armed here only.
-    let (v1, v2, v3, v4) = (
-        k2_tir_v1_descriptor(),
-        k2_tir_v2_descriptor(),
-        k2_tir_v3_descriptor(),
-        k2_tir_v4_descriptor(),
-    );
+    let (v1, v2, v3, v4) = (k2_tir_v1_descriptor(), k2_tir_v2_descriptor(), k2_tir_v3_descriptor(), k2_tir_v4_descriptor());
     let v5 = k2_tir_v5_descriptor();
     let schedule = KernelScheduleV1::default()
         .with(v1.digest(), KernelStatusV1::Active { since_daa: 0 })
@@ -419,8 +367,7 @@ pub fn palw_kernel_route_template_v1(policy: LedgerPolicyV1) -> KernelLedgerV1 {
         .with(v3.digest(), KernelStatusV1::Active { since_daa: 0 })
         .with(v4.digest(), KernelStatusV1::Active { since_daa: 0 })
         .with(v5.digest(), KernelStatusV1::Active { since_daa: 0 });
-    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3, v4, v5])
-        .expect("the interim kernel route policy validates")
+    KernelLedgerV1::genesis(policy, schedule, vec![v1, v2, v3, v4, v5]).expect("the interim kernel route policy validates")
 }
 
 /// One seat of an interim assignment.
@@ -493,14 +440,10 @@ fn positive_p_restore_key_v2<R: std::io::Read>(reader: &mut R) -> std::io::Resul
     reader.read_exact(&mut first)?;
     let positive = first[0] == b'P';
     if positive && length != 65 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "invalid native P key length",
-        ));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid native P key length"));
     }
     let mut key = Vec::new();
-    key.try_reserve_exact(length)
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "aux key allocation"))?;
+    key.try_reserve_exact(length).map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "aux key allocation"))?;
     key.resize(length, 0);
     key[0] = first[0];
     reader.read_exact(&mut key[1..])?;
@@ -513,39 +456,24 @@ const OPEN_ASSIGNMENT_JOB_OWNER_V2: u8 = 10;
 /// Price the derived index slot for either frozen aux151 row kind.
 pub(crate) fn is_positive_job_owner_row_v2(table: u8, key: &[u8]) -> bool {
     table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE
-        && matches!(
-            key.get(4).copied(),
-            Some(RESULT_JOB_OWNER_V2 | OPEN_ASSIGNMENT_JOB_OWNER_V2)
-        )
+        && matches!(key.get(4).copied(), Some(RESULT_JOB_OWNER_V2 | OPEN_ASSIGNMENT_JOB_OWNER_V2))
 }
 
-fn positive_job_owner_v2(
-    body: &misaka_palw_positive_contract::rows::NativeRowBody,
-) -> Option<(Hash64, u8, Hash64)> {
-    use misaka_palw_positive_contract::{
-        assignment::rows::AssignmentStatusV2, rows::NativeRowBody,
-    };
+fn positive_job_owner_v2(body: &misaka_palw_positive_contract::rows::NativeRowBody) -> Option<(Hash64, u8, Hash64)> {
+    use misaka_palw_positive_contract::{assignment::rows::AssignmentStatusV2, rows::NativeRowBody};
     match body {
-        NativeRowBody::Result(row) => Some((
-            Hash64::from_bytes(row.result.job.0),
-            RESULT_JOB_OWNER_V2,
-            Hash64::from_bytes(row.result.id().0.0),
-        )),
-        NativeRowBody::Assignment(row) if row.status == AssignmentStatusV2::Open => Some((
-            Hash64::from_bytes(row.job.0),
-            OPEN_ASSIGNMENT_JOB_OWNER_V2,
-            Hash64::from_bytes(row.id().0.0),
-        )),
+        NativeRowBody::Result(row) => {
+            Some((Hash64::from_bytes(row.result.job.0), RESULT_JOB_OWNER_V2, Hash64::from_bytes(row.result.id().0.0)))
+        }
+        NativeRowBody::Assignment(row) if row.status == AssignmentStatusV2::Open => {
+            Some((Hash64::from_bytes(row.job.0), OPEN_ASSIGNMENT_JOB_OWNER_V2, Hash64::from_bytes(row.id().0.0)))
+        }
         _ => None,
     }
 }
 
-fn open_assignment_draw_slot_v2(
-    body: &misaka_palw_positive_contract::rows::NativeRowBody,
-) -> Option<(u8, u64, Hash64)> {
-    use misaka_palw_positive_contract::{
-        assignment::rows::AssignmentStatusV2, rows::NativeRowBody,
-    };
+fn open_assignment_draw_slot_v2(body: &misaka_palw_positive_contract::rows::NativeRowBody) -> Option<(u8, u64, Hash64)> {
+    use misaka_palw_positive_contract::{assignment::rows::AssignmentStatusV2, rows::NativeRowBody};
     let NativeRowBody::Assignment(row) = body else {
         return None;
     };
@@ -558,8 +486,7 @@ fn open_assignment_draw_slot_v2(
 
 pub(crate) fn is_positive_gate_c_schedule_row_v2(table: u8, key: &[u8]) -> bool {
     use crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2;
-    (table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE
-        && key.get(4) == Some(&OPEN_ASSIGNMENT_JOB_OWNER_V2))
+    (table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE && key.get(4) == Some(&OPEN_ASSIGNMENT_JOB_OWNER_V2))
         || (table == POSITIVE_CERTIFICATION_TABLE_V2 && key.first() == Some(&b'P'))
 }
 
@@ -568,12 +495,10 @@ fn positive_p_schedule_v2(
     mut raw: &[u8],
 ) -> Result<Option<(u8, u64, Hash64)>, misaka_palw_positive_contract::ContractError> {
     use crate::palw_positive_certification_v2::{
-        MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2, MAX_POSITIVE_DRAW_POSITIONS_V2,
-        PositiveCertificationDrawMetaV2, PositiveCertificationFixedV2, PositiveCertificationVoteV2,
+        MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2, MAX_POSITIVE_DRAW_POSITIONS_V2, PositiveCertificationDrawMetaV2,
+        PositiveCertificationFixedV2, PositiveCertificationVoteV2,
     };
-    use misaka_palw_positive_contract::{
-        ContractError as E, certification::PositiveCourtVerdictV2,
-    };
+    use misaka_palw_positive_contract::{ContractError as E, certification::PositiveCourtVerdictV2};
     const _: () = assert!(MAX_POSITIVE_DRAW_POSITIONS_V2 <= u128::BITS as u16);
     if key.len() != 65 || raw.len() > MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2 {
         return Err(E::Budget);
@@ -586,11 +511,7 @@ fn positive_p_schedule_v2(
     let subject = Hash64::from_bytes(h.subject.0);
     let tag = u8::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
     if tag == 0 && raw == [0; 4] {
-        let last = h
-            .commit_origin
-            .accepted_daa
-            .checked_add(h.policy.certify_by_daa)
-            .ok_or(E::Range)?;
+        let last = h.commit_origin.accepted_daa.checked_add(h.policy.certify_by_daa).ok_or(E::Range)?;
         return Ok(fixed.outcome.is_none().then_some((b'P', last, subject)));
     }
     if tag != 1 {
@@ -600,16 +521,13 @@ fn positive_p_schedule_v2(
         return Ok(None);
     }
 
-    let draw =
-        PositiveCertificationDrawMetaV2::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
+    let draw = PositiveCertificationDrawMetaV2::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
     let position_count = u32::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
     let max = u32::from(h.policy.m.min(MAX_POSITIVE_DRAW_POSITIONS_V2));
     if position_count > max {
         return Err(E::Budget);
     }
-    let (positions, mut votes) = raw
-        .split_at_checked(position_count as usize * 64)
-        .ok_or(E::NonCanonical)?;
+    let (positions, mut votes) = raw.split_at_checked(position_count as usize * 64).ok_or(E::NonCanonical)?;
     let vote_count = u32::deserialize(&mut votes).map_err(|_| E::NonCanonical)?;
     if vote_count > max {
         return Err(E::Budget);
@@ -622,8 +540,7 @@ fn positive_p_schedule_v2(
     let mut negative = 0u128;
     let mut last_negative = draw.origin.daa;
     for _ in 0..vote_count {
-        let vote =
-            PositiveCertificationVoteV2::deserialize(&mut votes).map_err(|_| E::NonCanonical)?;
+        let vote = PositiveCertificationVoteV2::deserialize(&mut votes).map_err(|_| E::NonCanonical)?;
         let tally = match vote.statement.verdict {
             PositiveCourtVerdictV2::PositiveChecked => &mut positive,
             PositiveCourtVerdictV2::NotReproducible => {
@@ -641,9 +558,7 @@ fn positive_p_schedule_v2(
     if !votes.is_empty() {
         return Err(E::NonCanonical);
     }
-    if draw.roster_count == 0
-        || (h.policy.veto > 0 && negative.count_ones() >= u32::from(h.policy.veto))
-    {
+    if draw.roster_count == 0 || (h.policy.veto > 0 && negative.count_ones() >= u32::from(h.policy.veto)) {
         // A veto or an empty draw is due in this block, including equal DAA.
         return Ok(Some((b'V', last_negative, subject)));
     }
@@ -653,36 +568,23 @@ fn positive_p_schedule_v2(
     fixed
         .finality
         .map(|finish| {
-            let earliest = finish
-                .origin
-                .accepted_daa
-                .checked_add(h.policy.prosecution_window_daa)
-                .ok_or(E::Range)?;
+            let earliest = finish.origin.accepted_daa.checked_add(h.policy.prosecution_window_daa).ok_or(E::Range)?;
             Ok((b'C', earliest, subject))
         })
         .transpose()
 }
 
 impl PalwKernelRouteStateV1 {
-    fn positive_job_owners_for_kind_v2(
-        &self,
-        job: Hash64,
-        kind: u8,
-    ) -> impl Iterator<Item = &(Hash64, u8, Hash64)> {
-        self.positive_job_owners_v2
-            .range((job, kind, Hash64::default())..=(job, kind, Hash64::from_bytes([u8::MAX; 64])))
+    fn positive_job_owners_for_kind_v2(&self, job: Hash64, kind: u8) -> impl Iterator<Item = &(Hash64, u8, Hash64)> {
+        self.positive_job_owners_v2.range((job, kind, Hash64::default())..=(job, kind, Hash64::from_bytes([u8::MAX; 64])))
     }
 
     pub(crate) fn contains_positive_job_v2(&self, job: Hash64) -> bool {
-        self.positive_job_owners_for_kind_v2(job, RESULT_JOB_OWNER_V2)
-            .next()
-            .is_some()
+        self.positive_job_owners_for_kind_v2(job, RESULT_JOB_OWNER_V2).next().is_some()
     }
 
     pub(crate) fn contains_open_assignment_job_v2(&self, job: Hash64) -> bool {
-        self.positive_job_owners_for_kind_v2(job, OPEN_ASSIGNMENT_JOB_OWNER_V2)
-            .next()
-            .is_some()
+        self.positive_job_owners_for_kind_v2(job, OPEN_ASSIGNMENT_JOB_OWNER_V2).next().is_some()
     }
 
     pub(crate) fn owns_open_assignment_job_v2(&self, job: Hash64, id: Hash64) -> bool {
@@ -695,33 +597,19 @@ impl PalwKernelRouteStateV1 {
         // live set only shrinks in the future until another admission.
         // Counting one extra detects a state that exceeds the shared cap.
         let probe = usize::try_from(u64::from(capacity) + 1).unwrap_or(usize::MAX);
-        let active = |kind| {
-            self.positive_gate_c_schedule_v2
-                .range((kind, now, Hash64::default())..(kind + 1, 0, Hash64::default()))
-        };
+        let active = |kind| self.positive_gate_c_schedule_v2.range((kind, now, Hash64::default())..(kind + 1, 0, Hash64::default()));
         active(b'A').chain(active(b'P')).take(probe).count() as u64
     }
 
-    pub(crate) fn owns_open_assignment_draw_slot_v2(
-        &self,
-        result_before_daa: u64,
-        assignment: Hash64,
-    ) -> bool {
-        result_before_daa.checked_sub(1).is_some_and(|last| {
-            self.positive_gate_c_schedule_v2
-                .contains(&(b'A', last, assignment))
-        })
+    pub(crate) fn owns_open_assignment_draw_slot_v2(&self, result_before_daa: u64, assignment: Hash64) -> bool {
+        result_before_daa.checked_sub(1).is_some_and(|last| self.positive_gate_c_schedule_v2.contains(&(b'A', last, assignment)))
     }
 
     pub(crate) fn owns_undrawn_p_slot_v2(&self, last: u64, subject: Hash64) -> bool {
-        self.positive_gate_c_schedule_v2
-            .contains(&(b'P', last, subject))
+        self.positive_gate_c_schedule_v2.contains(&(b'P', last, subject))
     }
 
-    pub(crate) fn undrawn_positive_certification_subjects_v2(
-        &self,
-        now: u64,
-    ) -> impl Iterator<Item = Hash64> + '_ {
+    pub(crate) fn undrawn_positive_certification_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
         self.positive_gate_c_schedule_v2
             .range((b'P', now, Hash64::default())..(b'Q', 0, Hash64::default()))
             .map(|&(_, _, subject)| subject)
@@ -729,29 +617,16 @@ impl PalwKernelRouteStateV1 {
 
     /// Draw and attestation deadlines are inclusive. A veto is due as
     /// soon as its signed votes are in the accepted prefix.
-    pub(crate) fn due_positive_certification_subjects_v2(
-        &self,
-        now: u64,
-    ) -> impl Iterator<Item = Hash64> + '_ {
-        let elapsed = |kind| {
-            self.positive_gate_c_schedule_v2
-                .range((kind, 0, Hash64::default())..(kind, now, Hash64::default()))
-        };
-        let veto = self
-            .positive_gate_c_schedule_v2
-            .range((b'V', 0, Hash64::default())..=(b'V', now, Hash64::from_bytes([u8::MAX; 64])));
-        elapsed(b'P')
-            .chain(elapsed(b'D'))
-            .chain(veto)
-            .map(|&(_, _, subject)| subject)
+    pub(crate) fn due_positive_certification_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
+        let elapsed = |kind| self.positive_gate_c_schedule_v2.range((kind, 0, Hash64::default())..(kind, now, Hash64::default()));
+        let veto =
+            self.positive_gate_c_schedule_v2.range((b'V', 0, Hash64::default())..=(b'V', now, Hash64::from_bytes([u8::MAX; 64])));
+        elapsed(b'P').chain(elapsed(b'D')).chain(veto).map(|&(_, _, subject)| subject)
     }
 
     /// Lower bound for acquiring the committed Case archive. The decision
     /// still checks the actual Case maturity and replayed fraud topology.
-    pub(crate) fn ready_positive_certification_subjects_v2(
-        &self,
-        now: u64,
-    ) -> impl Iterator<Item = Hash64> + '_ {
+    pub(crate) fn ready_positive_certification_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
         self.positive_gate_c_schedule_v2
             .range((b'C', 0, Hash64::default())..=(b'C', now, Hash64::from_bytes([u8::MAX; 64])))
             .map(|&(_, _, subject)| subject)
@@ -778,10 +653,7 @@ impl PalwKernelRouteStateV1 {
             };
             if is_job {
                 let row = NativeRowValue::decode(&key.1, bytes)?;
-                Ok((
-                    positive_job_owner_v2(&row.body),
-                    open_assignment_draw_slot_v2(&row.body),
-                ))
+                Ok((positive_job_owner_v2(&row.body), open_assignment_draw_slot_v2(&row.body)))
             } else {
                 Ok((None, positive_p_schedule_v2(&key.1, bytes)?))
             }
@@ -794,11 +666,7 @@ impl PalwKernelRouteStateV1 {
     }
 }
 
-fn update_positive_index_v2<T: Ord>(
-    index: &mut std::collections::BTreeSet<T>,
-    previous: Option<T>,
-    next: Option<T>,
-) {
+fn update_positive_index_v2<T: Ord>(index: &mut std::collections::BTreeSet<T>, previous: Option<T>, next: Option<T>) {
     if previous != next {
         if let Some(previous) = previous {
             index.remove(&previous);
@@ -814,15 +682,12 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
         fn positive_blob<R: std::io::Read>(reader: &mut R, cap: usize) -> std::io::Result<Vec<u8>> {
             let length = u32::deserialize_reader(reader)? as usize;
             if length > cap {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Positive aux frame exceeds codec ceiling",
-                ));
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux frame exceeds codec ceiling"));
             }
             let mut bytes = Vec::new();
-            bytes.try_reserve_exact(length).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::OutOfMemory, "Positive aux allocation")
-            })?;
+            bytes
+                .try_reserve_exact(length)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "Positive aux allocation"))?;
             bytes.resize(length, 0);
             reader.read_exact(&mut bytes)?;
             Ok(bytes)
@@ -835,45 +700,26 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
         let mut positive_gate_c_schedule_v2 = std::collections::BTreeSet::new();
         // Positive keys must be canonical BEFORE BTreeMap can sort/collapse
         // them. Other aux tables retain their legacy ordering semantics.
-        let mut previous_positive =
-            [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
+        let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
         let mut previous_positive_len = 0usize;
         for _ in 0..count {
             let table = u8::deserialize_reader(reader)?;
             let (key, value) = if table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
-                let key = positive_blob(
-                    reader,
-                    misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES,
-                )?;
-                if previous_positive_len != 0
-                    && key.as_slice() <= &previous_positive[..previous_positive_len]
-                {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "noncanonical Positive aux key order",
-                    ));
+                let key = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES)?;
+                if previous_positive_len != 0 && key.as_slice() <= &previous_positive[..previous_positive_len] {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "noncanonical Positive aux key order"));
                 }
                 previous_positive[..key.len()].copy_from_slice(&key);
                 previous_positive_len = key.len();
-                let value = positive_blob(
-                    reader,
-                    misaka_palw_positive_contract::rows::MAX_NATIVE_ROW_BYTES,
-                )?;
+                let value = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_ROW_BYTES)?;
                 let row = misaka_palw_positive_contract::rows::NativeRowValue::decode(&key, &value)
-                    .map_err(|_| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "Positive aux key/value mismatch",
-                        )
-                    })?;
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux key/value mismatch"))?;
                 if let Some(owner) = positive_job_owner_v2(&row.body) {
                     positive_job_owners_v2.insert(owner);
                 }
                 positive_gate_c_schedule_v2.extend(open_assignment_draw_slot_v2(&row.body));
                 (key, value)
-            } else if table
-                == crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2
-            {
+            } else if table == crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2 {
                 // Preserve every old136 key/value byte. Only reserved prefix P
                 // gets the new strict key/length/preflight contract.
                 let (key, positive) = positive_p_restore_key_v2(reader)?;
@@ -882,19 +728,10 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                     crate::palw_native_resource_v1::preflight_native_value_v1::<
                         crate::palw_positive_certification_v2::PositiveCertificationRowV2,
                     >(value.as_slice(), value.len() as u64)
-                    .map_err(|_| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::InvalidData,
-                            "invalid native P frame",
-                        )
-                    })?;
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid native P frame"))?;
                     positive_gate_c_schedule_v2.extend(
-                        positive_p_schedule_v2(&key, &value).map_err(|_| {
-                            std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "invalid P certification schedule",
-                            )
-                        })?,
+                        positive_p_schedule_v2(&key, &value)
+                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid P certification schedule"))?,
                     );
                     value
                 } else {
@@ -902,16 +739,10 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 };
                 (key, value)
             } else {
-                (
-                    Vec::<u8>::deserialize_reader(reader)?,
-                    Vec::<u8>::deserialize_reader(reader)?,
-                )
+                (Vec::<u8>::deserialize_reader(reader)?, Vec::<u8>::deserialize_reader(reader)?)
             };
             if aux.insert((table, key), value).is_some() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "duplicate kernel aux key",
-                ));
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "duplicate kernel aux key"));
             }
         }
         Ok(Self {
@@ -927,8 +758,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
 
 /// How many kernel ledger loads were served from the cache in this process (a diagnostic: the fold of a block loads the ledger once
 /// per object, and every load after the block's first is a hit — GAP 8's "a cached ledger per block").
-pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The cached ledger of a [`PalwKernelRouteStateV1`] (see its `ledger_cache`). Clones share the immutable ledger; a load clones it.
 #[derive(Clone, Default)]
@@ -947,12 +777,9 @@ struct KernelCaseAliasesV2 {
 }
 
 impl KernelCaseAliasesV2 {
-    fn build(
-        ledger: &KernelLedgerV1,
-    ) -> Result<Self, crate::palw_native_resource_v1::NativeCoverageV1> {
+    fn build(ledger: &KernelLedgerV1) -> Result<Self, crate::palw_native_resource_v1::NativeCoverageV1> {
         use crate::palw_native_resource_v1::{
-            NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1,
-            typed::BTreeNodeEnvelopeV1,
+            NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1, typed::BTreeNodeEnvelopeV1,
         };
         let context = "kernel Case alias index";
         let members = [
@@ -979,9 +806,8 @@ impl KernelCaseAliasesV2 {
         requests.exact_v1::<BTreeNodeEnvelopeV1<[u8; 64], ()>>(members)?;
         requests.exact_v1::<Self>(1)?;
         requests.exact_v1::<usize>(2)?; // shared owner
-        let lease = reserve_native_requests_v1(requests.bytes_v1())?.ok_or_else(|| {
-            NativeCoverageV1::unsupported::<Self>(context, "actual checker is not armed")
-        })?;
+        let lease = reserve_native_requests_v1(requests.bytes_v1())?
+            .ok_or_else(|| NativeCoverageV1::unsupported::<Self>(context, "actual checker is not armed"))?;
 
         let mut claims = std::collections::BTreeSet::new();
         let mut jobs = std::collections::BTreeSet::new();
@@ -995,12 +821,7 @@ impl KernelCaseAliasesV2 {
             jobs.insert(job);
             claims.insert(claim);
         }
-        for &claim in ledger
-            .opv
-            .claims
-            .keys()
-            .chain(ledger.proof_seals.keys().map(|(claim, _)| claim))
-        {
+        for &claim in ledger.opv.claims.keys().chain(ledger.proof_seals.keys().map(|(claim, _)| claim)) {
             claims.insert(claim);
         }
         for &job in ledger
@@ -1012,11 +833,7 @@ impl KernelCaseAliasesV2 {
         {
             jobs.insert(job);
         }
-        Ok(Self {
-            claims,
-            jobs,
-            lease,
-        })
+        Ok(Self { claims, jobs, lease })
     }
     fn contains(&self, claim: Option<&[u8; 64]>, job: &[u8; 64]) -> bool {
         claim.is_some_and(|claim| self.claims.contains(claim)) || self.jobs.contains(job)
@@ -1028,24 +845,16 @@ impl KernelLedgerCacheV1 {
     pub(crate) fn native_ledger_ref_v1(&self) -> Option<&KernelLedgerV1> {
         self.0.as_ref().map(|ledger| &ledger.ledger)
     }
-    pub fn get(
-        &self,
-    ) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, String> {
+    pub fn get(&self) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, String> {
         self.get_reserved_v1().map_err(|e| e.to_string())
     }
     fn get_reserved_v1(
         &self,
-    ) -> Result<
-        Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>,
-        crate::palw_native_resource_v1::NativeCoverageV1,
-    > {
+    ) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
         if self.1 {
             return Ok(None);
         }
-        self.0
-            .as_ref()
-            .map(|ledger| ledger.try_clone_v1())
-            .transpose()
+        self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
     pub fn set(&mut self, ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
         self.2 = std::sync::OnceLock::new();
@@ -1062,22 +871,13 @@ impl KernelLedgerCacheV1 {
     }
     pub(crate) fn native_projection(
         &self,
-    ) -> Result<
-        Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>,
-        crate::palw_native_resource_v1::NativeCoverageV1,
-    > {
+    ) -> Result<Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
         if !self.1 {
             return Ok(None);
         }
-        self.0
-            .as_ref()
-            .map(|ledger| ledger.try_clone_v1())
-            .transpose()
+        self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
-    pub(crate) fn set_native_projection(
-        &mut self,
-        mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1,
-    ) {
+    pub(crate) fn set_native_projection(&mut self, mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
         ledger.clear_flat_conformance_classes_v9();
         self.2 = std::sync::OnceLock::new();
         self.0 = Some(std::sync::Arc::new(ledger));
@@ -1121,22 +921,11 @@ impl PalwKernelRouteStateV1 {
     }
 
     /// [`Self::new`] under the typed-roots fence's activation (RFC-0004 Part II).
-    pub fn new_typed(
-        policy: LedgerPolicyV1,
-        opv: Option<OpvPolicyV1>,
-        typed_roots: Option<u64>,
-        scalars: LedgerScalarsV1,
-    ) -> Self {
+    pub fn new_typed(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, typed_roots: Option<u64>, scalars: LedgerScalarsV1) -> Self {
         let template = palw_kernel_route_template_typed_v1(policy, opv, typed_roots);
         let config_root = config_root_of(&template.schedule, &template.known);
         Self {
-            header: PalwKernelRouteHeaderV1 {
-                policy,
-                config_root,
-                scalars,
-                opv,
-                typed_roots,
-            },
+            header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv, typed_roots },
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
             ledger_cache: KernelLedgerCacheV1::default(),
@@ -1147,31 +936,18 @@ impl PalwKernelRouteStateV1 {
 
     /// The configuration the rows were folded under (policy, OPV policy, typed roots, schedule, descriptors).
     pub fn template(&self) -> KernelLedgerV1 {
-        palw_kernel_route_template_typed_v1(
-            self.header.policy,
-            self.header.opv,
-            self.header.typed_roots,
-        )
+        palw_kernel_route_template_typed_v1(self.header.policy, self.header.opv, self.header.typed_roots)
     }
 
     /// The ledger's root, computed from the rows alone (equal to [`KernelLedgerV1::root`] of the ledger they describe).
     pub fn ledger_root(&self) -> Hash64 {
         let h = &self.header;
-        Hash64::from_bytes(root_of_rows(
-            &h.policy,
-            h.config_root,
-            h.scalars,
-            h.opv.as_ref(),
-            &self.rows,
-        ))
+        Hash64::from_bytes(root_of_rows(&h.policy, h.config_root, h.scalars, h.opv.as_ref(), &self.rows))
     }
 
     /// The consensus tables' root: every aux row, in key order.
     pub fn aux_root(&self) -> Hash64 {
-        let mut s = blake2b_simd::Params::new()
-            .hash_length(64)
-            .key(b"misaka-palw/kernel-route/aux-root/v1")
-            .to_state();
+        let mut s = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/kernel-route/aux-root/v1").to_state();
         s.update(&(self.aux.len() as u64).to_le_bytes());
         for ((table, key), row) in &self.aux {
             s.update(&[*table]);
@@ -1192,16 +968,12 @@ impl PalwKernelRouteStateV1 {
         self.ledger_checked_v1().map_err(|e| e.to_string())
     }
 
-    fn commitment_scope_checked_v1(
-        &self,
-    ) -> Result<Option<u64>, PalwKernelLedgerProjectionErrorV1> {
+    fn commitment_scope_checked_v1(&self) -> Result<Option<u64>, PalwKernelLedgerProjectionErrorV1> {
         self.aux
             .get(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()))
             .map(|bytes| {
                 borsh::from_slice(bytes).map_err(|_| {
-                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(
-                        "malformed court-scope activation".into(),
-                    )
+                    crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode("malformed court-scope activation".into())
                 })
             })
             .transpose()
@@ -1211,10 +983,7 @@ impl PalwKernelRouteStateV1 {
     /// The string form remains for diagnostic/compatibility readers only.
     pub fn ledger_checked_v1(
         &self,
-    ) -> Result<
-        crate::palw_native_resource_v1::ReservedKernelLedgerV1,
-        PalwKernelLedgerProjectionErrorV1,
-    > {
+    ) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         let commitment_scope = self.commitment_scope_checked_v1()?;
         let scoped = |mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1| -> Result<
@@ -1236,15 +1005,11 @@ impl PalwKernelRouteStateV1 {
             );
             return scoped(cached);
         }
-        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, false)
-            .map_err(E::Resource)?;
-        scoped(
-            crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(
-                KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows)
-                    .map_err(E::Decode)?,
-                lease,
-            ),
-        )
+        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, false).map_err(E::Resource)?;
+        scoped(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(
+            KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &self.rows).map_err(E::Decode)?,
+            lease,
+        ))
     }
 
     /// A decoded aux row.
@@ -1254,38 +1019,23 @@ impl PalwKernelRouteStateV1 {
 
     /// The V2 bond a kernel bond digest stands for (the route has seen it sign or sit).
     pub fn bond_key_of(&self, kernel_bond: &Digest) -> Option<PalwBondKeyV2> {
-        self.aux_row(
-            PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
-            &borsh::to_vec(kernel_bond).expect("a digest serializes"),
-        )
+        self.aux_row(PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, &borsh::to_vec(kernel_bond).expect("a digest serializes"))
     }
 
     /// A claim's interim assignment, while its receipts are still being counted.
     pub fn assignment_of(&self, claim: &Digest) -> Option<KernelAssignmentV1> {
-        self.aux_row(
-            PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1,
-            &borsh::to_vec(claim).expect("a digest serializes"),
-        )
+        self.aux_row(PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, &borsh::to_vec(claim).expect("a digest serializes"))
     }
 
     /// The receipts counted so far for a claim (dropped once the claim is covered).
-    pub fn receipts_of(
-        &self,
-        claim: &Digest,
-    ) -> Vec<misaka_palw_kernel::receipt::PalwConstraintReceiptV1> {
-        self.aux_row(
-            PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1,
-            &borsh::to_vec(claim).expect("a digest serializes"),
-        )
-        .unwrap_or_default()
+    pub fn receipts_of(&self, claim: &Digest) -> Vec<misaka_palw_kernel::receipt::PalwConstraintReceiptV1> {
+        self.aux_row(PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1, &borsh::to_vec(claim).expect("a digest serializes")).unwrap_or_default()
     }
 
     /// What the route holds against a V2 bond — the ledger's reservations (a claim's collateral, a demand bond) and the deposits of
     /// its open chunk groups: the term V2's committed-collateral ledger adds, so no V2 gate counts it as free.
     pub fn reserved_of(&self, bond: &PalwBondKeyV2) -> u64 {
-        self.ledger_reserved_of(bond)
-            .saturating_add(self.chunk_deposits_of_v1(bond))
-            .saturating_add(self.signer_locks_of_v1(bond))
+        self.ledger_reserved_of(bond).saturating_add(self.chunk_deposits_of_v1(bond)).saturating_add(self.signer_locks_of_v1(bond))
     }
 
     /// **G14 lane closure G-K4: the lowest blue score the pruning point may reach** — the first block that served material of a
@@ -1293,15 +1043,9 @@ impl PalwKernelRouteStateV1 {
     pub fn served_material_pruning_ceiling_v1(&self) -> Option<u64> {
         use crate::palw_g14_lane_closure_v1::*;
         self.aux
-            .range(
-                (
-                    PALW_G14_LANE_CLOSURE_TABLE_V1,
-                    vec![PALW_SERVED_MATERIAL_PREFIX_V1],
-                )..,
-            )
+            .range((PALW_G14_LANE_CLOSURE_TABLE_V1, vec![PALW_SERVED_MATERIAL_PREFIX_V1])..)
             .take_while(|((table, key), _)| {
-                *table == PALW_G14_LANE_CLOSURE_TABLE_V1
-                    && key.first() == Some(&PALW_SERVED_MATERIAL_PREFIX_V1)
+                *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.first() == Some(&PALW_SERVED_MATERIAL_PREFIX_V1)
             })
             .filter_map(|(_, bytes)| borsh::from_slice::<PalwServedMaterialRowV1>(bytes).ok())
             .map(|row| row.first_blue_score)
@@ -1322,12 +1066,8 @@ impl PalwKernelRouteStateV1 {
             .map(|prefix| {
                 self.aux
                     .range((PALW_G14_LANE_CLOSURE_TABLE_V1, prefix.clone())..)
-                    .take_while(|((table, key), _)| {
-                        *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.starts_with(&prefix)
-                    })
-                    .filter_map(|(_, bytes)| {
-                        borsh::from_slice::<PalwKernelSignerLockRowV1>(bytes).ok()
-                    })
+                    .take_while(|((table, key), _)| *table == PALW_G14_LANE_CLOSURE_TABLE_V1 && key.starts_with(&prefix))
+                    .filter_map(|(_, bytes)| borsh::from_slice::<PalwKernelSignerLockRowV1>(bytes).ok())
                     .map(|row| row.amount)
                     .fold(0u64, u64::saturating_add)
             })
@@ -1349,10 +1089,7 @@ impl PalwKernelRouteStateV1 {
 /// **The payout key of a kernel payee**: `H(domain; payload)` under the `0xFD` prefix. One row per payee, accumulating (as the
 /// panel's seat pay does).
 pub fn palw_kernel_payout_key_v1(payload: &Hash64) -> Hash64 {
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(PALW_KERNEL_ROUTE_PAYOUT_DOMAIN_V1)
-        .to_state();
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_PAYOUT_DOMAIN_V1).to_state();
     s.update(payload.as_byte_slice());
     let mut out = [0u8; 64];
     out.copy_from_slice(s.finalize().as_bytes());
@@ -1363,10 +1100,7 @@ pub fn palw_kernel_payout_key_v1(payload: &Hash64) -> Hash64 {
 /// The interim challenge anchor and sample seed of a claim (grindable: derived from the claim id alone — the receipts' bindings).
 pub fn palw_kernel_interim_challenge_v1(claim: &Digest) -> (Digest, Digest) {
     let derive = |tag: u8| {
-        let mut s = blake2b_simd::Params::new()
-            .hash_length(64)
-            .key(PALW_KERNEL_ROUTE_INTERIM_CHALLENGE_DOMAIN_V1)
-            .to_state();
+        let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_INTERIM_CHALLENGE_DOMAIN_V1).to_state();
         s.update(&[tag]);
         s.update(claim);
         let mut out = [0u8; 64];
@@ -1383,18 +1117,17 @@ pub fn palw_kernel_interim_challenge_v1(claim: &Digest) -> (Digest, Digest) {
 /// judgement is made on chain (PRINCIPLES §9). Below the fence the attested set is byte-identical. Registered after genesis, the class
 /// takes the 0.3 tier like every registered model. A hash is data identity only, never a proof of computation (PRINCIPLES §8).
 pub const PALW_T12_KERNEL_SLICE_ATTESTED_ROOT_V1: [u8; 64] = [
-    0x44, 0xc6, 0x28, 0x70, 0xde, 0xa5, 0xd1, 0x91, 0xff, 0x2b, 0xc2, 0xeb, 0x8a, 0x0a, 0x11, 0x42,
-    0xce, 0x40, 0x22, 0x21, 0x2e, 0x6b, 0xe7, 0xf1, 0x9a, 0xd5, 0x89, 0x3f, 0x05, 0x2f, 0x22, 0xea,
-    0x7f, 0x90, 0x33, 0xda, 0xba, 0x21, 0x88, 0x5d, 0x65, 0x5e, 0x61, 0x9a, 0xf5, 0x57, 0xab, 0x8e,
-    0x02, 0x09, 0x1e, 0x13, 0x9b, 0x46, 0xbb, 0x31, 0x69, 0x53, 0x53, 0x13, 0xed, 0xcb, 0x96, 0x0e,
+    0x44, 0xc6, 0x28, 0x70, 0xde, 0xa5, 0xd1, 0x91, 0xff, 0x2b, 0xc2, 0xeb, 0x8a, 0x0a, 0x11, 0x42, 0xce, 0x40, 0x22, 0x21, 0x2e,
+    0x6b, 0xe7, 0xf1, 0x9a, 0xd5, 0x89, 0x3f, 0x05, 0x2f, 0x22, 0xea, 0x7f, 0x90, 0x33, 0xda, 0xba, 0x21, 0x88, 0x5d, 0x65, 0x5e,
+    0x61, 0x9a, 0xf5, 0x57, 0xab, 0x8e, 0x02, 0x09, 0x1e, 0x13, 0x9b, 0x46, 0xbb, 0x31, 0x69, 0x53, 0x53, 0x13, 0xed, 0xcb, 0x96,
+    0x0e,
 ];
 
 /// **lane SEED (G14 independent review MAJOR-1 / MINOR-1): the Panel=1 seed domain.** Past `palw_kernel_route_panel_one_v1` a
 /// committed claim's seat draw, challenge anchor and sample seed are keyed by the claim id AND a round seed anchor (ADR-0130/ADR-0170)
 /// recorded strictly after the commit — the same kind of post-commit anchor RFC-0018 Gate C draws its verifiers from — so a producer
 /// that re-forms its claim id cannot know at commit which operator sits or which positions are sampled. No new randomness source.
-pub const PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1: &[u8] =
-    b"misaka-palw/kernel-route/panel-one-seed/v1";
+pub const PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1: &[u8] = b"misaka-palw/kernel-route/panel-one-seed/v1";
 
 /// **Is a round seed anchor later than a commit?** `true` iff the anchor's span STARTS strictly after `committed_daa`
 /// (`anchor.span × span_daa > committed_daa`), `span_daa` the lane's span length now. Then the anchor's block is strictly later than
@@ -1410,15 +1143,8 @@ pub fn palw_kernel_panel_one_anchor_after_commit_v1(
 
 /// The Panel=1 derivation `H(domain; tag ‖ claim ‖ anchor span ‖ anchor block ‖ anchor execution key)`: tag 0 the lottery seed,
 /// 1 the challenge anchor, 2 the sample seed.
-fn palw_kernel_panel_one_derive_v1(
-    claim: &Digest,
-    anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1,
-    tag: u8,
-) -> [u8; 64] {
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1)
-        .to_state();
+fn palw_kernel_panel_one_derive_v1(claim: &Digest, anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1, tag: u8) -> [u8; 64] {
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1).to_state();
     s.update(&[tag]);
     s.update(claim);
     s.update(&anchor.span.to_le_bytes());
@@ -1430,10 +1156,7 @@ fn palw_kernel_panel_one_derive_v1(
 }
 
 /// **The Panel=1 lottery seed** of a claim under a post-commit anchor (see [`PALW_KERNEL_ROUTE_PANEL_ONE_SEED_DOMAIN_V1`]).
-pub fn palw_kernel_panel_one_seed_v1(
-    claim: &Digest,
-    anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1,
-) -> Hash64 {
+pub fn palw_kernel_panel_one_seed_v1(claim: &Digest, anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1) -> Hash64 {
     Hash64::from_bytes(palw_kernel_panel_one_derive_v1(claim, anchor, 0))
 }
 
@@ -1442,18 +1165,12 @@ pub fn palw_kernel_panel_one_challenge_v1(
     claim: &Digest,
     anchor: &crate::palw_execution_lane_v1::PalwExecSeedAnchorV1,
 ) -> (Digest, Digest) {
-    (
-        palw_kernel_panel_one_derive_v1(claim, anchor, 1),
-        palw_kernel_panel_one_derive_v1(claim, anchor, 2),
-    )
+    (palw_kernel_panel_one_derive_v1(claim, anchor, 1), palw_kernel_panel_one_derive_v1(claim, anchor, 2))
 }
 
 /// The interim lottery seed of a claim: `H("misaka-palw/kernel-route/interim-assignment/v1"; claim id)`.
 pub fn palw_kernel_interim_seed_v1(claim: &Digest) -> Hash64 {
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(PALW_KERNEL_ROUTE_INTERIM_ASSIGNMENT_DOMAIN_V1)
-        .to_state();
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_INTERIM_ASSIGNMENT_DOMAIN_V1).to_state();
     s.update(claim);
     let mut out = [0u8; 64];
     out.copy_from_slice(s.finalize().as_bytes());
@@ -1462,10 +1179,7 @@ pub fn palw_kernel_interim_seed_v1(claim: &Digest) -> Hash64 {
 
 /// An interim seat's lottery key: `−log2(u) / W` (smaller wins), `u` the first 8 bytes of `H(domain; seed ‖ operator)`.
 pub fn palw_kernel_interim_key_v1(seed: &Hash64, operator: &Hash64, weight: u128) -> u128 {
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(PALW_KERNEL_ROUTE_INTERIM_TICKET_DOMAIN_V1)
-        .to_state();
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_ROUTE_INTERIM_TICKET_DOMAIN_V1).to_state();
     s.update(seed.as_byte_slice());
     s.update(operator.as_byte_slice());
     let mut u = [0u8; 8];
@@ -1475,10 +1189,7 @@ pub fn palw_kernel_interim_key_v1(seed: &Hash64, operator: &Hash64, weight: u128
 
 /// The assignment root: `H(seats in order ‖ quorum)`.
 pub fn palw_kernel_assignment_root_v1(seats: &[KernelSeatV1], quorum: u8) -> Digest {
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(b"misaka-palw/kernel-route/assignment-root/v1")
-        .to_state();
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/kernel-route/assignment-root/v1").to_state();
     s.update(&[quorum]);
     for seat in seats {
         s.update(&seat.kernel_bond);
@@ -1617,9 +1328,7 @@ fn selected_approval_event_v1(
     receipt: &misaka_palw_kernel::opv::FinalReceiptV1,
     settlement: crate::palw_kernel_settlement_v1::PalwKernelSettlementV1,
 ) -> Result<Option<Vec<u8>>, String> {
-    selected_approval_work_v6(ledger, receipt, settlement)?
-        .map(|work| borsh::to_vec(&work).map_err(|e| e.to_string()))
-        .transpose()
+    selected_approval_work_v6(ledger, receipt, settlement)?.map(|work| borsh::to_vec(&work).map_err(|e| e.to_string())).transpose()
 }
 
 /// Same RFC07 event as the encoded compatibility reader, without a second ledger
@@ -1635,10 +1344,7 @@ pub(crate) fn selected_approval_work_v6(
     if receipt.mode == VerificationModeV1::PanelLicensed {
         return Ok(None);
     }
-    let work = ledger
-        .claims
-        .get(&receipt.claim)
-        .map(|r| (r.class_binding_id, r.job_id));
+    let work = ledger.claims.get(&receipt.claim).map(|r| (r.class_binding_id, r.job_id));
     // The earliest acceptance of the work identity: the earliest commitment of any claim of the same job (a convicted or defaulted
     // earlier holder counts).
     let earliest = ledger
@@ -1664,21 +1370,13 @@ pub(crate) fn selected_approval_work_v6(
         S::FinalRevocable { .. } | S::Settled { .. } => {}
         S::Pending => event.claim_final = false,
     }
-    let producer = ledger
-        .claims
-        .get(&receipt.claim)
-        .map(|r| r.producer)
-        .unwrap_or([0u8; 64]);
-    let consumer = work.and_then(|(_, job)| ledger.job_poster(&job)).map_or(
-        misaka_palw_challenge::RootV1::Absent,
-        misaka_palw_challenge::RootV1::Present,
-    );
+    let producer = ledger.claims.get(&receipt.claim).map(|r| r.producer).unwrap_or([0u8; 64]);
+    let consumer = work
+        .and_then(|(_, job)| ledger.job_poster(&job))
+        .map_or(misaka_palw_challenge::RootV1::Absent, misaka_palw_challenge::RootV1::Present);
     let attributed = misaka_palw_challenge::AttributedWorkV1 {
         event,
-        attribution: misaka_palw_challenge::SourceAttributionV1 {
-            producer_id: producer,
-            consumer_id: consumer,
-        },
+        attribution: misaka_palw_challenge::SourceAttributionV1 { producer_id: producer, consumer_id: consumer },
     };
     Ok(Some(attributed))
 }
@@ -1695,10 +1393,7 @@ pub(crate) fn panel_record_v1(
     if final_path != "PanelLicensed" {
         return None;
     }
-    let work = ledger
-        .claims
-        .get(&receipt.claim)
-        .map(|r| (r.producer, r.job_id));
+    let work = ledger.claims.get(&receipt.claim).map(|r| (r.producer, r.job_id));
     let payer = work.and_then(|(_, job)| ledger.job_poster(&job));
     borsh::to_vec(&(receipt, settlement.label(), work.map(|(p, _)| p), payer)).ok()
 }
@@ -1726,31 +1421,14 @@ impl PalwKernelRouteStateV1 {
         // uses). That approval rests on the selection rule and its explicit honest-fraction premise, never on a timeout, a
         // zero payout, a matching replay or an operator identity. A Panel-licensed Final still exports nothing: the route
         // does not know the licensing Panel's seed and epoch.
-        Ok(
-            match (
-                receipt.mode,
-                ledger.paid_claim_consumers_v2.contains_key(&receipt.claim),
-            ) {
-                (_, true) => {
-                    let approved = crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(
-                        self,
-                        &Hash64::from_bytes(receipt.claim),
-                    );
-                    (
-                        "PaidClaimV2",
-                        if approved {
-                            selected_approval_event_v1(ledger, receipt, settlement)?
-                        } else {
-                            None
-                        },
-                    )
-                }
-                (VerificationModeV1::OptimisticPublicVerification, false) => {
-                    ("OptimisticUnapproved", None)
-                }
-                (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
-            },
-        )
+        Ok(match (receipt.mode, ledger.paid_claim_consumers_v2.contains_key(&receipt.claim)) {
+            (_, true) => {
+                let approved = crate::palw_exec_v2_verify::palw_exec_v2_selected_approval_v1(self, &Hash64::from_bytes(receipt.claim));
+                ("PaidClaimV2", if approved { selected_approval_event_v1(ledger, receipt, settlement)? } else { None })
+            }
+            (VerificationModeV1::OptimisticPublicVerification, false) => ("OptimisticUnapproved", None),
+            (VerificationModeV1::PanelLicensed, false) => ("PanelLicensed", None),
+        })
     }
 
     /// Every historical Final in canonical order. A lifecycle timeout is readable,
@@ -1759,23 +1437,12 @@ impl PalwKernelRouteStateV1 {
         let ledger = self.ledger_native_projection_v9()?;
         let mut out = Vec::new();
         for receipt in ledger.final_receipts() {
-            let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(
-                &ledger,
-                &receipt.claim,
-                ledger.daa,
-            )
-            .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
+            let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(&ledger, &receipt.claim, ledger.daa)
+                .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
             let (final_path, event) = self.final_export_v1(&ledger, &receipt, settlement)?;
             let statement = receipt.assurance.statement();
             let panel_record = panel_record_v1(&ledger, &receipt, final_path, settlement);
-            out.push(KernelFinalReadV1 {
-                receipt,
-                final_path,
-                event,
-                statement,
-                settlement: settlement.label(),
-                panel_record,
-            });
+            out.push(KernelFinalReadV1 { receipt, final_path, event, statement, settlement: settlement.label(), panel_record });
         }
         Ok(out)
     }
@@ -1789,50 +1456,26 @@ impl PalwKernelRouteStateV1 {
         };
         let (kind, public_record, record_header) = match &row.body {
             misaka_palw_kernel::ledger::ClaimBodyV1::Program { .. } => {
-                let (record, header) = ledger
-                    .public_record(claim)
-                    .ok_or("a stored program claim has no public record")?;
-                (
-                    "program",
-                    record.to_bytes(),
-                    borsh::to_vec(&header).map_err(|e| e.to_string())?,
-                )
+                let (record, header) = ledger.public_record(claim).ok_or("a stored program claim has no public record")?;
+                ("program", record.to_bytes(), borsh::to_vec(&header).map_err(|e| e.to_string())?)
             }
             misaka_palw_kernel::ledger::ClaimBodyV1::Pipeline { .. } => {
-                let (record, header, binding) = ledger
-                    .pipeline_public_record(claim)
-                    .ok_or("a stored pipeline claim has no public record")?;
+                let (record, header, binding) =
+                    ledger.pipeline_public_record(claim).ok_or("a stored pipeline claim has no public record")?;
                 // GAP 6 closed: the header a pipeline verifier is built with, with the class binding it checks the record against.
-                (
-                    "pipeline",
-                    record.to_bytes(),
-                    borsh::to_vec(&(header, binding)).map_err(|e| e.to_string())?,
-                )
+                ("pipeline", record.to_bytes(), borsh::to_vec(&(header, binding)).map_err(|e| e.to_string())?)
             }
             // K2-TIR-v4: the segmented record (the class's program, plan and v3 commitments, the evidence, the segment roots, the job's
             // prompt by length and root and the delivered ids); the header is the class's.
             misaka_palw_kernel::ledger::ClaimBodyV1::Segmented { .. } => {
-                let record =
-                    misaka_palw_kernel::seg_ledger::SegmentedClaimRecordV1::of(&ledger, claim)
-                        .ok_or("a stored segmented claim has no record")?;
-                let header = ledger
-                    .classes
-                    .get(&row.class_binding_id)
-                    .map(|c| c.header(row.class_binding_id))
-                    .ok_or("no class")?;
-                (
-                    "segmented",
-                    record.to_bytes(),
-                    borsh::to_vec(&header).map_err(|e| e.to_string())?,
-                )
+                let record = misaka_palw_kernel::seg_ledger::SegmentedClaimRecordV1::of(&ledger, claim)
+                    .ok_or("a stored segmented claim has no record")?;
+                let header = ledger.classes.get(&row.class_binding_id).map(|c| c.header(row.class_binding_id)).ok_or("no class")?;
+                ("segmented", record.to_bytes(), borsh::to_vec(&header).map_err(|e| e.to_string())?)
             }
             // RFC-0004 Part II: the typed claim's stored body is its public record, and the class's specification its header.
             misaka_palw_kernel::ledger::ClaimBodyV1::Spec(body) => {
-                let spec = ledger
-                    .typed
-                    .classes
-                    .get(&row.class_binding_id)
-                    .ok_or("a stored typed claim has no class")?;
+                let spec = ledger.typed.classes.get(&row.class_binding_id).ok_or("a stored typed claim has no class")?;
                 (
                     body.claim.kind(),
                     borsh::to_vec(body).map_err(|e| e.to_string())?,
@@ -1843,21 +1486,13 @@ impl PalwKernelRouteStateV1 {
         let mut served = Vec::new();
         for ((c, stage, position), sp) in ledger.served.iter() {
             if c == claim {
-                served.push((
-                    *stage,
-                    *position,
-                    borsh::to_vec(sp).map_err(|e| e.to_string())?,
-                ));
+                served.push((*stage, *position, borsh::to_vec(sp).map_err(|e| e.to_string())?));
             }
         }
         // A segmented claim keeps no served bytes: its served positions (and the progress of open demands) are borsh `SegProgressV1`.
         for ((c, stage, position), progress) in ledger.seg_progress.iter() {
             if c == claim {
-                served.push((
-                    *stage,
-                    *position,
-                    borsh::to_vec(progress).map_err(|e| e.to_string())?,
-                ));
+                served.push((*stage, *position, borsh::to_vec(progress).map_err(|e| e.to_string())?));
             }
         }
         let demands = ledger
@@ -1887,10 +1522,8 @@ impl PalwKernelRouteStateV1 {
             max_gain: v.max_gain,
             statement: v.assurance.statement(),
         });
-        let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(
-            &ledger, claim, ledger.daa,
-        )
-        .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
+        let settlement = crate::palw_kernel_settlement_v1::palw_kernel_row_settlement_v1(&ledger, claim, ledger.daa)
+            .unwrap_or(crate::palw_kernel_settlement_v1::PalwKernelSettlementV1::Pending);
         Ok(Some(KernelClaimReadV1 {
             claim_id: *claim,
             kind,
@@ -1912,10 +1545,7 @@ impl PalwKernelRouteStateV1 {
             record_header,
             served,
             demands,
-            seats: assignment
-                .as_ref()
-                .map(|a| a.seats.iter().map(|s| (s.bond, s.kernel_bond)).collect())
-                .unwrap_or_default(),
+            seats: assignment.as_ref().map(|a| a.seats.iter().map(|s| (s.bond, s.kernel_bond)).collect()).unwrap_or_default(),
             quorum: assignment.as_ref().map(|a| a.quorum).unwrap_or(0),
             assignment_deadline_daa: assignment.as_ref().map(|a| a.deadline_daa).unwrap_or(0),
             receipts_counted: self.receipts_of(claim).len() as u32,
@@ -1940,8 +1570,8 @@ impl PalwKernelRouteStateV1 {
         ledger_root: &Hash64,
         aux_root: &Hash64,
     ) -> Result<Self, String> {
-        let header: PalwKernelRouteHeaderV1 = borsh::from_slice(header)
-            .map_err(|e| format!("the route header does not decode: {e}"))?;
+        let header: PalwKernelRouteHeaderV1 =
+            borsh::from_slice(header).map_err(|e| format!("the route header does not decode: {e}"))?;
         let mut route = Self {
             header,
             rows: LedgerRowsV1::new(),
@@ -1955,7 +1585,8 @@ impl PalwKernelRouteStateV1 {
                 route.rows.insert((table, key), row).is_some()
             } else {
                 let key = (table, key);
-                route.update_positive_aux_indexes_v2(&key, Some(&row))
+                route
+                    .update_positive_aux_indexes_v2(&key, Some(&row))
                     .map_err(|why| format!("invalid Positive indexed row: {why:?}"))?;
                 route.aux.insert(key, row).is_some()
             };
@@ -1985,10 +1616,7 @@ impl PalwKernelRouteStateV1 {
         let mut bytes = 0usize;
         let mut next = None;
         // The ledger tables are numbered below the consensus tables, so the two maps concatenate in key order.
-        let all = self
-            .rows
-            .range((start.clone(), Unbounded))
-            .chain(self.aux.range((start, Unbounded)));
+        let all = self.rows.range((start.clone(), Unbounded)).chain(self.aux.range((start, Unbounded)));
         for ((table, key), row) in all {
             if !rows.is_empty() && bytes + key.len() + row.len() > max_bytes {
                 break;
@@ -1999,25 +1627,13 @@ impl PalwKernelRouteStateV1 {
         }
         // `next` is a resume point only if something follows it.
         if let Some(cursor) = &next {
-            let after_last = self
-                .rows
-                .range((Excluded(cursor.clone()), Unbounded))
-                .next()
-                .is_some()
-                || self
-                    .aux
-                    .range((Excluded(cursor.clone()), Unbounded))
-                    .next()
-                    .is_some();
+            let after_last = self.rows.range((Excluded(cursor.clone()), Unbounded)).next().is_some()
+                || self.aux.range((Excluded(cursor.clone()), Unbounded)).next().is_some();
             if !after_last {
                 next = None;
             }
         }
-        KernelRowsPageV1 {
-            rows,
-            next,
-            total_rows,
-        }
+        KernelRowsPageV1 { rows, next, total_rows }
     }
 }
 
@@ -2070,24 +1686,15 @@ pub enum PalwKernelChunkTargetV1 {
 
 /// Raw protected reveal plus the bounded signed outer envelope; never an arbitrary
 /// sixteen-part object. This bounds assembly before its variable Borsh decode.
-pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6: usize =
-    misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6 + (16 << 10);
-pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9: usize =
-    misaka_palw_kernel::flat_seal9::FLAT_SEAL_MAX_PROOF_BYTES_V9 + (16 << 10);
-pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7: usize =
-    misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7 + (16 << 10);
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6: usize = misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6 + (16 << 10);
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9: usize = misaka_palw_kernel::flat_seal9::FLAT_SEAL_MAX_PROOF_BYTES_V9 + (16 << 10);
+pub const PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7: usize = misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7 + (16 << 10);
 
 /// A completing part and terminal court must fit together. Derive this upper
 /// debit from fixed admitted metadata before opening/continuing a group.
-pub fn protected_flat_chunk_finish_work_v6(
-    h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3,
-) -> Option<u64> {
-    let proof = usize::try_from(h.max_filing_bytes)
-        .ok()?
-        .min(misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6);
-    let metadata = |bytes: usize| {
-        crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?)
-    };
+pub fn protected_flat_chunk_finish_work_v6(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal6::FLAT_SEAL_MAX_PROOF_BYTES_V6);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
     crate::palw_flat_model_vector_v3::flat_model_vector_work_v3(
         h.program_bytes_len,
         h.pc_instances,
@@ -2095,23 +1702,12 @@ pub fn protected_flat_chunk_finish_work_v6(
     )
     .and_then(|w| w.checked_add(h.max_court_work))
     .and_then(|w| w.checked_add(metadata(proof)?))
-    .and_then(|w| {
-        w.checked_add(metadata(
-            crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
-                + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6,
-        )?)
-    })
+    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6)?))
 }
 
-pub fn protected_flat_chunk_finish_work_v7(
-    h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3,
-) -> Option<u64> {
-    let proof = usize::try_from(h.max_filing_bytes)
-        .ok()?
-        .min(misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7);
-    let metadata = |bytes: usize| {
-        crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?)
-    };
+pub fn protected_flat_chunk_finish_work_v7(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<u64> {
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal7::FLAT_SEAL_MAX_PROOF_BYTES_V7);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
     crate::palw_flat_model_vector_v3::flat_model_vector_work_v3(
         h.program_bytes_len,
         h.pc_instances,
@@ -2119,43 +1715,23 @@ pub fn protected_flat_chunk_finish_work_v7(
     )
     .and_then(|w| w.checked_add(h.max_court_work))
     .and_then(|w| w.checked_add(metadata(proof)?))
-    .and_then(|w| {
-        w.checked_add(metadata(
-            crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES
-                + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7,
-        )?)
-    })
+    .and_then(|w| w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7)?))
 }
-pub fn protected_flat_chunk_cap_v9(
-    h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3,
-) -> Option<usize> {
-    usize::try_from(h.max_filing_bytes)
-        .ok()?
-        .checked_add(16 << 10)
-        .filter(|x| *x <= PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9)
+pub fn protected_flat_chunk_cap_v9(h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3) -> Option<usize> {
+    usize::try_from(h.max_filing_bytes).ok()?.checked_add(16 << 10).filter(|x| *x <= PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V9)
 }
 pub fn protected_flat_chunk_finish_work_v9(
     route: &PalwKernelRouteStateV1,
     h: &crate::palw_flat_model_vector_v3::FlatModelVectorHeaderV3,
 ) -> Option<u64> {
-    let proof = usize::try_from(h.max_filing_bytes)
-        .ok()?
-        .min(misaka_palw_kernel::flat_seal9::FLAT_SEAL_MAX_PROOF_BYTES_V9);
-    let metadata = |bytes: usize| {
-        crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?)
-    };
-    crate::palw_flat_model_vector_v9::flat_model_vector_work_v9(
-        route,
-        &h.class,
-        proof.checked_add(h.post_bytes_len as usize)?,
-    )
-    .and_then(|w| w.checked_add(h.max_court_work))
-    .and_then(|w| w.checked_add(metadata(proof)?))
-    .and_then(|w| {
-        w.checked_add(metadata(
-            crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * protected_flat_chunk_cap_v9(h)?,
-        )?)
-    })
+    let proof = usize::try_from(h.max_filing_bytes).ok()?.min(misaka_palw_kernel::flat_seal9::FLAT_SEAL_MAX_PROOF_BYTES_V9);
+    let metadata = |bytes: usize| crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.checked_add(1024)?);
+    crate::palw_flat_model_vector_v9::flat_model_vector_work_v9(route, &h.class, proof.checked_add(h.post_bytes_len as usize)?)
+        .and_then(|w| w.checked_add(h.max_court_work))
+        .and_then(|w| w.checked_add(metadata(proof)?))
+        .and_then(|w| {
+            w.checked_add(metadata(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES + 3 * protected_flat_chunk_cap_v9(h)?)?)
+        })
 }
 
 /// **One chunk of a prosecution object in the route's own lane** (the body of `KernelRouteChunkV1`, tag 113). `group` is
@@ -2187,10 +1763,7 @@ pub struct PalwKernelChunkGroupV1 {
 /// **The message a chunk's opener signs**: `H(domain; network ‖ len ‖ borsh(chunk))` — every field, the target and the bytes included.
 pub fn palw_kernel_chunk_message_v1(network_domain: Hash64, chunk: &PalwKernelChunkV1) -> Hash64 {
     let bytes = borsh::to_vec(chunk).expect("a chunk serializes");
-    let mut s = blake2b_simd::Params::new()
-        .hash_length(64)
-        .key(PALW_KERNEL_CHUNK_DOMAIN_V1)
-        .to_state();
+    let mut s = blake2b_simd::Params::new().hash_length(64).key(PALW_KERNEL_CHUNK_DOMAIN_V1).to_state();
     s.update(network_domain.as_byte_slice());
     s.update(&(bytes.len() as u64).to_le_bytes());
     s.update(&bytes);
@@ -2212,49 +1785,24 @@ pub fn palw_kernel_chunks_v1(
     target: PalwKernelChunkTargetV1,
     cap: usize,
 ) -> Result<Vec<PalwKernelChunkV1>, String> {
-    use crate::palw_state_v2::{
-        PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, palw_object_chunk_group_id_v1,
-    };
-    let native = matches!(
-        target,
-        PalwKernelChunkTargetV1::FundedProofV11 { .. }
-            | PalwKernelChunkTargetV1::StageProofV14 { .. }
-    );
-    let count_cap = if native {
-        64usize
-    } else {
-        PALW_OBJECT_CHUNK_MAX_COUNT as usize
-    };
-    let byte_cap = if native {
-        misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize
-    } else {
-        PALW_OBJECT_CHUNK_MAX_BYTES
-    };
+    use crate::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, palw_object_chunk_group_id_v1};
+    let native = matches!(target, PalwKernelChunkTargetV1::FundedProofV11 { .. } | PalwKernelChunkTargetV1::StageProofV14 { .. });
+    let count_cap = if native { 64usize } else { PALW_OBJECT_CHUNK_MAX_COUNT as usize };
+    let byte_cap =
+        if native { misaka_palw_kernel::flat_quota11::PROTECTED_FRAGMENT_BYTES_V11 as usize } else { PALW_OBJECT_CHUNK_MAX_BYTES };
     if cap == 0 || cap > byte_cap {
-        return Err(format!(
-            "a chunk holds 1..={PALW_OBJECT_CHUNK_MAX_BYTES} bytes"
-        ));
+        return Err(format!("a chunk holds 1..={PALW_OBJECT_CHUNK_MAX_BYTES} bytes"));
     }
     let bytes = borsh::to_vec(object).map_err(|e| e.to_string())?;
     let count = bytes.len().div_ceil(cap).max(1);
     if count > count_cap {
-        return Err(format!(
-            "{} bytes need {count} chunks of {cap}, past {PALW_OBJECT_CHUNK_MAX_COUNT}",
-            bytes.len()
-        ));
+        return Err(format!("{} bytes need {count} chunks of {cap}, past {PALW_OBJECT_CHUNK_MAX_COUNT}", bytes.len()));
     }
     let group = palw_object_chunk_group_id_v1(&bytes);
     Ok(bytes
         .chunks(cap)
         .enumerate()
-        .map(|(i, part)| PalwKernelChunkV1 {
-            opener,
-            group,
-            target,
-            index: i as u8,
-            count: count as u8,
-            bytes: part.to_vec(),
-        })
+        .map(|(i, part)| PalwKernelChunkV1 { opener, group, target, index: i as u8, count: count as u8, bytes: part.to_vec() })
         .collect())
 }
 
@@ -2272,54 +1820,29 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
             matches!(K::decode(bytes), Ok(K::FileProof { claim, .. } | K::Respond { claim, .. }) if claim == *id)
         }
         (
-            Obj::ArtifactBindingChallengedV1 {
-                v2_class,
-                kernel_param_root,
-                ..
-            },
-            PalwKernelChunkTargetV1::Binding {
-                v2_class: class,
-                kernel_param_root: root,
-            },
+            Obj::ArtifactBindingChallengedV1 { v2_class, kernel_param_root, .. },
+            PalwKernelChunkTargetV1::Binding { v2_class: class, kernel_param_root: root },
         ) => v2_class == class && kernel_param_root == root,
-        (
-            Obj::ConformanceEvidenceV1 { v2_class, .. },
-            PalwKernelChunkTargetV1::Conformance { v2_class: class },
-        ) => v2_class == class,
-        (
-            Obj::KernelRouteV1 { bytes, signer, .. },
-            PalwKernelChunkTargetV1::FlatProofV6 { vector, actor },
-        ) => {
+        (Obj::ConformanceEvidenceV1 { v2_class, .. }, PalwKernelChunkTargetV1::Conformance { v2_class: class }) => v2_class == class,
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV6 { vector, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
                 && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV6 { vector: id, .. }) if id == vector.as_bytes())
         }
-        (
-            Obj::KernelRouteV1 { bytes, signer, .. },
-            PalwKernelChunkTargetV1::FlatProofV7 { vector, actor },
-        ) => {
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV7 { vector, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
                 && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV7 { vector: id, .. }) if id == vector.as_bytes())
         }
-        (
-            Obj::KernelRouteV1 { bytes, signer, .. },
-            PalwKernelChunkTargetV1::FundedProofV11 { seal, actor },
-        ) => {
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FundedProofV11 { seal, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
                 && matches!(misaka_palw_kernel::route::borrowed_native_action_v1(bytes),Ok(Some(a))
                     if a.tag==misaka_palw_kernel::route::TAG_FUNDED_EXECUTION_V11 && a.action==6 && a.body.get(..64)==Some(seal.as_slice()))
         }
-        (
-            Obj::KernelRouteV1 { bytes, signer, .. },
-            PalwKernelChunkTargetV1::StageProofV14 { seal, actor },
-        ) => {
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::StageProofV14 { seal, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
                 && matches!(misaka_palw_kernel::route::borrowed_native_action_v1(bytes),Ok(Some(a))
                     if a.tag==misaka_palw_kernel::route::TAG_STAGE_EXECUTION_V14 && a.action==17 && a.body.get(..64)==Some(seal.as_slice()))
         }
-        (
-            Obj::KernelRouteV1 { bytes, signer, .. },
-            PalwKernelChunkTargetV1::FlatProofV9 { vector, actor },
-        ) => {
+        (Obj::KernelRouteV1 { bytes, signer, .. }, PalwKernelChunkTargetV1::FlatProofV9 { vector, actor }) => {
             palw_kernel_bond_id_v1(signer) == *actor
                 && matches!(K::decode(bytes), Ok(K::RevealFlatModelProofV9 { vector: id, .. }) if id == vector.as_bytes())
         }
@@ -2330,11 +1853,7 @@ pub fn palw_kernel_chunk_inner_matches_target_v1(
 /// **OPV-BOOT #1's deadline**: the agreed `palw_conformance_chunk_target_v1(route, v2_class, daa) -> Option<u64>` (the last DAA a part
 /// may arrive; `None`: no attempt can take one — a complete check never needs the lane), implemented over the attempt rows in
 /// [`crate::palw_onboarding_v1::palw_conformance_chunk_target_v1`] and wired here (OPVB).
-pub fn palw_conformance_chunk_target_pending_v1(
-    route: &PalwKernelRouteStateV1,
-    v2_class: &Hash64,
-    daa: u64,
-) -> Option<u64> {
+pub fn palw_conformance_chunk_target_pending_v1(route: &PalwKernelRouteStateV1, v2_class: &Hash64, daa: u64) -> Option<u64> {
     crate::palw_onboarding_v1::palw_conformance_chunk_target_v1(route, v2_class, daa)
 }
 
@@ -2348,29 +1867,17 @@ pub fn palw_kernel_claim_horizon_bound_v1(
     state: &misaka_palw_kernel::lifecycle::ClaimStateV1,
 ) -> Option<u64> {
     use misaka_palw_kernel::lifecycle::ClaimStateV1 as S;
-    let tail = policy
-        .court_deadline_daa
-        .saturating_add(policy.proof_grace_daa)
-        .saturating_add(policy.liability_daa);
+    let tail = policy.court_deadline_daa.saturating_add(policy.proof_grace_daa).saturating_add(policy.liability_daa);
     match state {
         S::Final { .. } | S::Unavailable { .. } => liability_until,
         S::TimedOut { .. } | S::Convicted { .. } => None,
-        S::Checking { deadline_daa, .. } => Some(
-            deadline_daa
-                .saturating_add(policy.challenge_window_daa)
-                .saturating_add(tail),
-        ),
-        S::ProbabilisticPass { window_end_daa, .. }
-        | S::Challengeable { window_end_daa, .. }
-        | S::WindowClosed { window_end_daa } => Some(window_end_daa.saturating_add(tail)),
-        S::Disputed { resume, .. } => {
-            palw_kernel_claim_horizon_bound_v1(policy, committed_daa, liability_until, resume)
+        S::Checking { deadline_daa, .. } => Some(deadline_daa.saturating_add(policy.challenge_window_daa).saturating_add(tail)),
+        S::ProbabilisticPass { window_end_daa, .. } | S::Challengeable { window_end_daa, .. } | S::WindowClosed { window_end_daa } => {
+            Some(window_end_daa.saturating_add(tail))
         }
+        S::Disputed { resume, .. } => palw_kernel_claim_horizon_bound_v1(policy, committed_daa, liability_until, resume),
         S::Committed | S::ChallengeBound { .. } => Some(
-            committed_daa
-                .saturating_add(policy.check_window_daa)
-                .saturating_add(policy.challenge_window_daa)
-                .saturating_add(tail),
+            committed_daa.saturating_add(policy.check_window_daa).saturating_add(policy.challenge_window_daa).saturating_add(tail),
         ),
     }
 }
@@ -2383,22 +1890,12 @@ fn chunk_fixed_header_v1(bytes: &[u8]) -> Option<(u64, u64)> {
     let expires = u64::deserialize_reader(&mut r).ok()?;
     let deposit = u64::deserialize_reader(&mut r).ok()?;
     let parts = u32::deserialize_reader(&mut r).ok()?;
-    (count > 0
-        && count <= crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT
-        && parts <= count as u32)
-        .then_some((expires, deposit))
+    (count > 0 && count <= crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT && parts <= count as u32).then_some((expires, deposit))
 }
 impl PalwKernelRouteStateV1 {
     /// One group of the route's chunk lane.
-    pub fn chunk_group_v1(
-        &self,
-        opener: &PalwBondKeyV2,
-        group: &Hash64,
-    ) -> Option<PalwKernelChunkGroupV1> {
-        self.aux_row(
-            PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1,
-            &palw_kernel_chunk_group_key_v1(opener, group),
-        )
+    pub fn chunk_group_v1(&self, opener: &PalwBondKeyV2, group: &Hash64) -> Option<PalwKernelChunkGroupV1> {
+        self.aux_row(PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, &palw_kernel_chunk_group_key_v1(opener, group))
     }
 
     /// Every half-assembled group, `(opener, group, row)`, in key order.
@@ -2408,11 +1905,7 @@ impl PalwKernelRouteStateV1 {
             .range((t, Vec::new())..(t + 1, Vec::new()))
             .filter_map(|((_, key), row)| {
                 let (opener, group) = borsh::from_slice::<(PalwBondKeyV2, Hash64)>(key).ok()?;
-                Some((
-                    opener,
-                    group,
-                    borsh::from_slice::<PalwKernelChunkGroupV1>(row).ok()?,
-                ))
+                Some((opener, group, borsh::from_slice::<PalwKernelChunkGroupV1>(row).ok()?))
             })
             .collect()
     }
@@ -2427,22 +1920,20 @@ impl PalwKernelRouteStateV1 {
     fn chunk_deposit_headers_v1(&self, opener: &PalwBondKeyV2) -> impl Iterator<Item = u64> + '_ {
         let prefix = borsh::to_vec(opener).expect("fixed bond key");
         let t = PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1;
-        self.aux
-            .range((t, prefix.clone())..(t + 1, Vec::new()))
-            .take_while(move |((_, key), _)| key.starts_with(&prefix))
-            .filter_map(|((_, key), bytes)| {
+        self.aux.range((t, prefix.clone())..(t + 1, Vec::new())).take_while(move |((_, key), _)| key.starts_with(&prefix)).filter_map(
+            |((_, key), bytes)| {
                 if key.len() != 132 {
                     return None;
                 }
                 chunk_fixed_header_v1(bytes).map(|(_, deposit)| deposit)
-            })
+            },
+        )
     }
 
     /// The deposits `bond`'s open groups hold against its collateral (part of what V2's committed-collateral ledger and both
     /// withdrawal gates read as the route's reservation).
     pub fn chunk_deposits_of_v1(&self, bond: &PalwBondKeyV2) -> u64 {
-        self.chunk_deposit_headers_v1(bond)
-            .fold(0u64, u64::saturating_add)
+        self.chunk_deposit_headers_v1(bond).fold(0u64, u64::saturating_add)
     }
 
     /// Read expiry/deposit headers without cloning proof payloads on every block.
@@ -2464,40 +1955,23 @@ impl PalwKernelRouteStateV1 {
 
     /// **The last DAA at which an object for `target` could still change anything** (`None`: nothing can — the claim is decided or
     /// unknown, the binding refuted or unknown). A group's TTL is never longer.
-    pub fn chunk_target_deadline_v1(
-        &self,
-        target: &PalwKernelChunkTargetV1,
-        daa: u64,
-    ) -> Option<u64> {
+    pub fn chunk_target_deadline_v1(&self, target: &PalwKernelChunkTargetV1, daa: u64) -> Option<u64> {
         match target {
             PalwKernelChunkTargetV1::Claim(id) => {
                 let key = borsh::to_vec(id).expect("a digest serializes");
-                let row: misaka_palw_kernel::ledger::ClaimRowV1 = borsh::from_slice(
-                    self.rows
-                        .get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, key))?,
-                )
-                .ok()?;
+                let row: misaka_palw_kernel::ledger::ClaimRowV1 =
+                    borsh::from_slice(self.rows.get(&(misaka_palw_kernel::rows::TABLE_CLAIMS_V1, key))?).ok()?;
                 if row.convicted {
                     return None;
                 }
-                palw_kernel_claim_horizon_bound_v1(
-                    &self.header.policy,
-                    row.committed_daa,
-                    row.liability_until,
-                    &row.life.state,
-                )
+                palw_kernel_claim_horizon_bound_v1(&self.header.policy, row.committed_daa, row.liability_until, &row.life.state)
             }
-            PalwKernelChunkTargetV1::Binding {
-                v2_class,
-                kernel_param_root,
-            } => {
+            PalwKernelChunkTargetV1::Binding { v2_class, kernel_param_root } => {
                 let row = self.artifact_binding_v1(v2_class, kernel_param_root)?;
                 // Refutable while `daa < final_daa`.
                 (!row.refuted).then(|| row.final_daa.saturating_sub(1))
             }
-            PalwKernelChunkTargetV1::Conformance { v2_class } => {
-                palw_conformance_chunk_target_pending_v1(self, v2_class, daa)
-            }
+            PalwKernelChunkTargetV1::Conformance { v2_class } => palw_conformance_chunk_target_pending_v1(self, v2_class, daa),
             PalwKernelChunkTargetV1::FlatProofV6 { vector, actor } => {
                 let header = self.flat_model_vector_header_v3(vector)?;
                 let seal = self.flat_model_seal_v6(vector, actor)?.seal;
@@ -2508,11 +1982,7 @@ impl PalwKernelRouteStateV1 {
                     && daa >= seal.mature_daa
                     && daa < seal.expires_daa
                     && daa < header.liability_until)
-                    .then(|| {
-                        seal.expires_daa
-                            .min(header.liability_until)
-                            .saturating_sub(1)
-                    })
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
             }
             PalwKernelChunkTargetV1::FlatProofV7 { vector, actor } => {
                 let header = self.flat_model_vector_header_v3(vector)?;
@@ -2524,25 +1994,19 @@ impl PalwKernelRouteStateV1 {
                     && daa >= seal.mature_daa
                     && daa < seal.expires_daa
                     && daa < header.liability_until)
-                    .then(|| {
-                        seal.expires_daa
-                            .min(header.liability_until)
-                            .saturating_sub(1)
-                    })
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
             }
             PalwKernelChunkTargetV1::FundedProofV11 { seal, actor } => {
                 let original = self.execution_seal_v11(seal)?;
                 let job = self.execution_job_header_v11(&original.job_id)?;
                 (original.actor == *actor
                     && !original.spent
-                    && job.terminal
-                        == misaka_palw_kernel::flat_execution11::ExecutionTerminalV11::Challengeable
-                    && daa >= original.mature_daa && daa < original.reveal_until)
+                    && job.terminal == misaka_palw_kernel::flat_execution11::ExecutionTerminalV11::Challengeable
+                    && daa >= original.mature_daa
+                    && daa < original.reveal_until)
                     .then(|| original.reveal_until.saturating_sub(1))
             }
-            PalwKernelChunkTargetV1::StageProofV14 { seal, actor } => {
-                self.stage_proof_deadline_v14(seal, actor, daa)
-            }
+            PalwKernelChunkTargetV1::StageProofV14 { seal, actor } => self.stage_proof_deadline_v14(seal, actor, daa),
             PalwKernelChunkTargetV1::FlatProofV9 { vector, actor } => {
                 let header = self.flat_model_vector_header_v3(vector)?;
                 let seal = self.flat_model_seal_v9(vector, actor)?.seal;
@@ -2553,11 +2017,7 @@ impl PalwKernelRouteStateV1 {
                     && daa >= seal.mature_daa
                     && daa < seal.expires_daa
                     && daa < header.liability_until)
-                    .then(|| {
-                        seal.expires_daa
-                            .min(header.liability_until)
-                            .saturating_sub(1)
-                    })
+                    .then(|| seal.expires_daa.min(header.liability_until).saturating_sub(1))
             }
         }
     }
@@ -2565,10 +2025,7 @@ impl PalwKernelRouteStateV1 {
     /// **The object `chunk` completes, if it completes its group**: every part present (the stored ones and this one), coherent with
     /// the stored group, the assembled bytes hashing to the group id and decoding to one object. `None` otherwise — the fold refuses
     /// what this cannot assemble. (The acceptance layer checks the assembled object's own signature at this chunk.)
-    pub fn chunk_completion_v1(
-        &self,
-        chunk: &PalwKernelChunkV1,
-    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+    pub fn chunk_completion_v1(&self, chunk: &PalwKernelChunkV1) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
         if matches!(chunk.target, PalwKernelChunkTargetV1::FundedProofV11 { .. }) {
             return self.funded_proof_chunk_completion_v11(chunk);
         }
@@ -2620,10 +2077,7 @@ impl PalwKernelRouteStateV1 {
         let stored = self.chunk_group_v1(&chunk.opener, &chunk.group);
         let mut parts: BTreeMap<u8, &[u8]> = BTreeMap::new();
         if let Some(stored) = &stored {
-            if stored.count != chunk.count
-                || stored.target != chunk.target
-                || stored.parts.contains_key(&chunk.index)
-            {
+            if stored.count != chunk.count || stored.target != chunk.target || stored.parts.contains_key(&chunk.index) {
                 return None;
             }
             parts.extend(stored.parts.iter().map(|(i, p)| (*i, p.as_slice())));
@@ -2636,9 +2090,9 @@ impl PalwKernelRouteStateV1 {
         let proof_cap = match chunk.target {
             PalwKernelChunkTargetV1::FlatProofV6 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V6),
             PalwKernelChunkTargetV1::FlatProofV7 { .. } => Some(PALW_FLAT_PROOF_CHUNK_MAX_BYTES_V7),
-            PalwKernelChunkTargetV1::FlatProofV9 { vector, .. } => Some(
-                protected_flat_chunk_cap_v9(&self.flat_model_vector_header_v3(&vector)?)?,
-            ),
+            PalwKernelChunkTargetV1::FlatProofV9 { vector, .. } => {
+                Some(protected_flat_chunk_cap_v9(&self.flat_model_vector_header_v3(&vector)?)?)
+            }
             _ => None,
         };
         if proof_cap.is_some_and(|cap| size > cap) {
@@ -2660,11 +2114,8 @@ impl PalwKernelRouteStateV1 {
     /// historical registration was fully independently checked in its block.
     /// Remote snapshot consumers use ledger()/full from_rows and an external
     /// chain anchor, never this fixed-prefix operational projection.
-    pub(crate) fn ledger_native_projection_v9(
-        &self,
-    ) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
-        self.ledger_native_projection_checked_v9()
-            .map_err(|e| e.to_string())
+    pub(crate) fn ledger_native_projection_v9(&self) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, String> {
+        self.ledger_native_projection_checked_v9().map_err(|e| e.to_string())
     }
 
     pub(crate) fn has_legacy_case_alias_v2(
@@ -2676,8 +2127,7 @@ impl PalwKernelRouteStateV1 {
             return Ok(index.contains(claim, job));
         }
         let ledger = self.ledger_native_projection_checked_v9()?;
-        let index = KernelCaseAliasesV2::build(&ledger)
-            .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource)?;
+        let index = KernelCaseAliasesV2::build(&ledger).map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource)?;
         let aliased = index.contains(claim, job);
         // A concurrent initializer sees the same immutable rows. In the race
         // the duplicate reservation is returned by dropping the losing Arc.
@@ -2687,30 +2137,22 @@ impl PalwKernelRouteStateV1 {
 
     pub(crate) fn ledger_native_projection_checked_v9(
         &self,
-    ) -> Result<
-        crate::palw_native_resource_v1::ReservedKernelLedgerV1,
-        PalwKernelLedgerProjectionErrorV1,
-    > {
+    ) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
         use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
         use misaka_palw_kernel::{ledger::flat_candidate9::*, rows::*};
         let commitment_scope = self.commitment_scope_checked_v1()?;
         let mut count = 0usize;
         let mut bytes = 0usize;
-        for ((_, _), row) in self.rows.range(
-            (TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())
-                ..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()),
-        ) {
+        for ((_, _), row) in
+            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
+        {
             count += 1;
-            bytes = bytes
-                .checked_add(row.len())
-                .ok_or_else(|| E::Decode("native9 registry size overflow".into()))?;
+            bytes = bytes.checked_add(row.len()).ok_or_else(|| E::Decode("native9 registry size overflow".into()))?;
             if count > FLAT_CANDIDATE_REGISTRY_MAX_V9
                 || row.len() > FLAT_CANDIDATE_RECORD_MAX_BYTES_V9
                 || bytes > FLAT_CANDIDATE_IMPORT_MAX_BYTES_V9
             {
-                return Err(E::Decode(
-                    "native9 admitted registry count/raw residency cap".into(),
-                ));
+                return Err(E::Decode("native9 admitted registry count/raw residency cap".into()));
             }
         }
         if count == 0 {
@@ -2720,60 +2162,41 @@ impl PalwKernelRouteStateV1 {
             debug_assert!(cached.scalars() == self.header.scalars);
             debug_assert!(cached.flat_conformance_classes_v9.is_empty());
             debug_assert!(cached.native_candidate_count_v9() == count);
-            debug_assert!(
-                cached
-                    .to_rows()
-                    .iter()
-                    .all(|(k, v)| self.rows.get(k) == Some(v))
-            );
+            debug_assert!(cached.to_rows().iter().all(|(k, v)| self.rows.get(k) == Some(v)));
             debug_assert_eq!(
                 cached.to_rows().len(),
-                self.rows
-                    .keys()
-                    .filter(|(t, _)| *t != TABLE_FLAT_CONFORMANCE_CLASSES_V9)
-                    .count()
+                self.rows.keys().filter(|(t, _)| *t != TABLE_FLAT_CONFORMANCE_CLASSES_V9).count()
             );
             PALW_KERNEL_LEDGER_CACHE_HITS_V1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let mut cached = cached;
             // RFC-0006: the reserved ledger is mutated only through its typed methods (no `DerefMut`).
             cached.set_commitment_scope_from_daa_v1(commitment_scope);
             cached.reserve_projection_v1(self).map_err(E::Resource)?;
-            self.apply_paid_claim_consumer_inputs_checked_v6(
-                cached.paid_consumer_projection_mut_v1(),
-            )?;
+            self.apply_paid_claim_consumer_inputs_checked_v6(cached.paid_consumer_projection_mut_v1())?;
             return Ok(cached);
         }
-        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true)
-            .map_err(E::Resource)?;
+        let lease = crate::palw_native_resource_v1::reserve_ledger_expansion_v1(self, true).map_err(E::Resource)?;
         let rows: LedgerRowsV1 = self
             .rows
             .iter()
             .filter(|((table, _), _)| *table != TABLE_FLAT_CONFORMANCE_CLASSES_V9)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let mut ledger = KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &rows)
-            .map_err(E::Decode)?;
-        for ((_, key), row) in self.rows.range(
-            (TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())
-                ..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()),
-        ) {
+        let mut ledger = KernelLedgerV1::from_rows(&self.template(), self.header.scalars, &rows).map_err(E::Decode)?;
+        for ((_, key), row) in
+            self.rows.range((TABLE_FLAT_CONFORMANCE_CLASSES_V9, Vec::new())..(TABLE_FLAT_CONFORMANCE_CLASSES_V9 + 1, Vec::new()))
+        {
             let class: Digest = borsh::from_slice(key).map_err(|e| E::Decode(e.to_string()))?;
             let owner: Digest = row
                 .get(..64)
                 .ok_or_else(|| E::Decode("native9 truncated admitted owner".into()))?
                 .try_into()
                 .map_err(|_| E::Decode("native9 owner size".into()))?;
-            ledger
-                .note_native_candidate_projection_v9(owner, class)
-                .map_err(E::Decode)?;
+            ledger.note_native_candidate_projection_v9(owner, class).map_err(E::Decode)?;
         }
         ledger.commitment_scope_from_daa = commitment_scope;
         self.apply_paid_claim_consumer_inputs_checked_v6(&mut ledger)?;
-        Ok(
-            crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(
-                ledger, lease,
-            ),
-        )
+        Ok(crate::palw_native_resource_v1::ReservedKernelLedgerV1::from_preflight_v1(ledger, lease))
     }
 }
 
@@ -2787,17 +2210,9 @@ mod tests {
     fn palw_kernel_route_the_interim_reporter_share_is_adr_0032s_49_percent() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
         assert_eq!(p.accuser_reward_permille, 490);
-        assert_eq!(
-            crate::palw_onboarding_v1::PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1,
-            490
-        );
-        let kept =
-            p.claim_collateral - p.claim_collateral * u64::from(p.accuser_reward_permille) / 1000;
-        assert!(
-            kept * 100 >= p.claim_collateral * 51,
-            "net loss {kept} of {}",
-            p.claim_collateral
-        );
+        assert_eq!(crate::palw_onboarding_v1::PALW_ONBOARDING_CHALLENGER_REWARD_PERMILLE_V1, 490);
+        let kept = p.claim_collateral - p.claim_collateral * u64::from(p.accuser_reward_permille) / 1000;
+        assert!(kept * 100 >= p.claim_collateral * 51, "net loss {kept} of {}", p.claim_collateral);
     }
 
     /// **AUDIT-3 m3 / E1**: a convicted producer that is also the poster and the accuser loses, net, only the collateral kept after
@@ -2806,20 +2221,11 @@ mod tests {
     #[test]
     fn palw_kernel_route_detection_loss_covers_gain_at_90_percent() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
-        let kept = p.claim_collateral as u128
-            - p.claim_collateral as u128 * u128::from(p.accuser_reward_permille) / 1000;
-        let burned = |x: u64| {
-            crate::palw_security_certification_v1::palw_kernel_uncertified_split_v1(x).0 as u128
-        };
-        let net = kept
-            + burned(p.claim_reward)
-            + burned(crate::palw_g14_values_v1::PALW_G14_FUNDED_FEE_SOMPI_V1);
-        let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1
-            .unwrap() as u128;
-        assert!(
-            net * 90 >= gain * 100,
-            "net loss {net} < gain {gain} / 0.90"
-        );
+        let kept = p.claim_collateral as u128 - p.claim_collateral as u128 * u128::from(p.accuser_reward_permille) / 1000;
+        let burned = |x: u64| crate::palw_security_certification_v1::palw_kernel_uncertified_split_v1(x).0 as u128;
+        let net = kept + burned(p.claim_reward) + burned(crate::palw_g14_values_v1::PALW_G14_FUNDED_FEE_SOMPI_V1);
+        let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.unwrap() as u128;
+        assert!(net * 90 >= gain * 100, "net loss {net} < gain {gain} / 0.90");
         assert!(net * 99 >= gain * 100);
     }
 
@@ -2836,96 +2242,46 @@ mod tests {
         let split = crate::palw_security_certification_v1::palw_kernel_uncertified_split_v1;
         let (reward_refund, fee_refund) = (split(p.claim_reward).1 as i128, split(fee).1 as i128);
         let delta = -c + share - p.claim_reward as i128 + reward_refund - fee as i128 + fee_refund;
-        let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1
-            .unwrap() as i128;
-        assert!(
-            -delta * 90 >= gain * 100,
-            "balance falls by {} < gain {gain} / 0.9",
-            -delta
-        );
+        let gain = crate::palw_g14_values_v1::PALW_G14_KERNEL_PANEL_ONE_EXTERNAL_GAIN_BOUND_SOMPI_V1.unwrap() as i128;
+        assert!(-delta * 90 >= gain * 100, "balance falls by {} < gain {gain} / 0.9", -delta);
     }
 
     #[test]
     fn the_interim_policy_validates_and_the_bond_digest_separates_indices() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
         p.validate().unwrap();
-        let b = |i| {
-            PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
-                crate::tx::TransactionId::from_u64_word(9),
-                i,
-            ))
-        };
+        let b = |i| PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(9), i));
         assert_ne!(palw_kernel_bond_id_v1(&b(0)), palw_kernel_bond_id_v1(&b(1)));
         let state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
-        assert_eq!(
-            state.ledger().unwrap().root(),
-            state.ledger_root().as_bytes(),
-            "an empty state roots like an empty ledger"
-        );
+        assert_eq!(state.ledger().unwrap().root(), state.ledger_root().as_bytes(), "an empty state roots like an empty ledger");
     }
 
     #[test]
     fn authenticated_scope_policy_survives_public_snapshot_cache_and_reverts_with_its_aux_row() {
-        let policy =
-            palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
+        let policy = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
         let mut state = PalwKernelRouteStateV1::new(policy, None, LedgerScalarsV1::default());
         let historical_root = state.aux_root();
         let ledger_root = state.ledger_root();
         let cached = state.ledger().unwrap().as_rebuilt_from_v1(&state.rows);
         state.ledger_cache.set(cached);
-        state.aux.insert(
-            (PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()),
-            borsh::to_vec(&77u64).unwrap(),
-        );
-        assert_ne!(
-            state.aux_root(),
-            historical_root,
-            "the response contract is authenticated by the route root"
-        );
-        assert_eq!(
-            state.ledger_root(),
-            ledger_root,
-            "consumer policy is not silently added to the historical ledger root"
-        );
-        assert_eq!(
-            state.ledger().unwrap().commitment_scope_from_daa,
-            Some(77),
-            "cached reads re-inject the authenticated policy"
-        );
-        let restored: PalwKernelRouteStateV1 =
-            borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
-        assert_eq!(
-            restored.ledger().unwrap().commitment_scope_from_daa,
-            Some(77)
-        );
+        state.aux.insert((PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()), borsh::to_vec(&77u64).unwrap());
+        assert_ne!(state.aux_root(), historical_root, "the response contract is authenticated by the route root");
+        assert_eq!(state.ledger_root(), ledger_root, "consumer policy is not silently added to the historical ledger root");
+        assert_eq!(state.ledger().unwrap().commitment_scope_from_daa, Some(77), "cached reads re-inject the authenticated policy");
+        let restored: PalwKernelRouteStateV1 = borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.ledger().unwrap().commitment_scope_from_daa, Some(77));
         assert_eq!(restored.aux_root(), state.aux_root());
-        state
-            .aux
-            .remove(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()));
-        assert_eq!(
-            state.ledger().unwrap().commitment_scope_from_daa,
-            None,
-            "a reverted scope row cannot survive in the cache"
-        );
+        state.aux.remove(&(PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()));
+        assert_eq!(state.ledger().unwrap().commitment_scope_from_daa, None, "a reverted scope row cannot survive in the cache");
         assert_eq!(state.aux_root(), historical_root);
-        state.aux.insert(
-            (PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()),
-            vec![1],
-        );
-        assert!(
-            state.ledger().is_err(),
-            "a malformed policy never falls back to historical disclosure"
-        );
+        state.aux.insert((PALW_KERNEL_ROUTE_TABLE_COMMITMENT_SCOPE_V1, Vec::new()), vec![1]);
+        assert!(state.ledger().is_err(), "a malformed policy never falls back to historical disclosure");
     }
 
     #[test]
-    fn the_interim_opv_policy_validates_against_the_interim_ledger_policy_and_roots_like_its_ledger()
-     {
+    fn the_interim_opv_policy_validates_against_the_interim_ledger_policy_and_roots_like_its_ledger() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
-        let opv = crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(
-            crate::config::params::ForkActivation::new(7),
-        )
-        .opv_policy();
+        let opv = crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(crate::config::params::ForkActivation::new(7)).opv_policy();
         opv.validate(&p).unwrap();
         // The test node's four-adjudication block must still satisfy the OPV relations.
         let mut small = p;
@@ -2938,11 +2294,7 @@ mod tests {
             "an empty OPV state roots like an empty OPV ledger"
         );
         let plain = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
-        assert_ne!(
-            state.ledger_root(),
-            plain.ledger_root(),
-            "the OPV root form is not the historical one"
-        );
+        assert_ne!(state.ledger_root(), plain.ledger_root(), "the OPV root form is not the historical one");
         // OPV-BOOT GAP-B1a: with tables 25 and 26 empty there is no root extension — both forms are what they were before them.
         let (opv_ledger, plain_ledger) = (state.ledger().unwrap(), plain.ledger().unwrap());
         assert!(
@@ -2950,24 +2302,11 @@ mod tests {
                 && opv_ledger.forfeited_claim_seals.is_empty()
                 && opv_ledger.job_posters.is_empty()
         );
-        assert_eq!(
-            state.ledger_root().as_bytes(),
-            opv_ledger.root_parts_v2().root(),
-            "the OPV form, unextended"
-        );
-        assert_eq!(
-            plain.ledger_root().as_bytes(),
-            plain_ledger.root_parts().root(),
-            "the historical form, unextended"
-        );
+        assert_eq!(state.ledger_root().as_bytes(), opv_ledger.root_parts_v2().root(), "the OPV form, unextended");
+        assert_eq!(plain.ledger_root().as_bytes(), plain_ledger.root_parts().root(), "the historical form, unextended");
         // The v3 beacon's window against the interim seal TTL: OPV-BOOT's interim W = 40 needs 2·W ≤ 100.
         assert!(misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, 40));
-        assert!(
-            !misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(
-                &p,
-                p.seal_ttl_daa / 2 + 1
-            )
-        );
+        assert!(!misaka_palw_kernel::ledger::seal_ttl_admits_beacon_window_v1(&p, p.seal_ttl_daa / 2 + 1));
     }
 
     /// GAP 6: a pipeline claim's `record_header` is borsh `(PipelineHeaderV1, PipelineClassV1)` — the header a pipeline verifier is
@@ -2976,11 +2315,7 @@ mod tests {
     fn a_pipeline_claims_record_header_has_a_wire_form() {
         use misaka_palw_kernel::pipeline::PipelineHeaderV1;
         use misaka_palw_kernel::pipeline_public::PipelineClassV1;
-        let header = PipelineHeaderV1 {
-            network_domain: [1; 64],
-            ruleset_digest: [2; 64],
-            class_binding_id: [3; 64],
-        };
+        let header = PipelineHeaderV1 { network_domain: [1; 64], ruleset_digest: [2; 64], class_binding_id: [3; 64] };
         let binding = PipelineClassV1 {
             descriptor_digest: [4; 64],
             pipeline_root: [5; 64],
@@ -3001,29 +2336,16 @@ mod tests {
         let v4 = misaka_palw_kernel::descriptor::k2_tir_v4_descriptor();
         assert!(template.known.iter().any(|d| d.digest() == v4.digest()));
         let v5 = misaka_palw_kernel::descriptor::k2_tir_v5_descriptor();
-        assert!(
-            template.known.iter().any(|d| d.digest() == v5.digest()) && v5.digest() != v4.digest()
-        );
+        assert!(template.known.iter().any(|d| d.digest() == v5.digest()) && v5.digest() != v4.digest());
         let mut state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         let plain = state.clone();
         let rebuilt = state.ledger().unwrap().as_rebuilt_from_v1(&state.rows);
         state.ledger_cache.set(rebuilt);
         assert_eq!(state, plain, "a cache is not part of what a state is");
-        assert_eq!(
-            borsh::to_vec(&state).unwrap(),
-            borsh::to_vec(&plain).unwrap(),
-            "and never encoded"
-        );
-        assert_eq!(
-            state.ledger().unwrap().root(),
-            plain.ledger().unwrap().root()
-        );
-        let decoded: PalwKernelRouteStateV1 =
-            borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
-        assert!(
-            !decoded.ledger_cache.is_set(),
-            "a decoded state starts without it"
-        );
+        assert_eq!(borsh::to_vec(&state).unwrap(), borsh::to_vec(&plain).unwrap(), "and never encoded");
+        assert_eq!(state.ledger().unwrap().root(), plain.ledger().unwrap().root());
+        let decoded: PalwKernelRouteStateV1 = borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
+        assert!(!decoded.ledger_cache.is_set(), "a decoded state starts without it");
     }
 
     /// **RFC-0004 Part II**: an unarmed route (no `palw_typed_roots_v1`) has the historical schedule, `config_root` and root byte for
@@ -3031,10 +2353,7 @@ mod tests {
     #[test]
     fn the_unarmed_typed_roots_fence_leaves_the_schedule_config_root_and_root_unchanged() {
         let p = palw_kernel_route_policy_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(2));
-        let opv = crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(
-            crate::config::params::ForkActivation::new(7),
-        )
-        .opv_policy();
+        let opv = crate::palw_panel_free_v1::PalwPanelFreeFenceV1::at(crate::config::params::ForkActivation::new(7)).opv_policy();
         for o in [None, Some(opv)] {
             let historical = palw_kernel_route_template_opv_v1(p, o);
             let unarmed = PalwKernelRouteStateV1::new(p, o, LedgerScalarsV1::default());
@@ -3044,39 +2363,18 @@ mod tests {
                 config_root_of(&historical.schedule, &historical.known),
                 "the historical config root"
             );
-            assert_eq!(
-                unarmed.template().schedule,
-                historical.schedule,
-                "the historical schedule"
-            );
-            assert_eq!(
-                unarmed.ledger().unwrap().root(),
-                historical.root(),
-                "the historical root"
-            );
-            let armed =
-                PalwKernelRouteStateV1::new_typed(p, o, Some(11), LedgerScalarsV1::default());
-            assert_ne!(
-                armed.header.config_root, unarmed.header.config_root,
-                "arming is another configuration"
-            );
+            assert_eq!(unarmed.template().schedule, historical.schedule, "the historical schedule");
+            assert_eq!(unarmed.ledger().unwrap().root(), historical.root(), "the historical root");
+            let armed = PalwKernelRouteStateV1::new_typed(p, o, Some(11), LedgerScalarsV1::default());
+            assert_ne!(armed.header.config_root, unarmed.header.config_root, "arming is another configuration");
             let l = armed.ledger().unwrap();
-            assert_eq!(
-                armed.ledger_root().as_bytes(),
-                l.root(),
-                "an armed state roots like its ledger"
-            );
+            assert_eq!(armed.ledger_root().as_bytes(), l.root(), "an armed state roots like its ledger");
             let tr = misaka_palw_kernel::spec::k2_tr_v1_descriptor().digest();
             assert_eq!(
                 l.schedule.standing_at(&tr, 10),
-                misaka_palw_kernel::descriptor::KernelStandingV1::NotActive(
-                    KernelStatusV1::Active { since_daa: 11 }
-                )
+                misaka_palw_kernel::descriptor::KernelStandingV1::NotActive(KernelStatusV1::Active { since_daa: 11 })
             );
-            assert_eq!(
-                l.schedule.standing_at(&tr, 11),
-                misaka_palw_kernel::descriptor::KernelStandingV1::Active
-            );
+            assert_eq!(l.schedule.standing_at(&tr, 11), misaka_palw_kernel::descriptor::KernelStandingV1::Active);
         }
     }
 
@@ -3084,23 +2382,13 @@ mod tests {
     fn the_tail_and_tables_are_the_allocated_ones() {
         assert_eq!(PALW_CARRIAGE_KERNEL_ROUTE_TAIL_V1, 0xEC);
         assert_eq!(
-            (
-                PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1,
-                PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1,
-                PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1
-            ),
+            (PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, PALW_KERNEL_ROUTE_TABLE_ASSIGNMENTS_V1, PALW_KERNEL_ROUTE_TABLE_RECEIPTS_V1),
             (32, 33, 34)
         );
         assert_eq!(PALW_KERNEL_ROUTE_TABLE_BLOCK_BUDGET_V1, 35);
         assert!(PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1 > 1_000_000);
         // C4 F-C4R3-03: the route's own chunk lane (the lead's allocation of 2026-10-08), above onboarding's 36–40.
-        assert_eq!(
-            (
-                PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1,
-                PALW_KERNEL_ROUTE_TABLE_RESERVED_42_V1
-            ),
-            (41, 42)
-        );
+        assert_eq!((PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, PALW_KERNEL_ROUTE_TABLE_RESERVED_42_V1), (41, 42));
     }
 
     /// **lane SEED (G14 review MAJOR-1) (a), the pure half**: under Panel=1 the seat seed, challenge anchor and sample seed of a claim
@@ -3111,115 +2399,55 @@ mod tests {
     fn lane_seed_panel_one_seed_needs_a_post_commit_anchor() {
         use crate::palw_execution_lane_v1::PalwExecSeedAnchorV1;
         let claim = [0x5Au8; 64];
-        let a = PalwExecSeedAnchorV1 {
-            span: 101,
-            block: Hash64::from_bytes([1; 64]),
-            execution_key: Hash64::from_bytes([2; 64]),
-        };
-        let b = PalwExecSeedAnchorV1 {
-            execution_key: Hash64::from_bytes([3; 64]),
-            ..a
-        };
+        let a = PalwExecSeedAnchorV1 { span: 101, block: Hash64::from_bytes([1; 64]), execution_key: Hash64::from_bytes([2; 64]) };
+        let b = PalwExecSeedAnchorV1 { execution_key: Hash64::from_bytes([3; 64]), ..a };
         let c = PalwExecSeedAnchorV1 { span: 102, ..a };
-        let d = PalwExecSeedAnchorV1 {
-            block: Hash64::from_bytes([4; 64]),
-            ..a
-        };
-        assert_eq!(
-            palw_kernel_panel_one_seed_v1(&claim, &a),
-            palw_kernel_panel_one_seed_v1(&claim, &a),
-            "deterministic"
-        );
+        let d = PalwExecSeedAnchorV1 { block: Hash64::from_bytes([4; 64]), ..a };
+        assert_eq!(palw_kernel_panel_one_seed_v1(&claim, &a), palw_kernel_panel_one_seed_v1(&claim, &a), "deterministic");
         for other in [&b, &c, &d] {
             assert_ne!(
                 palw_kernel_panel_one_seed_v1(&claim, &a),
                 palw_kernel_panel_one_seed_v1(&claim, other),
                 "the anchor moves the seed"
             );
-            assert_ne!(
-                palw_kernel_panel_one_challenge_v1(&claim, &a),
-                palw_kernel_panel_one_challenge_v1(&claim, other)
-            );
+            assert_ne!(palw_kernel_panel_one_challenge_v1(&claim, &a), palw_kernel_panel_one_challenge_v1(&claim, other));
         }
-        assert_ne!(
-            palw_kernel_panel_one_seed_v1(&claim, &a),
-            palw_kernel_interim_seed_v1(&claim),
-            "not the grindable interim seed"
-        );
+        assert_ne!(palw_kernel_panel_one_seed_v1(&claim, &a), palw_kernel_interim_seed_v1(&claim), "not the grindable interim seed");
         let (anchor_a, sample_a) = palw_kernel_panel_one_challenge_v1(&claim, &a);
         let (anchor_i, sample_i) = palw_kernel_interim_challenge_v1(&claim);
         assert!(anchor_a != anchor_i && sample_a != sample_i && anchor_a != sample_a);
         // The claim still matters: another claim under the same anchor draws differently.
-        assert_ne!(
-            palw_kernel_panel_one_seed_v1(&claim, &a),
-            palw_kernel_panel_one_seed_v1(&[0x5B; 64], &a)
-        );
+        assert_ne!(palw_kernel_panel_one_seed_v1(&claim, &a), palw_kernel_panel_one_seed_v1(&[0x5B; 64], &a));
         // The winning operator follows the anchor, not the claim id: over 64 anchors one claim id seats several operators.
-        let ops: Vec<Hash64> = (0..8u8)
-            .map(|i| Hash64::from_bytes([0x10 + i; 64]))
-            .collect();
+        let ops: Vec<Hash64> = (0..8u8).map(|i| Hash64::from_bytes([0x10 + i; 64])).collect();
         let winners: std::collections::BTreeSet<Hash64> = (0..64u64)
             .map(|k| {
-                let anchor = PalwExecSeedAnchorV1 {
-                    execution_key: Hash64::from_bytes([k as u8; 64]),
-                    ..a
-                };
+                let anchor = PalwExecSeedAnchorV1 { execution_key: Hash64::from_bytes([k as u8; 64]), ..a };
                 let seed = palw_kernel_panel_one_seed_v1(&claim, &anchor);
-                *ops.iter()
-                    .min_by_key(|op| palw_kernel_interim_key_v1(&seed, op, 1))
-                    .unwrap()
+                *ops.iter().min_by_key(|op| palw_kernel_interim_key_v1(&seed, op, 1)).unwrap()
             })
             .collect();
-        assert!(
-            winners.len() >= 4,
-            "one claim id, many seat outcomes: {}",
-            winners.len()
-        );
+        assert!(winners.len() >= 4, "one claim id, many seat outcomes: {}", winners.len());
         // Anchor freshness: strictly later than the commit, in DAA, at the lane's span length.
+        assert!(!palw_kernel_panel_one_anchor_after_commit_v1(100, 1, None), "no anchor, no draw");
         assert!(
-            !palw_kernel_panel_one_anchor_after_commit_v1(100, 1, None),
-            "no anchor, no draw"
-        );
-        assert!(
-            !palw_kernel_panel_one_anchor_after_commit_v1(
-                100,
-                1,
-                Some(&PalwExecSeedAnchorV1 { span: 100, ..a })
-            ),
+            !palw_kernel_panel_one_anchor_after_commit_v1(100, 1, Some(&PalwExecSeedAnchorV1 { span: 100, ..a })),
             "the commit's own span"
         );
         assert!(
-            !palw_kernel_panel_one_anchor_after_commit_v1(
-                100,
-                1,
-                Some(&PalwExecSeedAnchorV1 { span: 99, ..a })
-            ),
+            !palw_kernel_panel_one_anchor_after_commit_v1(100, 1, Some(&PalwExecSeedAnchorV1 { span: 99, ..a })),
             "an older anchor"
         );
+        assert!(palw_kernel_panel_one_anchor_after_commit_v1(100, 1, Some(&a)), "the next span's anchor");
         assert!(
-            palw_kernel_panel_one_anchor_after_commit_v1(100, 1, Some(&a)),
-            "the next span's anchor"
-        );
-        assert!(
-            !palw_kernel_panel_one_anchor_after_commit_v1(
-                100,
-                5,
-                Some(&PalwExecSeedAnchorV1 { span: 20, ..a })
-            ),
+            !palw_kernel_panel_one_anchor_after_commit_v1(100, 5, Some(&PalwExecSeedAnchorV1 { span: 20, ..a })),
             "span 20 starts at 100"
         );
-        assert!(palw_kernel_panel_one_anchor_after_commit_v1(
-            100,
-            5,
-            Some(&PalwExecSeedAnchorV1 { span: 21, ..a })
-        ));
+        assert!(palw_kernel_panel_one_anchor_after_commit_v1(100, 5, Some(&PalwExecSeedAnchorV1 { span: 21, ..a })));
     }
 
     fn chunk_bond(i: u32) -> PalwBondKeyV2 {
-        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
-            crate::tx::TransactionId::from_u64_word(77),
-            i,
-        ))
+        PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::tx::TransactionId::from_u64_word(77), i))
     }
 
     /// **C4 F-C4R3-03 (the lane's pure half)**: the splitter, the completion (every part, the group id, coherence with the stored
@@ -3232,206 +2460,85 @@ mod tests {
         let mut state = PalwKernelRouteStateV1::new(p, None, LedgerScalarsV1::default());
         let (opener, other) = (chunk_bond(0), chunk_bond(1));
         let claim = [7u8; 64];
-        let proof = K::FileProof {
-            accuser: [1; 64],
-            claim,
-            proof: ProsecutionV1::Kernel(vec![9; 3000]),
-        };
-        let inner = Obj::KernelRouteV1 {
-            bytes: proof.encode(),
-            signer: opener,
-            signature: vec![5; 64],
-        };
+        let proof = K::FileProof { accuser: [1; 64], claim, proof: ProsecutionV1::Kernel(vec![9; 3000]) };
+        let inner = Obj::KernelRouteV1 { bytes: proof.encode(), signer: opener, signature: vec![5; 64] };
         let target = PalwKernelChunkTargetV1::Claim(claim);
         let chunks = palw_kernel_chunks_v1(&inner, opener, target, 1024).unwrap();
         assert!(chunks.len() >= 3);
-        assert!(
-            palw_kernel_chunks_v1(&inner, opener, target, 64).is_err(),
-            "past the chunk count"
-        );
+        assert!(palw_kernel_chunks_v1(&inner, opener, target, 64).is_err(), "past the chunk count");
         assert!(palw_kernel_chunk_inner_matches_target_v1(&inner, &target));
-        assert!(
-            !palw_kernel_chunk_inner_matches_target_v1(
-                &inner,
-                &PalwKernelChunkTargetV1::Claim([8; 64])
-            ),
-            "another claim"
-        );
+        assert!(!palw_kernel_chunk_inner_matches_target_v1(&inner, &PalwKernelChunkTargetV1::Claim([8; 64])), "another claim");
         let demand = Obj::KernelRouteV1 {
-            bytes: K::FileDemand {
-                demander: [1; 64],
-                claim,
-                stage: 0,
-                position: 0,
-            }
-            .encode(),
+            bytes: K::FileDemand { demander: [1; 64], claim, stage: 0, position: 0 }.encode(),
             signer: opener,
             signature: vec![5; 64],
         };
-        assert!(
-            !palw_kernel_chunk_inner_matches_target_v1(&demand, &target),
-            "a demand is not a prosecution object of this lane"
-        );
+        assert!(!palw_kernel_chunk_inner_matches_target_v1(&demand, &target), "a demand is not a prosecution object of this lane");
         // A lone last chunk completes nothing; with the others stored it completes exactly the object.
         let last = chunks.last().unwrap().clone();
         assert!(state.chunk_completion_v1(&last).is_none());
-        let mut group = PalwKernelChunkGroupV1 {
-            target,
-            count: last.count,
-            opened_daa: 1,
-            expires_daa: 9,
-            deposit: 3,
-            parts: BTreeMap::new(),
-        };
+        let mut group =
+            PalwKernelChunkGroupV1 { target, count: last.count, opened_daa: 1, expires_daa: 9, deposit: 3, parts: BTreeMap::new() };
         for c in &chunks[..chunks.len() - 1] {
             group.parts.insert(c.index, c.bytes.clone());
         }
         state.aux.insert(
-            (
-                PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1,
-                palw_kernel_chunk_group_key_v1(&opener, &last.group),
-            ),
+            (PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&opener, &last.group)),
             borsh::to_vec(&group).unwrap(),
         );
         assert_eq!(state.chunk_completion_v1(&last), Some(inner.clone()));
         // The same bytes under another opener are another group (rooms are per bond); another target or count is incoherent.
+        assert!(state.chunk_completion_v1(&PalwKernelChunkV1 { opener: other, ..last.clone() }).is_none());
         assert!(
             state
-                .chunk_completion_v1(&PalwKernelChunkV1 {
-                    opener: other,
-                    ..last.clone()
-                })
-                .is_none()
-        );
-        assert!(
-            state
-                .chunk_completion_v1(&PalwKernelChunkV1 {
-                    target: PalwKernelChunkTargetV1::Claim([8; 64]),
-                    ..last.clone()
-                })
+                .chunk_completion_v1(&PalwKernelChunkV1 { target: PalwKernelChunkTargetV1::Claim([8; 64]), ..last.clone() })
                 .is_none()
         );
         let mut tampered = last.clone();
         tampered.bytes[0] ^= 1;
-        assert!(
-            state.chunk_completion_v1(&tampered).is_none(),
-            "the assembled bytes must hash to the group id"
-        );
+        assert!(state.chunk_completion_v1(&tampered).is_none(), "the assembled bytes must hash to the group id");
         // The open group is the opener's room and its deposit is part of what the route holds against the opener.
-        assert_eq!(
-            (
-                state.chunk_groups_of_v1(&opener),
-                state.chunk_groups_of_v1(&other)
-            ),
-            (1, 0)
-        );
-        assert_eq!(
-            (
-                state.reserved_of(&opener),
-                state.ledger_reserved_of(&opener)
-            ),
-            (3, 0)
-        );
+        assert_eq!((state.chunk_groups_of_v1(&opener), state.chunk_groups_of_v1(&other)), (1, 0));
+        assert_eq!((state.reserved_of(&opener), state.ledger_reserved_of(&opener)), (3, 0));
         // An unknown claim and a refuted / unknown binding have no deadline; a claim's is its horizon bound.
         assert_eq!(state.chunk_target_deadline_v1(&target, 0), None);
-        let binding = PalwKernelChunkTargetV1::Binding {
-            v2_class: Hash64::from_u64_word(3),
-            kernel_param_root: Hash64::from_u64_word(4),
-        };
+        let binding =
+            PalwKernelChunkTargetV1::Binding { v2_class: Hash64::from_u64_word(3), kernel_param_root: Hash64::from_u64_word(4) };
         assert_eq!(state.chunk_target_deadline_v1(&binding, 0), None);
         // OPV-BOOT #1: a conformance attempt's deadline is OPV-BOOT's (pending: no attempt is ever open here yet).
-        let conformance = PalwKernelChunkTargetV1::Conformance {
-            v2_class: Hash64::from_u64_word(3),
-        };
+        let conformance = PalwKernelChunkTargetV1::Conformance { v2_class: Hash64::from_u64_word(3) };
         assert_eq!(state.chunk_target_deadline_v1(&conformance, 0), None);
-        assert!(
-            !palw_kernel_chunk_inner_matches_target_v1(&inner, &conformance),
-            "a proof is not conformance evidence"
-        );
+        assert!(!palw_kernel_chunk_inner_matches_target_v1(&inner, &conformance), "a proof is not conformance evidence");
         {
-            use crate::palw_conformance_evidence_v1::{
-                ConformanceEvidenceActionV1 as A, ConformanceFaultV1 as F,
-            };
+            use crate::palw_conformance_evidence_v1::{ConformanceEvidenceActionV1 as A, ConformanceFaultV1 as F};
             let refute = |class: u64| Obj::ConformanceEvidenceV1 {
                 v2_class: Hash64::from_u64_word(class),
                 action: Box::new(A::Refute {
                     evidence_id: Hash64::from_u64_word(9),
-                    fault: Box::new(F::VectorTokens {
-                        check: 0,
-                        kernel_claim: Hash64::from_u64_word(5),
-                    }),
+                    fault: Box::new(F::VectorTokens { check: 0, kernel_claim: Hash64::from_u64_word(5) }),
                 }),
                 signer: other,
                 signature: vec![5; 64],
             };
-            assert!(
-                palw_kernel_chunk_inner_matches_target_v1(&refute(3), &conformance),
-                "the class's evidence"
-            );
-            assert!(
-                !palw_kernel_chunk_inner_matches_target_v1(&refute(4), &conformance),
-                "another class's evidence"
-            );
-            assert!(
-                !palw_kernel_chunk_inner_matches_target_v1(&refute(3), &binding),
-                "evidence is not a binding's refutation"
-            );
-            assert!(
-                !palw_kernel_chunk_inner_matches_target_v1(&refute(3), &target),
-                "evidence is not a claim's prosecution"
-            );
+            assert!(palw_kernel_chunk_inner_matches_target_v1(&refute(3), &conformance), "the class's evidence");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(4), &conformance), "another class's evidence");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(3), &binding), "evidence is not a binding's refutation");
+            assert!(!palw_kernel_chunk_inner_matches_target_v1(&refute(3), &target), "evidence is not a claim's prosecution");
         }
         use misaka_palw_kernel::lifecycle::ClaimStateV1 as S;
-        let bound = |state: &S, liability: Option<u64>| {
-            palw_kernel_claim_horizon_bound_v1(&p, 10, liability, state)
-        };
+        let bound = |state: &S, liability: Option<u64>| palw_kernel_claim_horizon_bound_v1(&p, 10, liability, state);
         let tail = p.court_deadline_daa + p.proof_grace_daa + p.liability_daa;
-        let pass = S::ProbabilisticPass {
-            passed_daa: 20,
-            window_end_daa: 70,
-        };
+        let pass = S::ProbabilisticPass { passed_daa: 20, window_end_daa: 70 };
+        assert_eq!(bound(&pass, None), Some(70 + tail), "a passed claim: its latest Final plus the liability horizon");
+        assert_eq!(bound(&S::Disputed { open: 1, resume: Box::new(pass) }, None), Some(70 + tail));
+        assert_eq!(bound(&S::Checking { anchor_daa: 10, deadline_daa: 110 }, None), Some(110 + p.challenge_window_daa + tail));
         assert_eq!(
-            bound(&pass, None),
-            Some(70 + tail),
-            "a passed claim: its latest Final plus the liability horizon"
-        );
-        assert_eq!(
-            bound(
-                &S::Disputed {
-                    open: 1,
-                    resume: Box::new(pass)
-                },
-                None
-            ),
-            Some(70 + tail)
-        );
-        assert_eq!(
-            bound(
-                &S::Checking {
-                    anchor_daa: 10,
-                    deadline_daa: 110
-                },
-                None
-            ),
-            Some(110 + p.challenge_window_daa + tail)
-        );
-        assert_eq!(
-            bound(
-                &S::Unavailable {
-                    daa: 40,
-                    producer_defaulted: true
-                },
-                Some(240)
-            ),
+            bound(&S::Unavailable { daa: 40, producer_defaulted: true }, Some(240)),
             Some(240),
             "a defaulted claim (F-C4R3-02)"
         );
         assert_eq!(bound(&S::Final { final_daa: 60 }, Some(260)), Some(260));
-        assert_eq!(
-            bound(&S::TimedOut { daa: 111 }, None),
-            None,
-            "a claim that ended without passing takes nothing more"
-        );
+        assert_eq!(bound(&S::TimedOut { daa: 111 }, None), None, "a claim that ended without passing takes nothing more");
         assert_eq!(bound(&S::Convicted { daa: 30 }, None), None);
     }
 
@@ -3440,37 +2547,22 @@ mod tests {
     /// inside the demand's chunk-counted window, while the old fixed window (the base court deadline) could not hold it.
     #[test]
     fn g14b_a_maximal_respond_rides_the_chunk_lane_in_the_chunks_the_kernel_counts() {
-        use crate::palw_state_v2::{
-            PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, PalwConsensusObjectV2 as Obj,
-        };
+        use crate::palw_state_v2::{PALW_OBJECT_CHUNK_MAX_BYTES, PALW_OBJECT_CHUNK_MAX_COUNT, PalwConsensusObjectV2 as Obj};
         use misaka_palw_kernel::budget as b;
         use misaka_palw_kernel::route::KernelRouteObjectV1 as K;
         // The mirrors (the kernel cannot import this crate).
         assert_eq!(b::ROUTE_CHUNK_BYTES_V1, PALW_OBJECT_CHUNK_MAX_BYTES as u64);
-        assert_eq!(
-            b::ROUTE_CHUNKS_PER_OBJECT_V1,
-            PALW_OBJECT_CHUNK_MAX_COUNT as u64
-        );
+        assert_eq!(b::ROUTE_CHUNKS_PER_OBJECT_V1, PALW_OBJECT_CHUNK_MAX_COUNT as u64);
         assert_eq!(
             b::ROUTE_OBJECT_WRAPPER_BYTES_V1,
-            (PALW_OBJECT_CHUNK_MAX_BYTES * PALW_OBJECT_CHUNK_MAX_COUNT as usize
-                - PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1) as u64
+            (PALW_OBJECT_CHUNK_MAX_BYTES * PALW_OBJECT_CHUNK_MAX_COUNT as usize - PALW_KERNEL_ROUTE_MAX_OBJECT_BYTES_V1) as u64
         );
-        assert_eq!(
-            b::ROUTE_CHUNK_TTL_MAX_DAA_V1,
-            PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1
-        );
-        assert_eq!(
-            b::LIFETIME_CEILING_DAA_V1,
-            crate::palw_bond_budget_v1::PALW_BOND_BUDGET_W_MAX_DAA_V1
-        );
+        assert_eq!(b::ROUTE_CHUNK_TTL_MAX_DAA_V1, PALW_KERNEL_CHUNK_TTL_MAX_DAA_V1);
+        assert_eq!(b::LIFETIME_CEILING_DAA_V1, crate::palw_bond_budget_v1::PALW_BOND_BUDGET_W_MAX_DAA_V1);
         // One full chunk a block: two would exceed what testnet-12's block mass admits in transaction bytes.
-        let block_bytes = crate::config::params::palw_t12_shipped_params().max_block_mass
-            / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
-        assert!(
-            block_bytes >= PALW_OBJECT_CHUNK_MAX_BYTES as u64
-                && block_bytes < 2 * PALW_OBJECT_CHUNK_MAX_BYTES as u64
-        );
+        let block_bytes =
+            crate::config::params::palw_t12_shipped_params().max_block_mass / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
+        assert!(block_bytes >= PALW_OBJECT_CHUNK_MAX_BYTES as u64 && block_bytes < 2 * PALW_OBJECT_CHUNK_MAX_BYTES as u64);
         assert_eq!(b::ROUTE_DAA_PER_CHUNK_V1, 1);
 
         // A maximal part, in its Respond, in its signed carrier object (an ML-DSA-87 signature's length).
@@ -3479,27 +2571,12 @@ mod tests {
         let producer = chunk_bond(0);
         let claim = [7u8; 64];
         let part = misaka_palw_kernel::seg_da::SEG_PART_BYTES_V4 as usize;
-        let respond = K::Respond {
-            claim,
-            stage: 0,
-            position: 8191,
-            bytes: vec![0xA5; part],
-        };
-        let inner = Obj::KernelRouteV1 {
-            bytes: respond.encode(),
-            signer: producer,
-            signature: vec![5; 4627],
-        };
+        let respond = K::Respond { claim, stage: 0, position: 8191, bytes: vec![0xA5; part] };
+        let inner = Obj::KernelRouteV1 { bytes: respond.encode(), signer: producer, signature: vec![5; 4627] };
         let target = PalwKernelChunkTargetV1::Claim(claim);
-        let chunks =
-            palw_kernel_chunks_v1(&inner, producer, target, PALW_OBJECT_CHUNK_MAX_BYTES).unwrap();
-        let counted =
-            b::route_object_chunks_v1(part as u128 + b::RESPOND_ENVELOPE_BYTES_V1 as u128);
-        assert_eq!(
-            chunks.len() as u64,
-            counted,
-            "the lane's real chunking is the kernel's count"
-        );
+        let chunks = palw_kernel_chunks_v1(&inner, producer, target, PALW_OBJECT_CHUNK_MAX_BYTES).unwrap();
+        let counted = b::route_object_chunks_v1(part as u128 + b::RESPOND_ENVELOPE_BYTES_V1 as u128);
+        assert_eq!(chunks.len() as u64, counted, "the lane's real chunking is the kernel's count");
         assert_eq!(counted, 11);
         assert!(palw_kernel_chunk_inner_matches_target_v1(&inner, &target));
         // The demand opens at t0; its chunk-counted window is the base deadline plus one DAA a further chunk.
@@ -3522,32 +2599,19 @@ mod tests {
             let daa = opened + i as u64;
             assert!(daa <= expires, "every chunk inside the group's TTL");
             if let Some(object) = state.chunk_completion_v1(c) {
-                assert_eq!(
-                    object, inner,
-                    "the assembled object is the Respond, byte for byte"
-                );
+                assert_eq!(object, inner, "the assembled object is the Respond, byte for byte");
                 completed_at = Some(daa);
                 break;
             }
             group.parts.insert(c.index, c.bytes.clone());
             state.aux.insert(
-                (
-                    PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1,
-                    palw_kernel_chunk_group_key_v1(&producer, &c.group),
-                ),
+                (PALW_KERNEL_ROUTE_TABLE_CHUNK_GROUPS_V1, palw_kernel_chunk_group_key_v1(&producer, &c.group)),
                 borsh::to_vec(&group).unwrap(),
             );
         }
         let completed_at = completed_at.expect("the last chunk completes the group");
-        assert_eq!(
-            completed_at,
-            t0 + window,
-            "it lands on the chunk-counted deadline's last DAA"
-        );
-        assert!(
-            completed_at > t0 + p.court_deadline_daa,
-            "the fixed window would have defaulted an honest producer by size alone"
-        );
+        assert_eq!(completed_at, t0 + window, "it lands on the chunk-counted deadline's last DAA");
+        assert!(completed_at > t0 + p.court_deadline_daa, "the fixed window would have defaulted an honest producer by size alone");
     }
 }
 
@@ -3572,10 +2636,7 @@ mod positive_p_restore_caps_v2 {
         let mut legacy = Vec::new();
         3u32.serialize(&mut legacy).unwrap();
         legacy.extend_from_slice(b"Sxy");
-        assert_eq!(
-            positive_p_restore_key_v2(&mut legacy.as_slice()).unwrap(),
-            (b"Sxy".to_vec(), false)
-        );
+        assert_eq!(positive_p_restore_key_v2(&mut legacy.as_slice()).unwrap(), (b"Sxy".to_vec(), false));
     }
     #[test]
     fn p_value_cap_precedes_body_read_and_old136_bytes_roundtrip() {
@@ -3585,14 +2646,9 @@ mod positive_p_restore_caps_v2 {
             None,
             LedgerScalarsV1 { daa: 0, burned: 0 },
         );
-        route
-            .aux
-            .insert((136, b"Slegacy".to_vec()), b"opaque-old-value".to_vec());
+        route.aux.insert((136, b"Slegacy".to_vec()), b"opaque-old-value".to_vec());
         let bytes = borsh::to_vec(&route).unwrap();
-        assert_eq!(
-            borsh::from_slice::<PalwKernelRouteStateV1>(&bytes).unwrap(),
-            route
-        );
+        assert_eq!(borsh::from_slice::<PalwKernelRouteStateV1>(&bytes).unwrap(), route);
         let mut bytes = borsh::to_vec(&(&route.header, &route.rows)).unwrap();
         1u32.serialize(&mut bytes).unwrap();
         136u8.serialize(&mut bytes).unwrap();
@@ -3671,10 +2727,7 @@ mod case_alias_cache_tests {
 
     #[test]
     fn kernel_case_alias_lease_follows_only_the_unchanged_route_copies() {
-        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
-            memory_bytes: 4096,
-            database_bytes: 0,
-        });
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 4096, database_bytes: 0 });
         let claim = [2; 64];
         let mut cache = KernelLedgerCacheV1::default();
         let index = KernelCaseAliasesV2 {
@@ -3684,13 +2737,7 @@ mod case_alias_cache_tests {
         };
         assert!(cache.2.set(std::sync::Arc::new(index)).is_ok());
         let old_route_cache = cache.clone();
-        assert!(
-            old_route_cache
-                .2
-                .get()
-                .unwrap()
-                .contains(Some(&claim), &[0; 64])
-        );
+        assert!(old_route_cache.2.get().unwrap().contains(Some(&claim), &[0; 64]));
         cache.clear();
         assert!(cache.2.get().is_none());
         assert_eq!(cache.case_alias_heap_v2(), 0);
