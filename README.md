@@ -21,16 +21,18 @@ kaspad --testnet --netsuffix=12
 
 The full-feature implementation is being integrated and is **not yet complete**. Completion requires executable normal paths, a coherent whole-candidate build, and the required tests. See the [implementation plan](docs/design/palw/integration/g14-17000/full-implementation-completion-2026-10-31.md) and [historical readiness record](docs/design/palw/integration/g14-17000/full-activation-17400-readiness-2026-10-28.md).
 
-The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a) is a separate, older artifact. The earlier G14 schedule is DAA **18,400**; full activation remains `None`. This working branch does not claim a new public deployment or advertise a verified full-candidate fingerprint.
+The public t12 preset in this source tree schedules the all-model G14 Panel=1 migration at **DAA 18,640**.
+The [release manifest](release.json) records its genesis, params fingerprint `edf472294c89dab0…`,
+and schedule ID `4024a6e74d7aeb17…`. The retention candidate at DAA 20,000 is disabled because
+the public chain crossed that height without it. Older binaries can report a fork-ID mismatch even with a fresh data directory.
+Full activation remains dormant.
 
-The upstream all-model G14 Panel=1 candidate schedules its separate migration at **DAA 18,640**. Its recorded fingerprint is
-**`edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189`**, genesis
-`a27f8f44fe4d91a5…`, and schedule id `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`.
-
-The upstream candidate is under Linux build and deployment validation. Code and local tests do not establish live activation,
-Final or SecurityCertified. See [the migration and validation record](docs/evidence/palw/model-panel-one-2026-10-31/README.md),
-[RFC-0042 (AllModelG14PanelOne)](docs/rfc/0042-all-model-g14-panel-one.md) and the [retained earlier G14 release record](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md).
-These upstream candidate identities are retained history, not a verified fingerprint of this merged full-feature working tree. The separately adopted [RFC-0042 (CourtSupplierConsent)](docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md) retains its own content and status. Both original RFC-0042 / ADR-0210 allocations are preserved by full path; see the [parallel-allocation record](docs/maintenance/numbering.md#2026-11-02-並行割当衝突).
+The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a)
+is an earlier artifact. This source update includes parent-order fixes for initial sync. It does not establish live fleet deployment
+or claim-level settlement. See [RFC-0042 (AllModelG14PanelOne)](docs/rfc/0042-all-model-g14-panel-one.md)
+and [RFC-0042 (CourtSupplierConsent)](docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md)
+for the separate designs. The [parallel-allocation record](docs/maintenance/numbering.md#2026-11-02-並行割当衝突)
+explains their shared historical numbering.
 
 Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
 **never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor. Claim-level credit authorization remains a separate requirement.
@@ -50,7 +52,7 @@ The adopted zero-genesis-bond startup path is described in [RFC-0041](docs/rfc/0
 ## Documentation
 
 Start at the [documentation map](docs/README.md): architecture ([overview](docs/architecture/overview.md), [what is different from
-Kaspa](docs/architecture/differences-from-kaspa.md)), the [ADRs (50 books)](docs/adr-v2/README.md), [RFCs (15 books)](docs/rfc-v2/README.md), specs, design
+Kaspa](docs/architecture/differences-from-kaspa.md)), the [ADRs (50 books)](docs/adr-v2/README.md), [RFCs (20 books)](docs/rfc-v2/README.md), specs, design
 records, operations and retained history. The previous, much longer README (testnet-11 era) is kept in
 [docs/history/README-2026-10-12.md](docs/history/README-2026-10-12.md).
 
