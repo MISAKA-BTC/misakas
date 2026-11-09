@@ -2,9 +2,49 @@
 use kaspa_consensus_core::palw_tir_court_v1::*;
 use kaspa_consensus_core::palw_tir_step_v1::*;
 use kaspa_consensus_core::{palw_logits_q24_v2 as wide, palw_step_refute::PalwStepRefuteError};
-use misaka_palw_tir_exec::node::wide_q24::TirWideCaptureV2;
+use misaka_palw_tir_exec::node::wide_capture_v2::{TirWideCaptureV2, WideCaptureLimitsV2};
 use misaka_palw_tir_exec::node::*;
 use std::path::Path;
+
+/// Mutable fixture data for the intentionally corrupt captures below.
+#[derive(Clone, borsh::BorshSerialize)]
+struct Capture {
+    binding: PalwTirStepBindingV1,
+    prompt: Vec<u32>,
+    logits_rows: Vec<Vec<i64>>,
+    generated: Vec<u32>,
+    leaves: Vec<kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1>,
+}
+
+impl Capture {
+    fn encode(&self) -> Result<Vec<u8>, std::io::Error> {
+        let mut frame = TirWideCaptureV2::MAGIC.to_vec();
+        borsh::to_writer(&mut frame, self)?;
+        Ok(frame)
+    }
+
+    fn limits(&self, frame_bytes: u64) -> WideCaptureLimitsV2 {
+        const CAPTURE_BUDGET: u64 = 16 << 30;
+        WideCaptureLimitsV2 {
+            max_frame_bytes: frame_bytes,
+            max_decoded_bytes: CAPTURE_BUDGET,
+            max_rows: self.generated.len() as u64,
+            max_row_lanes: self.logits_rows[0].len() as u64,
+            max_prompt_ids: self.prompt.len() as u64,
+            max_leaves: self.binding.step_leaf_count,
+            max_leaf_payload_bytes: CAPTURE_BUDGET,
+            max_total_leaf_payload_bytes: CAPTURE_BUDGET,
+            max_operation_bytes: CAPTURE_BUDGET,
+            external_retained_bytes: 0,
+        }
+    }
+
+    fn decode_fixture(&self) -> Result<TirWideCaptureV2, Box<dyn std::error::Error>> {
+        let frame = self.encode()?;
+        Ok(TirWideCaptureV2::decode_bounded(&frame, self.limits(frame.len() as u64))?)
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() != 3 {
@@ -46,18 +86,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         step_merkle_root: run.step_merkle_root,
         committed_execution_root: run.execution_root,
     };
-    let capture = TirWideCaptureV2 {
-        binding,
-        prompt: prompt.clone(),
-        logits_rows: run.logits_rows.clone(),
-        generated: run.generated.clone(),
-        leaves,
-    };
-    let bytes = capture.encode();
-    assert_eq!(TirWideCaptureV2::decode(&bytes)?, capture);
+    let capture =
+        Capture { binding, prompt: prompt.clone(), logits_rows: run.logits_rows.clone(), generated: run.generated.clone(), leaves };
+    let bytes = capture.encode()?;
+    let decoded = TirWideCaptureV2::decode_bounded(&bytes, capture.limits(bytes.len() as u64))?;
+    assert_eq!(decoded.encode_bounded(capture.limits(bytes.len() as u64))?, bytes);
     assert!(TirCaptureV1::decode(&bytes).is_err());
-    capture.authenticate(u64::MAX)?;
-    let event = capture.event(0, 0).ok_or("event")?;
+    verify_tir_binding_v1(decoded.binding(), 1 << 26)?;
+    let event = decoded.event(0, 0).ok_or("event")?;
     let vocab = capture.logits_rows[0].len();
     event.authenticate(&ctx, &run.trace_root, vocab, u64::MAX)?;
     let mut bad = event.clone();
@@ -73,12 +109,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let opening = tree.opening(i as u64).ok_or("opening")?;
     let leaf = space.leaf_at(&ctx, i as u64).ok_or("leaf")?;
     let PalwTirLeafKindV1::Commit { first_element, .. } = leaf.kind else { return Err("not output".into()) };
-    let evt = capture.event(0, (first_element / 4096) as u32).ok_or("output event")?;
+    let evt = decoded.event(0, (first_element / 4096) as u32).ok_or("output event")?;
     assert_eq!(
         check_tir_logits_consistency_wide_q24_v2(&capture.binding, &opening, &capture.leaves[i], &evt, &rules),
         Err(PalwStepRefuteError::NoFaultFound)
     );
-    let store = TirEvidenceV1::dense_wide_q24_v2(&runner, &capture, &art, form, rules.max_step_leaf_count)?;
+    let store = TirEvidenceV1::dense_wide_q24_v2(&runner, &decoded, &art, form, rules.max_step_leaf_count)?;
     let honest = store.cone_refutation(i as u64, &rules)?;
     assert_eq!(check_tir_cone_refutation_v1(&honest, &rules), Err(PalwStepRefuteError::NoFaultFound));
     // Commit one incorrect wide lane. The court must recompute it, not merely reject its hash.
@@ -93,6 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         kaspa_consensus_core::palw_step_leg::step_merkle_root_capped_v1(&hashes, rules.max_step_leaf_count)?;
     forged.binding.committed_execution_root =
         palw_tir_execution_root_v1(&ctx.context_hash(), &run.trace_root, &id, run.leaf_count, &forged.binding.step_merkle_root);
+    let forged = forged.decode_fixture()?;
     let forged_store = TirEvidenceV1::dense_wide_q24_v2(&runner, &forged, &art, form, rules.max_step_leaf_count)?;
     let refute = forged_store.cone_refutation(i as u64, &rules)?;
     assert!(check_tir_cone_refutation_v1(&refute, &rules).is_ok());
@@ -109,11 +146,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run.leaf_count,
         &run.step_merkle_root,
     );
-    let c = bad_decode.event(0, bad_decode.generated[0] / 4096).ok_or("committed event")?;
+    let bad_decode = bad_decode.decode_fixture()?;
+    let c = bad_decode.event(0, bad_decode.generated()[0] / 4096).ok_or("committed event")?;
     let b = bad_decode.event(0, correct / 4096).ok_or("beat event")?;
     assert!(
         check_tir_decode_wide_q24_v2(
-            &bad_decode.binding,
+            bad_decode.binding(),
             &c,
             &b,
             correct as usize,

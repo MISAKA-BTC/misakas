@@ -188,6 +188,27 @@ impl<'a> TirClassRunnerV1<'a> {
         if plan.program.wide_logits_q24() || space.program.wide_logits_q24() {
             return Err("wide Q24 requires the explicit V2 runner".into());
         }
+        Self::new_profile(space, plan, params, class_id)
+    }
+
+    pub fn new_wide_q24_v2(
+        space: &'a PalwTirStepSpaceV1,
+        plan: &'a TirPlan,
+        params: &'a TirParams<'a>,
+        class_id: Hash64,
+    ) -> Result<Self, String> {
+        if !plan.program.wide_logits_q24() {
+            return Err("wide runner requires wide profile".into());
+        }
+        Self::new_profile(space, plan, params, class_id)
+    }
+
+    fn new_profile(
+        space: &'a PalwTirStepSpaceV1,
+        plan: &'a TirPlan,
+        params: &'a TirParams<'a>,
+        class_id: Hash64,
+    ) -> Result<Self, String> {
         if space.program != plan.program {
             return Err("the step space and the plan are of different programs".into());
         }

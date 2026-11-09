@@ -25,11 +25,10 @@ pub mod partial;
 /// A1 full-coverage checker; computation facts only, no native credit.
 pub mod positive_check;
 pub mod positive_contract;
+pub mod positive_court;
 pub mod positive_court_adapter;
 #[cfg(feature = "positive-panel")]
 pub mod positive_panel;
-#[cfg(feature = "positive-panel")]
-pub mod positive_typed_adapter;
 #[cfg(feature = "positive-panel")]
 pub mod positive_typed_adapter;
 #[cfg(feature = "positive-panel")]
@@ -42,6 +41,7 @@ pub mod shardrows;
 mod sparse_tree;
 pub mod tree;
 pub mod wide_capture_v2;
+mod wide_q24;
 
 pub use crate::cellstep::{CpuCellStepperV1, TirCellStepperV1, TirDeviceV1, buf_lanes_le_v1};
 pub use annex::{

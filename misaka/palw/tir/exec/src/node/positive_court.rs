@@ -5,8 +5,11 @@
 //! assembles G14 TIR court material. Neither adapter grants consensus credit.
 
 use super::{
-    TirCaptureV1, TirClassRunnerV1, artifact::TirArtifactV1, evidence::TirEvidenceV1, inventory::TirParamOpenerV1,
-    wide_q24::TirWideCaptureV2,
+    TirCaptureV1, TirClassRunnerV1,
+    artifact::TirArtifactV1,
+    evidence::TirEvidenceV1,
+    inventory::TirParamOpenerV1,
+    wide_capture_v2::{TIR_WIDE_CAPTURE_MAGIC_V2, TirWideCaptureV2, WideCaptureLimitsV2},
 };
 use crate::{NoSink, Slice, TirExecutor, TirParams, TirPlan};
 use kaspa_consensus_core::palw_step_leg::{step_merkle_root_capped_v1, step_tile_leaf_hash_v1};
@@ -308,7 +311,7 @@ impl PanelCaptureV2 {
                 borsh::to_writer(&mut bytes, c).map_err(|e| e.to_string())?;
             }
             Capture::Wide(c) => {
-                bytes.extend_from_slice(&TirWideCaptureV2::MAGIC);
+                bytes.extend_from_slice(&TIR_WIDE_CAPTURE_MAGIC_V2);
                 borsh::to_writer(&mut bytes, c).map_err(|e| e.to_string())?;
             }
         }
@@ -345,8 +348,25 @@ impl PanelCaptureV2 {
         {
             return Err("positive Panel restore candidate/policy mismatch".into());
         }
-        let capture = if runner.plan.program.wide_logits_q24() {
-            Capture::Wide(TirWideCaptureV2::decode(bytes)?)
+        let program = &runner.plan.program;
+        let vocab = program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1);
+        let cap = limits.max_leaves.min(policy.max_leaves);
+        let capture = if program.wide_logits_q24() {
+            Capture::Wide(TirWideCaptureV2::decode_bounded(
+                bytes,
+                WideCaptureLimitsV2 {
+                    max_frame_bytes: bytes.len() as u64,
+                    max_decoded_bytes: limits.max_capture_bytes,
+                    max_rows: u64::from(limits.max_decode),
+                    max_row_lanes: vocab,
+                    max_prompt_ids: u64::from(limits.max_prefill),
+                    max_leaves: cap,
+                    max_leaf_payload_bytes: limits.max_capture_bytes,
+                    max_total_leaf_payload_bytes: limits.max_capture_bytes,
+                    max_operation_bytes: limits.max_capture_bytes,
+                    external_retained_bytes: 0,
+                },
+            )?)
         } else {
             Capture::I32(TirCaptureV1::decode(bytes)?)
         };
@@ -366,7 +386,6 @@ impl PanelCaptureV2 {
         {
             return Err("positive Panel restore runner identity mismatch".into());
         }
-        let cap = limits.max_leaves.min(policy.max_leaves);
         let count = capture_reservation(runner, &binding.job_context, prompt.len(), limits)?;
         if count != binding.step_leaf_count || leaves.len() as u64 != count {
             return Err("positive Panel restore requires a complete dense capture".into());
@@ -385,9 +404,13 @@ impl PanelCaptureV2 {
         match &panel.capture {
             Capture::I32(c) => super::backend::tir_authenticate_capture_metadata_v1(c, runner.class_id, rules.prompt_form, cap)?,
             Capture::Wide(c) => {
-                c.authenticate(cap)?;
-                let program = &runner.plan.program;
-                let vocab = program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.elements_at(1);
+                kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(binding, cap).map_err(|e| e.to_string())?;
+                if c.logits_rows.iter().any(|row| row.len() as u64 != vocab)
+                    || kaspa_consensus_core::palw_logits_q24_v2::trace_root(&binding.job_context, &c.logits_rows, &c.generated)
+                        != Some(binding.full_logits_trace_root)
+                {
+                    return Err("positive Panel restored wide trace differs from commitment".into());
+                }
                 if c.generated.len() as u64 != u64::from(binding.job_context.exact_decode_tokens)
                     || c.logits_rows.len() != c.generated.len()
                     || c.generated.iter().any(|id| u64::from(*id) >= vocab)

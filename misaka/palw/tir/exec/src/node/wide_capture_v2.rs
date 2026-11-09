@@ -127,6 +127,9 @@ impl TirWideCaptureV2 {
     pub fn leaves(&self) -> &[PalwStepTileLeafV1] {
         &self.leaves
     }
+    pub fn event(&self, row: u32, tile: u32) -> Option<wide::WideLogitsEventV2> {
+        super::wide_q24::event(&self.binding.job_context, &self.logits_rows, &self.generated, row, tile)
+    }
     pub fn is_dense(&self) -> bool {
         !self.leaves.is_empty()
     }

@@ -4917,3 +4917,93 @@ mod assignment_inventory_allocation_tests_v2 {
         assert!(native_tir_inventory_index_requests_v1(&shape).unwrap() >= retained as u64);
     }
 }
+
+/// Wide Q24 decode court. Sampling is taken from the authenticated job, never from evidence.
+/// The two opened tiles are tied to the same generated IDs and trace root before comparing Q48 keys.
+pub fn check_tir_decode_wide_q24_v2(
+    binding: &PalwTirStepBindingV1,
+    committed: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+    beat: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+    beat_lane: usize,
+    sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let v = match check_binding(binding)? {
+        BindingOutcome::Convicted(x) => return Ok(x),
+        BindingOutcome::Verified(x) => x,
+    };
+    if !v.space.program.wide_logits_q24() || committed.row != beat.row || committed.generated != beat.generated {
+        return Err(bad("wide decode profile/row/ids"));
+    }
+    let vocab = logits_shape(&v.space).0;
+    committed.authenticate(&binding.job_context, &binding.full_logits_trace_root, vocab, rules.max_step_leaf_count).map_err(bad)?;
+    beat.authenticate(&binding.job_context, &binding.full_logits_trace_root, vocab, rules.max_step_leaf_count).map_err(bad)?;
+    let row = committed.row;
+    let id = committed.generated[row as usize] as usize;
+    let verdict = || {
+        convict(
+            &binding.committed_execution_root,
+            PALW_DECODE_TOKEN_EVIDENCE_KIND,
+            row as u64,
+            PalwStepFaultV1::DecodeTokenMismatch { position: row },
+        )
+    };
+    if id >= vocab {
+        return Ok(verdict());
+    }
+    if beat_lane >= vocab
+        || committed.tile_opening.leaf_index as usize != id / PALW_LOGITS_TILE_LANES
+        || beat.tile_opening.leaf_index as usize != beat_lane / PALW_LOGITS_TILE_LANES
+    {
+        return Err(bad("wide decode lane/tile"));
+    }
+    let a = crate::palw_logits_q24_v2::lane_key(committed.lanes[id % PALW_LOGITS_TILE_LANES], sampling, row, id);
+    let b = crate::palw_logits_q24_v2::lane_key(beat.lanes[beat_lane % PALW_LOGITS_TILE_LANES], sampling, row, beat_lane);
+    if b > a || (b == a && beat_lane < id) { Ok(verdict()) } else { Err(PalwStepRefuteError::NoFaultFound) }
+}
+
+/// Tie the eight-byte step output to the independently committed wide logits trace.
+pub fn check_tir_logits_consistency_wide_q24_v2(
+    binding: &PalwTirStepBindingV1,
+    opening: &PalwStepOpeningV1,
+    preimage: &PalwStepTileLeafV1,
+    event: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let v = match check_binding(binding)? {
+        BindingOutcome::Convicted(x) => return Ok(x),
+        BindingOutcome::Verified(x) => x,
+    };
+    if !v.space.program.wide_logits_q24() {
+        return Err(bad("wide consistency profile"));
+    }
+    let leaf = match check_output_leaf(binding, &v, opening, preimage, rules.max_step_leaf_count)? {
+        Ok(x) => x,
+        Err(x) => return Ok(x),
+    };
+    let PalwTirLeafKindV1::Commit { block, node, first_element, .. } = leaf.kind else {
+        return Err(bad("wide consistency is not an output"));
+    };
+    if !v.space.program.is_wide_logits_node(block as usize, node as usize)
+        || leaf.position.checked_add(1).and_then(|position| position.checked_sub(v.job.prefill)) != Some(event.row)
+        || first_element / PALW_LOGITS_TILE_LANES as u64 != event.tile_opening.leaf_index
+    {
+        return Err(bad("wide consistency coordinates"));
+    }
+    event
+        .authenticate(&binding.job_context, &binding.full_logits_trace_root, logits_shape(&v.space).0, rules.max_step_leaf_count)
+        .map_err(bad)?;
+    for i in 0..leaf.value_count as usize {
+        let k = first_element as usize % PALW_LOGITS_TILE_LANES + i;
+        let value = event.lanes.get(k).ok_or(bad("wide consistency tile width"))?;
+        if lane(leaf.dtype, &preimage.values_le, i) != Some(*value as i128) {
+            return Ok(convict(
+                &binding.committed_execution_root,
+                PALW_TIR_EVIDENCE_KIND_LOGITS,
+                opening.leaf_index,
+                PalwStepFaultV1::TirLogitsTraceMismatch { value_index: i as u32 },
+            ));
+        }
+    }
+    Err(PalwStepRefuteError::NoFaultFound)
+}
