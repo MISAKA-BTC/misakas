@@ -31,6 +31,9 @@ fn rfc37_context() -> TestContext {
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
             *p = p.clone().with_palw_v2_cadence();
+            if !cfg!(feature = "evm") {
+                p.evm_activation_daa_score = u64::MAX;
+            }
         })
         .build();
     TestContext::new(TestConsensus::new(&config))
@@ -39,8 +42,8 @@ fn rfc37_context() -> TestContext {
 async fn rfc37_build_points(ctx: &mut TestContext) -> Vec<kaspa_hashes::Hash64> {
     let mut points = Vec::new();
     for nonce in 0..3 {
-        // The actual builder commits its timestamp into the active EVM root.
-        // Preserve that timestamp and the live lane while advancing real blocks.
+        // With EVM enabled the template commits its timestamp into the EVM root.
+        // Preserve the timestamp while advancing real blocks on either build.
         let template = ctx.build_block_template_keeping_time(nonce);
         let (template, _) = ctx.consensus.heartbeat_adapt_block_template(template).unwrap();
         let block = template.block.to_immutable();
