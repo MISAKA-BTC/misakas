@@ -1014,7 +1014,11 @@ impl SnapshotReceiver {
         self.verify_local_spill_v1()?;
         self.spill.file.seek(SeekFrom::Start(0)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
         let preflight = preflight_native_snapshot_v1(BufReader::new(&mut self.spill.file), self.total)?;
-        let lease = reserve_native_wire_v1(self.point, &preflight).map_err(NativeSnapshotDecodeErrorV1::Capacity)?;
+        let lease = if native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1() {
+            reserve_native_wire_v1(self.point, &preflight).map_err(NativeSnapshotDecodeErrorV1::Capacity)?
+        } else {
+            None
+        };
         let snapshot = self.decode_with(|reader, total| decode_snapshot(reader, total, true))?;
         Ok((snapshot, lease))
     }
