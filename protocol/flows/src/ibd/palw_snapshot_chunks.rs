@@ -128,6 +128,23 @@ impl IbdFlow {
                 .receive_pruning_point_palw_chunks(consensus, point, &mut receiver, &mut spill, &fresh, SNAPSHOT_CODEC_ZLIB_V1, None)
                 .await;
         }
+        // Older public t12 donors can serve the historical class declaration in
+        // raw framing only. The raw retry retains strict material authentication
+        // at import and performs structural preflight before decoding.
+        if codec == SNAPSHOT_CODEC_ZLIB_V1
+            && receiver.is_none()
+            && self.ctx.config.params.net
+                == kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12)
+            && self.ctx.config.params.genesis.hash == kaspa_consensus_core::config::genesis::PALW_T12_GENESIS.hash
+            && matches!(&result, Err(ProtocolError::PruningSidecarUnavailable("PALW chunked state", _)))
+        {
+            drop(spill.take());
+            spill = Some(
+                SnapshotSpill::new()
+                    .map_err(|why| ProtocolError::LocalNativeResourceUnavailable(format!("PALW fallback spill/session: {why}")))?,
+            );
+            result = self.receive_pruning_point_palw_chunks(consensus, point, &mut receiver, &mut spill, &[], 0, None).await;
+        }
         if matches!(&result, Err(ProtocolError::Timeout(_)) | Err(ProtocolError::ConnectionClosed))
             && let Some(receiver) = receiver.take()
         {
@@ -249,10 +266,13 @@ impl IbdFlow {
             return Err(ProtocolError::Other("PALW chunked snapshot ended early"));
         }
         let expected_root = expected_row_root;
+        let strict_raw =
+            codec == 0 && self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED;
         let (snapshot, native_lease, inventory) = kaspa_consensusmanager::spawn_blocking(move || match expected_root {
             Some(root) => receiver
                 .decode_row_generation_with_native_lease(root)
                 .map(|(snapshot, lease, inventory)| (snapshot, lease, Some(inventory))),
+            None if strict_raw => receiver.decode_strict_raw_snapshot_v1().map(|(snapshot, lease)| (snapshot, lease, None)),
             None => receiver.decode_snapshot_with_native_lease().map(|(snapshot, lease)| (snapshot, lease, None)),
         })
         .await

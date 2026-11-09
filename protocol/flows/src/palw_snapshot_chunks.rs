@@ -468,7 +468,7 @@ fn decode_snapshot(reader: &mut impl Read, total: u64, complete_material: bool) 
             declarations.push((class, data));
         } else {
             if complete_material {
-                return Err(invalid("compressed snapshot has unknown or duplicate declaration"));
+                return Err(invalid("complete snapshot has unknown or duplicate declaration"));
             }
             if io::copy(&mut (&mut *reader).take(bytes), &mut io::sink())? != bytes {
                 return Err(invalid("snapshot declaration truncated"));
@@ -1006,6 +1006,19 @@ impl SnapshotReceiver {
         }
         Ok((snapshot, lease, suffix.inventory))
     }
+    pub(crate) fn decode_strict_raw_snapshot_v1(
+        mut self,
+    ) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1>
+    {
+        use kaspa_consensus_core::palw_native_resource_v1::*;
+        self.verify_local_spill_v1()?;
+        self.spill.file.seek(SeekFrom::Start(0)).map_err(NativeSnapshotDecodeErrorV1::LocalStorage)?;
+        let preflight = preflight_native_snapshot_v1(BufReader::new(&mut self.spill.file), self.total)?;
+        let lease = reserve_native_wire_v1(self.point, &preflight).map_err(NativeSnapshotDecodeErrorV1::Capacity)?;
+        let snapshot = self.decode_with(|reader, total| decode_snapshot(reader, total, true))?;
+        Ok((snapshot, lease))
+    }
+
     pub(crate) fn decode_snapshot_with_native_lease(
         self,
     ) -> Result<(Snapshot, Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>), NativeSnapshotDecodeErrorV1>
@@ -1376,6 +1389,23 @@ mod tests {
         for declarations in [vec![(h(8), vec![1])], vec![(h(7), vec![1]), (h(7), vec![2])]] {
             let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
             assert!(decode_row_snapshot_with_admission_v1(h(1), &raw, false, |_, _| panic!("admission disabled")).is_err());
+        }
+    }
+
+    #[test]
+    fn strict_raw_snapshot_preflights_and_rejects_unknown_declarations() {
+        let budget = Arc::new(Semaphore::new(1));
+        let carriage = native_carriage();
+        let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &[] }).unwrap();
+        let (snapshot, _) = receive_raw(&budget, h(1), &raw).decode_strict_raw_snapshot_v1().unwrap();
+        assert!(snapshot.1.is_empty());
+        let declaration = include_bytes!("../../../consensus/core/tests/corpus/t12-daa508-class-admission.borsh").to_vec();
+        for declarations in [vec![(h(8), declaration.clone())], vec![(h(7), declaration.clone()), (h(7), declaration)]] {
+            let raw = borsh::to_vec(&SnapshotEnvelope { carriage: &carriage, declarations: &declarations }).unwrap();
+            assert!(matches!(
+                receive_raw(&budget, h(1), &raw).decode_strict_raw_snapshot_v1(),
+                Err(NativeSnapshotDecodeErrorV1::Encoding(error)) if error.to_string().contains("unknown or duplicate declaration")
+            ));
         }
     }
 

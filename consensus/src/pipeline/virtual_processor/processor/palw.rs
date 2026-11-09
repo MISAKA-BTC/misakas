@@ -3786,6 +3786,17 @@ impl VirtualStateProcessor {
         ) {
             return Ok(());
         }
+        if kaspa_consensus_core::palw_class_registration_origin_v1::palw_class_registration_origin_row_v1(route, &id).is_none()
+            && kaspa_consensus_core::palw_class_sync_v1::t12_legacy_class_declaration_matches_v1(
+                &self.network_id_bytes,
+                self.genesis.hash,
+                id,
+                class,
+                bytes,
+            )
+        {
+            return Ok(());
+        }
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
         for object in &self.palw_genesis_objects_v2 {
             if let PalwConsensusObjectV2::ClassRegistered {

@@ -7,6 +7,46 @@ use crate::{
     palw_state_v2::{PalwClassAdmissionCarriageV2, PalwClassStateV2, PalwPwuRuleV2},
 };
 
+// Testnet-12's pre-origin registration. The archived block body and acceptance
+// records match the live chain's transaction and accepted-ID Merkle commitments.
+// Carrier: dcfcb2536802d9b16c4ef4f903149f654f49e6ccca84e3eb9b157ea71f4861908b9287f6cb252f1c68e6a5af499ae30d12c93bc1db12a66aa637362b0711c33b
+// Accepting header at DAA 508: 998d00b0a77fe9dddce3089364539e0f3ed2b795200bc9931da451ea69bfc6d3cc860496d0de3fc876ad467d27adf7aea30a2b6e90aa6dc89b6928a258f67fd0
+const T12_LEGACY_CLASS_ID: Hash64 = Hash64::from_bytes([
+    0x7d, 0x7e, 0x3d, 0x05, 0x23, 0x24, 0x66, 0x9a, 0xcc, 0xe2, 0x4d, 0xc9, 0xd9, 0x31, 0x6d, 0x79, 0x1c, 0x71, 0x52, 0x34, 0x14,
+    0xe8, 0x99, 0x24, 0x9d, 0xc0, 0x40, 0xcd, 0x0a, 0xd1, 0xfa, 0xfd, 0x70, 0x5e, 0xb1, 0xe5, 0xb3, 0xa4, 0xce, 0x7e, 0x54, 0x05,
+    0x07, 0x34, 0xe6, 0xdb, 0xc7, 0xdf, 0x62, 0xe6, 0xcf, 0xff, 0x84, 0x9c, 0xe2, 0xc7, 0xe1, 0xf7, 0x35, 0xdf, 0x3b, 0x29, 0x22,
+    0xfc,
+]);
+const T12_LEGACY_CLASS_ARTIFACT: Hash64 = Hash64::from_bytes([
+    0xcf, 0x4a, 0xfc, 0x69, 0x44, 0xd7, 0x82, 0xf3, 0xc5, 0x4e, 0xd0, 0x41, 0xd9, 0xa5, 0x75, 0xfe, 0xbf, 0xb8, 0xf7, 0xfa, 0x14,
+    0x84, 0x60, 0x06, 0x6b, 0x39, 0xf4, 0xbb, 0x3d, 0xd0, 0xfd, 0x81, 0x83, 0xfc, 0x84, 0xe3, 0xb9, 0xd9, 0xef, 0x1f, 0x43, 0xa3,
+    0x97, 0x84, 0xf2, 0x85, 0x76, 0xbb, 0xfd, 0xe9, 0x95, 0xf8, 0xa6, 0xe9, 0xef, 0x94, 0x9c, 0xa0, 0xc1, 0xe4, 0xfa, 0x2d, 0xb2,
+    0x4f,
+]);
+const T12_LEGACY_ADMISSION_DIGEST: Hash64 = Hash64::from_bytes([
+    0x09, 0x8d, 0x31, 0xb9, 0x04, 0x07, 0x8d, 0x64, 0x08, 0x47, 0x5f, 0x3e, 0xc5, 0x25, 0x2b, 0x2f, 0x6c, 0x3b, 0x5a, 0x67, 0x81,
+    0xf9, 0xd7, 0xc9, 0x10, 0x2c, 0x66, 0xac, 0xad, 0x35, 0xcd, 0x75, 0x62, 0xc5, 0x7d, 0x4b, 0xa7, 0x8c, 0x72, 0xc5, 0x39, 0x16,
+    0xce, 0x34, 0xa5, 0x85, 0xcc, 0xb3, 0x3a, 0xe0, 0x0c, 0x28, 0x82, 0xbd, 0xc6, 0x7d, 0x3c, 0x58, 0xba, 0xb9, 0x44, 0x98, 0x05,
+    0xe8,
+]);
+
+/// Recognize the exact declaration of the historical testnet-12 registration
+/// when the snapshot predates rooted registration origins.
+pub fn t12_legacy_class_declaration_matches_v1(
+    network_id: &[u8],
+    genesis: Hash64,
+    class_id: Hash64,
+    class: &PalwClassStateV2,
+    bytes: &[u8],
+) -> bool {
+    network_id == b"testnet-12"
+        && genesis == crate::config::genesis::PALW_T12_GENESIS.hash
+        && class_id == T12_LEGACY_CLASS_ID
+        && class.artifact_root == T12_LEGACY_CLASS_ARTIFACT
+        && class.registered_daa == 508
+        && crate::palw_class_registration_origin_v1::palw_class_admission_bytes_digest_v1(bytes) == T12_LEGACY_ADMISSION_DIGEST
+}
+
 pub fn validate_class_declaration_v1(
     class_id: Hash64,
     class: &PalwClassStateV2,
@@ -58,6 +98,27 @@ pub fn validate_class_context_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn t12_legacy_pin_matches_only_the_archived_registration() {
+        let bytes = include_bytes!("../tests/corpus/t12-daa508-class-admission.borsh");
+        let genesis = crate::config::genesis::PALW_T12_GENESIS.hash;
+        let (_, mut class, _) = authentic();
+        class.artifact_root = T12_LEGACY_CLASS_ARTIFACT;
+        class.registered_daa = 508;
+        assert!(t12_legacy_class_declaration_matches_v1(b"testnet-12", genesis, T12_LEGACY_CLASS_ID, &class, bytes));
+        assert!(!t12_legacy_class_declaration_matches_v1(b"testnet-11", genesis, T12_LEGACY_CLASS_ID, &class, bytes));
+        assert!(!t12_legacy_class_declaration_matches_v1(b"testnet-12", Hash64::default(), T12_LEGACY_CLASS_ID, &class, bytes));
+        assert!(!t12_legacy_class_declaration_matches_v1(b"testnet-12", genesis, Hash64::default(), &class, bytes));
+        let mut altered = bytes.to_vec();
+        altered[0] ^= 1;
+        assert!(!t12_legacy_class_declaration_matches_v1(b"testnet-12", genesis, T12_LEGACY_CLASS_ID, &class, &altered));
+        class.registered_daa += 1;
+        assert!(!t12_legacy_class_declaration_matches_v1(b"testnet-12", genesis, T12_LEGACY_CLASS_ID, &class, bytes));
+        class.registered_daa -= 1;
+        class.artifact_root = Hash64::default();
+        assert!(!t12_legacy_class_declaration_matches_v1(b"testnet-12", genesis, T12_LEGACY_CLASS_ID, &class, bytes));
+    }
+
     fn authentic() -> (Hash64, PalwClassStateV2, PalwClassAdmissionCarriageV2) {
         let params = crate::config::params::palw_t12_launch_params_v1();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode else { panic!("V2") };
