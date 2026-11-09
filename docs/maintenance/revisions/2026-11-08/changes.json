@@ -1,0 +1,512 @@
+{
+  "schema": "misaka.docs.adopted-revision-changes.v1",
+  "date": "2026-11-08",
+  "input_archive": "docs(2).zip",
+  "input_archive_sha256": "7b97e539976711c835995da6f5e49fc4d471517d142eddc57f6653c2100271b2",
+  "scope": "Documentation and documentation validators only; no runtime or activation changes",
+  "adoption_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+  "active_rfc_count": 20,
+  "active_adr_book_count": 50,
+  "summary": {
+    "input_files": 1840,
+    "modified_input_files": 44,
+    "unchanged_input_files": 1796,
+    "added_files_excluding_this_manifest": 26,
+    "added_files_including_this_manifest": 27,
+    "removed_input_files": 0
+  },
+  "self_digest_excluded": "docs/maintenance/revisions/2026-11-08/changes.json",
+  "self_digest_reason": "The manifest lists every other added/modified file; no recursive self-hash.",
+  "changes": [
+    {
+      "path": "docs/AGENTS.md",
+      "change": "modified",
+      "input_sha256": "fc610b9c7f9a885ebb1cae24f61da3b741a7f6eadb6b47475971ccb30d9963d5",
+      "output_sha256": "4f7bc659dee85d812762e7afe5cce85b1d18feac4bde11eed1d6fb1f546743a6",
+      "output_bytes": 2802
+    },
+    {
+      "path": "docs/INDEX.md",
+      "change": "modified",
+      "input_sha256": "95e92d263cc7ac63a53fd7c0ca185566005a6288f6c677c7367df0887895a9df",
+      "output_sha256": "7442f34da7c3a364e3c8f5f5912390d69b8301dcc15ac2282b2af45de5d0e433",
+      "output_bytes": 1881
+    },
+    {
+      "path": "docs/PRINCIPLES.md",
+      "change": "modified",
+      "input_sha256": "c40ab726ef5a6eceddc792ce4a3a135722ec8922907a782ecf34444a78530f4f",
+      "output_sha256": "bd06500da08fb1d97c48a77aaa590233d7562cb152b0750be44da7f9a48e70a9",
+      "output_bytes": 48806
+    },
+    {
+      "path": "docs/README.md",
+      "change": "modified",
+      "input_sha256": "5afc172683c97b076972c484355b55ed3a99148c9c89e09f6aa0de23ac94ef42",
+      "output_sha256": "3fb47a8bba76df476cd37f208aaa5167c85e4e2e6a13315d6162f25ab11c3c2c",
+      "output_bytes": 4632
+    },
+    {
+      "path": "docs/STATUS.md",
+      "change": "modified",
+      "input_sha256": "78bc551f3b8e9e239a107a5b69088f184a86e0fb857d9fd1adb3710aa4cfec3f",
+      "output_sha256": "eec43684f47bb6a9c4ceeed94c69a83c1efbb78bfd308fc431806ab48b253268",
+      "output_bytes": 5699
+    },
+    {
+      "path": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "3eab7b8390f0e0407e3e5b27d592b8a300ec81735ce84d313bb72507829582cf",
+      "output_bytes": 8090
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "change": "modified",
+      "input_sha256": "0b4ddab70531cf49f7e881b9ed6fbab26a47e3c6783167dcccf4625ebd779172",
+      "output_sha256": "abbaaa14c946959f9b058b29d04880588804ff9bdfc866489a747a9fce6624a6",
+      "output_bytes": 37806
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "change": "modified",
+      "input_sha256": "ffecbbd8610cb4c4a226659f2f8117c048ca4c50d204e5ff4cc547010f516b5a",
+      "output_sha256": "5840806812c81fdf74afadbfdcae8fd6472d24b05d4cc5d6562e17e9e9623df1",
+      "output_bytes": 30953
+    },
+    {
+      "path": "docs/adr-v2/PRECEDENCE.md",
+      "change": "modified",
+      "input_sha256": "14d94cb06d9f5e8faf18647cf0e67672b0c60cb17a67718cbb7ceda376b5267a",
+      "output_sha256": "b632ec5ec6d29ff6a5ef4b101a27717fba1ca4ac603f38ce1422271fe6761b67",
+      "output_bytes": 9887
+    },
+    {
+      "path": "docs/adr-v2/README.md",
+      "change": "modified",
+      "input_sha256": "689f068313335fa3897e309ad3249956dfd0d72c0a4ecddac99900c0d122f1c4",
+      "output_sha256": "980e15eefb70a1da28f16b5a12f5d7d4f45e66240fa5609db22b2112a2bef00e",
+      "output_bytes": 14937
+    },
+    {
+      "path": "docs/adr-v2/RFC-CROSSWALK.md",
+      "change": "modified",
+      "input_sha256": "18e9d9dbd84ebd209efebc809159a7a861c31cbc62ce79d424e9bd88e462d777",
+      "output_sha256": "26e61d41ee0a29071f72256416b812701451b5c56db41a647c398e2ea80f80a6",
+      "output_bytes": 10019
+    },
+    {
+      "path": "docs/adr-v2/check_integrity.py",
+      "change": "modified",
+      "input_sha256": "09723e78dc8f3fc1f73c72b9e734261f154c88c3a2c77d8ae54784de98954f88",
+      "output_sha256": "d8acbba7ab785cd89e8d715623feacc820294d744860dd1f2732f16e93a4f0c9",
+      "output_bytes": 13891
+    },
+    {
+      "path": "docs/adr-v2/registry.json",
+      "change": "modified",
+      "input_sha256": "ec90cc7798819dadd366d44a93aac0e312abf053b0ab20992489bdc6d1d148dd",
+      "output_sha256": "558a47c1574ce64f0f3e62e4a11540128e8ae5d602eb346394732abdda8fd1c4",
+      "output_bytes": 38599
+    },
+    {
+      "path": "docs/architecture/overview.md",
+      "change": "modified",
+      "input_sha256": "d6c8071fecca998762f9a82fb263e38215ad6c9414d969d9cc562e08b9577c93",
+      "output_sha256": "427169183fe942b68cfad22e54847a15e69ed048d413b240794062aa1b8ac222",
+      "output_bytes": 3291
+    },
+    {
+      "path": "docs/architecture/palw-specification.md",
+      "change": "modified",
+      "input_sha256": "790640d945a3c9891998fc31442fad8b904752395984951d596efe7ecf203b91",
+      "output_sha256": "4f7ff57b10f8e50dba8c794a0a18b590e32a5a9dee78022af49262e7831466b7",
+      "output_bytes": 63525
+    },
+    {
+      "path": "docs/design/palw/consensus/public-adjudication-policy-v0.1.md",
+      "change": "modified",
+      "input_sha256": "66f5cddf57010e45fff705860b1f14ba3ff5e042d2b1ae6b294eb91de0dadace",
+      "output_sha256": "29afcb22548f287aa27bc715904395aef541b010d86d8497672cac579ffcc153",
+      "output_bytes": 12783
+    },
+    {
+      "path": "docs/design/palw/consensus/public-adjudication-policy-v0.2.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "fbd28784bb0f488a346c38acd4cde8402ab6424c9bef9efc419fcfc1b169073a",
+      "output_bytes": 5065
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "change": "modified",
+      "input_sha256": "2e77ccce7911e5ebb5b3f5b7fabb7d5c8ae42ea65fd396f48910d74835aa46bd",
+      "output_sha256": "6d831c32c5e527b5f2e375cbcd805f84d79a50af4082a1d735a1fec991c9c962",
+      "output_bytes": 104542
+    },
+    {
+      "path": "docs/maintenance/decision-catalog.json",
+      "change": "modified",
+      "input_sha256": "589ec1e390774831ff0533c70d6500ee1cd018bdcaf1175aee0f9cf93133c139",
+      "output_sha256": "8c2bec6e41ca7f809fd7b01ba115eae320cf8b9291a697d9b99858044a952de5",
+      "output_bytes": 87082
+    },
+    {
+      "path": "docs/maintenance/generate_indexes.py",
+      "change": "modified",
+      "input_sha256": "161b4e2fd95ef49bfc16306aab398dbfb05c76b6172dd423b14b8e98df1404e8",
+      "output_sha256": "9797fade674d3c889a0f4ec1ca7f275bb15f5fa3a58005859316a8d3fbbb4405",
+      "output_bytes": 4924
+    },
+    {
+      "path": "docs/maintenance/numbering.md",
+      "change": "modified",
+      "input_sha256": "2de15dd274ff8632b13a8066ad2330db65eb75029f4794be438f46bad211fb68",
+      "output_sha256": "e5e916ce3d3506dd90db64791bf7a12b088a7f639eca9001789c37804307bda8",
+      "output_bytes": 6972
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/README.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "50085993bdb91bf6a760de83e698f8c67c00b86ab6cd42853433612f2534e7fb",
+      "output_bytes": 9165
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/VALIDATION.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "90295b63cc169a7f0eedfbe66ae5ae3ce0d0c6cdacc7619ad0fb83a20396748e",
+      "output_bytes": 7733
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-adr.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "43919f0723cc2b900aae7426dc8c2917930c5b90b0d9574466a0a293868b8200",
+      "output_bytes": 8731
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-adr.txt",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "43919f0723cc2b900aae7426dc8c2917930c5b90b0d9574466a0a293868b8200",
+      "output_bytes": 8731
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-docs.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "68fae586ef296368f2792ca0f09ab95adbff25518b2c98d03caa205f6e8a3c26",
+      "output_bytes": 160462
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-docs.txt",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "98f265ccc178085dd4cdb7578c29b8e5b09f8dffc1234f50a4f02a980997f27f",
+      "output_bytes": 5563
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-revision.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "7ff234d1eadf76c04832e6f7857cd635845543a71135477eed36110c50bcae4c",
+      "output_bytes": 15473
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-revision.txt",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "12931a73d1a4397a734fa1ddded3d9c4d9751c8a935567743343ec899ed95b45",
+      "output_bytes": 575
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/current-rfc.txt",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+      "output_bytes": 528
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-adr-original.txt",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "dbf902a0f53014d6a6133afaff34ba0b19207c7ac22788319c4b9217ee7ea639",
+      "output_bytes": 1280
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-adr-with-overlay-support.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "ce3bf60df4c64f2922326c04dfc808e9bb73cd2350a30a2d37798bf2edd260ef",
+      "output_bytes": 5502
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-docs.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "ac19cafc6a3ac21f839972410a65a57786fb301f979ded4f6e47934e20929e4f",
+      "output_bytes": 242732
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-docs.txt",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "31b68819d9407e69b74807254af635b8f31c7e0f585f07bc15fa85aaf34cb593",
+      "output_bytes": 5565
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/input-rfc.txt",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "5fb261784fd0435057b31e6fde164de573fafb816f202220dff03d34fab8e299",
+      "output_bytes": 350
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check-results/revision-fault-injection.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "90bc5741bdf2ba0d82f2df64c5937e6284146b8b2880e5ad303502c3810bb0e9",
+      "output_bytes": 645
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/check_revision.py",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "17e74faf7ac96d2d71821f3b7f87846f735ad8ca44f0e60317e33980c3fd9126",
+      "output_bytes": 25606
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/input-link-issues.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "525b830422c93122c46e3339b4fffb6c433dbd914efc8d076b768bd7b4e4cf35",
+      "output_bytes": 489280
+    },
+    {
+      "path": "docs/maintenance/revisions/2026-11-08/input-manifest.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "638a24a961cca2b81f5f3542d949ba71ba595acc776d7bd4193aa0e22e21f8b1",
+      "output_bytes": 255754
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "change": "modified",
+      "input_sha256": "c03d93819a40989a15c1ae5977df980ba4acb2c525596f7903d45d9fbb39bf33",
+      "output_sha256": "9962175887308186e29b4e076ec4befcbcc9ba11d4e5c77d3e1cf7f869652761",
+      "output_bytes": 9109
+    },
+    {
+      "path": "docs/rfc/README.md",
+      "change": "modified",
+      "input_sha256": "d45a9c945b212c9d1ac3c3a3b41b1a542104952778698d5542176ac3f1206dd9",
+      "output_sha256": "9903ea35f1e97aa0a471dd920daea0eaa177a6da0c801293032f3338ce99c1f9",
+      "output_bytes": 1129
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "change": "modified",
+      "input_sha256": "f276a9c37e804185b3959c23973c05f9f6132a7b6d6d9d0464ed176b43542e66",
+      "output_sha256": "af1e83507b71ab4cb5c263f370c0572fd8a8cf8118a8ac85822ef81e7e07fb85",
+      "output_bytes": 7434
+    },
+    {
+      "path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+      "change": "modified",
+      "input_sha256": "090c60784e72965c54a6827908bbba9e150c50833167cbfe7218b08ca4200929",
+      "output_sha256": "9bfe75266524ee154734033b80e9de992ffe30a6ccbcb87b768c7034d50706e9",
+      "output_bytes": 206497
+    },
+    {
+      "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "change": "modified",
+      "input_sha256": "69865797271e054a00ea17da060c869b208a9229944f8d5835d49561f5968e9f",
+      "output_sha256": "78b0354505ad424f4950586a747518bd1cc90e253cd1c6af784556db4ba2f5a5",
+      "output_bytes": 287582
+    },
+    {
+      "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+      "change": "modified",
+      "input_sha256": "fec3271cc7e652d9ca21ddc8ba5000383c2b9837a9c059e488cfd9be6e172a33",
+      "output_sha256": "c0d947d668822079fc5c25bd410118387e536cbc98c018f0a5495c8e226680e7",
+      "output_bytes": 284978
+    },
+    {
+      "path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+      "change": "modified",
+      "input_sha256": "6e4dd9b5dbfb33c531e9280361e11cb3d5df155b0d33b61e1178f63f2b33045f",
+      "output_sha256": "63048fad5509a4e7408fc45c87281cd1d9a04afd0e87fcb42e4603ca7a15a730",
+      "output_bytes": 71619
+    },
+    {
+      "path": "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+      "change": "modified",
+      "input_sha256": "50910862ea80095bfc41bc608f2f99732a07907bf2d5dbb7b6ab81297ce0de3b",
+      "output_sha256": "66ad07b0adb5bd97cc7d545da9ba582d1185d296d9c6a695695ee7fee0464e04",
+      "output_bytes": 27741
+    },
+    {
+      "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "change": "modified",
+      "input_sha256": "8d0a884e842af738e153a4be4aaef5346f05f70eced51baa60af854e174b9fb8",
+      "output_sha256": "bdacfca8951854c2d15833c221f74c83cb7d8d2706b017146ec942857127dbe5",
+      "output_bytes": 288578
+    },
+    {
+      "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "change": "modified",
+      "input_sha256": "6c4a90643bbc2373c79d929451441dbcaa88a576cf78a456d02b4c3402feb725",
+      "output_sha256": "0a99747cedecf7857b5356853ed9e8db843e3c55b05d686ee42130dfecc997b1",
+      "output_bytes": 56310
+    },
+    {
+      "path": "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+      "change": "modified",
+      "input_sha256": "7b4ec48a34583bf7131e286a563a2cc43c7cc03684375db9a7a3f015aadcff60",
+      "output_sha256": "befecc1ad6914bf44e3127f675fd8be40be422fddec0ad80dd4ac94dfef2bdc1",
+      "output_bytes": 65259
+    },
+    {
+      "path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+      "change": "modified",
+      "input_sha256": "4dc5076908ef74ea92c8c84d838692e9612f5e35dd80a9f9867c0854e9b093c7",
+      "output_sha256": "60a26c6e47d6cc6bc19d9fb9413e59bd4604457994ad10bc3b760f164e92bacf",
+      "output_bytes": 51715
+    },
+    {
+      "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "change": "modified",
+      "input_sha256": "38d366a180f1fa7d747800a5a072b31ad76831c43adcbc3e2c9afa913a6cee21",
+      "output_sha256": "61e5947b4028e6e2b2e2aae4f71ab96523b251f13005a9b6aa1053b20fa7b5b7",
+      "output_bytes": 120912
+    },
+    {
+      "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "change": "modified",
+      "input_sha256": "2b41d33d1b2870e8811c3e29ce92c5b6ce4c7e46e20e3414a8a48e7608d20dcd",
+      "output_sha256": "a927e0d2c8d9b10bc123311040fe8d1e3a59e833bde352bf1ee2672390f22e65",
+      "output_bytes": 117789
+    },
+    {
+      "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "change": "modified",
+      "input_sha256": "8ec772aaa89ee6e8bd8a6432fed26312443156205f4c3e781072d2eec0a3a823",
+      "output_sha256": "35ab4090c5f3b69f91e2c466e50706e33d28b94bbed782c76772682651e03eab",
+      "output_bytes": 24533
+    },
+    {
+      "path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+      "change": "modified",
+      "input_sha256": "e889fef57195ff090ee160e1e24237544a3d07144c30a0a0ab6b4ae5e1085a71",
+      "output_sha256": "edb1a6c462076f1473229066465962cf002244c9f4db9183639ba9cfe1717bae",
+      "output_bytes": 9346
+    },
+    {
+      "path": "docs/rfc-v2/0014-court-master-contract.md",
+      "change": "modified",
+      "input_sha256": "0a82913da8644ac62457e2b658d2b8792ce573afc2e42d396729f2f02230d6f5",
+      "output_sha256": "dbe23f1256d2f868df799366e194d956fdd2d776dc6d408225f41b19bcc69344",
+      "output_bytes": 387172
+    },
+    {
+      "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "change": "modified",
+      "input_sha256": "dad6ece68396f09027e21b4a81fe67573e54801c4c766c501e8782cba281be54",
+      "output_sha256": "e89011fb69a61a7f6fcb43e9b1712d46df5720385fb19e29b0046da382d6b366",
+      "output_bytes": 293567
+    },
+    {
+      "path": "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "1e95ec4a9bd02afe3c813c02732a964ebf7f47b50ab28482fa9d6a75736a192c",
+      "output_bytes": 17496
+    },
+    {
+      "path": "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "324f54ddf0bb4e51dcb459f8d689a4e02e70756d86b6da5d414a9837c8e72f1e",
+      "output_bytes": 19157
+    },
+    {
+      "path": "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "cff395d71111dee00d10a9a99c61f946d6e635d069612c898a82a9eefa8be304",
+      "output_bytes": 18170
+    },
+    {
+      "path": "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "61d223f7c9d6a3845dce3ab32339b8424f6e375f7ceec8c5e21124bedfd5ad28",
+      "output_bytes": 17570
+    },
+    {
+      "path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "7904c9c5245b1dc0c5bdc1d145872a24ffd47d2801ad0f7b1063633295f7c8e0",
+      "output_bytes": 21567
+    },
+    {
+      "path": "docs/rfc-v2/MAPPING.md",
+      "change": "modified",
+      "input_sha256": "235e997ddc2cf7d978db229525ddb82ca5670828e04b59f133d4cbeadf17b2f2",
+      "output_sha256": "c14a655af84279ba9e68e0f9871fc7014b3f960181ac07eafb71af7f69d52fbe",
+      "output_bytes": 14676
+    },
+    {
+      "path": "docs/rfc-v2/MIGRATION.md",
+      "change": "modified",
+      "input_sha256": "b2a1f27aa4812636fceabd8366a3ab92db2d54c6888de02a0e8ecd22d965fc8b",
+      "output_sha256": "87fd1895d359e94d656776dc9463f1283a9d6aa7b9f75ec7ef4d76e0a2db472f",
+      "output_bytes": 6860
+    },
+    {
+      "path": "docs/rfc-v2/README.md",
+      "change": "modified",
+      "input_sha256": "e6160ad42fabbb2fa465a861637cf954d70fb4d5f4543ce2ab627bac47f48e16",
+      "output_sha256": "dd4284a27c472749046e7bedfa4e494f5edb3e6e80a9e171d09f3b06459347f5",
+      "output_bytes": 8807
+    },
+    {
+      "path": "docs/rfc-v2/VALIDATION.md",
+      "change": "modified",
+      "input_sha256": "3d9346865eb95c3dce23e476eff1a987975d02d49a4b6904bc3a39ae35e8b7e7",
+      "output_sha256": "732efbd46f43e97f2610c2e1854fd4b9affc9f0d94cf2b002a8228494377fbcb",
+      "output_bytes": 2321
+    },
+    {
+      "path": "docs/rfc-v2/adoption-map.json",
+      "change": "added",
+      "input_sha256": null,
+      "output_sha256": "e4057a2b414c0e2d4e2e3c9b40784b64e23912082d43c26f05c8bacdf9be9d1a",
+      "output_bytes": 42128
+    },
+    {
+      "path": "docs/rfc-v2/check_integrity.py",
+      "change": "modified",
+      "input_sha256": "39e14d699380380a39e537be2adfbe8de59bc81b087a6df445955add04cd666c",
+      "output_sha256": "e3afa007d57506ec02920e8c2aeac9b05c9b755d7c3ea57e5ce603c057388880",
+      "output_bytes": 5251
+    },
+    {
+      "path": "docs/rfc-v2/registry.json",
+      "change": "modified",
+      "input_sha256": "7375246491c12b63515419c29a6e0fbc232199c5681804afd4b8a11f1672d089",
+      "output_sha256": "6c300243c67e00ae75d9a6e860ffb14b3f9108c3791c9f50b2d4c47a0264ca65",
+      "output_bytes": 8413
+    },
+    {
+      "path": "docs/spec/README.md",
+      "change": "modified",
+      "input_sha256": "6f32100ac3fb41a9a14a5fe7c7b87a3199e96aa7e4cafa755e7dea84beae7f7a",
+      "output_sha256": "cdd3f3a42d0631bd30278e381af19ea79c23260a1236de6384a31db567410a5d",
+      "output_bytes": 3436
+    }
+  ]
+}

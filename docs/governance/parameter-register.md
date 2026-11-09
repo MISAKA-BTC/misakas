@@ -288,3 +288,52 @@ ADR-0206(proposed)。値は `consensus/core/src/palw_g14_values_v1.rs` 末尾。
 | 名前 | 値 | 根拠 | 見直し条件 |
 |---|---|---|---|
 | `allocation_bootstrapping_v1`（規則） | 配分 epoch 無し、または `Σ_j S̄_j = 0` の間は `P_m` を適用しない（ブロック機会・報酬 clip・モデル報酬予約なし、bond の Q/B/R/F は有効） | ユーザー「b)(推奨」（2026-10-28）。有効化時に全モデル `P_m = 0` で REAL が止まる（ADR-0176「枠不足で REAL が止まらない」）。17,400 の t12 では既存 bond に割当が無く、施行前の claim に予算行が無いため最初の roll で `S_m = 0`（コード確認）。 | `Σ S̄ > 0` になれば自動で終わる。立ち上げが長く続く（割当・席担保が付かない）場合は再検討。 |
+
+## 2026-11-08 EXEC 1 BPS目標の追加採択
+
+[RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md)／[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)に基づく、
+新EXEC profileの文書上の目標・境界である。既存runtime/presetの値は変更していない。
+
+| キー | 値 | 意味 |
+| --- | --- | --- |
+| exec_tx_target_bps_v2 | 1 BPS | 高速取引EXEC_TXの通常時目標。条件付きで測定する |
+| exec_tx_slot_period_ms_v2 | 1,000 ms | 合意clock profileに束縛するglobal slotの幅 |
+| exec_tx_canonical_blocks_per_slot_v2 | 最大1 | global slotの正規EXEC_TX数。重複候補や再送は含まない |
+
+旧値からの変更ではなく新profileの定義である。1秒不可逆決済、全クラス合算BPS、
+courtの実供給率、1 DAA＝1秒を意味しない。仕事量→credit量の式、経済上限、既存DAA時計は維持する。
+公開lead、生成horizon、包含grace、clock skew条件、credit寿命・carry上限は未確定であり、
+固定したbinary/profileと混合負荷の測定を根拠に有効化前に確定する。新規に未測定の既定値を置かない。
+
+## 2026-11-09 公開資料・一人の正直なPanelを前提とする新profile
+
+採択根拠: ユーザーが、独立Panelに少なくとも一人の正直な参加者がいること、その人がモデルを事前保有しているとは限らないこと、promptと検証に必要な資料を公開供給する方針を明示し、この方針に基づくdocs改訂を指示した。[RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)／[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。以下はlogical policyの新規定義であり、runtimeの定数名・wire ID・fence・有効化高さの割当ではない。
+
+### 旧値と新しい意味の分離
+
+| 項目 | 旧profile・既存値 | 新しい公開profile | 根拠・影響・有効化条件 |
+| --- | --- | --- | --- |
+| 必要な完全検証承認数 | Gate Cの`cert_k = 41`、`cert_m = 75`。既存署名・旧claimに保持 | `minimum_full_replay_approvals = 1`（今回の設計採択） | 他の全Panelの不署名でも、正直な一人の所定承認を成功候補にできる。全検査・異議期間、Q解消、資料・依存・資金等の全条件は残る。署名1件直後のFinalは禁止 |
+| 選出位置数・異なる主体数 | `cert_m = 75`と復元抽選の既存意味 | 数値未確定。独立選出と各claimの一人前提を満たす版付きpolicyで固定 | 承認数1から人数1・再実行1回は導けない。全選出者の検証義務と各正規化主体の保護枠を計上 |
+| 選出・認証の受付量 | 4,096抽選位置／日、75位置／claimなら最大54claim／日 | 新profileのdraw／署名／状態更新予算は未確定。旧上限を暗黙流用・無制限解除しない | 全再実行・cold配信・trace保持・Node裁定・canonical包含と併せて実測し、各資源／期限区間の上限を明示 |
+| 公開・取得 | 旧claimごとの供給・責任条件 | prompt、canonical input、重み・program・tokenizer、数値規則、初期KV／RNG、初回trace・openingを必要範囲で公開供給 | model事前保有・所有者の追加許可を選出・取得・再配布の条件にしない。URL／provider署名だけでは取得完了にしない |
+| 原時計・保持 | 原profileのnotice／hard／保持契約 | 本改訂で数値変更なし。元originalの時計を維持 | cold取得・全検査・最大合法caseの終結を既存の原期限へ収められないprofileは有効化しない。取得・batch・交代で時計をresetしない |
+| 局所整数区間B | 元kernel・profileごとの上限 | 数値未確定。最低要件Nodeで実測して版付き採用 | 初回commit済み部分和・数値意味・read-from・終端への対応を必須にし、proof bytes／hash／parse／heap／I/Oも計上 |
+| atomic batch | 既存original・署名の意味を維持 | 同Miner・同model・同profileの有限execution leaf群を受理前に封印し、一つの新originalとするoptional経路 | 封印後の未知seedで選出、全leaf検証、一leaf反証で全体Refuted、部分creditなし。envelope・上限・実装・測定がそろうまで有効化なし |
+| 全合法caseの処理枠 | 既存の有限要求・費用・court予約 | 各選出主体の保護枠と、悪意多数による最大の合法虚偽case・最遅手番を合算 | 正直者の位置を知らなくても枠を維持。料金・bondだけで物理容量が増えたと扱わない |
+
+新profileの設計上の成功条件は、最低1件の完全検証承認に加え、[RFC20](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の公開検証機会、Q、局所計画、資料義務、依存、原期限、資金・予約の全条件である。一人前提はruntimeが署名数から観測できる事実ではなく、資料・能力・期限内包含とともに明示する脅威モデルである。全員共謀や唯一正直者の全通信検閲まで安全だという数値評価へ変換しない。
+
+### 容量と安全性評価の再設定
+
+旧54claim／日と旧75／41に結び付いた誤認証・grinding・費用評価は、過去の対象policyに保持する。新profileの人数・受付量・batch価値へそのまま流用しない。新profileは各選出結果に正直な検証者がいる条件、全体coverage、cold取得、共通障害・買収・選択的秘匿、抽選の反復、最大同時case、期限内包含を評価する。抽選上の悪意多数が生じる確率と、不正claimが反証を逃れて成功する確率を同一視しない。
+
+5万モデル×1claim／日の約0.579claim／秒、同モデル数×1claim／時の約13.89claim／秒は、活動量を定義する算術例であり、承認済みの処理量や達成実測ではない。初期Panel人数、各資源の処理率・容量、batchのleaf／価値／仕事上限、費用額を、この例だけから採択しない。対象binary、最低要件機材、profile、到着・burst、cold比、全合法係争をそろえ、[RFC05](../rfc-v2/0005-bounded-resources-and-long-context.md)と[19](../rfc-v2/0019-model-free-node-and-bounded-evidence.md)に従って測定する。
+
+### 必須試験と残る決定
+
+有効化前に同じbinary・policyで、モデル未保有の唯一の正直者による正常Final、他者全承認下の単独反証、選択的秘匿と資料要求、最遅供給後のInspectionPending、悪意多数の不署名・最大虚偽係争の終結、cold最大混合負荷、restart／reorg／IBDを通す。受付拒否や未検証Abortの安全性だけを、正常claimの完了・数万モデルの継続活動のPASSにしない。
+
+本改訂は、model tier、`R = 0.25 × bond/日`、既存担保・報酬・fee・配分係数を変更しない。上記κ_registeredのpinとADR0179の発行扱いの不整合は未解決のまま明示し、新profileに接続する決済式、丸め・ゼロ分母の規範を一意に確定するgateを残す。beaconの初回起動からcommit後seed、最初の検証・creditへの接続も同一実装で確認する。公開化・最低承認1の採択だけで、これらを解決済みや本番有効として扱わない。
+
+`k_min`は新profileの`minimum_full_replay_approvals`の略記である。機械可読台帳`parameters.json`の同名行も設計記録であり、runtime key・wire値の割当ではない。

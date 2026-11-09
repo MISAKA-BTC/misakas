@@ -94,6 +94,27 @@
       "adoption_date": "2026-10-31",
       "import_date": "2026-11-01",
       "note": "Previously allocated adopted canonical documents imported without renumbering; A0 implementation and public activation are separate."
+    },
+    {
+      "rfc": "0049",
+      "rfc_path": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md",
+      "adr": "0217",
+      "adr_path": "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+      "source_archive": "misaka_docs_rfc20_exec_1bps_20261108(2).zip",
+      "adopted_by": "user",
+      "adoption_date": "2026-11-09",
+      "note": "Explicit current user instruction; allocation checked in supplied archive only. Runtime and activation unchanged."
+    },
+    {
+      "rfc": "0050",
+      "rfc_path": "docs/rfc/0050-public-materials-and-one-honest-panel.md",
+      "adr": "0218",
+      "adr_path": "docs/adr/0218-public-materials-and-one-honest-panel.md",
+      "source_archive": "misaka_docs_rfc20_exec_1bps_20261108(2).zip",
+      "inherited_revision": "2026-11-09-palw-execution-integrity",
+      "adopted_by": "user",
+      "adoption_date": "2026-11-09",
+      "note": "Explicit current user instruction for public materials, cold-panel verification and one-honest completion. Allocation checked in supplied and inherited files only. Runtime and activation unchanged."
     }
   ]
 }

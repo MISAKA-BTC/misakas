@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "revision": "2026-11-09-palw-execution-integrity",
+  "status": "PASS",
+  "scope": "Finite abstract specification model; not runtime, real-LLM, resource or activation verification.",
+  "assumptions": [
+    "signature/draw authority is correctly authenticated",
+    "events provided to batch() are canonically included, not merely sent",
+    "fixed native semantics and hash binding are trusted assumptions",
+    "post-Final rights exist only as explicitly configured in the toy policy"
+  ],
+  "not_established": [
+    "actual Miner or Panel independent physical execution",
+    "safety without an honest participating and included challenger",
+    "arbitrary LLM local completeness or performance",
+    "production parameter selection, Rust implementation or deployment readiness",
+    "network censorship detection, full localization protocol, reorg or IBD implementation"
+  ],
+  "source_sha256": {
+    "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md": "efd5c078d0f338a58aa494812bc62a583d62f3cd663d4df9c07275507b73b733",
+    "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md": "cb9da01402674e03c03136473f8ae6efe30c513f73698256dad75c985a0de683",
+    "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md": "a11f26f39cf50e5aa5081e22180c0d681e43e0d456cb3e743108184f5d409352",
+    "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md": "9d51188d07828e4bc87d08f1137fe3659747ecdd62a8c2ef1e81b9b5a108fc21"
+  },
+  "checks": [
+    {
+      "id": "M01-finite-trace-local-completeness",
+      "status": "PASS",
+      "detail": {
+        "numeric_trace_cases": 16875,
+        "metadata_trace_cases": 34992,
+        "valid_cases": 54,
+        "false_cases_with_local_witness": 51813,
+        "relation_kinds": [
+          "Add",
+          "EndHalt",
+          "EndLength",
+          "EndOutput",
+          "EndWork",
+          "Init",
+          "Mul",
+          "ReadAdd",
+          "ReadMul",
+          "StatePreserved",
+          "WellFormedness"
+        ],
+        "max_witness_records": 3,
+        "max_witness_sibling_hashes": 9,
+        "enumeration": "all numeric traces and, separately, all listed metadata combinations"
+      }
+    },
+    {
+      "id": "M02-authentication-and-binding",
+      "status": "PASS",
+      "detail": {
+        "rejected_variants": [
+          "changed_path",
+          "changed_value",
+          "different_claim",
+          "different_coordinate",
+          "different_program",
+          "different_scope",
+          "duplicated_operand",
+          "missing_operand",
+          "unregistered_relation",
+          "wrong_source_with_valid_membership"
+        ]
+      }
+    },
+    {
+      "id": "M03-batch-order-permutations",
+      "status": "PASS",
+      "detail": {
+        "permutations": 120,
+        "distinct_material_outcomes": 1
+      }
+    },
+    {
+      "id": "M04-notice-hard-and-final-boundaries",
+      "status": "PASS",
+      "detail": {
+        "boundary_cases": 16,
+        "coordinates": {
+          "notice": 2,
+          "hard": 5,
+          "hard_plus_one": 6
+        },
+        "note": "toy ordered coordinates, not production DAA parameters"
+      }
+    },
+    {
+      "id": "M05-case-isolation",
+      "status": "PASS",
+      "detail": {
+        "case_scoping_scenarios": 3
+      }
+    },
+    {
+      "id": "M06-failure-classification",
+      "status": "PASS",
+      "detail": {
+        "scenarios": 8,
+        "delivery_default_uses": "six modeled native prerequisites"
+      }
+    },
+    {
+      "id": "M07-once-effects-and-revocation",
+      "status": "PASS",
+      "detail": {
+        "scenarios": 4,
+        "post_final_rights": "explicit toy notice<=7 and collection<=8"
+      }
+    },
+    {
+      "id": "M08-protected-reservations",
+      "status": "PASS",
+      "detail": {
+        "adversarial_demand_cases": 16,
+        "duplicate_draw_case": 1
+      }
+    },
+    {
+      "id": "M09-final-gate-enumeration",
+      "status": "PASS",
+      "detail": {
+        "gate_combinations": 768,
+        "insufficient_approval_timeouts": 2
+      }
+    },
+    {
+      "id": "M10-stale-authority-scopes",
+      "status": "PASS",
+      "detail": {
+        "scope_dimension_rejections": 10,
+        "unsigned_rejections": 2,
+        "different_claim_rejections": 2
+      }
+    },
+    {
+      "id": "M11-guarantee-limit-counterexamples",
+      "status": "PASS",
+      "detail": [
+        {
+          "assumption_failure": "all selected verifiers collude; no public challenger participates",
+          "observed_abstract_result": "Final",
+          "classification": "EXPECTED_OUTSIDE_GUARANTEE_COUNTEREXAMPLE"
+        },
+        {
+          "assumption_failure": "the only honest verifier's entire communication is censored before canonical inclusion",
+          "observed_abstract_result": "Final",
+          "classification": "EXPECTED_OUTSIDE_GUARANTEE_COUNTEREXAMPLE"
+        }
+      ]
+    },
+    {
+      "id": "M12-mutation-sensitivity",
+      "status": "PASS",
+      "detail": {
+        "mutants_detected": [
+          "ignore_pending_cases",
+          "early_final",
+          "quorum_overrides_proof",
+          "timeout_first",
+          "clear_all_cases",
+          "pooled_reservations",
+          "ignore_scope",
+          "packet_rejection_closes_case",
+          "delivery_closes_inspection",
+          "shared_case_identity",
+          "raw_schema_is_packet_error",
+          "consume_before_revocation",
+          "omit_End_relations",
+          "omit_read_from_relation"
+        ],
+        "count": 14
+      }
+    },
+    {
+      "id": "M13-material-inspection-continuity",
+      "status": "PASS",
+      "detail": {
+        "scenarios": 6,
+        "same_case_clock": 5,
+        "result": "delivery keeps Q; old inspection can continue after initial notice window"
+      }
+    },
+    {
+      "id": "M14-claimant-case-and-shared-material-identity",
+      "status": "PASS",
+      "detail": {
+        "separate_case_ids": 2,
+        "shared_material_ids": 1,
+        "default_closes_only_defaulting_claimant": true
+      }
+    },
+    {
+      "id": "M15-authenticated-raw-schema-vs-envelope",
+      "status": "PASS",
+      "detail": {
+        "authenticated_schema_refutations": 3,
+        "envelope_unopenable_oversized_rejections": 3,
+        "scope": "bounded toy raw schema tag, not a real PALW codec implementation"
+      }
+    },
+    {
+      "id": "M16-consumers-read-post-batch-state",
+      "status": "PASS",
+      "detail": {
+        "consumer_and_order_cases": 10,
+        "previous_batch_consumption_preserved": true,
+        "modeled_consumers": [
+          "issuance",
+          "permit reservation",
+          "schedule activation",
+          "permit consumption"
+        ],
+        "scope": "one abstract entitlement token; not a real transaction or schedule engine"
+      }
+    }
+  ],
+  "summary": {
+    "passed": 16,
+    "failed": 0
+  }
+}

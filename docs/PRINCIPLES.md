@@ -1,5 +1,9 @@
 # MISAKAの設計前提 — 不可侵原則
 
+> **2026-11-08追加採択:** EXEC credit・future schedule・1 BPSとcourt容量の規範は[§14](#exec-credit-one-bps-and-court-capacity)を参照する。§13のNode非保有・検証先行Finalを維持する。
+
+> **2026-11-08 採択:** 新しいclaim版では [§13 モデル非保有Node・敵対的なモデル秘匿・非対話positive](#model-free-adversarial-verification) を優先する。Nodeはモデル本体を持たず、モデル内Miner／Panelの寡占を想定し、独立検証が成立した後に成功Finalを置く。旧claim・旧profile・model-epoch配分は従来の意味を保持する。
+
 > **現在の変更管理:** [§11 設計凍結](#design-freeze)。**初期 mainnet の対象範囲:** [§12 画像・動画・改善の延期](#post-mainnet-scope)。既存技術の再採択・有効化を意味しない。
 
 **確率的検証・経済的抑止・公開証拠による独立客観裁定**
@@ -37,6 +41,8 @@
 > **凍結前提(2026-10-15):** genesis と年次フォークで指定されたモデルは 1.0。後から登録したモデルは登録時点から審査なしで 0.3 に固定(昇格・更新・失効・試行手数料なし、1.0 への経路は年次フォーク指定のみ)。モデル単位の検証は「何を信頼するか」の問題が解決しないため不採用。claim 単位の検証は全モデルで維持。詳細は [§9](#9-モデルの二階層とモデル単位の検証の不採用--2026-10-15-ユーザー決定凍結前提)。
 
 ## 0. 最終Goal — 2026-10-14改定（ユーザー決定）
+
+> **新版の適用:** 以下の原則・履歴のうち今回の新claim版と衝突する範囲は[§13](#model-free-adversarial-verification)を優先する。model-epoch配分とclaim固有認証は別制度であり、旧版の実行・Final・署名の意味は保持する。
 
 > **MISAKAの最終Goalは、モデルを非公開にしておくことが経済的に不利になる仕組みを成立させることである。
 > 非公開での不正を不可能にすること（不正の完全排除）は目標にしない。**
@@ -83,6 +89,8 @@
 
 ## 1. 不可侵原則
 
+> **新版の適用:** 以下の原則・履歴のうち今回の新claim版と衝突する範囲は[§13](#model-free-adversarial-verification)を優先する。model-epoch配分とclaim固有認証は別制度であり、旧版の実行・Final・署名の意味は保持する。
+
 モデル計算の不正裁定は、Panelの多数派、単独Panel、producer、または特権的operatorの主観的判断を最終根拠としてはならない。合意 credit の認証には、抽選された検証者の承認を、正直な割合の明示的な前提の下で用いる（§8）。承認の認証と計算不正の客観的裁定を区別する。
 
 MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する費用が、その計算自体の実行費用に匹敵し、場合によっては上回るという問題を前提とする。
@@ -99,6 +107,8 @@ MISAKAは従来のPoWと異なり、有用計算の実行結果を検証する�
 これにより、全量再実行の費用を常時負担せずに、有用計算の正当性を経済的かつ検証可能な形で支えることを目指す。
 
 ## 2. 確率的検証 — 全量再実行を通常要件としない
+
+> **新版の適用:** 以下の原則・履歴のうち今回の新claim版と衝突する範囲は[§13](#model-free-adversarial-verification)を優先する。model-epoch配分とclaim固有認証は別制度であり、旧版の実行・Final・署名の意味は保持する。
 
 通常時の検証では、producerが計算結果と必要な証拠を先にcommitし、その後で決定される検証対象について検査する。
 
@@ -290,6 +300,8 @@ This appendix records where the principle already decides open work. It is a poi
 
 ## §0 — ユーザー方針 2026-10-15 による改定
 
+> **新版の適用:** 以下の原則・履歴のうち今回の新claim版と衝突する範囲は[§13](#model-free-adversarial-verification)を優先する。model-epoch配分とclaim固有認証は別制度であり、旧版の実行・Final・署名の意味は保持する。
+
 * **閉鎖モデル・`p = 0`の残余リスクは経済的なものに限る。** §0(2026-10-14改定)は、非公開モデルの`p = 0`をbond単位の上限で被害を有界化する残余リスクとした。これに次を加える: その残余リスクは**合意finalityにもsettlement finalityにも決してならない**。残余リスクが許すのは有界な経済的損失だけであり、未認証のclaimは合意creditを持たない。
 
 **ユーザー方針(原文):**「この攻撃を塞ぐ方針で進める。DNS-BFTはRFCにある通り廃止したので使用できない。」— ここでの攻撃は、閉鎖モデルまたは自前Panelのモデルの未認証claimが`Final`に達し、safe frontier・safe weight・live total・settlement depth・rule E participation・settled anchorを進めて、不正な合意またはsettlement finalityを得ること。補足判断(同日):「抽選した検証者の承認を認証の柱にしている。これは承認にするということは前提にするのでそのままでいい。」
@@ -303,6 +315,8 @@ This appendix records where the principle already decides open work. It is a poi
 * 本改定は追記であり、上の本文は履歴として残す。実装は休眠(fence `palw_independently_work_certified_v1`、全presetで`None`、有効化は別途のユーザー判断)。
 
 ## 10. PALW を成り立たせる前提 — bond が時間あたりの claim を制限する(2026-10-16 ユーザー決定)
+
+> **新版の適用:** 以下の原則・履歴のうち今回の新claim版と衝突する範囲は[§13](#model-free-adversarial-verification)を優先する。model-epoch配分とclaim固有認証は別制度であり、旧版の実行・Final・署名の意味は保持する。
 
 MISAKA は、確率的検証と経済によって PALW を実現する。この前提に加えて、次を設計の前提とする。
 
@@ -353,3 +367,113 @@ MISAKA は、確率的検証と経済によって PALW を実現する。この�
 mainnet 後に、機能別の実装・試験・影響・互換性・移行とレビューを確認し、明示的な提供・有効化承認で再開する。構造変更は §11 に従う。文書への反映と runtime の無効化実施は別である。
 
 正本: [延期・無効化方針](governance/post-mainnet-scope.md)。[ADR-0182](adr/0182-defer-media-and-model-improvement-until-post-mainnet.md) / [RFC-0022](rfc/0022-post-mainnet-media-and-model-improvement-scope.md)。
+
+<a id="model-free-adversarial-verification"></a>
+## 13. モデル非保有Node・公開資料・一人の正直な検証者 — 2026-11-09限定改定
+
+本節はユーザーの明示指示に基づく新claim/profileへの限定改定である。[ADR-0215](adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)のモデル非保有・検証先行Final、[RFC-0049](rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](adr/0217-palw-execution-integrity-and-unilateral-refutation.md)の反証完全性・一人の異議・経済効果を維持し、[RFC-0050](rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](adr/0218-public-materials-and-one-honest-panel.md)により公開資料、cold取得、最低一件の完全承認、条件付き正常完了を採択する。詳細の所有者は[RFC-v2-0016〜0020](rfc-v2/README.md)。新profileに限り§0、§1–2、2026-10-15の§0追記、§10、旧Positive Court R2の衝突箇所に優先する。旧claim、旧profile、model-epoch配分を遡及変更しない。
+
+### 13.1 Nodeのモデル非保有
+
+Nodeはモデルの全重み・checkpointを取得または保持せず、全推論・GPU・モデルrunner・外部モデルURL・Panel workerを必須にしない。通常処理、court、cold起動、IBD、再起動、reorgでも同じ条件を守る。
+
+Nodeが扱うのは固定claim・root・有界な実行定義、選出・署名・native状態、および局所courtの認証付き断片である。必要な重み・入力・中間値の小片は読むが、欠落証拠を全モデルfetchで補完しない。
+
+### 13.2 Minerの主張と反証の完全性
+
+Minerはモデル・program・入力・規則・seed・依存・出力と、canonical executionのWellFormed・初期状態・全遷移・終端を初回に署名固定する。全ての計算関係が有界なnative検査へ接続され、誤った実行なら少なくとも一つの元claimに結び付いた関係を反証できるprofileだけを受理する。関係の省略、後付けの細分trace、巨大演算の名称だけによる有界性を認めない。[16](rfc-v2/0016-miner-execution-commit-and-material-supply.md)と[19](rfc-v2/0019-model-free-node-and-bounded-evidence.md)が定義する。
+
+この「計算証明」は固定されたLLM実行の整合性と、その反証・認証の契約を意味する。Miner本人または各Panel本人が特定GPUで新規に全演算を実行した物理的行為、非外注、非共有、実作業時間を証明しない。
+
+### 13.3 公開資料とモデル未保有の独立検証
+
+各claim、または固定後抽選する有限batch全体を能動的に完全検証する正直な選出者が少なくとも一人いることを前提とする。その人がモデルを事前に持つこと、モデル保有者が多数であること、他Panelが正直であることを前提にしない。Nodeが正直な人を識別できるとはしない。
+
+Minerは重み・構造・program、prompt・token列・tokenizerと前処理、数値規則、seed・乱数・初期KV等の依存状態、初回traceと認証情報を元claimに束縛して公開供給する有限義務を負う。独立provider・cache・再配布者から認証付きchunkを取得でき、所有者の許可・独占席・Minerの推薦を取得や検証の条件にしない。公開URL・root・保存署名だけを供給完了とみなさない。適格な第三者にも有限の取得・異議経路を残す。
+
+global poolからclaim固定後の乱数で選出し、モデル事前保有や取得成功者だけへ母集団を狭めない。選出者はcold取得を含め必要資料を取得し、全体を独立再実行する。この新profileに限り§1–2の通常全量再実行不要という一般方針を置き換える。全Nodeの再実行義務にはせず、旧sampled profileは保持する。少人数への任意委任・layer分担で一人の全体coverageを失わない。
+
+正常時の資料・承認は[17](rfc-v2/0017-noninteractive-positive-verification.md)に従い一括提出できる。必要資料を取得し所定の検証を完了できなければ肯定しない。資料公開をモデル登録時審査・登録取消・tier昇格へ変換しない。
+
+### 13.4 一人の異議と有効な反証の優先
+
+一人の適格notice・資料要求はnative未解決状態を作り、他Panelの肯定署名数にかかわらず解決まで成功を止める。資料要求に算術反証を前提としない。資料供給履行と検査完了を分け、InspectionPendingを同じCaseId・scope・原時計で継続する。一人の完成反証がnative検査で成立すれば、元claimを無効化する。Minerの再署名・通常Panelの許可・悪意側の共同提出・追加quorumを必要としない。[18](rfc-v2/0018-interactive-negative-court-and-defaults.md)が入口・対話・直接証拠・帰責を所有する。
+
+root不一致、私的未受信申告、未認証資料は算術有罪としない。反証成立、客観的な供給義務違反、偽異議、Panel停止、未検証終了を区別する。一人の合法経路を他者の先着予約・重複claimで排除しない。無効packetの棄却で既存caseを閉じず、共有資料のIDで申立人ごとの権利を吸収しない。
+
+### 13.5 最低一件の完全承認と検証先行Final
+
+今回採択した新profileのlogicalな最低肯定数を **k_min = 1** とする。選出された有資格者の完全検証承認一件以上、必須局所検査、cold取得から全体検査・異議提出までの機会、Qの解消、依存・資金・原期限がそろった場合だけ、[20](rfc-v2/0020-verification-gated-final-and-adversarial-models.md)の単一gateで成功Finalへ進む。一件の署名直後に成功へ進めず、全員の受領・署名を別名で必須条件へ戻さない。最低承認数1はPanel人数1の採択ではない。旧75／41、旧抽選上限、旧署名と稼働設定を変更しない。
+
+資料不足や検証未完了は、反証を完成できなくても成功不可である。規定期限で未検証Abortと契約別精算へ進め、計算不正と推定しない。原受理a、notice a+3,120、係争hard a+10,000を維持し、取得・receipt・交代で時計をresetしない。収集と保持は別の義務である。
+
+同batchの適格異議・反証・Q hold・依存失効を、Final・仕事報酬・credit発行だけでなく、既発行creditの予約・schedule有効化・permit消費・関連経済効果より先に反映する。既受理consumedの保存は当該batchより前のcanonical消費に限る。消費済みEXECの全取引を一括rollbackする新規則は加えない。
+
+### 13.6 正常完了・容量・完成判定
+
+誤claimの反証優先には、正直な一人の能動的な完全検証、必要資料または適格要求、完全な関係集合、資格・費用、保護された容量、期限内のcanonical包含、native規則の実施が必要である。正常claimの条件付き完了には、正しいMinerの供給・応答と、最大合法な虚偽caseを元期限内に終結する予約・実サービスを加える。他者の不署名だけでは停止しないが、単なる反対を永久vetoにもせず、認証terminal・客観default・case別累積予算で処理する。実サービス不足時は成功不可・有限終了を維持し、正常完了の前提破れを記録する。
+
+cache、固定後抽選の有限batch、初回commitされた上限付き計算区間を使えるが、全leafの検証・責任・一回会計を省略しない。抽選、全再実行、cold配信、trace保持、Node court、包含を資源別・期限区間別に計上する。旧54claim／日や1 BPSを、新profileの実測容量と扱わない。全件拒否だけで利用可能なPALW完成としない。
+
+署名は主張と責任、openingは同一性、局所positiveは当該関係だけを確認する。全員共謀、永久秘匿、永久検閲、規則を実施しないNodeまでの無条件正当性・無条件完了を主張しない。§8の計算暗号proof禁止、§9の二階層・モデル審査不採用、一つの鎖、延期機能、§14のEXEC契約を維持する。既存報酬式の不整合・bootstrap乱数接続・未実装kernelは有効化前の別gateとして残す。
+
+モデルを一度も保有したことのない唯一正直なPanelで、正常Final、不正反証、不供給、遅延、悪意多数の不署名・虚偽case、cold最大負荷を同一実装で確認する。条件付き論証、独立レビュー、文書検査、抽象モデル、native実装、実LLM実測、公開有効化を区別する。今回の採択は **ADOPTED_DESIGN_NOT_ACTIVATED** である。
+
+
+<a id="exec-credit-one-bps-and-court-capacity"></a>
+## 14. EXEC生成権の分離・1 BPS・全体容量 — 2026-11-08追加採択
+
+[新RFC-0048](rfc/0048-exec-credit-schedule-and-one-bps.md)と
+[ADR-0216](adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)により、
+ユーザーの今回の指示を新claim／EXEC profileの設計として採択する。
+§13の検証先行Final、Node非保有、秘匿・寡占の脅威とglobal承認の保証限界を維持する。
+本節は実装・測定・activationの完了を示さない。
+
+### 14.1 高速取引を担当するEXECの通常時目標
+
+EXEC_TXの生成目標を1 BPS、slot幅を1,000 ms、global slotの正規ブロックを最大1つとする。
+有効credit、事前公開schedule、適格producer、検証・伝播・包含容量を前提とする。
+modelごと・producerごとの1 BPSを合算せず、重複候補・再送を達成数へ数えない。
+目標は[10](rfc-v2/0010-dag-consensus-and-native-settlement.md)の運用条件と測定分母を付けて評価する。
+
+1 BPS、TPS、暫定実行の遅延、本体受理の遅延、不可逆決済の遅延は別の指標である。
+既存の本体／Heartbeat、DAA、報酬周期、court期限を1秒へ置き換えない。
+
+### 14.2 PALW仕事から有限creditへ
+
+[07](rfc-v2/0007-claims-exec-and-answer-accounting.md)の単一gateで、成功Final、有効認証、
+成熟、依存、資本・bond予算、失効を確認して期限付きExecCreditを一度だけ発行する。
+Finalの一覧・snapshot・slice・scheduleを別の発行根拠にしない。
+空slotや供給不足を解消するために、未認証仕事や期限切れの権利を復活させない。
+EXEC_SLICEはrootの計算記録であり、それだけでTxPermitを増やさない。
+
+### 14.3 未来scheduleと現在slot
+
+対象集合をseedより前に固定し、future scheduleを合意stateへcommitする。
+ScheduleIdが生成資格を指し、EXECの接続先はその時点で許可された取引履歴・anchorを指す。
+通常tipの伸長は割当を変更せず、失効permitだけを無効にする。
+authorityのreorgは版付きの状態復元として処理する。
+
+producerは現在slotのpermitから生成する。過去round回収、モデル推論、証拠取得、
+次期schedule作成、Claim詳細の再検査をその通常ループへ入れない。
+validatorの包含規則はlocalな受信秒から独立させ、1秒の署名時刻を客観的に証明したとは扱わない。
+起動・credit補充・work anchor・認証・公開courtにEXECの先在を要求しない。
+
+### 14.4 courtとEXECを合算した資源計画
+
+[05](rfc-v2/0005-bounded-resources-and-long-context.md)に従い、依存DAGの最長経路、
+全合法分岐・複数claimの総需要、保証供給、期限内に実行可能な予約scheduleを同時に確認する。
+owner専有枠の順番待ちを公開者の必須経路にせず、認証共通資料と独立処理の並列化を使う。
+真の依存、cold取得、包含、reorg・再起動、保持義務は残す。
+
+1 BPS目標だけでcourtの供給容量を増やした扱いにしない。共通のCPU・メモリ・IO・帯域・包含資源は合算する。
+元のa+3,120／a+10,000と保持期間の区別を維持し、供給不足を成功Finalや自動slashへ変換しない。
+Nodeに全モデル取得・全推論を要求するfallbackを追加しない。
+
+### 14.5 完成判定
+
+超過計画を拒否できることは受付の安全性であり、対象実モデルを使えることとは別である。
+目的のモデル・文脈長・jobについて、明示した供給・配送・包含・復旧前提の下で、owner枠を全て共謀者が占有してもcold outsiderが取得から裁定まで進めること、
+EXEC負荷とcourt負荷が重なっても約束した供給を維持することを、同じ実装・設定・対象機材で示す。
+成功例だけの中央値や短いfixtureを、全サンプル・全合法経路の完了保証へ転用しない。
+全保有者の永久秘匿で供給前提が成立しない場合は、算術裁定の無条件成功を約束せず、成功停止・未検証終了・適格なdefault・残存責任の処理を別に確認する。

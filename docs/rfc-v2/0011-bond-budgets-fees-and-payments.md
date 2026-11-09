@@ -1,12 +1,26 @@
 # RFC-v2-0011 — Bond予算・配分・Fee同意・決済会計
 
-編集日: 2026-10-29 / 入力: `misakas-pre(5).zip`
+## 2026-11-09公開資料・一人前提の追加境界
 
-[15本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+[採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。cold取得・全再実行・最大合法caseの費用と支払原資を既存の有限契約へ結ぶ。多数不署名だけを成功阻害条件にしない。登録tier縮小分の発行・再配分の既存不整合は未解決gateとして維持し、今回のk_min=1から経済値変更を導かない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
-> **編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
+## 2026-11-09新profileの追加境界
+
+[採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。claim受理時に一人の合法な救済経路の有限費用と予約を確保し、算術不正・供給default・未検証終了の帰責を分ける。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+
+[20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+
+> **2026-10-29原統合の編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
 > **状態:** 採用済み・Draft・隔離実装・履歴を含む統合編集版。各条項の採択・置換関係を継承する。過去の「実装済み」「休眠」「未試験」等は、その記録時点の状態である。
 > **番号:** 本書は`RFC-v2`。原条文中の`RFC-xxxx`と`§`は旧版を指す。旧番号・wire・署名・fence名は再採番しない。
+
+## 2026-11-08採択による適用範囲
+
+既存のbond、finite fee、原資区分、署名済み同意・予約・返還権を維持する。[16](0016-miner-execution-commit-and-material-supply.md)の供給、[17](0017-noninteractive-positive-verification.md)の検証、[18](0018-interactive-negative-court-and-defaults.md)の公開反証の費用を混ぜず、[20](0020-verification-gated-final-and-adversarial-models.md)の未検証Abortには成功仕事報酬・creditを与えない。実行済み役務費と仕事報酬を別に精算する。
+
+**優先関係:** 2026-11-08の先行採択はADR-0215と公開裁定v0.2を根拠とする。今回の公開資料・一人前提の新profileには冒頭の0050／0218・RFC16〜20・[公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)を優先する。以下の基礎契約・旧profile記録と原付録は保持し、旧署名や旧Finalの意味を遡及変更しない。設計採択は実装・測定・有効化の完了を意味しない。
 
 **原文収録元:** [旧0014](../rfc/0014-panel-independent-fraud-prosecution.md)、[旧0015](../rfc/0015-panel-free-permissionless-verification.md)、[旧0016](../rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md)、[旧0039](../rfc/0039-finite-fee-consent-and-provider-payment-bounds.md)。
 
@@ -50,9 +64,26 @@ court固有の受付・役割同意・original escrow・終端効果は14が所�
 
 ---
 
+## EXEC creditの追加採択と経済上限
+
+[07](0007-claims-exec-and-answer-accounting.md)のExecCreditは有限の生成資格であり、
+取引可能な新coinや新たな仕事報酬ではない。既存のwork量、成熟、共通資本・bond上限、
+失効・依存・署名済みの原資と責任を継承する。
+予定表への予約と使用を別の発行として数えず、1 BPSを理由にcredit倍率や寿命を無断で増やさない。
+端数抽選の一回性と、無償の再試行・nonce変更による量の増加禁止を維持する。
+
+EXECの取引手数料、PALW仕事報酬、courtの役務費、未使用予約の返還は別の会計である。
+仕事が失効した場合の残permitの無効化と、すでに本体が受理した取引の状態を区別し、
+本改訂から新しい補償・自動rollback・settlement確定性を導かない。
+既存WorkerPaymentのB=F=R=0とfunded relayの権利を保持する。
+courtとEXECが共有する物理容量の予約は[05](0005-bounded-resources-and-long-context.md)、
+slot割当は[10](0010-dag-consensus-and-native-settlement.md)を正本とする。
+
+---
+
 ## 原条文の統合収録
 
-以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の15本の索引・旧新対応表で確認する。
+以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の20本の索引・旧新対応表で確認する。
 
 ### 収録箇所
 

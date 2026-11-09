@@ -1,0 +1,367 @@
+{
+  "schema": "misaka.docs.revision-audit.v1",
+  "revision": "2026-11-08-exec-1bps",
+  "checked_at_utc": "2026-11-08T13:00:24.737121+00:00",
+  "root": "/workspace/scratch/767afa1b06d2/rfc_exec_1bps_revision_20261108",
+  "status": "PASS",
+  "ok": true,
+  "error_count": 0,
+  "errors": [],
+  "scope": "Documentation preservation, registration, parameter-entry preservation and local-link regressions only.",
+  "limitations": [
+    "No semantic keyword matching certifies the adopted design.",
+    "No runtime safety, scheduling feasibility, measured 1 BPS, court performance or activation is checked.",
+    "External URLs and targets outside the supplied docs package remain unchecked by doclib.",
+    "Differences from older historical snapshots belong to the separate unmodified auditors.",
+    "The supplied court-analysis text's source-attachment identity is verified separately."
+  ],
+  "common_checker": {
+    "path": "docs/maintenance/revisions/2026-11-08/check_revision.py",
+    "sha256": "17e74faf7ac96d2d71821f3b7f87846f735ad8ca44f0e60317e33980c3fd9126",
+    "previous_revision_written_by_checker": false
+  },
+  "checks": [
+    {
+      "name": "input_evidence_and_no_deletions",
+      "status": "PASS",
+      "details": {
+        "input_file_count": 1867,
+        "present_input_file_count": 1867,
+        "unchanged_input_file_count": 1826,
+        "changed_input_file_count": 41,
+        "missing_input_files": []
+      },
+      "errors": []
+    },
+    {
+      "name": "numbered_inventories_and_preserved_bodies",
+      "status": "PASS",
+      "details": {
+        "active_rfc_books": 20,
+        "preserved_input_rfcs": 48,
+        "current_legacy_number_rfcs": 49,
+        "preserved_input_adrs": 211,
+        "current_legacy_number_adrs": 212,
+        "preserved_adr_v2_books": 50
+      },
+      "errors": []
+    },
+    {
+      "name": "immutable_snapshot_ledgers_and_previous_revision",
+      "status": "PASS",
+      "details": {
+        "protected_ledger_and_snapshot_files": 48,
+        "historical_source_hashes_reinterpreted": false,
+        "known_link_baseline_updated": false,
+        "preserved_previous_revision_files": 19,
+        "previous_revision_directory_inventory_unchanged": true
+      },
+      "errors": []
+    },
+    {
+      "name": "historical_rfc_fragment_digests",
+      "status": "PASS",
+      "details": {
+        "historical_rfc_sources": 41,
+        "registered_fragments": 89,
+        "actual_fragments": 89
+      },
+      "errors": []
+    },
+    {
+      "name": "complete_adoption_map_v2",
+      "status": "PASS",
+      "details": {
+        "source_entries": 49,
+        "unchanged_prior_entries": 48,
+        "new_source_entries": 1,
+        "historical_primary_owners": 41,
+        "human_readable_mapping_rows": 49
+      },
+      "errors": []
+    },
+    {
+      "name": "post_consolidation_registration",
+      "status": "PASS",
+      "details": {
+        "post_snapshot_rfcs": 8,
+        "post_snapshot_adrs": 8,
+        "rfc_registry_post_consolidation_records": 16,
+        "adr_registry_post_consolidation_records": 21
+      },
+      "errors": []
+    },
+    {
+      "name": "parameter_additions_only",
+      "status": "PASS",
+      "details": {
+        "preserved_input_parameter_entries": 52,
+        "new_parameter_entries": 3,
+        "new_parameter_keys": [
+          "exec_tx_canonical_blocks_per_slot_v2",
+          "exec_tx_slot_period_ms_v2",
+          "exec_tx_target_bps_v2"
+        ],
+        "runtime_configuration_tested": false
+      },
+      "errors": []
+    },
+    {
+      "name": "local_link_regressions_against_input",
+      "status": "PASS",
+      "details": {
+        "scanner": "docs/maintenance/doclib.py: scan, ERRORS, key",
+        "input_issue_rows": 974,
+        "current_issue_rows": 974,
+        "input_distinct_issue_keys": 949,
+        "current_distinct_issue_keys": 949,
+        "scanned_link_rows": 12824,
+        "status_counts": {
+          "external-unchecked": 322,
+          "missing-doc-file": 972,
+          "missing-heading": 2,
+          "ok": 11230,
+          "outside-package-unchecked": 298
+        },
+        "new_or_increased_issue_rows": 0,
+        "new_or_increased_issue_keys": 0,
+        "resolved_or_reduced_issue_rows": 0
+      },
+      "errors": []
+    }
+  ],
+  "input_changes": {
+    "note": "General input-file edits are informational; protected bodies and evidence are checked separately.",
+    "input_file_count": 1867,
+    "present_input_file_count": 1867,
+    "unchanged_input_file_count": 1826,
+    "changed_input_file_count": 41,
+    "missing_input_files": [],
+    "changed_input_files": [
+      {
+        "path": "docs/AGENTS.md",
+        "input_sha256": "4f7bc659dee85d812762e7afe5cce85b1d18feac4bde11eed1d6fb1f546743a6",
+        "current_sha256": "6af31fcab36fe9eaaa43f8a8fa940935e72870fad85c17581dd1363d8953c67b"
+      },
+      {
+        "path": "docs/INDEX.md",
+        "input_sha256": "7442f34da7c3a364e3c8f5f5912390d69b8301dcc15ac2282b2af45de5d0e433",
+        "current_sha256": "552a4f7c7fabec74bc72a0828bdadafc5b86c0e96a7f89fee8b56e3f41723e1a"
+      },
+      {
+        "path": "docs/PRINCIPLES.md",
+        "input_sha256": "bd06500da08fb1d97c48a77aaa590233d7562cb152b0750be44da7f9a48e70a9",
+        "current_sha256": "47664884c555b64717087a986ed9ef2df7d1bea08341c050a8958f6578b6beed"
+      },
+      {
+        "path": "docs/README.md",
+        "input_sha256": "3fb47a8bba76df476cd37f208aaa5167c85e4e2e6a13315d6162f25ab11c3c2c",
+        "current_sha256": "5b207a19c38b954c3a33ad6518ac6f6e0e33546fedb9ac3ba5485f7dae0756ec"
+      },
+      {
+        "path": "docs/STATUS.md",
+        "input_sha256": "eec43684f47bb6a9c4ceeed94c69a83c1efbb78bfd308fc431806ab48b253268",
+        "current_sha256": "8b8a332fd80bb72efbf87bcaf4c88c53c39794ecc8beac5b9bdbd607a89b76a0"
+      },
+      {
+        "path": "docs/adr-v2/PRECEDENCE.md",
+        "input_sha256": "b632ec5ec6d29ff6a5ef4b101a27717fba1ca4ac603f38ce1422271fe6761b67",
+        "current_sha256": "803d70af7356a6899f4b064b477131f01f092a70a121f453b4a6ec2a58ed437a"
+      },
+      {
+        "path": "docs/adr-v2/README.md",
+        "input_sha256": "980e15eefb70a1da28f16b5a12f5d7d4f45e66240fa5609db22b2112a2bef00e",
+        "current_sha256": "056c1f87d6bc5bafdcc4400a4ff0e38219f30c5a7b8475b6e9012d24e2616552"
+      },
+      {
+        "path": "docs/adr-v2/RFC-CROSSWALK.md",
+        "input_sha256": "26e61d41ee0a29071f72256416b812701451b5c56db41a647c398e2ea80f80a6",
+        "current_sha256": "774de676f56da7d668bf0a12b4959c50f205f972048528479235a7f31d95853a"
+      },
+      {
+        "path": "docs/adr-v2/registry.json",
+        "input_sha256": "558a47c1574ce64f0f3e62e4a11540128e8ae5d602eb346394732abdda8fd1c4",
+        "current_sha256": "de695550130d161dcf1094431a461e0895e3e3e60dff3e53124f3dca3ee9431d"
+      },
+      {
+        "path": "docs/adr/INDEX.md",
+        "input_sha256": "abbaaa14c946959f9b058b29d04880588804ff9bdfc866489a747a9fce6624a6",
+        "current_sha256": "58fa17a7e4535c9b88a51646e698e53cc33acb71571f7dc2d07e0d430bfc8e0c"
+      },
+      {
+        "path": "docs/adr/TOPICS.md",
+        "input_sha256": "5840806812c81fdf74afadbfdcae8fd6472d24b05d4cc5d6562e17e9e9623df1",
+        "current_sha256": "27b4e8c6886d3bfbbf40835c4b32959a7988b966aecfc2ee4a721bbe71c2b0a7"
+      },
+      {
+        "path": "docs/architecture/overview.md",
+        "input_sha256": "427169183fe942b68cfad22e54847a15e69ed048d413b240794062aa1b8ac222",
+        "current_sha256": "3c162bc41d7135204c35e577dfc6086c15efd19c0dbd4ea1b136be1088f23404"
+      },
+      {
+        "path": "docs/architecture/palw-specification.md",
+        "input_sha256": "4f7ff57b10f8e50dba8c794a0a18b590e32a5a9dee78022af49262e7831466b7",
+        "current_sha256": "8ff819754bf61ccff4ec9efca04e725dcc168e2873b2d6b44f3025ca39d1ad91"
+      },
+      {
+        "path": "docs/governance/parameter-register.md",
+        "input_sha256": "e9c3c8e0862114a25cf9843418819430df6ead0659c3fe33b398b72097823c6d",
+        "current_sha256": "dc694ad1d9124b25ac10410bf006cf3801f74205631e300cd5129a539e5875a6"
+      },
+      {
+        "path": "docs/governance/parameters.json",
+        "input_sha256": "ffcf109510ec4f05394a4c4ffc7bd991f1b8f38a5d32a3ffaeccbc430f33ee12",
+        "current_sha256": "3b26eec6add0e4f9c12a552e3152e058aaf22a154f6a13ed2622b54b2e70d146"
+      },
+      {
+        "path": "docs/maintenance/catalog.md",
+        "input_sha256": "6d831c32c5e527b5f2e375cbcd805f84d79a50af4082a1d735a1fec991c9c962",
+        "current_sha256": "2bbc0746d616d24b0c2e6cbcaf07e78e97716c368095a6db5e8f553863ba047b"
+      },
+      {
+        "path": "docs/maintenance/decision-catalog.json",
+        "input_sha256": "8c2bec6e41ca7f809fd7b01ba115eae320cf8b9291a697d9b99858044a952de5",
+        "current_sha256": "be4e63cc05071822fa245a388c2b77b42c0df122a3fb8be98d39e5aafcad9489"
+      },
+      {
+        "path": "docs/maintenance/generate_indexes.py",
+        "input_sha256": "9797fade674d3c889a0f4ec1ca7f275bb15f5fa3a58005859316a8d3fbbb4405",
+        "current_sha256": "9e99a2d2288a988858ca73bc0e37ac23f7231919af78e525dec010e8e8375685"
+      },
+      {
+        "path": "docs/maintenance/numbering.md",
+        "input_sha256": "e5e916ce3d3506dd90db64791bf7a12b088a7f639eca9001789c37804307bda8",
+        "current_sha256": "6158a2157708e2b44c366b3c07c9e803ca41c953ad8fe4f33e9d75b03db78967"
+      },
+      {
+        "path": "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+        "input_sha256": "66ad07b0adb5bd97cc7d545da9ba582d1185d296d9c6a695695ee7fee0464e04",
+        "current_sha256": "88f96ecce3b7bd4a7c62a3a1f96141351b98de325b1145b2c827de17c8f44c59"
+      },
+      {
+        "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+        "input_sha256": "0a99747cedecf7857b5356853ed9e8db843e3c55b05d686ee42130dfecc997b1",
+        "current_sha256": "a3ecf818b8de45a74d3f8f5a3d7a59693678844f804fcf41cc3427d9b3ae9088"
+      },
+      {
+        "path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+        "input_sha256": "60a26c6e47d6cc6bc19d9fb9413e59bd4604457994ad10bc3b760f164e92bacf",
+        "current_sha256": "a0cdac9c554b4d08121cae66996d49f8c60a0a950ee793bb7b719950f2801842"
+      },
+      {
+        "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+        "input_sha256": "61e5947b4028e6e2b2e2aae4f71ab96523b251f13005a9b6aa1053b20fa7b5b7",
+        "current_sha256": "a14ac69ae603a26069199710c5465c1ebb2b4a51f775b5c83c923faef0c53bd3"
+      },
+      {
+        "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+        "input_sha256": "a927e0d2c8d9b10bc123311040fe8d1e3a59e833bde352bf1ee2672390f22e65",
+        "current_sha256": "30e3deb60a8460ff36b1614da30f8acfc975ea95d934c103001510d288505013"
+      },
+      {
+        "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+        "input_sha256": "35ab4090c5f3b69f91e2c466e50706e33d28b94bbed782c76772682651e03eab",
+        "current_sha256": "56087be71aec9b9348d279077fd669c6185fdaf70fb42e554e49e9261b1c6da4"
+      },
+      {
+        "path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+        "input_sha256": "edb1a6c462076f1473229066465962cf002244c9f4db9183639ba9cfe1717bae",
+        "current_sha256": "cbf74d4e0e13106cea852fc6c7ebba81c5853317f288ef775ef10a5ce6a93bd3"
+      },
+      {
+        "path": "docs/rfc-v2/0014-court-master-contract.md",
+        "input_sha256": "dbe23f1256d2f868df799366e194d956fdd2d776dc6d408225f41b19bcc69344",
+        "current_sha256": "8517edbc1a8de4fb1e4157ea48d4ea666d5b4754457cdd1f41626f99fc3cbd91"
+      },
+      {
+        "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+        "input_sha256": "e89011fb69a61a7f6fcb43e9b1712d46df5720385fb19e29b0046da382d6b366",
+        "current_sha256": "ca420c0e92f874efafb71bc2bc757a7662ed9a8fa0fb7c7677f11e1d8f38ab7a"
+      },
+      {
+        "path": "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "input_sha256": "cff395d71111dee00d10a9a99c61f946d6e635d069612c898a82a9eefa8be304",
+        "current_sha256": "a36a7e2c1db6a7ee7162b5963becfbf7f3318fc0242c23de8667642f47a71a79"
+      },
+      {
+        "path": "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "input_sha256": "61d223f7c9d6a3845dce3ab32339b8424f6e375f7ceec8c5e21124bedfd5ad28",
+        "current_sha256": "d3b1bf18732413209ef63ad46f6e2e354a487f622fc4e4e9a663888826f6457e"
+      },
+      {
+        "path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+        "input_sha256": "7904c9c5245b1dc0c5bdc1d145872a24ffd47d2801ad0f7b1063633295f7c8e0",
+        "current_sha256": "18638aeef9728212fdd30f7b912e8196c2ee18829a32d3613753a56ebaa62e75"
+      },
+      {
+        "path": "docs/rfc-v2/MAPPING.md",
+        "input_sha256": "c14a655af84279ba9e68e0f9871fc7014b3f960181ac07eafb71af7f69d52fbe",
+        "current_sha256": "3f74c6cb2f3bd16f5d97ad035ee8fe7c8fa5c603173f4d94e65c72e299253c61"
+      },
+      {
+        "path": "docs/rfc-v2/MIGRATION.md",
+        "input_sha256": "87fd1895d359e94d656776dc9463f1283a9d6aa7b9f75ec7ef4d76e0a2db472f",
+        "current_sha256": "2281493bb4e3a41723eb908dcb80a3477cd6398ad5cadac90ea762fafae133a5"
+      },
+      {
+        "path": "docs/rfc-v2/README.md",
+        "input_sha256": "dd4284a27c472749046e7bedfa4e494f5edb3e6e80a9e171d09f3b06459347f5",
+        "current_sha256": "69ca7003e8eff16804eb0ef723120545d97c25669e11155f83d5e3e328ba7af8"
+      },
+      {
+        "path": "docs/rfc-v2/VALIDATION.md",
+        "input_sha256": "732efbd46f43e97f2610c2e1854fd4b9affc9f0d94cf2b002a8228494377fbcb",
+        "current_sha256": "6eed40fb6f367dff87418d47bf26538d492de2eda5a9382ae3c6f65b2c5a42f8"
+      },
+      {
+        "path": "docs/rfc-v2/adoption-map.json",
+        "input_sha256": "e4057a2b414c0e2d4e2e3c9b40784b64e23912082d43c26f05c8bacdf9be9d1a",
+        "current_sha256": "98231257ad220e00e49fc63af1a3beffee7a80c9deed3dce43604672913f5f45"
+      },
+      {
+        "path": "docs/rfc-v2/registry.json",
+        "input_sha256": "6c300243c67e00ae75d9a6e860ffb14b3f9108c3791c9f50b2d4c47a0264ca65",
+        "current_sha256": "171889e0274bca229f0465b4ca33502f314a78aca1ff3864997b5723121e2725"
+      },
+      {
+        "path": "docs/rfc/INDEX.md",
+        "input_sha256": "9962175887308186e29b4e076ec4befcbcc9ba11d4e5c77d3e1cf7f869652761",
+        "current_sha256": "3b55bac929d47fbcdad932af09d3f39ed953ddce2bd0c05d5f543f89b814f2bb"
+      },
+      {
+        "path": "docs/rfc/README.md",
+        "input_sha256": "9903ea35f1e97aa0a471dd920daea0eaa177a6da0c801293032f3338ce99c1f9",
+        "current_sha256": "f552e1036de1376972da6e3f32a02597bcf8b5c0e7156369753e640b412095f3"
+      },
+      {
+        "path": "docs/rfc/TOPICS.md",
+        "input_sha256": "af1e83507b71ab4cb5c263f370c0572fd8a8cf8118a8ac85822ef81e7e07fb85",
+        "current_sha256": "9a8c8e870cb6ff6474609f13f23276602aa7386e2d84db83a60cc6ddda5b1627"
+      },
+      {
+        "path": "docs/spec/README.md",
+        "input_sha256": "cdd3f3a42d0631bd30278e381af19ea79c23260a1236de6384a31db567410a5d",
+        "current_sha256": "9a7ae0e059f8dc02fc1589b362f4e9edf36d79a9409a5c429f787c319ed8290d"
+      }
+    ]
+  },
+  "link_scan": {
+    "scanner": "docs/maintenance/doclib.py: scan, ERRORS, key",
+    "input_issue_rows": 974,
+    "current_issue_rows": 974,
+    "input_distinct_issue_keys": 949,
+    "current_distinct_issue_keys": 949,
+    "scanned_link_rows": 12824,
+    "status_counts": {
+      "external-unchecked": 322,
+      "missing-doc-file": 972,
+      "missing-heading": 2,
+      "ok": 11230,
+      "outside-package-unchecked": 298
+    },
+    "new_or_increased_issue_rows": 0,
+    "new_or_increased_issue_keys": 0,
+    "resolved_or_reduced_issue_rows": 0,
+    "added_or_increased_issues": []
+  }
+}

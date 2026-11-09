@@ -25,8 +25,11 @@ def main() -> int:
     docs = registry['documents']
     actual = sorted(p.name for p in active.glob('[0-9][0-9][0-9][0-9]-*.md'))
     expected = sorted(d['file'] for d in docs)
-    if len(docs) != 15 or actual != expected:
-        errors.append('The active RFC inventory does not contain exactly the expected 15 books.')
+    active_count = registry['active_count']
+    expected_book_ids = {f'RFC-v2-{n:04d}' for n in range(1, active_count + 1)}
+    if (active_count != 20 or len(docs) != active_count or actual != expected
+            or {d['id'] for d in docs} != expected_book_ids):
+        errors.append('The adopted active RFC inventory must contain exactly RFC-v2-0001 through RFC-v2-0020.')
     expected_ids = {f'RFC-{n:04d}' for n in range(1, 42)}
     sources = manifest['sources']
     if len(sources) != 41 or {s['old_id'] for s in sources} != expected_ids:
@@ -90,6 +93,9 @@ def main() -> int:
             if not dst.exists():
                 errors.append(f'Broken newly authored link: {path.name}: {target}')
     if errors:
+        print(f'Scope: 2026-10-29 historical source audit, plus {len(docs)} current books. '
+              'For preservation relative to the 2026-11-08 input, run '
+              'docs/maintenance/revisions/2026-11-08/check_revision.py.')
         for err in errors:
             print('FAIL:', err, file=sys.stderr)
         return 1

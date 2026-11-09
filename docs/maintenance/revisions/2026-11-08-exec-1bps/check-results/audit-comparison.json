@@ -1,0 +1,35 @@
+{
+  "schema": "misaka.docs.exec-addition-audit-comparison.v1",
+  "current_revision_status": "PASS",
+  "input_archive_sha256": "cb8338e04f95fd0087bd39b5cacd2d2aeebaa545670d254dd478a5b116fd6963",
+  "supplied_analysis": {
+    "attachment_filename": "貼り付けたテキスト（1）(6).txt",
+    "saved_path": "docs/maintenance/revisions/2026-11-08-exec-1bps/sources/provided-court-budget-analysis.txt",
+    "bytes_identical": true,
+    "sha256": "8d386c6a868c2cd1525a04af9665b55c821572fee102d3030aa6b1d2dc47b4fc",
+    "external_measurements_reverified": false
+  },
+  "check_docs": {
+    "prior_failure_count": 948,
+    "current_failure_count": 948,
+    "failure_multiset_identical": true,
+    "input_link_issue_occurrences": 974,
+    "current_link_issue_occurrences": 974,
+    "added_or_increased_link_occurrences": 0
+  },
+  "historical_rfc_audit": {
+    "stdout_identical_to_prior": true,
+    "inherited_source_mismatches": 7
+  },
+  "historical_adr_audit": {
+    "prior_errors": 84,
+    "current_errors": 86,
+    "added_errors": [
+      "Unchanged baseline files modified or missing: docs/governance/parameter-register.md",
+      "Unchanged baseline files modified or missing: docs/governance/parameters.json"
+    ],
+    "removed_errors": [],
+    "explanation": "The two adopted parameter documents changed; all 52 old parameter entries are preserved and three new-profile entries were added."
+  },
+  "runtime_or_performance_verified": false
+}

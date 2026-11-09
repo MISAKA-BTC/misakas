@@ -1,12 +1,26 @@
 # RFC-v2-0009 — Remote Client・SDK・非保管型操作
 
-編集日: 2026-10-29 / 入力: `misakas-pre(5).zip`
+## 2026-11-09公開資料・一人前提の追加境界
 
-[15本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+[採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。clientはprompt・重み等の公開範囲、有限の取得・保持・検証費用をjobの固定条件として扱う。検証者が初めて取得する手順とcase状態を表示し、資料受領を検査完了と表示しない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
-> **編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
+## 2026-11-09新profileの追加境界
+
+[採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。API/SDKは局所pass、範囲付き検証承認、適格異議、反証成立、未検証Abortを区別し、本人実行証明と表示しない。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+
+[20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+
+> **2026-10-29原統合の編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
 > **状態:** 採用済み・Draft・隔離実装・履歴を含む統合編集版。各条項の採択・置換関係を継承する。過去の「実装済み」「休眠」「未試験」等は、その記録時点の状態である。
 > **番号:** 本書は`RFC-v2`。原条文中の`RFC-xxxx`と`§`は旧版を指す。旧番号・wire・署名・fence名は再採番しない。
+
+## 2026-11-08採択による適用範囲
+
+新profileのAPI／CLI／walletは、結果固定、検証待ち、CertificationReady、成功Final、未検証Abortを区別する。旧Finalと新成功Finalを同じ表示で誤認させない。[16](0016-miner-execution-commit-and-material-supply.md)のoriginal固定と[17](0017-noninteractive-positive-verification.md)の正常一括提出に、Minerとの逐次中間値照合を追加しない。
+
+**優先関係:** 2026-11-08の先行採択はADR-0215と公開裁定v0.2を根拠とする。今回の公開資料・一人前提の新profileには冒頭の0050／0218・RFC16〜20・[公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)を優先する。以下の基礎契約・旧profile記録と原付録は保持し、旧署名や旧Finalの意味を遡及変更しない。設計採択は実装・測定・有効化の完了を意味しない。
 
 **原文収録元:** [旧0009](../rfc/0009-palw-remote-miner.md)。
 
@@ -34,9 +48,23 @@ remote RPCの返答を無条件の合意事実にしない。clientが何を自�
 
 ---
 
+## EXEC・1 BPS追加採択のAPIと表示
+
+[10](0010-dag-consensus-and-native-settlement.md)のEXEC状態を、EXECへの収録、暫定実行、
+本体受理、決済条件成立として別々に表示する。暫定結果には対象履歴と取消可能性を結び付ける。
+1 BPSを1秒決済、RPC送信成功を本体受理、ローカル署名をcredit消費として返さない。
+
+producer向けの読み口はschedule_id・slot・producerとcanonicalなchain viewからReady(ExecPermit)またはWait(Reason)を返す。
+これは論理APIであり、実装済みRPC名やwire fieldの割当ではない。
+credit不足、schedule未公開／開始前、失効、slot欠落、包含期限を区別し、
+モデル取得・Claim詳細・次期scheduleの組立てを高速生成APIに内包しない。
+[採択記録](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)に従い、新版と旧版を混同しない。
+
+---
+
 ## 原条文の統合収録
 
-以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の15本の索引・旧新対応表で確認する。
+以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の20本の索引・旧新対応表で確認する。
 
 ### 収録箇所
 

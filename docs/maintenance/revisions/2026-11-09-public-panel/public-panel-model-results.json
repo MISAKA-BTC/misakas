@@ -1,0 +1,385 @@
+{
+  "schema": "misaka.public-one-honest.finite-model.v1",
+  "revision": "2026-11-09-public-panel",
+  "status": "PASS",
+  "scope": "Finite conditional specification model; no runtime, LLM, public-availability or capacity certification.",
+  "assumptions": [
+    "correct signature/draw authentication, hash binding and native toy arithmetic",
+    "model events have canonical inclusion, not mere network transmission",
+    "exactly specified finite inspection and filing opportunities are supplied",
+    "one active honest selected participant inspects the entire subject"
+  ],
+  "toy_availability_procedure": {
+    "kind": "tiny-complete-authenticated-public-transcript",
+    "scope": "At most three tiny scalar execution leaves; all required authenticated material is explicitly in a finite public transcript.",
+    "maximum_scalar_material_records": 41,
+    "not_a_proposal_for": "Publishing a full LLM through Node or certifying off-chain delivery by a boolean/receipt.",
+    "large_LLM_procedure": "NOT ESTABLISHED; unknown procedure admission is rejected."
+  },
+  "not_established": [
+    "profile-specific objective availability/inspection mechanism for large off-chain LLM data",
+    "actual LLM kernel coverage, production numeric policy or trace/resource bounds",
+    "Rust implementation, real signatures, censorship resistance, live network or activation",
+    "physical Miner/Panel execution or actual independent work",
+    "real restart, reorg, IBD or throughput and economic parameter correctness"
+  ],
+  "source_sha256": {
+    "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md": "96ee5886a0648a8f3befbe54ce3f7eb9dff2dc120f49a4272325561046f5ca58",
+    "docs/rfc-v2/0017-noninteractive-positive-verification.md": "3d3d5e5770953cfacc07f12d16247a4f1b7510d5ef4c2cebe03d7dcf38716ad9",
+    "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md": "969b00a9d8ed8561223a3a5a072b35217e7836eea2697d217a0d49a858a77853",
+    "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md": "cd7db12060a3cc611ca02a63bdb5e997e6e1bf647f6b2b96a4ac3727f901451e",
+    "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md": "d2d883d37832c6c1fe41ba47ceec3bea9c704b8e4ca26298be79fa51e920eb06"
+  },
+  "preserved_model_sha256": "f342785167de249939c594829e876219a7a5b7dfe730f3e434ccb02b730bb048",
+  "checks": [
+    {
+      "id": "P01-cold-single-honest-normal-completion",
+      "status": "PASS",
+      "detail": {
+        "cold_start_complete_runs": 9,
+        "other_selected_signatures": 0
+      }
+    },
+    {
+      "id": "P02-one-refutation-overrides-all-approvals",
+      "status": "PASS",
+      "detail": {
+        "bad_leaf_and_honest_identity_combinations": 18,
+        "local_checker": "preserved authenticated positional Merkle checker"
+      }
+    },
+    {
+      "id": "P03-material-inspection-continuity",
+      "status": "PASS",
+      "detail": {
+        "same_case_after_notice": [
+          "correct_completion_to_Final",
+          "bad_trace_to_Refuted"
+        ],
+        "delivery_alone_closes_case": false
+      }
+    },
+    {
+      "id": "P04-derived-inspection-prerequisite-space",
+      "status": "PASS",
+      "detail": {
+        "enumerated_combinations": 384,
+        "established": 10,
+        "derivation": "all tiny authenticated material + claimant-specific slot + original remaining time",
+        "large_offchain_LLM_availability": "NOT ESTABLISHED"
+      }
+    },
+    {
+      "id": "P05-no-default-from-missing-material-or-quota",
+      "status": "PASS",
+      "detail": {
+        "withholding_and_quota_cases": 6,
+        "late_delivery_without_remaining_time": "AbortedUnverified"
+      }
+    },
+    {
+      "id": "P06-bounded-false-cases-and-abstention",
+      "status": "PASS",
+      "detail": {
+        "unique_honest_and_request_order_runs": 18,
+        "max_false_cases_per_run": 4,
+        "liveness_scope": "tiny complete-public-transcript procedure and reserved canonical service only"
+      }
+    },
+    {
+      "id": "P07-signature-version-and-scope",
+      "status": "PASS",
+      "detail": {
+        "legacy_selected_positions": 75,
+        "legacy_required": 41,
+        "new_required": 1,
+        "invalid_scope_variants_rejected": 5
+      }
+    },
+    {
+      "id": "P08-Final-gate-enumeration",
+      "status": "PASS",
+      "detail": {
+        "gate_time_combinations": 640,
+        "permitted_Final_cases": 2
+      }
+    },
+    {
+      "id": "P09-atomic-sealed-batch",
+      "status": "PASS",
+      "detail": {
+        "invalid_batch_variants": 6,
+        "reordered_or_appended_scope_rejections": 2,
+        "one_bad_leaf_refutes_whole_batch": true
+      }
+    },
+    {
+      "id": "P10-case-isolation-and-once-credit",
+      "status": "PASS",
+      "detail": {
+        "independent_claimant_cases": 2,
+        "repeated_settlement_attempts": 6,
+        "issued_execution_ids": 3,
+        "credits": 6,
+        "rewrapped_batch_with_already_issued_execution_ids": "rejected",
+        "restoration_scope": "in-memory state-copy invariant, not actual restart/reorg/IBD implementation"
+      }
+    },
+    {
+      "id": "P11-canonical-event-order",
+      "status": "PASS",
+      "detail": {
+        "permutations": 120,
+        "distinct_outcomes": 1
+      }
+    },
+    {
+      "id": "P12-unestablished-profile-and-guarantee-limits",
+      "status": "PASS",
+      "detail": {
+        "unestablished_large_data_profile": "UnsupportedProfile",
+        "expected_outside_guarantee_counterexamples": [
+          "all verifiers collude",
+          "all honest communication censored"
+        ],
+        "actual_LLM_publication_prerequisite_mechanism": "NOT ESTABLISHED"
+      }
+    },
+    {
+      "id": "P13-honest-whole-subject-coverage",
+      "status": "PASS",
+      "detail": {
+        "subset_excludes_unique_honest_counterexamples": 9,
+        "partitioned_layer_or_leaf_counterexamples": 1,
+        "classification": "EXPECTED_UNSAFE_OPTIMIZATIONS_NOT_ADOPTED"
+      }
+    },
+    {
+      "id": "P14-mutation-sensitivity",
+      "status": "PASS",
+      "detail": {
+        "mutants_detected": [
+          "early_one_vote",
+          "all_ack",
+          "ignore_q",
+          "ignore_version",
+          "partial_is_full",
+          "quota_is_delivery",
+          "delivery_closes_case",
+          "merge_claimants",
+          "partial_batch_credit",
+          "assign_only_arbitrary_subset",
+          "accept_late_leaf_with_old_approval"
+        ],
+        "count": 11
+      }
+    }
+  ],
+  "summary": {
+    "passed": 14,
+    "failed": 0
+  },
+  "preserved_revision_checks": {
+    "scope": "Reexecuted unchanged previous model; its old toy quorum policy is not the new PublicOneHonest policy.",
+    "checks": [
+      {
+        "id": "M01",
+        "status": "PASS",
+        "detail": {
+          "numeric_trace_cases": 16875,
+          "metadata_trace_cases": 34992,
+          "valid_cases": 54,
+          "false_cases_with_local_witness": 51813,
+          "relation_kinds": [
+            "Add",
+            "EndHalt",
+            "EndLength",
+            "EndOutput",
+            "EndWork",
+            "Init",
+            "Mul",
+            "ReadAdd",
+            "ReadMul",
+            "StatePreserved",
+            "WellFormedness"
+          ],
+          "max_witness_records": 3,
+          "max_witness_sibling_hashes": 9,
+          "enumeration": "all numeric traces and, separately, all listed metadata combinations"
+        }
+      },
+      {
+        "id": "M02",
+        "status": "PASS",
+        "detail": {
+          "rejected_variants": [
+            "changed_path",
+            "changed_value",
+            "different_claim",
+            "different_coordinate",
+            "different_program",
+            "different_scope",
+            "duplicated_operand",
+            "missing_operand",
+            "unregistered_relation",
+            "wrong_source_with_valid_membership"
+          ]
+        }
+      },
+      {
+        "id": "M03",
+        "status": "PASS",
+        "detail": {
+          "permutations": 120,
+          "distinct_material_outcomes": 1
+        }
+      },
+      {
+        "id": "M04",
+        "status": "PASS",
+        "detail": {
+          "boundary_cases": 16,
+          "coordinates": {
+            "notice": 2,
+            "hard": 5,
+            "hard_plus_one": 6
+          },
+          "note": "toy ordered coordinates, not production DAA parameters"
+        }
+      },
+      {
+        "id": "M05",
+        "status": "PASS",
+        "detail": {
+          "case_scoping_scenarios": 3
+        }
+      },
+      {
+        "id": "M06",
+        "status": "PASS",
+        "detail": {
+          "scenarios": 8,
+          "delivery_default_uses": "six modeled native prerequisites"
+        }
+      },
+      {
+        "id": "M07",
+        "status": "PASS",
+        "detail": {
+          "scenarios": 4,
+          "post_final_rights": "explicit toy notice<=7 and collection<=8"
+        }
+      },
+      {
+        "id": "M08",
+        "status": "PASS",
+        "detail": {
+          "adversarial_demand_cases": 16,
+          "duplicate_draw_case": 1
+        }
+      },
+      {
+        "id": "M09",
+        "status": "PASS",
+        "detail": {
+          "gate_combinations": 768,
+          "insufficient_approval_timeouts": 2
+        }
+      },
+      {
+        "id": "M10",
+        "status": "PASS",
+        "detail": {
+          "scope_dimension_rejections": 10,
+          "unsigned_rejections": 2,
+          "different_claim_rejections": 2
+        }
+      },
+      {
+        "id": "M11",
+        "status": "PASS",
+        "detail": [
+          {
+            "assumption_failure": "all selected verifiers collude; no public challenger participates",
+            "observed_abstract_result": "Final",
+            "classification": "EXPECTED_OUTSIDE_GUARANTEE_COUNTEREXAMPLE"
+          },
+          {
+            "assumption_failure": "the only honest verifier's entire communication is censored before canonical inclusion",
+            "observed_abstract_result": "Final",
+            "classification": "EXPECTED_OUTSIDE_GUARANTEE_COUNTEREXAMPLE"
+          }
+        ]
+      },
+      {
+        "id": "M12",
+        "status": "PASS",
+        "detail": {
+          "mutants_detected": [
+            "ignore_pending_cases",
+            "early_final",
+            "quorum_overrides_proof",
+            "timeout_first",
+            "clear_all_cases",
+            "pooled_reservations",
+            "ignore_scope",
+            "packet_rejection_closes_case",
+            "delivery_closes_inspection",
+            "shared_case_identity",
+            "raw_schema_is_packet_error",
+            "consume_before_revocation",
+            "omit_End_relations",
+            "omit_read_from_relation"
+          ],
+          "count": 14
+        }
+      },
+      {
+        "id": "M13",
+        "status": "PASS",
+        "detail": {
+          "scenarios": 6,
+          "same_case_clock": 5,
+          "result": "delivery keeps Q; old inspection can continue after initial notice window"
+        }
+      },
+      {
+        "id": "M14",
+        "status": "PASS",
+        "detail": {
+          "separate_case_ids": 2,
+          "shared_material_ids": 1,
+          "default_closes_only_defaulting_claimant": true
+        }
+      },
+      {
+        "id": "M15",
+        "status": "PASS",
+        "detail": {
+          "authenticated_schema_refutations": 3,
+          "envelope_unopenable_oversized_rejections": 3,
+          "scope": "bounded toy raw schema tag, not a real PALW codec implementation"
+        }
+      },
+      {
+        "id": "M16",
+        "status": "PASS",
+        "detail": {
+          "consumer_and_order_cases": 10,
+          "previous_batch_consumption_preserved": true,
+          "modeled_consumers": [
+            "issuance",
+            "permit reservation",
+            "schedule activation",
+            "permit consumption"
+          ],
+          "scope": "one abstract entitlement token; not a real transaction or schedule engine"
+        }
+      }
+    ],
+    "summary": {
+      "passed": 16,
+      "failed": 0
+    }
+  }
+}

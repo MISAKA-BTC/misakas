@@ -1,12 +1,32 @@
-# RFC-v2-0010 — DAG合意・Gate C・Native EVM決済
+# RFC-v2-0010 — DAG合意・EXECスケジュール・Native EVM決済
 
-編集日: 2026-10-29 / 入力: `misakas-pre(5).zip`
+## 2026-11-09公開資料・一人前提の追加境界
 
-[15本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+[採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。一人の完全承認と保護された全検査・異議機会を20の成功gateへ接続し、同batchの反証・Q holdを全credit consumerより先に反映する。EXEC 1 BPSをclaim認証件数やcourt容量の保証にしない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
-> **編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
+## 2026-11-09新profileの追加境界
+
+既発行ExecCredit・schedule・permitにも[20 §5.2](0020-verification-gated-final-and-adversarial-models.md#52-同じcanonical処理単位での反証優先と終端)の優先順を適用する。同じBASE／native batchの反証・Qによるhold・依存失効を反映してから、候補EXECのcanonical受理と`reserved -> consumed`を判定する。「既受理consumed」を保持する対象はそのbatchより前のcanonical消費であり、候補の署名・受信・provisional実行・batch内の前方配置ではない。無効となった同batch候補から取引効果やfeeを先に外へ出さない。既受理取引の一括rollback、slotの再抽選、元expiryの延長は追加しない。
+
+[採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。同blockの異議・反証・失効を成功と経済効果より先に評価し、credit取消を既存取引の一括rollbackへ読み替えない。EXECの1 BPS契約は維持する。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+
+[20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+
+> **2026-10-29原統合の編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
 > **状態:** 採用済み・Draft・隔離実装・履歴を含む統合編集版。各条項の採択・置換関係を継承する。過去の「実装済み」「休眠」「未試験」等は、その記録時点の状態である。
 > **番号:** 本書は`RFC-v2`。原条文中の`RFC-xxxx`と`§`は旧版を指す。旧番号・wire・署名・fence名は再採番しない。
+
+## 2026-11-08採択による適用範囲
+
+新profileは[20](0020-verification-gated-final-and-adversarial-models.md)のResultCommitted後にcommit後乱数でglobal verifierを選び、Finalを要求しない事前認証predicateからCertificationReadyへ進む。必要条件成立後に成功Finalを与え、その後だけcreditを消費する。旧Gate CのFinal後認証と別版にし、循環待ちを作らない。
+
+**優先関係:** 2026-11-08の先行採択はADR-0215と公開裁定v0.2を根拠とする。今回の公開資料・一人前提の新profileには冒頭の0050／0218・RFC16〜20・[公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)を優先する。以下の基礎契約・旧profile記録と原付録は保持し、旧署名や旧Finalの意味を遡及変更しない。設計採択は実装・測定・有効化の完了を意味しない。
+
+**EXEC継続と1 BPSの追加採択:** [RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) / [ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)に基づき、認証済みworkから有限期間のcreditを作り、事前公開した未来slotのscheduleを`ScheduleId`で直接参照する。正常時の目標は**全モデル共通のEXEC_TXについて1秒slot当たり1 canonical block、1 BPS**とする。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。これは実測値、1秒settlement、preset変更、既存wireの再解釈を意味しない。
+
+creditの発行・予約・消費・失効は[07](0007-claims-exec-and-answer-accounting.md)、scheduleとslot・canonical EXEC順序は本書が所有する。新規RFCを現行の21冊目にせず、閲覧入口は20冊を維持する。以下の新schedule規則は新profileだけに適用し、原条文付録のbytes・過去の採択状態は保持する。
 
 **原文収録元:** [旧0012](../rfc/0012-palw-only-consensus-and-native-evm-settlement.md)、[旧0018](../rfc/0018-dag-parallel-multi-model-consensus.md)。
 
@@ -14,35 +34,203 @@
 
 ## 1. 一つの合意Authority
 
-旧0012のPALW-only consensus／native EVM settlementと旧0018のDAG並行生成／Gate Cを統合する。PALWの承認・workからfork choiceと決済を進める経路を扱い、DNS validator overlayの退役方針は15の台帳から参照する。
+旧0012のPALW-only consensus／native EVM settlementと旧0018のDAG並行生成／Gate Cを継承する。PALWの承認・workからfork choiceと決済を進め、EXECを同じ鎖の取引実行laneとして残す。別chain、BFT委員会、DNS validator overlay、独立の最終承認者を追加しない。退役・履歴は[15](0015-freeze-deferred-rejected-and-governance.md)を参照する。
+
+| 役割 | 本書の境界 |
+| --- | --- |
+| PALWの基礎となるcanonical履歴 | scheduleのauthority、claim認証、native台帳、EXECの受理順序・決済を決める |
+| EXEC_TX | 正規permitで取引を運ぶ。生成自体でPALW weight・DAA・settlement workを追加しない |
+| EXEC_SLICE | 適用版が許すwork資料を運ぶ。sliceだけでEXEC_TX permitや新たな二重creditを得ない |
+| Heartbeat / BASE経路 | 適用版の独立したliveness・object搬送を維持する。tickだけを認証workに換算しない |
+
+Nodeはモデル本体、全推論、GPU、外部モデルURLを必要としない。承認、native状態、署名、slot規則、有界なcourt資料、通常の取引実行を検査する。[19](0019-model-free-node-and-bounded-evidence.md)の資源上限はEXEC負荷下でも維持する。
 
 ## 2. 認証と裁定を分ける
 
-Gate C／`SecurityCertified`は抽選検証者の承認、責任、公開告発windowに基づく認証である。計算の暗号学的証明ではない。モデルtier、登録成功、local replay、receiptの外形一致だけで認証を代用しない。
+新claim版は[20](0020-verification-gated-final-and-adversarial-models.md)の事前認証、公開異議、依存、資金条件を満たして成功Finalへ進む。その後、[07](0007-claims-exec-and-answer-accounting.md)の適格性・成熟・有効期限を満たしたcreditだけをschedule候補にできる。`CertificationReady`、局所positive、モデルtier、local replay、単なるFinalという名前からcreditを作らない。
 
-2026-11-07 の [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md) は、claim の裁定について下の原文に優先する。原文は履歴として残す。異議がないことは、計算全体の正しさの証明ではない。公開資料、容量、または独立した検証者が欠けるときは、安全な hold または abort であり、通常の Final ではない。合意ノードはモデル計算を端から端まで再実行しない。原文の「抽選検証者による再実行」と「異議なし経過で成立する」は、この設計ではその方針が優先する。Panel の定足数は評決ではない。§8 の暗号学的証明の禁止と、§9 のモデル階層は変えない。
+global poolから選ばれた検証者の正直さという前提は残る。未共有モデル、モデル内Miner／Panelの全結託を想定し、資料不足を成功認証へ変換しない。計算不正の有罪判定は[14](0014-court-master-contract.md)・[18](0018-interactive-negative-court-and-defaults.md)の公開証拠と決定論的courtに従う。認証は全計算の暗号学的証明でも、将来の取消がない保証でもない。
 
-不正の有罪判定は14の客観裁定に従う。未認証claimや未解決依存を、名前の違うweight／participation経路から消費しない。
+旧profileのGate C・公開裁定v0.1〜v0.3は旧履歴として保持し、今回の公開資料・一人前提の新claim版には[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)を適用する。暗号学的計算証明の禁止、二階層、公開検証・原時計・責任上限は変更しない。
 
 ## 3. DAGと並行進行
 
 複数モデルの生成、sibling attribution、Panel anchorの公開参加、Rule E、DAG幅は、それぞれ独立した条件・fenceを持つ。G14限定集合が動いたことを、全DAG機能の有効化へ読み替えない。
 
+**1 BPSはEXEC_TXの正常時目標**である。slot幅は1秒、正規枠は全モデルを通じてglobalに一つとする。モデルごと1 BPS、claimごと1 BPS、REAL・Heartbeat・EXEC_SLICEを含めた総ブロック数の目標に読み替えない。複数候補が流通しても同じglobal slotに複数のcanonical EXEC_TXを受理しない。
+
+credit不足、未確定seed、schedule未公開、割当先停止、ネットワーク分断、資源不足では空slotがあり得る。slotを飛ばし、過去slotの一括生成、無根拠permit、Heartbeatのcredit化で埋めない。operator集中制約など既存の安全条件がslotを空にする場合も、その条件を1 BPSのために迂回しない。
+
 ## 4. Native EVM決済
 
-nativeの受理済み仕事から、正規の仕事量、anchor、成熟、operator／集中度、取消条件を導出する。別のvalidator署名を最終authorityとして復活させない。native39を含む仕事namespaceごとのmappingは、source identityと実際の受理点を保持する。
+nativeの受理済み仕事から正規の仕事量、anchor、成熟、operator／集中度、取消条件を導出する。仕事namespaceごとのmappingはsource identityと実際の受理点を保持する。EXEC候補の独立した到着順や署名数を新しいfork choiceにしない。
 
-RPCのSafe／Finalized等は、そのversionで定義する境界から導出する。単なる時間経過や外部委員会の宣言で未解決責任を消さない。
+| 取引状態 | 意味と必要条件 |
+| --- | --- |
+| `EXEC included` | 署名されたEXEC候補に取引が含まれる。Nodeの検証・canonical採用・決済の完了を意味しない |
+| `provisional` | 対象schedule・permit・取引を検査し、指定した暫定state上で実行した候補。競合、後着、取消、reorgで採用されない場合がある |
+| `BASE accepted` | canonical BASEの共通順序によってEXEC・取引が受理され、permit消費とUTXO/EVM更新を同一native foldへ反映した状態 |
+| `settled` | BASE acceptedの連続prefixについて、既存の版付きsettlement policyが必要work・成熟・depth・依存・責任条件を満たすと認証した状態 |
+
+RPC・walletは四状態と対象block/slot/prefix/policy/generationを区別する。単なる時刻経過、EXECの署名、空slot、1 BPS達成から`safe`・`finalized`・`settled`を導かない。後日の認証撤回とcanonical reorgも別事象として表示・記録する。
+
+1秒slotは高速な取引搬送の周期であり、1秒の不可逆finalityを約束しない。settlement policyの既存要件を弱めず、保証範囲とglobal検証者の前提を維持する。
 
 ## 5. 互換性と受入
 
-旧ネットワークの履歴やbond権利を消さず、overlayの停止・返還・移行は既存方針に従う。fork choice、Gate C、reorg、EVM入出金、同じ仕事の二重消費、独立claim進行、異なる起動・同期経路での一致を確認する。
+旧ネットワークの履歴、既存credit、permit、bond権利、accepted prefixを消さず、overlayの停止・返還・移行は既存方針に従う。新scheduleのschema・署名domain・clock profile・fence・activation高さは未割当とする。旧slotや旧署名を新しい`ScheduleId`形式として再解釈しない。
+
+新規則が既存の「最新parent stateからscheduleを探す」経路と異なる部分は、writer・reader・undo・snapshot・IBD・RPCを同じ版で切り替える。既存型にフィールドを足すだけで意味が保たれるとは扱わない。以下の概念名は実装済みAPIや割当済みwire IDの宣言ではない。
+
+## 6. ScheduleIdが指す固定subject
+
+新profileのEXECは、直接の`ScheduleId`と自身のglobal slotを必ず指定する。NodeはそのIDが指すcanonicalなschedule commitを取得・認証し、現在のtipから「最新schedule」を推測して代用してはならない。
+
+| subject | 固定する内容 |
+| --- | --- |
+| network / profile | genesis・network identity、schema、active fence、allocation / clock / inclusion policyの識別子 |
+| epoch / authority | globalな対象epoch、このproposalの予約・schedule commitを含まない先行canonical cutのBASE anchor identityとstate root、候補集合の固定記録 |
+| eligible集合 | canonicalなcredit unit ID、元work・operator・bond・有効期限を含む認証済み集合rootとcanonical順序 |
+| seed | 集合固定後に確定するseed anchorのidentity、seed値と導出規則 |
+| assignment | ScheduleIdに依存しないleaf `(global_slot, permit_position, producer, credit_unit_id)` のcanonical集合を認証するallocation root |
+| 時間境界 | 絶対的な`start_slot`、排他的な`end_slot`、包含期限・slot閉鎖規則、clock profile |
+
+seed前の固定参照を`ScheduleProposalId`とし、network・profile・epoch・authority・eligible集合・未来slot区間・各policyをcanonical encodingでhashする。`ScheduleId`はdomain separationの下で、このProposalId、seed anchor/value、allocation rootを束縛する。hashは資料の同一性を認証し、work計算全体の正当性を証明するものではない。
+
+authorityの入力は予約前の既知canonical cutであり、proposalやscheduleを収録するtransaction／block自身のhash、その適用後state rootを自分のID材料に入れない。予約とschedule commitの実際の収録block・適用後rootは、native受理recordと包含証拠としてIDの外で保持する。使用時には入力cutのcanonical性だけでなく、proposalの正規予約とschedule commitが現枝で受理済みであることも検査する。
+
+allocation leafには、これから導出するScheduleIdやPermitIdを含めない。依存順序は`先行cut → ScheduleProposalId → 後続seedとallocation root → ScheduleId → PermitId`とする。Nodeはleafのopeningを検査し、確定したScheduleIdとleafからPermitIdを再導出する。IDを含む木からそのIDを作る循環hashを許さない。
+
+`ScheduleId`を変えて同じglobal slotを増設できない。native状態はepochとglobal slot範囲の一意性を検査し、同じcanonical枝に重複する有効scheduleを受理しない。scheduleの件数・slot数・unit数・証拠bytesは有限のprofile上限内に置く。Nodeはcommit時に決定論的割当・一意性を有界な処理で検査する。単独のopeningだけで集合全体の非重複が証明されたとは扱わない。
+
+`PermitId`はnetwork/profile、ScheduleId、global slot、固定されたpermit位置、割当producer、credit unitから一意に導出する。二重署名の衝突単位とdurable journalのkeyはこのPermitIdであり、payload digestやattachmentをkeyへ加えて別permitにしない。署名メッセージにはそれらを含め、同じPermitIdの異なる署名対象を検出できるようにする。
+
+## 7. 固定・抽選・公開・開始の順序
+
+1. **Eligible集合を固定する。** 合意で指定したcutの認証済みnative状態から、未失効・未消費・他schedule未予約のcredit unitを取り出す。[07](0007-claims-exec-and-answer-accounting.md)のMintRecordと数量保存に従い、同じunitを`ScheduleProposalId`へ予約する。
+2. **後続seedを確定する。** 集合固定時には未知だったcanonical seed anchorを、版付きの決定論的規則で選ぶ。header nonce、任意timestamp、producerが選べる最新tip、ローカル乱数を再抽選源にしない。seed供給者のgrinding・公開拒否リスクと利用する乱数前提は評価・公開する。
+3. **一意に一回割り当てる。** 固定集合・seed・policyから全割当を再現する。各permitは一つのslot・producer・credit unitへ束縛し、各unitは同時に一つの有効割当だけを持つ。割当を見て集合・slot区間・epochを選び直さない。
+4. **canonicalにcommitし公開する。** native受理によってProposalIdとScheduleIdの対応、allocation root、原資予約、時間境界を確定する。必要なscheduleデータ・openingを開始前に公開し、Node・割当producerが取得して検査できる状態にする。
+5. **未来のstart_slotから使用する。** commit・公開の必要先行期間を満たす未来slotだけを許可する。遅れたcommitで過去slotへ遡らず、開始条件を満たさないepochは使用しない。
+
+候補予約とcommitの前後で適格性を再確認する。固定後の失効・取消は対応unitを無効化し、残りの割当のseedや位置を引き直さない。未選択unitの返却、失敗したproposalの解放、再試行上限は[07](0007-claims-exec-and-answer-accounting.md)に従い、同じunit ID・元のexpiry・累積attemptを維持する。
+
+seed遅延・schedule欠落はcredit発行や公開異議の時計をresetしない。空slotや公開不足を理由に、Miner／Panelの追加署名だけで臨時permitを発行してはならない。
+
+## 8. DAA・秒slot・包含期限を分ける
+
+| 時計・区間 | 用途 | 禁止する混同 |
+| --- | --- | --- |
+| DAAのcollection / freeze / seed / commit境界 | canonical状態の順序、credit予約、原時計と責任期限 | DAAを単純に秒数へ置き換えない |
+| 絶対秒slot `[start_slot, end_slot)` | producerへ事前割当した1秒ごとの生成機会 | 毎slot、新たなBASE blockやDAA更新を待たない |
+| inclusion / closure window | 遅延候補の収集・canonical収録とslotの閉鎖 | 生成期間の終了だけで、期限内の遅延候補を一律拒否しない |
+| credit expiry / liability retention | 発行済み権利の寿命、資料保持と責任追跡 | schedule作成・遅延収録で元の寿命やcourt期限を延長しない |
+
+合意でcommitしたepoch originとclock profileから、`slot = floor((consensus_time - origin) / 1秒)`の絶対slot区間を定義する。ここで`consensus_time`の入力、DAA境界との対応、許容timestamp、未来時刻の扱い、epoch間の重複禁止、停止・再開時の境界は版付き合意規則で固定する。DAAの進み方を1秒と仮定しない。
+
+producerはcommit済み時計を基準にlocal timerで起床し、現在slotを選ぶ。**local wall clockは合意の正本ではない。** validatorの恒久的なaccept/rejectはcanonicalなtime context、blockの認証済み対象slot、包含・閉鎖境界から再現し、検査したPCの現在時刻で過去ブロックのvalidityを変えない。初期受信時の未来時刻保留は、永続的な不正認定と区別する。
+
+信用の期限にDAAと時刻の両方を使うprofileでは、適用条件と比較順を明示し、暗黙の換算や都合のよい片方を使わない。slot終了後に遅延包含を許す場合、その許可・収録上限・元expiryとの関係を予約時から固定する。slot使用期間、包含猶予、資料保持の数値は本採択で捏造せず、activation gateで実測・承認する。
+
+## 9. Work anchor・producer・attachmentの分離
+
+**work anchor**はcreditの元となる認証済みworkを特定する。**schedule authority anchor**は集合固定とschedule commitのcanonicalな根拠である。**EXEC attachment**は取引候補を実際に収録するBASE側の依存・parent・mergeset関係である。三つのidentityと有効性を別フィールド・別predicateで検査し、attachmentを変えて元の仕事や割当を選び直さない。
+
+slot producerはscheduleに記録した署名者であり、その場の推論完了やwork anchorを収録したBASE producerの応答を待たない。BASE producerとの一致を要求せず、creditに固定したowner／bond／operatorに対する資格を個別認証する。[07](0007-claims-exec-and-answer-accounting.md)の非譲渡性を維持し、schedule作成を別ownerへの移転や任意のproducer付替えに使わない。許された署名鍵管理の範囲も所有権移転と区別する。
+
+通常のtip伸長ではScheduleId、seed、assignmentを維持する。使用時にはcanonical membership、元creditの失効・取消、permit未消費、attachmentの適法性を最新の適用stateで再確認する。authority anchorがcanonical枝から外れるreorgでは、その枝のscheduleを無条件に流用せず、新しいcanonical状態で有効性と台帳をundo/replayする。
+
+## 10. 現在slotの生成と、遅延候補の検証
+
+producerは現在slotに自分の有効permitがある場合だけ生成し、遅れたslotはskipする。起動時の未処理slotを走査してまとめて採掘しない。未来slotのpayloadを準備しても、未来slotの候補を今のslotとして公開・消費しない。
+
+概念上の`exec_opportunity(...)`はcanonical state generationと対象ScheduleIdから、現在slotのpermit・expiry・包含境界、または機会なしの理由を返す。`build_exec(...)`はそのScheduleId・slot・permitを直接指定し、署名前に最新stateで再検査する。modelの推論や新しいBASE blockの到着を、毎回の生成準備に追加しない。API名は新しい実装契約の候補であり、現行APIの存在を宣言しない。
+
+署名対象にはnetwork/profile、ScheduleId、global slot、permit、producer、attachmentと取引payload digestを束縛する。署名前にdurable journalへ`PermitId → 署名対象digest`を記録する。同一permitを別payloadで再署名してはならず、再起動・reorgでchain上の消費がundoされても、このローカル記録を削除しない。同一bytesの再送は包含条件内で許可する。
+
+validatorは受信時の現在slotと候補slotが一致することだけを要求しない。候補の対象slotに正しい割当があり、署名・取引・canonical収録時の失効状態・包含期限・slot閉鎖条件を満たすかを判定する。履歴検証も同じ規則と保存証拠で完結する。
+
+**署名と自己申告timestampだけでは、実際に旧slotで生成されたことを証明できない。** 正直なproducerの過去slot生成禁止と、validatorが客観的に検知できる境界を区別する。包含猶予内のbackdatingを完全検出できるとは主張せず、その可能範囲・遅延・二重署名の扱いをclock profileの残余として評価する。
+
+## 11. 共通順序・競合・accepted prefix
+
+同じScheduleId/slot/permitの異なるpayloadへの二重署名は、両署名と同じ固定subjectを認証した客観的equivocationの候補である。異なる枝の正規schedule、異なるpermit、競合UTXO/EVM取引があるだけで、同じ不正を証明したことにしない。slashの対象と条件は採択済みの責任規則に従う。
+
+BASEは版付きの**共通順序関数**を用い、canonicalに収集したEXEC候補をglobal slot、permitと決定論的tie-breakにより処理する。ローカル受信順やprivate cacheを順序根拠にしない。同一slotの候補競合は一つのcanonical候補に解決し、取引の二重spend・nonce競合はその共通順序上のnative実行規則で解決する。候補の単体validityと、canonical受理・取引成功は別である。
+
+native状態はaccepted EXEC prefixとslotのclose frontierを持つ。合意上の包含・閉鎖条件を満たしたslotを順番に閉じ、候補のないslotは有限期限後に空として閉じる。閉鎖前の収集、閉鎖時の候補確定、common order、permit消費・EVM適用の境界を同じpolicyで定義する。より後のslotを先に確定して未閉鎖の穴を残したり、閉鎖済みslotへの後着をprefix途中へ挿入したりしない。
+
+同じcanonical枝の通常伸長では受理済みprefixはappend-onlyである。正規BASE受理、permitの`reserved → consumed`、関連するUTXO/EVM効果・feeは同じnative foldへ原子的に反映する。単なる生成・署名・伝送・provisional実行はcredit消費にしない。fork選択が変わる場合は別のcanonical reorgとして、同じ版のundo/replayで台帳とexecution prefixを一緒に復元する。
+
+未使用slotの予約は、包含期限・必要な閉鎖処理を終えcanonicalに未消費と確定するまで解放しない。解放や後続利用は[07](0007-claims-exec-and-answer-accounting.md)の同じunit ID・元expiry・累積attempt上限を守る。消費undoを理由に、durable journalに反する別payloadを同じpermitで作らない。
+
+## 12. 失効・取消と取引権利の境界
+
+| 事象 | nativeの扱い |
+| --- | --- |
+| 使用前のcredit失効・取消 | 対応unitとそのpermitを使用不可にする。他unitのassignmentを再抽選・移動しない |
+| provisional候補の原資・scheduleが失効 | canonical受理を保留または拒否し理由を記録する。既存accepted prefixへ勝手に効果を加えない |
+| BASE accepted後に元workの反証・credit取消が成立 | 消費済みunitを再発行せず、provenance・責任・現在の認証状態を更新する。未使用permitには取消を反映する |
+| 取消がPALW fork choiceに影響してcanonical枝が変化 | 正規reorgとしてEXEC消費・実行効果をundo/replayする。別の巻戻しauthorityを追加しない |
+| settled表示の根拠が後日失われる | 既存settlement policyに従って現在の認証と過去の公表記録を区別し、withdrawal/conflictを記録する |
+
+creditの単なる期限満了は、適法に受理・消費した取引や既得権の一括取消命令ではない。元workの不正でも、**そのcreditで運ばれた全取引の自動rollback、全受領者への返還義務、無条件のsettlement保証を本改定で追加しない**。保持する権利、未確定利益、責任帰属、native取消効果は既存の採択済み規則と[07](0007-claims-exec-and-answer-accounting.md)に従う。未確定の接続はactivationを止め、暗黙のrollback仕様で埋めない。
+
+## 13. EXEC creditに循環依存しない進行
+
+claim提出、認証資料、positive／negative court、資料要求・応答、schedule proposal/commit、Heartbeat／BASE anchorの搬送に、これから作るEXEC creditや当該scheduleの成功を必須条件としてはならない。既存の独立したBASE/object経路とその有限資源・料金規則を維持する。
+
+creditがゼロでも次のworkを提出・認証でき、scheduleが欠けてもcourtを終結でき、EXECが止まってもBASEのlivenessを進められることを確認する。独立経路を無制限・無償・予約不要な迂回路にはしない。
+
+1 BPSのEXEC負荷は共有の搬送・CPU・メモリ・state I/O・保存予算を消費する。公開negative、資料供給、局所courtの予約容量をEXECへ流用せず、原受理からのnotice・hard期限をslotやschedule更新でresetしない。モデル非保有Nodeの制限内で、混合負荷時にも公開裁定の予算が残る必要がある。
+
+## 14. 1 BPSの測定項目とactivation gate
+
+| KPI | 分けて報告する内容 |
+| --- | --- |
+| generated BPS | 生成したdistinct EXEC_TX候補数／観測秒。再送を除き、空payload・equivocation・過去slot生成を別計上 |
+| valid BPS | 完全なschedule・署名・取引検査を通ったdistinct候補数／観測秒。競合候補をcanonical数に数えない |
+| BASE accepted BPS | canonical native foldへ新たに受理したEXEC_TX数／観測秒。reorg前の総数、取消数、正味数を区別 |
+| settled BPS | 版付きsettlement条件を新たに満たしたEXEC_TX数／観測秒。後日の認証撤回を別記し不可逆性を仮定しない |
+| slot fill | 全global slotを分母にした割当率・生成率・受理率。credit不足・集中制約・停止slotも分母に残す |
+| latency | work受付→認証→credit、freeze→公開→開始、生成→受理→settledの分布と待ち行列。観測終端の未完了件数・timeout・取消を分母とともに報告 |
+| 持続供給 | 成熟eligible creditの純供給率、予約・消費・失効率、残高、BASE収録能力、増加backlog、schedule切替時の空白 |
+| 混合負荷 | EXEC_TX・claim・positive・公開negative・資料応答の同時負荷、予約court容量、deadline違反、CPU/RAM/I/O/帯域と保存量 |
+
+同じ観測区間・負荷条件を使い、完了例だけの平均やp95/p99で未解決件を隠さない。初期creditストックで短時間1 BPSを示す試験と、期限付きcreditの継続供給で1 BPSを維持する試験を分ける。stockが減り続ける、未受理backlogが増え続ける、courtが期限を逃す状態を持続達成と判定しない。settled BPSの立上り・遅延は生成BPSと別に記録する。
+
+activation前に、clock/epoch mapping、timestampと未来時刻規則、公開先行期間、credit寿命、slot生成区間、包含猶予、閉鎖frontier、seed条件、schedule上限、再試行・返却、BASE受理容量、共通順序・取消・reorg・settlementの接続を版付きで固定する。具体的な期間・猶予・閾値は実測と明示承認を必要とし、本書で任意の数値を置かない。1秒slot以外の既存presetをこの文書だけで変更しない。
+
+## 15. 実装接続・移行と受入ケース
+
+添付source snapshotの`consensus/core/src/palw_execution_lane_v1.rs`には、秒round、DAA span、集合snapshot後のseed、permit、credit・forfeitの足場がある。この参照は最新mainの動作、有効化、1 BPSの実測、新しいScheduleId直接参照・clock/包含規則の完成を示さない。`exec_opportunity`と`build_exec`、schedule ID検索、native consumption、RPC四状態、durable journal、pruned IBDの接続を新profileとして確認する。
+
+| ID | 受入ケース | 必須結果 |
+| --- | --- | --- |
+| S01 | seed判明後の集合・epoch・slot区間変更 | 拒否。同一freezeから引き直さない |
+| S02 | 同unitの重複予約、異なるScheduleIdのslot重複 | canonical状態で一意性を拒否。global枠を増やさない |
+| S03 | commitが開始slotに間に合わない／資料非公開 | 当該scheduleを開始せず、過去slotを埋めない |
+| S04 | BASE tipが数slot更新されないが有効scheduleあり | 毎slotの新BASE待ちなしで現在slotの機会を導出。期限・資源条件は維持 |
+| S05 | 普通のtip伸長／元credit一部取消 | assignment不変。取消unit由来permitのみ無効化し、使用時stateで検査 |
+| S06 | authority anchorがreorgで枝から外れる | schedule・予約・消費・execution stateをcanonical枝でundo/replay |
+| S07 | 再起動直後に多数の過去slotあり | catch-up生成なし。現在slotだけ生成 |
+| S08 | 同permitで異なるpayload署名を要求 | durable journalが拒否。reorgによるconsume undo後も拒否 |
+| S09 | 対象slot後に候補が届く／包含期限を過ぎる | 同一のcanonical境界から前者の適否を判定し、期限超過・閉鎖後の挿入は拒否 |
+| S10 | 正しい署名で旧timestampを自己申告 | 署名だけで実生成時刻を証明したと扱わず、包含規則で制限 |
+| S11 | 同slot競合・二重spend・受信順逆転 | 共通順序で同じ受理結果。equivocationと取引競合を区別 |
+| S12 | 後着の古いslot、空slot、並行候補 | close frontierを守り、通常伸長のaccepted prefixを途中変更しない |
+| S13 | BASE受理直後のcredit取消／settled根拠の撤回 | 自動全TX rollbackやcredit再発行をせず、規定責任・認証更新・正規reorgを区別 |
+| S14 | creditゼロ、seed停止、EXEC飽和 | claim・court・schedule commit・Heartbeat／BASEの独立進行を維持 |
+| S15 | 長時間1 BPSと公開negativeの混合負荷 | 4種BPS、未解決分母、stock減少、backlog、court予約・期限を報告 |
+| S16 | cold Node・IBD・再起動・異なる受信順 | モデルなしでschedule・prefix・台帳・四状態が一致し、旧履歴を読み替えない |
+
+旧版と新版の混在epoch、fence前後のundo、未消費予約、未決court・依存、過去のsettled公表履歴を含む移行表を完成させる。文書リンク検査や少数の局所試験を、これらの合意接続・持続性能・activationの完了証拠にしない。
 
 ---
 
 ## 原条文の統合収録
 
-以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の15本の索引・旧新対応表で確認する。
+以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の20本の索引・旧新対応表で確認する。
 
 ### 収録箇所
 

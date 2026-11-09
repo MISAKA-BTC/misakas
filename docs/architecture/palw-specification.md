@@ -1,5 +1,13 @@
 # MISAKA Architecture Specification
 
+> **2026-11-08追加採択:** EXEC creditは[RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、事前公開scheduleと通常時1 BPS目標は[RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md)に反映した。courtの全分岐予約と実モデル完了条件も更新した。[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)／[変更記録](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。現行RFC20冊・統合ADR50冊を維持し、実装・測定・activationは別のgateとする。
+
+> **2026-11-08 の適用範囲:** 下の本文・状態表は2026-11-03の統合仕様と、その時点の照合範囲を保持します。今回採択した新しい claim / profile には [RFC-v2-0016〜0020](../rfc-v2/README.md)、[ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) の明示改定を適用します。状態は **ADOPTED_DESIGN_NOT_ACTIVATED** であり、実装・測定・activation の完了を示しません。
+>
+> **新しい claim 版の必須境界:** Node はモデル本体を取得・保持せず、全推論・GPU・外部モデル取得を要求されません。Miner が trace と資料供給責任を固定し、独立選出 Panel が所定の検証を行い、Node は承認情報と認証付きの上限付き局所証拠を検査します。通常 Node の Panel 兼務は必須にしません。モデル未共有とモデル内 Miner／Panel の全結託を想定し、global pool の独立選出と正直な検証者の前提は残します。
+>
+> **状態遷移の改定:** 正常時の positive は非対話、不一致の局所化は negative の対話で進めます。新版は結果固定後に認証を開始し、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等も成立した場合だけ成功 Final へ進みます。局所 positive と全体の承認を区別し、資料不足を計算不正と同一視しません。旧 `Final` 後認証の記述は旧版に限定し、旧署名済み claim の意味を変更しません。詳細な優先関係は [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) に従います。
+
 
 ## Local Useful Inference, Panel-Assisted Verification, Court and Model Economy
 

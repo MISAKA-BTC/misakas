@@ -209,14 +209,20 @@ def check(root: Path) -> dict:
     stats['verified_post_integration_metadata_changes']=len(applied_updates)
     stats['current_rfc_documents']=len(list((root/'docs/rfc-v2').glob('[0-9][0-9][0-9][0-9]-*.md')))
     stats['legacy_rfc_documents']=len(list((root/'docs/rfc').glob('[0-9][0-9][0-9][0-9]-*.md')))
-    later_rfc = [d for d in later if d['kind'] == 'rfc']
-    if stats['current_rfc_documents']!=15 or stats['legacy_rfc_documents']!=41+len(later_rfc):
+    later_rfc = [d for d in later if d['kind'] == 'rfc' and d['path'].startswith('docs/rfc/')]
+    rfc_registry = json.loads((root/'docs/rfc-v2/registry.json').read_text(encoding='utf-8'))
+    if (stats['current_rfc_documents'] != rfc_registry['active_count']
+            or stats['legacy_rfc_documents'] != 41 + len(later_rfc)):
         errors.append('Existing RFC document counts changed.')
 
     # New links only; source payloads and quoted source declarations are inside fences.
     links=0
     fragments=0
-    paths=list(current.glob('*.md')) + [root/'README.md']
+    paths=list(current.glob('*.md'))
+    if (root/'README.md').is_file():
+        paths.append(root/'README.md')
+    else:
+        stats['repository_readme_scope'] = 'Not supplied in docs-only overlay; not checked.'
     rx=re.compile(r'\[[^\]\n]*\]\(([^\s)]+)\)')
     explicit_anchor_cache: dict[Path,set[str]]={}
     for path in paths:

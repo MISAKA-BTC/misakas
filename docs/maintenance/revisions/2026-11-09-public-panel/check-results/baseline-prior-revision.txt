@@ -1,0 +1,7 @@
+PASS: 2026-11-09-palw-execution-integrity; 0 documentation errors.
+  PASS: exact_input_and_no_deletions
+  PASS: historical_evidence_and_parameter_preservation
+  PASS: current_inventory_and_new_adoption_records
+  PASS: mapping_registry_and_index_consistency
+  PASS: local_link_regression_against_exact_input
+Scope: documentation only; runtime, protocol closure and activation are not certified here.

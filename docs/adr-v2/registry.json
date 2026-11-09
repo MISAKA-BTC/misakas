@@ -842,14 +842,14 @@
   ],
   "post_consolidation_documents": [
     {
-      "kind": "adr",
-      "id": "ADR-0210",
-      "path": "docs/adr/0210-all-model-g14-panel-one.md"
+      "kind": "rfc",
+      "id": "RFC-0042",
+      "path": "docs/rfc/0042-all-model-g14-panel-one.md"
     },
     {
       "kind": "rfc",
       "id": "RFC-0042",
-      "path": "docs/rfc/0042-all-model-g14-panel-one.md"
+      "path": "docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md"
     },
     {
       "kind": "rfc",
@@ -857,9 +857,129 @@
       "path": "docs/rfc/0043-wide-q24-llm-output.md"
     },
     {
+      "kind": "rfc",
+      "id": "RFC-0044",
+      "path": "docs/rfc/0044-positive-court-full-coverage.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0045",
+      "path": "docs/rfc/0045-positive-court-canonical-assignment.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0046",
+      "path": "docs/rfc/0046-positive-native-funded-relay.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0047",
+      "path": "docs/rfc/0047-batch-court-time-contract.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0210",
+      "path": "docs/adr/0210-all-model-g14-panel-one.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0210",
+      "path": "docs/adr/0210-court-family-supplier-consent-and-native-reservation.md"
+    },
+    {
       "kind": "adr",
       "id": "ADR-0211",
       "path": "docs/adr/0211-wide-q24-llm-output.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0212",
+      "path": "docs/adr/0212-positive-court-without-model-prepossession.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0213",
+      "path": "docs/adr/0213-positive-court-canonical-assignment.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0214",
+      "path": "docs/adr/0214-positive-native-funded-relay.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0215",
+      "path": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-v2-0016",
+      "path": "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-v2-0017",
+      "path": "docs/rfc-v2/0017-noninteractive-positive-verification.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-v2-0018",
+      "path": "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-v2-0019",
+      "path": "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-v2-0020",
+      "path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0048",
+      "path": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0216",
+      "path": "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0049",
+      "path": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0217",
+      "path": "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0050",
+      "path": "docs/rfc/0050-public-materials-and-one-honest-panel.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0218",
+      "path": "docs/adr/0218-public-materials-and-one-honest-panel.md"
     }
-  ]
+  ],
+  "current_revision": {
+    "date": "2026-11-09",
+    "current_rfc_book_count": 20,
+    "current_adr_book_count": 50,
+    "adopted_decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+    "historical_consolidation_metadata_retained": true,
+    "runtime_changed": false,
+    "activation_changed": false,
+    "revision": "2026-11-09-public-panel",
+    "subsequent_adopted_decision_records": [
+      "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
+      "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+      "docs/adr/0218-public-materials-and-one-honest-panel.md"
+    ]
+  }
 }

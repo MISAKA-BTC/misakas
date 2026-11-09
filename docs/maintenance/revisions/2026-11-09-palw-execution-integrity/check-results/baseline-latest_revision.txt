@@ -1,0 +1,11 @@
+PASS: EXEC / 1 BPS documentation addition; 0 errors.
+  PASS: input_evidence_and_no_deletions
+  PASS: numbered_inventories_and_preserved_bodies
+  PASS: immutable_snapshot_ledgers_and_previous_revision
+  PASS: historical_rfc_fragment_digests
+  PASS: complete_adoption_map_v2
+  PASS: post_consolidation_registration
+  PASS: parameter_additions_only
+  PASS: local_link_regressions_against_input
+Scope: documents only; runtime, throughput, court completion and activation are not certified.
+JSON report: /workspace/scratch/246575217021/palw_integration_audit/baseline-latest-revision.json

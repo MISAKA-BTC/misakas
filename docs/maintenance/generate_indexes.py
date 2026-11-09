@@ -21,6 +21,13 @@ def topic(n):
  return 'Consensus / architecture'
 def ref(src,p,label):return '['+label+']('+posixpath.relpath(p.relative_to(ROOT).as_posix(),posixpath.dirname(src))+')'
 status={('rfc','0003'):'画像・動画は延期/無効。共通部分は別',('rfc','0004'):'モデル改善はmainnet後へ延期/無効',('rfc','0016'):'採用設計・測定待ち・休眠',('rfc','0017'):'二階層採用・旧審査撤回',('rfc','0018'):'Draft / 個別採択あり',('rfc','0019'):'Draft / 原文参照',('rfc','0020'):'Draft / 部分実装',('rfc','0021'):'Accepted / 文書管理',('rfc','0022'):'Accepted / 延期・無効化方針',('adr','0179'):'Accepted / 二階層',('adr','0180'):'Accepted / BFT不使用の設計',('adr','0181'):'Accepted / 原則凍結',('adr','0182'):'Accepted / 延期・無効化方針'}
+status[('adr','0215')]='Accepted design / 実装・測定・有効化は別'
+status[('rfc','0048')]='Accepted design / EXEC 1 BPS・court容量、未有効化'
+status[('adr','0216')]='Accepted design / EXEC・1 BPS追加採択、未有効化'
+status[('rfc','0049')]='Accepted design / PALW実行整合性・単独反証、未有効化'
+status[('adr','0217')]='Accepted design / PALW条件付き保証の追加採択、未有効化'
+status[('rfc','0050')]='Accepted design / 公開資料・モデル未保有の一人検証、未有効化'
+status[('adr','0218')]='Accepted design / 一人前提・最低一件承認の追加採択、未有効化'
 records=[]
 for kind in ['adr','rfc']:
  files=sorted(p for p in (D/kind).glob('*.md') if re.match(r'^\d{4}-',p.name));groups=defaultdict(list)

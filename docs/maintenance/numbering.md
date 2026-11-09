@@ -1,5 +1,24 @@
 # 文書番号の台帳
 
+## 2026-11-08 EXEC・1 BPSの追加採択
+
+新規記録は[RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md)と
+[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)。
+今回の提供workspace内で未使用を確認した範囲の割当であり、未取得branchの一意性は保証しない。
+現行20冊／統合ADR50冊を増やさず、後続採択記録として管理する。
+旧番号系列の実ファイルはRFC49・ADR212となる。旧原文・衝突パスは保持する。
+以下の記録にある冊数・次番号は各時点の履歴である。
+
+## 2026-11-08 の現行入口と採択記録
+
+現在の RFC は **RFC-v2-0001〜RFC-v2-0020 の20本**として整理する。[RFC 一覧](../rfc-v2/README.md)。新規の0016〜0020はこの名前空間で割り当て、旧 `RFC-0016`〜`RFC-0020` の意味・主文書パスを変更しない。統合 ADR は **ADR-v2-0001〜ADR-v2-0050 の50本**を維持する。
+
+新しい採択記録は [ADR-0215 — Model-free Node, Noninteractive Positive and Adversarial Availability](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)。添付 `docs(2).zip` 内で同番号の既存主文書がないことを確認した範囲の割当であり、他 branch・未取得 remote・将来予約まで含めた一意性は確認していない。ADR-v2 50本とは別の post-consolidation 文書として識別する。
+
+2026-11-08 の明示採択は設計の採択であり、wire ID・fence・有効化高さの割当ではない。[改訂記録](revisions/2026-11-08/README.md)。以下の「次番号」や文書数は各日時の記録であり、現在の未使用番号を保証しない。既存衝突は完全パスで識別し、解消のために過去番号を再利用・再採番しない。
+
+## 初回整理時の記録
+
 既存主文書は再採番していません。このセットの次番号は **ADR-0185 / RFC-0023**。新規0181/0021は設計凍結、0182/0022は画像・動画・改善の延期です。他ブランチの予約は未確認です。[機械可読版](number-registry.json)。
 
 ## 既存の衝突

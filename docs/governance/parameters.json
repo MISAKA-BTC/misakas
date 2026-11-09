@@ -645,6 +645,58 @@
       "status": "目安（未実測）",
       "derivation": "docs/evidence/palw/studio-values-2026-10-22/pin-2026-10-22.md",
       "approval": "ユーザー委任 2026-10-22"
+    },
+    {
+      "key": "exec_tx_target_bps_v2",
+      "symbol": "BPS_EXEC_TX",
+      "baseline": "1",
+      "unit": "正規EXEC_TX block/秒",
+      "approval_state": "2026-11-08 ユーザー指示による新profileの設計採択。未実装・未測定・未有効化",
+      "guard": "有効credit・適格producer・指定負荷・供給の前提付き目標。生成と本体受理・決済を別計測し、DAA換算へ流用しない",
+      "source": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "changed_by_reorganization": false,
+      "new_profile_only": true,
+      "runtime_config_changed": false,
+      "previous_baseline": "新profileの新規定義。旧runtime/preset値を上書きしない"
+    },
+    {
+      "key": "exec_tx_slot_period_ms_v2",
+      "symbol": "Δslot",
+      "baseline": "1000",
+      "unit": "ms/global slot",
+      "approval_state": "2026-11-08 ユーザー指示による新profileの設計採択。未実装・未測定・未有効化",
+      "guard": "新profileの合意clockへ接続。local受信時刻で恒久validityを決めず、毎slotのBASE更新を待たない",
+      "source": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "changed_by_reorganization": false,
+      "new_profile_only": true,
+      "runtime_config_changed": false,
+      "previous_baseline": "新profileの新規定義。旧runtime/preset値を上書きしない"
+    },
+    {
+      "key": "exec_tx_canonical_blocks_per_slot_v2",
+      "symbol": "N_exec_slot",
+      "baseline": "1",
+      "unit": "正規EXEC_TX block/global slot（上限）",
+      "approval_state": "2026-11-08 ユーザー指示による新profileの設計採択。未実装・未測定・未有効化",
+      "guard": "ScheduleId・model・producerをまたぐ重複枠を禁止。署名候補数や再送を正規数へ換算しない",
+      "source": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "changed_by_reorganization": false,
+      "new_profile_only": true,
+      "runtime_config_changed": false,
+      "previous_baseline": "新profileの新規定義。旧runtime/preset値を上書きしない"
+    },
+    {
+      "key": "minimum_full_replay_approvals",
+      "symbol": "k_min (PublicOneHonest)",
+      "baseline": "1",
+      "unit": "完全検証承認件数",
+      "scope": "PublicOneHonest logical profile only; not runtime configuration",
+      "approval_state": "ADOPTED_DESIGN_NOT_ACTIVATED — ユーザーの2026-11-09 docs改訂指示による設計採択",
+      "guard": "選出された有資格bondの全subject承認に限定。全検査・異議期間、Q解消、局所検査、資料・依存・期限・資源条件を維持。Panel人数m=1を意味せず、旧75/41署名を変更しない。全資料caseの有界な客観終結手順が未確立のprofileは有効化不可。",
+      "source": "docs/rfc/0050-public-materials-and-one-honest-panel.md",
+      "decision": "docs/adr/0218-public-materials-and-one-honest-panel.md",
+      "runtime_key": null,
+      "changed_by_reorganization": false
     }
   ]
 }

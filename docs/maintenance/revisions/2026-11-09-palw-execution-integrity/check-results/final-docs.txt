@@ -1,0 +1,50 @@
+FAIL — no-new-regressions
+{
+  "mode": "no-new-regressions",
+  "passed": false,
+  "markdown_files": 962,
+  "targets": {
+    "ok": 11419,
+    "missing-doc-file": 972,
+    "outside-package-unchecked": 298,
+    "external-unchecked": 322,
+    "missing-heading": 2
+  },
+  "primary_documents": {
+    "adr": 213,
+    "rfc": 50
+  },
+  "known_issue_occurrences": 43,
+  "new_issue_occurrences": 931
+}
+  new link issue x1: missing-doc-file|docs/README.md|docs/evidence/README.md|
+  new link issue x1: missing-doc-file|docs/adr/0028-palw-challenge-sampling-protocol.md|docs/evidence/palw/measurements/palw-legs-capture-measurement-2026-08-15.md|
+  new link issue x1: missing-doc-file|docs/adr/0032-palw-fee-bond-escrow.md|docs/evidence/palw/measurements/palw-economic-parameters-2026-08-16.md|
+  new link issue x1: missing-doc-file|docs/adr/0134-the-compute-overlays-committee-beacon-retires-at-a-height-and-its-machinery-goes.md|docs/evidence/adr/0134-testnet-11-subnetwork-census-2026-09-17.json|
+  new link issue x1: missing-doc-file|docs/adr/0169-a-work-slice-is-a-normal-consensus-block-the-session-earns-nothing-and-the-floor-is-kept-out-by-merge-admission.md|docs/evidence/palw/implementation-records/rfc-0008-v0-test-record.md|
+  new link issue x1: missing-doc-file|docs/adr/0172-model-extensibility-uses-versioned-kernels-not-a-universal-vm.md|docs/evidence/rfc/0012-kernel-only-design-audit.md|
+  new link issue x1: missing-doc-file|docs/adr/0173-public-verifier-dispute-completeness-is-misaka-purpose.md|docs/evidence/adr/0173-mission-alignment-audit-2026-10-07.md|
+  new link issue x1: missing-doc-file|docs/adr/0175-registered-models-are-permanently-immutable.md|docs/evidence/adr/0175-immutable-model-registration-2026-10-10.md|
+  new link issue x1: missing-doc-file|docs/adr/0188-d2-x3-arm-records-composition-and-pause-credit.md|docs/evidence/palw/g14-completion-2026-10-21/readiness-root.md|
+  new link issue x1: missing-doc-file|docs/adr/0189-tir-court-read-set-door-options.md|docs/evidence/palw/g14-measure-2026-10-18/read-set-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0189-tir-court-read-set-door-options.md|docs/evidence/palw/g14-measure-2026-10-18/door-breakdown-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0189-tir-court-read-set-door-options.md|docs/evidence/palw/g14-measure-2026-10-18/cone-runs-analysis-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0189-tir-court-read-set-door-options.md|docs/evidence/palw/g14-measure-2026-10-18/nonconone-door-options-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0189-tir-court-read-set-door-options.md|docs/evidence/palw/g14-measure-2026-10-18/derived-upper-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0190-tir-door-sparse-fetch-designated-answers-tenure-split.md|docs/evidence/palw/g14-measure-2026-10-18/door-breakdown-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0190-tir-door-sparse-fetch-designated-answers-tenure-split.md|docs/evidence/palw/g14-measure-2026-10-18/read-set-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0190-tir-door-sparse-fetch-designated-answers-tenure-split.md|docs/evidence/palw/g14-measure-2026-10-18/nonconone-door-options-1018.md|
+  new link issue x1: missing-doc-file|docs/adr/0195-rooted-court-response-eligibility-history.md|docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md|retained-stage-timing-counterexample
+  new link issue x1: missing-doc-file|docs/adr/0196-owner-independent-shared-tir-query-data.md|docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md|owner-independent-shared-source-data-candidate
+  new link issue x1: missing-doc-file|docs/adr/0196-owner-independent-shared-tir-query-data.md|docs/evidence/palw/g14-integration-candidate-2026-10-20/README.md|rooted-shared-data-native-adapter-candidate
+  new link issue x1: missing-doc-file|docs/adr/0201-archived-close-qualified-financial-discharge.md|docs/evidence/palw/g14-completion-2026-10-21/s1-and-original-cover.md|
+  new link issue x1: missing-doc-file|docs/adr/0202-court-original-funded-contract-and-role-consent.md|docs/evidence/palw/g14-completion-2026-10-21/funded-original-stage1.md|
+  new link issue x1: missing-doc-file|docs/adr/0202-court-original-funded-contract-and-role-consent.md|docs/evidence/palw/g14-completion-2026-10-22/numerical-geometry-and-funding-preflight.md|
+  new link issue x1: missing-doc-file|docs/adr/0209-genesis-bond-free-bootstrap.md|docs/evidence/palw/rfc0041-bond-free-bootstrap-2026-10-31/README.md|
+  new link issue x1: missing-doc-file|docs/adr/0209-genesis-bond-free-bootstrap.md|docs/evidence/palw/rfc0041-bond-free-bootstrap-2026-10-31/candidate-c10/README.md|
+  new link issue x1: missing-doc-file|docs/adr/0210-all-model-g14-panel-one.md|docs/evidence/palw/model-panel-one-2026-10-31/README.md|
+  new link issue x1: missing-doc-file|docs/adr/0210-all-model-g14-panel-one.md|docs/evidence/palw/model-panel-one-2026-10-31/retention-18850.md|
+  new link issue x1: missing-doc-file|docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md|docs/evidence/palw/implementation-records/coverage-p1p2-record.md|
+  new link issue x1: missing-doc-file|docs/audit/palw/design-reviews/g14-completeness-proof-2026-10-16.md|docs/evidence/palw/implementation-records/genesis02-preupload-identity-2026-10-18.json|
+  new link issue x1: missing-doc-file|docs/audit/palw/design-reviews/t12-bond-reuse-audit-2026-10-10.md|docs/evidence/palw/design-records/t12-bond-reuse-probe-2026-10-10.rs|
+NOTE: baseline missing references remain; PASS is not a clean strict audit.

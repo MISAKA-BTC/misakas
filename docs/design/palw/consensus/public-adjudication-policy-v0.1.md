@@ -1,5 +1,7 @@
 # 公開裁定の方針 v0.1
 
+> **後続採択 2026-11-08:** 新しいclaim版のNode非保有・モデル秘匿／寡占・非対話positive・検証先行Finalは[公開裁定の方針v0.2](public-adjudication-policy-v0.2.md)と[RFC-v2-0016〜0020](../../../rfc-v2/README.md)に従う。本v0.1の原本文と既存Batch v5の時計・履歴は保持する。
+
 - 状態: 2026-11-07 のユーザー採択。この文書が公開裁定の上位設計である。配置は有効化ではない。出荷 preset は武装しない。P0–P3 には試験がある。P4 の debug 印刷は class の受理ではない。P5 は未了。main へは push していない。T12 の upgrade はない。
 - 関係: [設計原則 §8](../../../PRINCIPLES.md#8-モデル計算の暗号学的証明を使用しない2026-10-15ユーザー恒久決定)、[設計原則 §9](../../../PRINCIPLES.md#9-モデルの二階層モデル単位の検証は不採用2026-10-15ユーザー決定)、[RFC-0047](../../../rfc/0047-batch-court-time-contract.md)
 - 対象: 新しい Batch 時計版 `PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5` だけ。既に署名された claim は古い規則のままである。

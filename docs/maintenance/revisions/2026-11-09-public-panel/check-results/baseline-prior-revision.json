@@ -1,0 +1,303 @@
+{
+  "schema": "misaka.docs.execution-integrity-audit.v1",
+  "revision": "2026-11-09-palw-execution-integrity",
+  "checked_at_utc": "2026-11-09T06:39:15.299415+00:00",
+  "status": "PASS",
+  "ok": true,
+  "error_count": 0,
+  "errors": [],
+  "checks": [
+    {
+      "name": "exact_input_and_no_deletions",
+      "status": "PASS",
+      "details": {
+        "input_files": 1885,
+        "present_input_files": 1885,
+        "changed_input_files": 39,
+        "unchanged_input_files": 1846
+      },
+      "errors": []
+    },
+    {
+      "name": "historical_evidence_and_parameter_preservation",
+      "status": "PASS",
+      "details": {
+        "protected_input_files": 1846,
+        "previous_revision_files": 35,
+        "unchanged_historical_rfc_appendices": 15,
+        "principles_edit_scope": "section 13 only",
+        "parameters_changed": false
+      },
+      "errors": []
+    },
+    {
+      "name": "current_inventory_and_new_adoption_records",
+      "status": "PASS",
+      "details": {
+        "rfc_books": 20,
+        "adr_books": 50,
+        "legacy_rfcs": 50,
+        "legacy_adrs": 213,
+        "new_numbered_adoption_records": [
+          "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md",
+          "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md"
+        ]
+      },
+      "errors": []
+    },
+    {
+      "name": "mapping_registry_and_index_consistency",
+      "status": "PASS",
+      "details": {
+        "unchanged_mapping_rows": 49,
+        "new_mapping_rows": 1,
+        "rfc_post_records": 18,
+        "adr_post_records": 23
+      },
+      "errors": []
+    },
+    {
+      "name": "local_link_regression_against_exact_input",
+      "status": "PASS",
+      "details": {
+        "input_error_occurrences": 974,
+        "current_error_occurrences": 974,
+        "new_or_increased": 0,
+        "fixed_occurrences": 0,
+        "external_urls_and_outside_package_targets": "unchecked"
+      },
+      "errors": []
+    }
+  ],
+  "input_changes": [
+    {
+      "path": "docs/INDEX.md",
+      "input_sha256": "552a4f7c7fabec74bc72a0828bdadafc5b86c0e96a7f89fee8b56e3f41723e1a",
+      "current_sha256": "8c2cbceae66bb9e010d8d91ff397d22c8f5c4e527226ec9cc41098ae0ccaa61c"
+    },
+    {
+      "path": "docs/PRINCIPLES.md",
+      "input_sha256": "47664884c555b64717087a986ed9ef2df7d1bea08341c050a8958f6578b6beed",
+      "current_sha256": "9ed43d56c7ed0aef75592036c36ee2610d1b7dfc1443105102095fd9d8685f0f"
+    },
+    {
+      "path": "docs/README.md",
+      "input_sha256": "5b207a19c38b954c3a33ad6518ac6f6e0e33546fedb9ac3ba5485f7dae0756ec",
+      "current_sha256": "e7b018b832b0fd4c571d7052fc9825959352f9a0ab24c7c997048d817330709a"
+    },
+    {
+      "path": "docs/STATUS.md",
+      "input_sha256": "8b8a332fd80bb72efbf87bcaf4c88c53c39794ecc8beac5b9bdbd607a89b76a0",
+      "current_sha256": "24309547ce71be8da4c2f9f05f063e01cda656a4621cd56fc0bb8c0b2878ecff"
+    },
+    {
+      "path": "docs/adr/INDEX.md",
+      "input_sha256": "58fa17a7e4535c9b88a51646e698e53cc33acb71571f7dc2d07e0d430bfc8e0c",
+      "current_sha256": "e711914b4dc71884b663aa8034d493b66a40e3c27b381141e9780fa2cabefabe"
+    },
+    {
+      "path": "docs/adr/TOPICS.md",
+      "input_sha256": "27b4e8c6886d3bfbbf40835c4b32959a7988b966aecfc2ee4a721bbe71c2b0a7",
+      "current_sha256": "b766f81bc83bd09bf94157c7f1152a7984b93361ca8d8fdb84f3632c6432c8ac"
+    },
+    {
+      "path": "docs/adr-v2/README.md",
+      "input_sha256": "056c1f87d6bc5bafdcc4400a4ff0e38219f30c5a7b8475b6e9012d24e2616552",
+      "current_sha256": "78a95e9f16c2a8fa15b29b662411ef0a447c15fa9d124f863437d694cab59427"
+    },
+    {
+      "path": "docs/adr-v2/registry.json",
+      "input_sha256": "de695550130d161dcf1094431a461e0895e3e3e60dff3e53124f3dca3ee9431d",
+      "current_sha256": "5c5bc7335f466456d78b86a7e6a03b4a8ea00638a49430a0acc432e95b4c1448"
+    },
+    {
+      "path": "docs/maintenance/catalog.md",
+      "input_sha256": "2bbc0746d616d24b0c2e6cbcaf07e78e97716c368095a6db5e8f553863ba047b",
+      "current_sha256": "0e7c3df52f57a219641c12b5e58e7e9e45cdc1b44ce8ea5ccfb22aaed11e6d73"
+    },
+    {
+      "path": "docs/maintenance/decision-catalog.json",
+      "input_sha256": "be4e63cc05071822fa245a388c2b77b42c0df122a3fb8be98d39e5aafcad9489",
+      "current_sha256": "dc701d5d37447e91d308970e28a575a7dcd4895ae53f71785aebe1732a5c4fb1"
+    },
+    {
+      "path": "docs/maintenance/generate_indexes.py",
+      "input_sha256": "9e99a2d2288a988858ca73bc0e37ac23f7231919af78e525dec010e8e8375685",
+      "current_sha256": "97e47eb398e4eb694e766c390f7fbbdbb70c9c1343bacbc4b47e4a607bb20f38"
+    },
+    {
+      "path": "docs/maintenance/number-registry.json",
+      "input_sha256": "1179837f6529e743f9ec60fa82f5cd04a086b56fcddf88ce1b5b4629861bf8bd",
+      "current_sha256": "c41e061c2dd1b98bad4801f9a71eba1e36d9d33d9eec4ab7a023ae279c25c389"
+    },
+    {
+      "path": "docs/rfc/INDEX.md",
+      "input_sha256": "3b55bac929d47fbcdad932af09d3f39ed953ddce2bd0c05d5f543f89b814f2bb",
+      "current_sha256": "29e7b7102d55ea970cb3e1b78681e30c37da4da34cc1d3a4a579c9fbf0d44c0a"
+    },
+    {
+      "path": "docs/rfc/TOPICS.md",
+      "input_sha256": "9a8c8e870cb6ff6474609f13f23276602aa7386e2d84db83a60cc6ddda5b1627",
+      "current_sha256": "8106a9b6672357542d48ce6c0fb3c9b78c4de827f8155a0e2676269a3dcb5483"
+    },
+    {
+      "path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+      "input_sha256": "9bfe75266524ee154734033b80e9de992ffe30a6ccbcb87b768c7034d50706e9",
+      "current_sha256": "9b9b0338cc8846c2771a2858558fbda8abffd7a0b71c58dbcfc03f750434c257"
+    },
+    {
+      "path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "input_sha256": "78b0354505ad424f4950586a747518bd1cc90e253cd1c6af784556db4ba2f5a5",
+      "current_sha256": "9ec40d2654f1386cdd7bb9db01e2ef37defaa53f7d39bc26255f4c040bc0b149"
+    },
+    {
+      "path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+      "input_sha256": "c0d947d668822079fc5c25bd410118387e536cbc98c018f0a5495c8e226680e7",
+      "current_sha256": "d41791945ea4ad44604a2b4645b490fb6fda38b6503e1bc41c5cbf1e140b4cf9"
+    },
+    {
+      "path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+      "input_sha256": "63048fad5509a4e7408fc45c87281cd1d9a04afd0e87fcb42e4603ca7a15a730",
+      "current_sha256": "409b2815685f3ab38c10cc90bfc4d65c21f81b779e5732fd7e9fb8cd6b5934e4"
+    },
+    {
+      "path": "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+      "input_sha256": "88f96ecce3b7bd4a7c62a3a1f96141351b98de325b1145b2c827de17c8f44c59",
+      "current_sha256": "d00d890c3801e7f05e49e206c8886ad95b95c7b9e3e60b2e98af4e3910dfd2b0"
+    },
+    {
+      "path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "input_sha256": "bdacfca8951854c2d15833c221f74c83cb7d8d2706b017146ec942857127dbe5",
+      "current_sha256": "3d41ff46f5f615678fc61218c2953bb73d7d60fb2adbe4160070acb9f1b46189"
+    },
+    {
+      "path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "input_sha256": "a3ecf818b8de45a74d3f8f5a3d7a59693678844f804fcf41cc3427d9b3ae9088",
+      "current_sha256": "78e4cc8b737608fb88350bb1cc6e4e43ebabdeb5445b7687d085539320a58b46"
+    },
+    {
+      "path": "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+      "input_sha256": "befecc1ad6914bf44e3127f675fd8be40be422fddec0ad80dd4ac94dfef2bdc1",
+      "current_sha256": "839f837c59467e6999d676e7e7a18dedbe6de5de9a7e3e9b6719468663370906"
+    },
+    {
+      "path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+      "input_sha256": "a0cdac9c554b4d08121cae66996d49f8c60a0a950ee793bb7b719950f2801842",
+      "current_sha256": "86e6ff450c8dd60f1516d90e7c808a84acb4d9f3f69d31a7fef488efb6c4a2a1"
+    },
+    {
+      "path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "input_sha256": "a14ac69ae603a26069199710c5465c1ebb2b4a51f775b5c83c923faef0c53bd3",
+      "current_sha256": "bbc144df74d7b4d66302d446db0eb4fa29ec5079df32ed8640ba639dcb3b1671"
+    },
+    {
+      "path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "input_sha256": "30e3deb60a8460ff36b1614da30f8acfc975ea95d934c103001510d288505013",
+      "current_sha256": "a47d59715088889dd24d199f0933c530ab8d80cd51f920f50ead487936ddc625"
+    },
+    {
+      "path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "input_sha256": "56087be71aec9b9348d279077fd669c6185fdaf70fb42e554e49e9261b1c6da4",
+      "current_sha256": "e9dc974fc9d45f0984e4980aa9eb0fedfc958dd6de8cde92f144f9948f8663fe"
+    },
+    {
+      "path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+      "input_sha256": "cbf74d4e0e13106cea852fc6c7ebba81c5853317f288ef775ef10a5ce6a93bd3",
+      "current_sha256": "b9806e8ba5e5feb9c539b46afdba7a2066ecead04bf0373e1c5492dd80914339"
+    },
+    {
+      "path": "docs/rfc-v2/0014-court-master-contract.md",
+      "input_sha256": "8517edbc1a8de4fb1e4157ea48d4ea666d5b4754457cdd1f41626f99fc3cbd91",
+      "current_sha256": "dbbee2aa630fc24a25c557656e834511134516fd9f7ddf22bf413afe1da4ee1a"
+    },
+    {
+      "path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "input_sha256": "ca420c0e92f874efafb71bc2bc757a7662ed9a8fa0fb7c7677f11e1d8f38ab7a",
+      "current_sha256": "81a6db6192039a932d60b523dd7e2ccccb51b2bd0e98627541ae19ea5cac5d6e"
+    },
+    {
+      "path": "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+      "input_sha256": "1e95ec4a9bd02afe3c813c02732a964ebf7f47b50ab28482fa9d6a75736a192c",
+      "current_sha256": "efd5c078d0f338a58aa494812bc62a583d62f3cd663d4df9c07275507b73b733"
+    },
+    {
+      "path": "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+      "input_sha256": "324f54ddf0bb4e51dcb459f8d689a4e02e70756d86b6da5d414a9837c8e72f1e",
+      "current_sha256": "c20a1c52e0e2491ca17973ff69fed486b749e3caed9756a778cb8a42bc1dc3e8"
+    },
+    {
+      "path": "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+      "input_sha256": "a36a7e2c1db6a7ee7162b5963becfbf7f3318fc0242c23de8667642f47a71a79",
+      "current_sha256": "cb9da01402674e03c03136473f8ae6efe30c513f73698256dad75c985a0de683"
+    },
+    {
+      "path": "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+      "input_sha256": "d3b1bf18732413209ef63ad46f6e2e354a487f622fc4e4e9a663888826f6457e",
+      "current_sha256": "a11f26f39cf50e5aa5081e22180c0d681e43e0d456cb3e743108184f5d409352"
+    },
+    {
+      "path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+      "input_sha256": "18638aeef9728212fdd30f7b912e8196c2ee18829a32d3613753a56ebaa62e75",
+      "current_sha256": "9d51188d07828e4bc87d08f1137fe3659747ecdd62a8c2ef1e81b9b5a108fc21"
+    },
+    {
+      "path": "docs/rfc-v2/MAPPING.md",
+      "input_sha256": "3f74c6cb2f3bd16f5d97ad035ee8fe7c8fa5c603173f4d94e65c72e299253c61",
+      "current_sha256": "d4b5d9520c070c9a5eb978052d859e230c31b72cb4220d1a46f0a09570dc7cdf"
+    },
+    {
+      "path": "docs/rfc-v2/MIGRATION.md",
+      "input_sha256": "2281493bb4e3a41723eb908dcb80a3477cd6398ad5cadac90ea762fafae133a5",
+      "current_sha256": "6fa69d744852b14b65c1bb469fe6943f6bf2679b56b69c00bd23a5496df38d19"
+    },
+    {
+      "path": "docs/rfc-v2/README.md",
+      "input_sha256": "69ca7003e8eff16804eb0ef723120545d97c25669e11155f83d5e3e328ba7af8",
+      "current_sha256": "3b4dd5f1a30489fbfb853eea8da1713717118f3aaf2d5c575f362fc2ed7d5f5e"
+    },
+    {
+      "path": "docs/rfc-v2/adoption-map.json",
+      "input_sha256": "98231257ad220e00e49fc63af1a3beffee7a80c9deed3dce43604672913f5f45",
+      "current_sha256": "ac5fe82a2e0dbb4472f5e12d101c88ea467e8b7bc6252b0fd19109a497259240"
+    },
+    {
+      "path": "docs/rfc-v2/registry.json",
+      "input_sha256": "171889e0274bca229f0465b4ca33502f314a78aca1ff3864997b5723121e2725",
+      "current_sha256": "1ffe5eee27c19b5ca6c72cc01cd3d6f8b5f28dbe487ff0563e61f630446057d8"
+    }
+  ],
+  "new_files": [
+    "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+    "docs/design/palw/consensus/public-adjudication-policy-v0.3.md",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/README.md",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/REVIEW-CRITERIA.md",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/REVIEW.md",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/VALIDATION.md",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-adr.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-adr.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-docs.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-docs.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-latest-revision.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-latest_revision.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/baseline-rfc.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-adr.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-adr.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-docs.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-docs.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-revision.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-revision.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check-results/final-rfc.txt",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check_protocol_model.py",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/check_revision.py",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/input-link-issues.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/input-manifest.json",
+    "docs/maintenance/revisions/2026-11-09-palw-execution-integrity/model-results.json",
+    "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md"
+  ],
+  "scope": "Exact-input documentation preservation, registration and local-link regressions only.",
+  "limitations": [
+    "Does not prove protocol semantics, runtime safety, measured throughput or activation.",
+    "Historical snapshot checker failures are reported separately, never baseline-rewritten.",
+    "Does not validate external URLs or code outside the supplied docs tree."
+  ]
+}

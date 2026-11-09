@@ -1,0 +1,1046 @@
+{
+  "schema": "misaka.docs.rfc20-adoption-map.v2",
+  "date": "2026-11-09",
+  "source_identity": "complete-relative-path-not-number-alone",
+  "active_rfc_count": 20,
+  "input_legacy_rfc_file_count": 48,
+  "historical_mapping": "source-map.json",
+  "decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+  "sources": [
+    {
+      "source_path": "docs/rfc/0001-palw-inference-surface-gaps.md",
+      "legacy_id": "RFC-0001",
+      "input_sha256": "cf5d0a773fa10221d09ec0e4f5f28cbede209fdfda1c97e4e993ed4bfa941486",
+      "current_owner_id": "RFC-v2-0001",
+      "current_owner_path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0017",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0001",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0002-palw-tensor-ir.md",
+      "legacy_id": "RFC-0002",
+      "input_sha256": "146a6db24530aa8a5440e9b6904a3f3bf7f643fe21c4d63325be6c7eb6d78d87",
+      "current_owner_id": "RFC-v2-0002",
+      "current_owner_path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0017",
+        "RFC-v2-0019"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+      ],
+      "historical_owner_id": "RFC-v2-0002",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0003-palw-generative-model-classes.md",
+      "legacy_id": "RFC-0003",
+      "input_sha256": "2e6c459f7c1f2aceb4233f4c9b71364486d78f625e948aacf6e4c4fa1fe951b5",
+      "current_owner_id": "RFC-v2-0001",
+      "current_owner_path": "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0001",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0004-palw-model-improvement.md",
+      "legacy_id": "RFC-0004",
+      "input_sha256": "6abaa2eba4f2ef5aa97774b93154858365f116370cec0b7a64465240252deb42",
+      "current_owner_id": "RFC-v2-0015",
+      "current_owner_path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "related_new_profile_ids": [],
+      "related_new_profile_paths": [],
+      "historical_owner_id": "RFC-v2-0015",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0005-palw-ml-vm.md",
+      "legacy_id": "RFC-0005",
+      "input_sha256": "cc096f4afa7bc81205e50f8123553a81d1b4ece4ed7ea6084cf6118aaa41676f",
+      "current_owner_id": "RFC-v2-0015",
+      "current_owner_path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "related_new_profile_ids": [],
+      "related_new_profile_paths": [],
+      "historical_owner_id": "RFC-v2-0015",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0006-palw-layer-sharded-panels.md",
+      "legacy_id": "RFC-0006",
+      "input_sha256": "06ae27140abd9812a80678750240b9e84785ecbd3871fc48fd64483af029f50c",
+      "current_owner_id": "RFC-v2-0006",
+      "current_owner_path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0017",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0006",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0007-palw-verification-certificates-and-algebraic-checks.md",
+      "legacy_id": "RFC-0007",
+      "input_sha256": "eadad4e17cc30e8acf0b0f882d664fa1bedb871af9e6e63fb7bd1c00d924c07b",
+      "current_owner_id": "RFC-v2-0006",
+      "current_owner_path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0017",
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0006",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0008-palw-claim-backed-consensus-blocks.md",
+      "legacy_id": "RFC-0008",
+      "input_sha256": "710936edcb883c09baa8b7daea0c8a3d953a02f521315bfa34d5cc266eb17324",
+      "current_owner_id": "RFC-v2-0007",
+      "current_owner_path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0007",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0009-palw-remote-miner.md",
+      "legacy_id": "RFC-0009",
+      "input_sha256": "5520264bc74290cd86218c4755e8fabad8ca4d7da09ed25bcf172d031ae1d793",
+      "current_owner_id": "RFC-v2-0009",
+      "current_owner_path": "docs/rfc-v2/0009-remote-client-and-sdk.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0017",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0009",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0010-permissionless-palw-panel-and-claim-completion.md",
+      "legacy_id": "RFC-0010",
+      "input_sha256": "127e4c2429955ff112c13b0fd2a4e54dcc01dd3b8c243ca83ebe75e101f0210f",
+      "current_owner_id": "RFC-v2-0006",
+      "current_owner_path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0017",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0006",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0011-permissionless-model-and-long-context-onboarding.md",
+      "legacy_id": "RFC-0011",
+      "input_sha256": "be973e6d23b3ac0de5b95fd4eb35f14fe17771a7092ee8507345653548e5e32e",
+      "current_owner_id": "RFC-v2-0003",
+      "current_owner_path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0003",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0012-palw-only-consensus-and-native-evm-settlement.md",
+      "legacy_id": "RFC-0012",
+      "input_sha256": "95a70735174361d070ca69e17f44907f70bb8ee30f25a9ea77e8c7e5c728b9f9",
+      "current_owner_id": "RFC-v2-0010",
+      "current_owner_path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0010",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0013-reproducible-layouts-and-resource-bounded-onboarding-tools.md",
+      "legacy_id": "RFC-0013",
+      "input_sha256": "8c9c2a6e3b5cb2b1c95d62da8a60670d826b5ecd27e56c661819a171102c2df0",
+      "current_owner_id": "RFC-v2-0003",
+      "current_owner_path": "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0019"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+      ],
+      "historical_owner_id": "RFC-v2-0003",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0014-panel-independent-fraud-prosecution.md",
+      "legacy_id": "RFC-0014",
+      "input_sha256": "a0b759f44596afe99322bb3a4960f942159d2dd0bec468f22e0f4b749aeb51f5",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0015-panel-free-permissionless-verification.md",
+      "legacy_id": "RFC-0015",
+      "input_sha256": "9f005a05fd7c732069baa47195f4c56ef9995b423e9cf35876937f8d1046618c",
+      "current_owner_id": "RFC-v2-0015",
+      "current_owner_path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0017",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0015",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0016-bond-weighted-block-opportunity-and-elastic-final-capacity.md",
+      "legacy_id": "RFC-0016",
+      "input_sha256": "e821fe260743d5b9bad78d8918647c6f71a946818d1ac0bcd410c1673984f47a",
+      "current_owner_id": "RFC-v2-0011",
+      "current_owner_path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0011",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0017-model-eligibility-examination-and-renewal.md",
+      "legacy_id": "RFC-0017",
+      "input_sha256": "6f91c20b1650ec66336df78bd6715a742e97edde4c5cdbc396afb3544c32fabc",
+      "current_owner_id": "RFC-v2-0004",
+      "current_owner_path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0004",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0018-dag-parallel-multi-model-consensus.md",
+      "legacy_id": "RFC-0018",
+      "input_sha256": "1e3dbe8df6d19dabf080c319f8b2d00251a3a101cfcf3238591103b6433d0be8",
+      "current_owner_id": "RFC-v2-0010",
+      "current_owner_path": "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0010",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0019-annual-model-upgrade.md",
+      "legacy_id": "RFC-0019",
+      "input_sha256": "ea6c0bbcb654f575bb8396e909f2b31ed78004a3b4897fba1d7088b8e0c66d0e",
+      "current_owner_id": "RFC-v2-0004",
+      "current_owner_path": "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0004",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0020-long-context-calibration-memory.md",
+      "legacy_id": "RFC-0020",
+      "input_sha256": "9ea21859e194f85dedd83868df1c397b982df9f65f30e34de281fa2a355f6fce",
+      "current_owner_id": "RFC-v2-0005",
+      "current_owner_path": "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0005",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0021-design-freeze-and-documentation-governance.md",
+      "legacy_id": "RFC-0021",
+      "input_sha256": "1d780be260b557208bf4bdf3310e09bb3b1b7f463d1dbc13cfe6a0f81b68183a",
+      "current_owner_id": "RFC-v2-0015",
+      "current_owner_path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0015",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0022-post-mainnet-media-and-model-improvement-scope.md",
+      "legacy_id": "RFC-0022",
+      "input_sha256": "753f83e076fc1228ddf8b29ae0520c9a61457ff66842da20d3fd31e773df4717",
+      "current_owner_id": "RFC-v2-0015",
+      "current_owner_path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "related_new_profile_ids": [],
+      "related_new_profile_paths": [],
+      "historical_owner_id": "RFC-v2-0015",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0023-unresolved-claim-liability-and-independent-progress.md",
+      "legacy_id": "RFC-0023",
+      "input_sha256": "6c6713d0a42be5669776eb74d5ef38dd47291809508a878daae47bc123bdd6a1",
+      "current_owner_id": "RFC-v2-0008",
+      "current_owner_path": "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0008",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0024-court-door-3200-to-ctx-2m.md",
+      "legacy_id": "RFC-0024",
+      "input_sha256": "ab4f29ce187abefcc408a26fcd0b9c0f4e4e862311a0406bab3a658037a9f62f",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0025-scalable-objective-court-many-models-mass-disputes.md",
+      "legacy_id": "RFC-0025",
+      "input_sha256": "c4cf2e50999f29623cde90fff5e96b70b07f8e2f0c7fcf24d7df82c02a78f8db",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0026-court-policy-master-contract.md",
+      "legacy_id": "RFC-0026",
+      "input_sha256": "c7cd77c36fcc4c0698254636ee5b704e22fc9b87c2024e27f6aa9386317005ff",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0018",
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0027-miner-account-bond-and-panel-incentives.md",
+      "legacy_id": "RFC-0027",
+      "input_sha256": "337747d946ea2685c2920767eb9c552705fc38f42f2e299139808470ab582053",
+      "current_owner_id": "RFC-v2-0015",
+      "current_owner_path": "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+      "related_new_profile_ids": [],
+      "related_new_profile_paths": [],
+      "historical_owner_id": "RFC-v2-0015",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0028-rooted-court-response-eligibility-history.md",
+      "legacy_id": "RFC-0028",
+      "input_sha256": "8bfeec2011ee648014ff4ee4207167189ff74d3828e99a70649d38832bd273b8",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0029-owner-independent-shared-tir-query-data.md",
+      "legacy_id": "RFC-0029",
+      "input_sha256": "9fb6257c28155e32e66c3dba004f6baf2e2c0661ad49ca858ff0c9a7ba6c723e",
+      "current_owner_id": "RFC-v2-0002",
+      "current_owner_path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0018",
+        "RFC-v2-0019"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+      ],
+      "historical_owner_id": "RFC-v2-0002",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0030-court-end-effects-and-pending-liability-archive.md",
+      "legacy_id": "RFC-0030",
+      "input_sha256": "1c46304fa175f2b1f214c397c682b829f3c0e3a23ef2729c7234746453ae501d",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0031-shared-court-initial-notice-boundary.md",
+      "legacy_id": "RFC-0031",
+      "input_sha256": "5a969226d9d4b4a805d6e2f80df6df2b05dd5bac745927d717e2cc8f53d83b2f",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md",
+      "legacy_id": "RFC-0032",
+      "input_sha256": "da14fa673ee16cbf368bf1caa10b27a388a06aa4425de5d51062be75a6c1ae36",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0019"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0033-d2-readiness-root-opening-availability.md",
+      "legacy_id": "RFC-0033",
+      "input_sha256": "3339abc3303c7e80e22a64778b65643d7bcaea049f6241fa040b8d0726d5215e",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0034-archived-close-qualified-financial-discharge.md",
+      "legacy_id": "RFC-0034",
+      "input_sha256": "9f23efd19a8949949a1c8abfa192226e552de303045f33b3dbbc1102d2ad2ae8",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0035-court-original-funded-contract-and-role-consent.md",
+      "legacy_id": "RFC-0035",
+      "input_sha256": "746be1d58ec259fb8aaca4b55dd988025f9f558cd05b7c7d145cc0a468786042",
+      "current_owner_id": "RFC-v2-0014",
+      "current_owner_path": "docs/rfc-v2/0014-court-master-contract.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0018"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md"
+      ],
+      "historical_owner_id": "RFC-v2-0014",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0036-authenticated-palw-state-map-and-row-access.md",
+      "legacy_id": "RFC-0036",
+      "input_sha256": "2a7da16331868ede8756e30c9e2d069a4827dee36b07ef62fa1729123b690920",
+      "current_owner_id": "RFC-v2-0012",
+      "current_owner_path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0012",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0037-ibd-bounded-row-stream-and-storage-generations.md",
+      "legacy_id": "RFC-0037",
+      "input_sha256": "c1e98895a7731b2bb46b09baea8e0ef51be42c4d641f06ab33d99753945cc211",
+      "current_owner_id": "RFC-v2-0012",
+      "current_owner_path": "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0012",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0038-palw-fp-answer-accounting.md",
+      "legacy_id": "RFC-0038",
+      "input_sha256": "c6f5f27e7426fb99920201e90dba22931029b54128ede4f81b9f127c0bd75bbf",
+      "current_owner_id": "RFC-v2-0007",
+      "current_owner_path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0007",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0039-finite-fee-consent-and-provider-payment-bounds.md",
+      "legacy_id": "RFC-0039",
+      "input_sha256": "cbfd09fe01ac1ffd3068666c292ad1ba6103cc2e313caacf3c6ad123eb263474",
+      "current_owner_id": "RFC-v2-0011",
+      "current_owner_path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0011",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0040-authenticated-prefix-work-dependencies.md",
+      "legacy_id": "RFC-0040",
+      "input_sha256": "73c697298446b50af899349f1f32147c5da5300beef81c8c19b39c60b2fcf7e3",
+      "current_owner_id": "RFC-v2-0008",
+      "current_owner_path": "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0008",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0041-genesis-bond-free-bootstrap.md",
+      "legacy_id": "RFC-0041",
+      "input_sha256": "c76dfb6ae4336a82b3ce0550622e484d6fb9940d97ac76dad52bfeb51c995d0f",
+      "current_owner_id": "RFC-v2-0013",
+      "current_owner_path": "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": "RFC-v2-0013",
+      "historical_snapshot_included": true,
+      "disposition": "原統合の担当と原付録を保持。関連する新profile条項のみ2026-11-08採択に従う。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0042-all-model-g14-panel-one.md",
+      "legacy_id": "RFC-0042",
+      "input_sha256": "97947f1b0072d9a0674bc7dc9fefdf57f4cf5d3c86d119279d044c83afe5be52",
+      "current_owner_id": "RFC-v2-0006",
+      "current_owner_path": "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "モデル保有者内の通常Panelとglobal検証者を分離。旧署名・旧profileは保持。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md",
+      "legacy_id": "RFC-0042",
+      "input_sha256": "3614835d26e4c2485ba100dbb8481473f7eb304e0ae343688908ca682901522a",
+      "current_owner_id": "RFC-v2-0011",
+      "current_owner_path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0018"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "供給同意・資金予約は共通会計へ。新版originalとqualified defaultへ接続。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0043-wide-q24-llm-output.md",
+      "legacy_id": "RFC-0043",
+      "input_sha256": "4790b6e98ed93171fc6842c855998dc7df22bc9eaa3a9be265d9220e2449c6f6",
+      "current_owner_id": "RFC-v2-0002",
+      "current_owner_path": "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0017",
+        "RFC-v2-0019"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "型・丸め・layoutの版を保持し、canonical traceと局所courtへ束縛。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0044-positive-court-full-coverage.md",
+      "legacy_id": "RFC-0044",
+      "input_sha256": "b22376781e4c27e34fdafd03c325c4a5b2790a93f81771f492a57275c220dd08",
+      "current_owner_id": "RFC-v2-0017",
+      "current_owner_path": "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "旧R2全被覆の保証は保持。新版はPanel全再実行・Node局所検査とglobal承認前提へ変更。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0045-positive-court-canonical-assignment.md",
+      "legacy_id": "RFC-0045",
+      "input_sha256": "99d0bf1fe187e790ec7a16aea2050910658460624961885680e635fdd80f1df6",
+      "current_owner_id": "RFC-v2-0011",
+      "current_owner_path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0006",
+        "RFC-v2-0017",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "割当・WorkerPaymentの原資と署名済み権利を保持。全体検証承認とは分離。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0046-positive-native-funded-relay.md",
+      "legacy_id": "RFC-0046",
+      "input_sha256": "e0e91e2cba5e38a0f863c7c886d628c553f21d25d593ddaf1f8917f15bcee3dc",
+      "current_owner_id": "RFC-v2-0011",
+      "current_owner_path": "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0016",
+        "RFC-v2-0018",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "funded relayの同意・予約・返還を維持。新版の供給と公開反証へ接続。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0047-batch-court-time-contract.md",
+      "legacy_id": "RFC-0047",
+      "input_sha256": "c7780a35e1a1a41ae83ecca9a97349e6bf032d79edb820d49134dddad486522f",
+      "current_owner_id": "RFC-v2-0018",
+      "current_owner_path": "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0014",
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0014-court-master-contract.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "a+3120とa+10000の時計・公開経路を維持。事前認証とcold取得予算を接続。",
+      "source_bytes_preserved": true
+    },
+    {
+      "source_path": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "legacy_id": "RFC-0048",
+      "input_sha256": null,
+      "new_adoption_record": true,
+      "source_sha256": "8983a6dd73d90485df2d7999406bee975c3d809f824e7f615321141e5a533543",
+      "current_owner_id": "RFC-v2-0007",
+      "current_owner_path": "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0005",
+        "RFC-v2-0010",
+        "RFC-v2-0018",
+        "RFC-v2-0019",
+        "RFC-v2-0020"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+        "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md",
+        "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "2026-11-08追加採択。07がcredit、10がschedule/1 BPS、05/18/19/20がcourt容量と成功条件を所有する。",
+      "source_bytes_preserved": null
+    },
+    {
+      "source_path": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md",
+      "legacy_id": "RFC-0049",
+      "input_sha256": null,
+      "new_adoption_record": true,
+      "source_sha256": "db9d4b2f883e27b496829d2afe6ba14488734ebf9fe52b8512cfb2adde241dc9",
+      "current_owner_id": "RFC-v2-0020",
+      "current_owner_path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0005",
+        "RFC-v2-0006",
+        "RFC-v2-0007",
+        "RFC-v2-0008",
+        "RFC-v2-0010",
+        "RFC-v2-0012",
+        "RFC-v2-0014",
+        "RFC-v2-0016",
+        "RFC-v2-0017",
+        "RFC-v2-0018",
+        "RFC-v2-0019"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+        "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+        "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+        "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+        "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+        "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+        "docs/rfc-v2/0014-court-master-contract.md",
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "2026-11-09追加採択。20が条件付き安全命題と単一成功gate、16/19が全関係と局所反証、17/18が承認・単独異議、関連冊子が資源・経済・保存を所有する。",
+      "source_bytes_preserved": null
+    },
+    {
+      "source_path": "docs/rfc/0050-public-materials-and-one-honest-panel.md",
+      "legacy_id": "RFC-0050",
+      "input_sha256": null,
+      "new_adoption_record": true,
+      "source_sha256": "0ecf1be300ab86110cc3107fee1274c947407a04a7984f1d8ce8dee57276d237",
+      "current_owner_id": "RFC-v2-0020",
+      "current_owner_path": "docs/rfc-v2/0020-verification-gated-final-and-adversarial-models.md",
+      "related_new_profile_ids": [
+        "RFC-v2-0001",
+        "RFC-v2-0002",
+        "RFC-v2-0003",
+        "RFC-v2-0004",
+        "RFC-v2-0005",
+        "RFC-v2-0006",
+        "RFC-v2-0007",
+        "RFC-v2-0008",
+        "RFC-v2-0009",
+        "RFC-v2-0010",
+        "RFC-v2-0011",
+        "RFC-v2-0012",
+        "RFC-v2-0013",
+        "RFC-v2-0014",
+        "RFC-v2-0015",
+        "RFC-v2-0016",
+        "RFC-v2-0017",
+        "RFC-v2-0018",
+        "RFC-v2-0019"
+      ],
+      "related_new_profile_paths": [
+        "docs/rfc-v2/0001-inference-and-generative-jobs.md",
+        "docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md",
+        "docs/rfc-v2/0003-model-onboarding-and-artifacts.md",
+        "docs/rfc-v2/0004-model-tiers-and-annual-catalog.md",
+        "docs/rfc-v2/0005-bounded-resources-and-long-context.md",
+        "docs/rfc-v2/0006-panels-and-probabilistic-verification.md",
+        "docs/rfc-v2/0007-claims-exec-and-answer-accounting.md",
+        "docs/rfc-v2/0008-claim-dependencies-and-liability.md",
+        "docs/rfc-v2/0009-remote-client-and-sdk.md",
+        "docs/rfc-v2/0010-dag-consensus-and-native-settlement.md",
+        "docs/rfc-v2/0011-bond-budgets-fees-and-payments.md",
+        "docs/rfc-v2/0012-authenticated-state-storage-and-ibd.md",
+        "docs/rfc-v2/0013-permissionless-bootstrap-and-release.md",
+        "docs/rfc-v2/0014-court-master-contract.md",
+        "docs/rfc-v2/0015-freeze-deferred-rejected-and-governance.md",
+        "docs/rfc-v2/0016-miner-execution-commit-and-material-supply.md",
+        "docs/rfc-v2/0017-noninteractive-positive-verification.md",
+        "docs/rfc-v2/0018-interactive-negative-court-and-defaults.md",
+        "docs/rfc-v2/0019-model-free-node-and-bounded-evidence.md"
+      ],
+      "historical_owner_id": null,
+      "historical_snapshot_included": false,
+      "disposition": "2026-11-09追加採択。20が公開資料・一人前提・k_min=1と条件付き正常完了、16/17/18がcold取得・供給・承認・case、05/19が容量と有界native検証を所有する。",
+      "source_bytes_preserved": null
+    }
+  ],
+  "revision": "2026-11-09-public-panel",
+  "current_legacy_rfc_file_count": 51,
+  "subsequent_decision_records": [
+    "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
+    "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+    "docs/adr/0218-public-materials-and-one-honest-panel.md"
+  ],
+  "revision_input_legacy_rfc_file_count": 50
+}

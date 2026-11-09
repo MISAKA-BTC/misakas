@@ -1,44 +1,247 @@
 # RFC-v2-0007 — Claim・EXEC・仕事量・回答会計
 
-編集日: 2026-10-29 / 入力: `misakas-pre(5).zip`
+## 2026-11-09公開資料・一人前提の追加境界
 
-[15本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+[採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。一件の完全承認は直ちにcreditを発生させない。単一claimでは20の成功条件を満たした仕事だけを一回計上する。任意のatomic batchではbatch全体がFinalを満たした後に全leafの非重複仕事を一回計上し、部分Final・部分creditは認めない。batch共有や複数承認で原仕事を増幅しない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
-> **編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
+## 2026-11-09新profileの追加境界
+
+[採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。成功gateの未成立・反証・取消を全仕事報酬とcredit consumerが読み、未消費権利へ整合して伝播する。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+新profileでは、20 §5.2の同batch反証・未解決caseのholdを先に反映したstateから、発行・予約・schedule有効化・permitの新消費を判定する。下記のconsumed保全は当該batchより前にcanonical受理済みの分だけであり、同batchで反証される起源のunitを先にconsumedへ移して取消を逃れることを許さない。Final後に受理された適格caseも、Qが解決するまで起源の現在の使用適格性をholdする。数量Nや既消費provenanceを増減させる新規則ではない。
+
+原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+
+[20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+
+> **2026-10-29原統合の編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
 > **状態:** 採用済み・Draft・隔離実装・履歴を含む統合編集版。各条項の採択・置換関係を継承する。過去の「実装済み」「休眠」「未試験」等は、その記録時点の状態である。
 > **番号:** 本書は`RFC-v2`。原条文中の`RFC-xxxx`と`§`は旧版を指す。旧番号・wire・署名・fence名は再採番しない。
+
+## 2026-11-08採択による適用範囲
+
+新profileではResultCommittedと成功Finalを分離する。[20](0020-verification-gated-final-and-adversarial-models.md)のCertificationReady成立・公開異議条件・依存条件を満たすまで、仕事報酬、合意credit、成功仕事量を計上しない。資料不足によるAbortedUnverifiedを成功Finalや計算不正へ読み替えない。
+
+**優先関係:** 2026-11-08の先行採択はADR-0215と公開裁定v0.2を根拠とする。今回の公開資料・一人前提の新profileには冒頭の0050／0218・RFC16〜20・[公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)を優先する。以下の基礎契約・旧profile記録と原付録は保持し、旧署名や旧Finalの意味を遡及変更しない。設計採択は実装・測定・有効化の完了を意味しない。
 
 **原文収録元:** [旧0008](../rfc/0008-palw-claim-backed-consensus-blocks.md)、[旧0038](../rfc/0038-palw-fp-answer-accounting.md)。
 
 **関連RFC:** [01 推論・生成Job・入出力](0001-inference-and-generative-jobs.md) / [02 TIR・Kernel・共有Queryデータ](0002-tensor-ir-and-shared-query-data.md) / [08 Claim依存・Prefix生成元・未解決責任](0008-claim-dependencies-and-liability.md) / [10 DAG合意・Gate C・Native EVM決済](0010-dag-consensus-and-native-settlement.md) / [11 Bond予算・配分・Fee同意・決済会計](0011-bond-budgets-fees-and-payments.md) / [14 Court統合契約](0014-court-master-contract.md)。
 
-## 1. 仕事と支払いの対応
+## EXEC常設経路の追加採択 — 2026-11-08
 
-旧0008のclaim-backed EXEC／work sliceと旧0038の回答token会計を統合する。一つの計算から複数のcarriageやreceiptが生じても、同じ仕事に重複した報酬・creditを作らない。
+**状態: ADOPTED_DESIGN_NOT_ACTIVATED。** [RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md)・[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)により、認証仕事から期限付きExecCreditを発行し、事前固定した未来期間のExecScheduleと、そのslotのExecPermitでEXEC_TXを生成する経路を常設する。本書は仕事の一回性、credit量、予約・消費台帳を所有する。ScheduleId、時刻、slot割当、包含順序、attachmentは[10](0010-dag-consensus-and-native-settlement.md)が所有する。
 
-## 2. EXECの責務
+採択目標は**1秒slotでglobalに原則一slot一正規EXEC_TXブロック、持続1 BPS**である。BASE／Heartbeatを加えた総ブロック数、取引件数、1秒での決済確定を意味しない。既存preset、wire、署名domain、fence、有効化高さ、credit換算値・TTLを本書だけで変更しない。
 
-root、worker、provider、支払権利、transaction実行を区別する。実行許可と完了済みwork、claimの受理とFinal、計算報酬と実transaction feeは別勘定である。jobや依存契約を、単に同じclassであるという理由で共有しない。
+本追加採択は、上の検証先行Finalを弱めない。Nodeはモデル本体を持たず、正常positiveは非対話、negativeは対話局所化と客観裁定を用いる。資料不足を成功へ変えず、global選出者の誠実性前提と侵害時の保証限界は[20](0020-verification-gated-final-and-adversarial-models.md)に従う。以下は新claim／EXEC版に適用し、原付録と旧署名の意味は保持する。
 
-## 3. 回答Tokenの会計
+## 1. 仕事・取引資格・支払いを分ける
 
-free-promptで生成した回答を支払済み位置として記録し、その回答を次のpromptに連結しただけで同じ位置を再びprefill報酬にしない。回答行、根拠claim、実際に受理されたcarrier、価格計算を結び付ける。
+一つの計算から複数のcarrier、slice、receiptが生じても、同じcanonical workに二重の発行・支払いを作らない。Claimの受理、完全な検証、成功Final、成熟、ExecCredit発行、取引資格の予約・消費、現金の支払いは別の事実である。
 
-同じclaimを運ぶ複数transactionがある場合、成立させたcarrierの事実を使う。曖昧な自己申告や現在tipから推測して会計を完成させない。
+ExecCreditは**譲渡可能なcoinでも、未払い報酬残高でもない**。指定されたproducer／bond／operatorと起源workに結び付く、期限付き・一回限りのEXEC_TX資格である。取引で売買、送金、質入れ、別ownerへ付け替える機能を設けない。許された署名鍵管理をcreditの所有権移転として使わない。
 
-## 4. 他RFCへの出口
+EXEC_TXの取引feeは実際の取引受理から生じる。credit発行やschedule作成だけでfee、追加の有用仕事報酬、fork-choice weight、DAA貢献を発生させない。既存の拘束資本・共通期間・報酬上限は[11](0011-bond-budgets-fees-and-payments.md)に従う。
 
-計算入力の生成元と推移的責任は08、物理支払・返金・総予算は11、consensus／EVMが消費する確定事実は10、違反や証拠不提出の判定は14に従う。claimのFinalだけで全ての支払・証拠保持が終了したとは扱わない。
+## 2. 論理型と責務
 
-## 5. 受入確認
+以下は新版の論理型であり、同名のRust型、codec、署名domainが実装済みという宣言ではない。
 
-同じ仕事の再送、回答再利用、carrier競合、queue重複、予約と支払の二重計上、reorgでのundo、支払後の証拠保持を確認する。wire tagや署名domainは旧versionのまま保存する。
+| 型 | 必須の意味・binding | 責務 |
+| --- | --- | --- |
+| Claim | 元job、canonical work identity、Minerのoriginal roots、入力・出力・rules、範囲、依存、署名、native状態 | 16〜20に従い検証し、成功・未検証・反証を区別する |
+| ExecCredit | 一つのMintRecord、unit ordinal、owner／bond／operator、数量、policy版、有効開始・失効境界、起源の取消状態 | 本書の一回発行と数量台帳を読む。Claimやsliceの自己申告から作らない |
+| ExecSchedule | 固定された候補credit集合、ScheduleProposalId、後続seed、割当root、ScheduleId、未来slot範囲 | 10のschedule contractに従う。予約済み権利を超えてpermitを作らない |
+| ExecPermit | ScheduleId、現在slot、割当producer、使用するcredit unitと検査に必要な有界情報 | 10から導出するproducerの読み口。未認証claimの代替承認ではない |
+| ExecBlock | permitとtransaction batchを持つEXEC_TX、または独立資格のEXEC_SLICE | 排他的subtypeを認証し、10のcanonical acceptanceで台帳・取引状態を適用する |
+
+Claimからscheduleまでの生成・検査は事前処理で完了させる。producerのslot処理は、有効なExecPermitと通常の取引状態を読み、claim詳細、LLM実行、モデル取得、court資料取得を開始しない。現在の取消情報や必要な認証stateが不明なら、そのpermitを使用せず同期する。
+
+## 3. ExecCredit発行の単一gate
+
+新版の全発行経路は、同じnative predicateを通る。概念上の条件は次のすべてである。
+
+```text
+exec_credit_issuable =
+    new_version_accepted && native_success_final
+    && current_pre_final_certificate_valid
+    && canonical_work_and_output_accounted
+    && maturity_satisfied && dependencies_credit_ready
+    && capital_bond_and_common_budget_conditions_satisfied
+    && source_rights_live && !refuted && !revoked
+    && issuance_window_open && !already_minted_for_canonical_work
+```
+
+`Final`という文字列、Panel receipt、局所positive一件、古いSecurityCertified、provider custody、役務feeの支払いでこのpredicateを代用しない。[20](0020-verification-gated-final-and-adversarial-models.md)の成功Finalと有効な新版認証を両方確認する。旧claimの既存権利を新版に二重mintする入口は設けない。
+
+maturityは成功Finalの条件と別に満たす。必要な依存、資本・bondの拘束、共通上限、信用取消、責任holdを同じnative snapshotで判定する。未成熟の権利、保留中の候補、まだ存在しない将来creditを予約へ渡さない。
+
+発行時の判定を永久の有効性証明とみなさない。予約・schedule有効化・permit受理にも、起源と権利の現在の適格性を反映する。これらはclaim全体を毎秒再読する処理ではなく、認証済みのcredit台帳・取消index・schedule状態をnative foldが更新して行う。古いcacheだけで取消後のpermitを使わせない。
+
+## 4. root全体の発行量を一回だけ固定する
+
+### 4.1 MintRecordと仕事の同一性
+
+元rootのcanonical workと既存の重複規則から一つの発行主体を決める。署名封筒、carrier、再送、bond key、slice分割、schedule期間の違いで、同じ仕事を別の発行主体にしない。重複Finalの代表はcanonicalな受理順序から決め、producerが都合のよいFinalを選ばない。
+
+MintRecordには、canonical work identity、代表Finalと受理根拠、認証参照、非重複範囲、量の換算policy、適用資本上限、成熟・失効境界、端数抽選の根拠、発行総数N、ownerとunit identityの導出条件を固定する。発行record、重複防止index、初期数量台帳を原子的に作る。
+
+量の固定点は、版付き規則が定める最初の発行適格なcanonical状態から導出する。呼出し時刻や請求者、予定表を変えて、別の量子・seed・cap snapshotを選ばせない。端数抽選の結果N=0になった場合も、その決定と一回性recordを保存し、後の期間で再抽選しない。
+
+root prefixと各sliceのcanonical範囲は互いに重複させず、合計を元jobの認証済み仕事量以下にする。root全体が成功Finalを満たした時点の一つの集計からのみ量を導出する。rootとsliceをそれぞれFinal creditとしてsnapshotに投入しない。未完了予算、carrier数、回答文字数、自己申告FLOPsから発行量を増やさない。
+
+### 4.2 量の換算と端数抽選
+
+既存のcanonical workとbudgetを読む版付き換算規則で量を決める。仕事一件をcredit一個に固定する規則ではない。大きな認証仕事は複数unitを得られるが、資本・共通期間・root・networkの各上限を越えない。
+
+量子換算を用いるpolicyでは、上限を適用したcanonical仕事量をW、同じ単位の正の量子をQとすると、概念上の量は次となる。
+
+```text
+base = floor(W / Q)
+remainder = W mod Q
+N_raw = base + RoundOnce(original_work, fixed_rounding_anchor, remainder / Q)
+N = min(N_raw, applicable_issuance_cap)
+```
+
+Wへの換算、Q、capの適用順序、端数抽選の整数表現・分布・上限は新版policyで固定し、既存休眠コードの定数を本番値と扱わない。丸め関数が未確定のprofileを有効化しない。overflow、量子0、過大Nを切り詰めた配列生成で救済しない。
+
+端数抽選は、原仕事を固定した後の一意なcanonical seed anchorに束縛し、**同じrootについて一回だけ**行う。後のschedule seed、再予約、失敗slot、再送、別Finalを理由に再抽選しない。発行量を決める抽選と、未来slotを決める抽選は別domainとする。未確定seedから発行済み扱いにしない。
+
+Nを固定した後、未選択の持越しや期限切れでNを増やさない。capで発行されなかった分を、後の空き予算で同じrootから追いmintしない。canonical reorgによる根拠のundo・再導出は§8に従い、利用者が選ぶ抽選のやり直しにしない。
+
+## 5. 数量台帳と保存則
+
+各発行lotのunitは、元のNとordinalから一意に識別する。実装はrange圧縮できるが、部分範囲の重複を検出できなければならない。異なるlotの値を単なる整数残高として相殺し、起源・期限・責任を失ってはならない。
+
+| 区分 | 意味 | 通常の遷移 |
+| --- | --- | --- |
+| available | 未予約・未消費のunit。現在の適格性を別途満たす場合だけ予約可能 | reserved、expired、revoked |
+| reserved | 一つの正規proposal／scheduleに排他的に拘束中 | consumed、条件付きavailable、expired、revoked |
+| consumed | canonicalに受理されたEXEC_TXが使用したunit | 通常は終端。正規reorg undoだけ別扱い |
+| expired | 元の失効境界で未使用のまま終了したunit | 終端 |
+| revoked | 失効前に客観的取消により未使用権利を失ったunit | 終端 |
+
+canonical stateの各lotについて、常に次を満たす。
+
+```text
+N = available + reserved + consumed + expired + revoked
+all quantities >= 0
+unit categories are pairwise disjoint
+one unit has at most one live reservation
+```
+
+予約や返却はこのNの内部移動である。署名・送信回数、ScheduleIdの数、queueの数からNを増やさない。reservedの内訳はproposal／ScheduleIdに束縛した範囲の和と一致させる。
+
+一時的なsource holdは新しい数量区分やmintにしない。適格性indexで使用を止め、正式な解除・取消・失効をnative規則で処理する。availableという区分だけで適格性を保証しない。
+
+consumedの起源claimが後から取消されても、消費済みunitを再発行・返却しない。consumed数量を保ち、取消された起源・既消費額・責任対象を別の認証recordで追跡する。expiredの後の起源取消も二重にrevokedへ加算しない。同じ処理点で取消と失効が競合する場合の優先順位を版付きfoldで固定する。取引状態・決済・責任への効果は10・08・11に従い、単に古い取引を消して帳尻を合わせない。
+
+## 6. 予約・選択・返却
+
+### 6.1 未来期間の予約
+
+10のScheduleProposalIdは、後続seedの確定前に候補集合とauthorityを固定する予約先である。適格credit集合のfreezeと、対象unitのavailableからreservedへの移動を同じnative状態遷移で行う。proposalの作成だけではpermitを作らない。ScheduleId確定後は同じ予約をそのscheduleへ結び付け、新しい予約数量を追加しない。
+
+予約は所有者・bond・policy・起源状態、元expiry、対象範囲、未予約性、各予算を確認する。slot開始だけでなく、10が定義する当該permitの最遅包含まで権利の有効期間で覆う。予定表を長くするためにcreditの寿命を延ばさない。
+
+競合proposal、重なるordinal、別namespaceへの転用、複数未来期間への二重予約を、nativeのcanonical適用順序で解決する。最初に成立した正規予約だけを生かし、後の競合を拒否する。範囲の一部だけ成功させる暗黙の部分受理をしない。再送は同じ予約結果の参照であり、別のreserveではない。
+
+10のglobal EXEC_TX schedule namespaceと一意割当を使う。owner、モデル、個別scheduleごとに別の「一秒一ブロック」を増やさない。部分予約・候補数・future horizon・予約回数・台帳行数・総bytesは有限のprofile上限に従う。
+
+### 6.2 未選択creditの持越し
+
+候補として予約したunitが割当で未選択なら、10のcanonicalな割当完了記録に基づいてのみavailableへ戻せる。別枝で選ばれた、local cacheに見当たらない、producerが不利と判断した、という理由では返却しない。
+
+持ち越すのは同じunit、owner、MintRecord、元expiry、累積試行履歴である。後続の正規未来期間へ再予約できるのは、未取消・期限内・未消費で、予約上限・持越し回数・残り包含時間・予算を満たす場合だけとする。未選択を理由に量の再抽選、期限更新、同じ期間の別seed選択を認めない。
+
+### 6.3 選択済みだが未使用だった枠
+
+選択済みunitは、slotの時刻を過ぎただけで返却しない。10が定義する包含期限・許容された遅延を終え、当該permitを後からcanonicalに消費できない終了事実と、未消費の事実が同じstateで成立した場合だけ予約を解く。
+
+その時点で元creditが有効かつ累積再予約条件内ならavailableへ戻す。既に期限切れならexpired、取消済みならrevokedへ移す。proposal失敗やschedule非成立についても、10の終端記録なしにlocal timeoutでreleaseしない。古いpermitは閉じたままとし、次の予約は別の正規proposal／scheduleに従う。同じ権利を旧permitと新permitの両方で使用できてはならない。
+
+## 7. canonical消費とproducerの二重署名防止
+
+EXEC_TXの生成、署名、送信、受信、候補保存だけではcreditをconsumedにしない。10のcanonicalなBASE側の受理で、permitの一回性確認、reservedからconsumedへの移動、取引状態・feeの適用を原子的に行う。無効packetや負けた枝に対するlocal観測から二重消費を作らない。
+
+同一permitを複数のblock／attachmentが提示しても、正規の順序とone-use規則で一つだけを受理する。重複、別slot、別ScheduleId、期限後の提示を別creditに振り替えて救済しない。予定表の全体再抽選や1秒slotの追加で不足を埋めない。
+
+producerは署名前・送信前に、10の署名衝突単位に対応するPermitIdと署名対象digestをdurableなanti-equivocation journalへ記録する。再起動後に同じPermitIdで異なるblockを署名しない。同じ署名済みblockの再送は新しい消費ではない。
+
+このlocal journalは合意の消費台帳と別である。journalはconsumedの証拠にせず、chainのreorg undoで削除して二重署名を許さない。reorgで権利がavailable／reservedへ戻っても、同一PermitIdに既に異なる署名があれば再署名を止める。新しい正規permitへの適格性は10から導出する。
+
+## 8. restart・reorg・取消の復元
+
+MintRecord、work重複index、unit区分、予約、schedule対応、消費tombstone、失効・取消、依存・予算を同じcanonical世代でcommit／undoする。quantityだけ戻し、permit-useやreserveを残す復元、またはその逆を禁止する。[12](0012-authenticated-state-storage-and-ibd.md)の認証された保存・IBDへ同じ事実を運ぶ。
+
+正規reorgで消費blockが外れた場合は、その直前のcanonical予約状態へ戻し、新枝の期限・取消・schedule状態を再適用する。常にavailableへ戻す単純返金にはしない。MintRecordの根拠自体が外れた場合、そのlotと派生予約・permitを新枝で使用させない。新枝の正規導出は一つだけ行い、古い枝のNと合算しない。
+
+通常のtip伸長、restart、provider交代、snapshotの再読ではMintRecordや端数抽選を再生成しない。schedule変更、seed anchorのcanonical性、取消permitと他のpermitの扱いは10に従う。適格性が失われたcreditだけを無効にし、残る割当を都合よく再抽選しない。
+
+消費・失効・取消tombstoneの削除は元workの再発行を可能にしてはならない。保持・集約・pruningは責任期間とreorg／IBDの認証条件を満たす場合だけ行う。無制限のlive行数を正当化せず、発行lot数、N、予約、索引、復元workの上限を受理条件にする。
+
+## 9. EXEC_TXとEXEC_SLICE・回答tokenの会計
+
+EXEC_TXは成熟済みExecCreditを使う高速取引経路である。EXEC_SLICEは進行中rootの認証可能なwork範囲を運ぶ。初期の排他的subtypeを維持し、sliceだけでExecCredit、TxPermit、取引fee、fork-choice weightを発生させない。
+
+sliceの受理・positive検査・計算完了と、root全体の成功Finalを混同しない。失敗したsliceを別rootへ持ち込んで既存仕事の一回性を回避しない。rootがFinalになった後も、§4の一つの集計だけを発行元にする。EXEC_TXは既に得た資格を消費するため、別の進行中sliceの速度や停止を毎slotの生成条件にしない。
+
+free-promptで生成した回答を支払済み位置として記録し、その回答を次のpromptに連結しただけで同じ位置を再びprefill報酬や仕事量にしない。回答行、根拠claim、実際に受理されたcarrier、価格計算を結び付ける。成立させたcarrierの事実を使い、自己申告や現在tipの推測で完成扱いにしない。
+
+取引資格とreceipt／仕事報酬の量子は別物である。同じ認証仕事から既存規則が認める異なる役割の権利が生じても、互いの台帳を代わりに消費したり、新しい発行原資として循環させたりしない。
+
+## 10. 1 BPSの持続条件と有限在庫
+
+1ブロックにつき1unitを消費するprofileでは、1 BPSを持続するために**平均1unit／秒の実消費を支える適格credit供給**が必要になる。仕事一件／秒を要求する意味ではなく、§4の換算後のunitで数える。失効・取消による未使用損失があれば、その分も供給量へ含める。
+
+観測区間の発行量をM、消費量をC、未使用の失効・取消量をD、未消費在庫をS=available+reservedとすると、正規reorgを除いた同一canonical履歴で次を満たす。
+
+```text
+S_end = S_start + M - C - D
+long_run_issuance_rate >= target_consumption_rate + unused_loss_rate
+```
+
+持続1 BPSの評価ではtarget_consumption_rateを1unit／秒とする。長期供給率、認証・成熟の遅延、credit寿命、scheduleの先行期間、欠落slot、損失率を別に測る。最初の有限在庫だけで短時間1 BPSになった結果を、継続供給の成立と扱わない。
+
+供給停止時に使える在庫がS unitなら、他の損失がなくても1 BPSを支えられる時間は最大S秒である。実際には未来割当・期限・取消によりさらに短くなり得る。creditが尽きたslotは10に従い欠落として扱い、未成熟claim、未認証Final、EXEC_SLICE、無制限mintで埋めない。BASE／Heartbeatの進行はこの在庫に依存させない。
+
+## 11. 定量受入とfailure cases
+
+以下は新版の必須受入条件であり、今回測定済み・PASSという報告ではない。使用policy、binary、機器、試験時間、負荷、観測対象のcanonical枝を記録する。
+
+| ID | 入力・条件 | 必須の検査・定量結果 |
+| --- | --- | --- |
+| E07-01 | N unitを発行し、L個のglobal slotへ予約・使用 | 消費はmin(N,L)以下。各slotの正規EXEC_TXは最大1。各lotの保存則誤差0 |
+| E07-02 | 同じrootをF個のFinal／carrier／slice分割で提示 | MintRecordは1つ、端数抽選1回、発行量は同じN。Fに比例して増えない |
+| E07-03 | 未成熟、AbortedUnverified、無効認証、取消、依存未成立、bond上限超過 | 発行量0。既存の無関係creditを失わせない |
+| E07-04 | 同じordinalへ同時proposal、部分重複、再送 | live予約数はunitごとに最大1。後続競合を拒否し、数量の部分移動なし |
+| E07-05 | 未選択carry、未使用slot、後から届く旧permit | native終了前の返却0。元expiry・N・試行予算を維持。旧新permitの二重消費0 |
+| E07-06 | mint／reserve／consume／expiry／revokeの境界でcrash | 途中世代を復元しない。全区分合計N、重複unit数0 |
+| E07-07 | 消費block、schedule anchor、mint根拠を順にreorg | 新枝のnative状態再生と台帳一致。旧新枝のN合算・二重fee適用0 |
+| E07-08 | consumed後に起源取消、expiryと取消の競合 | consumedを再使用不可。Dへ二重加算せず、責任recordを保持 |
+| E07-09 | 署名後crash、reorg後に同一PermitIdで別blockを要求 | durable journalが拒否。合意undoを二重署名の許可にしない |
+| E07-10 | cold producerでscheduleを事前用意しL slot運転 | claim詳細／モデル／court資料のhot path fetchは0。permit取得・取引処理の遅延分布を測る |
+| E07-11 | 認証・成熟済み供給を継続する定常負荷 | M/秒、C/秒、D/秒、在庫、slot充足率、予約滞留を測り、1 BPSと有限在庫を両立 |
+| E07-12 | 初期在庫だけで開始し新規認証を停止 | 在庫尽き後の無資格生成0。欠落を計測し、BASE／Heartbeatの進行を確認 |
+| E07-13 | Q=0、overflow、最大lot・ordinal・予約・復元量 | allocation前に不正値を拒否。受理上限内のCPU・RAM・bytesを計測 |
+| E07-14 | EXEC_SLICE flood、same-work回答再利用、copy carrier | slice由来の即時mint0。root集計と支払済み位置の重複計上0 |
+
+定量profileには、最大lot／unit／予約数、量子・cap、成熟、TTL、最大持越し回数、未来期間、保存・復元量、長期供給能力、producerの遅延目標を記載する。未確定値はUNKNOWNとし、値がないままlive既定値を補わない。EXEC_TXの1 BPSとcourt／資料処理の容量試験は別の計測とし、[14](0014-court-master-contract.md)・[19](0019-model-free-node-and-bounded-evidence.md)の有界性を同時に満たす。
+
+## 12. 接続・移行・他RFCへの出口
+
+workspaceの既存source snapshotにあるexecution_quanta／execution_laneは、workの重複排除、量子、未来割当、成熟、消費の参考となる。最新main、採択済みTTL／換算値、新しい五区分台帳の実装、1 BPSの達成を示すものではない。旧sourceの測定記録を新版の合格実績へ移さない。
+
+新policy・codec・署名domain・migration・fence・network presetを別に確定し、旧creditと新版creditを二重計上しない。旧権利の移行が必要なら、起源・残量・期限・責任を保つ一意な移行と旧側の使用停止を規定し、既存権利を文書編集だけで延長・削除しない。
+
+仕事入力・推移的責任は[08](0008-claim-dependencies-and-liability.md)、ScheduleProposalId／ScheduleId・slot・permit・attachment・canonical順序は[10](0010-dag-consensus-and-native-settlement.md)、物理支払・返金・総予算は[11](0011-bond-budgets-fees-and-payments.md)、保存・IBDは[12](0012-authenticated-state-storage-and-ibd.md)、courtは[14](0014-court-master-contract.md)と16〜20に従う。本書から別の時刻や順序を定義しない。
 
 ---
 
 ## 原条文の統合収録
 
-以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の15本の索引・旧新対応表で確認する。
+以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の20本の索引・旧新対応表で確認する。
 
 ### 収録箇所
 

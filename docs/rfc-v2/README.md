@@ -1,60 +1,120 @@
-# MISAKA RFC v2 — 41本を15本へ統合
+# MISAKA RFC v2 — 現行20本
 
-入力: `misakas-pre(5).zip` / 整理日: 2026-10-29。
+## 2026-11-09追加採択 — 公開資料とモデル未保有の一人検証
 
-**普段読む・更新するRFC本文は15本。旧41本は既存パスのまま参照・履歴として保存する。**
-この整理は文書構成の変更で、未採択案の採用、mainnet公開、コード完成、有効化を意味しない。
+独立選出Panelに少なくとも一人の能動的な正直者がいることを前提とし、その人がモデルを事前保有せずに全必要資料を取得・全体検証できる新profileを採択した。Minerの有限な公開供給、owner許可に依存しない認証付きcache・再配布、cold取得からの異議権、Nodeの小さなcourtを接続する。最低完全承認数はlogicalに **k_min=1** とするが、一件の署名直後にFinalへ進めず、全検査・異議機会、Qの解消、依存・資金・原期限を[20](0020-verification-gated-final-and-adversarial-models.md)の単一gateで確認する。
 
-[旧41本→新15本の完全対応表](MAPPING.md) / [移行方法・未解決事項](MIGRATION.md) / [機械可読の節・行対応](source-map.json) / [検査結果](VALIDATION.md)
+[RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md) / [ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md) / [公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md) / [今回の改訂](../maintenance/revisions/2026-11-09-public-panel/README.md) / [今回の検査](../maintenance/revisions/2026-11-09-public-panel/VALIDATION.md)。
 
-## 15本の構成
+正常claimの条件付き完了には、正しいMinerの供給・応答、唯一正直なPanelの完全検証、最大合法な虚偽caseの有限終結と実サービス・包含が必要である。承認数1をPanel人数1や性能実測へ読み替えない。旧75／41、旧署名、既存経済値、EXEC 1 BPS、現行20 RFC／50 ADR、過去のレビューを保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。以下の先行採択は当時の範囲で読み、今回の実装・測定・有効化の証拠にはしない。
 
-| 新RFC | 担当する範囲 | 主な旧RFC |
+## 2026-11-09の先行採択 — PALW実行整合性と一人の反証
+
+新claim/profileでは、一人の適格異議をnative未解決状態へ反映し、一人の有効な反証で多数の肯定承認に関係なく元claimを無効化する。必要な検証が未成立なら成功Final・仕事報酬・creditを与えない。Init・Step・Endの全関係、元claimへの認証、同blockの処理順序、保護された救済容量、資料不足、失効と依存を[現行RFC20](0020-verification-gated-final-and-adversarial-models.md)へ接続した。
+
+[RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md) / [ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md) / [公開裁定v0.3](../design/palw/consensus/public-adjudication-policy-v0.3.md) / [今回の改訂](../maintenance/revisions/2026-11-09-palw-execution-integrity/README.md) / [今回の検査](../maintenance/revisions/2026-11-09-palw-execution-integrity/VALIDATION.md)。
+
+通常編集先はRFC20冊・統合ADR50冊のまま。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。条件付きの実行整合性を扱い、Miner/Panel本人のGPU使用、全員共謀・永久検閲下の無条件正当性を証明しない。以下の過去日付の採択・検査はその時点の記録であり、今回の保証・実装状態に読み替えない。今回の入力は `misaka_docs_rfc20_exec_1bps_20261108(2).zip` である。
+
+## 追加採択 — EXECの1 BPSとcourt容量
+
+**現行RFCは引き続き20本。** ユーザーの追加指示により、
+[07](0007-claims-exec-and-answer-accounting.md)へ期限付きExecCredit台帳、
+[10](0010-dag-consensus-and-native-settlement.md)へ事前公開schedule・明示ScheduleId・現在slot生成と1 BPS目標を反映した。
+生成権の参照と取引履歴への接続先を分離し、通常tipの伸長で割当を変えない。
+
+1 BPSはEXEC_TX全体の通常時目標であり、1,000 ms slotあたり最大一つの正規blockを使う。
+credit・予定表・producer・検証／包含容量の条件を付け、1秒決済や1 DAA/秒とは扱わない。
+[05](0005-bounded-resources-and-long-context.md)・[18](0018-interactive-negative-court-and-defaults.md)・
+[19](0019-model-free-node-and-bounded-evidence.md)・[20](0020-verification-gated-final-and-adversarial-models.md)には、
+添付分析のcourt待機・搬送予算の膨張を解消する全分岐予約・共有・並列化・実モデルの受入条件を追加した。
+
+[追加採択RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) /
+[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md) /
+[今回の変更](../maintenance/revisions/2026-11-08-exec-1bps/README.md) /
+[今回の検査](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。
+
+改訂日: 2026-11-08 / 入力: docs(2).zip / 新設計: **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+**普段読む・更新するRFCを0001〜0020の20本に整理する。**
+ユーザーが採択した、モデルを持たないNode、モデル非共有・Miner／Panel寡占の脅威、
+非対話positive・対話negative・検証先行Finalを16〜20で定義し、01〜15の適用範囲も更新した。
+これは設計採択と文書更新であり、新profileの実装・測定・公開有効化の完了ではない。
+
+[旧番号原文・追加採択の対応](MAPPING.md) / [版の境界・反映方法](MIGRATION.md) /
+[採択ADR](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) /
+[変更記録](../maintenance/revisions/2026-11-08/README.md) /
+[検査結果](../maintenance/revisions/2026-11-08/VALIDATION.md)。
+
+## 先に固定する設計条件
+
+- **Nodeはモデル本体を取得・保持せず、全推論、GPU、モデル実行環境、Panel workerを必須にしない。** court・cold start・IBD・再起動でも同じ条件とする。Nodeは上限内の認証付き局所断片を検査する。
+- **モデル共有やモデル保有者内の正直な参加者を仮定しない。** 悪意ある運営者がモデルを隠し、そのモデルのMiner・通常Panel・providerを全て支配していても、そこだけの承認で成功Finalにしない。
+- Minerが元traceと結果を署名して固定し、global poolから独立に選ばれた検証者が資料を取得して全再実行する。canonical traceのrootと宣言出力が一致すれば、自分の記録からpositiveを一括作成できる。
+- 正常positiveに中間値を順次照合する対話を要求しない。不一致は対話negativeで局所化し、完成済み反証は直接提出も認める。
+- 資料不足・検証未完了なら、反証を作れなくても成功Finalと仕事creditを与えない。計算不正、提供義務違反、未検証終了は別の結果である。
+- 小さなpositiveと承認署名だけで、全global検証者の共謀まで防げるとは主張しない。global抽選と誠実性の前提、Nodeの局所検査、資料供給義務の保証範囲を分ける。
+
+## 20本の構成
+
+| RFC | 担当する範囲 | 今回の位置づけ |
 | --- | --- | --- |
-| [01](0001-inference-and-generative-jobs.md) | 推論・生成Job・入出力 | 01・03 |
-| [02](0002-tensor-ir-and-shared-query-data.md) | TIR・Kernel・共有Queryデータ | 02・29 |
-| [03](0003-model-onboarding-and-artifacts.md) | モデル登録・変換・Artifact | 11・13 ＋02のonboarding節 |
-| [04](0004-model-tiers-and-annual-catalog.md) | モデル二階層・年次カタログ | 17・19 |
-| [05](0005-bounded-resources-and-long-context.md) | 資源上限・長文脈メモリ・計測 | 20 |
-| [06](0006-panels-and-probabilistic-verification.md) | Panel参加・抽選・確率的検証・認証Receipt | 06・07・10 |
-| [07](0007-claims-exec-and-answer-accounting.md) | Claim・EXEC・仕事量・回答会計 | 08・38 |
-| [08](0008-claim-dependencies-and-liability.md) | Claim依存・Prefix生成元・未解決責任 | 23・40 |
-| [09](0009-remote-client-and-sdk.md) | Remote Client・SDK・非保管型操作 | 09 |
-| [10](0010-dag-consensus-and-native-settlement.md) | DAG合意・Gate C・Native EVM決済 | 12・18 |
-| [11](0011-bond-budgets-fees-and-payments.md) | Bond予算・配分・Fee同意・決済会計 | 16・39 ＋15の共通会計 |
-| [12](0012-authenticated-state-storage-and-ibd.md) | 認証State・保存・Pruning・IBD | 36・37 |
-| [13](0013-permissionless-bootstrap-and-release.md) | 公開Bootstrap・Genesis・有効化とRelease接続 | 41 |
-| [14](0014-court-master-contract.md) | Court統合契約 — 受付・対話・裁定・資金・責任終了 | 14・24・25・26・28・30・31・32・33・34・35 ＋他RFCのCourt専用条項 |
-| [15](0015-freeze-deferred-rejected-and-governance.md) | 設計凍結・延期・不採用・未採択・変更管理 | 04・05・15・21・22・27 ＋03の画像・動画／撤回・未採択部分 |
+| [01](0001-inference-and-generative-jobs.md) | 推論・生成Job・入出力 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [02](0002-tensor-ir-and-shared-query-data.md) | TIR・Kernel・共有Queryデータ | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [03](0003-model-onboarding-and-artifacts.md) | モデル登録・変換・Artifact | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [04](0004-model-tiers-and-annual-catalog.md) | モデル二階層・年次カタログ | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [05](0005-bounded-resources-and-long-context.md) | 資源上限・長文脈メモリ・計測 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [06](0006-panels-and-probabilistic-verification.md) | Panel参加・抽選・確率的検証・認証Receipt | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [07](0007-claims-exec-and-answer-accounting.md) | Claim・EXEC・仕事量・回答会計 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [08](0008-claim-dependencies-and-liability.md) | Claim依存・Prefix生成元・未解決責任 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [09](0009-remote-client-and-sdk.md) | Remote Client・SDK・非保管型操作 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [10](0010-dag-consensus-and-native-settlement.md) | DAG合意・EXECスケジュール・Native EVM決済 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [11](0011-bond-budgets-fees-and-payments.md) | Bond予算・配分・Fee同意・決済会計 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [12](0012-authenticated-state-storage-and-ibd.md) | 認証State・保存・Pruning・IBD | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [13](0013-permissionless-bootstrap-and-release.md) | 公開Bootstrap・Genesis・有効化とRelease接続 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [14](0014-court-master-contract.md) | Court統合契約 — 受付・対話・裁定・資金・責任終了 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [15](0015-freeze-deferred-rejected-and-governance.md) | 設計凍結・延期・不採用・未採択・変更管理 | 基礎契約・旧profileを保持し、新profileの適用範囲を追加 |
+| [16](0016-miner-execution-commit-and-material-supply.md) | Minerの実行commitとclaim固有の資料供給 | 2026-11-08採択の新profileを定義 |
+| [17](0017-noninteractive-positive-verification.md) | 非対話positiveと独立再実行の承認 | 2026-11-08採択の新profileを定義 |
+| [18](0018-interactive-negative-court-and-defaults.md) | 対話negative・局所裁定・提供義務違反 | 2026-11-08採択の新profileを定義 |
+| [19](0019-model-free-node-and-bounded-evidence.md) | モデルを持たないNodeと有界な証拠 | 2026-11-08採択の新profileを定義 |
+| [20](0020-verification-gated-final-and-adversarial-models.md) | 検証先行Finalと秘匿・寡占を前提にした安全条件 | 2026-11-08採択の新profileを定義 |
 
-## 最初に読む場所
+## 読む順序と責務
 
-LLMを使う経路は **01（job）→ 03（登録）→ 02（TIR実行）→ 06（Panel検査）→ 07（claim会計）→ 10（合意・決済）**。
-不正・異議・無応答は **14（Court）**、入力再利用の影響は **08（依存）**、お金は **11（会計）**、同期は **12**、起動は **13**。
-**何を凍結・延期・不採用としたかは15だけを入口にする。**
+先行した検証設計の変更は **20（脅威・成功条件）→19（Nodeの境界）→16（元claim・供給）→17（positive）→18（negative）** の順で読む。
+jobと数値実行は01・02、登録と階層は03・04、資源は05、参加は06、仕事会計は07、
+依存は08、APIは09、合意接続は10、資金は11、保存とIBDは12、releaseは13、共通courtは14、変更管理は15を参照する。
 
-02がTIRと旧29の共有query/dataを所有し、14がCourtの手続き・責任を所有する。両方で同じprotocolを再定義しない。
+新profileの成功は、ResultCommitted → VerificationPending → CertificationReady → Finalの順である。
+CertificationReadyは事前認証の成立を表し、それだけでは仕事報酬や合意creditを与えない。
+不一致・適格な公開異議・資料要求が未解決なら保留し、期限までに肯定条件が成立しなければ未検証終了となる。
 
-## 状態を混ぜない
+Nodeの承認条件と局所検査は19・20、Panelの独立再実行責任は17に置く。
+同じ規範を各冊で別々に定義しない。通常Panelとglobal認証者を同じrole名だけで同一視しない。
 
-設計凍結は実装停止ではない。延期は永久不採用ではない。未採択は拒否済みではない。
-旧15のPanel=0と、同じ文書内の採用済み共通bond会計を分離した。旧39も採択済みfeeと未採択の役務有限化A/Bを分離した。
+## 歴史と現行の区別
 
-各RFCは短い統合本文を先頭に置き、その後に担当する原条文を収録している。原条文の情報・数式・コードを捨てず、旧41本へ戻らなくても該当分野をまとめて読める。出典・元行番号・原文のhashと配置検査を付ける。原条文中の旧番号・§参照は旧版を指す。
+以前の旧番号RFC48ファイル（0001〜0047、0042は二つ）を元の完全パスで保持し、今回のRFC-0048を加えた49ファイルを索引化する。
+ADRの統合50本も保持し、新しい採択記録ADR-0215をpost-consolidation記録として登録する。
+旧番号のbody・wire ID・署名domain・fence・digestを一括置換しない。
 
-## 番号を壊さない
+2026-10-29の41原文→15冊の統合は、[source-map.json](source-map.json)と89収録区間に残る。
+現在の49の旧番号原文・採択記録→20冊の編集担当は[adoption-map.json](adoption-map.json)にある。
+前者は歴史snapshot、後者は現在の担当表であり、同じ台帳として書き換えない。
+旧0044のPositive Court R2全被覆検査、旧Gate CのFinal後認証もその版の意味を保持する。
 
-新しい文書識別子は **RFC-v2-0001〜RFC-v2-0015**。旧RFC-0001〜0041とは別系列である。
-旧番号をコード、wire tag、署名domain、fence名、履歴digestまで一括置換しない。文書を15本へ減らすことと、protocolを再採番することは別である。
+新しい規則の優先範囲は[20](0020-verification-gated-final-and-adversarial-models.md)と
+[PRINCIPLES §13](../PRINCIPLES.md#model-free-adversarial-verification)に限定する。
+[公開裁定の方針v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md)が新profileの方針である。
+二階層、既存経済パラメーター、計算validity proofの禁止、media・モデル改善の延期は維持する。
 
-通常の追記は対応する15本へ集約する。重大問題に伴う設計変更は、既存の凍結規程に従う新規RFC＋ADRを別の変更提案として扱い、採択後に15本へ反映する。
+## 検証と有効化
 
-## 統合基準日後の追加文書
+今回の再検査は、20冊の構成、原文と歴史付録の保持、対応表、追加リンクの回帰を対象とする。
+runtimeの完成、未測定の性能、稼働ネットワークの安全性を文書検査で保証しない。
+既存入力にある欠損リンクと旧snapshotのハッシュ不一致は[検査結果](../maintenance/revisions/2026-11-08/VALIDATION.md)で別に報告する。
 
-並行作業で追加された [ADR-0210](../adr/0210-all-model-g14-panel-one.md) / [RFC-0042](../rfc/0042-all-model-g14-panel-one.md) は、入力snapshotの204 ADR／41 RFCに含まれない追加文書として保持する。今回の50 ADR／15 RFCへ原文を混ぜず、採択・実装・有効化の状態は各文書の記録を参照する。`registry.json` の `post_consolidation_documents` からもたどれる。旧番号の意味は変えない。
-
-2026-10-31に採択された学習済みLLMの出力表現の追加は [RFC-0043](../rfc/0043-wide-q24-llm-output.md) / [ADR-0211](../adr/0211-wide-q24-llm-output.md)。旧i32 Q24・既存schemeを保持し、別のi64 Q24 profileを追加する。公開有効化は別判断。入力原本へ混ぜず、post-consolidation文書として読む。
-
-2026-10-31に実装指示されたPositive Court R2は [RFC-0044](../rfc/0044-positive-court-full-coverage.md) / [ADR-0212](../adr/0212-positive-court-without-model-prepossession.md)。主担当は14、演算・資料認証は02を共用する。[実装状態](../design/palw/positive-court/IMPLEMENTATION-STATUS.md)。原付録と旧0042／0210は保持し、公開網は未有効化。
-
-2026-11-07の再検討は [RFC-0047](../rfc/0047-batch-court-time-contract.md)。上位は [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md) である。Batch の新しい版だけが時間契約を始める。Panel の署名は署名者の識別であり、定足数は評決ではない。合意ノードはモデル計算を端から端まで再実行しない。完了 receipt から 10,000 を始めない。306,108 DAA の局所化は代替経路ではない。G14 の batch 予算は測定したモデルではない。既存の 3,120 と 10,000 は延ばさない。15本へは混ぜない。P0–P3 には試験がある。debug の局所 door 27 は class の受理ではない。`PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1` は空である。出荷 preset は未武装。T12 の upgrade はなく、main へは push していない。
+新profileの署名形式・native接続・抽選policy・資源割当・cold資料取得・最悪時のnegative・
+reorg・決済の検証が揃ってから、既存手順でactivationを判断する。
+以後の通常追記は20冊の担当先へ集約し、設計凍結の例外手続きが必要な変更は新規RFC＋ADRと明示採択で扱う。

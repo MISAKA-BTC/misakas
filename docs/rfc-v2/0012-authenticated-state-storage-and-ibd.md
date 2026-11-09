@@ -1,12 +1,28 @@
 # RFC-v2-0012 — 認証State・保存・Pruning・IBD
 
-編集日: 2026-10-29 / 入力: `misakas-pre(5).zip`
+## 2026-11-09公開資料・一人保証の追加境界
 
-[15本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+**適用順:** 本節と公開profileについての追加条項は、先行採択の同じ論点を更新する。公開profileの成功条件・atomic batchの規範はRFC20を正本とし、後段の2026-11-08／実行整合性改訂の説明は、矛盾しない資源・保存条件として継承する。旧署名・歴史付録の適用条件は変更しない。
 
-> **編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
+[RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)／[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)の公開profileでは、モデル未保有Panelによる取得・全体検証・単独反証を、Nodeの全モデル取得へ置き換えない。[20](0020-verification-gated-final-and-adversarial-models.md)の最低1件承認、公開検査期間、QとInspectionPending、個別救済予約、客観的default、資料義務と原時計をnative stateとして復元する。本追記は現行本文への追加要件であり、以下の旧実装snapshotが増分処理へ移行済みであるとの宣言ではない。設計状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+## 2026-11-09新profileの追加境界
+
+[採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。cold起動・IBD・reorg・再起動でも未解決異議、取消、原時計、証拠保持を復元し、全モデル取得で補完しない。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+
+[20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+
+> **2026-10-29原統合の編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
 > **状態:** 採用済み・Draft・隔離実装・履歴を含む統合編集版。各条項の採択・置換関係を継承する。過去の「実装済み」「休眠」「未試験」等は、その記録時点の状態である。
 > **番号:** 本書は`RFC-v2`。原条文中の`RFC-xxxx`と`§`は旧版を指す。旧番号・wire・署名・fence名は再採番しない。
+
+## 2026-11-08採択による適用範囲
+
+Nodeのcold start・IBD・再起動・reorg・過去court再検査でも[19](0019-model-free-node-and-bounded-evidence.md)のモデル非保有条件を守る。保存した認証付き局所証拠と状態履歴を使い、モデルの全取得やPanel workerの必須起動へ迂回しない。同期中の不足を過去Minerの新たな有罪理由にしない。
+
+**優先関係:** 新profileに限り、本節・RFC16〜20・[ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)・[公開裁定の方針v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md)を適用する。以下の基礎契約・旧profile記録と原付録は保持し、旧署名や旧Finalの意味を遡及変更しない。設計採択は実装・測定・有効化の完了を意味しない。
 
 **原文収録元:** [旧0036](../rfc/0036-authenticated-palw-state-map-and-row-access.md)、[旧0037](../rfc/0037-ibd-bounded-row-stream-and-storage-generations.md)。
 
@@ -38,9 +54,47 @@ digestだけのcheckpointを、外部告発者が資料を取得できること�
 
 ---
 
+## EXEC credit・schedule・署名記録の復元
+
+[07](0007-claims-exec-and-answer-accounting.md)のcredit状態と[10](0010-dag-consensus-and-native-settlement.md)のschedule、
+slot閉鎖、permit消費、authority、取引の受理prefixをcanonical stateへ結び付け、原子的にcommit／undoする。
+有効schedule、未消費予約、取消状態、受付期限、未終了liabilityに必要な行をpruningで先に捨てない。
+別NodeのIBDでも、モデル本体を取得せず、認証state・有界な局所証拠から検査できるようにする。
+
+producerのdurable署名journalは、このchain stateのundoとは別である。
+reorg、credentialの再読み込み、service再起動で同一PermitIdへの署名履歴を消さず、
+同じpayloadの再送と別payloadへの再署名を区別する。
+旧版／新版共存時も、一つの仕事やpermitを二重に復元・消費しない。
+保存対象、上限、GC可能条件、disk failure時の停止を明示し、1 BPSを保つために記録前の署名へ省略しない。
+
+---
+
+## 公開profileの増分処理・期限索引・復元gate
+
+数万modelの登録と継続claim処理では、毎blockの仕事を全登録model・全bond・全終了claimの無条件走査／全表再hashへ依存させない。更新行、参照する依存、期限到来行、抽選に必要な認証範囲と、それぞれの上限をnative契約として列挙する。claimの受付、選出母集団cut、Qへの追加／終了、資料要求・応答、InspectionPending、全体承認、失効、費用・予約解放を認証付きの増分更新へ結び付ける。索引が存在することだけで実装完了とはしない。
+
+状態と索引は、原claim／policy／batch membership、正規化したCaseIdと共有MaterialId、申立人ごとの予約、次の手番と観測可能な提出機会、notice／hard／保持期限、残る責任を同じcanonical rootへ拘束する。索引は元行を省略・重複せず、その時点に処理すべき範囲の完全性を検査できる必要がある。期限索引の欠落やfetch失敗を「Qが空」「責任なし」「同意済み」へ変換しない。期限到来件数が一blockの予算を超える場合の有界な継続と受付backpressureも定め、後から期限を延ばして追いつく前提を置かない。
+
+restart、reorg、pruned IBD後には、本文の原子的commit／undoに加え、各caseの取得済み範囲、供給履行と検査未完了の区別、局所証拠の再検査範囲、個別予約の使用残量、atomic batchの単一original・全leaf scope・全体hold／Refutedを復元する。shared cacheのbyte再利用で別人のcase権利を併合せず、復元で新しい要求予算・検査時計を発行しない。資料を受け取った直後に再起動した場合でも、検査完了署名や正規terminalなしにQを消さない。
+
+正常Final、反証によるRefuted／Revoked、供給未完了によるAbort、申立人defaultによるそのcaseだけの終了を区別して再現する。最低1件承認は当該claimの全実行scopeに結び付いた選出者の承認として復元し、旧75／41のclaimや別batchの承認と混在させない。「EXEC credit・schedule・署名記録の復元」節のcredit consumerも復元後の同じ更新済みstateを読む。
+
+| ID | 追加受入ケース | 必要な結果 |
+| --- | --- | --- |
+| S12-P01 | 50,000モデルと多数bondを登録し、少数行だけ変更 | 各更新・抽選・期限処理の実workを測定し、未変更全表への無条件依存がないことを確認 |
+| S12-P02 | 未取得→資料到着→InspectionPendingの各境界で停止・再起動 | Q、原時計、個別予約、未完了検査を正確に復元し、早期Finalなし |
+| S12-P03 | 一人の反証、他caseの棄却、同batchのcredit消費をreorgでundo／replay | case隔離、反証優先、消費の一回性を維持 |
+| S12-P04 | 期限索引の欠落・重複・不完全range・未知schema | 認証／完全性検査で拒否または同期未完了。空集合へ補完しない |
+| S12-P05 | atomic batchの一leaf反証・共有資料不足を別NodeのIBDで復元 | batch全体のRefuted／成功holdと個別caseの責任を一致させ、部分credit・別original吸収・予算増殖なし |
+| S12-P06 | 正常Final、単独反証、不供給Abort、悪意者defaultの同一binary試験 | Nodeのモデル取得APIを禁止したまま、局所証拠と認証stateで同じ終端を再現 |
+
+これらは有効化前の要求であり、現行state実装、50,000モデル実測、帯域・IO上限の達成を意味しない。原付録の未完了事項を黙って解消済みにしない。
+
+---
+
 ## 原条文の統合収録
 
-以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の15本の索引・旧新対応表で確認する。
+以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の20本の索引・旧新対応表で確認する。
 
 ### 収録箇所
 

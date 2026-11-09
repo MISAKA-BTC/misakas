@@ -1,8 +1,12 @@
-# RFC-v2 15本とADR-v2 50本の対応
+# RFC-v2 20本と統合ADR 50本・追加採択記録の対応
+
+> **2026-11-08追加採択:** EXEC creditは[RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、事前公開scheduleと通常時1 BPS目標は[RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md)に反映した。courtの全分岐予約と実モデル完了条件も更新した。[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)／[変更記録](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。現行RFC20冊・統合ADR50冊を維持し、実装・測定・activationは別のgateとする。
 
 RFCは仕様の入口、ADRは判断・理由・却下案・移行条件の入口です。対応づけは新しい実装や有効化の承認ではありません。
 
-| RFC-v2 | テーマ | 関連ADR-v2 |
+RFC-v2-0001〜0015 は従来の統合単位、0016〜0020 は2026-11-08に採択した新規設計です。新規5本の採択根拠は [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) であり、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。関連する既存 ADR-v2 は共通制約と履歴の参照先で、新しい設計が既に実装・有効化されていたという意味ではありません。ADR-v2 の50本は維持します。
+
+| RFC-v2 | テーマ | 関連ADR（統合版／追加採択記録） |
 | --- | --- | --- |
 | [RFC-v2-0001](../rfc-v2/0001-inference-and-generative-jobs.md) | 推論・生成Job・入出力 | [24](0024-inference-input-output-contract.md)、[25](0025-context-and-input-commitments.md) |
 | [RFC-v2-0002](../rfc-v2/0002-tensor-ir-and-shared-query-data.md) | TIR・Kernel・共有Queryデータ | [13](0013-tir-arithmetic-and-determinism.md)、[14](0014-versioned-kernels-and-backends.md)、[40](0040-tir-terminal-proof-and-local-opening.md)、[44](0044-shared-tir-query-data.md) |
@@ -19,8 +23,15 @@ RFCは仕様の入口、ADRは判断・理由・却下案・移行条件の入�
 | [RFC-v2-0013](../rfc-v2/0013-permissionless-bootstrap-and-release.md) | 公開Bootstrap・Genesis・有効化とRelease接続 | [01](0001-network-identity-and-fingerprint.md)、[02](0002-post-quantum-signatures-and-interfaces.md)、[09](0009-heartbeat-floor-and-liveness.md)、[10](0010-genesis-emission-and-bond-free-bootstrap.md)、[11](0011-release-activation-and-flag-days.md) |
 | [RFC-v2-0014](../rfc-v2/0014-court-master-contract.md) | Court統合契約 — 受付・対話・裁定・資金・責任終了 | [33](0033-probabilistic-checks-and-exact-court.md)、[38](0038-g14-public-prosecution-and-completeness.md)、[39](0039-data-availability-court-and-panel-da.md)、[40](0040-tir-terminal-proof-and-local-opening.md)、[41](0041-long-context-court-decomposition.md)、[42](0042-court-service-and-versioned-clock.md)、[43](0043-court-eligibility-and-initial-notice.md)、[44](0044-shared-tir-query-data.md)、[45](0045-terminal-material-and-readiness.md)、[46](0046-court-close-and-liability-archive.md)、[47](0047-funded-original-and-role-authorization.md) |
 | [RFC-v2-0015](../rfc-v2/0015-freeze-deferred-rejected-and-governance.md) | 設計凍結・延期・不採用・未採択・変更管理 | [50](0050-freeze-deferred-rejected-and-governance.md) |
+| [RFC-v2-0016](../rfc-v2/0016-miner-execution-commit-and-material-supply.md) | Miner の実行 commit・trace・有限の資料供給責任 | [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[25](0025-context-and-input-commitments.md)、[44](0044-shared-tir-query-data.md)、[47](0047-funded-original-and-role-authorization.md) |
+| [RFC-v2-0017](../rfc-v2/0017-noninteractive-positive-verification.md) | 独立 Panel の非対話 positive・局所証拠と全体承認の区別 | [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[31](0031-panel-independence-and-unavailability.md)、[32](0032-sampling-beacon-and-receipts.md)、[33](0033-probabilistic-checks-and-exact-court.md) |
+| [RFC-v2-0018](../rfc-v2/0018-interactive-negative-court-and-defaults.md) | 不一致時の対話 negative・局所化・帰責・適格 default | [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[38](0038-g14-public-prosecution-and-completeness.md)、[39](0039-data-availability-court-and-panel-da.md)、[42](0042-court-service-and-versioned-clock.md)、[46](0046-court-close-and-liability-archive.md) |
+| [RFC-v2-0019](../rfc-v2/0019-model-free-node-and-bounded-evidence.md) | モデルを持たない Node・証拠と計算の上限・再検査 | [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[13](0013-tir-arithmetic-and-determinism.md)、[17](0017-model-streaming-and-memory-bounds.md)、[40](0040-tir-terminal-proof-and-local-opening.md)、[49](0049-authenticated-state-map-and-row-stream.md) |
+| [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) | 検証成立後の Final・モデル未共有と全結託の脅威・移行 | [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)、[27](0027-claim-lifecycle-and-liability.md)、[31](0031-panel-independence-and-unavailability.md)、[48](0048-claim-dependencies-and-prefix-origin.md) |
 
 ## 重要な入口
+
+**2026-11-08 採択の新しい claim 版は [RFC-v2-0020](../rfc-v2/0020-verification-gated-final-and-adversarial-models.md) と [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) から読みます。** Node のモデル非保有、通常 positive の非対話化、negative の対話局所化、資料不足時の成功 Final 閉鎖をまとめています。旧版への適用範囲は [優先関係](PRECEDENCE.md) を確認してください。
 
 TIRは[RFC-v2-0002](../rfc-v2/0002-tensor-ir-and-shared-query-data.md)と[ADR-v2-0013](0013-tir-arithmetic-and-determinism.md)・[ADR-v2-0014](0014-versioned-kernels-and-backends.md)・[ADR-v2-0044](0044-shared-tir-query-data.md)。通常Panelは[RFC-v2-0006](../rfc-v2/0006-panels-and-probabilistic-verification.md)と[ADR-v2-0030](0030-sharded-verification-and-model-measurement.md)〜[ADR-v2-0034](0034-verification-spans-and-service-clock.md)。Courtは[RFC-v2-0014](../rfc-v2/0014-court-master-contract.md)と[ADR-v2-0038](0038-g14-public-prosecution-and-completeness.md)〜[ADR-v2-0047](0047-funded-original-and-role-authorization.md)。Claim依存は[RFC-v2-0008](../rfc-v2/0008-claim-dependencies-and-liability.md)と[ADR-v2-0048](0048-claim-dependencies-and-prefix-origin.md)。凍結・延期・未採択の状態は[RFC-v2-0015](../rfc-v2/0015-freeze-deferred-rejected-and-governance.md)と[ADR-v2-0050](0050-freeze-deferred-rejected-and-governance.md)。
 

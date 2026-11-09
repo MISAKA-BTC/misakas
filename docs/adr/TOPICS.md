@@ -116,6 +116,7 @@
 - [ADR-0208 — 再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md)
 - [ADR-0211 — 学習済みcheckpointのlogit範囲を損なわず扱う](0211-wide-q24-llm-output.md)
 - [ADR-0214 — Positive原資へ先行relay資料・custodyを追加する判断案](0214-positive-native-funded-relay.md)
+- [ADR-0217 — PALW実行整合性と一人による反証の完結契約](0217-palw-execution-integrity-and-unilateral-refutation.md)
 
 ## EVM / wallet
 
@@ -190,6 +191,7 @@
 - [ADR-0191 — TIR court: dispute-local decomposition for long-context claims (Proposed)](0191-tir-dispute-local-decomposition-long-context.md)
 - [ADR-0210 — (AllModelG14PanelOne) — 全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md)
 - [ADR-0212 — Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md)
+- [ADR-0215 — モデル非保有Node・非対話positive・対話negative・検証先行Final](0215-model-free-node-noninteractive-positive-and-adversarial-availability.md)
 
 ## Operations / interfaces / recovery
 
@@ -237,4 +239,6 @@
 - [ADR-0206 — PanelDa の G14 経路 — 期限付きの必須公開](0206-panel-da-mandatory-disclosure-g14-route.md)
 - [ADR-0210 — (CourtSupplierConsent) — Court全分岐の供給者契約と原子的native予約](0210-court-family-supplier-consent-and-native-reservation.md)
 - [ADR-0213 — 最初のPositive native TIR経路を合意Assignmentとposter原資で分離する](0213-positive-court-canonical-assignment.md)
+- [ADR-0216 — EXEC credit・事前公開schedule・1 BPSとcourt容量](0216-exec-credit-schedule-one-bps-and-court-capacity.md)
+- [ADR-0218 — 公開資料とモデル未保有の一人検証](0218-public-materials-and-one-honest-panel.md)
 

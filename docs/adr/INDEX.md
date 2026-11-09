@@ -218,3 +218,7 @@
 | ADR-0212 | [Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md) | 原文と後続改定を参照 |
 | ADR-0213 | [最初のPositive native TIR経路を合意Assignmentとposter原資で分離する](0213-positive-court-canonical-assignment.md) | 原文と後続改定を参照 |
 | ADR-0214 | [Positive原資へ先行relay資料・custodyを追加する判断案](0214-positive-native-funded-relay.md) | 原文と後続改定を参照 |
+| ADR-0215 | [モデル非保有Node・非対話positive・対話negative・検証先行Final](0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) | Accepted design / 実装・測定・有効化は別 |
+| ADR-0216 | [EXEC credit・事前公開schedule・1 BPSとcourt容量](0216-exec-credit-schedule-one-bps-and-court-capacity.md) | Accepted design / EXEC・1 BPS追加採択、未有効化 |
+| ADR-0217 | [PALW実行整合性と一人による反証の完結契約](0217-palw-execution-integrity-and-unilateral-refutation.md) | Accepted design / PALW条件付き保証の追加採択、未有効化 |
+| ADR-0218 | [公開資料とモデル未保有の一人検証](0218-public-materials-and-one-honest-panel.md) | Accepted design / 一人前提・最低一件承認の追加採択、未有効化 |

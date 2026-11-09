@@ -1,12 +1,26 @@
 # RFC-v2-0014 — Court統合契約 — 受付・対話・裁定・資金・責任終了
 
-編集日: 2026-10-29 / 入力: `misakas-pre(5).zip`
+## 2026-11-09公開資料・一人前提の追加境界
 
-[15本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+[採択RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)により、独立選出されたPanelの中の一人が、モデルを事前保有せずに公開資料を取得して全体検証できる新profileを採択する。適格な資料要求には算術反証を前提とせず、InspectionPendingから同caseの検査・反証へ継続する。最大合法な虚偽caseも元期限内に客観的に終結できる予約を要求し、一人の異議を永久の無条件vetoにしない。 成功の規範所有者は[20](0020-verification-gated-final-and-adversarial-models.md)、公開方針は[v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)。以下の先行採択・基礎契約と衝突する箇所は、この新profileに限って本境界と16〜20を適用する。旧claim・歴史付録は保持し、状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
-> **編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
+## 2026-11-09新profileの追加境界
+
+[採択RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)と[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)により、[20](0020-verification-gated-final-and-adversarial-models.md)の実行整合性・一人の反証・検証未成立時の成功停止を適用する。一人の適格noticeと直接反証、対話の有限化、原時計、責任終了は18/20と同じnative状態を読む。 詳細の規範所有者は16〜20であり、本追記で別の成功条件を定義しない。旧claim・歴史付録の意味とbytesは保持する。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
+原統合: 2026-10-29 / 採択改訂: 2026-11-08 / 原入力: `misakas-pre(5).zip`
+
+[20本の索引](README.md) · [旧→新対応表](MAPPING.md) · [編集・移行規則](MIGRATION.md)
+
+> **2026-10-29原統合の編集範囲:** 文書の統合・重複する責務の整理。技術仕様の採択、パラメーター変更、runtime有効化、試験成功の宣言ではない。
 > **状態:** 採用済み・Draft・隔離実装・履歴を含む統合編集版。各条項の採択・置換関係を継承する。過去の「実装済み」「休眠」「未試験」等は、その記録時点の状態である。
 > **番号:** 本書は`RFC-v2`。原条文中の`RFC-xxxx`と`§`は旧版を指す。旧番号・wire・署名・fence名は再採番しない。
+
+## 2026-11-08採択による適用範囲
+
+共通の受付、費用、原時計、liabilityは本書を基礎とする。新profileの各規範は[16 original・供給](0016-miner-execution-commit-and-material-supply.md)、[17 positive](0017-noninteractive-positive-verification.md)、[18 negative](0018-interactive-negative-court-and-defaults.md)、[19 Nodeの検査境界](0019-model-free-node-and-bounded-evidence.md)、[20 成功Final](0020-verification-gated-final-and-adversarial-models.md)へ分担する。正常時に探索対話を要求せず、不一致だけ局所化する。資料不足で反証不能でも成功不可とする。
+
+**優先関係:** 2026-11-08の先行採択はADR-0215と公開裁定v0.2を根拠とする。今回の公開資料・一人前提の新profileには冒頭の0050／0218・RFC16〜20・[公開裁定v0.4](../design/palw/consensus/public-adjudication-policy-v0.4.md)を優先する。以下の基礎契約・旧profile記録と原付録は保持し、旧署名や旧Finalの意味を遡及変更しない。設計採択は実装・測定・有効化の完了を意味しない。
 
 **原文収録元:** [旧0002](../rfc/0002-palw-tensor-ir.md)、[旧0007](../rfc/0007-palw-verification-certificates-and-algebraic-checks.md)、[旧0008](../rfc/0008-palw-claim-backed-consensus-blocks.md)、[旧0014](../rfc/0014-panel-independent-fraud-prosecution.md)、[旧0024](../rfc/0024-court-door-3200-to-ctx-2m.md)、[旧0025](../rfc/0025-scalable-objective-court-many-models-mass-disputes.md)、[旧0026](../rfc/0026-court-policy-master-contract.md)、[旧0028](../rfc/0028-rooted-court-response-eligibility-history.md)、[旧0030](../rfc/0030-court-end-effects-and-pending-liability-archive.md)、[旧0031](../rfc/0031-shared-court-initial-notice-boundary.md)、[旧0032](../rfc/0032-shared-court-terminal-material-and-nonblocking-ingress.md)、[旧0033](../rfc/0033-d2-readiness-root-opening-availability.md)、[旧0034](../rfc/0034-archived-close-qualified-financial-discharge.md)、[旧0035](../rfc/0035-court-original-funded-contract-and-role-consent.md)。
 
@@ -82,9 +96,24 @@ original、採択ruleset、accepted prefix、応答資格、terminal bytes、裁
 
 ---
 
+## EXEC・court容量の追加採択
+
+[RFC-0048](../rfc/0048-exec-credit-schedule-and-one-bps.md)／[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)に従い、
+courtの時間・容量の膨張を解消する規範は[05](0005-bounded-resources-and-long-context.md)、
+公開対話と提供機会は[18](0018-interactive-negative-court-and-defaults.md)、
+Nodeと共通資源の上限は[19](0019-model-free-node-and-bounded-evidence.md)へ集約する。
+
+共有資料や並列workerの存在だけで、全合法分岐・複数claimの予約と供給が成立したと扱わない。
+ownerの専有枠を外部者の取得・訴追の必須待機にせず、cold取得から終端裁定までを測る。
+EXEC 1 BPSの予定枠とcourtの搬送・包含予約に同じ物理容量を重複計上しない。
+元時計と保持義務は維持する。旧経路へのfallbackも同じ時間・資源の受入対象とし、
+10,000 DAAを超える隠れた成功経路で不足を解消しない。
+
+---
+
 ## 原条文の統合収録
 
-以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の15本の索引・旧新対応表で確認する。
+以下は内容を落とさないための原条文である。見出しの深さとリンク先だけを編集し、数式・コード・値・記録を再解釈していない。旧い方針・候補・試験記録も含むため、本文の責務・適用範囲と15の台帳を先に読む。原文内の相互参照は保存した旧ファイルへ戻る。新しい編集先は本書先頭の20本の索引・旧新対応表で確認する。
 
 ### 収録箇所
 

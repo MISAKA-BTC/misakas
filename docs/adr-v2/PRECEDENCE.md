@@ -1,6 +1,24 @@
 # 置換・撤回・混合採択の適用境界
 
+> **2026-11-08追加採択:** EXEC creditは[RFC07](../rfc-v2/0007-claims-exec-and-answer-accounting.md)、事前公開scheduleと通常時1 BPS目標は[RFC10](../rfc-v2/0010-dag-consensus-and-native-settlement.md)に反映した。courtの全分岐予約と実モデル完了条件も更新した。[ADR-0216](../adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md)／[変更記録](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。現行RFC20冊・統合ADR50冊を維持し、実装・測定・activationは別のgateとする。
+
 **大きい番号や新しい日付だけで、古い文書全体を無効にしません。** 明示された対象の節・network・claim cohort・fenceについてだけ後続改定を適用します。表は重要な読み違いを防ぐ編集索引であり、全原文に含まれる全ての競合を機械的に解決した証明ではありません。
+
+## 2026-11-08 採択の適用範囲
+
+[PRINCIPLES](../PRINCIPLES.md) の明示改定と [ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) に基づき、新しい claim / profile は [RFC-v2-0016〜0020](../rfc-v2/README.md) および [公開裁定の方針 v0.2](../design/palw/consensus/public-adjudication-policy-v0.2.md) に従います。設計状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。wire・fence・有効化高さは未割当であり、旧署名済み claim を新版に読み替えません。
+
+| 論点 | 新しい claim 版で優先する規則 | 保持する境界 |
+| --- | --- | --- |
+| Node の責務 | モデル本体の取得・保持、全推論、GPU を要求しない。確定状態と上限付き局所証拠で裁定 | 重いモデル検証は Miner／Panel。認証付きの必要な重み断片は証拠として扱える |
+| 正常時の肯定検証 | Miner が trace と資料の供給責任を固定し、独立選出 Panel が非対話 positive を作る | 一つの局所計算の成立や署名だけを、全計算の正しさへ昇格させない |
+| Final と認証 | 結果固定後に検証し、必須局所 positive と独立肯定承認の成立で `CertificationReady`、公開異議・依存条件等の成立後に成功 Final | 従来の `Final` 後認証は旧版の履歴。旧 claim の状態・責任・署名の意味は不変 |
+| 未共有・秘匿・寡占 | モデル内 Miner／Panel の全結託を想定し、global pool の独立選出と資料取得を要求 | global な正直者の前提は残る。モデル登録時の可用性審査や全 Node へのモデル配布を復活させない |
+| 取得不能と責任 | 資料不足・肯定検証未成立なら成功 Final 不可。計算不正と適格な提供義務違反を区別 | private timeout や Panel の未受領申告だけで計算不正として slash しない |
+
+統合 ADR 50本は判断履歴・共通制約の参照先として保持し、ADR-0215 をその原文に混ぜません。モデル二階層、暗号学的な計算正当性証明を使わない方針、初期 mainnet の延期機能、既存の原時計・責任境界は、明示的に改定された範囲を除いて維持します。
+
+## 従来の採択と置換の索引
 
 | 主題 | 優先・区別の範囲 | 原資料 | 新しい主担当 |
 | --- | --- | --- | --- |

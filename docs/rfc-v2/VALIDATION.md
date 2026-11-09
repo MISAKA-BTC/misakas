@@ -1,4 +1,14 @@
-# 文書統合の検査結果
+# RFC検査結果の入口
+
+> **追加改訂の現行入口:** [EXEC・1 BPSの変更](../maintenance/revisions/2026-11-08-exec-1bps/README.md)／[検査結果](../maintenance/revisions/2026-11-08-exec-1bps/VALIDATION.md)。以下の前回改訂・過去snapshotの記録は履歴として読む。実装・有効化の完了記録ではない。
+
+**現行2026-11-08の検査結果は[こちら](../maintenance/revisions/2026-11-08/VALIDATION.md)。**
+以下の2026-10-29のPASS記録は当時の入力に対する履歴であり、
+今回の添付全体や新profileのruntimeを検証済みとする根拠には使わない。
+当時のsource-map・fragment digestをそのまま残している。
+
+## 2026-10-29の記録
+
 
 検査日: 2026-10-29。対象入力: `misakas-pre(5).zip`。
 

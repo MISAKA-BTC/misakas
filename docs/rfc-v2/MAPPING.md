@@ -1,4 +1,65 @@
-# RFC v1 → v2 全41本の対応表
+# RFCの現行20本への対応表
+
+## 2026-11-09追加改訂 — 公開資料とモデル未保有の一人検証
+
+先行改訂から継承した旧番号RFC50ファイルとadoption-map50行を保持し、新規0050を追加した51ファイルを現行20冊へ割り当てる。原添付の49ファイルに、同会話で採択された0049と今回0050を重ねた数である。過去のsource-map、section-owners、歴史付録、旧hashは書き換えない。
+
+| 追加記録 | 主所有者 | 関連する所有者 | 状態 |
+| --- | --- | --- | --- |
+| [0050](../rfc/0050-public-materials-and-one-honest-panel.md) | [20](0020-verification-gated-final-and-adversarial-models.md) | 01〜19の公開入力・資源・選出・会計・保存・bootstrap・native検証との接続 | Accepted design、実装・測定・有効化は別 |
+
+公開資料、cold取得、一人前提、k_min=1、最大虚偽caseの有限終結は0050／0218で採択し、詳細を16〜20と関連冊子へ反映する。旧75／41や旧署名の意味は変更しない。以下は先行改訂時点の対応記録である。
+
+## 2026-11-09追加改訂 — 一人の反証と実行整合性
+
+入力の旧番号RFC49ファイルを保持し、新規採択記録0049を加えた50ファイルを現行20冊へ割り当てる。既存adoption-map49行、source-map、section-owners、歴史付録は維持する。今回入力49件と、以前の入力48件という履歴メタデータを混同しない。
+
+| 追加記録 | 現行主担当 | 関連担当 | 状態 |
+| --- | --- | --- | --- |
+| [0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md) | [20](0020-verification-gated-final-and-adversarial-models.md) | [05](0005-bounded-resources-and-long-context.md) / [06](0006-panels-and-probabilistic-verification.md) / [07](0007-claims-exec-and-answer-accounting.md) / [08](0008-claim-dependencies-and-liability.md) / [10](0010-dag-consensus-and-native-settlement.md) / [12](0012-authenticated-state-storage-and-ibd.md) / [14](0014-court-master-contract.md) / [16](0016-miner-execution-commit-and-material-supply.md) / [17](0017-noninteractive-positive-verification.md) / [18](0018-interactive-negative-court-and-defaults.md) / [19](0019-model-free-node-and-bounded-evidence.md) | Accepted design、実装・測定・有効化は別 |
+
+## 2026-11-08追加改訂 — EXEC・1 BPS
+
+現行の通常編集先は20冊を維持する。旧番号系列は、以前の48ファイルを保持し、
+新しい採択記録RFC-0048を加えて49ファイルとなる。番号0042の二つの原文も別パスで保持する。
+adoption-mapのv2は既存48行をそのまま残し、新規採択記録のinput hashが存在しないことを明示する。
+旧41原文と89収録区間のsource-mapは変更しない。
+
+| 追加記録 | 現行主担当 | 関連担当 | 状態 |
+| --- | --- | --- | --- |
+| [0048](../rfc/0048-exec-credit-schedule-and-one-bps.md) | [07](0007-claims-exec-and-answer-accounting.md) | [05](0005-bounded-resources-and-long-context.md) / [10](0010-dag-consensus-and-native-settlement.md) / [18](0018-interactive-negative-court-and-defaults.md) / [19](0019-model-free-node-and-bounded-evidence.md) / [20](0020-verification-gated-final-and-adversarial-models.md) | Accepted design、実装・測定・有効化は未完了 |
+
+以下の48ファイルという数は直前の改訂時点を表す。新規0048はこの表の追加行で管理する。
+
+整理日: 2026-11-08 / 入力: docs(2).zip。[現行索引](README.md) / [移行規則](MIGRATION.md)。
+
+**現行の編集先は20本。添付内の旧番号RFCは48ファイルすべてを保持する。**
+0042は二つの異なるファイルがあるため、番号だけで同一視しない。
+[adoption-map.json](adoption-map.json)が48ファイルの現行担当・新profile条項・入力SHA-256を持つ。
+[source-map.json](source-map.json)は2026-10-29の41原文・89収録区間の歴史台帳として変更しない。
+
+## 基準日後の7ファイル
+
+| 保存する旧RFC | 現行の主担当 | 新profileの関連先 | 扱い |
+| --- | --- | --- | --- |
+| [0042-all-model-g14-panel-one.md](../rfc/0042-all-model-g14-panel-one.md) | [06](0006-panels-and-probabilistic-verification.md) | [20](0020-verification-gated-final-and-adversarial-models.md) | モデル保有者内の通常Panelとglobal検証者を分離。旧署名・旧profileは保持。 |
+| [0042-court-family-supplier-consent-and-native-reservation.md](../rfc/0042-court-family-supplier-consent-and-native-reservation.md) | [11](0011-bond-budgets-fees-and-payments.md) | [16](0016-miner-execution-commit-and-material-supply.md) / [18](0018-interactive-negative-court-and-defaults.md) | 供給同意・資金予約は共通会計へ。新版originalとqualified defaultへ接続。 |
+| [0043-wide-q24-llm-output.md](../rfc/0043-wide-q24-llm-output.md) | [02](0002-tensor-ir-and-shared-query-data.md) | [16](0016-miner-execution-commit-and-material-supply.md) / [17](0017-noninteractive-positive-verification.md) / [19](0019-model-free-node-and-bounded-evidence.md) | 型・丸め・layoutの版を保持し、canonical traceと局所courtへ束縛。 |
+| [0044-positive-court-full-coverage.md](../rfc/0044-positive-court-full-coverage.md) | [17](0017-noninteractive-positive-verification.md) | [16](0016-miner-execution-commit-and-material-supply.md) / [19](0019-model-free-node-and-bounded-evidence.md) / [20](0020-verification-gated-final-and-adversarial-models.md) | 旧R2全被覆の保証は保持。新版はPanel全再実行・Node局所検査とglobal承認前提へ変更。 |
+| [0045-positive-court-canonical-assignment.md](../rfc/0045-positive-court-canonical-assignment.md) | [11](0011-bond-budgets-fees-and-payments.md) | [06](0006-panels-and-probabilistic-verification.md) / [17](0017-noninteractive-positive-verification.md) / [20](0020-verification-gated-final-and-adversarial-models.md) | 割当・WorkerPaymentの原資と署名済み権利を保持。全体検証承認とは分離。 |
+| [0046-positive-native-funded-relay.md](../rfc/0046-positive-native-funded-relay.md) | [11](0011-bond-budgets-fees-and-payments.md) | [16](0016-miner-execution-commit-and-material-supply.md) / [18](0018-interactive-negative-court-and-defaults.md) / [20](0020-verification-gated-final-and-adversarial-models.md) | funded relayの同意・予約・返還を維持。新版の供給と公開反証へ接続。 |
+| [0047-batch-court-time-contract.md](../rfc/0047-batch-court-time-contract.md) | [18](0018-interactive-negative-court-and-defaults.md) | [14](0014-court-master-contract.md) / [19](0019-model-free-node-and-bounded-evidence.md) / [20](0020-verification-gated-final-and-adversarial-models.md) | a+3120とa+10000の時計・公開経路を維持。事前認証とcold取得予算を接続。 |
+
+## 新profileの責務の優先順位
+
+16はMiner originalと資料供給、17は非対話positive、18は対話negativeと提供義務違反、
+19はモデルを持たないNode、20はglobal選出・肯定認証・成功Finalを所有する。
+01〜15の先頭節も更新し、下記の歴史配置だけから新profileの規則を決めない。
+旧版を置換する範囲は[20](0020-verification-gated-final-and-adversarial-models.md)に限定する。
+旧原文の署名・wire・fence・権利は保持する。
+
+## 2026-10-29の41原文の収録対応（歴史記録）
+
 
 [統合索引](README.md) / [編集・移行規則](MIGRATION.md)
 

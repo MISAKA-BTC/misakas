@@ -1682,6 +1682,38 @@
       "status": "原文と後続改定を参照"
     },
     {
+      "kind": "adr",
+      "number": "0215",
+      "path": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+      "title": "ADR-0215 — モデル非保有Node・非対話positive・対話negative・検証先行Final",
+      "topic": "Models / execution / onboarding",
+      "status": "Accepted design / 実装・測定・有効化は別"
+    },
+    {
+      "kind": "adr",
+      "number": "0216",
+      "path": "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
+      "title": "ADR-0216 — EXEC credit・事前公開schedule・1 BPSとcourt容量",
+      "topic": "Verification / court",
+      "status": "Accepted design / EXEC・1 BPS追加採択、未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0217",
+      "path": "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+      "title": "ADR-0217 — PALW実行整合性と一人による反証の完結契約",
+      "topic": "Consensus / architecture",
+      "status": "Accepted design / PALW条件付き保証の追加採択、未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0218",
+      "path": "docs/adr/0218-public-materials-and-one-honest-panel.md",
+      "title": "ADR-0218 — 公開資料とモデル未保有の一人検証",
+      "topic": "Verification / court",
+      "status": "Accepted design / 一人前提・最低一件承認の追加採択、未有効化"
+    },
+    {
       "kind": "rfc",
       "number": "0001",
       "path": "docs/rfc/0001-palw-inference-surface-gaps.md",
@@ -2064,6 +2096,30 @@
       "title": "RFC-0047 — Batch court time contract: one door, separate retention, public 6,880",
       "topic": "Verification / court",
       "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0048",
+      "path": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "title": "RFC-0048 — EXEC credit・事前公開schedule・1 BPSとcourt容量の統合契約",
+      "topic": "Consensus / architecture",
+      "status": "Accepted design / EXEC 1 BPS・court容量、未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0049",
+      "path": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md",
+      "title": "RFC-0049 — PALW実行整合性と一人による反証の完結契約",
+      "topic": "Consensus / architecture",
+      "status": "Accepted design / PALW実行整合性・単独反証、未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0050",
+      "path": "docs/rfc/0050-public-materials-and-one-honest-panel.md",
+      "title": "RFC-0050 — 公開資料とモデル未保有の一人検証",
+      "topic": "Verification / court",
+      "status": "Accepted design / 公開資料・モデル未保有の一人検証、未有効化"
     }
   ]
 }

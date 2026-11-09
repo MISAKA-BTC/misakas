@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "namespace": "RFC-v2",
-  "active_count": 15,
+  "active_count": 20,
   "legacy_namespace": "RFC",
-  "legacy_range": "0001..0041",
+  "legacy_range": "0001..0050; duplicate 0042 distinguished by full path",
   "legacy_mode": "immutable-reference-history",
   "protocol_identifiers_changed": false,
   "documents": [
@@ -90,7 +90,7 @@
     {
       "id": "RFC-v2-0010",
       "file": "0010-dag-consensus-and-native-settlement.md",
-      "title": "DAG合意・Gate C・Native EVM決済",
+      "title": "DAG合意・EXECスケジュール・Native EVM決済",
       "primary_v1": [
         "RFC-0012",
         "RFC-0018"
@@ -152,14 +152,54 @@
         "RFC-0022",
         "RFC-0027"
       ]
+    },
+    {
+      "id": "RFC-v2-0016",
+      "file": "0016-miner-execution-commit-and-material-supply.md",
+      "title": "Minerの実行commitとclaim固有の資料供給",
+      "primary_v1": [],
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "adoption_date": "2026-11-08",
+      "decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md"
+    },
+    {
+      "id": "RFC-v2-0017",
+      "file": "0017-noninteractive-positive-verification.md",
+      "title": "非対話positiveと独立再実行の承認",
+      "primary_v1": [],
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "adoption_date": "2026-11-08",
+      "decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md"
+    },
+    {
+      "id": "RFC-v2-0018",
+      "file": "0018-interactive-negative-court-and-defaults.md",
+      "title": "対話型 negative court・公開異議・提供義務違反",
+      "primary_v1": [],
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "adoption_date": "2026-11-08",
+      "decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md"
+    },
+    {
+      "id": "RFC-v2-0019",
+      "file": "0019-model-free-node-and-bounded-evidence.md",
+      "title": "モデルを持たない Node と有界な局所証拠",
+      "primary_v1": [],
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "adoption_date": "2026-11-08",
+      "decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md"
+    },
+    {
+      "id": "RFC-v2-0020",
+      "file": "0020-verification-gated-final-and-adversarial-models.md",
+      "title": "モデル秘匿・Miner／Panel寡占を前提とする検証先行Final",
+      "primary_v1": [],
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "adoption_date": "2026-11-08",
+      "decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md"
     }
   ],
   "post_consolidation_documents": [
-    {
-      "kind": "adr",
-      "id": "ADR-0210",
-      "path": "docs/adr/0210-all-model-g14-panel-one.md"
-    },
     {
       "kind": "rfc",
       "id": "RFC-0042",
@@ -167,13 +207,13 @@
     },
     {
       "kind": "rfc",
-      "id": "RFC-0043",
-      "path": "docs/rfc/0043-wide-q24-llm-output.md"
+      "id": "RFC-0042",
+      "path": "docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md"
     },
     {
-      "kind": "adr",
-      "id": "ADR-0211",
-      "path": "docs/adr/0211-wide-q24-llm-output.md"
+      "kind": "rfc",
+      "id": "RFC-0043",
+      "path": "docs/rfc/0043-wide-q24-llm-output.md"
     },
     {
       "kind": "rfc",
@@ -181,14 +221,142 @@
       "path": "docs/rfc/0044-positive-court-full-coverage.md"
     },
     {
-      "kind": "adr",
-      "id": "ADR-0212",
-      "path": "docs/adr/0212-positive-court-without-model-prepossession.md"
+      "kind": "rfc",
+      "id": "RFC-0045",
+      "path": "docs/rfc/0045-positive-court-canonical-assignment.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0046",
+      "path": "docs/rfc/0046-positive-native-funded-relay.md"
     },
     {
       "kind": "rfc",
       "id": "RFC-0047",
       "path": "docs/rfc/0047-batch-court-time-contract.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0210",
+      "path": "docs/adr/0210-all-model-g14-panel-one.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0210",
+      "path": "docs/adr/0210-court-family-supplier-consent-and-native-reservation.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0211",
+      "path": "docs/adr/0211-wide-q24-llm-output.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0212",
+      "path": "docs/adr/0212-positive-court-without-model-prepossession.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0213",
+      "path": "docs/adr/0213-positive-court-canonical-assignment.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0214",
+      "path": "docs/adr/0214-positive-native-funded-relay.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0215",
+      "path": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0048",
+      "path": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0216",
+      "path": "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0049",
+      "path": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0217",
+      "path": "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0050",
+      "path": "docs/rfc/0050-public-materials-and-one-honest-panel.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0218",
+      "path": "docs/adr/0218-public-materials-and-one-honest-panel.md"
+    }
+  ],
+  "editorial_date": "2026-11-09",
+  "legacy_file_count_at_revision": 51,
+  "historical_source_snapshot": {
+    "date": "2026-10-29",
+    "rfc_count": 41,
+    "active_book_count": 15,
+    "mapping": "source-map.json",
+    "unchanged": true
+  },
+  "adoption": {
+    "date": "2026-11-08",
+    "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+    "authority": "Explicit user instruction in the current conversation",
+    "decision_record": "docs/adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md",
+    "new_profile_only": true,
+    "runtime_changed": false,
+    "activation_changed": false,
+    "current_source_mapping": "adoption-map.json"
+  },
+  "latest_revision": "2026-11-09-public-panel",
+  "subsequent_adoptions": [
+    {
+      "date": "2026-11-08",
+      "revision": "2026-11-08-exec-1bps",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "authority": "Current user instruction: EXEC design revision and 1 BPS target",
+      "proposal_record": "docs/rfc/0048-exec-credit-schedule-and-one-bps.md",
+      "decision_record": "docs/adr/0216-exec-credit-schedule-one-bps-and-court-capacity.md",
+      "current_owners": [
+        "RFC-v2-0007",
+        "RFC-v2-0010"
+      ],
+      "runtime_changed": false,
+      "activation_changed": false
+    },
+    {
+      "date": "2026-11-09",
+      "revision": "2026-11-09-palw-execution-integrity",
+      "rfc_record": "docs/rfc/0049-palw-execution-integrity-and-unilateral-refutation.md",
+      "decision_record": "docs/adr/0217-palw-execution-integrity-and-unilateral-refutation.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "new_profile_only": true,
+      "runtime_changed": false,
+      "activation_changed": false
+    },
+    {
+      "date": "2026-11-09",
+      "revision": "2026-11-09-public-panel",
+      "rfc_record": "docs/rfc/0050-public-materials-and-one-honest-panel.md",
+      "decision_record": "docs/adr/0218-public-materials-and-one-honest-panel.md",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "new_profile_only": true,
+      "logical_min_full_replay_approvals": 1,
+      "panel_population_size_changed": false,
+      "runtime_changed": false,
+      "activation_changed": false
     }
   ]
 }

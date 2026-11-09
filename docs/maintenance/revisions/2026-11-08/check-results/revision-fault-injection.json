@@ -1,0 +1,20 @@
+{
+  "scope": "Two fault-injection checks in an isolated disposable documentation copy; no protocol/runtime validation.",
+  "cases": [
+    {
+      "case": "old_rfc_bytes_modified",
+      "detected": true,
+      "actual_audit_status": "FAIL",
+      "targeted_check_status": "FAIL"
+    },
+    {
+      "case": "existing_link_issue_repeated_once",
+      "detected": true,
+      "actual_audit_status": "FAIL",
+      "issue_key": "missing-doc-file|docs/rfc-v2/0002-tensor-ir-and-shared-query-data.md|docs/design/palw/tir/evidence/rfc02-artifact-tile-protocol.json|",
+      "input_count": 1,
+      "current_count": 2
+    }
+  ],
+  "all_detected": true
+}

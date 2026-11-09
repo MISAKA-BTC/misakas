@@ -19,6 +19,8 @@
 - [RFC-0040 — 再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md)
 - [RFC-0043 — 学習済みLLMの広いQ24 logit表現](0043-wide-q24-llm-output.md)
 - [RFC-0046 — Positive native原資の先行relay資料と有限custody](0046-positive-native-funded-relay.md)
+- [RFC-0048 — EXEC credit・事前公開schedule・1 BPSとcourt容量の統合契約](0048-exec-credit-schedule-and-one-bps.md)
+- [RFC-0049 — PALW実行整合性と一人による反証の完結契約](0049-palw-execution-integrity-and-unilateral-refutation.md)
 
 ## EVM / wallet
 
@@ -71,5 +73,6 @@
 - [RFC-0042 — (CourtSupplierConsent) — Court全分岐の供給者同意・実原資・native予約](0042-court-family-supplier-consent-and-native-reservation.md)
 - [RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md)
 - [RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路](0045-positive-court-canonical-assignment.md)
-- [RFC-0047 — Batch court time contract: one door, separate retention, public 6,880](0047-batch-court-time-contract.md)。上位は [公開裁定の方針 v0.1](../design/palw/consensus/public-adjudication-policy-v0.1.md)。debug の局所 door 27 は class の受理ではない
+- [RFC-0047 — Batch court time contract: one door, separate retention, public 6,880](0047-batch-court-time-contract.md)
+- [RFC-0050 — 公開資料とモデル未保有の一人検証](0050-public-materials-and-one-honest-panel.md)
 

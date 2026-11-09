@@ -1,0 +1,10 @@
+PASS: 2026-11-08 documentation revision audit; 0 errors.
+  PASS: input_evidence_and_no_deletions
+  PASS: numbered_inventories_and_preserved_bodies
+  PASS: immutable_snapshot_ledgers
+  PASS: historical_rfc_fragment_digests
+  PASS: complete_adoption_map
+  PASS: post_consolidation_registration
+  PASS: local_link_regressions_against_input
+Scope: documentation integrity only; runtime, protocol safety, and activation are not certified.
+JSON report: /workspace/scratch/767afa1b06d2/rfc_revision_20261108/docs/maintenance/revisions/2026-11-08/check-results/current-revision.json
