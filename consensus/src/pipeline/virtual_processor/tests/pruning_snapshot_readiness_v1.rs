@@ -33,6 +33,7 @@ fn rfc37_context() -> TestContext {
             *p = p.clone().with_palw_v2_cadence();
             if !cfg!(feature = "evm") {
                 p.evm_activation_daa_score = u64::MAX;
+                p.palw_model_evm = None;
             }
         })
         .build();
