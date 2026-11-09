@@ -3687,7 +3687,6 @@ mod source_verifier_economics_v2;
 mod material_gc_v4;
 mod material_typed_ingress_v4;
 mod provider_fee_lifecycle_v2;
-mod provider_fee_lifecycle_v2;
 // Lane ROLES: the slice root attested past the Panel=1 fence only: `g14_kernel_route_e2e/roles_slice_attest.rs`.
 mod roles_slice_attest;
 
