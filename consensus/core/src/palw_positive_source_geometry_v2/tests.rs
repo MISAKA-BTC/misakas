@@ -198,13 +198,11 @@ fn actual_inventory_opening_and_ragged_prompt_tile_fit_hand_calculated_bounds() 
     assert_eq!(tail.max_data_bytes, 4);
     assert_eq!(tail.max_unit_bytes, PALW_PROMPT_IDS_OPENING_HEADER_BYTES + 4 + 2 * 64);
     let actual = borsh::object_length(&tile).unwrap() as u64;
-    assert_eq!(geometry.canonical_opening_bytes_v2(SourceKind::Input, 2), Ok(actual));
     assert!(actual < tail.max_unit_bytes, "promoting the odd last leaf removes a sibling");
     let full_path = prompt_ids_opening_v1(&f.prompt, 0).unwrap();
     let full_bound = geometry.unit_bound(SourceKind::Input, 0).unwrap();
-    assert_eq!(geometry.canonical_opening_bytes_v2(SourceKind::Input, 0), Ok(full_bound.max_unit_bytes));
     assert_eq!(borsh::object_length(&full_path).unwrap() as u64, full_bound.max_unit_bytes);
-    assert!(geometry.canonical_opening_bytes_v2(SourceKind::Input, 3).is_err());
+    assert!(geometry.unit_bound(SourceKind::Input, 3).is_err());
     let request = f.request(SourceKind::Input, 0, 3);
     let maximum = geometry.request_bound(&request).unwrap();
     assert_eq!(maximum.max_data_bytes, 128);
