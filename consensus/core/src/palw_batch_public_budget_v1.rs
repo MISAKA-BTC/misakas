@@ -285,6 +285,12 @@ pub struct SharedPublicReservationBookV1 {
     opportunities: ServiceReservations,
 }
 
+impl Default for SharedPublicReservationBookV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SharedPublicReservationBookV1 {
     pub fn new() -> Self {
         let budget = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
@@ -378,7 +384,7 @@ impl SharedPublicReservationBookV1 {
         recovery_daa: u64,
     ) -> Result<u64, SharedReservationRefusalV1> {
         use SharedReservationRefusalV1::{Budget, Dependency, DoubleBooked, ForeignRequest, Owner};
-        if !self.claims.get(&claim).is_some_and(|held| !held.owners.is_empty()) {
+        if self.claims.get(&claim).is_none_or(|held| held.owners.is_empty()) {
             return Err(Owner);
         }
         let required = check_reserved_public_graph_v1(notice_offset_daa, slots, recovery_daa).map_err(Budget)?;

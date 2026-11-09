@@ -53,7 +53,7 @@ fn derive(attrs: &[Attribute], name: &str) -> bool {
             .any(|path| path.segments.last().unwrap().ident == name && path.segments.iter().any(|s| s.ident == "prost"))
     })
 }
-fn peel<'a>(mut ty: &'a Type, repeated: bool) -> (&'a Type, bool) {
+fn peel(mut ty: &Type, repeated: bool) -> (&Type, bool) {
     let mut boxed = false;
     loop {
         let Type::Path(path) = ty else { panic!("unsupported generated field type") };

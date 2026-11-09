@@ -3,6 +3,7 @@
 //! This is not the remaining node/pruning G14 acceptance drill.
 #![allow(warnings)]
 use super::*;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "rfc37_native_row_roundtrip_v1.rs"]
 mod rfc37_native_row_roundtrip_v1;
 use crate::palw_rfc0018_v1::PalwRfc0018MirrorV1;
@@ -1608,10 +1609,14 @@ fn rfc0038_exact_old_winner_lifecycle(legacy_without_a5: bool, observe_geometry:
         projected.contains(&PalwClaimLocalWorkRefV1::ChainClaim { claim: id }),
         "actual scoped facts retain graph edges without F1"
     );
-    let restored = rfc37_native_row_roundtrip_v1::roundtrip(&spent, &p);
-    assert_facts(&restored);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let restored = rfc37_native_row_roundtrip_v1::roundtrip(&spent, &p);
+        assert_facts(&restored);
+        assert_eq!(revert_delta_v2(&restored, &spent_delta, &p).unwrap().state_root(), cold.state_root());
+    }
     assert_facts(&apply_delta_v2(&cold, &spent_delta, &p).unwrap());
-    assert_eq!(revert_delta_v2(&restored, &spent_delta, &p).unwrap().state_root(), cold.state_root());
+    assert_eq!(revert_delta_v2(&spent, &spent_delta, &p).unwrap().state_root(), cold.state_root());
     if observe_geometry {
         // Actual new consumer carries two distinct winning inputs for SAME raw
         // source at different births, plus one duplicate and one ordinary tx.

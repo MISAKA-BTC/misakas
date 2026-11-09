@@ -73,10 +73,11 @@ pub fn budget_generated_messages(path: &Path) {
                 if let Some(field) = text.strip_prefix("pub ").and_then(|s| s.split_once(':').map(|(field, _)| field)) {
                     fields.push(field.to_owned());
                 }
-            } else if !text.starts_with('#') && !text.starts_with("///") {
-                if let Some((variant, _)) = text.split_once('(') {
-                    fields.push(variant.to_owned());
-                }
+            } else if !text.starts_with('#')
+                && !text.starts_with("///")
+                && let Some((variant, _)) = text.split_once('(')
+            {
+                fields.push(variant.to_owned());
             }
         } else if let Some(name) = text.strip_prefix("pub struct ").and_then(|s| s.strip_suffix(" {")) {
             item = Some((name.to_owned(), indent, false, Vec::new()));
