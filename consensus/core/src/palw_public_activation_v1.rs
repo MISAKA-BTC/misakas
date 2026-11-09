@@ -2,7 +2,8 @@
 //!
 //! The rule stays unarmed. No fleet claim was run, and no shipped preset reads
 //! this module. [`PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1`] is empty, so
-//! activation refuses. Rollback is stop-new-admission plus continuation of a
+//! activation refuses. Measurements alone cannot establish the public inspection
+//! procedure required by RFC-v2-0020 §4.3. Rollback is stop-new-admission plus continuation of a
 //! claim already admitted under the clock stored on that claim. It does not
 //! rewrite the row. The trace list is empty and names no live block.
 
@@ -25,6 +26,7 @@ pub enum PublicAdjudicationActivationRefusalV1 {
     MeasuredClassRecordsEmpty,
     /// A listed record does not pass [`admit_measured_class_from_records_v1`].
     MeasuredClassNotAdmitted,
+    ProfileProcedureNotEstablished,
 }
 
 impl PublicAdjudicationActivationRefusalV1 {
@@ -34,14 +36,14 @@ impl PublicAdjudicationActivationRefusalV1 {
                 "the public-adjudication rule refuses activation while PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1 is empty"
             }
             Self::MeasuredClassNotAdmitted => "a measured-class record in the activation list is not admitted",
+            Self::ProfileProcedureNotEstablished => "PROFILE PROCEDURE NOT ESTABLISHED",
         }
     }
 }
 
 /// Activate the new rule from the pinned measured-class list.
 ///
-/// The pinned list is empty, so this refuses. `Ok` is not an armed preset and
-/// is not reachable while that list stays empty.
+/// The pinned list is empty, so this refuses before checking the procedure.
 pub fn activate_public_adjudication_rule_v1() -> Result<(), PublicAdjudicationActivationRefusalV1> {
     debug_assert!(!PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1);
     activate_public_adjudication_rule_from_records_v1(PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1)
@@ -49,9 +51,9 @@ pub fn activate_public_adjudication_rule_v1() -> Result<(), PublicAdjudicationAc
 
 /// The same activation rule over an explicit record list.
 ///
-/// An empty list refuses. A non-empty list still has to pass the measured-class
-/// predicate. `Ok` does not arm a preset, does not select `palw_batch_court_v1`,
-/// and does not write a claim row.
+/// A valid measurement list is insufficient. RFC-v2-0020 §4.3 requires an
+/// objective procedure for closing public material cases after a full-scope
+/// inspection opportunity. There is no implemented procedure for this profile.
 pub fn activate_public_adjudication_rule_from_records_v1(
     records: &[PublicClassMeasurementRecordV1],
 ) -> Result<(), PublicAdjudicationActivationRefusalV1> {
@@ -63,7 +65,7 @@ pub fn activate_public_adjudication_rule_from_records_v1(
             return Err(PublicAdjudicationActivationRefusalV1::MeasuredClassNotAdmitted);
         }
     }
-    Ok(())
+    Err(PublicAdjudicationActivationRefusalV1::ProfileProcedureNotEstablished)
 }
 
 /// A claim row as stored at admission. Rollback copies this value and does not
@@ -92,6 +94,7 @@ pub fn rollback_public_adjudication_v1(already_admitted: StoredPublicClaimRowV1)
 pub enum PublicNewAdmissionRefusalV1 {
     MeasuredClassRecordsEmpty,
     MeasuredClassNotAdmitted,
+    ProfileProcedureNotEstablished,
     /// Rollback has stopped new admission.
     Stopped,
 }
@@ -101,6 +104,7 @@ impl PublicNewAdmissionRefusalV1 {
         match self {
             Self::MeasuredClassRecordsEmpty => PublicAdjudicationActivationRefusalV1::MeasuredClassRecordsEmpty.reason(),
             Self::MeasuredClassNotAdmitted => PublicAdjudicationActivationRefusalV1::MeasuredClassNotAdmitted.reason(),
+            Self::ProfileProcedureNotEstablished => PublicAdjudicationActivationRefusalV1::ProfileProcedureNotEstablished.reason(),
             Self::Stopped => "a new admission after stop-new-admission is refused",
         }
     }
@@ -115,8 +119,8 @@ pub fn admit_new_public_claim_v1(stop_new_admission: bool) -> Result<(), PublicN
     admit_new_public_claim_from_records_v1(stop_new_admission, PALW_PUBLIC_MEASURED_CLASS_RECORDS_V1)
 }
 
-/// The admission gate over an explicit measured-class list. `Ok` writes nothing
-/// and leaves [`PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1`] false.
+/// The admission gate over an explicit measured-class list. The public
+/// inspection procedure is required here as well as at activation.
 pub fn admit_new_public_claim_from_records_v1(
     stop_new_admission: bool,
     records: &[PublicClassMeasurementRecordV1],
@@ -127,6 +131,9 @@ pub fn admit_new_public_claim_from_records_v1(
     activate_public_adjudication_rule_from_records_v1(records).map_err(|refusal| match refusal {
         PublicAdjudicationActivationRefusalV1::MeasuredClassRecordsEmpty => PublicNewAdmissionRefusalV1::MeasuredClassRecordsEmpty,
         PublicAdjudicationActivationRefusalV1::MeasuredClassNotAdmitted => PublicNewAdmissionRefusalV1::MeasuredClassNotAdmitted,
+        PublicAdjudicationActivationRefusalV1::ProfileProcedureNotEstablished => {
+            PublicNewAdmissionRefusalV1::ProfileProcedureNotEstablished
+        }
     })
 }
 
@@ -283,12 +290,16 @@ mod tests {
             activate_public_adjudication_rule_from_records_v1(&[blank]),
             Err(PublicAdjudicationActivationRefusalV1::MeasuredClassNotAdmitted)
         );
-        // A stand-in digest opens only the explicit list. The pinned list stays
-        // empty, so the production entry still refuses. The stand-in is not a
-        // harness printout and does not arm a preset.
+        // A measurement digest cannot stand in for an implemented inspection procedure.
         let stand_in = PublicClassMeasurementRecordV1 { profile, digest: [9; 32] };
-        assert_eq!(activate_public_adjudication_rule_from_records_v1(&[stand_in]), Ok(()));
-        assert_eq!(admit_new_public_claim_from_records_v1(false, &[stand_in]), Ok(()));
+        assert_eq!(
+            activate_public_adjudication_rule_from_records_v1(&[stand_in]),
+            Err(PublicAdjudicationActivationRefusalV1::ProfileProcedureNotEstablished)
+        );
+        assert_eq!(
+            admit_new_public_claim_from_records_v1(false, &[stand_in]),
+            Err(PublicNewAdmissionRefusalV1::ProfileProcedureNotEstablished)
+        );
         assert_eq!(activate_public_adjudication_rule_v1(), Err(PublicAdjudicationActivationRefusalV1::MeasuredClassRecordsEmpty));
         assert_eq!(admit_new_public_claim_v1(false), Err(PublicNewAdmissionRefusalV1::MeasuredClassRecordsEmpty));
         assert!(!PALW_PUBLIC_ADJUDICATION_RULE_ARMED_V1);

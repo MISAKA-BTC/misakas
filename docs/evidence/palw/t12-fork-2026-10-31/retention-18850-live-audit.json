@@ -1,0 +1,614 @@
+{
+  "observedUnix": 1793539896,
+  "source": "95.111.236.186 JSON wRPC 127.0.0.1:26314",
+  "virtualDaa": 18930,
+  "sink": "5219e8ec3faf8ecd7e17e308d4a7d198f2cd57ffe247c019838b621b48f94cacc86f239d1c90dcb9b084a4b53d6272aba803ba1ba432ca9f12ffbe1e56edf667",
+  "selectedChainCount": 160,
+  "selectedDaaMin": 18849,
+  "selectedDaaMax": 18929,
+  "lowAnchor": "f05a165581efdbc5c4235f1f51478a76e275f55f2fc729bac9e4861c6d2248aaa29f9c943f7c3c25c81544ae50767b696344243f668111ec30e5cd25b47fde2a",
+  "getBlocksPages": [
+    {
+      "low": "f05a165581efdbc5c4235f1f51478a76e275f55f2fc729bac9e4861c6d2248aaa29f9c943f7c3c25c81544ae50767b696344243f668111ec30e5cd25b47fde2a",
+      "count": 183,
+      "last": "6b5fcce25154e48a0c93656d442e129ec1bc9b1caa5a38d2a0e62252accfeb72a180daf1eb80123a307c3340cda7f39d465f8a4d342299335323c786cd3260be"
+    },
+    {
+      "low": "6b5fcce25154e48a0c93656d442e129ec1bc9b1caa5a38d2a0e62252accfeb72a180daf1eb80123a307c3340cda7f39d465f8a4d342299335323c786cd3260be",
+      "count": 50,
+      "last": "d8aaa91696c76813ffdb96e10300a3afeee29eb5591ecb6b2d766611afb1fc0eb2f0b755fffaacee1a151e16253013e519e53d1106a2082add27d7609ad6897f"
+    }
+  ],
+  "uniqueBlocks": 232,
+  "allFullBodies": true,
+  "algoCounts": {
+    "6": 29,
+    "8": 203
+  },
+  "attemptCount": 29,
+  "classCounts": {
+    "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01": 29
+  },
+  "mergedBlueAttempts": 26,
+  "mergedRedAttempts": 2,
+  "unmergedAttempts": 1,
+  "claimFixtureIdentityMatched": true,
+  "attempts": [
+    {
+      "hash": "5219e8ec3faf8ecd7e17e308d4a7d198f2cd57ffe247c019838b621b48f94cacc86f239d1c90dcb9b084a4b53d6272aba803ba1ba432ca9f12ffbe1e56edf667",
+      "daa": 18929,
+      "rawRetentionDaa": 39537,
+      "ownSpan": 20608,
+      "chain": true,
+      "merges": [],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "37e5ee911751c35eddacd6d4c1f421ed9aace2c605691ba4e04d39aa9e6539ebb482d4efd8f342372c522c2d32f0b1ad5745d75877c078112d47bd85e08f7749"
+    },
+    {
+      "hash": "1968bd8233755b6931e8ad21b6004d2b67ef19d4b8bfede32d2980f36c42294ab9b1cd7054425339fb60351ddd00a8a7986fbb1ab532261546bac9b98a6553ac",
+      "daa": 18848,
+      "rawRetentionDaa": 39456,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "44714a6187830c2932dc7ab10a13747a5ebbb8557462a1c94ec2148f7ebe2c4cf3e2f5d2c7f5608c8ae2ed0f01dded90ff6d540c1b7472265e45511368238eaa",
+          "acceptingDaa": 18851,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39459,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "66a31042e161c05450bdd643947e691535529e6f372cf646b42ba2f5712eb5cc2537b14acaad7e921fd73255e945212c5a0f8a30f61c91915159c469b40b189e"
+    },
+    {
+      "hash": "f678bf353b65874f7c5d951ad4c0ae475e5b3f03d7374f4d340f4e9d8ef43b1b5eee98c96540cfc5c84fcc7f16d3203ad384fce8836f0e77944a83509bb0d956",
+      "daa": 18851,
+      "rawRetentionDaa": 39459,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "9883edcf326ed8926e8e28bdb445804d000aca6014956dce5ff2166bcf2dc22a7c80757d02e9c02b046ae9b0d1dc5e66ea008121637c90f4bc1db04f33b4b191",
+          "acceptingDaa": 18853,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39461,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "e99d854e7df0c1c79bcb22edc784bebdccc9e423a923411e0f109fb1012c601999830266c810ae0c2ead7a6ed7fb966eafa33d91d8828feca1289e6dc44cafa5"
+    },
+    {
+      "hash": "c9dbfcc613683b1eff5c2045a00877d17329b2c36c72da1f85d9971ef427bf3fe4f5b991c13bcf7205780c6944ba529deb84a7d5768ee49dca78c4b45f00e6e8",
+      "daa": 18853,
+      "rawRetentionDaa": 39461,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "4b30ff4de4eaf0e726e7687f18849d6d95f33966ce156ad10d7bc86f436e8dade7d882c5c4fd42b1d4295290d8bbfbbce1d9ff59583df490dd26bd551ed4e564",
+          "acceptingDaa": 18856,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39464,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "4e6baf8d4af4e395a68b37d60f4ec33012a76c28aba370eef47d8896f50f3f29aadd7c4efc7111e996228e8adcc70ef515f6e1432bc412ff710dcdddde62dc94"
+    },
+    {
+      "hash": "88eff7b0768091c2e7eb45d9ef2274ee2339c431b102ebedad383f5d8a38b6075e2f23deb49c10e1c7738efaf70de2d322304b900b07d8dd7dd2b0aeeab8c301",
+      "daa": 18856,
+      "rawRetentionDaa": 39464,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "c97fcd50d41b3e0ccdbdd280a58fdce4194133172752b23cb92624a66acb51afbeed288bc860ea2b1d57874bffe5d749d8072b1707bc55e5b93356faf0aeef64",
+          "acceptingDaa": 18858,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39466,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "6a3e40ee93fea7719a0ad6f1aa9767c11cf944ed50e67017d6a2431a5a5e98f3447c82e76fbf9eedb32e8aa7cecc59d90be4a32519b1addb87fa09d1169d9780"
+    },
+    {
+      "hash": "cc39f376a4c56abc6dd9c61151cf3e83848db8861495507e7f60d829895db6bb99da5628b88a1cfed1365b234daa97867a6041845e351f471aaf4c9e94c2516d",
+      "daa": 18858,
+      "rawRetentionDaa": 39466,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "5af1af09e57fcfd3752646c73fdb734e83598a009e80c8589c5be4e78a7b0e46f69729e055a290d57b801cb213f13cbed8f8b96ebcb3023aa5d76692a607144d",
+          "acceptingDaa": 18861,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39469,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "da45fdd9b76f8e7f0d8c4af229b42e2665ebafbf5316423d5c22c4d3ed8be9c12a8a11c142c69f50469a47f4cf1ad9aa3ee7bf32b1bdc852601e858494f2895b"
+    },
+    {
+      "hash": "3a751a1e5b96c2acb32bc61a7b94db9473968cf539bbd531e264d1a24d675f832fd4a66a12aae216d4da1141b9572dfbb796ffb81890a9b2a0e87636173eaf1f",
+      "daa": 18861,
+      "rawRetentionDaa": 39469,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "ca5cfcd2dd3882eb6ea794163cea9ca40eeb9d915d575e987e423fd1803ec954a252767c7a180e5f88184b2f326e2c0c3a2e540c7d95456ef225b9bd721df75c",
+          "acceptingDaa": 18864,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39472,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "d588b15f034ad154ddd64f4f8791c7c069adb65104b2ae3b4803c25f86d0f4f2dd072cab2af6a68bd15a6a740561203f4c0b349e969f36c091e1401cb8833edf"
+    },
+    {
+      "hash": "80f850d843ab270eccaaa11ed41390ac875d27c7430aacc2d063e3dedd294a8deb082566e418c17ead8fb2d7cd8564cb5d89256cb302c8c39cb370914eb20948",
+      "daa": 18864,
+      "rawRetentionDaa": 39472,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "6279bc0b61cec222e73d753087ecfea88a9e97e3c91ec95a14df3aa86e49d4082bc5450f4165dbdf4ad319327117a7366b4ddfec4ff703ec95df4b6d77d79f87",
+          "acceptingDaa": 18866,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39474,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "6a169655fdf0df631e10c6404c4c039440a8b9945cf7208a34c888db531bcddf25ff9d89122a45c011e9a714ca7af6d8af8254fd4e40f89fa1430af57cd7697a"
+    },
+    {
+      "hash": "07498ec097ee3684bd413f33513c1142b31360fc78e28a568673bd193e9fc4291fd185382f9e267ec6712579349fb1bf051a2731abd64b80db9a793cd6efb7ab",
+      "daa": 18866,
+      "rawRetentionDaa": 39474,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "6885f41cfe2d02a325795e67934f305ded8817a5c9dd50eb9885c3b3b4eb043e1af28234ecab4ee9fb8bdfc04b6ebbff9c5d8f3cb51c49a42a21ca53440c61ba",
+          "acceptingDaa": 18869,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39477,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "6e7918f9ce9cd317f024a1a27c6dea5e2007be44b826abdf6d9301233f4a834ed92f8ed61c133a44d517c654e5239e6bce843e75132366052e5fb1f9e6318e60"
+    },
+    {
+      "hash": "5565c47dfb1fbf4a3fdbb4be3de30a18b4b4b6dfa33b0c6d001df05c15bf96ffad4834383b07b8e49d1d15cbeacf503ff636166156af92505e0f5c1e761b7d68",
+      "daa": 18869,
+      "rawRetentionDaa": 39477,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "07345d12a430dd06719b63b2469776ccf404c207eaaf45d9e543df3baca0f9ed272bf7be63d8119279d469364a82ec9ed7388ed448beccbdc455416ab3abc17a",
+          "acceptingDaa": 18871,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39479,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "bc719193c07ba18a09c2c9793fbab538e18851376bee1a5b9c39a6e4fdb021338d63df7f64cc375f2befaa80803d7678a83e74c8b18291c075e742c92678e9f1"
+    },
+    {
+      "hash": "4b766e0b8043e298d6eab363245c26156fe2ff8912db56e8d5a5ea7bde554fafb57010cf7d6159569d73544bda72561d68dbfd168a49f863166518b073c456cb",
+      "daa": 18871,
+      "rawRetentionDaa": 39479,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "451f171481b45f123fa910d74cb1730e811eb91bc3be5efc6e35582130c9f2b6c833f355ccbc9d0a30ee1a1556b906790d5ed4b21f6f73b3f2065d0868488e9a",
+          "acceptingDaa": 18874,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39482,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "82b081837b8c8c00f67cd206722f088b2aa14dd389432020143e2fb7c8e6409b22e392c7ae69cfa24d9b0139f752cd475e6b7c93f5e803342483651996362941"
+    },
+    {
+      "hash": "443e93fcb3bc09f3228c7983283c45d09550aa8138d40a6cfa63229c1c5b020b97a1b65165193949b161178e27f91971cf1bd27afc6c8406a598c4bec3c831e9",
+      "daa": 18874,
+      "rawRetentionDaa": 39482,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "6901baa9b4e56fd36b38e5494a6b2216231c5def3556e56589b46c43ff7a6384ebc05fff874d0487003fd2fb60eb2da6b93e6bd86e9e7f5391f965fd33d1f1f7",
+          "acceptingDaa": 18876,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39484,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "d0d9a938eafe922a384c9a04681278f30cb5cb9a31b5f022940416b6d30ee1dfa5f7d2a5b6b9a1d0466aa9cf3aa00b90ef972d982b64204d30db138dd6c0807c"
+    },
+    {
+      "hash": "20f133f4da0192d59f9164265aa4a146e9bab1c6a76aaf0023890c75843a1ca24447c1cf4d68ce0997ecac3d9a8114845a83c87c5156f695b879cbe75be33e14",
+      "daa": 18876,
+      "rawRetentionDaa": 39484,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "049e683b390d26677c2571f69a4792aea37bc12a15fe960fe08a5916ef6a96ac08e92a79f04eafe3066644ea8d7a0ee54b7f86f20e7520cd32427c240d347db3",
+          "acceptingDaa": 18879,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39487,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "f8c501a1a674bb90e9ab4b0dc83b81a922f475ed346e89f4284e69bfb2fc8126a9ff897cd68e973c3277acbfd27395e154e1386d309b4cb23280ad1ea9f716ae"
+    },
+    {
+      "hash": "769332bda078f765c17575dc070a707e30530a9c52000e95d40a291a58f734222560f1a597b71850b6c311b300a97d664a946bbf79b8bdf479fdae7fb72f1fe5",
+      "daa": 18879,
+      "rawRetentionDaa": 39487,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "ea6940b83701239662c1d146391ea9c7ec181181f95e9b956543ac1d356544db747a407d386decacd0fe369279883dbc6bbff6dff5eac8329139f63010e458ad",
+          "acceptingDaa": 18881,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39489,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "f4ffa36201c2aa6c719da30ddb6c991a1d68375289b16b901bec238f84690852fb484eef49e31aa37c0a7833d7a0828354f827f65645cb34b69a19fd3d894af8"
+    },
+    {
+      "hash": "ce999f49b2eb43626592247813bb4c886149eca588e494a5bcffd0e11ab251a66aec9eb53633e812f0d7f4a9ac95c55fc37e0cf4b23671e5e08922b09dd36aaf",
+      "daa": 18881,
+      "rawRetentionDaa": 39489,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "d3e26103f78a0d7659d4bba7ff46b539f2ff42e878fed25e0f9b5bf46bdedac44bf562e15f785d43b6121c5f9d2bc56238aa8d3408a264662fa2aeab707116b6",
+          "acceptingDaa": 18884,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39492,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "678931b8eb5ae0bac30633e9d9badc173e2700a0b0a188687de6f597466d6d47ea912bbf3dc882abec339f470258db9ff269b012a229f555884d8bf658ffd3c2"
+    },
+    {
+      "hash": "e75b155bf01213db773f35706070c6fa0d1cd2781381bd55201f1173638d8df14fd2aa3f892ad2e611d095c0506d519afc48f5e23e0c233540b8776fdf93da4d",
+      "daa": 18884,
+      "rawRetentionDaa": 39492,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "b3705d274b16a1dea9b71cc94f60dd07461018083b51206d05f063237727e2ae139bbe1dbdef69f09237b5bfbdaa58306e5843ba9f777c9876b4b420b6b2435e",
+          "acceptingDaa": 18887,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39495,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "14a16259411a404c6c0f5db82f826290cf2a1e8ca88adea593fccbde764111ad647ec63e25c4063bc0be476e9815046c48c42cbc1bbca84dff5c08384d05da6c"
+    },
+    {
+      "hash": "f5283528a6641354916e374c765b03128d5debdb34c4587d62586a16708639ed7d284f0aef1d6a8b84d713cd68dd7c804b1b86a4da7d6dbabf442ae4d11b834e",
+      "daa": 18887,
+      "rawRetentionDaa": 39495,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "4f6dcf77dbf650834313adb33eb2e0638c412ce31abdb6e42707991801320aa305af6bcac0e3ee9f6cd3f8718a63e76da096281ebb607f81444a987a81478e8f",
+          "acceptingDaa": 18890,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39498,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "e50f46d9e897767011157fc74d1ed404ccc98d1bb8ea2e04eb5a278f96090971b9541b86c2dde9b5b35d4371b150b1acb29091c6ef52444ecb472764f77d33c0"
+    },
+    {
+      "hash": "c34da0d2e8d5c8c999437db7b4be2f2b433807c6f54b060db6d1938774097c2069b19bfa3b8122538ffd0d0ba2ee768a42af498895d448476d1c592236c2a7a8",
+      "daa": 18890,
+      "rawRetentionDaa": 39498,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "cd38e4f77eca60f4c3d99a8df57066e777d6b786181ed776fd85870af2dcec0cb59ac959f8b521dd4bbeb491730f7020271f2643f07ab79fc54795d90e054f0d",
+          "acceptingDaa": 18892,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39500,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "792ffda105690f86acb59bd1a8d4269c39faaf1ef516d45f160482e39f86685449d248ebc28da329d8a180acf4704228d1721c728de9dd143f240677e82e4bf9"
+    },
+    {
+      "hash": "9a77b2cf204791fa42bcf09c0a0dd2728c8f518cb67ff32c934b3f41602c315d2a9b4be26268264778e85802c9fb585d001de23265dc62ff3dcff89cd8a6fc7d",
+      "daa": 18892,
+      "rawRetentionDaa": 39500,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "530e16552961c46a00dfa85b0a276b6ed1db215578b4320a30e9bede614aa876537e003ca5d8050bfc9e541cf42410a0e8fd071b885220cacaa07851f1814442",
+          "acceptingDaa": 18895,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39503,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "1ea9671b7295ee54bb7ce85d69c547deb289c0abb4f5a900d8d47e07f9ffce44cc82b17f1ba522fe47633922d20f5571dc56e0b53b64c6e2befaa70c4beffa2c"
+    },
+    {
+      "hash": "d851a0a1d92c684703587e4f90cfcf2d1a7b723a990e95c1ac7c9b55bb5807a78c15b05023935c5a874e4346e1e9ec4223f3133516e4781202526a9151ad1e5e",
+      "daa": 18895,
+      "rawRetentionDaa": 39503,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "9a6c339e6bfc55feaf155f91496c92ace90749d80b74b23474f45787927675cf6a94bb929fa188a08e534b0d6889902583543b7d77203ea25e0025831e8202d0",
+          "acceptingDaa": 18898,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39506,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "9cf707165adfbc1c0c2a69e0b44991c6ab7cda0e8a9a8ce9341f6e18016e1e7bf4ab6d1ff0de59d29201816e751bca3493266ab892f97155a6258adbd22c0ff3"
+    },
+    {
+      "hash": "c733d334d2d839f8dc0ba119a27ca46a6af48edf0c35daa9681720ba48fdf73e4d53e86feb58bbea9a31a67186df3a2f5e838d4d6bd24ee228dea49ead29d72a",
+      "daa": 18898,
+      "rawRetentionDaa": 39506,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "b17e64bd30f0af0e3b7ce0631eeb022fe66a5b5ec80e681543e6d15c6253507c0a9bb6ee891a3743c0bd66d818ade82d7e1970e74e2764d38fc5a3f9cb76e128",
+          "acceptingDaa": 18901,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39509,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "447d0e01cd43de56472ece70a87dd76ed57582dfb42c249bc6f2996c5c909bc5d0cc7b22b477db6245ed9bd701794ee6b8e14d2263b18245b36ce3f87f19795f"
+    },
+    {
+      "hash": "3e99fc1a3dfe74077dd682258707cb20341b741828c10a0df1bae3acc0cf0e7b4bada235de8e9c363e0792901c02b8e1c9a1a855e290d013e1bc54670f15b656",
+      "daa": 18901,
+      "rawRetentionDaa": 39509,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "b0763449e1ce8dd028779cacd9d3b46287cca3fdcd6775e13b378f6877f8a6ab2a570e9263b8817f30296b719c21998947095ed05b7244b27a1c70d95f22d0cc",
+          "acceptingDaa": 18903,
+          "color": "red",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39511,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "019f4c66dea0b860e53bb9726a960e457918bb5b3c6816ff9894f4d87211937776c94be0722e6fa1d32868fa4da41a6476c93c631467ffd405a5945635af8832"
+    },
+    {
+      "hash": "7d11286089a7ed4de4e6d3d06f2410bd04e8ad894fdb48b36c52e5091105d8e7ec5cb165349fd71f52a5142fd9e521dbdd2ec0487886c62c41e0ab77b118dad7",
+      "daa": 18903,
+      "rawRetentionDaa": 39511,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "3f547df0f0b5d71f42d389e9bbd74d6353b001bdea87a716a746554c862d93009313947f42df31e258371c76ecd977c71ef42d5013e3d3dcc9d8aea40a37dbd9",
+          "acceptingDaa": 18906,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39514,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "e57d673f2e0e80776970e4546cbb3ce84b792aad94b0580c616d6e68f5668154368a560aca502a951d70210221624c4cd6ef5ae39aa15bcfa25d474074686b4e"
+    },
+    {
+      "hash": "84269dcbdecbe3c9abc8f8fcf1e19d1cc2b92ad83a68566d890f17f26688a6d371eec4f6eaa4ee9dd03f78eb7d6bc14daa6b42166194182b37b0b822c32f1d01",
+      "daa": 18906,
+      "rawRetentionDaa": 39514,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "45b94f548b96f7e182225faca222fcf6fd1ee3d5ef4e9043945d43e202bcd9b4fd3f5fbafe65407f42857436834f2d4a64bbf6ada57c67e37e834be62e036a75",
+          "acceptingDaa": 18908,
+          "color": "blue",
+          "oldRemaining": 20606,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39516,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "f422a60568bbe04a501407cfc70b5e2302f6f35d59f802ef7cc7625b239f577dbe1db424cc72feb519cf04006a44445df054d36441a25b0d17c4408d9549aad2"
+    },
+    {
+      "hash": "3c0232446ff12cc478ecd2081d1a8c78ccf604cfc96a19d0a3f0cabe15a2b0b76dd5388c69f883c9d6889ddee3d1f3ffbb390a2e992b24ff23b8fcf1d9982eb3",
+      "daa": 18908,
+      "rawRetentionDaa": 39516,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "51d8111c9a5affd7a2602949c4a8f81060b5cbefb6dd5f3e8d5100f26b904016247028d41fa0409362cbbe6b4a836749ea4e697ea51385024dfe301a2756ea83",
+          "acceptingDaa": 18911,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39519,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "7073b4ab54b30a73b37f47ea25153e16716e8579b2f995b7b337580f7ff3fad630ecbb6cd8717b3b130c7f8865429324d209f175255c345218b8c00480c2c9af"
+    },
+    {
+      "hash": "180aaedc5d36a5596b035dd521867c7364e8db047362914eb34130b8148f32bafb56c017521c421b0a8efeaf211dec67d5acb1068bbc32f7b470b761f947710e",
+      "daa": 18911,
+      "rawRetentionDaa": 39519,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "20966acd54bca37db544741a3d504b15fe084da2e6eec9cb7c07b700f1c49a68249368d1e17ecc9ccbca99bd7c3a33f2c1ba74ba69db607885270a7ca0356793",
+          "acceptingDaa": 18914,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39522,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "7c6fab569c86175da1d5be6f29a9f44b1877f8a357d2c265e3359376d8ef85a196948b0aaf096a159a64ee731632c3e37278eca48b3b73c99c3e92a35ec2bff4"
+    },
+    {
+      "hash": "f71fd7fd0692ef0d5f15cfff7439a3e6e28ffbf4e636980ba9c9fd1c7f92f2adaed6b95a147c7e123e3a00a2f1adf4d251f020e55cb96d3f999abe92fa3698af",
+      "daa": 18920,
+      "rawRetentionDaa": 39528,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "e4a07cdfb8cc45f461c2bb4b00d4bd18e40aa22a2396971db94318588511e1b9bb557301a1f1ac190a5cfb77c141c11b8184df61d8138dd696d8729b0462fb9d",
+          "acceptingDaa": 18923,
+          "color": "blue",
+          "oldRemaining": 20605,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39531,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "41b078f41325b01c3d6b68c6063f4daf198ce31d70d4f90d6cb18eb3cd4c31134b9bfc337b7071fa85c2602f9e1cfdf571f7d8b3c8eabdd0efa41a05f50ba9b2"
+    },
+    {
+      "hash": "734ec3850926a590e923442e1873d0f0a6c0742f070ddb89de879ab397450f255b59383c0b557eb0155d2427adb443ce43afd5c7200ed0fd1920f92b72dfd6e7",
+      "daa": 18924,
+      "rawRetentionDaa": 39532,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "7c6f6ce739ae5415421e67d6bc55643df72e5243d6153402c84056d2089150878dd7b5f6e9225327cc515aef3e37baf44cc8e4f8c875097e9706f6ca9af5284a",
+          "acceptingDaa": 18928,
+          "color": "red",
+          "oldRemaining": 20604,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39536,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "722156c0d7e5887a8f429bc22a927b58ccb5c8305bfbd9f91d2ac1e4a51161e04ab0f5ce625e3130bdffe9f33742b99e22ed216493c08c53b123ee360f1c29eb"
+    },
+    {
+      "hash": "eb2e7a94bbfafc6facce63467cc3760eabd860213d4dae16e1e895c3f3b4273db08efbb84c23787306d4d6db0c692ade781f0dd0e5d43d55bf1a16f15aeb1373",
+      "daa": 18928,
+      "rawRetentionDaa": 39536,
+      "ownSpan": 20608,
+      "chain": false,
+      "merges": [
+        {
+          "acceptor": "5219e8ec3faf8ecd7e17e308d4a7d198f2cd57ffe247c019838b621b48f94cacc86f239d1c90dcb9b084a4b53d6272aba803ba1ba432ca9f12ffbe1e56edf667",
+          "acceptingDaa": 18929,
+          "color": "blue",
+          "oldRemaining": 20607,
+          "canonicalSpanFromOwnPin": 20608,
+          "candidateEffectiveRetention": 39537,
+          "retentionCheckWouldChange": true
+        }
+      ],
+      "classId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+      "claimId": "0c84d1e294446f300eea97dc11d5e3f1ab0fa552d58dbd28d5eefd7d7a7763a8c9d38a1d2eef0b9c87d101de78c53c5f3f930a8880ce6690f592a692e8b1aafc"
+    }
+  ],
+  "limitations": [
+    "Retention comparison only: full replay of new-rule state transition has not been executed.",
+    "found=false does not itself establish a particular rejection reason or guarantee that every other new-rule admission gate passes.",
+    "Base-class attempts were absent only in the captured range; no claim of all-network absence.",
+    "PeerInfo has no params ID; no proof that every external peer remains on the old rules."
+  ]
+}
