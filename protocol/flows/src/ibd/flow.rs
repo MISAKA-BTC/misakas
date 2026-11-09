@@ -406,11 +406,8 @@ impl IbdFlow {
                         }
                         if sidecar_shortfall {
                             warn!(
-                                "IBD with {} committed a chain but {} — this node cannot advance past its pruning point until a \
-                                 peer serves it. Retrying against other peers; after {} consecutive failures it will quarantine.",
-                                self.router,
-                                e,
-                                FlowContext::SIDECAR_SHORTFALL_TOLERANCE
+                                "IBD with {} could not obtain a pruning-point sidecar: {}. The node can retry with another peer.",
+                                self.router, e
                             );
                             return Err(e);
                         }
