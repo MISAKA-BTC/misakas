@@ -1,0 +1,124 @@
+{
+  "schema": "palw-funded-tokenizer-registration-regression-v2",
+  "date": "2026-11-11",
+  "sourceCommit": "fc3e726e26e4b2c640bb25485af591271d099116",
+  "scope": "Local registration core, authoritative fold fee parity, cutoff, candidate scanner, SDK and existing Batch/Output regressions. Node UTXO handoff/order wiring is compile-checked only. Coinbase/template/Round fee reconciliation, production work enforcement, RPC and public activation are incomplete.",
+  "passedTotal": 24,
+  "runs": [
+    {
+      "name": "registration",
+      "summary": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 5960 filtered out; finished in 0.30s",
+      "passed": 17,
+      "testNames": [
+        "palw_tokenizer_registration_snapshot_v1::tests::equal_blue_score_requires_the_exact_accepted_point",
+        "palw_tokenizer_registration_snapshot_v1::tests::historical_snapshot_needs_no_tokenizer_book",
+        "palw_tokenizer_registration_carriage_v1::tests::candidate_preflight_meters_physical_finish_copies_and_sweeps_once",
+        "palw_tokenizer_registration_v1::tests::bookkeeping_bounds_scale_and_reject_underfunded_metadata",
+        "palw_tokenizer_registration_snapshot_v1::tests::tokenizer_journal_binds_session_progress_and_terminal_point",
+        "palw_tokenizer_registration_v1::tests::invalid_tokenizer_input_is_priced_before_a_small_declared_limit_can_refuse_it",
+        "palw_tokenizer_registration_v1::tests::quote_pins_indexed_parts_and_fixed_retention",
+        "palw_tokenizer_registration_carriage_v1::tests::real_fee_context_and_zero_service_burn_for_parts",
+        "palw_tokenizer_registration_carriage_v1::tests::new_open_burns_once_and_duplicate_projection_keeps_ordinary_fee",
+        "palw_tokenizer_registration_v1::tests::finish_reuses_registered_eog_opening_and_rejects_oversized_lists",
+        "palw_tokenizer_registration_state_v1::tests::reservation_rejects_corruption_and_expiry_preserves_other_slots",
+        "config::params::tokenizer_registration_v1::tests::schedule_fingerprint_and_header_gate_preserve_dormant_rules",
+        "palw_tokenizer_registration_snapshot_v1::tests::tokenizer_journal_preserves_surviving_assignments",
+        "palw_tokenizer_registration_v1::tests::signed_open_and_bounded_wire_are_scope_bound",
+        "palw_tokenizer_registration_state_v1::tests::signed_finish_cannot_reuse_an_attempt_consumed_by_a_failed_parse",
+        "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::verified_tokenizer_registration_root_replay_and_carriage_require_native_context",
+        "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::funded_tokenizer_registration_native_open_parts_finish_and_expiry"
+      ],
+      "log": "/tmp/t12-tokenizer-phase2-tests.log",
+      "logSha256": "c2587a27c5611342891f510e8efeec72487316c8232da6e0ecb4dd08a92b241e",
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08",
+      "binarySha256": "ec8c7719dae8c85a246294cfcf906ad17d1e7c2bd9bcb0b1fe5a8bfb748e99d5",
+      "coreOptLevel": 0,
+      "stackBytes": null
+    },
+    {
+      "name": "accepted_order",
+      "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 5973 filtered out; finished in 0.00s",
+      "passed": 4,
+      "testNames": [
+        "palw_batch_court_v1::fold_order::tests::native_handoffs_refuse_invalid_positions_and_ordinals",
+        "palw_batch_court_v1::fold_order::tests::native_handoffs_merge_by_accepted_ordinal_at_same_position",
+        "palw_batch_court_v1::fold_order::tests::batch_handoffs_keep_same_position_order_and_follow_the_ordinary_notice",
+        "palw_batch_court_v1::fold_order::tests::indexing_preserves_batch_order_around_extracted_objects_and_skips"
+      ],
+      "log": "/tmp/t12-tokenizer-phase2-order-tests.log",
+      "logSha256": "212661b7ad697fdd11f0843bacae4ac88226c5a1effbd753e344f0a1af95bbee",
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08",
+      "binarySha256": "ec8c7719dae8c85a246294cfcf906ad17d1e7c2bd9bcb0b1fe5a8bfb748e99d5",
+      "coreOptLevel": 0,
+      "stackBytes": null
+    },
+    {
+      "name": "batch",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5976 filtered out; finished in 87.97s",
+      "passed": 1,
+      "testNames": [
+        "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_native_funded_batch_candidate_v1"
+      ],
+      "log": "/tmp/t12-tokenizer-phase2-batch-stack64m-tests.log",
+      "logSha256": "37e64f263481591b476986ad024bdb92d517551ce47a9b6a64e760f90fd43726",
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08",
+      "binarySha256": "ec8c7719dae8c85a246294cfcf906ad17d1e7c2bd9bcb0b1fe5a8bfb748e99d5",
+      "coreOptLevel": 0,
+      "stackBytes": 67108864
+    },
+    {
+      "name": "output",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5976 filtered out; finished in 0.06s",
+      "passed": 1,
+      "testNames": [
+        "palw_court_shared_material_intake_v1::batch::plain_output::tests::plain_output_control_length_and_signing_scope_v2"
+      ],
+      "log": "/tmp/t12-tokenizer-phase2-output-tests.log",
+      "logSha256": "e06ab79a04da8aedc2ccac8d78ffa0bf6a78e2383972e9a47c0bf096209f7099",
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08",
+      "binarySha256": "ec8c7719dae8c85a246294cfcf906ad17d1e7c2bd9bcb0b1fe5a8bfb748e99d5",
+      "coreOptLevel": 0,
+      "stackBytes": null
+    },
+    {
+      "name": "sdk",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 188 filtered out; finished in 0.18s",
+      "passed": 1,
+      "testNames": [
+        "tokenizer_registration::tests::builds_signed_indexed_payloads_and_refuses_changed_inputs_before_signing"
+      ],
+      "log": "/tmp/t12-tokenizer-phase2-sdk-tests.log",
+      "logSha256": "8471c07a914980b714ac1127dd6751d0d03d108597acedd2ee85ba9e47dbed3b",
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka_palw_sdk-8ab6217c05b3ef04",
+      "binarySha256": "0ff258ea780eef5d6311715a87bad805772c57aae6110a837145734ad162ba70",
+      "coreOptLevel": 0,
+      "stackBytes": null
+    }
+  ],
+  "nodeCheck": {
+    "command": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' check -j 2 -p kaspa-consensus --lib",
+    "log": "/tmp/t12-tokenizer-phase2-node-check.log",
+    "logSha256": "03daee7a465ce05b59a49c9265c4530480cbe9d43638b0aaa466a624cbc8cd3b",
+    "result": "PASS"
+  },
+  "limitations": [
+    "All current tests use core opt-level 0 for functional checking; no public performance qualification.",
+    "Batch regression aborted on default and 8 MiB test-thread stacks; it passed with RUST_MIN_STACK=67108864. The larger test stack is not a public node configuration.",
+    "Initial full-fold registration fixture omitted the synthetic claim deadline index; fixture was rebuilt with the existing production index function. No production invariant was removed."
+  ],
+  "earlierBatchFailures": [
+    {
+      "log": "/tmp/t12-tokenizer-phase2-batch-tests.log",
+      "logSha256": "a8b47c0007cd7b63caa20259c6e3c7037986ad4f07a2353a0e2d60d77cebd7b1",
+      "result": "stack overflow / exit 134"
+    },
+    {
+      "log": "/tmp/t12-tokenizer-phase2-batch-stack8m-tests.log",
+      "logSha256": "40a8193ce52a46b5bcd73bd060139316efc6fccf24d153e8ddb2f01d0b3cf1bd",
+      "result": "stack overflow / exit 134"
+    }
+  ],
+  "publicSubmission": false,
+  "publicActivation": false,
+  "mainPush": false
+}

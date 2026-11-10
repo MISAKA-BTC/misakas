@@ -187,3 +187,6 @@ snapshot / journal 検査で固定 quote・Part 集合・元の割当・終端 /
 
 
 `ad9f9ae2e` として native 登録と SDK 準備 API をコミットした。core の登録関連 15 件、既存 Batch と Output 各 1 件、SDK 1 件の計 **18 件が成功**。[検証記録](../../../evidence/palw/funded-tokenizer-registration-regression-2026-11-11.json) に完全 source commit、実行 filter、profile、binary/log SHA-256、テスト名を保存した。core test build は 19 分 03 秒。SDK は機能検査用に core の opt-level を 0 にした別ビルドで、性能測定には使用していない。公開受付・quote・Final は引き続き未達である。
+
+
+`fc3e726e2` に transport policy / Open cutoff、専用 network domain、UTXO handoff、通常 / Batch / TKR1 の受理順、確定 fold の fee parity を保存した。候補 scanner と予約 book は期限処理分を含む同じ総 work 上限を使う。core 17、受理順 4、Batch / Output / SDK 各 1 の計 **24 件が成功**し、ノード library の最新 check も成功した。[検証記録](../../../evidence/palw/funded-tokenizer-registration-phase2-regression-2026-11-11.json) に完全 source commit とログ・binary hash を保存。Batch は opt-level 0 の標準 / 8 MiB stack で overflow し、64 MiB のテスト用 stack で成功したため、その差を記録し性能認定には用いない。公開 preset は未設定で、coinbase / template / Round の焼却照合と scanner の本番境界適用は未接続。公開受付の成功、main push、公開有効化は行っていない。
