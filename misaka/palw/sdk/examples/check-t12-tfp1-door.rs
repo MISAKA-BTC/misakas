@@ -1,6 +1,8 @@
 //! Offline resource quote for a retained TIR worker result under the compiled public t12 settings.
 //! The EOF certificate is a fixture. The optional authenticated table comparison uses the
 //! family V4 allocation locally. It does not check network activation or produce a carrier.
+//! `--dense-replay` checks the retained original's numerical roots with the existing court
+//! builder and checker and reports their maximum replay cost.
 use kaspa_consensus_core::{
     Hash64,
     config::params::palw_t12_shipped_params,
@@ -118,19 +120,129 @@ fn parameter_shape(
     Ok(ParameterShape { siblings, value_bytes, multiproof_bytes })
 }
 
+/// Measure the local numerical builder and checker against a retained dense capture.
+fn dense_replay(
+    artifact: &misaka_palw_tir_exec::node::TirArtifactV1,
+    original: &PalwFreePromptCommitmentV3,
+    header: &kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    record: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &kaspa_consensus_core::palw_tir_class_v1::PalwTirLayoutV1,
+    allocation: PalwTirPublicAllocationRulesV1,
+    demand: kaspa_consensus_core::palw_tir_fence2_v1::PalwTirDemandRulesV1,
+    capture_file: &Path,
+    max_roots: u64,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    use kaspa_consensus_core::{
+        palw_court_numerical_geometry_v3::{NativeNumericalGeometryV3, NumericalGeometryBudgetV3},
+        palw_step_refute::PalwStepRefuteError,
+        palw_tir_court_v1::{PalwTirCourtRulesV1, build_tir_cone_refutation_bounded_v1, check_tir_cone_refutation_v1},
+    };
+    use misaka_palw_tir_exec::node::{TirCaptureV1, TirClassRunnerV1, TirEvidenceV1, tir_court_builder_limits_v1};
+
+    let source = PalwTirPublicSourceV1::new_native_v1(
+        record,
+        layout,
+        header,
+        original.execution_root,
+        original.trace_root,
+        allocation.maximum_leaves,
+    )
+    .map_err(|error| format!("dense replay source: {error:?}"))?;
+    let [_, _, max_paths, max_edges, max_path_bytes] = kaspa_consensus_core::palw_g14_values_v1::PALW_G14_NUMERICAL_GEOMETRY_V1;
+    let geometry = NativeNumericalGeometryV3::derive_native_v3(
+        &source,
+        record,
+        layout,
+        &allocation.court,
+        demand,
+        NumericalGeometryBudgetV3 { max_original_leaves: allocation.maximum_leaves, max_roots, max_paths, max_edges, max_path_bytes },
+    )
+    .map_err(|error| format!("dense replay geometry: {error:?}"))?;
+    if geometry.roots_v3().is_empty() {
+        return Err("dense replay found no numerical roots".into());
+    }
+    let capture = TirCaptureV1::decode(&read(capture_file, 16 << 20)?)?;
+    let binding = header.resolve_registered_layout_v1(record, layout, original.execution_root, allocation.maximum_leaves)?;
+    if capture.binding != binding
+        || !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+            allocation.prompt_form,
+            &capture.prompt,
+            &binding.job_context.prompt_token_ids_hash,
+        )
+    {
+        return Err("dense capture does not match the retained original".into());
+    }
+    let verified = kaspa_consensus_core::palw_tir_step_v1::verify_tir_binding_v1(&binding, allocation.maximum_leaves)
+        .map_err(|error| error.to_string())?;
+    let runner = TirClassRunnerV1::new(&verified.space, artifact.plan(), artifact.params(), original.job.class_id)?;
+    let store = TirEvidenceV1::dense(
+        &runner,
+        &binding,
+        &capture.prompt,
+        &capture.logits_rows,
+        &capture.generated,
+        &capture.leaves,
+        artifact,
+        allocation.prompt_form,
+        allocation.maximum_leaves,
+    )?;
+    let rules = PalwTirCourtRulesV1 {
+        max_step_leaf_count: allocation.maximum_leaves,
+        prompt_form: allocation.prompt_form,
+        limits: kaspa_consensus_core::palw_court_v2::palw_tir_court_limits_v1(&allocation.court),
+    };
+    let mut maximum = [0; 5];
+    for root in geometry.roots_v3() {
+        let leaf = root.leaf_v3();
+        let (mut cone, meter) =
+            build_tir_cone_refutation_bounded_v1(&binding, leaf, &store, &rules, tir_court_builder_limits_v1(&rules))
+                .map_err(|error| format!("dense replay leaf {leaf}: {error}"))?;
+        let verdict = check_tir_cone_refutation_v1(&cone, &rules);
+        if !matches!(verdict, Err(PalwStepRefuteError::NoFaultFound)) {
+            return Err(format!("dense replay leaf {leaf}: {verdict:?}").into());
+        }
+        kaspa_consensus_core::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut cone.binding);
+        let sample =
+            [meter.work.elements, meter.work.terms, meter.target_requests, meter.source_reads, borsh::object_length(&cone)? as u64];
+        for (maximum, value) in maximum.iter_mut().zip(sample) {
+            *maximum = (*maximum).max(value);
+        }
+    }
+    Ok(json!({
+        "scope": "local numerical replay using the retained dense capture",
+        "checked_roots": geometry.roots_v3().len(),
+        "max_elements": maximum[0],
+        "max_terms": maximum[1],
+        "max_target_requests": maximum[2],
+        "max_source_reads": maximum[3],
+        "max_program_free_cone_bytes": maximum[4],
+    }))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let [artifact, tokenizer, result, binding, semantics, daa, custodians, rest @ ..] = args.as_slice() else {
-        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper> [--original-commitment <file>] [--exact-token-table <file>] [disputed-leaf | --all-roots <max-leaves> <max-edges> <max-coordinates> <max-memberships> <max-native-bytes>]".into());
+        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper> [--original-commitment <file>] [--exact-token-table <file>] [--dense-replay <capture> <max-roots>] [disputed-leaf | --all-roots <max-leaves> <max-edges> <max-coordinates> <max-memberships> <max-native-bytes>]".into());
     };
     let (original_file, rest) = match rest {
         [flag, file, tail @ ..] if flag == "--original-commitment" => (Some(file), tail),
         [flag] if flag == "--original-commitment" => return Err("--original-commitment needs a Borsh commitment file".into()),
         _ => (None, rest),
     };
-    let (table_file, cover_args) = match rest {
+    let (table_file, rest) = match rest {
         [flag, file, tail @ ..] if flag == "--exact-token-table" => (Some(file), tail),
         [flag] if flag == "--exact-token-table" => return Err("--exact-token-table needs a canonical PALWTTB1 file".into()),
+        _ => (None, rest),
+    };
+    let (replay, cover_args) = match rest {
+        [flag, file, roots, tail @ ..] if flag == "--dense-replay" => {
+            let max_roots: u64 = roots.to_str().ok_or("replay root limit must be text")?.parse()?;
+            if original_file.is_none() || max_roots == 0 {
+                return Err("--dense-replay requires a retained --original-commitment and a positive root limit".into());
+            }
+            (Some((file, max_roots)), tail)
+        }
+        [flag, ..] if flag == "--dense-replay" => return Err("--dense-replay needs a capture and a root limit".into()),
         _ => (None, rest),
     };
     let cover_mode = cover_mode(cover_args)?;
@@ -317,6 +429,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let program = &entry.artifact.plan().program;
     let layout = &entry.class.layout;
+    let dense_replay_diagnostic = replay
+        .map(|(capture, max_roots)| {
+            dense_replay(
+                &entry.artifact,
+                &original,
+                &header,
+                &record,
+                layout,
+                rules,
+                params.palw_tir_demand_rules_at(daa),
+                Path::new(capture),
+                max_roots,
+            )
+        })
+        .transpose()?;
     let (parameter_cover, all_root_cover) = match cover_mode {
         CoverMode::None => (serde_json::Value::Null, serde_json::Value::Null),
         CoverMode::Named(leaf) => {
@@ -414,6 +541,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "maximum_door_daa":cost.clock.maximum_door_daa,
             "public_cost_quote":public,
             "offline_batch_v5_clock_quote":batch,
+            "dense_replay_diagnostic":dense_replay_diagnostic,
             "exact_table_diagnostic":exact_table_diagnostic,
             "non_tokenizer_diagnostic":non_tokenizer,
             "disputed_leaf_parameter_cover":parameter_cover,
