@@ -190,3 +190,12 @@ snapshot / journal 検査で固定 quote・Part 集合・元の割当・終端 /
 
 
 `fc3e726e2` に transport policy / Open cutoff、専用 network domain、UTXO handoff、通常 / Batch / TKR1 の受理順、確定 fold の fee parity を保存した。候補 scanner と予約 book は期限処理分を含む同じ総 work 上限を使う。core 17、受理順 4、Batch / Output / SDK 各 1 の計 **24 件が成功**し、ノード library の最新 check も成功した。[検証記録](../../../evidence/palw/funded-tokenizer-registration-phase2-regression-2026-11-11.json) に完全 source commit とログ・binary hash を保存。Batch は opt-level 0 の標準 / 8 MiB stack で overflow し、64 MiB のテスト用 stack で成功したため、その差を記録し性能認定には用いない。公開 preset は未設定で、coinbase / template / Round の焼却照合と scanner の本番境界適用は未接続。公開受付の成功、main push、公開有効化は行っていない。
+
+
+### 2026-11-11 — RFC-0051 段階3: fee・容量の実行境界
+
+コミット `b41a758851f32dee9ecbe7861bf87bf83c55a2d3` で TKR1 の source body / candidate work 検査、Open の焼却後 fee と Round 予算の照合、body 拒否時の native journal 逆適用、候補内 Finish cache を接続した。carrier ごとの全 state 複製を所有権の移動に置換し、未変更・拒否経路の一時予約を返す。最大五回の native 処理・二回の逆適用・一回の parser を共通の見積もりと policy ID に含める。
+
+[機能回帰30件](../../../evidence/palw/funded-tokenizer-registration-phase3-regression-2026-11-11.json)が成功した。core/node opt-level 0、Batch のテスト stack は64 MiBであり、公開性能測定ではない。[実 tokenizer の搬送 mass 記録](../../../evidence/palw/tokenizer-registration-mass-2026-11-11/README.md)は固定テスト鍵によるオフライン値で、使用 rlib の元コミットは未特定。この値を出荷コミットの適格性として扱わない。
+
+RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック受理・復元、最大入力での計測を続ける。公開 profile・activation は未設定。公開 TFP1 quote 成功、main push、Final は未達である。
