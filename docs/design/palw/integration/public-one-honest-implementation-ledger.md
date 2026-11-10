@@ -128,3 +128,5 @@ seat 7 の停止中に DB を複製し、旧サービスを再開した。複製
 `--dense-replay` の関数を取り出した実行に、同じ Studio 候補 `7645bc8b…a3711` の保存済み capture を渡した。root 上限 269 では `numerical root budget exhausted`、270 では全件検査完了。最大は 1,043 elements、130 terms、64 target requests、323 source reads、program 除外後の cone 13,335 bytes。SDK example 全体は型検査済み。この計測は公開 quote や公開の受付予約を成立させるものではない。
 
 公開 seat 7 は virtual DAA 21,001 で、資料宣言と family supplier は引き続き未スケジュール。稼働プロセスは対象の 135M artifact を保持リストへ載せておらず、既存の EOF 自動公開 actor が選ぶ canonical class の指定もなかった。SDK の診断は、固定値の EOF 証明書を組み立てる代わりに、保存済みの実 tokenizer をネイティブの Part/Finish で再生するようにした。ローカルの署名欄と包含時刻は fixture。実ファイルは 2,104,556 bytes で、1 byte を変えると Finish で拒否した。ネットワークの EOF 予約条件で最大 35 move、140 DAA、rent 11,929,756 sompi、deposit 35 sompi（carrier 手数料は別）。この EOF を同じ claim の見積もりへ渡すと、出荷設定で必要 8,567,151 DAA 対上限 3,120 DAA、Batch v5 比較では 72,565 対 6,880 DAA。宣言のみで EOF を省いた比較は計画計算前に拒否した。
+
+保存済みの署名 object を復号し、元の宣言 Borsh と一致すること、T12 の署名ドメインと先に公開照会した登録者公開鍵で ML-DSA-87 の portable 検証が通ることを確認した。seat 7 の `/root/palw-class/t12-studio-7a2616b4/` に対象モデルと `tokenizer.json` を配置し、両ファイルの SHA-256 を送信元と照合した。保持リストへの追加、fence 変更、宣言の送信は未実施。
