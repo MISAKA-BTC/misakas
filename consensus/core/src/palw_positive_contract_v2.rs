@@ -1031,6 +1031,17 @@ pub enum PublicReplayApprovalLookupErrorV1 {
     CarrierUnavailable(AcceptedOrigin),
 }
 
+/// Outcome of the persisted public-verification checks before Final.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicFinalReplayPrerequisiteV1 {
+    RecordedRefutation,
+    NoticeOpen,
+    PastHardDeadline,
+    ManifestCasePending,
+    MissingReplayApproval,
+    ReadyForRemainingChecks,
+}
+
 impl From<ContractError> for PublicReplayApprovalLookupErrorV1 {
     fn from(error: ContractError) -> Self {
         Self::Contract(error)
@@ -1116,6 +1127,51 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             }
         }
         Ok(())
+    }
+
+    /// Check the public verification rows at this exact native state point.
+    /// Local positive checks, inspection opportunity, dependencies, funding,
+    /// and settlement are separate and still required for Final.
+    pub fn public_final_replay_prerequisite_v1(
+        &self,
+        draw: &PreparedPublicDrawV1,
+        approval_until: u64,
+        read_carrier: impl FnMut(
+            AcceptedOrigin,
+        )
+            -> Option<[u8; misaka_palw_positive_contract::public_one_honest::SignedFullReplayApprovalV1::WIRE_BYTES]>,
+    ) -> Result<PublicFinalReplayPrerequisiteV1, PublicReplayApprovalLookupErrorV1> {
+        use PublicFinalReplayPrerequisiteV1::*;
+        let original = draw.original;
+        let admission = self.public_original_admission_record_v1(original)?.ok_or(ContractError::Scope)?;
+        if self.public_draw_record_v1(original)? != Some(draw.record()) {
+            return Err(ContractError::Scope.into());
+        }
+        let route = self.kernel_route_state_v1().ok_or(ContractError::Scope)?;
+        let key = (PUBLIC_COURT_RECORD_TABLE_V1, original.0.0.to_vec());
+        if let Some(((table, key), bytes)) = route.aux.range(key..).next()
+            && *table == PUBLIC_COURT_RECORD_TABLE_V1
+            && key.starts_with(&original.0.0)
+        {
+            self.decode_public_court_row_v1(key, bytes)?;
+            return Ok(RecordedRefutation);
+        }
+        let clock = OriginalClock::new(admission.carrier.origin.accepted_daa)?;
+        let now = self.last_point().ok_or(ContractError::Scope)?.daa_score;
+        if clock.is_past_hard(now) {
+            return Ok(PastHardDeadline);
+        }
+        if !clock.permits_final_time(now) {
+            return Ok(NoticeOpen);
+        }
+        if self.has_public_pending_manifest_v1(original)? {
+            return Ok(ManifestCasePending);
+        }
+        if self.has_reauthenticated_public_replay_approval_v1(draw, approval_until, read_carrier)? {
+            Ok(ReadyForRemainingChecks)
+        } else {
+            Ok(MissingReplayApproval)
+        }
     }
 
     /// Resolve the profile's one-approval condition from rooted state. The

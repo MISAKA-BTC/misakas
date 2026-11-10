@@ -473,6 +473,51 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         Err(PublicReplayApprovalLookupErrorV1::Contract(misaka_palw_positive_contract::ContractError::Signature))
     );
 
+    use crate::palw_positive_contract_v2::PublicFinalReplayPrerequisiteV1;
+    let clock = misaka_palw_positive_contract::public_one_honest::OriginalClock::new(point.daa_score).unwrap();
+    let draw_extras_without_votes = PalwTransitionExtrasV1 { kernel_route: extras.kernel_route.clone(), ..Default::default() };
+    let fold_at = |parent, block, daa| {
+        let point = ctx(block, daa, block);
+        apply_palw_transition_v2_with_extras(
+            parent,
+            &params,
+            &point,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &draw_extras_without_votes,
+        )
+        .unwrap()
+        .0
+    };
+    assert_eq!(
+        restored_vote.public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("notice is open")),
+        Ok(PublicFinalReplayPrerequisiteV1::NoticeOpen)
+    );
+    let notice_end = fold_at(&restored_vote, 5, clock.notice_until());
+    assert_eq!(
+        notice_end.public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("notice is inclusive")),
+        Ok(PublicFinalReplayPrerequisiteV1::NoticeOpen)
+    );
+    let after_notice = fold_at(&notice_end, 6, clock.notice_until() + 1);
+    assert_eq!(
+        after_notice.public_final_replay_prerequisite_v1(&draw, 104, |_| Some(bytes)),
+        Ok(PublicFinalReplayPrerequisiteV1::ReadyForRemainingChecks)
+    );
+    let absent_vote = fold_at(&drawn, 6, clock.notice_until() + 1);
+    assert_eq!(
+        absent_vote.public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("no approval to look up")),
+        Ok(PublicFinalReplayPrerequisiteV1::MissingReplayApproval)
+    );
+    let past_hard = fold_at(&after_notice, 7, clock.hard() + 1);
+    assert_eq!(
+        past_hard.public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("hard deadline passed")),
+        Ok(PublicFinalReplayPrerequisiteV1::PastHardDeadline)
+    );
+
     let earlier = FullReplayApproval { original, draw: context.draw, bond: other_bond, member, full_scope: context.full_scope };
     let signature =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &earlier.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [1; 32]).unwrap();

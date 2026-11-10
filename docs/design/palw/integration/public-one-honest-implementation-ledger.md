@@ -62,3 +62,5 @@ I1 のローカル統合テストでは、Miner が wide TIR を一度実行し�
 隔離 Linux ノードの旧ビルド `fa449130a` は同日 DAA 5,057 で、公開 Explorer の DAA 20,868 と pruning point は一致したが同期未完了。IBD は `unsupported native cold tip capacity` を繰り返し、一部の再試行では `IbdChainBlockLocator`／`BlockBody` の待受に別の応答が到着した。公開側は同期済み。新ビルド `244b69d93` で確認する対象は、この隔離環境での IBD 完了と公開側の sink への合流であり、Studio claim の実証とは分けて記録する。
 
 公開 T12 の DAA 20,944 で、Studio 候補のクラス登録 tx `86f7e37feabecda0b80f475bc7d2bec8e7de73e07cb82fa90e3f88b5d27b70ba5c4e4bd5f3863aaac7c174fbfadb55a66c3e6afcb42eeb9d14a6d11b7a6d08a6` を中継した。ローカルの同期済みノードを pin の出所として owner 証明を照合し、署名経路の判定は `VERIFIED_REMOTE`。2 ノードが中継を受理した。確認時点では mempool 受理、ブロック包含と registry fold は未確認。この tx はクラス登録であり、Studio の TFP1 claim の提出記録とは別に追跡する。
+
+同じ登録 tx の搭載ブロックは DAA 20,945 の `6a067b8fbcd7cdb9db13ecf66829b5d3175df1bf253e48a7cb59d94f2b12339c2f676d0fc8dab180203ed99a33c5078c4bd509893a69815f4e00634bd16b7156`。次の受理ブロック `60766c89bcb72a1c462b8b1363a8caf61a1cf4f9308ecb406b331369a5100dcc11d9f8d012717d8d1bd12f744797f88eb979956354ab58ae416aa88a80caeeab` の受理 tx 一覧を seat 5 と Explorer で確認した。DAA 20,946 の登録状態は `ADMISSION_OK`、`Candidate`。同じ未提出 TFP1 候補の見積もりは `TIR_CLASS_CONTAINER_UNBOUND`。
