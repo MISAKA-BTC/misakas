@@ -231,19 +231,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|err| format!("the table does not authenticate against the class declaration: {err:?}"))?;
         let mut family_rules = rules;
         family_rules.clock.version = PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4;
-        let answer = derive_tir_public_allocation_family_native_v2(
-            &geometry,
-            &original,
-            &header,
-            &record,
-            &entry.class.layout,
-            Some(&bound),
-            Some(&inventory),
-            family_rules,
-            Some(&table),
-        )
-        .map_err(|err| format!("offline family quote failed: {err:?}"))?;
-        let quote = match answer {
+        let family_quote = |family_rules| {
+            derive_tir_public_allocation_family_native_v2(
+                &geometry,
+                &original,
+                &header,
+                &record,
+                &entry.class.layout,
+                Some(&bound),
+                Some(&inventory),
+                family_rules,
+                Some(&table),
+            )
+            .map_err(|err| format!("offline family quote failed: {err:?}"))
+        };
+        let quote = match family_quote(family_rules)? {
             PalwTirPublicAllocationQuoteV1::Complete(plan) => json!({
                 "complete": true, "collect_daa": plan.terms.collect_until_daa - daa,
             }),
@@ -251,7 +253,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "complete": false, "missing": format!("{missing:?}"),
             }),
         };
-        json!({"mode": "offline_family_v4_fixture", "canonical_table_bytes": literal.len(), "quote": quote})
+        // The comparison below exposes the derived component clocks. Keep
+        // its altered limit out of the quote reported above.
+        family_rules.clock.maximum_door_daa = u64::MAX;
+        let breakdown = match family_quote(family_rules)? {
+            PalwTirPublicAllocationQuoteV1::Complete(plan) => {
+                let stages: Vec<_> = plan
+                    .semantic
+                    .iter()
+                    .flat_map(|bundle| &bundle.stages)
+                    .map(|stage| {
+                        json!({
+                            "family": format!("{:?}", stage.family),
+                            "open_offset_daa": stage.terms.open_until_daa - daa,
+                            "stream_offset_daa": stage.terms.stream_until_daa - daa,
+                            "resource_inclusion_daa": stage.terms.plan.inclusion_daa,
+                            "maximum_moves": stage.terms.plan.maximum_moves,
+                        })
+                    })
+                    .collect();
+                json!({
+                    "collect_offset_daa": plan.terms.collect_until_daa - daa,
+                    "acquisition_inclusion_daa": plan.acquisition.envelope.inclusion_daa,
+                    "semantic_stages": stages,
+                })
+            }
+            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => json!({"missing":format!("{missing:?}")}),
+        };
+        json!({
+            "mode": "offline_family_v4_fixture",
+            "canonical_table_bytes": literal.len(),
+            "quote": quote,
+            "unbounded_door_breakdown": breakdown,
+        })
     } else {
         serde_json::Value::Null
     };
