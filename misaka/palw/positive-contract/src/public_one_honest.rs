@@ -842,6 +842,25 @@ impl PendingManifestCaseRecordV1 {
 }
 
 impl PendingManifestCase {
+    /// Recover a delivery only by replaying its literal packet against the
+    /// restored request and the canonical provider obligation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn restore_provider_response_bytes(
+        &self,
+        record: &ManifestResponseRecordV1,
+        packet: &[u8],
+        expected_provider: PrincipalId,
+        original: &OriginalCommit,
+        origin: AcceptedOrigin,
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
+    ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
+        record.check_case(&self.record())?;
+        let delivery = self.verify_provider_response_bytes(packet, expected_provider, original, origin, scope_limits, total_limit)?;
+        record.check_restore(&delivery)?;
+        Ok(delivery)
+    }
+
     /// Verify a raw delivery under the provider and profile resolved from
     /// the native obligation. A delivery record leaves inspection pending.
     #[allow(clippy::too_many_arguments)]
@@ -1715,8 +1734,16 @@ mod tests {
         let wrong_obligation = PendingManifestCaseRecordV1 { supply_obligation: Digest([99; 64]), ..pending.record() };
         assert_eq!(restored.check_case(&wrong_obligation), Err(ContractError::Scope));
         assert_eq!(restored.check_restore(&verified), Ok(()));
+        let mut packet = header.clone();
+        packet.extend_from_slice(&bytes);
+        let restore = |origin, provider| {
+            pending.restore_provider_response_bytes(&restored, &packet, provider, &bound_original, origin, &rules, 90)
+        };
+        assert_eq!(restore(delivery_origin, principal(key)).as_ref(), Ok(&verified));
+        assert_eq!(restore(delivery_origin, PrincipalId(Digest([99; 64]))), Err(ContractError::Identity));
         assert_eq!(stored.len(), ManifestResponseRecordV1::WIRE_BYTES);
         let alternate = AcceptedOrigin { carrier_transaction: crate::rows::NativeHash64([7; 64]), ..delivery_origin };
+        assert_eq!(restore(alternate, principal(key)), Err(ContractError::Scope));
         assert_eq!(restored.check_restore(&verify(alternate, &bytes, 90).unwrap()), Err(ContractError::Scope));
         assert_eq!(verify(context.origin, &bytes, 90), Err(ContractError::Scope));
         assert_eq!(verify(delivery_origin, &bytes, 91), Err(ContractError::Scope));
