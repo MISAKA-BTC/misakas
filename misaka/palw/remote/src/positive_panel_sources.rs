@@ -70,16 +70,58 @@ pub fn fetch_public_trace_index_v1(
     Ok(index)
 }
 
+/// Caller-reserved bounds for acquiring the complete published trace.
+#[derive(Clone, Copy)]
+pub struct PublicTraceAcquisitionV1 {
+    pub max_tiles: u64,
+    pub max_wire_bytes: u64,
+}
+
 pub(crate) fn check_public_replay_trace_v1(
     provider: &dyn MaterialProvider,
     original: &OriginalCommit,
     replayed: &PublicOriginalTraceIndexV1,
+    hashes: &[Hash64],
+    total_bytes: u64,
+    chunk_bytes: usize,
+    limits: PublicTraceAcquisitionV1,
 ) -> Result<(), PanelSourceErrorR1> {
+    let count = replayed.step_leaf_count;
+    if count == 0 || count != hashes.len() as u64 {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    // Reserve the longest possible opening for every tile before fetching.
+    let overhead = trace_tile_wire_overhead(count) as u64;
+    let max_wire = count.checked_mul(overhead).and_then(|bytes| total_bytes.checked_add(bytes));
+    if count > limits.max_tiles || max_wire.is_none_or(|bytes| bytes > limits.max_wire_bytes) {
+        return Err(PanelSourceErrorR1::Budget);
+    }
     let published = fetch_public_trace_index_v1(provider, original)?;
     if published != *replayed {
         return Err(PanelSourceErrorR1::Binding);
     }
+    let mut remaining = total_bytes.checked_sub(PublicOriginalTraceIndexV1::WIRE_BYTES as u64).ok_or(PanelSourceErrorR1::Binding)?;
+    for (index, hash) in hashes.iter().enumerate() {
+        let max_value_bytes = chunk_bytes.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let (opening, tile) =
+            fetch_public_trace_tile_v1(provider, original, &published, index as u64, limits.max_tiles, max_value_bytes)?;
+        if opening.leaf_hash != *hash {
+            return Err(PanelSourceErrorR1::Binding);
+        }
+        remaining -= tile.values_le.len() as u64;
+    }
+    if remaining != 0 {
+        return Err(PanelSourceErrorR1::Binding);
+    }
     Ok(())
+}
+
+const TRACE_OPENING_PREFIX: usize = 8 + 64 + 4;
+const TRACE_TILE_PREFIX: usize = 2 + 16 + 4 + 4;
+
+fn trace_tile_wire_overhead(count: u64) -> usize {
+    let depth = u64::BITS - (count - 1).leading_zeros();
+    TRACE_OPENING_PREFIX + depth as usize * 64 + TRACE_TILE_PREFIX
 }
 
 /// Fetch one opening and tile, rejecting invalid vector lengths before
@@ -97,10 +139,8 @@ pub fn fetch_public_trace_tile_v1(
         return Err(PanelSourceErrorR1::Binding);
     }
     // Borsh opening prefix, at most 64 siblings, then tile prefix.
-    const OPENING_PREFIX: usize = 8 + 64 + 4;
-    const TILE_PREFIX: usize = 2 + 16 + 4 + 4;
     let depth = u64::BITS - (trace.step_leaf_count - 1).leading_zeros();
-    let cap = (OPENING_PREFIX + depth as usize * 64 + TILE_PREFIX)
+    let cap = trace_tile_wire_overhead(trace.step_leaf_count)
         .saturating_add(max_value_bytes)
         .min(crate::public_material::MATERIAL_UNIT_MAX_BYTES);
     let path = crate::public_material::public_original_trace_tile_path(original.id(), index);
@@ -111,11 +151,11 @@ pub fn fetch_public_trace_tile_v1(
     let read_u32 = |offset| {
         bytes.get(offset..offset + 4).and_then(|raw| raw.try_into().ok()).map(u32::from_le_bytes).ok_or(PanelSourceErrorR1::Binding)
     };
-    let siblings = read_u32(OPENING_PREFIX - 4)?;
+    let siblings = read_u32(TRACE_OPENING_PREFIX - 4)?;
     if siblings > depth || bytes.len() > cap {
         return Err(PanelSourceErrorR1::Binding);
     }
-    let header = OPENING_PREFIX + siblings as usize * 64 + TILE_PREFIX;
+    let header = TRACE_OPENING_PREFIX + siblings as usize * 64 + TRACE_TILE_PREFIX;
     let values = read_u32(header - 4)? as usize;
     if values > max_value_bytes || bytes.len().checked_sub(header) != Some(values) {
         return Err(PanelSourceErrorR1::Binding);
@@ -213,6 +253,7 @@ pub fn run_public_wide_replay_v1(
     work: &WidePanelWorkV2,
     tape: File,
     reserver: &TirMemoryReserverV1,
+    acquisition: PublicTraceAcquisitionV1,
     search: Option<PublicTraceSearchV1>,
 ) -> Result<(), PanelSourceErrorR1> {
     let expected_root = Hash64::from_bytes(original.artifact.0);
@@ -291,7 +332,11 @@ pub fn run_public_wide_replay_v1(
         if capture.public_trace_material(rules)? != *trace {
             return Err(PanelSourceErrorR1::Binding);
         }
-        return check_public_replay_trace_v1(provider, original, &capture.public_trace_index());
+        let replayed = capture.public_trace_index();
+        let hashes =
+            capture.public_replay_leaf_hashes(original, replayed.step_leaf_count).map_err(PanelSourceErrorR1::ReplayMismatch)?;
+        let chunk_bytes = usize::try_from(trace.chunk_bytes).map_err(|_| PanelSourceErrorR1::Budget)?;
+        return check_public_replay_trace_v1(provider, original, &replayed, hashes, trace.total_bytes, chunk_bytes, acquisition);
     };
     if let Some(search) = search
         && capture.run().execution_root().as_bytes() != original.trace_root.0
@@ -666,6 +711,7 @@ impl PanelSourceCacheR1 {
         work: &WidePanelWorkV2,
         tape: File,
         reserver: &TirMemoryReserverV1,
+        acquisition: PublicTraceAcquisitionV1,
         search: Option<PublicTraceSearchV1>,
     ) -> Result<(), PanelSourceErrorR1> {
         if manifest.original() != original.id()
@@ -692,6 +738,7 @@ impl PanelSourceCacheR1 {
             work,
             tape,
             reserver,
+            acquisition,
             search,
         )
     }
