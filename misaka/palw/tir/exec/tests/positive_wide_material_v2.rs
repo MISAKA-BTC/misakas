@@ -461,13 +461,15 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     // The admission adapter authenticates the signed commitment without
     // fetching its manifest. This fixture tests that boundary only.
     use kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionV1;
-    use misaka_palw_positive_contract::public_one_honest::{ManifestV1, ORIGINAL_SIGN_CONTEXT};
+    use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, manifest_limits_id_v1};
     assert!(capture.check_public_original_replay(&original, EXPECTED).is_err());
     original.manifest_root = d(4);
     capture.check_public_original_replay(&original, EXPECTED).unwrap();
     assert!(capture.check_public_original_replay(&original, &EXPECTED[1..]).is_err());
     let different_trace = misaka_palw_positive_contract::public_one_honest::OriginalCommit { trace_root: d(77), ..original.clone() };
     assert!(capture.check_public_original_replay(&different_trace, EXPECTED).is_err());
+    let manifest_scope_limits = [rules; MaterialScope::COUNT];
+    let manifest_total_limit = rules.max_bytes * MaterialScope::COUNT as u64;
     let admission = PublicOriginalAdmissionV1 {
         scope: r.scope,
         job: &f.job,
@@ -479,7 +481,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         dependencies: r.dependencies,
         service_contract,
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
-        manifest_limits: d(16),
+        manifest_scope_limits: &manifest_scope_limits,
+        manifest_total_limit,
     };
     let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
     let signature = libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0; 32]).unwrap();
@@ -535,6 +538,10 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(bytes.len(), SignedPublicOriginalV1::WIRE_BYTES);
     assert!(SignedPublicOriginalV1::decode(&bytes[..bytes.len() - 1]).is_err());
     let prepared = admission.prepare_signed_bytes(&bytes, &reservation).unwrap();
+    let mut unavailable_scope = manifest_scope_limits;
+    unavailable_scope[MaterialScope::Trace as usize].chunk_bytes = 0;
+    let invalid_profile = PublicOriginalAdmissionV1 { manifest_scope_limits: &unavailable_scope, ..admission };
+    assert_eq!(invalid_profile.prepare_signed_bytes(&bytes, &reservation), Err(misaka_palw_positive_contract::ContractError::Budget));
     let mut oversized = bytes.clone();
     oversized.push(0);
     assert_eq!(
@@ -546,6 +553,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(admission.prepare_signed_bytes(&tampered, &reservation), Err(misaka_palw_positive_contract::ContractError::Signature));
     let reserved = d(21);
     let record = prepared.record(reserved);
+    let changed_profile = PublicOriginalAdmissionV1 { manifest_total_limit: manifest_total_limit + 1, ..admission };
+    assert_eq!(
+        changed_profile.restore_signed_bytes(&bytes, &reservation, &record, reserved),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     let terminal = prepared.schedule.terminal_by();
     assert_eq!(
         record.court_verdict_key(&prepared, reserved, terminal, &verdict),
@@ -648,7 +660,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         supply_obligation: d(13),
         reservation: d(8),
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
-        manifest_limits: d(16),
+        manifest_limits: manifest_limits_id_v1(&manifest_scope_limits, manifest_total_limit, ManifestV1::WIRE_BYTES),
         manifest_body_bytes_reserved: body,
         schedule: prepared.schedule,
         origin: AcceptedOrigin {

@@ -25,10 +25,10 @@ use misaka_palw_positive_contract::{
     ports::{NodeChecker, require_next},
     public_one_honest::{
         CaseId, Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
-        ManifestV1, MaterialCaseDemand, MissingInspectionOutcome, OriginalClock, OriginalCommit, OriginalId, PanelBond,
-        PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext,
-        SignedPublicOriginalV1, VerificationSchedule, public_draw_id_v1, public_draw_members_digest_v1,
-        public_original_service_contract_id_v1, require_accepted_after_v1,
+        ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialScope, MissingInspectionOutcome, OriginalClock, OriginalCommit,
+        OriginalId, PanelBond, PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1,
+        ReplayApprovalContext, SignedPublicOriginalV1, VerificationSchedule, manifest_limits_id_v1, public_draw_id_v1,
+        public_draw_members_digest_v1, public_original_service_contract_id_v1, require_accepted_after_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -146,7 +146,8 @@ pub struct PublicOriginalAdmissionV1<'a> {
     pub dependencies: Digest,
     pub service_contract: Digest,
     pub max_manifest_bytes: u32,
-    pub manifest_limits: Digest,
+    pub manifest_scope_limits: &'a [ManifestScopeRules; MaterialScope::COUNT],
+    pub manifest_total_limit: u64,
 }
 
 /// Native reservation inputs from the accepted profile and current ledger.
@@ -1098,7 +1099,7 @@ impl PublicOriginalAdmissionV1<'_> {
             rescue: reservation.rescue,
             budget: *reservation.budget,
             max_manifest_bytes: self.max_manifest_bytes,
-            manifest_limits: self.manifest_limits,
+            manifest_limits: manifest_limits_id_v1(self.manifest_scope_limits, self.manifest_total_limit, self.max_manifest_bytes),
         })
     }
 
@@ -1111,6 +1112,11 @@ impl PublicOriginalAdmissionV1<'_> {
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<OriginalId, ContractError> {
         ManifestV1::fetch_size(self.max_manifest_bytes)?;
+        if self.manifest_total_limit < MaterialScope::COUNT as u64
+            || self.manifest_scope_limits.iter().any(|scope| scope.max_bytes == 0 || scope.chunk_bytes == 0)
+        {
+            return Err(ContractError::Budget);
+        }
         if original.scope != self.scope
             || original.miner != self.miner
             || original.prompt != self.prompt
