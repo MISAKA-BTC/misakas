@@ -362,9 +362,10 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let mut checker = signed.preparation(f).begin(record, panel.verification_key.as_ref(), &sig).unwrap();
     let before = builder.meter();
     let mut rejected = false;
-    let step_root = kaspa_consensus_core::palw_tir_court_v1::PublicOriginalStepRootV1 {
-        full_logits_trace_root: capture.run().trace_root(),
-        step_leaf_count: capture.run().leaf_count(),
+    let step_root = capture.public_step_root();
+    let wrong_step_root = kaspa_consensus_core::palw_tir_court_v1::PublicOriginalStepRootV1 {
+        full_logits_trace_root: Hash64::from_u64_word(1),
+        step_leaf_count: step_root.step_leaf_count,
     };
     for index in 0..n {
         let progress = checker.progress();
@@ -384,6 +385,18 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
                 max_bytes,
             )
             .unwrap();
+            assert!(
+                check_public_original_step_data_v1(
+                    &original,
+                    &wrong_step_root,
+                    index,
+                    target.opening,
+                    target.preimage,
+                    step_root.step_leaf_count,
+                    max_bytes,
+                )
+                .is_err()
+            );
             assert!(
                 check_public_original_step_data_v1(
                     &original,

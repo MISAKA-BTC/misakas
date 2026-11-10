@@ -7,6 +7,7 @@ use crate::{NodeValue, Slice};
 use kaspa_consensus_core::{
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1},
     palw_step_leg::{PalwStepTileLeafV1, step_tile_leaf_hash_v1},
+    palw_tir_court_v1::PublicOriginalStepRootV1,
     palw_tir_step_v1::{palw_tir_execution_root_v1, palw_tir_leaf_values_v2},
 };
 use misaka_palw_positive_contract::{
@@ -71,6 +72,11 @@ impl WidePanelCaptureV2<'_> {
     }
     pub fn run(&self) -> &TirJobRunWideQ24V2 {
         &self.run
+    }
+
+    /// Fixed-size root data a reader needs beside an original step opening.
+    pub fn public_step_root(&self) -> PublicOriginalStepRootV1 {
+        PublicOriginalStepRootV1 { full_logits_trace_root: self.run.trace_root(), step_leaf_count: self.run.leaf_count() }
     }
 
     /// The exact output of the same observed run, as one canonical chunk.
