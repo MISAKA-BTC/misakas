@@ -14,6 +14,8 @@ use kaspa_consensus_core::{
     palw_tir_class_v1::PalwTirClassV1,
     palw_v2::PalwJobContextV2,
 };
+#[cfg(feature = "positive-panel")]
+use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, OriginalCommit};
 use misaka_palw_positive_contract::{
     public_one_honest::{ManifestEntryV1, ManifestScopeRules, tir_program_material_codec_v1},
     tir::greedy_selector_id,
@@ -205,6 +207,46 @@ impl TirMinerJobV2<'_> {
         let subject = Digest(self.class.graph_ir_root().as_bytes());
         Ok(ManifestEntryV1 { subject, content_root: subject, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes })
     }
+}
+
+/// Bind one observed execution, sign its original and durably publish the
+/// manifest before returning it to the caller for native submission.
+/// The caller supplies the remaining material entries and owns their retention.
+#[cfg(feature = "positive-panel")]
+#[allow(clippy::too_many_arguments)]
+pub fn finalize_public_capture_v1(
+    capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
+    job: &TirMinerJobV2<'_>,
+    mut original: OriginalCommit,
+    mut manifest: ManifestV1,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+    provider_root: &std::path::Path,
+    key: &[u8; PUBKEY_BYTES],
+    sign: impl FnOnce(&[u8], &[u8]) -> Result<[u8; SIGNATURE_BYTES], String>,
+) -> Result<(OriginalCommit, [u8; SIGNATURE_BYTES]), MinerErrorV2> {
+    if misaka_palw_positive_contract::identity::principal(key) != original.miner {
+        return Err(ContractError::Identity.into());
+    }
+    // This capture currently uses the native flat commitment.
+    if job.prompt_form != PalwPromptIdsFormV1::Flat {
+        return Err(ContractError::UnsupportedProfile.into());
+    }
+    capture.bind_public_original(&mut original).map_err(|_| MinerErrorV2::Binding)?;
+    let program = MaterialScope::Program as usize;
+    let input = MaterialScope::InputTokens as usize;
+    let output = MaterialScope::Output as usize;
+    manifest.entries[program] = job.public_program_material(scope_limits[program])?;
+    manifest.entries[input] = job.public_input_token_material(scope_limits[input])?;
+    manifest.entries[output] = capture.public_output_material(scope_limits[output])?;
+    let bytes = original.bind_manifest(&manifest, scope_limits, total_limit, max_manifest_bytes)?;
+    let digest = original.id().0;
+    let signature = sign(&digest.0, ORIGINAL_SIGN_CONTEXT).map_err(MinerErrorV2::Signer)?;
+    original.authenticate(key, &signature)?;
+    super::store::store_public_manifest_v1(provider_root, &original, scope_limits, total_limit, max_manifest_bytes, &bytes)
+        .map_err(|error| MinerErrorV2::Journal(format!("public manifest: {error:?}")))?;
+    Ok((original, signature))
 }
 
 /// The concrete A2 inference→result path. Every job/class/input/selector field
