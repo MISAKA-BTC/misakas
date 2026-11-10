@@ -308,7 +308,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let budget = AggregateBudget {
         rounds: 1,
         unique_source_bytes: body + manifest_total_limit,
-        transmitted_bytes: body * 4 + manifest_total_limit * 3,
+        transmitted_bytes: (body + manifest_total_limit) * 4,
         additional_work: 4,
         retained_bytes: body * 4 + manifest_total_limit,
         retention_until: 10_100,
@@ -566,7 +566,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
             filing_daa: 1,
             adjudication_and_recovery_daa: 1,
         },
-        initial_supply: RemainingCapacity { retained_bytes: body + manifest_total_limit, ..supply },
+        initial_supply: RemainingCapacity { retained_bytes: body + manifest_total_limit, ..rescue_supply },
         rescue: ProtectedRescueDemand {
             max_drawn_bonds: 2,
             per_drawn_bond: rescue_supply,
@@ -583,8 +583,13 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(bytes.len(), SignedPublicOriginalV1::WIRE_BYTES);
     assert!(SignedPublicOriginalV1::decode(&bytes[..bytes.len() - 1]).is_err());
     let prepared = admission.prepare_signed_bytes(&bytes, &reservation).unwrap();
-    let short_retention = PublicOriginalReservationV1 { initial_supply: supply, ..reservation };
+    let short_retention = PublicOriginalReservationV1 { initial_supply: rescue_supply, ..reservation };
     assert_eq!(admission.prepare_signed_bytes(&bytes, &short_retention), Err(misaka_palw_positive_contract::ContractError::Budget));
+    let short_supply = PublicOriginalReservationV1 {
+        initial_supply: RemainingCapacity { transmitted_bytes: body, ..reservation.initial_supply },
+        ..reservation
+    };
+    assert_eq!(admission.prepare_signed_bytes(&bytes, &short_supply), Err(misaka_palw_positive_contract::ContractError::Budget));
     let mut unavailable_scope = manifest_scope_limits;
     unavailable_scope[MaterialScope::Trace as usize].chunk_bytes = 0;
     let invalid_profile = PublicOriginalAdmissionV1 { manifest_scope_limits: &unavailable_scope, ..admission };
@@ -656,7 +661,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         bad_record.court_verdict_key(&bad_prepared, reserved, terminal + 1, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Range)
     );
-    assert_eq!(prepared.capacity.transmitted_bytes, body * 3 + manifest_total_limit * 2);
+    assert_eq!(prepared.capacity.transmitted_bytes, (body + manifest_total_limit) * 3);
     use misaka_palw_positive_contract::public_one_honest::{
         FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond, PublicDrawMemberV1,
     };

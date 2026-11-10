@@ -200,6 +200,7 @@ fn public_original_capacity_v1(
     let material_bytes = body_bytes.checked_add(manifest_payload_bytes).ok_or(ContractError::Budget)?;
     if manifest_payload_bytes < MaterialScope::COUNT as u64
         || material_bytes > max_unique_source_bytes
+        || initial_supply.transmitted_bytes < material_bytes
         || initial_supply.retained_bytes < material_bytes
         || rescue.per_drawn_bond.transmitted_bytes < material_bytes
         || (rescue.max_outsiders != 0 && rescue.per_outsider.transmitted_bytes < material_bytes)
@@ -1761,7 +1762,7 @@ impl PublicOriginalAdmissionV1<'_> {
 }
 
 #[test]
-fn stored_public_admission_requires_manifest_capacity_for_each_rescue_path() {
+fn stored_public_admission_requires_manifest_capacity_for_initial_supply_and_rescue() {
     use misaka_palw_positive_contract::rows::NativeHash64;
 
     let original = OriginalId(Digest([1; 64]));
@@ -1787,6 +1788,10 @@ fn stored_public_admission_requires_manifest_capacity_for_each_rescue_path() {
     let mut short_retention = row;
     short_retention.initial_supply.retained_bytes = u64::from(ManifestV1::WIRE_BYTES);
     assert_eq!(decode(&short_retention), Err(ContractError::Budget));
+
+    let mut short_supply = row;
+    short_supply.initial_supply.transmitted_bytes = u64::from(ManifestV1::WIRE_BYTES);
+    assert_eq!(decode(&short_supply), Err(ContractError::Budget));
 
     // Each protected allocation must cover the referenced materials even
     // when the smaller allocation still fits the aggregate budget.
