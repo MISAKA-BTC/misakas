@@ -283,3 +283,24 @@ fn malformed_public_admission_is_rejected_before_journaling() {
     corrupt_snapshot.set_kernel_aux_row_for_tests(key.0, key.1, Some(vec![2]));
     assert_eq!(corrupt_snapshot.public_original_admission_record_v1(original), Err(ContractError::NonCanonical));
 }
+
+#[test]
+fn malformed_public_admission_delta_cannot_install_on_replay_or_revert() {
+    use crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1;
+
+    let mut state = PalwChainStateV2::genesis();
+    let table = PUBLIC_ORIGINAL_ADMISSION_TABLE_V1;
+    let key = vec![1; 64];
+    state.set_kernel_aux_row_for_tests(table, key.clone(), None);
+    let root = state.state_root();
+    let malformed = Some(vec![2]);
+    assert!(matches!(
+        apply_kernel_route_row_v1(&mut state, table, &key, &None, &malformed, false),
+        Err(PalwStateV2Error::DeltaMismatch("invalid public original admission row in kernel route delta"))
+    ));
+    assert!(matches!(
+        apply_kernel_route_row_v1(&mut state, table, &key, &malformed, &None, true),
+        Err(PalwStateV2Error::DeltaMismatch("invalid public original admission row in kernel route delta"))
+    ));
+    assert_eq!(state.state_root(), root);
+}
