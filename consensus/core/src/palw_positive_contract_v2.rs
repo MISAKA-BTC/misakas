@@ -595,6 +595,22 @@ impl PublicOriginalAdmissionRecordV1 {
     }
 }
 
+impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Read the record from this state point. Callers must still resolve its
+    /// carrier in accepted history and revalidate it with the native reservation.
+    pub fn public_original_admission_record_v1(
+        &self,
+        original: OriginalId,
+    ) -> Result<Option<PublicOriginalAdmissionRecordV1>, ContractError> {
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
+        let key = (PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, original.0.0.to_vec());
+        let Some(bytes) = route.aux.get(&key) else { return Ok(None) };
+        let record = PublicOriginalAdmissionRecordV1::decode_row(&key.1, bytes)?;
+        record.check_state_point(self.last_point().ok_or(ContractError::Scope)?)?;
+        Ok(Some(record))
+    }
+}
+
 impl PublicOriginalAdmissionV1<'_> {
     /// Decode the fixed-size carrier before validating admission or quoting
     /// its reservation. Native callers resolve the expected facts separately.

@@ -262,6 +262,7 @@ fn positive_aux_writer_reserves_retained_workspace_only_on_insert() {
 #[test]
 fn malformed_public_admission_is_rejected_before_journaling() {
     use crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1;
+    use misaka_palw_positive_contract::{ContractError, identity::Digest, public_one_honest::OriginalId};
 
     let mut parent = PalwChainStateV2::genesis();
     parent.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
@@ -276,4 +277,9 @@ fn malformed_public_admission_is_rejected_before_journaling() {
     assert!(matches!(builder.write_kernel_row(key.0, key.1.clone(), Some(vec![2])), Err(PalwStateV2Error::KernelRouteRefused(_))));
     assert!(!builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&key));
     assert!(builder.entries.is_empty());
+    let original = OriginalId(Digest([1; 64]));
+    assert_eq!(builder.state.public_original_admission_record_v1(original), Ok(None));
+    let mut corrupt_snapshot = builder.state;
+    corrupt_snapshot.set_kernel_aux_row_for_tests(key.0, key.1, Some(vec![2]));
+    assert_eq!(corrupt_snapshot.public_original_admission_record_v1(original), Err(ContractError::NonCanonical));
 }
