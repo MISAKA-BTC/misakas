@@ -493,6 +493,15 @@ pub struct ManifestRequest {
     pub reservation: Digest,
 }
 
+/// Identity of the accepted profile limits used to interpret the manifest.
+pub fn manifest_limits_id_v1(
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+) -> Digest {
+    hash(b"misaka/palw/public-manifest-limits/v1", &(*scope_limits, total_limit, max_manifest_bytes))
+}
+
 /// Expected values read by the consumer from the accepted original, native
 /// eligibility, and this claimant's booked service opportunity. It must never
 /// be constructed from the submitted request.
@@ -505,6 +514,7 @@ pub struct ManifestRequestContext<'a> {
     pub reservation: Digest,
     /// Limit from the accepted material profile.
     pub max_manifest_bytes: u32,
+    pub manifest_limits: Digest,
     /// Body bytes still booked for this claimant and obligation. The native
     /// consumer accounts for the envelope, verification work and retention separately.
     pub manifest_body_bytes_reserved: u64,
@@ -524,6 +534,7 @@ pub struct PendingManifestCase {
     request_digest: Digest,
     origin: AcceptedOrigin,
     max_manifest_bytes: u32,
+    manifest_limits: Digest,
     schedule: VerificationSchedule,
 }
 
@@ -554,6 +565,7 @@ pub struct PendingManifestCaseRecordV1 {
     request_digest: Digest,
     origin: AcceptedOrigin,
     max_manifest_bytes: u32,
+    manifest_limits: Digest,
     material_ready_by: u64,
     filed_by: u64,
     hard: u64,
@@ -637,6 +649,7 @@ impl ManifestResponseRecordV1 {
     pub fn check_case(&self, pending: &PendingManifestCaseRecordV1) -> Result<(), ContractError> {
         if self.original != pending.original
             || self.case != pending.id
+            || self.limits != pending.manifest_limits
             || !(pending.origin.accepted_daa..=pending.material_ready_by).contains(&self.origin.accepted_daa)
         {
             return Err(ContractError::Scope);
@@ -668,7 +681,7 @@ pub fn require_accepted_after_v1(prior: AcceptedOrigin, later: AcceptedOrigin) -
 }
 
 impl PendingManifestCaseRecordV1 {
-    pub const WIRE_BYTES: usize = 5 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 4;
+    pub const WIRE_BYTES: usize = 6 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 4;
     pub const KEY_BYTES: usize = 2 * 64;
 
     pub fn key(original: OriginalId, case: CaseId) -> [u8; Self::KEY_BYTES] {
@@ -700,6 +713,7 @@ impl PendingManifestCaseRecordV1 {
         accepted_at: u64,
         state_daa: u64,
         max_manifest_bytes: u32,
+        manifest_limits: Digest,
         material_ready_by: u64,
         filed_by: u64,
     ) -> Result<(), ContractError> {
@@ -707,6 +721,7 @@ impl PendingManifestCaseRecordV1 {
         if !clock.accepts_first_notice(self.origin.accepted_daa)
             || self.origin.accepted_daa > state_daa
             || self.max_manifest_bytes != max_manifest_bytes
+            || self.manifest_limits != manifest_limits
             || self.material_ready_by != material_ready_by
             || self.filed_by != filed_by
             || self.hard != clock.hard()
@@ -750,6 +765,10 @@ impl PendingManifestCase {
     ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
         self.check_delivery_context(original, origin.accepted_daa)?;
         require_accepted_after_v1(self.origin, origin)?;
+        let limits = manifest_limits_id_v1(scope_limits, total_limit, self.max_manifest_bytes);
+        if limits != self.manifest_limits {
+            return Err(ContractError::Scope);
+        }
         if response.case != self.id || response.supply_obligation != self.supply_obligation {
             return Err(ContractError::Scope);
         }
@@ -776,7 +795,6 @@ impl PendingManifestCase {
             ManifestDeliveryV1::CommittedButInvalid(_) => ManifestDeliveryClassV1::CommittedButInvalid,
             ManifestDeliveryV1::WrongMaterial => ManifestDeliveryClassV1::WrongMaterial,
         };
-        let limits = hash(b"misaka/palw/public-manifest-limits/v1", &(*scope_limits, total_limit, self.max_manifest_bytes));
         Ok(VerifiedManifestDeliveryV1 {
             record: ManifestResponseRecordV1 {
                 original: self.original,
@@ -799,6 +817,7 @@ impl PendingManifestCase {
             request_digest: self.request_digest,
             origin: self.origin,
             max_manifest_bytes: self.max_manifest_bytes,
+            manifest_limits: self.manifest_limits,
             material_ready_by: self.schedule.material_ready_by(),
             filed_by: self.schedule.filed_by(),
             hard: self.schedule.clock.hard(),
@@ -892,6 +911,7 @@ impl ManifestRequest {
             request_digest: self.signing_digest(),
             origin: context.origin,
             max_manifest_bytes: context.max_manifest_bytes,
+            manifest_limits: context.manifest_limits,
             schedule: context.schedule,
         })
     }
@@ -1339,6 +1359,7 @@ mod tests {
             supply_obligation: d,
             reservation: d,
             max_manifest_bytes: ManifestV1::WIRE_BYTES,
+            manifest_limits: d,
             manifest_body_bytes_reserved: u64::from(ManifestV1::WIRE_BYTES),
             schedule,
             origin: AcceptedOrigin {
@@ -1417,8 +1438,10 @@ mod tests {
             signer: principal(key),
             ..request
         };
+        let limits_id = manifest_limits_id_v1(&rules, 90, max);
         let context = ManifestRequestContext {
             original: &bound_original,
+            manifest_limits: limits_id,
             signer: request.signer,
             origin: AcceptedOrigin { accepted_daa: clock.notice_until(), ..context.origin },
             ..context
@@ -1437,11 +1460,11 @@ mod tests {
         assert_eq!(PendingManifestCaseRecordV1::decode_row(&wrong_original, &stored), Err(ContractError::Identity));
         assert_eq!(PendingManifestCaseRecordV1::decode_row(&[], &stored), Err(ContractError::Identity));
         assert_eq!(
-            restored.check_admission(100, clock.notice_until(), max, schedule.material_ready_by(), schedule.filed_by()),
+            restored.check_admission(100, clock.notice_until(), max, limits_id, schedule.material_ready_by(), schedule.filed_by()),
             Ok(())
         );
         assert_eq!(
-            restored.check_admission(100, clock.notice_until() - 1, max, schedule.material_ready_by(), schedule.filed_by()),
+            restored.check_admission(100, clock.notice_until() - 1, max, limits_id, schedule.material_ready_by(), schedule.filed_by()),
             Err(ContractError::Scope)
         );
         assert_eq!(restored.check_restore(&pending), Ok(()));
@@ -1486,10 +1509,7 @@ mod tests {
                 provider_signature.as_ref(),
             )
         };
-        assert_eq!(
-            verify(delivery_origin, &bytes, 89).unwrap().into_outcome(),
-            ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget)
-        );
+        assert_eq!(verify(delivery_origin, &bytes, 89), Err(ContractError::Scope));
         assert_eq!(verify(delivery_origin, &changed_bytes, 90), Err(ContractError::Identity));
         let wrong_response = SignedManifestResponseV1 {
             body_root: manifest_root(bound_original.scope.ruleset, &changed_bytes, max).unwrap(),
@@ -1530,10 +1550,7 @@ mod tests {
         let alternate = AcceptedOrigin { carrier_transaction: crate::rows::NativeHash64([7; 64]), ..delivery_origin };
         assert_eq!(restored.check_restore(&verify(alternate, &bytes, 90).unwrap()), Err(ContractError::Scope));
         assert_eq!(verify(context.origin, &bytes, 90), Err(ContractError::Scope));
-        assert_eq!(restored.check_restore(&verify(delivery_origin, &bytes, 89).unwrap()), Err(ContractError::Scope));
-        let other_limits = verify(delivery_origin, &bytes, 91).unwrap();
-        assert_eq!(restored.check_restore(&other_limits), Err(ContractError::Scope));
-        assert!(matches!(other_limits.into_outcome(), ManifestDeliveryV1::Checked(_)));
+        assert_eq!(verify(delivery_origin, &bytes, 91), Err(ContractError::Scope));
         assert_eq!(restored.check_restore(&wrong), Err(ContractError::Scope));
         assert_eq!(wrong.into_outcome(), ManifestDeliveryV1::WrongMaterial);
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));

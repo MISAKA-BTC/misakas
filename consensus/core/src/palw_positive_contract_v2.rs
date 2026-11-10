@@ -146,6 +146,7 @@ pub struct PublicOriginalAdmissionV1<'a> {
     pub dependencies: Digest,
     pub service_contract: Digest,
     pub max_manifest_bytes: u32,
+    pub manifest_limits: Digest,
 }
 
 /// Native reservation inputs from the accepted profile and current ledger.
@@ -172,6 +173,7 @@ pub struct PreparedPublicOriginalV1 {
     rescue: ProtectedRescueDemand,
     budget: AggregateBudget,
     max_manifest_bytes: u32,
+    manifest_limits: Digest,
 }
 
 /// Fixed-size record to store in the same state update as the reservation.
@@ -184,6 +186,7 @@ pub struct PublicOriginalAdmissionRecordV1 {
     rescue: ProtectedRescueDemand,
     budget: AggregateBudget,
     max_manifest_bytes: u32,
+    manifest_limits: Digest,
     deadlines: [u64; 8],
 }
 
@@ -300,8 +303,8 @@ wire_struct!(ProtectedRescueDemand; u64, RemainingCapacity, u64, RemainingCapaci
 native_struct!(PanelBond; transaction, index);
 wire_struct!(PanelBond; Digest, u32);
 
-native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, budget, max_manifest_bytes, deadlines);
-wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, [u64; 8]);
+native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, budget, max_manifest_bytes, manifest_limits, deadlines);
+wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, Digest, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, beacon, draw_point, hard, full_scope, ordered_members, per_bond);
@@ -566,6 +569,7 @@ impl PreparedPublicOriginalV1 {
         if context.original.id() != self.original
             || context.schedule != self.schedule
             || context.max_manifest_bytes != self.max_manifest_bytes
+            || context.manifest_limits != self.manifest_limits
         {
             return Err(ContractError::Scope);
         }
@@ -636,6 +640,7 @@ impl PreparedPublicOriginalV1 {
             rescue: self.rescue,
             budget: self.budget,
             max_manifest_bytes: self.max_manifest_bytes,
+            manifest_limits: self.manifest_limits,
             deadlines: [
                 self.draw_ready_by,
                 self.schedule.first_notice_by(),
@@ -679,6 +684,7 @@ impl PublicOriginalAdmissionRecordV1 {
                 witness_attempts: 1,
             },
             max_manifest_bytes: ManifestV1::WIRE_BYTES,
+            manifest_limits: Digest([3; 64]),
             deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
         }
     }
@@ -991,7 +997,14 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         check_public_origin_point_v1(row.origin(), point)?;
         require_accepted_after_v1(admission.carrier.origin, row.origin())?;
         let [_, _, _, ready, _, _, filed, _] = admission.deadlines;
-        row.check_admission(admission.carrier.origin.accepted_daa, point.daa_score, admission.max_manifest_bytes, ready, filed)?;
+        row.check_admission(
+            admission.carrier.origin.accepted_daa,
+            point.daa_score,
+            admission.max_manifest_bytes,
+            admission.manifest_limits,
+            ready,
+            filed,
+        )?;
         Ok(row)
     }
 
@@ -1077,6 +1090,7 @@ impl PublicOriginalAdmissionV1<'_> {
             rescue: reservation.rescue,
             budget: *reservation.budget,
             max_manifest_bytes: self.max_manifest_bytes,
+            manifest_limits: self.manifest_limits,
         })
     }
 

@@ -479,6 +479,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         dependencies: r.dependencies,
         service_contract,
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
+        manifest_limits: d(16),
     };
     let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
     let signature = libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0; 32]).unwrap();
@@ -647,6 +648,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         supply_obligation: d(13),
         reservation: d(8),
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
+        manifest_limits: d(16),
         manifest_body_bytes_reserved: body,
         schedule: prepared.schedule,
         origin: AcceptedOrigin {
