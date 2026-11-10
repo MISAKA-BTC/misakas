@@ -468,11 +468,14 @@ impl PublicOriginalAdmissionRecordV1 {
 }
 
 impl PublicOriginalAdmissionV1<'_> {
-    pub fn prepare_signed(
+    /// Decode the fixed-size carrier before validating admission or quoting
+    /// its reservation. Native callers resolve the expected facts separately.
+    pub fn prepare_signed_bytes(
         &self,
-        signed: &misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1,
+        bytes: &[u8],
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<PreparedPublicOriginalV1, ContractError> {
+        let signed = misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1::decode(bytes)?;
         self.prepare(&signed.original, &signed.key, &signed.signature, reservation)
     }
 

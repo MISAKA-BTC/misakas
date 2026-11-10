@@ -522,7 +522,16 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let bytes = borsh::to_vec(&envelope).unwrap();
     assert_eq!(bytes.len(), SignedPublicOriginalV1::WIRE_BYTES);
     assert!(SignedPublicOriginalV1::decode(&bytes[..bytes.len() - 1]).is_err());
-    let prepared = admission.prepare_signed(&SignedPublicOriginalV1::decode(&bytes).unwrap(), &reservation).unwrap();
+    let prepared = admission.prepare_signed_bytes(&bytes, &reservation).unwrap();
+    let mut oversized = bytes.clone();
+    oversized.push(0);
+    assert_eq!(
+        admission.prepare_signed_bytes(&oversized, &reservation),
+        Err(misaka_palw_positive_contract::ContractError::NonCanonical)
+    );
+    let mut tampered = bytes;
+    *tampered.last_mut().unwrap() ^= 1;
+    assert_eq!(admission.prepare_signed_bytes(&tampered, &reservation), Err(misaka_palw_positive_contract::ContractError::Signature));
     let reserved = d(21);
     let record = prepared.record(reserved);
     let terminal = prepared.schedule.terminal_by();
