@@ -70,8 +70,12 @@ impl OriginalCommit {
         total_limit: u64,
         max_manifest_bytes: u32,
     ) -> Result<Vec<u8>, ContractError> {
+        let wire_bytes = ManifestV1::fetch_size(max_manifest_bytes)?;
         manifest.check(self, scope_limits, total_limit)?;
         let bytes = borsh::to_vec(manifest).map_err(|_| ContractError::NonCanonical)?;
+        if bytes.len() != wire_bytes as usize {
+            return Err(ContractError::NonCanonical);
+        }
         self.manifest_root = manifest_root(self.scope.ruleset, &bytes, max_manifest_bytes)?;
         Ok(bytes)
     }
@@ -140,6 +144,9 @@ impl<'a> AuthenticatedManifest<'a> {
     ) -> Result<CheckedManifestV1, ContractError> {
         if self.id != original.manifest_material_id() {
             return Err(ContractError::Scope);
+        }
+        if self.bytes.len() != ManifestV1::WIRE_BYTES as usize {
+            return Err(ContractError::NonCanonical);
         }
         let manifest: ManifestV1 = borsh::from_slice(self.bytes).map_err(|_| ContractError::NonCanonical)?;
         manifest.check(original, scope_limits, total_limit)?;
@@ -216,6 +223,19 @@ pub struct ManifestV1 {
 }
 
 impl ManifestV1 {
+    // Borsh fixed arrays have no length prefix. Each entry holds three
+    // digests, one u64 and one u32; the header holds the service digest.
+    pub const WIRE_BYTES: u32 = 64 + MaterialScope::COUNT as u32 * (3 * 64 + 8 + 4);
+
+    /// Reserve the exact manifest body length before any provider read. A
+    /// profile whose byte limit cannot carry this format cannot request it.
+    pub fn fetch_size(max_manifest_bytes: u32) -> Result<u32, ContractError> {
+        if max_manifest_bytes < Self::WIRE_BYTES {
+            return Err(ContractError::Range);
+        }
+        Ok(Self::WIRE_BYTES)
+    }
+
     pub fn entry(&self, scope: MaterialScope) -> &ManifestEntryV1 {
         &self.entries[scope as usize]
     }
@@ -847,6 +867,8 @@ mod tests {
         manifest.entries[MaterialScope::Program as usize].codec = program_codec;
         manifest.entries[MaterialScope::Program as usize].chunk_bytes = 16;
         let max = u32::try_from(borsh::object_length(&manifest).unwrap()).unwrap();
+        assert_eq!(ManifestV1::fetch_size(max), Ok(max));
+        assert_eq!(ManifestV1::fetch_size(max - 1), Err(ContractError::Range));
         let mut bound_original = original.clone();
         assert_eq!(bound_original.bind_manifest(&manifest, &rules, 89, max), Err(ContractError::Budget));
         assert_eq!(bound_original.bind_manifest(&manifest, &rules, 90, max - 1), Err(ContractError::Range));
