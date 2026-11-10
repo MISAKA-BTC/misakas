@@ -1638,7 +1638,8 @@ impl IbdFlow {
 
                     // Imports the pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
                     // atomically before marking the utxoset stable — see sync_new_utxo_set.
-                    self.sync_new_utxo_set(&session, pruning_point).await?;
+                    let import_session = self.prepare_pruning_point_sidecars(&session, pruning_point).await?;
+                    self.sync_new_utxo_set(&session, import_session).await?;
                 }
                 // Once utxo is valid, simply sync missing headers
                 self.sync_headers(
@@ -1654,7 +1655,7 @@ impl IbdFlow {
                 let staging =
                     self.ctx.consensus_manager.new_staging_consensus().map_err(ProtocolError::LocalNativeCapacityUnavailable)?;
                 match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_header).await {
-                    Ok(proof_pruning_point) => {
+                    Ok(prepared_import) => {
                         // The commit barrier. Everything above this line is reversible by
                         // cancelling staging; nothing below it is.
                         if let Err(e) = self.authorize_commit(&staging.session().await).await {
@@ -1726,27 +1727,10 @@ impl IbdFlow {
                             self.router
                         );
 
-                        // This will reobtain the freshly committed staging consensus
+                        // The committed consensus owns the same import session.
+                        // Finish it without downloading its verified sidecars again.
                         session = self.ctx.consensus().session().await;
-                        // Next, sync a utxoset corresponding to the new pruning point from the syncer.
-                        // Note that the new pruning point's anticone need not be downloaded separately as in other IBD types
-                        // as it was just downloaded as part of the headers proof.
-                        // Imports the new pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
-                        // atomically before marking the utxoset stable — see sync_new_utxo_set. Without the
-                        // sidecars the first post-pruning block re-executes EVM from an empty genesis state /
-                        // recomputes overlay rewards from empty state and is disqualified (with all descendants).
-                        // **The pruning point from the VALIDATED PROOF, not the peer's locator
-                        // tail** (audit3 H2). `negotiation_output.syncer_pruning_point` is simply
-                        // `*locator_hashes.last().unwrap()` (negotiate.rs:40), and
-                        // `get_syncer_chain_block_locator` validates nothing about its contents —
-                        // so this asked the peer for the sidecars of a block the peer chose and
-                        // this node had never seen. A syncer that serves an entirely honest chain
-                        // but substitutes its last locator hash makes every sidecar request miss:
-                        // the server keys its single snapshot to the real pruning point, answers
-                        // `found: false`, and the joiner is quarantined below for what looks like
-                        // its own failure. `proof_pruning_point` is the one this node validated,
-                        // installed, and built its whole staged chain on.
-                        self.sync_new_utxo_set(&session, proof_pruning_point).await?;
+                        self.sync_new_utxo_set(&session, prepared_import).await?;
                     }
                     Err(e) => {
                         warn!("IBD with headers proof from {} was unsuccessful ({})", self.router, e);
@@ -1763,7 +1747,9 @@ impl IbdFlow {
                         self.sync_missing_trusted_bodies(&session).await?;
                         // Imports the new pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
                         // atomically before marking the utxoset stable — see sync_new_utxo_set.
-                        self.sync_new_utxo_set(&session, negotiation_output.syncer_pruning_point).await?;
+                        let import_session =
+                            self.prepare_pruning_point_sidecars(&session, negotiation_output.syncer_pruning_point).await?;
+                        self.sync_new_utxo_set(&session, import_session).await?;
                         // Note that pruning of old data will only occur once virtual has caught up sufficiently far
                     }
 
@@ -1954,15 +1940,14 @@ impl IbdFlow {
         Ok(())
     }
 
-    /// Returns the pruning point taken from the VALIDATED proof — which is the only pruning point
-    /// this node has any reason to believe in, and the one the sidecars must be fetched for
-    /// (audit3 H2).
+    /// Prepares the sidecars in staging and returns the durable import session
+    /// for the pruning point established by the validated proof.
     async fn ibd_with_headers_proof(
         &mut self,
         staging: &StagingConsensus,
         syncer_virtual_selected_parent: BlockHash,
         relay_header: &Arc<Header>,
-    ) -> Result<BlockHash, ProtocolError> {
+    ) -> Result<PruningImportSessionV1, ProtocolError> {
         info!("Starting IBD with headers proof with peer {}", self.router);
 
         let staging_session = staging.session().await;
@@ -1987,12 +1972,9 @@ impl IbdFlow {
         // and the only other writer — the pruning-point import — used to run after the commit
         // barrier. So the comparison had nothing to compare and fell through. Import here, into
         // STAGING, and the challenger becomes a real value.
-        if let Some((carriage, declarations)) = self.request_pruning_point_palw_state(&staging_session, pruning_point).await? {
-            let import_session = staging_session.async_begin_pruning_point_import(pruning_point).await?;
-            self.import_pruning_point_palw_state(&staging_session, import_session, carriage, declarations).await?;
-        }
+        let import_session = self.prepare_pruning_point_sidecars(&staging_session, pruning_point).await?;
         self.validate_staging_palw_order(&self.ctx.consensus().session().await, &staging_session).await?;
-        Ok(pruning_point)
+        Ok(import_session)
     }
 
     /// **Unit D, site 2: on a V2 network the staging commit is the one comparator, and nothing
@@ -2624,56 +2606,32 @@ impl IbdFlow {
         }
     }
 
-    async fn sync_new_utxo_set(&mut self, consensus: &ConsensusProxy, pruning_point: BlockHash) -> Result<(), ProtocolError> {
-        // **Everything that can legitimately fail happens BEFORE anything is destroyed.**
-        //
-        // The PALW carriage is fetched first because a peer may answer `found: false` — it has
-        // captured no snapshot yet — and that is a normal outcome, not a fault. Clearing the utxo
-        // set first meant such a node had already deleted its own pruning utxoset and latched
-        // `is_utxo_stable = false` before it could learn it had to stop, and every retry deleted it
-        // again against the same unservable peer.
-        let palw_carriage = if pruning_point != self.ctx.config.genesis.hash {
-            self.request_pruning_point_palw_state(consensus, pruning_point).await?
-        } else {
-            None
-        };
-        // Beginning a fresh durable epoch invalidates delayed chunks and sidecars
-        // from every earlier attempt, including an attempt at the same point.
+    async fn prepare_pruning_point_sidecars(
+        &mut self,
+        consensus: &ConsensusProxy,
+        pruning_point: BlockHash,
+    ) -> Result<PruningImportSessionV1, ProtocolError> {
+        // A fresh epoch rejects delayed writes from any earlier attempt.
         let import_session = consensus.async_begin_pruning_point_import(pruning_point).await?;
-        // **The two child-verified sidecars are imported here — still before anything is
-        // destroyed** (audit M1-2). Both check the peer's bytes against a child header of the
-        // pruning point, so they need only headers and the peer's answer; running them after the
-        // clear meant a verification failure — including one an attacker can manufacture for every
-        // joining node with a single cheap side block — left the node with its pruning utxoset
-        // deleted and `is_utxo_stable = false` latched, recoverable only by wiping the datadir.
-        // Moving the fetch alone (2026-08-22) fixed the not-found case and left the mismatch case.
-        //
-        // Ordering against the stable flag is unchanged: the flag is still set only after the
-        // utxoset and the EVM state land, and a failure anywhere leaves it unset, so the next IBD
-        // re-runs the whole import. These two writes are idempotent under that retry.
         if pruning_point != self.ctx.config.genesis.hash {
+            // Serve the small sidecars first. One large PALW snapshot can consume
+            // the donor's per-peer allowance for the rest of the window.
             self.sync_pruning_point_overlay_snapshot(consensus, import_session).await?;
-            if let Some((carriage, declarations)) = palw_carriage {
+            self.sync_pruning_point_evm_state(consensus, import_session).await?;
+            if let Some((carriage, declarations)) = self.request_pruning_point_palw_state(consensus, pruning_point).await? {
                 self.import_pruning_point_palw_state(consensus, import_session, carriage, declarations).await?;
             }
         }
-        // A better solution could be to create a copy of the old utxo state for some sort of fallback rather than delete it.
+        Ok(import_session)
+    }
+
+    async fn sync_new_utxo_set(
+        &mut self,
+        consensus: &ConsensusProxy,
+        import_session: PruningImportSessionV1,
+    ) -> Result<(), ProtocolError> {
         consensus.async_clear_pruning_utxo_set_for_session(import_session).await?;
         self.sync_pruning_point_utxoset(consensus, import_session).await?;
-        // kaspa-pq ADR-0022: import the pruning point's EVM execution state + DNS/PoS-v2 overlay snapshot
-        // as part of the SAME "make the pruning point usable" step — BEFORE marking the utxoset stable.
-        // Atomicity matters: async_set_pruning_utxoset_stable() below latches is_utxo_stable=true, and a
-        // later IbdType::Sync SKIPS re-import while that flag is true. If a sidecar import failed (the
-        // peer can answer not-found) or the node crashed AFTER the utxoset was marked stable but BEFORE
-        // the sidecars landed, the node would be permanently missing the EVM/overlay state and would
-        // disqualify every post-pruning block with no path to recover. Importing the sidecars first keeps
-        // "utxoset + EVM + overlay" all-or-nothing w.r.t. the stable flag (a failure leaves the utxoset
-        // unstable, so the next IBD re-runs the whole import). Skipped at genesis: there is no
-        // below-genesis state and the peer has captured no snapshot (it would answer not-found and abort).
-        if pruning_point != self.ctx.config.genesis.hash {
-            // The overlay and PALW sidecars landed above, before the clear.
-            self.sync_pruning_point_evm_state(consensus, import_session).await?;
-        }
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
         // The target may have changed after virtual/head commit released its pruning
         // guard. Refuse completion unless UTXO and all sidecars share this generation.
