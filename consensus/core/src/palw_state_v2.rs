@@ -16302,7 +16302,7 @@ fn apply_palw_transition_v7_inner(
     palw_native_mining_fold_v39::write_native39_settlement_checkpoint_v1(&mut builder, parent, ctx)?;
     palw_claim_local_context_gc_v3::finish_fold_v3(&mut builder)?;
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
-    // Weight / frontier / position entries, exactly once, at the end.
+    // Weight / frontier / position entries, exactly once.
     let weights_changed = (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature);
     let frontier_changed = old_frontier != new_frontier;
     builder.reserve_final_journal_v1(1 + usize::from(weights_changed) + usize::from(frontier_changed))?;
@@ -16317,6 +16317,17 @@ fn apply_palw_transition_v7_inner(
     }
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: parent.last_point, new: Some(*ctx) });
     builder.state.last_point = Some(*ctx);
+    if extras.public_replay_approvals.windows(2).any(|pair| pair[0] != pair[1] && pair[0].accepted_order() >= pair[1].accepted_order())
+    {
+        return Err(PalwStateV2Error::CarriageInconsistent("public replay approvals are outside accepted order".into()));
+    }
+    for approval in &extras.public_replay_approvals {
+        if let Some((key, row)) = approval.storage_row(&builder.state, ctx).map_err(|error| {
+            PalwStateV2Error::CarriageInconsistent(format!("inconsistent accepted public replay approval: {error:?}"))
+        })? {
+            builder.write_kernel_row_encoded_v1(crate::palw_positive_contract_v2::PUBLIC_REPLAY_APPROVAL_TABLE_V1, &key, Some(row))?;
+        }
+    }
     palw_claim_local_execution_cohort_census_v15::finish_compact_observations_v15(&mut builder);
 
     // ADR-0152 R-core+ (S-SPEC §4): the derived indexes the writers maintain incrementally are the
@@ -21500,6 +21511,8 @@ pub struct PalwTransitionExtrasV1 {
     /// Raw native actions replayed at exact positions in the accepted object
     /// fold. This is not a vector of prepared or previously accepted rows.
     pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,
+    /// Public replay approvals qualified by native carrier acceptance.
+    pub public_replay_approvals: Vec<crate::palw_positive_contract_v2::PreparedPublicReplayApprovalV1>,
     pub positive_decision_histories: Vec<NativePositiveDecisionHistoryV2>,
     /// **G14 r5 (lane r5-escrow-settlement): how long a SETTLED funded-escrow row stays rooted after its settling spend** — the
     /// processor's `2 × pruning_depth` (DAA advances at least as fast as blue score, so by then the pruning point has passed the

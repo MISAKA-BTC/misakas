@@ -362,6 +362,72 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     assert_eq!(restored.state_root(), child.state_root());
     assert_eq!(restored.last_point(), child.last_point());
     assert_eq!(restored.public_original_admission_record_v1(original), Ok(Some(row)));
+    use crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1;
+    use misaka_palw_positive_contract::{
+        identity::principal,
+        public_one_honest::{FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond, PublicDrawMemberV1, SignedFullReplayApprovalV1},
+    };
+    let draw_point = ctx(3, 102, 3);
+    let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([17; 32]);
+    let key = *pair.verification_key.as_ref();
+    let bond = PanelBond { transaction: Digest([8; 64]), index: 0 };
+    let member = principal(&key);
+    let draw =
+        row.storage_draw_fixture(draw_point, PublicDrawMemberV1 { bond, principal: member, rescue_reservation: Digest([9; 64]) });
+    let draw_extras = PalwTransitionExtrasV1 {
+        kernel_route: extras.kernel_route.clone(),
+        exec_v2_test_kernel_rows: vec![(PUBLIC_DRAW_TABLE_V1, original.0.0.to_vec(), Some(borsh::to_vec(&draw.record()).unwrap()))],
+        ..Default::default()
+    };
+    let (drawn, _) =
+        apply_palw_transition_v2_with_extras(&child, &params, &draw_point, &[], None, false, false, false, false, &draw_extras)
+            .unwrap();
+    let vote_point = ctx(4, 103, 4);
+    let origin = AcceptedOrigin {
+        accepting_block: NativeHash64(vote_point.block.as_bytes()),
+        carrier_block: NativeHash64(h64(5).as_bytes()),
+        carrier_transaction: NativeHash64(h64(6).as_bytes()),
+        accepted_daa: 103,
+        accepted_blue_score: 4,
+        ..row.carrier().origin
+    };
+    let context = draw.approval_context(bond).unwrap();
+    let approval = FullReplayApproval { original, draw: context.draw, bond, member, full_scope: context.full_scope };
+    let sig =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &approval.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [0; 32]).unwrap();
+    let bytes = borsh::to_vec(&SignedFullReplayApprovalV1 { approval, key, signature: *sig.as_ref() }).unwrap();
+    let accepted = draw.prepare_replay_approval_bytes(104, origin, &bytes).unwrap();
+    let vote_extras = PalwTransitionExtrasV1 {
+        kernel_route: extras.kernel_route.clone(),
+        public_replay_approvals: vec![accepted, accepted],
+        ..Default::default()
+    };
+    let (voted, votes) =
+        apply_palw_transition_v2_with_extras(&drawn, &params, &vote_point, &[], None, false, false, false, false, &vote_extras)
+            .unwrap();
+    let record = draw.verify_replay_approval_bytes(104, origin, &bytes).unwrap();
+    assert_eq!(voted.public_replay_approval_record_v1(original, bond), Ok(Some(record)));
+    assert_eq!(
+        votes
+            .entries
+            .iter()
+            .filter(|entry| matches!(
+                entry,
+                PalwDeltaEntryV2::KernelRouteRow { table: crate::palw_positive_contract_v2::PUBLIC_REPLAY_APPROVAL_TABLE_V1, .. }
+            ))
+            .count(),
+        1
+    );
+    assert_eq!(apply_delta_v2(&drawn, &votes, &params).unwrap(), voted);
+    assert_eq!(revert_delta_v2(&voted, &votes, &params).unwrap(), drawn);
+    let restored_vote = PalwStateCarriageV2::from_state(&voted).into_state(&params, Some(voted.state_root())).unwrap();
+    assert_eq!(restored_vote.public_replay_approval_record_v1(original, bond), Ok(Some(record)));
+    let other_point = PalwBlockContextV2 { block: h64(8), ..vote_point };
+    assert!(
+        apply_palw_transition_v2_with_extras(&drawn, &params, &other_point, &[], None, false, false, false, false, &vote_extras,)
+            .is_err()
+    );
+
     let mut invalid_delta = delta.clone();
     let future_origin = AcceptedOrigin { accepted_blue_score: point.blue_score + 1, ..row.carrier().origin };
     let future_row = PublicOriginalAdmissionRecordV1::storage_fixture(original, future_origin);

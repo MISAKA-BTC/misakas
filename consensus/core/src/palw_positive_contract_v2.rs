@@ -364,6 +364,7 @@ wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, 
 native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, beacon, draw_point, hard, full_scope, ordered_members, per_bond);
 wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, Digest, crate::palw_state_v2::PalwBlockContextV2, u64, Digest, Digest, RemainingCapacity);
 native_struct!(PublicReplayApprovalRecordV1; original, draw, full_scope, ordered_members, bond, origin, approval_digest);
+native_struct!(PreparedPublicReplayApprovalV1; row, draw);
 wire_struct!(PublicReplayApprovalRecordV1; OriginalId, Digest, Digest, Digest, PanelBond, AcceptedOrigin, Digest);
 
 // Shared contract records keep their fields private. Read exactly the fixed
@@ -429,6 +430,41 @@ impl PublicReplayApprovalRecordV1 {
     }
 }
 
+/// An approval verified against the selected member and the accepted carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedPublicReplayApprovalV1 {
+    row: PublicReplayApprovalRecordV1,
+    draw: PublicDrawRecordV1,
+}
+
+impl PreparedPublicReplayApprovalV1 {
+    pub(crate) fn accepted_order(&self) -> (u32, u32) {
+        (self.row.origin.accepted_tx_ordinal, self.row.origin.event_ordinal)
+    }
+
+    pub(crate) fn storage_row(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; PublicReplayApprovalRecordV1::KEY_BYTES], &PublicReplayApprovalRecordV1)>, ContractError> {
+        let row = &self.row;
+        if row.origin.accepted_daa != point.daa_score
+            || row.origin.accepted_blue_score != point.blue_score
+            || row.origin.accepting_block.0 != point.block.as_bytes()
+            || state.public_draw_record_v1(row.original)? != Some(self.draw)
+        {
+            return Err(ContractError::Scope);
+        }
+        if let Some(existing) = state.public_replay_approval_record_v1(row.original, row.bond)? {
+            if existing.approval_digest != row.approval_digest {
+                return Err(ContractError::Scope);
+            }
+            return Ok(None);
+        }
+        Ok(Some((PublicReplayApprovalRecordV1::key(row.original, row.bond), row)))
+    }
+}
+
 impl PreparedPublicDrawV1 {
     /// Verify the literal carrier at an inclusion point resolved from native history.
     pub fn verify_replay_approval_bytes(
@@ -439,6 +475,18 @@ impl PreparedPublicDrawV1 {
     ) -> Result<PublicReplayApprovalRecordV1, ContractError> {
         let signed = misaka_palw_positive_contract::public_one_honest::SignedFullReplayApprovalV1::decode(bytes)?;
         self.verify_replay_approval(approval_until, origin, &signed.approval, &signed.key, &signed.signature)
+    }
+
+    /// Prepare a verified carrier for the accepting transition. The fold
+    /// checks its inclusion point and the draw rooted in the executing state.
+    pub fn prepare_replay_approval_bytes(
+        &self,
+        approval_until: u64,
+        origin: AcceptedOrigin,
+        bytes: &[u8],
+    ) -> Result<PreparedPublicReplayApprovalV1, ContractError> {
+        let row = self.verify_replay_approval_bytes(approval_until, origin, bytes)?;
+        Ok(PreparedPublicReplayApprovalV1 { row, draw: self.record() })
     }
 
     pub fn record(&self) -> PublicDrawRecordV1 {
@@ -767,6 +815,37 @@ impl PublicOriginalAdmissionRecordV1 {
             manifest_payload_bytes: MaterialScope::COUNT as u64,
             manifest_limits: Digest([3; 64]),
             deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_draw_fixture(
+        &self,
+        draw_point: crate::palw_state_v2::PalwBlockContextV2,
+        member: PublicDrawMemberV1,
+    ) -> PreparedPublicDrawV1 {
+        let beacon = Digest([5; 64]);
+        let full_scope = self.original.full_replay_scope(Digest([6; 64]));
+        let ordered_members = public_draw_members_digest_v1(&[member]);
+        let draw = public_draw_id_v1(
+            self.original,
+            self.carrier.digest,
+            Digest(draw_point.block.as_bytes()),
+            beacon,
+            full_scope,
+            ordered_members,
+        );
+        PreparedPublicDrawV1 {
+            original: self.original,
+            admission_carrier: self.carrier,
+            draw,
+            beacon,
+            draw_point,
+            hard: OriginalClock::new(self.carrier.origin.accepted_daa).unwrap().hard(),
+            full_scope,
+            members: [((member.bond.transaction, member.bond.index), member)].into(),
+            ordered_members,
+            per_bond: self.rescue.per_drawn_bond,
         }
     }
 
