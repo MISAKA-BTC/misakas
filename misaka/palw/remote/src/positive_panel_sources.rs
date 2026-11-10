@@ -22,8 +22,8 @@ use kaspa_consensus_core::{
     palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
     palw_tir_court_v1::{
-        PalwTirInventoryIndexV1, PublicOriginalStepRootV1, PublicOriginalTraceIndexV1, PublicOriginalTraceTileV1,
-        check_public_original_step_data_v1,
+        PalwTirInventoryIndexV1, PublicOriginalStepRootV1, PublicOriginalTraceCountV1, PublicOriginalTraceIndexV1,
+        PublicOriginalTraceTileV1, check_public_original_step_data_v1,
     },
     palw_tir_step_v1::PalwTirStepSpaceV2,
     palw_v2::{PalwJobContextV2, output_commitment_v2},
@@ -240,7 +240,8 @@ pub fn run_public_wide_replay_v1(
         let trace = fetch_public_trace_index_v1(provider, original, search.max_step_leaf_count)?;
         let expected_leaf_count = capture.run().leaf_count();
         if trace.step_leaf_count != expected_leaf_count {
-            return Err(PanelSourceErrorR1::TraceLeafCountMismatch { trace: Box::new(trace), expected: expected_leaf_count });
+            let evidence = PublicOriginalTraceCountV1 { original: original.id(), trace };
+            return Err(PanelSourceErrorR1::TraceLeafCountMismatch { evidence: Box::new(evidence), expected: expected_leaf_count });
         }
         let difference = find_public_trace_difference_v1(
             provider,
@@ -466,7 +467,7 @@ pub enum PanelSourceErrorR1 {
     ReplayExecution(String),
     ReplayMismatch(String),
     LocatedTraceDifference(Box<PublicOriginalTraceTileV1>),
-    TraceLeafCountMismatch { trace: Box<PublicOriginalTraceIndexV1>, expected: u64 },
+    TraceLeafCountMismatch { evidence: Box<PublicOriginalTraceCountV1>, expected: u64 },
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {

@@ -3806,7 +3806,16 @@ impl PublicOriginalTraceIndexV1 {
         }
         Ok(())
     }
+}
 
+/// Claim-bound evidence that an authenticated trace declares the wrong extent.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PublicOriginalTraceCountV1 {
+    pub original: misaka_palw_positive_contract::public_one_honest::OriginalId,
+    pub trace: PublicOriginalTraceIndexV1,
+}
+
+impl PublicOriginalTraceCountV1 {
     /// Adjudicate a leaf-count mismatch using the authenticated index alone.
     pub fn check_wide_leaf_count(
         &self,
@@ -3815,11 +3824,14 @@ impl PublicOriginalTraceIndexV1 {
         class: &crate::palw_tir_class_v1::PalwTirClassV1,
         max_step_leaf_count: u64,
     ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-        self.check(original, max_step_leaf_count)?;
+        if self.original != original.id() {
+            return Err(bad("public trace count names another original"));
+        }
+        self.trace.check(original, max_step_leaf_count)?;
         let expected = public_original_wide_space(original, job, class)?
             .leaf_count_capped(job, max_step_leaf_count)
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-        if self.step_leaf_count == expected {
+        if self.trace.step_leaf_count == expected {
             return Err(PalwStepRefuteError::NoFaultFound);
         }
         Ok(convict(
