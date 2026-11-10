@@ -548,6 +548,14 @@ pub struct ManifestResponseRecordV1 {
     case: CaseId,
     response_digest: Digest,
     inclusion_daa: u64,
+    classification: ManifestDeliveryClassV1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+enum ManifestDeliveryClassV1 {
+    Checked,
+    CommittedButInvalid,
+    WrongMaterial,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -624,7 +632,15 @@ impl PendingManifestCase {
                 Err(error) => ManifestDeliveryV1::CommittedButInvalid(error),
             }
         };
-        Ok(VerifiedManifestDeliveryV1 { record: ManifestResponseRecordV1 { case: self.id, response_digest, inclusion_daa }, outcome })
+        let classification = match &outcome {
+            ManifestDeliveryV1::Checked(_) => ManifestDeliveryClassV1::Checked,
+            ManifestDeliveryV1::CommittedButInvalid(_) => ManifestDeliveryClassV1::CommittedButInvalid,
+            ManifestDeliveryV1::WrongMaterial => ManifestDeliveryClassV1::WrongMaterial,
+        };
+        Ok(VerifiedManifestDeliveryV1 {
+            record: ManifestResponseRecordV1 { case: self.id, response_digest, inclusion_daa, classification },
+            outcome,
+        })
     }
 
     pub fn record(&self) -> PendingManifestCaseRecordV1 {
@@ -1312,6 +1328,7 @@ mod tests {
         let stored = borsh::to_vec(&verified.record()).unwrap();
         let restored: ManifestResponseRecordV1 = borsh::from_slice(&stored).unwrap();
         assert_eq!(restored.check_restore(&verified), Ok(()));
+        assert_eq!(restored.check_restore(&verify(&bytes, 89).unwrap()), Err(ContractError::Scope));
         assert_eq!(restored.check_restore(&wrong), Err(ContractError::Scope));
         assert_eq!(wrong.into_outcome(), ManifestDeliveryV1::WrongMaterial);
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
