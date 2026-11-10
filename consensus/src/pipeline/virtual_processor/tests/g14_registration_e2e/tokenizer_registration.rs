@@ -7,6 +7,7 @@ use kaspa_consensus_core::{
     config::params::TokenizerRegistrationFenceV1,
     dns_finality::split_normal_tx_fees,
     mldsa87_primitives::MLDSA87_SIGNATURE_LEN,
+    muhash::MuHashExtensions,
     palw_class_semantics_v1::{
         PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1, PalwClassSemanticsDeclarationV1, palw_class_semantics_message_v1,
     },
@@ -296,6 +297,30 @@ async fn wait_for_source_daa(env: &mut Env, target: u64, part_slot: u64, finish_
     assert_eq!(env.chain.daa_of(env.chain.sink()), target - 1);
 }
 
+fn committed_pruning_utxos(chain: &T12Chain, point: &Block) -> Vec<(TransactionOutpoint, UtxoEntry)> {
+    let mut rows: std::collections::HashMap<_, _> = chain.ctx.consensus.get_virtual_utxos(None, 10_000, false).into_iter().collect();
+    assert!(rows.len() < 10_000, "the fixture fits one capture page");
+    let vp = chain.vp();
+    let view = vp.virtual_stores.read().state.get().unwrap();
+    assert_eq!(view.ghostdag_data.selected_parent, point.header.hash);
+    // The virtual includes the selected parent's body. Reverse its virtual
+    // diff to export the past UTXOs committed by the pruning point itself.
+    for (out, entry) in &view.utxo_diff.add {
+        assert_eq!(rows.remove(out).as_ref(), Some(entry));
+    }
+    for (out, entry) in &view.utxo_diff.remove {
+        assert!(rows.insert(*out, entry.clone()).is_none());
+    }
+    let mut rows: Vec<_> = rows.into_iter().collect();
+    rows.sort_unstable_by_key(|(out, _)| (out.transaction_id, out.index));
+    let mut commitment = kaspa_muhash::MuHash::new();
+    for (out, entry) in &rows {
+        commitment.combine(&kaspa_muhash::MuHash::from_utxo(out, entry));
+    }
+    assert_eq!(commitment.finalize(), point.header.utxo_commitment);
+    rows
+}
+
 fn assert_collectible(env: &Env, source: &Block, amount: u64) {
     let vp = env.chain.vp();
     let stores = vp.virtual_stores.read();
@@ -507,6 +532,12 @@ async fn run() {
     assert_utxo_accepted(&m.env, &part_fold, &part_tx);
     let part_status = m.env.chain.ctx.consensus.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap().value.unwrap();
     let part_state = m.env.chain.tip_state().1;
+    let pruning_utxos = committed_pruning_utxos(&m.env.chain, &part_fold);
+    let pruning_overlay = {
+        let donor = m.env.chain.vp();
+        donor.capture_pruning_point_overlay_snapshot(part_fold.header.hash).unwrap();
+        donor.pruning_point_overlay_snapshot()
+    };
     let received = part_status.parts[0].accepted.expect("the actual Part folded");
     assert_eq!(received.block, part_fold.header.hash);
     assert_eq!(received.daa_score, open_status.parts[0].slot_daa);
@@ -590,7 +621,15 @@ async fn run() {
         }
     }
     importer.establish_pruning_import_target(p);
-    importer.vp().import_pruning_point_palw_state(p, carriage).expect("authenticated TKR1 snapshot imports at the Part point");
+    let session = api.begin_pruning_point_import(p).unwrap();
+    if let Some(overlay) = pruning_overlay {
+        assert_eq!(overlay.pruning_point, p);
+        api.import_pruning_point_overlay_snapshot_for_session(session, overlay.snapshot).unwrap();
+    } else {
+        assert!(importer.config.params.dns_params.is_none());
+    }
+    assert!(!importer.config.params.is_evm_active(part_fold.header.daa_score));
+    api.import_pruning_point_palw_state_for_session(session, carriage).expect("authenticated TKR1 snapshot imports at the Part point");
     let (at, imported) = importer.tip_state();
     assert_eq!(at, p);
     assert_eq!(imported.state_root(), fold_roots[1].1);
@@ -602,13 +641,33 @@ async fn run() {
         let expected = part_state.staged_court_row_v1(&key).expect("donor row at the accepted Part point");
         assert_eq!(imported.staged_court_row_v1(&key), Some(expected), "imported paid state, including original Part bytes");
     }
-    // The snapshot import invalidates the stable marker until the UTXO
-    // generation completes. This epoch-zero fixture retains its verified
-    // UTXOs throughout, so only the marker needs to be restored.
     assert!(!api.is_pruning_utxoset_stable());
     assert!(api.palw_tokenizer_registration_status_v1(open_id).is_err(), "an incomplete import cannot serve an authoritative status");
+    assert!(api.complete_pruning_point_import_for_session(session).is_err());
+    api.clear_pruning_utxo_set_for_session(session).unwrap();
+    let mut commitment = kaspa_muhash::MuHash::new();
+    let mut chunks = pruning_utxos.chunks(8);
+    let first = chunks.next().expect("the pruning point commits real UTXOs");
+    api.append_imported_pruning_point_utxos_for_session(session, first, &mut commitment).unwrap();
+    assert!(chunks.len() > 0, "the fixture streams multiple chunks");
+    assert!(
+        matches!(
+            api.import_pruning_point_utxo_set_for_session(session, commitment.clone()),
+            Err(kaspa_consensus_core::errors::pruning::PruningImportError::ImportedMultisetHashMismatch(..))
+        ),
+        "an incomplete UTXO stream cannot finalize"
+    );
+    for chunk in chunks {
+        api.append_imported_pruning_point_utxos_for_session(session, chunk, &mut commitment).unwrap();
+    }
+    assert_eq!(commitment.clone().finalize(), part_fold.header.utxo_commitment);
+    api.import_pruning_point_utxo_set_for_session(session, commitment).unwrap();
+    assert!(!api.is_pruning_utxoset_stable(), "UTXO import does not expose the generation before completion");
+    assert!(api.palw_tokenizer_registration_status_v1(open_id).is_err());
+    api.complete_pruning_point_import_for_session(session).unwrap();
+    assert!(api.is_pruning_utxoset_stable());
+    assert!(api.pruning_import_session().unwrap().active.is_none());
     assert_eq!(virtual_utxos(), verified_utxos);
-    api.set_pruning_utxoset_stable_flag(true).expect("fixture retains the verified pruning-point UTXOs");
     let imported_status = api.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap();
     assert_eq!(imported_status.parent_point.block, p);
     assert_eq!(imported_status.parent_root, fold_roots[1].1);
