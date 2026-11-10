@@ -903,7 +903,7 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
         evidence::fs::FsProvider,
         positive_panel_sources::{
             PanelSourceErrorR1, PanelSourceLimitsR1, PublicTraceAcquisitionV1, fetch_public_manifest_v1,
-            fetch_public_replay_inputs_v1, fetch_public_replay_output_v1, run_cold_public_wide_replay_v1,
+            fetch_public_replay_inputs_v1, fetch_public_replay_output_v1, replay_and_sign_drawn_public_wide_v1,
         },
         public_material::{MaterialProvider, artifact_leaf_path},
         transport::{
@@ -911,7 +911,15 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
             server::{self, ServerConfig},
         },
     };
-    use misaka_palw_positive_contract::public_one_honest::*;
+    use kaspa_consensus_core::{
+        palw_positive_contract_v2::{PublicOriginalAdmissionV1, PublicOriginalReservationV1},
+        palw_state_v2::PalwBlockContextV2,
+    };
+    use misaka_palw_positive_contract::{
+        public_one_honest::*,
+        reservations::RemainingCapacity,
+        rows::{AcceptedOrigin, AggregateUsage, NativeHash64},
+    };
     use misaka_palw_tir_exec::node::{
         positive_wide_material_v2::{WidePanelDiskReserverV2, WidePanelLimitsV2, WidePanelWorkV2},
         run_wide_q24_v2::TirWideRunLimitsV2,
@@ -957,7 +965,10 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     let result = &fixture.result;
     let prompt = prompt_text_material_v1(result.scope.ruleset, "ab", rules[MaterialScope::Prompt as usize]).unwrap();
     let mut budget = fixture.contract.budget;
-    budget.retained_bytes = 1 << 20;
+    budget.retained_bytes = 1 << 22;
+    budget.unique_source_bytes = 1 << 22;
+    budget.transmitted_bytes = 1 << 22;
+    budget.retention_until = 10_100;
     let obligation = result.service_contract;
     let service_contract = public_original_service_contract_id_v1(obligation, &budget);
     let mut original = OriginalCommit {
@@ -1061,11 +1072,78 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
         max_container_bytes: 1 << 16,
     };
     let artifact_root = Hash64::from_bytes(signed.original.artifact.0);
+    let admitted = &signed.original;
+    let admission = PublicOriginalAdmissionV1 {
+        scope: admitted.scope,
+        job: &fixture.context,
+        class: &fixture.class,
+        artifact: artifact_root,
+        miner: admitted.miner,
+        prompt: admitted.prompt,
+        initial_state: admitted.initial_state,
+        dependencies: admitted.dependencies,
+        service_contract,
+        max_manifest_bytes: ManifestV1::WIRE_BYTES,
+        manifest_scope_limits: &rules,
+        manifest_total_limit: 1 << 20,
+    };
+    let origin = AcceptedOrigin {
+        accepting_block: NativeHash64([1; 64]),
+        carrier_block: NativeHash64([2; 64]),
+        carrier_transaction: NativeHash64([3; 64]),
+        accepted_tx_ordinal: 0,
+        event_ordinal: 0,
+        accepted_daa: 100,
+        accepted_blue_score: 100,
+    };
+    let capacity = RemainingCapacity { transmitted_bytes: 1 << 20, retained_bytes: 1 << 20, additional_work: 0 };
+    let zero = RemainingCapacity { transmitted_bytes: 0, additional_work: 0, retained_bytes: 0 };
+    let reservation = PublicOriginalReservationV1 {
+        origin,
+        service_obligation: obligation,
+        initial_supply: capacity,
+        notice: FirstNoticeDemand {
+            draw_ready_by: 101,
+            material_ready_by: 101,
+            cold_acquisition_daa: 1,
+            full_inspection_daa: 1,
+            notice_inclusion_daa: 1,
+            missing_material_detected_by: 101,
+            material_request_inclusion_daa: 1,
+        },
+        case: MaterialCaseDemand {
+            material_delivery_daa: 1,
+            full_inspection_daa: 1,
+            localization_daa: 1,
+            filing_daa: 1,
+            adjudication_and_recovery_daa: 1,
+        },
+        rescue: ProtectedRescueDemand {
+            max_drawn_bonds: 1,
+            per_drawn_bond: capacity,
+            max_outsiders: 0,
+            per_outsider: zero,
+            defensive: zero,
+        },
+        usage: &AggregateUsage::default(),
+        budget: &budget,
+    };
+    let accepted = admission.prepare(admitted, &signed.key, &signed.signature, &reservation).unwrap();
+    let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([63; 32]);
+    let panel_key = panel.verification_key.as_ref();
+    let bond = PanelBond { transaction: d(45), index: 0 };
+    let draw_point = PalwBlockContextV2 { block: h(101), daa_score: 101, blue_score: 101, subsidy: 0 };
+    let members = [PublicDrawMemberV1 { bond, principal: principal(panel_key), rescue_reservation: d(46) }];
+    let draw = accepted.prepare_draw(d(47), draw_point, &members, stateless_wide_replay_plan_v1()).unwrap();
+    let other_plan = accepted.prepare_draw(d(47), draw_point, &members, d(48)).unwrap();
+    let panel_signatures = Cell::new(0);
     let artifact_path = |index| artifact_leaf_path(&artifact_root, index);
-    let replay = |name: &str| {
-        run_cold_public_wide_replay_v1(
+    let replay = |name: &str, draw, bond| {
+        replay_and_sign_drawn_public_wide_v1(
             &provider,
             &signed,
+            draw,
+            bond,
             &fixture.context,
             &fixture.class,
             &rules,
@@ -1079,9 +1157,17 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
             &reserver,
             PublicTraceAcquisitionV1 { max_tiles: 1024, max_wire_bytes: 1 << 20 },
             None,
+            panel_key,
+            |message, context| {
+                panel_signatures.set(panel_signatures.get() + 1);
+                assert_eq!(context, FULL_REPLAY_SIGN_CONTEXT);
+                Ok(*libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, message, context, [0; 32]).unwrap().as_ref())
+            },
         )
     };
-    assert_eq!(replay("missing-artifact"), Err(PanelSourceErrorR1::Incomplete));
+    assert_eq!(replay("other-plan", &other_plan, bond), Err(ContractError::Scope.into()));
+    assert_eq!(replay("other-bond", &draw, PanelBond { index: 1, ..bond }), Err(ContractError::Identity.into()));
+    assert_eq!(replay("missing-artifact", &draw, bond), Err(PanelSourceErrorR1::Incomplete));
     for row in 0..4u32 {
         let operand = PalwArtifactOperandV1 {
             tensor_name: "embedding".into(),
@@ -1091,14 +1177,26 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
         };
         store.put(&artifact_path(row), &borsh::to_vec(&operand).unwrap()).unwrap();
     }
-    replay("panel-tape").unwrap();
+    assert_eq!(panel_signatures.get(), 0);
+    let approval = replay("panel-tape", &draw, bond).unwrap();
+    let inclusion = AcceptedOrigin {
+        accepting_block: NativeHash64([10; 64]),
+        carrier_block: NativeHash64([11; 64]),
+        carrier_transaction: NativeHash64([12; 64]),
+        accepted_daa: 102,
+        accepted_blue_score: 102,
+        ..origin
+    };
+    let bytes = borsh::to_vec(&approval).unwrap();
+    draw.verify_replay_approval_bytes(102, inclusion, &bytes).unwrap();
     let tile = crate::public_material::public_original_trace_tile_path(signed.original.id(), 0);
     std::fs::remove_file(store_root.join(tile)).unwrap();
-    assert_eq!(replay("incomplete-tape"), Err(PanelSourceErrorR1::Incomplete));
+    assert_eq!(replay("incomplete-tape", &draw, bond), Err(PanelSourceErrorR1::Incomplete));
     let mut corrupt = provider.get(&artifact_path(0), 64).unwrap().unwrap();
     *corrupt.last_mut().unwrap() ^= 1;
     store.put(&artifact_path(0), &corrupt).unwrap();
-    assert_eq!(replay("corrupt-artifact"), Err(PanelSourceErrorR1::Binding));
+    assert_eq!(replay("corrupt-artifact", &draw, bond), Err(PanelSourceErrorR1::Binding));
+    assert_eq!(panel_signatures.get(), 1);
     server.stop();
     std::fs::remove_dir_all(root).unwrap();
 }

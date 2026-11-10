@@ -13,6 +13,12 @@ pub const MANIFEST_REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-r
 pub const MANIFEST_RESPONSE_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-response/v1";
 const ACCEPTED_ORIGIN_WIRE_BYTES: usize = 3 * 64 + 2 * 4 + 2 * 8;
 
+/// Inspection plan for strict wide TIR with every node committed, no state
+/// tensors or external dependencies, and full public input and trace replay.
+pub fn stateless_wide_replay_plan_v1() -> Digest {
+    hash(b"misaka/palw/public-relation-plan/v1", &b"wide-tir/flat/all-nodes-committed/stateless/cold-v1")
+}
+
 /// Binds the native supply obligation and its exact limits into the
 /// original's existing signed service-contract field.
 pub fn public_original_service_contract_id_v1(obligation: Digest, budget: &crate::messages::AggregateBudget) -> Digest {

@@ -277,6 +277,78 @@ pub fn run_cold_public_wide_replay_v1(
     )
 }
 
+/// Sign a replay assertion for the exact drawn bond and supported relation plan
+/// only after a complete cold replay. Native inclusion still enforces deadlines
+/// and the independent local checks required for Final.
+#[allow(clippy::too_many_arguments)]
+pub fn replay_and_sign_drawn_public_wide_v1(
+    provider: &dyn MaterialProvider,
+    signed: &misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1,
+    draw: &kaspa_consensus_core::palw_positive_contract_v2::PreparedPublicDrawV1,
+    bond: misaka_palw_positive_contract::public_one_honest::PanelBond,
+    job: &PalwJobContextV2,
+    class: &PalwTirClassV1,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+    artifact_limits: PanelSourceLimitsR1,
+    container: &Path,
+    run_limits: TirWideRunLimitsV2,
+    work: &WidePanelWorkV2,
+    tape: File,
+    reserver: &TirMemoryReserverV1,
+    acquisition: PublicTraceAcquisitionV1,
+    search: Option<PublicTraceSearchV1>,
+    key: &[u8; PUBKEY_BYTES],
+    sign: impl FnOnce(&[u8], &[u8]) -> Result<[u8; SIGNATURE_BYTES], String>,
+) -> Result<misaka_palw_positive_contract::public_one_honest::SignedFullReplayApprovalV1, PanelSourceErrorR1> {
+    use misaka_palw_positive_contract::{
+        identity::principal,
+        public_one_honest::{FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, SignedFullReplayApprovalV1, stateless_wide_replay_plan_v1},
+    };
+
+    let context = draw.approval_context(bond)?;
+    let original = signed.original.id();
+    if context.original != original || context.full_scope != original.full_replay_scope(stateless_wide_replay_plan_v1()) {
+        return Err(ContractError::Scope.into());
+    }
+    if principal(key) != context.member {
+        return Err(ContractError::Identity.into());
+    }
+    if borsh::object_length(class).map_err(|_| PanelSourceErrorR1::Binding)? as u64 > artifact_limits.max_class_bytes {
+        return Err(PanelSourceErrorR1::Budget);
+    }
+    let program = class.decode_program().map_err(|_| PanelSourceErrorR1::Binding)?;
+    if !program.wide_logits_q24()
+        || !program.states.is_empty()
+        || program.blocks.iter().any(|block| block.nodes.iter().any(|node| !node.commit))
+    {
+        return Err(ContractError::UnsupportedProfile.into());
+    }
+    drop(program);
+    run_cold_public_wide_replay_v1(
+        provider,
+        signed,
+        job,
+        class,
+        scope_limits,
+        total_limit,
+        max_manifest_bytes,
+        artifact_limits,
+        container,
+        run_limits,
+        work,
+        tape,
+        reserver,
+        acquisition,
+        search,
+    )?;
+    let approval = FullReplayApproval { original, draw: context.draw, bond, member: context.member, full_scope: context.full_scope };
+    let signature = sign(&approval.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT).map_err(PanelSourceErrorR1::ReplaySigner)?;
+    approval.authenticate(&context, key, &signature)?;
+    Ok(SignedFullReplayApprovalV1 { approval, key: *key, signature })
+}
+
 /// Stream a registered artifact from public inventory rows into a caller-owned
 /// temporary container. No model bytes are used for execution until the root
 /// of the complete canonical inventory is authenticated.
@@ -715,6 +787,7 @@ pub enum PanelSourceErrorR1 {
     ManifestProvider(String),
     ReplayProvider(String),
     ReplayExecution(String),
+    ReplaySigner(String),
     ReplayMismatch(String),
     LocatedTraceDifference(Box<PublicOriginalTraceTileV1>),
     TraceLeafCountMismatch { evidence: Box<PublicOriginalTraceCountV1>, expected: u64 },
