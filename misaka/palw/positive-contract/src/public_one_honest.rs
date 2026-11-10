@@ -93,6 +93,11 @@ pub struct SignedPublicOriginalV1 {
 impl SignedPublicOriginalV1 {
     pub const WIRE_BYTES: usize = 19 * 64 + 32 + 3 * 4 + PUBKEY_BYTES + SIGNATURE_BYTES;
 
+    /// Identity of the literal carrier, including the key and signature.
+    pub fn carrier_digest(original: &OriginalCommit, key: &[u8; PUBKEY_BYTES], signature: &[u8; SIGNATURE_BYTES]) -> Digest {
+        hash(b"misaka/palw/public-original-carrier/v1", &(original, key, signature))
+    }
+
     pub fn decode(bytes: &[u8]) -> Result<Self, ContractError> {
         if bytes.len() != Self::WIRE_BYTES {
             return Err(ContractError::NonCanonical);

@@ -26,11 +26,11 @@ use misaka_palw_positive_contract::{
     public_one_honest::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
         ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
-        PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, VerificationSchedule,
-        public_draw_members_digest_v1,
+        PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1,
+        VerificationSchedule, public_draw_members_digest_v1,
     },
     reservations::RemainingCapacity,
-    rows::{AcceptedOrigin, AggregateUsage},
+    rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
     tir::{EXACT_PART_HEADER_BYTES, decode_frame, exact_derivation_id, greedy_selector_id, provenance_id, raw_part_budget},
     wire::{AuthenticatedEvidenceFrame, EVIDENCE_HEADER_BYTES, EvidenceFrame},
 };
@@ -133,7 +133,7 @@ pub struct PreparedPublicOriginalV1 {
     pub original: OriginalId,
     pub schedule: VerificationSchedule,
     pub capacity: RemainingCapacity,
-    origin: AcceptedOrigin,
+    carrier: AcceptedMaterial,
     draw_ready_by: u64,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
@@ -143,7 +143,7 @@ pub struct PreparedPublicOriginalV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicOriginalAdmissionRecordV1 {
     original: OriginalId,
-    origin: AcceptedOrigin,
+    carrier: AcceptedMaterial,
     reservation: Digest,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
@@ -155,7 +155,7 @@ pub struct PublicOriginalAdmissionRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicOriginalCourtRecordV1 {
     original: OriginalId,
-    admission_origin: AcceptedOrigin,
+    admission_carrier: AcceptedMaterial,
     reservation: Digest,
     evidence_id: Hash64,
     origin: AcceptedOrigin,
@@ -230,10 +230,10 @@ wire_struct!(ProtectedRescueDemand; u64, RemainingCapacity, u64, RemainingCapaci
 native_struct!(PanelBond; transaction, index);
 wire_struct!(PanelBond; Digest, u32);
 
-native_struct!(PublicOriginalAdmissionRecordV1; original, origin, reservation, initial_supply, rescue, deadlines);
-wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedOrigin, Digest, RemainingCapacity, ProtectedRescueDemand, [u64; 8]);
-native_struct!(PublicOriginalCourtRecordV1; original, admission_origin, reservation, evidence_id, origin);
-wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedOrigin, Digest, Hash64, AcceptedOrigin);
+native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, deadlines);
+wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, [u64; 8]);
+native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
+wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
 wire_struct!(PublicDrawRecordV1; OriginalId, Digest, u64, u64, Digest, Digest, RemainingCapacity);
 native_struct!(PublicReplayApprovalRecordV1; bond, origin, approval_digest);
@@ -478,7 +478,7 @@ impl PreparedPublicOriginalV1 {
         members: &[PublicDrawMemberV1],
         relation_plan: Digest,
     ) -> Result<PreparedPublicDrawV1, ContractError> {
-        if draw_daa <= self.origin.accepted_daa || draw_daa > self.draw_ready_by {
+        if draw_daa <= self.carrier.origin.accepted_daa || draw_daa > self.draw_ready_by {
             return Err(ContractError::Range);
         }
         if members.is_empty() || members.len() as u64 > self.rescue.max_drawn_bonds {
@@ -508,7 +508,7 @@ impl PreparedPublicOriginalV1 {
     pub fn record(&self, reservation: Digest) -> PublicOriginalAdmissionRecordV1 {
         PublicOriginalAdmissionRecordV1 {
             original: self.original,
-            origin: self.origin,
+            carrier: self.carrier,
             reservation,
             initial_supply: self.initial_supply,
             rescue: self.rescue,
@@ -527,6 +527,11 @@ impl PreparedPublicOriginalV1 {
 }
 
 impl PublicOriginalAdmissionRecordV1 {
+    /// Resolve this reference from canonical accepted history on restore.
+    pub fn carrier(&self) -> AcceptedMaterial {
+        self.carrier
+    }
+
     /// Match against admission re-derived at the original DAA and against the
     /// reservation from native state. A stored record alone grants no rights.
     pub fn check_restore(&self, prepared: &PreparedPublicOriginalV1, reservation: Digest) -> Result<(), ContractError> {
@@ -551,7 +556,7 @@ impl PublicOriginalAdmissionRecordV1 {
         if key.0 != self.original {
             return Err(ContractError::Scope);
         }
-        if inclusion_daa < self.origin.accepted_daa || inclusion_daa > prepared.schedule.terminal_by() {
+        if inclusion_daa < self.carrier.origin.accepted_daa || inclusion_daa > prepared.schedule.terminal_by() {
             return Err(ContractError::Range);
         }
         Ok(key)
@@ -565,7 +570,7 @@ impl PublicOriginalAdmissionRecordV1 {
         verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
     ) -> Result<PublicOriginalCourtRecordV1, ContractError> {
         let (original, evidence_id) = self.court_verdict_key(prepared, reservation, origin.accepted_daa, verdict)?;
-        Ok(PublicOriginalCourtRecordV1 { original, admission_origin: self.origin, reservation, evidence_id, origin })
+        Ok(PublicOriginalCourtRecordV1 { original, admission_carrier: self.carrier, reservation, evidence_id, origin })
     }
 }
 
@@ -577,7 +582,7 @@ impl PublicOriginalAdmissionV1<'_> {
         bytes: &[u8],
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<PreparedPublicOriginalV1, ContractError> {
-        let signed = misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1::decode(bytes)?;
+        let signed = SignedPublicOriginalV1::decode(bytes)?;
         self.prepare(&signed.original, &signed.key, &signed.signature, reservation)
     }
 
@@ -619,12 +624,15 @@ impl PublicOriginalAdmissionV1<'_> {
         let schedule = VerificationSchedule::new(clock, reservation.notice, reservation.case)?;
         let capacity = reservation.initial_supply.checked_add(reservation.rescue.total()?)?;
         capacity.check(reservation.usage, reservation.budget)?;
-        let original = self.authenticate(original, key, signature)?;
+        let original_id = self.authenticate(original, key, signature)?;
         Ok(PreparedPublicOriginalV1 {
-            original,
+            original: original_id,
             schedule,
             capacity,
-            origin: reservation.origin,
+            carrier: AcceptedMaterial {
+                origin: reservation.origin,
+                digest: SignedPublicOriginalV1::carrier_digest(original, key, signature),
+            },
             draw_ready_by: reservation.notice.draw_ready_by,
             initial_supply: reservation.initial_supply,
             rescue: reservation.rescue,
