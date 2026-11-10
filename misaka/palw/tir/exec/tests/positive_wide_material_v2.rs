@@ -305,7 +305,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(other.trace_root, d(0));
     capture.bind_public_original(&mut original).unwrap();
     assert_eq!(original.trace_root, digest(capture.run().execution_root()));
-    assert_eq!(original.output, digest(palw_attempt_output_root_v1(f.job, EXPECTED)));
+    assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
     use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
     let size = original.decode * 4;
     let rules = ManifestScopeRules { codec: tir_output_material_codec_v1(), max_bytes: u64::from(size), chunk_bytes: size };
@@ -313,6 +313,32 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(output.content_root, original.output);
     assert_eq!(output.chunk_range(0), Ok(0..u64::from(size)));
     assert!(capture.public_output_material(ManifestScopeRules { chunk_bytes: size - 1, ..rules }).is_err());
+    // The admission adapter authenticates the signed commitment without
+    // fetching its manifest. This fixture tests that boundary only.
+    use kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionV1;
+    use misaka_palw_positive_contract::public_one_honest::{ManifestV1, ORIGINAL_SIGN_CONTEXT};
+    original.manifest_root = d(4);
+    let admission = PublicOriginalAdmissionV1 {
+        scope: r.scope,
+        job: &f.job,
+        class: &f.class,
+        artifact: f.artifact,
+        miner: r.miner,
+        prompt: d(1),
+        initial_state: d(2),
+        dependencies: r.dependencies,
+        service_contract: r.service_contract,
+        max_manifest_bytes: ManifestV1::WIRE_BYTES,
+    };
+    let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0; 32]).unwrap();
+    assert_eq!(admission.authenticate(&original, &signed.key, signature.as_ref()), Ok(original.id()));
+    let mut wrong_service = original.clone();
+    wrong_service.service_contract = d(5);
+    assert_eq!(
+        admission.authenticate(&wrong_service, &signed.key, signature.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     let result = signed.authenticate();
     let prep = signed.preparation(f);
     let source = TirParamsSourceV1(f.params);

@@ -13,12 +13,13 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     ContractError,
-    identity::{Digest, PUBKEY_BYTES, ResultId, SIGNATURE_BYTES, WitnessId},
+    identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
     messages::{
         AdmissionContext, CheckProfile, ClaimForm, CoverageCursor, CoverageDescriptor, MinerResultCommit, PanelWitnessCommit,
         coverage_plan_id,
     },
     ports::{NodeChecker, require_next},
+    public_one_honest::{ManifestV1, OriginalCommit, OriginalId},
     tir::{EXACT_PART_HEADER_BYTES, decode_frame, exact_derivation_id, greedy_selector_id, provenance_id, raw_part_budget},
     wire::{AuthenticatedEvidenceFrame, EVIDENCE_HEADER_BYTES, EvidenceFrame},
 };
@@ -43,6 +44,64 @@ pub(crate) fn signed_quote(count: u64, frame_cap: u64) -> Result<SignedTransport
 }
 fn digest(hash: Hash64) -> Digest {
     Digest(hash.as_bytes())
+}
+
+/// Facts resolved from the canonical job, class and funded execution owner.
+/// The native admission path supplies these independently of the candidate.
+pub struct PublicOriginalAdmissionV1<'a> {
+    pub scope: ChainScope,
+    pub job: &'a PalwJobContextV2,
+    pub class: &'a PalwTirClassV1,
+    pub artifact: Hash64,
+    pub miner: PrincipalId,
+    pub prompt: Digest,
+    pub initial_state: Digest,
+    pub dependencies: Digest,
+    pub service_contract: Digest,
+    pub max_manifest_bytes: u32,
+}
+
+impl PublicOriginalAdmissionV1<'_> {
+    /// Verify the signed original against native facts. The caller must still
+    /// reserve resources and persist admission before drawing any Panel bonds.
+    pub fn authenticate(
+        &self,
+        original: &OriginalCommit,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<OriginalId, ContractError> {
+        ManifestV1::fetch_size(self.max_manifest_bytes)?;
+        let job = self.job;
+        let class = self.class;
+        if original.scope != self.scope
+            || original.miner != self.miner
+            || original.job != digest(job.job_id)
+            || original.artifact != digest(self.artifact)
+            || original.registered_class != digest(job.shape_profile_id)
+            || original.prompt != self.prompt
+            || original.input_tokens != digest(job.prompt_token_ids_hash)
+            || original.tokenizer != digest(job.tokenizer_id)
+            || original.execution_rules != digest(job.cu_ruleset_id)
+            || original.generation_seed != job.execution_seed
+            || original.initial_state != self.initial_state
+            || original.dependencies != self.dependencies
+            || original.prefill != job.declared_prefill_tokens
+            || original.decode != job.exact_decode_tokens
+            || original.max_context != job.max_context_tokens
+            || original.service_contract != self.service_contract
+            || original.manifest_root == Digest([0; 64])
+        {
+            return Err(ContractError::Scope);
+        }
+        if original.execution != digest(job.context_hash())
+            || original.registered_class != digest(class.class_id(&self.artifact))
+            || original.program != digest(class.graph_ir_root())
+        {
+            return Err(ContractError::Scope);
+        }
+        original.authenticate(key, signature)?;
+        Ok(original.id())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
