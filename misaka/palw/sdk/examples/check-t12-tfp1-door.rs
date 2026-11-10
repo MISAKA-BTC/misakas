@@ -1,5 +1,6 @@
 //! Offline resource quote for a retained TIR worker result under the compiled public t12 settings.
-//! The EOF certificate is a fixture. This example does not contact a node or produce a carrier.
+//! The EOF certificate is a fixture. The optional authenticated table comparison uses the
+//! family V4 allocation locally. It does not check network activation or produce a carrier.
 use kaspa_consensus_core::{
     Hash64,
     config::params::palw_t12_shipped_params,
@@ -7,8 +8,10 @@ use kaspa_consensus_core::{
         palw_artifact_multiproof_borsh_len_v1, palw_artifact_multiproof_sibling_count_v1, palw_artifact_operand_borsh_len_v1,
     },
     palw_class_semantics_v1::PalwClassSemanticsDeclarationV1,
+    palw_court_family_material_v1::prepare_family_table_inventory_v1,
+    palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1,
     palw_fp_execution_v3::palw_fp_job_pin_v1,
-    palw_freeprompt_v3::PalwFpWorkerResultV3,
+    palw_freeprompt_v3::{PALW_FP_COMMITMENT_TX_MAX_BYTES, PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3},
     palw_mode_v2::PalwConsensusMode,
     palw_native_resource_v1::{
         NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, native_declared_logical_limits_v1, reserve_native_requests_v1,
@@ -21,9 +24,10 @@ use kaspa_consensus_core::{
         PalwTirInventoryIndexV1,
         parameter_cover::{ParameterCoverBudgetV1, derive_parameter_cover_v1},
     },
-    palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1,
+    palw_tir_frame_cost_v1::{PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4, tir_public_owner_queue_wait_v1},
     palw_tir_public_allocation_v1::{
-        PalwTirPublicAllocationQuoteV1, PalwTirPublicAllocationRulesV1, derive_tir_public_allocation_native_v2,
+        PalwTirPublicAllocationQuoteV1, PalwTirPublicAllocationRulesV1, derive_tir_public_allocation_family_native_v2,
+        derive_tir_public_allocation_native_v2,
     },
     palw_tir_public_source_v1::{PalwTirPublicSourceV1, parameter_cover_v1::OriginalParameterCoverBudgetV1},
     palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
@@ -115,9 +119,19 @@ fn parameter_shape(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let [artifact, tokenizer, result, binding, semantics, daa, custodians, rest @ ..] = args.as_slice() else {
-        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper> [disputed-leaf | --all-roots <max-leaves> <max-edges> <max-coordinates> <max-memberships> <max-native-bytes>]".into());
+        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper> [--original-commitment <file>] [--exact-token-table <file>] [disputed-leaf | --all-roots <max-leaves> <max-edges> <max-coordinates> <max-memberships> <max-native-bytes>]".into());
     };
-    let cover_mode = cover_mode(rest)?;
+    let (original_file, rest) = match rest {
+        [flag, file, tail @ ..] if flag == "--original-commitment" => (Some(file), tail),
+        [flag] if flag == "--original-commitment" => return Err("--original-commitment needs a Borsh commitment file".into()),
+        _ => (None, rest),
+    };
+    let (table_file, cover_args) = match rest {
+        [flag, file, tail @ ..] if flag == "--exact-token-table" => (Some(file), tail),
+        [flag] if flag == "--exact-token-table" => return Err("--exact-token-table needs a canonical PALWTTB1 file".into()),
+        _ => (None, rest),
+    };
+    let cover_mode = cover_mode(cover_args)?;
     let daa: u64 = daa.to_str().ok_or("DAA must be text")?.parse()?;
     let maximum_custodians: u64 = custodians.to_str().ok_or("custodian upper must be text")?.parse()?;
     if daa < 2 || maximum_custodians == 0 {
@@ -159,7 +173,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let PalwConsensusMode::ConsensusV2(ref bundle) = params.palw_consensus_mode else {
         return Err("the compiled t12 has no PALW V2 bundle".into());
     };
-    let original = result.to_commitment(daa.checked_add(40_000).ok_or("fixture retention DAA overflow")?);
+    let original = if let Some(file) = original_file {
+        let original: PalwFreePromptCommitmentV3 = borsh::from_slice(&read(Path::new(file), PALW_FP_COMMITMENT_TX_MAX_BYTES as u64)?)?;
+        if original != result.to_commitment(original.trace_retention_daa) {
+            return Err("the retained commitment does not match the worker result".into());
+        }
+        original
+    } else {
+        result.to_commitment(daa.checked_add(40_000).ok_or("fixture retention DAA overflow")?)
+    };
     let geometry = PalwStagedClaimGeometryV1 {
         class_id: entry.class_id(),
         producer: PalwBondKeyV2(original.job.executor_bond),
@@ -202,6 +224,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let public = match quote(rules, Some(&bound), Some(&inventory))? {
         PalwTirPublicAllocationQuoteV1::Complete(plan) => json!({"complete":true, "collect_daa":plan.terms.collect_until_daa-daa}),
         PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => json!({"complete":false,"missing":format!("{missing:?}")}),
+    };
+    let exact_table_diagnostic = if let Some(file) = table_file {
+        let literal = read(Path::new(file), PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64)?;
+        let table = prepare_family_table_inventory_v1(&literal, &bound, record.logits_vocab)
+            .map_err(|err| format!("the table does not authenticate against the class declaration: {err:?}"))?;
+        let mut family_rules = rules;
+        family_rules.clock.version = PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4;
+        let family_quote = |family_rules| {
+            derive_tir_public_allocation_family_native_v2(
+                &geometry,
+                &original,
+                &header,
+                &record,
+                &entry.class.layout,
+                Some(&bound),
+                Some(&inventory),
+                family_rules,
+                Some(&table),
+            )
+            .map_err(|err| format!("offline family quote failed: {err:?}"))
+        };
+        let quote = match family_quote(family_rules)? {
+            PalwTirPublicAllocationQuoteV1::Complete(plan) => json!({
+                "complete": true, "collect_daa": plan.terms.collect_until_daa - daa,
+            }),
+            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => json!({
+                "complete": false, "missing": format!("{missing:?}"),
+            }),
+        };
+        // The comparison below exposes the derived component clocks. Keep
+        // its altered limit out of the quote reported above.
+        family_rules.clock.maximum_door_daa = u64::MAX;
+        let breakdown = match family_quote(family_rules)? {
+            PalwTirPublicAllocationQuoteV1::Complete(plan) => {
+                let stages: Vec<_> = plan
+                    .semantic
+                    .iter()
+                    .flat_map(|bundle| &bundle.stages)
+                    .map(|stage| {
+                        json!({
+                            "family": format!("{:?}", stage.family),
+                            "open_offset_daa": stage.terms.open_until_daa - daa,
+                            "stream_offset_daa": stage.terms.stream_until_daa - daa,
+                            "resource_inclusion_daa": stage.terms.plan.inclusion_daa,
+                            "maximum_moves": stage.terms.plan.maximum_moves,
+                        })
+                    })
+                    .collect();
+                json!({
+                    "collect_offset_daa": plan.terms.collect_until_daa - daa,
+                    "acquisition_inclusion_daa": plan.acquisition.envelope.inclusion_daa,
+                    "semantic_stages": stages,
+                })
+            }
+            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => json!({"missing":format!("{missing:?}")}),
+        };
+        json!({
+            "mode": "offline_family_v4_fixture",
+            "canonical_table_bytes": literal.len(),
+            "quote": quote,
+            "unbounded_door_breakdown": breakdown,
+        })
+    } else {
+        serde_json::Value::Null
     };
     // Isolate the non-tokenizer terms with an unbounded diagnostic door. The
     // resulting resource breakdown is not an admissible public quote.
@@ -309,11 +395,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_string_pretty(&json!({
             "params_id":params.consensus_params_id().to_string(),
             "class_id":entry.class_id().to_string(),
+            "claim_id":fp_claim_id_v3(&original).to_string(),
+            "fixture_commitment":original_file.is_none(),
             "daa":daa,
             "fixture_eof":true,
             "custodian_upper":maximum_custodians,
             "maximum_door_daa":cost.clock.maximum_door_daa,
             "public_cost_quote":public,
+            "exact_table_diagnostic":exact_table_diagnostic,
             "non_tokenizer_diagnostic":non_tokenizer,
             "disputed_leaf_parameter_cover":parameter_cover,
             "all_numerical_root_parameter_cover":all_root_cover,
