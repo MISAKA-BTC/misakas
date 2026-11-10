@@ -97,6 +97,9 @@ USAGE:
     palw-class tir-fp-setup --network <id> [--drill-salt <hex>] --artifact <class.palwtir>
                          --container <index.palwart> --semantics <declaration.borsh>
                          --key-file <registrant seed> --out <fresh-dir>
+    palw-class tir-container-binding --network <id> [--drill-salt <hex>] --artifact <class.palwtir>
+                         --container <index.palwart> --expect-class <128hex> --expect-root <128hex>
+                         --expect-container-root <128hex> [--key-file <registrant seed>] --out <fresh-file>
     palw-class improve <policy|hard-case|opt-in|setter-set|dataset|artifact|licence|candidate|adapter-list|rollback>
                          --network <id> [--drill-salt <hex>] --key-file <ml-dsa-87 seed> [--bond <txid:index>]
                          [--spec <json>] [--parent <parent.palwtir> --section <candidate.palwtirs> | --artifact <candidate.palwtir>]
@@ -364,6 +367,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
         "tir-fp-setup" => tir_fp_setup(&mut args, network.as_deref()),
+        "tir-container-binding" => tir_container_binding(&mut args, network.as_deref()),
         "kernel-params" => {
             let limit = |value: Option<String>, name: &str| -> Result<u64, String> {
                 value
@@ -2358,8 +2362,92 @@ fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-/// `composite`: a LoRA candidate's container checked against its parent's, its sections rooted, and
-/// (with `out`) written again with the record in its provenance.
+fn checked_tir_container_binding(
+    container: &std::path::Path,
+    class: Hash64,
+    artifact_root: Hash64,
+    record: &kaspa_consensus_core::palw_tir_admission_v1::PalwTirClassRecordV1,
+) -> Result<kaspa_consensus_core::palw_tir_container_v1::PalwTirContainerBindingV1, String> {
+    use kaspa_consensus_core::palw_tir_container_v1::check_tir_container_binding_v1;
+    use misaka_palw_sdk::tir_container::tir_container_binding_v1;
+    use misaka_palw_tir_artifact::palwart_v3::PalwArtV3;
+
+    let package = PalwArtV3::open(container).map_err(|error| format!("{}: {error}", container.display()))?;
+    let binding = tir_container_binding_v1(&package.header, class)?;
+    check_tir_container_binding_v1(&binding, &class, &artifact_root, record, 0).map_err(str::to_owned)?;
+    Ok(binding)
+}
+
+/// Prepare one container binding independently of the tokenizer declaration.
+fn tir_container_binding(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> {
+    use kaspa_consensus_core::{
+        config::drill::{PalwDrillSaltV1, palw_chain_params_v1},
+        palw_attempt_v2::palw_network_domain_v2_for,
+        palw_tir_admission_v1::palw_tir_class_record_v1,
+        palw_tir_container_v1::{PALW_TIR_CONTAINER_BINDING_SIGNATURE_CONTEXT_V1, palw_tir_container_binding_message_v1},
+    };
+    use kaspa_pq_validator_core::{MessageSigner, ValidatorKey, load_validator_seed};
+    use misaka_palw_sdk::{lineages::tir::TirLineageV1, tir_container::tir_container_binding_object_v1};
+    use std::{fs::OpenOptions, io::Write, path::Path};
+
+    let network: NetworkId = network.ok_or("--network is required")?.parse().map_err(|why| format!("--network: {why}"))?;
+    let salt = take_flag(args, "--drill-salt").map(|s| PalwDrillSaltV1::from_hex(&s).map_err(|why| why.to_string())).transpose()?;
+    let key_file = take_flag(args, "--key-file");
+    let mut require = |flag: &str| take_flag(args, flag).ok_or_else(|| format!("{flag} is required"));
+    let artifact = require("--artifact")?;
+    let container = require("--container")?;
+    let class: Hash64 = require("--expect-class")?.parse().map_err(|error| format!("--expect-class: {error}"))?;
+    let artifact_root: Hash64 = require("--expect-root")?.parse().map_err(|error| format!("--expect-root: {error}"))?;
+    let container_root: Hash64 =
+        require("--expect-container-root")?.parse().map_err(|error| format!("--expect-container-root: {error}"))?;
+    let out = PathBuf::from(require("--out")?);
+    if !args.is_empty() || out.exists() {
+        return Err("tir-container-binding requires a fresh output file and recognized options".into());
+    }
+    let params = palw_chain_params_v1(network, salt.as_ref())?;
+    let domain = palw_network_domain_v2_for(params.net.to_string().as_bytes(), Some(params.genesis.hash));
+    let entry = TirLineageV1::open_entry(Path::new(&artifact))?;
+    if entry.class_id() != class || entry.artifact_root != artifact_root {
+        return Err("the TIR artifact does not match the expected class and inventory root".into());
+    }
+    let (record, _) = palw_tir_class_record_v1(&entry.class, &artifact_root).map_err(|why| why.to_string())?;
+    let binding = checked_tir_container_binding(Path::new(&container), class, artifact_root, &record)?;
+    if binding.container_root != container_root {
+        return Err("the PALWART3 container does not match the expected container root".into());
+    }
+
+    let message = palw_tir_container_binding_message_v1(domain, &binding);
+    let context = PALW_TIR_CONTAINER_BINDING_SIGNATURE_CONTEXT_V1;
+    let (stage, bytes) = if let Some(key_file) = key_file {
+        let key = ValidatorKey::from_seed(load_validator_seed(&key_file)?);
+        let signature = key.sign_message(message.as_byte_slice(), context)?;
+        ("signed_object", borsh::to_vec(&tir_container_binding_object_v1(binding, signature)))
+    } else {
+        ("unsigned_binding", borsh::to_vec(&binding))
+    };
+    let bytes = bytes.map_err(|error| error.to_string())?;
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&out)
+        .and_then(|mut file| file.write_all(&bytes))
+        .map_err(|error| format!("{}: {error}", out.display()))?;
+    println!(
+        "{}",
+        serde_json::json!({
+            "stage": stage,
+            "network_domain": domain.to_string(),
+            "class_id": class.to_string(),
+            "artifact_root": artifact_root.to_string(),
+            "container_root": container_root.to_string(),
+            "signature_context": std::str::from_utf8(context).map_err(|error| error.to_string())?,
+            "signature_message": message.to_string(),
+            "output": out,
+        })
+    );
+    Ok(())
+}
+
 /// Prepare the class registrant's immutable tokenizer declaration and PALWART3 binding.
 fn tir_fp_setup(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> {
     use kaspa_consensus_core::{
@@ -2369,16 +2457,10 @@ fn tir_fp_setup(args: &mut Vec<String>, network: Option<&str>) -> Result<(), Str
             PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1, PalwClassSemanticsDeclarationV1, palw_class_semantics_message_v1,
         },
         palw_tir_admission_v1::palw_tir_class_record_v1,
-        palw_tir_container_v1::{
-            PALW_TIR_CONTAINER_BINDING_SIGNATURE_CONTEXT_V1, check_tir_container_binding_v1, palw_tir_container_binding_message_v1,
-        },
+        palw_tir_container_v1::{PALW_TIR_CONTAINER_BINDING_SIGNATURE_CONTEXT_V1, palw_tir_container_binding_message_v1},
     };
     use kaspa_pq_validator_core::{MessageSigner, ValidatorKey, load_validator_seed};
-    use misaka_palw_sdk::{
-        lineages::tir::TirLineageV1,
-        tir_container::{tir_container_binding_object_v1, tir_container_binding_v1},
-    };
-    use misaka_palw_tir_artifact::palwart_v3::PalwArtV3;
+    use misaka_palw_sdk::{lineages::tir::TirLineageV1, tir_container::tir_container_binding_object_v1};
     use std::path::Path;
 
     let network: NetworkId = network.ok_or("--network is required")?.parse().map_err(|why| format!("--network: {why}"))?;
@@ -2410,9 +2492,7 @@ fn tir_fp_setup(args: &mut Vec<String>, network: Option<&str>) -> Result<(), Str
     {
         return Err("the tokenizer declaration does not bind the selected TIR class and artifact".into());
     }
-    let package = PalwArtV3::open(Path::new(&container)).map_err(|why| why.to_string())?;
-    let binding = tir_container_binding_v1(&package.header, class_id)?;
-    check_tir_container_binding_v1(&binding, &class_id, &entry.artifact_root, &record, 0).map_err(str::to_owned)?;
+    let binding = checked_tir_container_binding(Path::new(&container), class_id, entry.artifact_root, &record)?;
 
     let key = ValidatorKey::from_seed(load_validator_seed(&key_file)?);
     let semantics_signature = key.sign_message(
