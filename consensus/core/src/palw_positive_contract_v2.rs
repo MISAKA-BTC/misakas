@@ -52,6 +52,24 @@ fn digest(hash: Hash64) -> Digest {
     Digest(hash.as_bytes())
 }
 
+/// Describe bounded tokenizer bytes by the existing native raw identity.
+/// This only identifies the data; the execution profile owns its parser.
+pub fn public_tokenizer_material_v1(
+    bytes: &[u8],
+    rules: misaka_palw_positive_contract::public_one_honest::ManifestScopeRules,
+) -> Result<misaka_palw_positive_contract::public_one_honest::ManifestEntryV1, ContractError> {
+    use misaka_palw_positive_contract::public_one_honest::{ManifestEntryV1, tokenizer_json_material_codec_v1};
+    if rules.codec != tokenizer_json_material_codec_v1() {
+        return Err(ContractError::UnsupportedProfile);
+    }
+    let total_bytes = bytes.len() as u64;
+    if total_bytes == 0 || total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
+        return Err(ContractError::Budget);
+    }
+    let subject = digest(crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(bytes));
+    Ok(ManifestEntryV1 { subject, content_root: subject, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes })
+}
+
 /// Facts resolved from the canonical job, class and funded execution owner.
 /// The native admission path supplies these independently of the candidate.
 pub struct PublicOriginalAdmissionV1<'a> {

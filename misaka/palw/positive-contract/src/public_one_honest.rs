@@ -359,6 +359,10 @@ pub fn prompt_text_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"prompt-text/utf8-exact/whole")
 }
 
+pub fn tokenizer_json_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tokenizer-json/native-raw/whole")
+}
+
 /// Preserve the exact UTF-8 bytes independently of token IDs. The relation
 /// between these bytes and the token sequence is checked by the profile.
 pub fn prompt_text_material_v1(ruleset: Digest, text: &str, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {

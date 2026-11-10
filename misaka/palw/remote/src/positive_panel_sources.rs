@@ -12,6 +12,7 @@ use kaspa_consensus_core::{
     Hash64,
     palw_artifact::verify_artifact_opening_v1,
     palw_attempt_rules_v1::palw_attempt_rendered_output_v1,
+    palw_positive_contract_v2::public_tokenizer_material_v1,
     palw_prompt_ids_v1::{
         PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, prompt_ids_form_id_v1, prompt_ids_tile_count_v1,
         prompt_token_ids_match_v1, verify_prompt_ids_opening_v1,
@@ -90,6 +91,16 @@ pub fn open_public_tir_program_v1(manifest: &CheckedManifestV1, bytes: &[u8]) ->
         return Err(PanelSourceErrorR1::Binding);
     }
     TirProgramV1::decode_canonical(bytes).map_err(|_| PanelSourceErrorR1::Binding)
+}
+
+/// Authenticate tokenizer bytes before handing them to the profile's parser.
+pub fn check_public_tokenizer_v1(manifest: &CheckedManifestV1, bytes: &[u8]) -> Result<(), PanelSourceErrorR1> {
+    let entry = manifest.entry(MaterialScope::Tokenizer);
+    let rules = ManifestScopeRules { codec: entry.codec, max_bytes: entry.total_bytes, chunk_bytes: entry.chunk_bytes };
+    if public_tokenizer_material_v1(bytes, rules)? != *entry {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(())
 }
 
 /// Authenticate the published output data under the original execution context.

@@ -220,6 +220,7 @@ pub fn finalize_public_capture_v1(
     capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
     job: &TirMinerJobV2<'_>,
     prompt_text: &str,
+    tokenizer_json: &[u8],
     mut original: OriginalCommit,
     mut manifest: ManifestV1,
     scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
@@ -239,12 +240,15 @@ pub fn finalize_public_capture_v1(
     capture.bind_public_original(&mut original).map_err(|_| MinerErrorV2::Binding)?;
     let program = MaterialScope::Program as usize;
     let prompt = MaterialScope::Prompt as usize;
+    let tokenizer = MaterialScope::Tokenizer as usize;
     let input = MaterialScope::InputTokens as usize;
     let output = MaterialScope::Output as usize;
     manifest.entries[program] = job.public_program_material(scope_limits[program])?;
     // The rooted job supplied original.prompt. Manifest validation rejects a
     // different text before the Miner is asked to sign.
     manifest.entries[prompt] = prompt_text_material_v1(original.scope.ruleset, prompt_text, scope_limits[prompt])?;
+    manifest.entries[tokenizer] =
+        kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1(tokenizer_json, scope_limits[tokenizer])?;
     manifest.entries[input] = job.public_input_token_material(scope_limits[input])?;
     manifest.entries[output] = capture.public_output_material(scope_limits[output])?;
     let bytes = original.bind_manifest(&manifest, scope_limits, total_limit, max_manifest_bytes)?;
