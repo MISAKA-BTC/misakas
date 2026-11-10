@@ -106,6 +106,20 @@ pub struct ManifestRequest {
     pub reservation: Digest,
 }
 
+/// Expected values read by the consumer from the accepted original, native
+/// eligibility, and this claimant's booked service opportunity. It must never
+/// be constructed from the submitted request.
+pub struct ManifestRequestContext<'a> {
+    pub original: &'a OriginalCommit,
+    pub claimant: Claimant,
+    pub signer: PrincipalId,
+    pub inspection_scope: Digest,
+    pub supply_obligation: Digest,
+    pub reservation: Digest,
+    pub schedule: VerificationSchedule,
+    pub inclusion_daa: u64,
+}
+
 impl ManifestRequest {
     pub fn material_id(&self, original: &OriginalCommit) -> Result<MaterialId, ContractError> {
         if self.original != original.id() || self.manifest_root != original.manifest_root {
@@ -136,6 +150,37 @@ impl ManifestRequest {
             return Err(ContractError::Identity);
         }
         authenticate_actor(eligible_signer, key, signature, self.signing_digest(), MANIFEST_REQUEST_SIGN_CONTEXT)
+    }
+
+    /// Authenticate a candidate against its expected case and original
+    /// schedule before the native fold installs the case and debits its
+    /// reservation atomically.
+    pub fn verify_for_inclusion(
+        &self,
+        context: &ManifestRequestContext<'_>,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<CaseId, ContractError> {
+        let id = self.check_inclusion(context)?;
+        self.authenticate(context.signer, key, signature)?;
+        Ok(id)
+    }
+
+    fn check_inclusion(&self, context: &ManifestRequestContext<'_>) -> Result<CaseId, ContractError> {
+        let id = self.case_id(context.original, context.claimant)?;
+        if self.signer != context.signer {
+            return Err(ContractError::Identity);
+        }
+        if self.inspection_scope != context.inspection_scope || self.supply_obligation != context.supply_obligation {
+            return Err(ContractError::Scope);
+        }
+        if self.reservation != context.reservation {
+            return Err(ContractError::Budget);
+        }
+        if !context.schedule.clock.accepts_first_notice(context.inclusion_daa) || self.collect_until != context.schedule.filed_by() {
+            return Err(ContractError::Range);
+        }
+        Ok(id)
     }
 }
 
@@ -453,8 +498,39 @@ mod tests {
         assert_eq!(request.case_id(&original, first), retry.case_id(&original, first));
         assert_ne!(request.signing_digest(), retry.signing_digest());
 
-        let wrong_root = ManifestRequest { manifest_root: Digest([8; 64]), ..request };
+        let wrong_root = ManifestRequest { manifest_root: Digest([8; 64]), ..request.clone() };
         assert_eq!(wrong_root.material_id(&original), Err(ContractError::Scope));
+
+        let clock = OriginalClock::new(100).unwrap();
+        let schedule = VerificationSchedule {
+            clock,
+            first_notice_by: 3_220,
+            first_material_request_by: 3_220,
+            material_ready_by: 6_220,
+            inspection_by: 7_220,
+            localized_by: 8_220,
+            filed_by: 9_220,
+            terminal_by: 10_100,
+        };
+        let mut context = ManifestRequestContext {
+            original: &original,
+            claimant: first,
+            signer: PrincipalId(d),
+            inspection_scope: d,
+            supply_obligation: d,
+            reservation: d,
+            schedule,
+            inclusion_daa: clock.notice_until(),
+        };
+        let request = ManifestRequest { collect_until: schedule.filed_by(), ..request };
+        assert_eq!(request.check_inclusion(&context), request.case_id(&original, first));
+        assert_eq!(wrong_root.check_inclusion(&context), Err(ContractError::Scope));
+        let other_reservation = ManifestRequest { reservation: Digest([8; 64]), ..request.clone() };
+        assert_eq!(other_reservation.check_inclusion(&context), Err(ContractError::Budget));
+        let shortened = ManifestRequest { collect_until: schedule.filed_by() - 1, ..request.clone() };
+        assert_eq!(shortened.check_inclusion(&context), Err(ContractError::Range));
+        context.inclusion_daa += 1;
+        assert_eq!(request.check_inclusion(&context), Err(ContractError::Range));
     }
 
     #[test]
