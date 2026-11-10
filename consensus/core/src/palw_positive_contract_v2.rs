@@ -226,6 +226,33 @@ pub struct PreparedPublicOriginalV1 {
     manifest_limits: Digest,
 }
 
+/// An original qualified at an accepted carrier with its native reservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedPublicOriginalRecordV1(PublicOriginalAdmissionRecordV1);
+
+impl PreparedPublicOriginalRecordV1 {
+    pub(crate) fn storage_row(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; 64], &PublicOriginalAdmissionRecordV1)>, ContractError> {
+        let row = &self.0;
+        let origin = row.carrier.origin;
+        if origin.accepting_block.0 != point.block.as_bytes()
+            || origin.accepted_daa != point.daa_score
+            || origin.accepted_blue_score != point.blue_score
+            || row.reservation == Digest([0; 64])
+            || state.kernel_route_state_v1().is_none()
+        {
+            return Err(ContractError::Scope);
+        }
+        if let Some(existing) = state.public_original_admission_record_v1(row.original)? {
+            return if existing == *row { Ok(None) } else { Err(ContractError::Scope) };
+        }
+        Ok(Some((row.original.0.0, row)))
+    }
+}
+
 /// Fixed-size record to store in the same state update as the reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicOriginalAdmissionRecordV1 {
@@ -379,6 +406,7 @@ wire_struct!(PanelBond; Digest, u32);
 
 native_tuple_struct!(MaterialId; id);
 wire_struct!(MaterialId; Digest);
+native_tuple_struct!(PreparedPublicOriginalRecordV1; admission);
 native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, manifest_material, reservation, initial_supply, rescue, budget, max_manifest_bytes, manifest_payload_bytes, manifest_limits, deadlines);
 wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, MaterialId, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, u64, Digest, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
@@ -784,6 +812,12 @@ impl PreparedPublicOriginalV1 {
         })
     }
 
+    /// Qualify this checked original for storage with the reservation resolved
+    /// by the native acceptance owner. The identifier does not book capacity.
+    pub fn prepare_storage_record(&self, reservation: Digest) -> PreparedPublicOriginalRecordV1 {
+        PreparedPublicOriginalRecordV1(self.record(reservation))
+    }
+
     pub fn record(&self, reservation: Digest) -> PublicOriginalAdmissionRecordV1 {
         PublicOriginalAdmissionRecordV1 {
             original: self.original,
@@ -844,6 +878,11 @@ impl PublicOriginalAdmissionRecordV1 {
             manifest_limits: Digest([3; 64]),
             deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_admission_fixture(&self) -> PreparedPublicOriginalRecordV1 {
+        PreparedPublicOriginalRecordV1(*self)
     }
 
     #[cfg(test)]

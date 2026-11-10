@@ -16317,6 +16317,18 @@ fn apply_palw_transition_v7_inner(
     }
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: parent.last_point, new: Some(*ctx) });
     builder.state.last_point = Some(*ctx);
+    for original in &extras.public_original_admissions {
+        if let Some((key, row)) = original
+            .storage_row(&builder.state, ctx)
+            .map_err(|error| PalwStateV2Error::CarriageInconsistent(format!("inconsistent accepted public original: {error:?}")))?
+        {
+            builder.write_kernel_row_encoded_v1(
+                crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1,
+                &key,
+                Some(row),
+            )?;
+        }
+    }
     for draw in &extras.public_draws {
         if let Some((key, row)) = draw
             .storage_row(&builder.state, ctx)
@@ -21519,6 +21531,8 @@ pub struct PalwTransitionExtrasV1 {
     /// Raw native actions replayed at exact positions in the accepted object
     /// fold. This is not a vector of prepared or previously accepted rows.
     pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,
+    /// Signed originals qualified by the native acceptance and reservation owners.
+    pub public_original_admissions: Vec<crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1>,
     /// Checked draws for admitted originals, resolved from native history.
     pub public_draws: Vec<crate::palw_positive_contract_v2::PreparedPublicDrawRecordV1>,
     /// Public replay approvals qualified by native carrier acceptance.

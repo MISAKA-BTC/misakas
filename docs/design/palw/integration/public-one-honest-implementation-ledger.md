@@ -40,7 +40,7 @@
 | Trace | Miner の確定処理は初回 capture のタイルと opening を公開ストアに書く。Panel は公開索引と全タイルを有界取得し、元 claim と独立再実行に照合する。葉数と wide logits の裁定結果は元 claim ID と証拠 ID の組で参照できる | Miner と Panel の daemon への接続、全関係の局所化、裁定結果から native 状態更新への接続 |
 | Output | 公開の生成 token 列を native output root と照合し、wide 再実行と比較する | 停止・生成長・会計を含む End 検査を接続する |
 
-I1 のローカル統合テストでは、Miner が wide TIR を一度実行して署名・公開し、Panel は signed original を入口に HTTP で manifest と artifact の行を取得し、登録済み inventory root を検証して別の実行用テープで同じ original を再実行する。artifact の行や公開 trace のタイルが欠けると資料不足で停止し、改変された artifact も拒否する。全ノードを commit するステートレス wide TIR の検査計画について、同じ original と抽選済み bond に束縛した一括承認を再実行後に署名する。統合テストではその承認を native の carrier 検証に渡す。native fold は受理済み original と抽選点を照合して draw を保存し、検証済み carrier を包含点と保存済み draw が一致する場合に一 bond 一行で記録する。daemon からの draw と carrier の入力、必須局所検査、Final、決済は未接続。
+I1 のローカル統合テストでは、Miner が wide TIR を一度実行して署名・公開し、Panel は signed original を入口に HTTP で manifest と artifact の行を取得し、登録済み inventory root を検証して別の実行用テープで同じ original を再実行する。artifact の行や公開 trace のタイルが欠けると資料不足で停止し、改変された artifact も拒否する。全ノードを commit するステートレス wide TIR の検査計画について、同じ original と抽選済み bond に束縛した一括承認を再実行後に署名する。統合テストではその承認を native の carrier 検証に渡す。native fold は予約 ID 付き original の受理記録を包含点と照合して保存し、抽選点で draw を保存する。検証済み承認 carrier は包含点と保存済み draw が一致する場合に一 bond 一行で記録する。これらの差分適用、巻き戻し、スナップショット復元をローカルで検証済み。daemon での受付・予約の取得、抽選、必須局所検査、Final、決済は未接続。
 
 固定長 manifest の取得と、資料供給義務に結び付いた署名済み応答の認証は別経路。前者は元 claim と資料の同一性、後者は当該 case への応答の帰属を確認する。どちらも単独では検査機会を成立させない。
 
@@ -57,6 +57,6 @@ I1 のローカル統合テストでは、Miner が wide TIR を一度実行し�
 
 2026-11-10 の公開 T12 では、同期済み seat 7 の受付見積もりが DAA 20,850 で対象の Studio claim をクラス未登録として拒否した。復旧後の seat 5 の作業ブロックは別の claim を含む。Studio の登録見積もりは取得済みで、登録の署名、受付、対話、Final、ブロック生成の記録は未取得。
 
-同日 DAA 20,860 の seat 5 でも、同じ Studio データで登録事前検査は通り、claim の見積もりはクラス未登録として拒否された。新 profile の original 受け入れ記録は合意状態の行、差分適用・巻き戻し、スナップショット復元に接続済みで、これらの回帰テストは未実行。公開 RPC で受理された署名付き original から、同じ状態遷移で供給・保持を予約して記録を書く処理は未接続。
+同日 DAA 20,860 の seat 5 でも、同じ Studio データで登録事前検査は通り、claim の見積もりはクラス未登録として拒否された。新 profile の original 受け入れ記録は合意状態の行、差分適用・巻き戻し、スナップショット復元に接続済み。公開 RPC で受理された署名付き original から、同じ状態遷移で供給・保持を予約して記録を書く処理は未接続。
 
 隔離 Linux ノードの旧ビルド `fa449130a` は同日 DAA 5,057 で、公開 Explorer の DAA 20,868 と pruning point は一致したが同期未完了。IBD は `unsupported native cold tip capacity` を繰り返し、一部の再試行では `IbdChainBlockLocator`／`BlockBody` の待受に別の応答が到着した。公開側は同期済み。新ビルド `244b69d93` で確認する対象は、この隔離環境での IBD 完了と公開側の sink への合流であり、Studio claim の実証とは分けて記録する。

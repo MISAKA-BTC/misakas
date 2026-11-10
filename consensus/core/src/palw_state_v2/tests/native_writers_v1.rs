@@ -344,15 +344,17 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
             ruleset_digest: h64(2),
             ..Default::default()
         }),
-        exec_v2_test_kernel_rows: vec![(
-            PUBLIC_ORIGINAL_ADMISSION_TABLE_V1,
-            original.0.0.to_vec(),
-            Some(borsh::to_vec(&row).unwrap()),
-        )],
+        public_original_admissions: vec![row.storage_admission_fixture(), row.storage_admission_fixture()],
         ..Default::default()
     };
     let (child, delta) =
         apply_palw_transition_v2_with_extras(&parent, &params, &point, &[], None, false, false, false, false, &extras).unwrap();
+    let wrong_accepting_block = PalwBlockContextV2 { block: h64(10), ..point };
+    assert!(
+        apply_palw_transition_v2_with_extras(
+            &parent, &params, &wrong_accepting_block, &[], None, false, false, false, false, &extras,
+        ).is_err()
+    );
     assert_eq!(child.public_original_admission_record_v1(original), Ok(Some(row)));
     assert_eq!(child.has_public_pending_manifest_v1(original), Ok(false));
     assert_eq!(parent.has_public_pending_manifest_v1(original), Err(misaka_palw_positive_contract::ContractError::Scope));
