@@ -149,11 +149,14 @@ pub struct PublicOriginalAdmissionRecordV1 {
 }
 
 /// Identity of a verdict included under one restored admission.
-/// Revalidation uses the case evidence and the canonical inclusion DAA.
+/// Revalidation uses the case evidence and the canonical inclusion block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicOriginalCourtRecordV1 {
     original: OriginalId,
+    admission_block: Hash64,
+    reservation: Digest,
     evidence_id: Hash64,
+    inclusion_block: Hash64,
     inclusion_daa: u64,
 }
 
@@ -163,10 +166,10 @@ impl PublicOriginalCourtRecordV1 {
         admission: &PublicOriginalAdmissionRecordV1,
         prepared: &PreparedPublicOriginalV1,
         reservation: Digest,
-        inclusion_daa: u64,
+        inclusion: &crate::palw_state_v2::PalwBlockContextV2,
         verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
     ) -> Result<(), ContractError> {
-        let expected = admission.court_record(prepared, reservation, inclusion_daa, verdict)?;
+        let expected = admission.court_record(prepared, reservation, inclusion, verdict)?;
         if *self != expected {
             return Err(ContractError::Scope);
         }
@@ -510,11 +513,18 @@ impl PublicOriginalAdmissionRecordV1 {
         &self,
         prepared: &PreparedPublicOriginalV1,
         reservation: Digest,
-        inclusion_daa: u64,
+        inclusion: &crate::palw_state_v2::PalwBlockContextV2,
         verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
     ) -> Result<PublicOriginalCourtRecordV1, ContractError> {
-        let (original, evidence_id) = self.court_verdict_key(prepared, reservation, inclusion_daa, verdict)?;
-        Ok(PublicOriginalCourtRecordV1 { original, evidence_id, inclusion_daa })
+        let (original, evidence_id) = self.court_verdict_key(prepared, reservation, inclusion.daa_score, verdict)?;
+        Ok(PublicOriginalCourtRecordV1 {
+            original,
+            admission_block: self.inclusion_block,
+            reservation,
+            evidence_id,
+            inclusion_block: inclusion.block,
+            inclusion_daa: inclusion.daa_score,
+        })
     }
 }
 

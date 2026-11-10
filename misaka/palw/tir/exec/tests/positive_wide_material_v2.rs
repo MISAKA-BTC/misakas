@@ -545,18 +545,31 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let bad_prepared = admission.prepare(&bad_original, &signed.key, bad_signature.as_ref(), &reservation).unwrap();
     let bad_record = bad_prepared.record(reserved);
     assert_eq!(bad_record.court_verdict_key(&bad_prepared, reserved, terminal, &verdict), Ok(verdict.key()));
-    let verdict_record = bad_record.court_record(&bad_prepared, reserved, terminal, &verdict).unwrap();
+    let verdict_inclusion = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: Hash64::from_bytes([3; 64]),
+        daa_score: terminal,
+        blue_score: terminal,
+        subsidy: 0,
+    };
+    let verdict_record = bad_record.court_record(&bad_prepared, reserved, &verdict_inclusion, &verdict).unwrap();
     let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalCourtRecordV1>(
         &borsh::to_vec(&verdict_record).unwrap(),
     )
     .unwrap();
-    assert_eq!(restored.check_restore(&bad_record, &bad_prepared, reserved, terminal, &verdict), Ok(()));
+    assert_eq!(restored.check_restore(&bad_record, &bad_prepared, reserved, &verdict_inclusion, &verdict), Ok(()));
+    let earlier = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { daa_score: terminal - 1, ..verdict_inclusion };
     assert_eq!(
-        restored.check_restore(&bad_record, &bad_prepared, reserved, terminal - 1, &verdict),
+        restored.check_restore(&bad_record, &bad_prepared, reserved, &earlier, &verdict),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
+    let competing =
+        kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: Hash64::from_bytes([4; 64]), ..verdict_inclusion };
+    assert_eq!(
+        restored.check_restore(&bad_record, &bad_prepared, reserved, &competing, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
     assert_eq!(
-        restored.check_restore(&bad_record, &bad_prepared, d(22), terminal, &verdict),
+        restored.check_restore(&bad_record, &bad_prepared, d(22), &verdict_inclusion, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
     assert_eq!(
