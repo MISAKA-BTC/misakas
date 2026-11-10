@@ -74,6 +74,35 @@ pub enum Claimant {
     Outsider(PrincipalId),
 }
 
+/// Fixed-width native representation of the two claimant kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+struct ManifestClaimantRecordV1 {
+    drawn: bool,
+    identity: Digest,
+    index: u32,
+}
+
+impl ManifestClaimantRecordV1 {
+    fn new(claimant: Claimant) -> Self {
+        match claimant {
+            Claimant::DrawnBond(bond) => Self { drawn: true, identity: bond.transaction, index: bond.index },
+            Claimant::Outsider(principal) => Self { drawn: false, identity: principal.0, index: 0 },
+        }
+    }
+
+    fn decode(self) -> Result<Claimant, ContractError> {
+        match (self.drawn, self.index) {
+            (true, index) => Ok(Claimant::DrawnBond(PanelBond { transaction: self.identity, index })),
+            (false, 0) => Ok(Claimant::Outsider(PrincipalId(self.identity))),
+            (false, _) => Err(ContractError::NonCanonical),
+        }
+    }
+}
+
+fn manifest_case_id(original: OriginalId, claimant: Claimant, material: MaterialId, scope: Digest) -> CaseId {
+    CaseId(hash(b"misaka/palw/public-manifest-case/v1", &(original, claimant, material, scope)))
+}
+
 /// The version of this signed body is bound by its domain. The ruleset in
 /// scope binds the execution profile and its parameters independently of any
 /// future wire tag or activation height.
@@ -529,6 +558,8 @@ pub struct PendingManifestCase {
     id: CaseId,
     original: OriginalId,
     material: MaterialId,
+    claimant: Claimant,
+    inspection_scope: Digest,
     signer: PrincipalId,
     reservation: Digest,
     supply_obligation: Digest,
@@ -562,6 +593,8 @@ pub struct PendingManifestCaseRecordV1 {
     id: CaseId,
     original: OriginalId,
     material: MaterialId,
+    claimant: ManifestClaimantRecordV1,
+    inspection_scope: Digest,
     signer: PrincipalId,
     reservation: Digest,
     supply_obligation: Digest,
@@ -686,7 +719,7 @@ pub fn require_accepted_after_v1(prior: AcceptedOrigin, later: AcceptedOrigin) -
 }
 
 impl PendingManifestCaseRecordV1 {
-    pub const WIRE_BYTES: usize = 8 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 4;
+    pub const WIRE_BYTES: usize = 10 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 2 * 4 + 1;
     pub const KEY_BYTES: usize = 2 * 64;
 
     pub fn key(original: OriginalId, case: CaseId) -> [u8; Self::KEY_BYTES] {
@@ -699,6 +732,12 @@ impl PendingManifestCaseRecordV1 {
     pub fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
         let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
         if key != Self::key(row.original, row.id).as_slice() {
+            return Err(ContractError::Identity);
+        }
+        let claimant = row.claimant.decode()?;
+        if row.id != manifest_case_id(row.original, claimant, row.material, row.inspection_scope)
+            || matches!(claimant, Claimant::Outsider(principal) if principal != row.signer)
+        {
             return Err(ContractError::Identity);
         }
         ManifestV1::fetch_size(row.max_manifest_bytes)?;
@@ -823,6 +862,8 @@ impl PendingManifestCase {
             id: self.id,
             original: self.original,
             material: self.material,
+            claimant: ManifestClaimantRecordV1::new(self.claimant),
+            inspection_scope: self.inspection_scope,
             signer: self.signer,
             reservation: self.reservation,
             supply_obligation: self.supply_obligation,
@@ -884,7 +925,7 @@ impl ManifestRequest {
             return Err(ContractError::Identity);
         }
         let material = self.material_id(original)?;
-        Ok(CaseId(hash(b"misaka/palw/public-manifest-case/v1", &(self.original, eligible_claimant, material, self.inspection_scope))))
+        Ok(manifest_case_id(self.original, eligible_claimant, material, self.inspection_scope))
     }
 
     pub fn signing_digest(&self) -> Digest {
@@ -918,6 +959,8 @@ impl ManifestRequest {
             id,
             original: self.original,
             material: context.original.manifest_material_id(),
+            claimant: context.claimant,
+            inspection_scope: context.inspection_scope,
             signer: context.signer,
             reservation: context.reservation,
             supply_obligation: context.supply_obligation,
@@ -931,7 +974,7 @@ impl ManifestRequest {
 
     fn check_inclusion(&self, context: &ManifestRequestContext<'_>) -> Result<CaseId, ContractError> {
         let id = self.case_id(context.original, context.claimant)?;
-        if self.signer != context.signer {
+        if self.signer != context.signer || matches!(context.claimant, Claimant::Outsider(principal) if principal != context.signer) {
             return Err(ContractError::Identity);
         }
         if self.inspection_scope != context.inspection_scope || self.supply_obligation != context.supply_obligation {
@@ -1470,6 +1513,16 @@ mod tests {
         let case_key = PendingManifestCaseRecordV1::key(bound_original.id(), pending.id());
         let restored = PendingManifestCaseRecordV1::decode_row(&case_key, &stored).unwrap();
         assert_eq!(restored.signer(), request.signer);
+        let changed_scope = PendingManifestCaseRecordV1 { inspection_scope: Digest([99; 64]), ..restored };
+        assert_eq!(
+            PendingManifestCaseRecordV1::decode_row(&case_key, &borsh::to_vec(&changed_scope).unwrap()),
+            Err(ContractError::Identity)
+        );
+        let other_claimant = PendingManifestCaseRecordV1 { claimant: ManifestClaimantRecordV1::new(second), ..restored };
+        assert_eq!(
+            PendingManifestCaseRecordV1::decode_row(&case_key, &borsh::to_vec(&other_claimant).unwrap()),
+            Err(ContractError::Identity)
+        );
         let wrong_original = PendingManifestCaseRecordV1::key(OriginalId(Digest([0; 64])), pending.id());
         assert_eq!(PendingManifestCaseRecordV1::decode_row(&wrong_original, &stored), Err(ContractError::Identity));
         assert_eq!(PendingManifestCaseRecordV1::decode_row(&[], &stored), Err(ContractError::Identity));
