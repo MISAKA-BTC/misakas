@@ -199,3 +199,10 @@ snapshot / journal 検査で固定 quote・Part 集合・元の割当・終端 /
 [機能回帰30件](../../../evidence/palw/funded-tokenizer-registration-phase3-regression-2026-11-11.json)が成功した。core/node opt-level 0、Batch のテスト stack は64 MiBであり、公開性能測定ではない。[実 tokenizer の搬送 mass 記録](../../../evidence/palw/tokenizer-registration-mass-2026-11-11/README.md)は固定テスト鍵によるオフライン値で、使用 rlib の元コミットは未特定。この値を出荷コミットの適格性として扱わない。
 
 RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック受理・復元、最大入力での計測を続ける。公開 profile・activation は未設定。公開 TFP1 quote 成功、main push、Final は未達である。
+
+
+### 2026-11-11 — RFC-0051 段階4: 見積もり・受理状態の参照接続
+
+コミット `d27ddb34261fef09ad88ae307322b135139e969a` に、署名前 Open quote と受理済み Open status の core / node / gRPC / wRPC / CLI 接続を保存した。親の block・root・DAA と見積もり用 virtual clock を分け、応答前に virtual owner と pruning/import context を再照合する。quote は予約・UTXO 支払済みとは扱わず、status は受理された Part、通常・回復 Finish の試行、完了 record を読み戻す。GC/reorg 後の不存在を受付拒否や送信履歴に変換しない。
+
+[回帰22件とビルド記録](../../../evidence/palw/funded-tokenizer-registration-phase4-read-regression-2026-11-11.json)に結果を保存した。node、RPC service、gRPC client/server、wRPC server、CLI の cargo check が成功。初回ビルドの所有権エラーと gRPC テストの型推論エラーを修正して通過した。公開 RPC の利用・登録・有効化は未実施。次は実ブロック受理の試験と署名・送信側の接続を行う。
