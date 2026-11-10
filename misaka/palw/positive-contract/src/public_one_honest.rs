@@ -592,6 +592,37 @@ impl VerifiedManifestDeliveryV1 {
 
 impl ManifestResponseRecordV1 {
     pub const WIRE_BYTES: usize = 3 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 1;
+    pub const KEY_BYTES: usize = 2 * 64;
+
+    pub fn key(&self) -> [u8; Self::KEY_BYTES] {
+        let mut key = [0; Self::KEY_BYTES];
+        key[..64].copy_from_slice(&self.case.0.0);
+        key[64..].copy_from_slice(&self.response_digest.0);
+        key
+    }
+
+    pub fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
+        let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
+        if key != row.key().as_slice() {
+            return Err(ContractError::Identity);
+        }
+        Ok(row)
+    }
+
+    pub fn case(&self) -> CaseId {
+        self.case
+    }
+
+    pub fn origin(&self) -> AcceptedOrigin {
+        self.origin
+    }
+
+    pub fn check_case(&self, pending: &PendingManifestCaseRecordV1) -> Result<(), ContractError> {
+        if self.case != pending.id || !(pending.origin.accepted_daa..=pending.material_ready_by).contains(&self.origin.accepted_daa) {
+            return Err(ContractError::Scope);
+        }
+        check_delivery_order(pending.origin, self.origin)
+    }
 
     /// The caller re-verifies the original signed packet before this check.
     pub fn check_restore(&self, delivery: &VerifiedManifestDeliveryV1) -> Result<(), ContractError> {
@@ -600,6 +631,17 @@ impl ManifestResponseRecordV1 {
         }
         Ok(())
     }
+}
+
+fn check_delivery_order(request: AcceptedOrigin, response: AcceptedOrigin) -> Result<(), ContractError> {
+    if response.accepted_blue_score < request.accepted_blue_score
+        || (response.accepted_blue_score == request.accepted_blue_score
+            && (response.accepting_block != request.accepting_block
+                || (response.accepted_tx_ordinal, response.event_ordinal) <= (request.accepted_tx_ordinal, request.event_ordinal)))
+    {
+        return Err(ContractError::Scope);
+    }
+    Ok(())
 }
 
 impl PendingManifestCaseRecordV1 {
@@ -668,14 +710,7 @@ impl PendingManifestCase {
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
         self.check_delivery_context(original, origin.accepted_daa)?;
-        if origin.accepted_blue_score < self.origin.accepted_blue_score
-            || (origin.accepted_blue_score == self.origin.accepted_blue_score
-                && (origin.accepting_block != self.origin.accepting_block
-                    || (origin.accepted_tx_ordinal, origin.event_ordinal)
-                        <= (self.origin.accepted_tx_ordinal, self.origin.event_ordinal)))
-        {
-            return Err(ContractError::Scope);
-        }
+        check_delivery_order(self.origin, origin)?;
         if response.case != self.id || response.supply_obligation != self.supply_obligation {
             return Err(ContractError::Scope);
         }
@@ -1426,7 +1461,14 @@ mod tests {
             .unwrap();
         let verified = verify(delivery_origin, &bytes, 90).unwrap();
         let stored = borsh::to_vec(&verified.record()).unwrap();
-        let restored: ManifestResponseRecordV1 = borsh::from_slice(&stored).unwrap();
+        let restored = ManifestResponseRecordV1::decode_row(&verified.record().key(), &stored).unwrap();
+        assert_eq!(
+            ManifestResponseRecordV1::decode_row(&[0; ManifestResponseRecordV1::KEY_BYTES], &stored),
+            Err(ContractError::Identity)
+        );
+        assert_eq!(restored.check_case(&pending.record()), Ok(()));
+        let wrong_case = PendingManifestCaseRecordV1 { id: CaseId(Digest([8; 64])), ..pending.record() };
+        assert_eq!(restored.check_case(&wrong_case), Err(ContractError::Scope));
         assert_eq!(restored.check_restore(&verified), Ok(()));
         assert_eq!(stored.len(), ManifestResponseRecordV1::WIRE_BYTES);
         let alternate = AcceptedOrigin { carrier_transaction: crate::rows::NativeHash64([7; 64]), ..delivery_origin };

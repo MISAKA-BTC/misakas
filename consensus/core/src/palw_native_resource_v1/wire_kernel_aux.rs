@@ -338,6 +338,13 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         crate::palw_positive_contract_v2::PUBLIC_PENDING_MANIFEST_TABLE_V1 => {
             return Err(wire::wire_bad("unallocated public pending manifest key"));
         }
+        crate::palw_positive_contract_v2::PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => {
+            use misaka_palw_positive_contract::public_one_honest::ManifestResponseRecordV1;
+            if k.len() != ManifestResponseRecordV1::KEY_BYTES {
+                return Err(wire::wire_bad("unallocated public manifest response key"));
+            }
+            ManifestResponseRecordV1::scan_native_wire_v1(frame)?
+        }
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,
