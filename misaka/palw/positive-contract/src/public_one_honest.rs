@@ -33,8 +33,15 @@ pub struct PanelBond {
     pub index: u32,
 }
 
-/// Compact identity of the ordered bond/principal pairs in a native draw.
-pub fn public_draw_members_digest_v1(members: &[(PanelBond, PrincipalId)]) -> Digest {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PublicDrawMemberV1 {
+    pub bond: PanelBond,
+    pub principal: PrincipalId,
+    pub rescue_reservation: Digest,
+}
+
+/// Compact identity of the ordered membership and its protected allocations.
+pub fn public_draw_members_digest_v1(members: &[PublicDrawMemberV1]) -> Digest {
     hash(b"misaka/palw/public-draw-members/v1", &members)
 }
 

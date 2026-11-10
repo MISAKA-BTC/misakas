@@ -21,8 +21,8 @@ use misaka_palw_positive_contract::{
     ports::{NodeChecker, require_next},
     public_one_honest::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestV1, MaterialCaseDemand,
-        OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase, ProtectedRescueDemand, ReplayApprovalContext,
-        VerificationSchedule, public_draw_members_digest_v1,
+        OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase, ProtectedRescueDemand, PublicDrawMemberV1,
+        ReplayApprovalContext, VerificationSchedule, public_draw_members_digest_v1,
     },
     reservations::RemainingCapacity,
     rows::AggregateUsage,
@@ -107,7 +107,7 @@ pub struct PreparedPublicDrawV1 {
     draw: Digest,
     draw_daa: u64,
     full_scope: Digest,
-    members: std::collections::BTreeMap<(Digest, u32), PrincipalId>,
+    members: std::collections::BTreeMap<(Digest, u32), PublicDrawMemberV1>,
     ordered_members: Digest,
     per_bond: RemainingCapacity,
 }
@@ -145,8 +145,14 @@ impl PreparedPublicDrawV1 {
     }
 
     pub fn approval_context(&self, bond: PanelBond) -> Result<ReplayApprovalContext, ContractError> {
-        let member = *self.members.get(&(bond.transaction, bond.index)).ok_or(ContractError::Identity)?;
-        Ok(ReplayApprovalContext { original: self.original, draw: self.draw, bond, member, full_scope: self.full_scope })
+        let member = self.members.get(&(bond.transaction, bond.index)).ok_or(ContractError::Identity)?;
+        Ok(ReplayApprovalContext {
+            original: self.original,
+            draw: self.draw,
+            bond,
+            member: member.principal,
+            full_scope: self.full_scope,
+        })
     }
 
     pub fn rescue_capacity(&self, bond: PanelBond) -> Result<RemainingCapacity, ContractError> {
@@ -215,8 +221,12 @@ impl PreparedPublicOriginalV1 {
         let Claimant::DrawnBond(bond) = context.claimant else {
             return Err(ContractError::Identity);
         };
-        if context.signer != draw.approval_context(bond)?.member {
+        let member = draw.members.get(&(bond.transaction, bond.index)).ok_or(ContractError::Identity)?;
+        if context.signer != member.principal {
             return Err(ContractError::Identity);
+        }
+        if context.reservation != member.rescue_reservation {
+            return Err(ContractError::Budget);
         }
         self.verify_manifest_request_with_capacity(draw.per_bond, request, context, key, signature)
     }
@@ -244,7 +254,7 @@ impl PreparedPublicOriginalV1 {
         &self,
         draw: Digest,
         draw_daa: u64,
-        members: &[(PanelBond, PrincipalId)],
+        members: &[PublicDrawMemberV1],
         relation_plan: Digest,
     ) -> Result<PreparedPublicDrawV1, ContractError> {
         if draw_daa <= self.inclusion_daa || draw_daa > self.draw_ready_by {
@@ -254,8 +264,11 @@ impl PreparedPublicOriginalV1 {
             return Err(ContractError::Budget);
         }
         let mut checked = std::collections::BTreeMap::new();
-        for &(candidate, principal) in members {
-            if checked.insert((candidate.transaction, candidate.index), principal).is_some() {
+        let mut reservations = std::collections::BTreeSet::new();
+        for &member in members {
+            if !reservations.insert(member.rescue_reservation)
+                || checked.insert((member.bond.transaction, member.bond.index), member).is_some()
+            {
                 return Err(ContractError::Identity);
             }
         }

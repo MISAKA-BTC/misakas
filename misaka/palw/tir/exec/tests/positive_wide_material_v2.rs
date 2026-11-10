@@ -382,10 +382,15 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
     assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
-    use misaka_palw_positive_contract::public_one_honest::{FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond};
+    use misaka_palw_positive_contract::public_one_honest::{
+        FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond, PublicDrawMemberV1,
+    };
     let bond = PanelBond { transaction: d(10), index: 1 };
     let second_bond = PanelBond { transaction: d(11), index: 1 };
-    let members = [(bond, r.miner), (second_bond, r.miner)];
+    let members = [
+        PublicDrawMemberV1 { bond, principal: r.miner, rescue_reservation: d(8) },
+        PublicDrawMemberV1 { bond: second_bond, principal: r.miner, rescue_reservation: d(9) },
+    ];
     let draw = prepared.prepare_draw(d(11), 101, &members, d(12)).unwrap();
     let record = borsh::to_vec(&draw.record()).unwrap();
     let restored: kaspa_consensus_core::palw_positive_contract_v2::PublicDrawRecordV1 = borsh::from_slice(&record).unwrap();
@@ -430,6 +435,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let accepted =
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
+    request_context.reservation = d(9);
+    assert_eq!(
+        prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Budget)
+    );
+    request_context.reservation = d(8);
     request_context.manifest_body_bytes_reserved += 1;
     assert_eq!(
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()),
