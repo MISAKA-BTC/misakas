@@ -133,6 +133,48 @@ pub fn check_public_original_execution_v1(
     Ok(())
 }
 
+pub fn public_wide_tir_rules_codec_v1() -> Digest {
+    misaka_palw_positive_contract::identity::hash(b"misaka/palw/material-codec/v1", &b"tir-wide-rules-v1/whole")
+}
+
+/// Public preimage for the native wide TIR execution rules selected by the job.
+pub fn public_wide_tir_rules_material_v1(
+    job: &PalwJobContextV2,
+    program: &misaka_palw_tir::TirProgramV1,
+    rules: ManifestScopeRules,
+) -> Result<(ManifestEntryV1, [u8; 256]), ContractError> {
+    use misaka_palw_positive_contract::identity::hash;
+    let codec = public_wide_tir_rules_codec_v1();
+    if rules.codec != codec
+        || !program.wide_logits_q24()
+        || program.prim_set_id != crate::palw_tir_v1::palw_tir_prim_set_id_v1().as_bytes()
+        || job.trace_scheme_id != crate::palw_logits_q24_v2::scheme_id()
+    {
+        return Err(ContractError::UnsupportedProfile);
+    }
+    let mut bytes = [0; 256];
+    for (part, field) in bytes.chunks_exact_mut(64).zip([
+        program.prim_set_id,
+        program.logits_scheme_id,
+        job.trace_scheme_id.as_bytes(),
+        job.cu_ruleset_id.as_bytes(),
+    ]) {
+        part.copy_from_slice(&field);
+    }
+    let total_bytes = bytes.len() as u64;
+    if total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
+        return Err(ContractError::Budget);
+    }
+    let entry = ManifestEntryV1 {
+        subject: digest(job.cu_ruleset_id),
+        content_root: hash(b"misaka/palw/tir-wide-rules/v1", &bytes),
+        codec,
+        total_bytes,
+        chunk_bytes: rules.chunk_bytes,
+    };
+    Ok((entry, bytes))
+}
+
 /// Facts resolved from the canonical job, class and funded execution owner.
 /// The native admission path supplies these independently of the candidate.
 pub struct PublicOriginalAdmissionV1<'a> {

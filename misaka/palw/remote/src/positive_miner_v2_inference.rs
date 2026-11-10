@@ -260,6 +260,16 @@ pub fn finalize_public_capture_v1(
         return Err(ContractError::UnsupportedProfile.into());
     }
     manifest.entries[dependencies] = dependencies_entry;
+    let execution_rules = MaterialScope::ExecutionRules as usize;
+    let (rules_entry, rules_bytes) = kaspa_consensus_core::palw_positive_contract_v2::public_wide_tir_rules_material_v1(
+        job.context,
+        &params.plan.program,
+        scope_limits[execution_rules],
+    )?;
+    if original.execution_rules != rules_entry.subject {
+        return Err(MinerErrorV2::Binding);
+    }
+    manifest.entries[execution_rules] = rules_entry;
     let program = MaterialScope::Program as usize;
     let prompt = MaterialScope::Prompt as usize;
     let tokenizer = MaterialScope::Tokenizer as usize;
@@ -283,6 +293,7 @@ pub fn finalize_public_capture_v1(
         (MaterialScope::Tokenizer, tokenizer_json),
         (MaterialScope::InitialState, initial_bytes.as_slice()),
         (MaterialScope::Dependencies, dependencies_bytes.as_slice()),
+        (MaterialScope::ExecutionRules, rules_bytes.as_slice()),
         (MaterialScope::Output, output_bytes.as_slice()),
     ];
     if replay_material.iter().any(|(_, bytes)| bytes.len() > crate::public_material::MATERIAL_UNIT_MAX_BYTES) {

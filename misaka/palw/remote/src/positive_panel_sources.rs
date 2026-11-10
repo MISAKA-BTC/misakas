@@ -243,6 +243,14 @@ pub fn run_public_wide_replay_v1(
     if &program != space.program() {
         return Err(PanelSourceErrorR1::Binding);
     }
+    let entry = manifest.entry(MaterialScope::ExecutionRules);
+    let rules = ManifestScopeRules { codec: entry.codec, max_bytes: entry.total_bytes, chunk_bytes: entry.chunk_bytes };
+    let (expected, bytes) = kaspa_consensus_core::palw_positive_contract_v2::public_wide_tir_rules_material_v1(job, &program, rules)?;
+    if expected != *entry
+        || fetch_public_replay_material(provider, original, manifest, MaterialScope::ExecutionRules)?.as_slice() != bytes.as_slice()
+    {
+        return Err(PanelSourceErrorR1::Binding);
+    }
     drop(program);
     let output = fetch_public_replay_output_v1(provider, original, manifest)?;
     if &artifact.class().map_err(PanelSourceErrorR1::Artifact)? != class {

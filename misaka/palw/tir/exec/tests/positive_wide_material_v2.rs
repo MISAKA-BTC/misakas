@@ -260,7 +260,19 @@ fn material_meter_delta(
     }
 }
 fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
+    use kaspa_consensus_core::palw_positive_contract_v2::{public_wide_tir_rules_codec_v1, public_wide_tir_rules_material_v1};
+    use misaka_palw_positive_contract::public_one_honest::ManifestScopeRules;
+
     let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
+    let rules = ManifestScopeRules { codec: public_wide_tir_rules_codec_v1(), max_bytes: 256, chunk_bytes: 256 };
+    let (entry, rules_bytes) = public_wide_tir_rules_material_v1(&f.job, space.program(), rules).unwrap();
+    assert_eq!(entry.subject, digest(f.job.cu_ruleset_id));
+    assert_eq!(&rules_bytes[128..192], &f.job.trace_scheme_id.as_bytes());
+    let wrong_scheme = PalwJobContextV2 { trace_scheme_id: Hash64::default(), ..f.job.clone() };
+    assert_eq!(
+        public_wide_tir_rules_material_v1(&wrong_scheme, space.program(), rules),
+        Err(misaka_palw_positive_contract::ContractError::UnsupportedProfile)
+    );
     let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.class.class_id(&f.artifact)).unwrap();
     let reserver = reserve();
     let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
@@ -452,7 +464,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(verdict.fault(), &PalwStepFaultV1::TirLogitsTraceMismatch { value_index: 0 });
     assert_eq!(verdict.key().0, bad_original.id());
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
-    use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
+    use misaka_palw_positive_contract::public_one_honest::tir_output_material_codec_v1;
     let size = original.decode * 4;
     let rules = ManifestScopeRules { codec: tir_output_material_codec_v1(), max_bytes: u64::from(size), chunk_bytes: size };
     let output = capture.public_output_material(rules).unwrap();
