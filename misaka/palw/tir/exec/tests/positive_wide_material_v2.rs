@@ -333,6 +333,61 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
     let signature = libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0; 32]).unwrap();
     assert_eq!(admission.authenticate(&original, &signed.key, signature.as_ref()), Ok(original.id()));
+    use kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalReservationV1;
+    use misaka_palw_positive_contract::{
+        public_one_honest::{FirstNoticeDemand, MaterialCaseDemand, ProtectedRescueDemand},
+        reservations::RemainingCapacity,
+        rows::AggregateUsage,
+    };
+    let body = u64::from(ManifestV1::WIRE_BYTES);
+    let supply = RemainingCapacity { transmitted_bytes: body, additional_work: 1, retained_bytes: body };
+    let budget = AggregateBudget {
+        rounds: 1,
+        unique_source_bytes: body,
+        transmitted_bytes: body * 3,
+        additional_work: 3,
+        retained_bytes: body * 3,
+        retention_until: 10_100,
+        fee: 1,
+        witness_attempts: 1,
+    };
+    let mut reservation = PublicOriginalReservationV1 {
+        inclusion_daa: 100,
+        notice: FirstNoticeDemand {
+            draw_ready_by: 101,
+            material_ready_by: 101,
+            cold_acquisition_daa: 1,
+            full_inspection_daa: 1,
+            notice_inclusion_daa: 1,
+            missing_material_detected_by: 101,
+            material_request_inclusion_daa: 1,
+        },
+        case: MaterialCaseDemand {
+            material_delivery_daa: 1,
+            full_inspection_daa: 1,
+            localization_daa: 1,
+            filing_daa: 1,
+            adjudication_and_recovery_daa: 1,
+        },
+        initial_supply: supply,
+        rescue: ProtectedRescueDemand {
+            max_drawn_bonds: 2,
+            per_drawn_bond: supply,
+            max_outsiders: 0,
+            per_outsider: RemainingCapacity { transmitted_bytes: 0, additional_work: 0, retained_bytes: 0 },
+            defensive: RemainingCapacity { transmitted_bytes: 0, additional_work: 0, retained_bytes: 0 },
+        },
+        usage: &AggregateUsage::default(),
+        budget: &budget,
+    };
+    let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
+    assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
+    let short = AggregateBudget { transmitted_bytes: body * 3 - 1, ..budget };
+    reservation.budget = &short;
+    assert_eq!(
+        admission.prepare(&original, &signed.key, signature.as_ref(), &reservation),
+        Err(misaka_palw_positive_contract::ContractError::Budget)
+    );
     let mut wrong_service = original.clone();
     wrong_service.service_contract = d(5);
     assert_eq!(

@@ -15,11 +15,16 @@ use misaka_palw_positive_contract::{
     ContractError,
     identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
     messages::{
-        AdmissionContext, CheckProfile, ClaimForm, CoverageCursor, CoverageDescriptor, MinerResultCommit, PanelWitnessCommit,
-        coverage_plan_id,
+        AdmissionContext, AggregateBudget, CheckProfile, ClaimForm, CoverageCursor, CoverageDescriptor, MinerResultCommit,
+        PanelWitnessCommit, coverage_plan_id,
     },
     ports::{NodeChecker, require_next},
-    public_one_honest::{ManifestV1, OriginalCommit, OriginalId},
+    public_one_honest::{
+        FirstNoticeDemand, ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, ProtectedRescueDemand,
+        VerificationSchedule,
+    },
+    reservations::RemainingCapacity,
+    rows::AggregateUsage,
     tir::{EXACT_PART_HEADER_BYTES, decode_frame, exact_derivation_id, greedy_selector_id, provenance_id, raw_part_budget},
     wire::{AuthenticatedEvidenceFrame, EVIDENCE_HEADER_BYTES, EvidenceFrame},
 };
@@ -61,7 +66,51 @@ pub struct PublicOriginalAdmissionV1<'a> {
     pub max_manifest_bytes: u32,
 }
 
+/// Native reservation inputs from the accepted profile and current ledger.
+pub struct PublicOriginalReservationV1<'a> {
+    pub inclusion_daa: u64,
+    pub notice: FirstNoticeDemand,
+    pub case: MaterialCaseDemand,
+    pub initial_supply: RemainingCapacity,
+    pub rescue: ProtectedRescueDemand,
+    pub usage: &'a AggregateUsage,
+    pub budget: &'a AggregateBudget,
+}
+
+/// Checked inputs for the native fold to book and persist atomically.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PreparedPublicOriginalV1 {
+    pub original: OriginalId,
+    pub schedule: VerificationSchedule,
+    pub capacity: RemainingCapacity,
+}
+
 impl PublicOriginalAdmissionV1<'_> {
+    pub fn prepare(
+        &self,
+        original: &OriginalCommit,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+        reservation: &PublicOriginalReservationV1<'_>,
+    ) -> Result<PreparedPublicOriginalV1, ContractError> {
+        let body_bytes = u64::from(ManifestV1::fetch_size(self.max_manifest_bytes)?);
+        if reservation.initial_supply.retained_bytes < body_bytes
+            || reservation.rescue.per_drawn_bond.transmitted_bytes < body_bytes
+            || (reservation.rescue.max_outsiders != 0 && reservation.rescue.per_outsider.transmitted_bytes < body_bytes)
+        {
+            return Err(ContractError::Budget);
+        }
+        let clock = OriginalClock::new(reservation.inclusion_daa)?;
+        if reservation.budget.retention_until < clock.hard() {
+            return Err(ContractError::Budget);
+        }
+        let schedule = VerificationSchedule::new(clock, reservation.notice, reservation.case)?;
+        let capacity = reservation.initial_supply.checked_add(reservation.rescue.total()?)?;
+        capacity.check(reservation.usage, reservation.budget)?;
+        let original = self.authenticate(original, key, signature)?;
+        Ok(PreparedPublicOriginalV1 { original, schedule, capacity })
+    }
+
     /// Verify the signed original against native facts. The caller must still
     /// reserve resources and persist admission before drawing any Panel bonds.
     pub fn authenticate(
