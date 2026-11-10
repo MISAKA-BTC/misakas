@@ -2127,4 +2127,4 @@ fn g14_genesis_class_declarations_commit_and_reopen_through_actual_sync_getter()
 }
 
 #[path = "g14_registration_e2e/tokenizer_registration.rs"]
-mod tokenizer_registration;
+pub(super) mod tokenizer_registration;

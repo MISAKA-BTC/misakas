@@ -37,10 +37,21 @@ const RETRY_PAYER: usize = 7;
 
 fn isolated_config() -> (Config, PalwConsensusParamsV2, Premine, Premine, TokenizerRegistrationPolicyV1) {
     let (mut config, _, premine, floats) = t12_release_compressed_over(Some(44));
-    let p = &mut config.params;
+    let policy = configure_tokenizer_registration(&mut config.params);
+    let PalwConsensusMode::ConsensusV2(bundle) = &config.params.palw_consensus_mode else { unreachable!() };
+    (config.clone(), bundle.clone(), premine, floats, policy)
+}
+
+pub(in crate::pipeline::virtual_processor::tests) fn configure_tokenizer_registration(
+    p: &mut kaspa_consensus_core::config::params::Params,
+) -> TokenizerRegistrationPolicyV1 {
     p.genesis =
         kaspa_consensus_core::palw_g14_gates_v1::palw_isolated_g14_genesis_v1(&p.genesis, Hash64::from_u64_word(0x544b5231)).unwrap();
     let at = ForkActivation::new(START);
+    if p.palw_tir_v1.as_ref().is_none_or(|f| !f.activation.is_active(START)) {
+        p.palw_tir_v1 = Some(PalwTirFenceV1::testnet12_v1(at));
+        p.sync_palw_tir_v1();
+    }
     p.palw_audit_2026_09_11 = Some(ForkActivation::always());
     p.palw_class_semantics_v1 = Some(at);
     p.palw_legacy_public_filer_v1 = Some(at);
@@ -63,6 +74,8 @@ fn isolated_config() -> (Config, PalwConsensusParamsV2, Premine, Premine, Tokeni
             Some(kaspa_consensus_core::palw_aggregate_liability_v1::PalwCapacityLiabilityV1::t12_at_v1(at));
     }
     p.sync_palw_legacy_public_filer_v1();
+    p.sync_palw_capacity_liability();
+    p.sync_palw_rcore_plus();
     p.sync_palw_2026_10_12_ruling_fences_v1();
     p.sync_palw_g14_gates_v1();
     let sources = p.tokenizer_registration_source_blocks_bound_v1().unwrap();
@@ -103,9 +116,7 @@ fn isolated_config() -> (Config, PalwConsensusParamsV2, Premine, Premine, Tokeni
     p.palw_tokenizer_registration_v1 = Some(TokenizerRegistrationFenceV1 { activation: at, open_cutoff: None, policy });
     assert!(p.has_isolated_g14_genesis_v1());
     p.validate_palw_v2().expect("all node parameter validation on the isolated genesis");
-    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { unreachable!() };
-    let bundle = bundle.clone();
-    (config, bundle, premine, floats, policy)
+    policy
 }
 
 fn signed_bytes(card: usize, message: &[u8], purpose: &[u8]) -> [u8; MLDSA87_SIGNATURE_LEN] {
@@ -308,14 +319,11 @@ fn signed_tkr1_open_parts_finish_and_duplicate_use_the_actual_node() {
         .unwrap();
 }
 
-async fn run() {
-    let (config, bundle, premine, floats, policy) = isolated_config();
-    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-    let (sender, _receiver) = async_channel::unbounded();
-    let node = TestConsensus::with_db(db.clone(), &config, sender);
-    let chain = t12_genesis_chain_on(node, &config, &bundle, &premine, &floats);
-    let mut env = Env::around(chain, (config, bundle, premine, floats));
-    warm_to(&mut env, START).await;
+async fn prepare_class(
+    env: Env,
+    policy: TokenizerRegistrationPolicyV1,
+) -> (Mined, TokenizerRegistrationOpenBodyV1, &'static [u8], kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1)
+{
     let raw = br#"{"model":{"vocab":{"A":0},"merges":[]},"added_tokens":[]}"#;
     let mut c = case("dense-gqa-2layer");
     c.class.tokenizer_id = palw_tokenizer_raw_commitment_v1(raw);
@@ -325,10 +333,6 @@ async fn run() {
     let table = PalwTokenTableV1 { entries, eog_token_ids: vec![0], tokenizer_id: c.class.tokenizer_id };
     let pins = prerequisites(&mut m, raw, &table).await;
     let eog = table.eog_opening().unwrap();
-    // A tick-bearing heartbeat uses the recovery cadence. Target block time
-    // alone permits repeated-DAA beats, which cannot deliver an exact slot.
-    let ttpb =
-        m.env.config.params.target_time_per_block().max(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS);
     let now = m.env.chain.daa_of(m.env.chain.sink());
     let body = TokenizerRegistrationOpenBodyV1 {
         version: TOKENIZER_REGISTRATION_VERSION_V1,
@@ -351,6 +355,35 @@ async fn run() {
         material_until_daa: now + 40 + policy.retention_daa,
         max_registration_charge: policy.max_registration_charge,
     };
+    (m, body, raw, eog)
+}
+
+pub(in crate::pipeline::virtual_processor::tests) async fn prepare_round_class(
+    chain: T12Chain,
+    premine: Premine,
+    floats: Premine,
+) -> (T12Chain, (TokenizerRegistrationOpenBodyV1, Premine)) {
+    let config = chain.config.clone();
+    let bundle = chain.bundle.clone();
+    let policy = config.params.palw_tokenizer_registration_v1.as_ref().unwrap().policy;
+    let env = Env::around(chain, (config, bundle, premine, floats));
+    let (mined, body, _, _) = prepare_class(env, policy).await;
+    (mined.env.chain, (body, mined.env.floats))
+}
+
+async fn run() {
+    let (config, bundle, premine, floats, policy) = isolated_config();
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _receiver) = async_channel::unbounded();
+    let node = TestConsensus::with_db(db.clone(), &config, sender);
+    let chain = t12_genesis_chain_on(node, &config, &bundle, &premine, &floats);
+    let mut env = Env::around(chain, (config, bundle, premine, floats));
+    warm_to(&mut env, START).await;
+    let (mut m, body, raw, eog) = prepare_class(env, policy).await;
+    // A tick-bearing heartbeat uses the recovery cadence. Target block time
+    // alone permits repeated-DAA beats, which cannot deliver an exact slot.
+    let ttpb =
+        m.env.config.params.target_time_per_block().max(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS);
     let open_id = body.id_v1().unwrap();
     let preview = m.env.chain.ctx.consensus.palw_tokenizer_registration_open_quote_v1(body).unwrap().unwrap();
     assert_eq!(preview.parent_point.block, m.env.chain.sink());

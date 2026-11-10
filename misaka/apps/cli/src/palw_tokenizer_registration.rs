@@ -7,6 +7,7 @@ use kaspa_consensus_core::palw_tokenizer_registration_v1::{
 };
 use kaspa_rpc_core::{GetPalwTokenizerRegistrationQuoteRequest, GetPalwTokenizerRegistrationStatusRequest, api::rpc::RpcApi};
 use std::{io::Read, path::PathBuf};
+mod sender;
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum TokenizerRegistrationCmd {
@@ -37,6 +38,23 @@ pub(crate) enum TokenizerRegistrationCmd {
         /// New directory; an existing directory is never overwritten.
         #[arg(long)]
         output_dir: PathBuf,
+    },
+    /// Fund one prepared control; broadcast only with --submit at its accepted slot.
+    Send {
+        #[arg(long)]
+        payload: PathBuf,
+        /// quote.json from prepare; the chain is read again before funding.
+        #[arg(long)]
+        quote: PathBuf,
+        #[arg(long)]
+        key_file: Option<String>,
+        #[arg(long)]
+        key_stdin: bool,
+        /// Maximum total wallet fee in sompi, including the Open service charge.
+        #[arg(long)]
+        max_fee: u64,
+        #[arg(long)]
+        submit: bool,
     },
 }
 
@@ -73,6 +91,9 @@ fn print_observation<T: serde::Serialize>(reply: &T, observation: &str) -> CliRe
 
 pub(crate) async fn run(ctx: &Ctx, command: TokenizerRegistrationCmd) -> CliResult {
     match command {
+        TokenizerRegistrationCmd::Send { payload, quote, key_file, key_stdin, max_fee, submit } => {
+            sender::run(ctx, &payload, &quote, crate::keys::KeySource { key_file, key_stdin }, max_fee, submit).await?;
+        }
         TokenizerRegistrationCmd::Prepare { open_body, raw_tokenizer, eog_opening, key_file, key_stdin, output_dir } => {
             prepare(ctx, &open_body, &raw_tokenizer, &eog_opening, crate::keys::KeySource { key_file, key_stdin }, &output_dir)
                 .await?;

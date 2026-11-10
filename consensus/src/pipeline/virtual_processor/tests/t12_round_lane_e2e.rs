@@ -787,6 +787,19 @@ async fn a_floor_final_scheduled_with_edit(
     fixed_heartbeat: bool,
     edit: impl FnOnce(&mut Params),
 ) -> AtTheTargetSpan {
+    a_floor_final_scheduled_with_setup(draw, exec_v2_fence, fixed_heartbeat, edit, |chain, _, _| async { (chain, ()) }).await.0
+}
+
+async fn a_floor_final_scheduled_with_setup<T, F>(
+    draw: SeedDraw,
+    exec_v2_fence: Option<u64>,
+    fixed_heartbeat: bool,
+    edit: impl FnOnce(&mut Params),
+    setup: impl FnOnce(T12Chain, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) -> F,
+) -> (AtTheTargetSpan, T)
+where
+    F: std::future::Future<Output = (T12Chain, T)>,
+{
     use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecSeedAnchorV1, palw_execution_span_seed_v1, palw_execution_span_v1};
     use kaspa_consensus_core::palw_execution_quanta_v1::{
         PALW_EXECUTION_QUANTUM_V1, palw_execution_quantum_count_v1, palw_execution_span_rounds_v1,
@@ -984,6 +997,9 @@ async fn a_floor_final_scheduled_with_edit(
         target * span_daa - final_daa
     );
 
+    let (mut chain, setup_result) = setup(chain, premine, floats).await;
+    assert!(palw_execution_span_v1(chain.sink_daa(), span_daa) + 1 < target, "fixture setup fits before the seed anchor");
+
     // ---- 6. the maturity runs; an attempt block in the span before the target records the anchor --
     chain
         .beat_until(2 * (target * span_daa) + 400, "the span before the target", |c| {
@@ -1032,7 +1048,23 @@ async fn a_floor_final_scheduled_with_edit(
         schedule.quanta.len(),
         schedule.quanta.iter().map(|q| q.scheduled_round).collect::<Vec<_>>()
     );
-    AtTheTargetSpan { chain, lane, claim_id, executor, final_row, span_daa, target, opening, open_round, window, schedule, carrier }
+    (
+        AtTheTargetSpan {
+            chain,
+            lane,
+            claim_id,
+            executor,
+            final_row,
+            span_daa,
+            target,
+            opening,
+            open_round,
+            window,
+            schedule,
+            carrier,
+        },
+        setup_result,
+    )
 }
 
 #[cfg(feature = "evm")]
@@ -1062,10 +1094,7 @@ async fn a_round_block_with_actual_fee(
     fee: u64,
     preflight_fee: u64,
 ) -> (MutableBlock, Transaction) {
-    use kaspa_consensus_core::palw_execution_lane_v1::{
-        PALW_EXEC_ENVELOPE_VERSION_V1, PALW_EXEC_MLDSA87_CONTEXT, PalwExecEnvelopeV1, palw_exec_signing_message_v1,
-        palw_execution_span_v1,
-    };
+    use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1;
     // One second on, a block that does not move the clock, so the opening block becomes the sink's
     // selected parent — the anchor a round block hangs from — and the span does not move. It used to
     // be a heartbeat stamped a second after the span opened, which earned no DAA only because it was
@@ -1146,6 +1175,19 @@ async fn a_round_block_with_actual_fee(
         *block.transactions.iter_mut().find(|tx| tx.id() == old_id).expect("original body") = paying.clone();
         block.header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(block.transactions.iter());
     }
+    (insert_signed_round_block(at, round, permit_index, block, &paying).await, paying)
+}
+
+async fn insert_signed_round_block(
+    at: &AtTheTargetSpan,
+    round: u64,
+    permit_index: u16,
+    mut block: MutableBlock,
+    paying: &Transaction,
+) -> MutableBlock {
+    use kaspa_consensus_core::palw_execution_lane_v1::{
+        PALW_EXEC_ENVELOPE_VERSION_V1, PALW_EXEC_MLDSA87_CONTEXT, PalwExecEnvelopeV1, palw_exec_signing_message_v1,
+    };
     assert_eq!(block.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_ROUND_V1);
     assert_eq!(block.header.direct_parents(), &[at.opening], "hung from the opening block, the sink's selected parent");
     assert!(block.transactions.iter().any(|tx| tx.id() == paying.id()), "the round block carries the spend");
@@ -1189,7 +1231,7 @@ async fn a_round_block_with_actual_fee(
         .expect("a signed round block is valid at the header");
     assert_eq!(at.chain.sink(), sink_before, "a round block never moves the sink");
     assert_eq!(at.chain.vp().ghostdag_store.get_selected_parent(round_hash).unwrap(), at.opening, "anchored in the target span");
-    (block, paying)
+    block
 }
 
 /// What the merging block did with one round block.
@@ -1764,3 +1806,6 @@ async fn t12_a_claim_records_the_anchor_of_the_header_that_carried_it() {
         assert_eq!(record.job_identity, anchor_of(&chain, block), "each claim records the anchor of its OWN header");
     }
 }
+
+#[path = "t12_round_lane_e2e/tokenizer_registration.rs"]
+mod tokenizer_registration;
