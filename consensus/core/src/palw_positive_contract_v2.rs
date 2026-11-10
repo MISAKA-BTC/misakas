@@ -279,7 +279,7 @@ impl NativeWireScanV1 for PendingManifestCaseRecordV1 {
 
 impl NativeWireScanV1 for ManifestResponseRecordV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
-        scan_fixed_manifest_record::<Self, { 3 * 64 + 8 + 1 }>(reader)
+        scan_fixed_manifest_record::<Self, { Self::WIRE_BYTES }>(reader)
     }
 }
 

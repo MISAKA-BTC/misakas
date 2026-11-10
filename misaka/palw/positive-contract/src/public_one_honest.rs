@@ -11,6 +11,7 @@ pub const ORIGINAL_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-original/v1";
 pub const FULL_REPLAY_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-full-replay/v1";
 pub const MANIFEST_REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-request/v1";
 pub const MANIFEST_RESPONSE_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-response/v1";
+const ACCEPTED_ORIGIN_WIRE_BYTES: usize = 3 * 64 + 2 * 4 + 2 * 8;
 
 /// Binds the native supply obligation and its exact limits into the
 /// original's existing signed service-contract field.
@@ -561,7 +562,7 @@ pub enum ManifestDeliveryV1 {
 pub struct ManifestResponseRecordV1 {
     case: CaseId,
     response_digest: Digest,
-    inclusion_daa: u64,
+    origin: AcceptedOrigin,
     limits: Digest,
     classification: ManifestDeliveryClassV1,
 }
@@ -590,6 +591,8 @@ impl VerifiedManifestDeliveryV1 {
 }
 
 impl ManifestResponseRecordV1 {
+    pub const WIRE_BYTES: usize = 3 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 1;
+
     /// The caller re-verifies the original signed packet before this check.
     pub fn check_restore(&self, delivery: &VerifiedManifestDeliveryV1) -> Result<(), ContractError> {
         if *self != delivery.record() {
@@ -600,7 +603,7 @@ impl ManifestResponseRecordV1 {
 }
 
 impl PendingManifestCaseRecordV1 {
-    pub const WIRE_BYTES: usize = 5 * 64 + (3 * 64 + 2 * 4 + 2 * 8) + 3 * 8 + 4;
+    pub const WIRE_BYTES: usize = 5 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 4;
 
     pub fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
         let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
@@ -657,14 +660,22 @@ impl PendingManifestCase {
         response: &SignedManifestResponseV1,
         expected_provider: PrincipalId,
         original: &OriginalCommit,
-        inclusion_daa: u64,
+        origin: AcceptedOrigin,
         bytes: &[u8],
         scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
         total_limit: u64,
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
-        self.check_delivery_context(original, inclusion_daa)?;
+        self.check_delivery_context(original, origin.accepted_daa)?;
+        if origin.accepted_blue_score < self.origin.accepted_blue_score
+            || (origin.accepted_blue_score == self.origin.accepted_blue_score
+                && (origin.accepting_block != self.origin.accepting_block
+                    || (origin.accepted_tx_ordinal, origin.event_ordinal)
+                        <= (self.origin.accepted_tx_ordinal, self.origin.event_ordinal)))
+        {
+            return Err(ContractError::Scope);
+        }
         if response.case != self.id || response.supply_obligation != self.supply_obligation {
             return Err(ContractError::Scope);
         }
@@ -693,7 +704,7 @@ impl PendingManifestCase {
         };
         let limits = hash(b"misaka/palw/public-manifest-limits/v1", &(*scope_limits, total_limit, self.max_manifest_bytes));
         Ok(VerifiedManifestDeliveryV1 {
-            record: ManifestResponseRecordV1 { case: self.id, response_digest, inclusion_daa, limits, classification },
+            record: ManifestResponseRecordV1 { case: self.id, response_digest, origin, limits, classification },
             outcome,
         })
     }
@@ -1363,12 +1374,20 @@ mod tests {
         let provider_signature =
             libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &response.signing_digest().0, MANIFEST_RESPONSE_SIGN_CONTEXT, [0; 32])
                 .unwrap();
-        let verify = |body: &[u8], total_limit| {
+        let delivery_origin = AcceptedOrigin {
+            accepting_block: crate::rows::NativeHash64([4; 64]),
+            carrier_block: crate::rows::NativeHash64([5; 64]),
+            carrier_transaction: crate::rows::NativeHash64([6; 64]),
+            accepted_daa: schedule.material_ready_by(),
+            accepted_blue_score: schedule.material_ready_by(),
+            ..context.origin
+        };
+        let verify = |origin, body: &[u8], total_limit| {
             pending.verify_provider_response(
                 &response,
                 principal(key),
                 &bound_original,
-                schedule.material_ready_by(),
+                origin,
                 body,
                 &rules,
                 total_limit,
@@ -1376,8 +1395,11 @@ mod tests {
                 provider_signature.as_ref(),
             )
         };
-        assert_eq!(verify(&bytes, 89).unwrap().into_outcome(), ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget));
-        assert_eq!(verify(&changed_bytes, 90), Err(ContractError::Identity));
+        assert_eq!(
+            verify(delivery_origin, &bytes, 89).unwrap().into_outcome(),
+            ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget)
+        );
+        assert_eq!(verify(delivery_origin, &changed_bytes, 90), Err(ContractError::Identity));
         let wrong_response = SignedManifestResponseV1 {
             body_root: manifest_root(bound_original.scope.ruleset, &changed_bytes, max).unwrap(),
             ..response.clone()
@@ -1394,7 +1416,7 @@ mod tests {
                 &wrong_response,
                 principal(key),
                 &bound_original,
-                schedule.material_ready_by(),
+                delivery_origin,
                 &changed_bytes,
                 &rules,
                 90,
@@ -1402,12 +1424,16 @@ mod tests {
                 wrong_signature.as_ref(),
             )
             .unwrap();
-        let verified = verify(&bytes, 90).unwrap();
+        let verified = verify(delivery_origin, &bytes, 90).unwrap();
         let stored = borsh::to_vec(&verified.record()).unwrap();
         let restored: ManifestResponseRecordV1 = borsh::from_slice(&stored).unwrap();
         assert_eq!(restored.check_restore(&verified), Ok(()));
-        assert_eq!(restored.check_restore(&verify(&bytes, 89).unwrap()), Err(ContractError::Scope));
-        let other_limits = verify(&bytes, 91).unwrap();
+        assert_eq!(stored.len(), ManifestResponseRecordV1::WIRE_BYTES);
+        let alternate = AcceptedOrigin { carrier_transaction: crate::rows::NativeHash64([7; 64]), ..delivery_origin };
+        assert_eq!(restored.check_restore(&verify(alternate, &bytes, 90).unwrap()), Err(ContractError::Scope));
+        assert_eq!(verify(context.origin, &bytes, 90), Err(ContractError::Scope));
+        assert_eq!(restored.check_restore(&verify(delivery_origin, &bytes, 89).unwrap()), Err(ContractError::Scope));
+        let other_limits = verify(delivery_origin, &bytes, 91).unwrap();
         assert_eq!(restored.check_restore(&other_limits), Err(ContractError::Scope));
         assert!(matches!(other_limits.into_outcome(), ManifestDeliveryV1::Checked(_)));
         assert_eq!(restored.check_restore(&wrong), Err(ContractError::Scope));
