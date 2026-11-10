@@ -423,6 +423,31 @@ pub fn tir_program_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-program-v1/native-graph-ir/whole")
 }
 
+pub fn tir_wide_rules_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tir-wide-rules-v1/whole")
+}
+
+pub fn tir_wide_rules_material_entry_v1(
+    subject: Digest,
+    bytes: &[u8; 256],
+    rules: ManifestScopeRules,
+) -> Result<ManifestEntryV1, ContractError> {
+    if rules.codec != tir_wide_rules_material_codec_v1() {
+        return Err(ContractError::UnsupportedProfile);
+    }
+    let total_bytes = bytes.len() as u64;
+    if total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
+        return Err(ContractError::Budget);
+    }
+    Ok(ManifestEntryV1 {
+        subject,
+        content_root: hash(b"misaka/palw/tir-wide-rules/v1", bytes),
+        codec: rules.codec,
+        total_bytes,
+        chunk_bytes: rules.chunk_bytes,
+    })
+}
+
 /// Position zero, zero-filled Fixed tensors and empty Hist windows. Shapes,
 /// layers and the job seed are determined by the program and execution IDs.
 pub fn tir_cold_initial_state_codec_v1() -> Digest {

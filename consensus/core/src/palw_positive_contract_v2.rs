@@ -24,11 +24,12 @@ use misaka_palw_positive_contract::{
     },
     ports::{NodeChecker, require_next},
     public_one_honest::{
-        CaseId, Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
-        ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialId, MaterialScope, MissingInspectionOutcome, OriginalClock,
-        OriginalCommit, OriginalId, PanelBond, PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand,
-        PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1, VerificationSchedule, manifest_limits_id_v1,
-        public_draw_id_v1, public_draw_members_digest_v1, public_original_service_contract_id_v1, require_accepted_after_v1,
+        CaseId, Claimant, FirstNoticeDemand, FullReplayApproval, ManifestEntryV1, ManifestRequest, ManifestRequestContext,
+        ManifestResponseRecordV1, ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialId, MaterialScope,
+        MissingInspectionOutcome, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
+        PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1,
+        VerificationSchedule, manifest_limits_id_v1, public_draw_id_v1, public_draw_members_digest_v1,
+        public_original_service_contract_id_v1, require_accepted_after_v1, tir_wide_rules_material_entry_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -133,20 +134,13 @@ pub fn check_public_original_execution_v1(
     Ok(())
 }
 
-pub fn public_wide_tir_rules_codec_v1() -> Digest {
-    misaka_palw_positive_contract::identity::hash(b"misaka/palw/material-codec/v1", &b"tir-wide-rules-v1/whole")
-}
-
 /// Public preimage for the native wide TIR execution rules selected by the job.
 pub fn public_wide_tir_rules_material_v1(
     job: &PalwJobContextV2,
     program: &misaka_palw_tir::TirProgramV1,
     rules: ManifestScopeRules,
 ) -> Result<(ManifestEntryV1, [u8; 256]), ContractError> {
-    use misaka_palw_positive_contract::identity::hash;
-    let codec = public_wide_tir_rules_codec_v1();
-    if rules.codec != codec
-        || !program.wide_logits_q24()
+    if !program.wide_logits_q24()
         || program.prim_set_id != crate::palw_tir_v1::palw_tir_prim_set_id_v1().as_bytes()
         || job.trace_scheme_id != crate::palw_logits_q24_v2::scheme_id()
     {
@@ -161,17 +155,7 @@ pub fn public_wide_tir_rules_material_v1(
     ]) {
         part.copy_from_slice(&field);
     }
-    let total_bytes = bytes.len() as u64;
-    if total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
-        return Err(ContractError::Budget);
-    }
-    let entry = ManifestEntryV1 {
-        subject: digest(job.cu_ruleset_id),
-        content_root: hash(b"misaka/palw/tir-wide-rules/v1", &bytes),
-        codec,
-        total_bytes,
-        chunk_bytes: rules.chunk_bytes,
-    };
+    let entry = tir_wide_rules_material_entry_v1(digest(job.cu_ruleset_id), &bytes, rules)?;
     Ok((entry, bytes))
 }
 

@@ -260,11 +260,11 @@ fn material_meter_delta(
     }
 }
 fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
-    use kaspa_consensus_core::palw_positive_contract_v2::{public_wide_tir_rules_codec_v1, public_wide_tir_rules_material_v1};
-    use misaka_palw_positive_contract::public_one_honest::ManifestScopeRules;
+    use kaspa_consensus_core::palw_positive_contract_v2::public_wide_tir_rules_material_v1;
+    use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_wide_rules_material_codec_v1};
 
     let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
-    let rules = ManifestScopeRules { codec: public_wide_tir_rules_codec_v1(), max_bytes: 256, chunk_bytes: 256 };
+    let rules = ManifestScopeRules { codec: tir_wide_rules_material_codec_v1(), max_bytes: 256, chunk_bytes: 256 };
     let (entry, rules_bytes) = public_wide_tir_rules_material_v1(&f.job, space.program(), rules).unwrap();
     assert_eq!(entry.subject, digest(f.job.cu_ruleset_id));
     assert_eq!(&rules_bytes[128..192], &f.job.trace_scheme_id.as_bytes());
