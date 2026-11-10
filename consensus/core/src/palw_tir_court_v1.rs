@@ -3822,6 +3822,44 @@ impl PublicOriginalTraceTileV1 {
         };
         check_public_original_step_data_v1(original, &root, index, &self.opening, &self.tile, max_step_leaf_count, max_value_bytes)
     }
+
+    /// Interpret an authenticated tile under the canonical wide job geometry.
+    /// A malformed committed tile is distinct from an unauthenticated answer.
+    pub fn wide_geometry(
+        &self,
+        original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+        job: &PalwJobContextV2,
+        class: &crate::palw_tir_class_v1::PalwTirClassV1,
+        index: u64,
+        max_step_leaf_count: u64,
+        max_value_bytes: usize,
+    ) -> Result<PublicWideTileGeometryV1, PalwStepRefuteError> {
+        use crate::palw_tir_step_v1::{PalwTirStepSpaceV2, palw_tir_leaf_values_v2};
+        self.authenticate(original, index, max_step_leaf_count, max_value_bytes)?;
+        if job.context_hash().as_bytes() != original.execution.0
+            || job.shape_profile_id.as_bytes() != original.registered_class.0
+            || class.class_id(&Hash64::from_bytes(original.artifact.0)) != job.shape_profile_id
+        {
+            return Err(bad("public trace court job or class mismatch"));
+        }
+        let space = PalwTirStepSpaceV2::new(class).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let expected = space.leaf_count_capped(job, max_step_leaf_count).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        if self.trace.step_leaf_count != expected {
+            return Ok(PublicWideTileGeometryV1::MalformedLeafCount { expected });
+        }
+        let leaf = space.leaf_at(job, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
+        if palw_tir_leaf_values_v2(&space, job, &leaf, &self.tile).is_err() {
+            return Ok(PublicWideTileGeometryV1::MalformedTile { leaf });
+        }
+        Ok(PublicWideTileGeometryV1::Canonical { leaf })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicWideTileGeometryV1 {
+    Canonical { leaf: PalwTirLeafV1 },
+    MalformedTile { leaf: PalwTirLeafV1 },
+    MalformedLeafCount { expected: u64 },
 }
 
 /// Authenticate the bytes of one original step leaf. Interpretation of its

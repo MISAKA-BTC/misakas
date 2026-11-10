@@ -334,6 +334,10 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let cap = trace_material.tile.values_le.len();
     trace_material.authenticate(&original, 0, trace_len, cap).unwrap();
+    assert!(matches!(
+        trace_material.wide_geometry(&original, &f.job, &f.class, 0, trace_len, cap).unwrap(),
+        kaspa_consensus_core::palw_tir_court_v1::PublicWideTileGeometryV1::Canonical { leaf } if leaf.index == 0
+    ));
     let mut other_original = original.clone();
     other_original.manifest_root = d(99);
     assert!(trace_material.authenticate(&other_original, 0, trace_len, cap).is_err());
