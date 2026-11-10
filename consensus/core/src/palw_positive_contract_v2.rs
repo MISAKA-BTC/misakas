@@ -139,6 +139,7 @@ pub struct PreparedPublicOriginalV1 {
     draw_ready_by: u64,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
+    budget: AggregateBudget,
 }
 
 /// Fixed-size record to store in the same state update as the reservation.
@@ -149,6 +150,7 @@ pub struct PublicOriginalAdmissionRecordV1 {
     reservation: Digest,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
+    budget: AggregateBudget,
     deadlines: [u64; 8],
 }
 
@@ -232,8 +234,8 @@ wire_struct!(ProtectedRescueDemand; u64, RemainingCapacity, u64, RemainingCapaci
 native_struct!(PanelBond; transaction, index);
 wire_struct!(PanelBond; Digest, u32);
 
-native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, deadlines);
-wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, [u64; 8]);
+native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, budget, deadlines);
+wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
@@ -514,6 +516,7 @@ impl PreparedPublicOriginalV1 {
             reservation,
             initial_supply: self.initial_supply,
             rescue: self.rescue,
+            budget: self.budget,
             deadlines: [
                 self.draw_ready_by,
                 self.schedule.first_notice_by(),
@@ -546,6 +549,16 @@ impl PublicOriginalAdmissionRecordV1 {
                 per_outsider: supply,
                 defensive: supply,
             },
+            budget: AggregateBudget {
+                rounds: 1,
+                unique_source_bytes: supply.transmitted_bytes,
+                transmitted_bytes: supply.transmitted_bytes * 4,
+                additional_work: supply.additional_work * 4,
+                retained_bytes: supply.retained_bytes * 4,
+                retention_until: OriginalClock::new(origin.accepted_daa).unwrap().hard(),
+                fee: 1,
+                witness_attempts: 1,
+            },
             deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
         }
     }
@@ -566,7 +579,10 @@ impl PublicOriginalAdmissionRecordV1 {
         {
             return Err(ContractError::Range);
         }
-        row.initial_supply.checked_add(row.rescue.total()?)?;
+        if row.budget.retention_until < clock.hard() {
+            return Err(ContractError::Budget);
+        }
+        row.initial_supply.checked_add(row.rescue.total()?)?.check(&AggregateUsage::default(), &row.budget)?;
         Ok(row)
     }
 
@@ -706,6 +722,7 @@ impl PublicOriginalAdmissionV1<'_> {
             draw_ready_by: reservation.notice.draw_ready_by,
             initial_supply: reservation.initial_supply,
             rescue: reservation.rescue,
+            budget: *reservation.budget,
         })
     }
 

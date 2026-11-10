@@ -821,6 +821,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         admission.restore_signed_bytes(&bytes, &reorg_inputs, &restored, d(8)),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
+    let extended = AggregateBudget { retention_until: budget.retention_until + 1, ..budget };
+    let changed_budget = PublicOriginalReservationV1 { budget: &extended, ..reservation };
+    assert_eq!(
+        admission.restore_signed_bytes(&bytes, &changed_budget, &restored, d(8)),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     reservation.initial_supply.additional_work += 2;
     reservation.rescue.per_drawn_bond.additional_work -= 1;
     let shifted = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
