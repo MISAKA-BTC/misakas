@@ -575,6 +575,14 @@ pub struct VerificationSchedule {
     terminal_by: u64,
 }
 
+/// Failure-side result while a case lacks objective inspection prerequisites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingInspectionOutcome {
+    AwaitingMaterial,
+    NoSlashHold,
+    AbortedUnverified,
+}
+
 impl VerificationSchedule {
     pub fn new(clock: OriginalClock, notice: FirstNoticeDemand, case: MaterialCaseDemand) -> Result<Self, ContractError> {
         if notice.draw_ready_by < clock.accepted_at
@@ -648,6 +656,22 @@ impl VerificationSchedule {
     /// to the native admission procedure.
     pub fn material_arrival_fits(self, opened_at: u64, ready_at: u64) -> bool {
         self.clock.accepts_first_notice(opened_at) && (opened_at..=self.material_ready_by).contains(&ready_at)
+    }
+
+    /// Apply after processing timely responses in the current canonical batch.
+    /// The input is a still-unresolved case, regardless of partial deliveries
+    /// or approval signatures. None of these outcomes removes its Q blocker.
+    pub fn missing_inspection_outcome(self, opened_at: u64, now: u64) -> Result<MissingInspectionOutcome, ContractError> {
+        if !self.clock.accepts_first_notice(opened_at) || now < opened_at {
+            return Err(ContractError::Range);
+        }
+        Ok(if self.clock.is_past_hard(now) {
+            MissingInspectionOutcome::AbortedUnverified
+        } else if now > self.material_ready_by {
+            MissingInspectionOutcome::NoSlashHold
+        } else {
+            MissingInspectionOutcome::AwaitingMaterial
+        })
     }
 }
 
@@ -766,6 +790,14 @@ mod tests {
         assert!(schedule.material_arrival_fits(clock.notice_until(), schedule.material_ready_by()));
         assert!(!schedule.material_arrival_fits(clock.notice_until(), schedule.material_ready_by() + 1));
         assert!(!schedule.material_arrival_fits(clock.notice_until() + 1, schedule.material_ready_by()));
+        let opened = clock.notice_until();
+        assert_eq!(schedule.missing_inspection_outcome(opened, opened - 1), Err(ContractError::Range));
+        assert_eq!(
+            schedule.missing_inspection_outcome(opened, schedule.material_ready_by()),
+            Ok(MissingInspectionOutcome::AwaitingMaterial)
+        );
+        assert_eq!(schedule.missing_inspection_outcome(opened, clock.hard()), Ok(MissingInspectionOutcome::NoSlashHold));
+        assert_eq!(schedule.missing_inspection_outcome(opened, clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
         assert_eq!(
             VerificationSchedule::new(clock, FirstNoticeDemand { material_ready_by: 201, ..notice }, case),
             Err(ContractError::Budget)
