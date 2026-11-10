@@ -691,12 +691,9 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     use kaspa_consensus_core::palw_positive_contract_v2::PublicManifestClaimantAuthorityV1;
     use misaka_palw_positive_contract::public_one_honest::SignedManifestRequestV1;
     let request_carrier = SignedManifestRequestV1 { request: request.clone(), key: signed.key, signature: *request_sig.as_ref() };
+    let request_wire = borsh::to_vec(&request_carrier).unwrap();
     let accepted = prepared
-        .verify_manifest_request_bytes(
-            PublicManifestClaimantAuthorityV1::Drawn(&draw),
-            &borsh::to_vec(&request_carrier).unwrap(),
-            &request_context,
-        )
+        .verify_manifest_request_bytes(PublicManifestClaimantAuthorityV1::Drawn(&draw), &request_wire, &request_context)
         .unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
     let stale_origin = AcceptedOrigin { accepted_blue_score: reservation.origin.accepted_blue_score, ..request_context.origin };
@@ -718,17 +715,20 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     .unwrap();
     let case_record = borsh::from_slice(&case_bytes).unwrap();
     assert_eq!(
-        prepared.restore_drawn_manifest_request(&case_record, &draw, &request, &request_context, &signed.key, request_sig.as_ref()),
+        prepared.restore_manifest_request_bytes(
+            &case_record,
+            PublicManifestClaimantAuthorityV1::Drawn(&draw),
+            &request_wire,
+            &request_context
+        ),
         Ok(accepted)
     );
     assert_eq!(
-        prepared.restore_drawn_manifest_request(
+        prepared.restore_manifest_request_bytes(
             &case_record,
-            &other_plan,
-            &request,
-            &request_context,
-            &signed.key,
-            request_sig.as_ref()
+            PublicManifestClaimantAuthorityV1::Drawn(&other_plan),
+            &request_wire,
+            &request_context
         ),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
@@ -765,25 +765,24 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let outsider_case =
         with_outsider.verify_outsider_manifest_request(0, &outside, &request_context, &signed.key, outside_sig.as_ref()).unwrap();
     let outsider_record = borsh::from_slice(&borsh::to_vec(&outsider_case.record()).unwrap()).unwrap();
+    let outsider_wire =
+        borsh::to_vec(&SignedManifestRequestV1 { request: outside.clone(), key: signed.key, signature: *outside_sig.as_ref() })
+            .unwrap();
     assert_eq!(
-        with_outsider.restore_outsider_manifest_request(
+        with_outsider.restore_manifest_request_bytes(
             &outsider_record,
-            0,
-            &outside,
-            &request_context,
-            &signed.key,
-            outside_sig.as_ref()
+            PublicManifestClaimantAuthorityV1::Outsider(0),
+            &outsider_wire,
+            &request_context
         ),
         Ok(outsider_case)
     );
     assert_eq!(
-        with_outsider.restore_outsider_manifest_request(
+        with_outsider.restore_manifest_request_bytes(
             &case_record,
-            0,
-            &outside,
-            &request_context,
-            &signed.key,
-            outside_sig.as_ref()
+            PublicManifestClaimantAuthorityV1::Outsider(0),
+            &outsider_wire,
+            &request_context
         ),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );

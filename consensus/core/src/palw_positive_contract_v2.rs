@@ -511,6 +511,20 @@ impl PreparedPublicOriginalV1 {
         }
     }
 
+    /// Restore against the literal packet and the authority resolved at its
+    /// original inclusion point.
+    pub fn restore_manifest_request_bytes(
+        &self,
+        record: &PendingManifestCaseRecordV1,
+        authority: PublicManifestClaimantAuthorityV1<'_>,
+        bytes: &[u8],
+        context: &ManifestRequestContext<'_>,
+    ) -> Result<PendingManifestCase, ContractError> {
+        let pending = self.verify_manifest_request_bytes(authority, bytes, context)?;
+        record.check_restore(&pending)?;
+        Ok(pending)
+    }
+
     /// Restore the draw using the members and inclusion DAA read from native
     /// history. An archived draw record cannot supply its own inputs.
     pub fn restore_draw(
@@ -545,22 +559,6 @@ impl PreparedPublicOriginalV1 {
         self.verify_manifest_request_with_capacity(self.rescue.per_outsider, request, context, key, signature)
     }
 
-    /// Restore an outsider case against the slot and inclusion context
-    /// resolved by the native eligibility and reservation ledger.
-    pub fn restore_outsider_manifest_request(
-        &self,
-        record: &PendingManifestCaseRecordV1,
-        slot: u64,
-        request: &ManifestRequest,
-        context: &ManifestRequestContext<'_>,
-        key: &[u8; PUBKEY_BYTES],
-        signature: &[u8; SIGNATURE_BYTES],
-    ) -> Result<PendingManifestCase, ContractError> {
-        let pending = self.verify_outsider_manifest_request(slot, request, context, key, signature)?;
-        record.check_restore(&pending)?;
-        Ok(pending)
-    }
-
     /// Check the protected draw slot before authenticating a manifest request.
     /// The ledger supplies the reservation identity and remaining body bytes.
     pub fn verify_drawn_manifest_request(
@@ -592,22 +590,6 @@ impl PreparedPublicOriginalV1 {
             return Err(ContractError::Budget);
         }
         self.verify_manifest_request_with_capacity(draw.per_bond, request, context, key, signature)
-    }
-
-    /// Reauthenticate the request and its booked draw slot before using a
-    /// stored case. The caller resolves the inclusion context from history.
-    pub fn restore_drawn_manifest_request(
-        &self,
-        record: &PendingManifestCaseRecordV1,
-        draw: &PreparedPublicDrawV1,
-        request: &ManifestRequest,
-        context: &ManifestRequestContext<'_>,
-        key: &[u8; PUBKEY_BYTES],
-        signature: &[u8; SIGNATURE_BYTES],
-    ) -> Result<PendingManifestCase, ContractError> {
-        let pending = self.verify_drawn_manifest_request(draw, request, context, key, signature)?;
-        record.check_restore(&pending)?;
-        Ok(pending)
     }
 
     fn verify_manifest_request_with_capacity(
