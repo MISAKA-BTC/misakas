@@ -137,4 +137,12 @@ Batch の数値資料量の導出を、旧 allocation と署名済み custody fr
 
 既存の funded Batch fixture に、独立した materialized envelope との上限・scope 一致、別 claim・別 prompt 形式・空 profile の拒否検査を追加した。独立エージェントの静的レビューと `git diff --check` は完了。新規回帰テストはビルド待ちで、今回の変更の動作検証は未完了。前回から実行中だった SDK example のテスト 2 件は成功したが、そのビルドは今回の分離前のコードであり、この変更の検証には数えない。
 
-この分離は公開 quote の成功を意味しない。新しい版の quote/admission 共通 planner、実 service book での予約、その結果を署名対象へ束縛する接続は残っている。現在の Batch book は数値と ConstraintStop が対象で、FP の入力テキストから prompt IDs への tokenizer 裁定を代替しない。その検査・供給も同じ期限内に収める必要がある。公開 fence、期限、検証 gate は変更していない。
+この分離は公開 quote の成功を意味しない。新しい版の quote/admission 共通 planner、実 service book での予約、その結果を署名対象へ束縛する接続は残っている。現在の Batch book は数値と ConstraintStop が対象で、raw tokenizer と token ID の文字列表現の対応を調べる既存 FpTokenizer 裁定を代替しない。その検査・供給も同じ期限内に収める必要がある。公開 fence、期限、検証 gate は変更していない。
+
+2026-11-11、Batch の service 予約も frame 非依存の共通 kernel に分離した。既存受理 wrapper は従来の allocation/source/profile/Stop と絶対期限の検査を維持し、同じ kernel の結果を元 claim の行へ登録する。グラフの構築と容量予約を分け、未予約の `CompiledBatchAdmissionV1` は private な graph/保持費用と native memory lease を所有し、相対 funding graph ID のみを公開する。quote は実 book への予約成功後に作る。
+
+同じ相対 graph ID でも、仮 namespace と確定 scope では同期限 packet の ID 順が変わるため、容量上の成立性は同一とは限らない。共通 planner は確定した ID でもう一度 compile/予約してから quote 成功を返す必要がある。fixture に、事前構築した相対 ID と確定 quote の一致、共通 kernel と既存受理 wrapper の quote/book 完全一致、容量不足での原子的拒否を追加した。静的独立レビューと diff check は完了し、実行テストは待機中。tokenizer を含む全 branch の新版 planner と公開 RPC への接続は未完了。
+
+先行実行していた SDK example の実ファイル診断が完了した。同じ完全 claim ID について 270 numerical roots の local replay と最大 work 値を出力し、公開費用条件の quote は必要 8,567,151 / 許容 3,120 DAA、Batch v5 比較は 72,565 / 6,880 DAA の拒否だった。raw EOF の再生を含むが、包含時刻・署名欄は fixture で、公開 quote ではない。先行する `cargo check -p kaspa-p2p-flows` も成功したが、今回の reservation 分離後の検証には数えない。
+
+tokenizer の範囲について記述を訂正した。既存 FpTokenizer terminal は raw tokenizer から token ID ごとの rendering が正しいかを判定し、原文から prompt IDs への full retokenization は行わない。rooted tokenizer registration は全 rendering table を再導出して root と照合し、EOG は別提供の署名済み設定を同じ table root で認証する。これを後者の入力変換検証へ読み替えない。

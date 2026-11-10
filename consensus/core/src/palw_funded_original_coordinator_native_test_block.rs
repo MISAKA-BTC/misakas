@@ -385,9 +385,33 @@
                 assert_eq!(base.signer_packets, derivation.signer_packets);
                 assert_eq!(base.branch_count(), liable * service_profile.packets_per_signer + 1);
                 assert_eq!(base_book.state.claims[&claim].packet_ids, base.packet_ids());
+                use crate::palw_court_shared_material_intake_v1::batch::admission::{
+                    NativeBatchDeliveryShapeV1, reserve_native_batch_delivery_shape_v1, compile_native_batch_delivery_shape_v1,
+                };
+                let shape = |scope| NativeBatchDeliveryShapeV1 {
+                    claim, scope, accepted_daa: ctx.daa_score,
+                    material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa,
+                    maximums: streamed_envelope.maximums_v1(),
+                };
+                // The prospective reservation owns no CourtServiceRow/claim
+                // binding. It must reserve exactly what native install does.
+                let compiled = compile_native_batch_delivery_shape_v1(
+                    shape(h(0xB47D)), None, costs, storage, |_, bytes| Ok(cost(bytes)),
+                ).unwrap();
+                let relative_id = compiled.relative_graph_id_v1();
+                drop(compiled);
+                let mut projected_book = base_book.state.book.clone();
+                let (projected_quote, projected_graph) = reserve_native_batch_delivery_shape_v1(
+                    &mut projected_book, shape(streamed_envelope.scope_v1()), None, costs, storage, |_, bytes| Ok(cost(bytes)),
+                ).unwrap();
                 let (quote, batch_book) = reserve_native_batch_delivery_v1(
                     base_book, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
                 ).unwrap();
+                assert_eq!(relative_id, quote.relative_graph_id,
+                    "relative graph identity must survive final packet namespace binding");
+                assert_eq!(projected_quote, quote);
+                assert_eq!(projected_book, batch_book.state.book);
+                assert!(projected_graph.iter().all(|node| batch_book.state.claims[&claim].packet_ids.contains(&node.packet.id)));
                 let batch_packets = &batch_book.state.claims[&claim].packet_ids;
                 assert!(quote.required_daa <= 10_000 && base.packet_ids().is_subset(batch_packets));
                 assert!(derivation.source_packets.iter().all(|packet| !batch_packets.contains(&packet.id)));

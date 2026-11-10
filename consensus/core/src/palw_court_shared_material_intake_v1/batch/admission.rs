@@ -39,6 +39,7 @@ pub(crate) struct BatchAdmissionV1<'a> {
 }
 
 /// A native control with signed operands retained after filing, such as Stop.
+#[derive(Clone, Copy)]
 pub(crate) struct BatchRetainedControlV1 {
     pub packet: [u8; 64],
     pub payload_bytes: u64,
@@ -192,7 +193,7 @@ pub(crate) fn batch_numerical_service_ids_v1(claim: Hash64, scope: Hash64) -> Re
 /// the common terminal follows verification and any Stop filing. Role,
 /// payer, and complete adjudication policy remain the coordinator's checks.
 pub(crate) fn reserve_native_batch_delivery_v1(
-    candidate: crate::palw_court_service_release_v1::CourtServiceRowV3,
+    mut candidate: crate::palw_court_service_release_v1::CourtServiceRowV3,
     frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
     envelope: &NumericalBatchEnvelopeV1,
     stop: Option<(&ConstraintStopBatchOperandsV1, ServiceCost, ServiceCost)>,
@@ -200,7 +201,7 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<(BatchAdmissionQuoteV1, crate::palw_court_service_release_v1::CourtServiceRowV3), BatchCourtErrorV1> {
-    use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, LocalResource, Window};
+    use BatchCourtErrorV1::{CaseGraph, Window};
     let original = frame.plan_v1();
     let claim = original.original_claim;
     let scope = envelope.scope_v1();
@@ -214,6 +215,70 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     {
         return Err(CaseGraph);
     }
+    if binding.original_accepted_daa.checked_add(DISPUTE_WINDOW_DAA) != Some(binding.hard_deadline_daa) {
+        return Err(Window);
+    }
+    let shape = NativeBatchDeliveryShapeV1 {
+        claim,
+        scope,
+        accepted_daa: original.terms.accepted_daa,
+        material_until_daa: original.terms.material_until_daa,
+        maximums: envelope.maximums_v1(),
+    };
+    let (quote, graph) = reserve_native_batch_delivery_shape_v1(&mut candidate.state.book, shape, stop, costs, storage, cost)?;
+    attach_batch_graph_v1(&mut candidate, claim, graph)?;
+    Ok((quote, candidate))
+}
+
+/// Native geometry and absolute windows, before any allocation/custody frame
+/// exists. `scope` is a packet namespace only; passing this shape does not
+/// create an accepted scope or a rooted original binding. The profile compiler
+/// must supply authenticated bounds and rederive them at actual acceptance.
+pub(crate) struct NativeBatchDeliveryShapeV1<'a> {
+    pub claim: Hash64,
+    pub scope: Hash64,
+    pub accepted_daa: u64,
+    pub material_until_daa: u64,
+    pub maximums: &'a [u64],
+}
+
+/// The shared reservation kernel for prospective pricing and native install.
+/// Operates on a private candidate book. A result carries no original binding,
+/// payer consent or install authority. It includes delivery, numerical replay,
+/// terminal and optional Stop; other semantic families remain separate duties.
+pub(crate) fn reserve_native_batch_delivery_shape_v1(
+    book: &mut ServiceReservations,
+    shape: NativeBatchDeliveryShapeV1<'_>,
+    stop: Option<(&ConstraintStopBatchOperandsV1, ServiceCost, ServiceCost)>,
+    costs: NativeBatchDeliveryCostsV1,
+    storage: MaterialIntakeScheduleV1,
+    cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+    let compiled = compile_native_batch_delivery_shape_v1(shape, stop, costs, storage, cost)?;
+    CompiledBatchAdmissionV1::reserve_v1(compiled, book)
+}
+
+/// Compile the relative graph without trying a provisional packet namespace
+/// against capacity. The final scope can then be derived from this graph ID.
+/// Only a subsequent reservation using those final IDs can produce a quote.
+pub(crate) fn compile_native_batch_delivery_shape_v1(
+    shape: NativeBatchDeliveryShapeV1<'_>,
+    stop: Option<(&ConstraintStopBatchOperandsV1, ServiceCost, ServiceCost)>,
+    costs: NativeBatchDeliveryCostsV1,
+    storage: MaterialIntakeScheduleV1,
+    cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
+    use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, LocalResource, Window};
+    let (claim, scope) = (shape.claim, shape.scope);
+    if claim == Hash64::default()
+        || scope == Hash64::default()
+        || stop.is_some_and(|(operands, _, _)| !operands.matches_original_v1(claim, scope))
+        || shape.maximums.is_empty()
+        || shape.maximums.len() > costs.maximum_packets
+        || shape.maximums.iter().any(|&bytes| !(1..=super::MATERIAL_PIPELINED_MAX_BYTES).contains(&bytes))
+    {
+        return Err(CaseGraph);
+    }
     let valid_cost = |cost: ServiceCost| cost.work > 0 && cost.controls == 1;
     let numerical_verification = costs.numerical_verification.service_cost_v1().ok_or(DeliveryCost)?;
     if !costs.numerical_verification.covers_terminal_recheck_v1(costs.terminal)
@@ -221,11 +286,8 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     {
         return Err(DeliveryCost);
     }
-    let a = binding.original_accepted_daa;
+    let a = shape.accepted_daa;
     let hard = a.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
-    if hard != binding.hard_deadline_daa {
-        return Err(Window);
-    }
     let notice = a.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
     let first = notice.checked_add(1).ok_or(Clock)?;
     let before = hard.checked_sub(costs.recovery_daa).ok_or(Window)?;
@@ -246,13 +308,13 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         parts: take_service_window_v1(&mut cursor, timing.parts_daa, before)?,
         finish: take_service_window_v1(&mut cursor, timing.finish_daa, before)?,
     };
-    let expires = storage.draft_expires_v1(windows.begin.start, hard, original.terms.material_until_daa).map_err(|_| Window)?;
+    let expires = storage.draft_expires_v1(windows.begin.start, hard, shape.material_until_daa).map_err(|_| Window)?;
     if windows.finish.end > expires {
         return Err(Window);
     }
     let verification_window = take_service_window_v1(&mut cursor, timing.verification_daa, before)?;
     let retained_numerical_fault_bytes = costs.numerical_verification.max_fault_bytes;
-    let retention_daa = original.terms.material_until_daa.checked_sub(verification_window.start).ok_or(Window)?;
+    let retention_daa = shape.material_until_daa.checked_sub(verification_window.start).ok_or(Window)?;
     if retention_daa == 0 {
         return Err(Window);
     }
@@ -261,7 +323,7 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     let stop_window = stop.map(|_| take_service_window_v1(&mut cursor, timing.stop_daa, before)).transpose()?;
     let terminal_window = take_service_window_v1(&mut cursor, timing.terminal_daa, before)?;
     let packet = |id, cost, window: &Range<u64>| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
-    let demand_count = envelope.demand_ranges_v1().count();
+    let demand_count = super::native_ranges::partition_maximums_v1(shape.maximums).count();
     let demand_capacity = demand_count.checked_add(usize::from(stop.is_some())).ok_or(CaseGraph)?;
     if demand_count == 0 || demand_capacity > costs.maximum_packets {
         return Err(CaseGraph);
@@ -272,11 +334,8 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     q.vec_v1::<[u8; 64]>(2).map_err(LocalResource)?;
     let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(LocalResource)?;
     let mut demands = Vec::with_capacity(demand_capacity);
-    demands.extend(envelope.demand_ranges_v1().enumerate().map(|(ordinal, range_maximums)| MaximumBatchDemandV1 {
-        ordinal: ordinal as u64,
-        range_maximums,
-        predecessors: &[],
-        verification,
+    demands.extend(super::native_ranges::partition_maximums_v1(shape.maximums).enumerate().map(|(ordinal, range_maximums)| {
+        MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification }
     }));
     let mut graph = Vec::with_capacity(if stop.is_some() { 4 } else { 2 });
     graph.push(CausalServicePacketV1 {
@@ -305,7 +364,7 @@ pub(crate) fn reserve_native_batch_delivery_v1(
             claim_accepted_daa: a,
             challenge_opened_daa: notice,
             collect_until_daa: hard,
-            material_until_daa: original.terms.material_until_daa,
+            material_until_daa: shape.material_until_daa,
         },
         demands: &demands,
         retained_controls: retained.as_slice(),
@@ -313,14 +372,15 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         recovery_daa: costs.recovery_daa,
         maximum_packets: costs.maximum_packets,
     };
-    let (mut quote, candidate) = plan.reserve_for_original_with_windows_v1(candidate, graph, storage, cost, Some(&windows))?;
-    // The earliest assigned slot may move during repair. Report the bound
-    // for the latest terminal permitted by its immutable packet interval.
-    quote.required_daa = terminal_window.end - a + costs.recovery_daa;
-    quote.retained_numerical_fault_bytes = retained_numerical_fault_bytes;
-    quote.retained_numerical_fault_byte_daa = retained_numerical_fault_byte_daa;
-    quote.numerical_fault_storage_rent_sompi = numerical_fault_storage_rent_sompi;
-    Ok((quote, candidate))
+    let compiled = plan.compile_with_v1(graph, storage, cost, reserve_native_requests_v1, Some(&windows))?;
+    let (mut compiled, lease) = compiled.into_parts_v1();
+    // Assigned slots may move during repair; the original immutable phase
+    // interval, rather than one successful early assignment, prices the door.
+    compiled.required_daa = Some(terminal_window.end - a + costs.recovery_daa);
+    compiled.retained_numerical_fault_bytes = retained_numerical_fault_bytes;
+    compiled.retained_numerical_fault_byte_daa = retained_numerical_fault_byte_daa;
+    compiled.numerical_fault_storage_rent_sompi = numerical_fault_storage_rent_sompi;
+    Ok(NativeRetainedV1::from_owner_reserved_v1(compiled, lease))
 }
 
 impl BatchAdmissionV1<'_> {
@@ -353,16 +413,7 @@ impl BatchAdmissionV1<'_> {
         }
         let (quote, graph) =
             self.reserve_with_v1(&mut candidate.state.book, graph, storage, cost, reserve_native_requests_v1, windows)?;
-        let (graph, _graph_lease) = graph.into_parts_v1();
-        for node in graph {
-            binding.packet_ids.insert(node.packet.id);
-            if !node.predecessors.is_empty() {
-                let mut predecessors = node.predecessors;
-                predecessors.sort_unstable();
-                candidate.causal.insert(node.packet.id, predecessors);
-            }
-        }
-        candidate.check().map_err(|_| BatchCourtErrorV1::CaseGraph)?;
+        attach_batch_graph_v1(&mut candidate, self.claim, graph)?;
         Ok((quote, candidate))
     }
 
@@ -382,12 +433,24 @@ impl BatchAdmissionV1<'_> {
     fn reserve_with_v1(
         &self,
         book: &mut ServiceReservations,
+        graph: Vec<CausalServicePacketV1>,
+        storage: MaterialIntakeScheduleV1,
+        cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+        windows: Option<&DeliveryWindowsV1>,
+    ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+        let compiled = self.compile_with_v1(graph, storage, cost, reserve, windows)?;
+        CompiledBatchAdmissionV1::reserve_v1(compiled, book)
+    }
+
+    fn compile_with_v1(
+        &self,
         mut graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
         mut cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
         windows: Option<&DeliveryWindowsV1>,
-    ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+    ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, Window};
         let a = self.window.claim_accepted_daa;
         let hard = a.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
@@ -520,48 +583,146 @@ impl BatchAdmissionV1<'_> {
                 controls: sum.controls.checked_add(cost.controls).ok_or(DeliveryCost)?,
             })
         })?;
-        let mut retained_payload_byte_daa = 0u64;
-        let required_daa =
-            self.window.reserve_latest_notice_checked_v1(book, &graph, self.terminal, self.recovery_daa, |book, _| {
-                let mut account_retained = |start, bytes: u64| {
-                    let duration = self.window.material_until_daa.checked_sub(start).ok_or(ServiceRefusal::DeadlineExhausted)?;
-                    let holding = bytes.checked_mul(duration).ok_or(ServiceRefusal::InvalidBudget)?;
-                    retained_payload_byte_daa = retained_payload_byte_daa.checked_add(holding).ok_or(ServiceRefusal::InvalidBudget)?;
-                    Ok(())
-                };
-                for (begin, finish, bytes) in spans {
-                    let begin = book.assigned_daa(&begin).ok_or(ServiceRefusal::InvalidState)?;
-                    let finish = book.assigned_daa(&finish).ok_or(ServiceRefusal::InvalidState)?;
-                    let expires = storage
-                        .draft_expires_v1(begin, hard, self.window.material_until_daa)
-                        .map_err(|_| ServiceRefusal::DeadlineExhausted)?;
-                    if finish >= expires {
-                        return Err(ServiceRefusal::DeadlineExhausted);
-                    }
-                    account_retained(begin, bytes)?;
-                }
-                for control in self.retained_controls {
-                    let at = book.assigned_daa(&control.packet).ok_or(ServiceRefusal::InvalidState)?;
-                    account_retained(at, control.payload_bytes)?;
-                }
-                Ok::<_, ServiceRefusal>(())
-            })?;
-        let quote = BatchAdmissionQuoteV1 {
-            claim: self.claim,
-            scope: self.scope,
+        Ok(NativeRetainedV1::from_owner_reserved_v1(
+            CompiledBatchAdmissionV1 {
+                claim: self.claim,
+                scope: self.scope,
+                window: self.window,
+                terminal: self.terminal,
+                recovery_daa: self.recovery_daa,
+                storage,
+                graph,
+                spans,
+                controls: self.retained_controls.to_vec(),
+                relative_graph_id,
+                service,
+                retained_payload_bytes,
+                carrier_storage_rent_sompi,
+                required_daa: None,
+                retained_numerical_fault_bytes: 0,
+                retained_numerical_fault_byte_daa: 0,
+                numerical_fault_storage_rent_sompi: 0,
+            },
+            lease,
+        ))
+    }
+}
+
+/// An unreserved graph is not an admission quote. It exposes only the relative
+/// funding commitment; reservation consumes this owner and retains its native
+/// memory lease through scheduling and the final graph handoff.
+pub(crate) struct CompiledBatchAdmissionV1 {
+    claim: Hash64,
+    scope: Hash64,
+    window: BatchCourtWindowV1,
+    terminal: [u8; 64],
+    recovery_daa: u64,
+    storage: MaterialIntakeScheduleV1,
+    graph: Vec<CausalServicePacketV1>,
+    spans: Vec<([u8; 64], [u8; 64], u64)>,
+    controls: Vec<BatchRetainedControlV1>,
+    relative_graph_id: Hash64,
+    service: ServiceCost,
+    retained_payload_bytes: u64,
+    carrier_storage_rent_sompi: u64,
+    required_daa: Option<u64>,
+    retained_numerical_fault_bytes: u64,
+    retained_numerical_fault_byte_daa: u64,
+    numerical_fault_storage_rent_sompi: u64,
+}
+
+impl CompiledBatchAdmissionV1 {
+    pub(crate) fn relative_graph_id_v1(&self) -> Hash64 {
+        self.relative_graph_id
+    }
+
+    /// The caller must compile using the final allocation's packet namespace
+    /// before reporting quote success. Namespace-independent graph identity
+    /// alone does not imply the same slot order or capacity outcome.
+    pub(crate) fn reserve_v1(
+        compiled: NativeRetainedV1<Self>,
+        book: &mut ServiceReservations,
+    ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+        let (compiled, lease) = compiled.into_parts_v1();
+        let Self {
+            claim,
+            scope,
+            window,
+            terminal,
+            recovery_daa,
+            storage,
+            graph,
+            spans,
+            controls,
             relative_graph_id,
-            required_daa,
-            material_until_daa: self.window.material_until_daa,
+            service,
+            retained_payload_bytes,
+            carrier_storage_rent_sompi,
+            required_daa: required_bound,
+            retained_numerical_fault_bytes,
+            retained_numerical_fault_byte_daa,
+            numerical_fault_storage_rent_sompi,
+        } = compiled;
+        let hard = window.claim_accepted_daa.checked_add(DISPUTE_WINDOW_DAA).ok_or(BatchCourtErrorV1::Clock)?;
+        let mut retained_payload_byte_daa = 0u64;
+        let required_daa = window.reserve_latest_notice_checked_v1(book, &graph, terminal, recovery_daa, |book, _| {
+            let mut account_retained = |start, bytes: u64| {
+                let duration = window.material_until_daa.checked_sub(start).ok_or(ServiceRefusal::DeadlineExhausted)?;
+                let holding = bytes.checked_mul(duration).ok_or(ServiceRefusal::InvalidBudget)?;
+                retained_payload_byte_daa = retained_payload_byte_daa.checked_add(holding).ok_or(ServiceRefusal::InvalidBudget)?;
+                Ok(())
+            };
+            for (begin, finish, bytes) in spans {
+                let begin = book.assigned_daa(&begin).ok_or(ServiceRefusal::InvalidState)?;
+                let finish = book.assigned_daa(&finish).ok_or(ServiceRefusal::InvalidState)?;
+                let expires =
+                    storage.draft_expires_v1(begin, hard, window.material_until_daa).map_err(|_| ServiceRefusal::DeadlineExhausted)?;
+                if finish >= expires {
+                    return Err(ServiceRefusal::DeadlineExhausted);
+                }
+                account_retained(begin, bytes)?;
+            }
+            for control in &controls {
+                let at = book.assigned_daa(&control.packet).ok_or(ServiceRefusal::InvalidState)?;
+                account_retained(at, control.payload_bytes)?;
+            }
+            Ok::<_, ServiceRefusal>(())
+        })?;
+        let quote = BatchAdmissionQuoteV1 {
+            claim,
+            scope,
+            relative_graph_id,
+            required_daa: required_bound.unwrap_or(required_daa),
+            material_until_daa: window.material_until_daa,
             service,
             retained_payload_bytes,
             retained_payload_byte_daa,
             carrier_storage_rent_sompi,
-            retained_numerical_fault_bytes: 0,
-            retained_numerical_fault_byte_daa: 0,
-            numerical_fault_storage_rent_sompi: 0,
+            retained_numerical_fault_bytes,
+            retained_numerical_fault_byte_daa,
+            numerical_fault_storage_rent_sompi,
         };
         Ok((quote, NativeRetainedV1::from_owner_reserved_v1(graph, lease)))
     }
+}
+
+fn attach_batch_graph_v1(
+    candidate: &mut crate::palw_court_service_release_v1::CourtServiceRowV3,
+    claim: Hash64,
+    graph: NativeRetainedV1<Vec<CausalServicePacketV1>>,
+) -> Result<(), BatchCourtErrorV1> {
+    let binding = candidate.state.claims.get_mut(&claim).ok_or(BatchCourtErrorV1::CaseGraph)?;
+    let (graph, _graph_lease) = graph.into_parts_v1();
+    for node in graph {
+        binding.packet_ids.insert(node.packet.id);
+        if !node.predecessors.is_empty() {
+            let mut predecessors = node.predecessors;
+            predecessors.sort_unstable();
+            candidate.causal.insert(node.packet.id, predecessors);
+        }
+    }
+    candidate.check().map_err(|_| BatchCourtErrorV1::CaseGraph)?;
+    Ok(())
 }
 
 fn expansion_workspace_v1(
@@ -577,6 +738,8 @@ fn expansion_workspace_v1(
     let demand_edges =
         demands.iter().try_fold(0u64, |n, demand| n.checked_add(demand.predecessors.len() as u64)).ok_or_else(overflow)?;
     let mut q = TirNativeRequestsV1::new();
+    q.exact_v1::<CompiledBatchAdmissionV1>(1)?;
+    q.vec_v1::<BatchRetainedControlV1>(graph.len() as u64)?;
     q.vec_v1::<CausalServicePacketV1>(packets as u64)?; // original, expanded and one response during append
     q.add_v1((packets as u64).checked_mul(btree_node_envelope_bytes_v1::<Id, u64>() as u64).ok_or_else(overflow)?)?;
     q.exact_v1::<(Id, Id, u64)>(ranges as u64)?;
@@ -706,7 +869,16 @@ mod tests {
         };
         assert!(plan.reserve_v1(&mut book, graph(3_129), schedule, project(3)).is_err());
         assert_eq!(book, empty);
+        // Graph commitment can be computed without either a fabricated
+        // original binding or an optimistic reservation in an empty book.
+        let compiled = plan.compile_with_v1(graph(3_129), schedule, project(2), reserve_native_requests_v1, None).unwrap();
+        let compiled_id = compiled.relative_graph_id_v1();
+        let mut no_room = ServiceReservations::new(cost(1)).unwrap();
+        let before = no_room.clone();
+        assert!(CompiledBatchAdmissionV1::reserve_v1(compiled, &mut no_room).is_err());
+        assert_eq!(no_room, before, "unavailable capacity must not leave partial reservations");
         let (quote, graph) = plan.reserve_v1(&mut book, graph(3_129), schedule, project(2)).unwrap();
+        assert_eq!(compiled_id, quote.relative_graph_id);
         assert_eq!(quote.required_daa, 10_000);
         let graph_id = |plan: &BatchAdmissionV1<'_>, graph: &[CausalServicePacketV1]| {
             let ranks = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index as u64)).collect();

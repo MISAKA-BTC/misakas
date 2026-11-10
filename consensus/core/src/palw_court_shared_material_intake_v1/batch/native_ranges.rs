@@ -810,7 +810,7 @@ fn project_numerical_batch_geometry_v1(
     Ok((NativeRetainedV1::from_owner_reserved_v1(projection, lease), selected))
 }
 
-fn partition_maximums_v1(mut remaining: &[u64]) -> impl Iterator<Item = &[u64]> {
+pub(super) fn partition_maximums_v1(mut remaining: &[u64]) -> impl Iterator<Item = &[u64]> {
     use crate::palw_batch_court_v1::{MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1, MAX_BATCH_RANGES_V1};
     std::iter::from_fn(move || {
         if remaining.is_empty() {
