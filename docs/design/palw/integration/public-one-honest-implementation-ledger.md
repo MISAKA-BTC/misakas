@@ -84,3 +84,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 保存済み commitment から同じ `7645bc8b…a3711` を再導出して、実際の tokenizer と認証済み table（578,215 bytes）でオフライン診断を実行した。DAA 20,974、custodian 上限 3、EOF certificate は fixture。family V4 の要求 8,924,271 DAA は上限 3,120 DAA を超え、そのうち tokenizer 段階の予約は 8,418,420 DAA、資料取得の予約は 72,182 DAA。custodian 上限を 2 または 6 としても要求は 8,841,425 または 9,172,926 DAA。実データのキー処理 98,471 件だけで計算しても、現行の 2 move/event・4 DAA/move では 787,768 DAA。公開 seat 5 の DAA 20,981〜20,982 での実 quote は `TIR_CLASS_CONTAINER_UNBOUND` で拒否し、同じ ID の受付、court、lifecycle の行はなかった。選択チェーンには DAA 20,981 のブロックがあったが、この候補との関連は確認できなかった。
 
 `positive-panel` を有効にした remote crate のテストを実行し、270 件成功、長時間テスト 1 件は ignored。HTTP 統合テストでは、Miner が署名して公開した同じ original に対して、Panel の取得・不足時の署名済み要求、provider の応答 packet の生成と認証、同じ original の独立再実行まで確認した。試験の accepted origin は fixture。公開 T12 の carrier 受付、予約、Q の終結、Final はこの結果の対象外。
+
+公開 seat 5 を DAA 20,987〜20,988 で再照会した。同期済みの testnet-12 ノードは、同じ未署名候補 `7645bc8b…a3711` の original quote を `TIR_CLASS_CONTAINER_UNBOUND` で拒否した。FreePromptClaim、KernelClaim、ClaimDetail、CourtState、claim-lifecycle はすべて `found=false`。選択ブロック `9ced0332…885be` は DAA 20,987 で取得できたが、候補の受付ブロックは取得できなかった。
