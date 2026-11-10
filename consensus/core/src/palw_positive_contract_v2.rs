@@ -1012,6 +1012,20 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let point = self.last_point().ok_or(ContractError::Scope)?;
         check_public_origin_point_v1(row.origin(), point)?;
         require_accepted_after_v1(admission.carrier.origin, row.origin())?;
+        match row.claimant()? {
+            Claimant::DrawnBond(_) => {
+                let draw = self.public_draw_record_v1(row.original())?.ok_or(ContractError::Scope)?;
+                if row.original().full_replay_scope(row.inspection_scope()) != draw.full_scope {
+                    return Err(ContractError::Scope);
+                }
+                if row.origin().accepted_daa < draw.draw_point.daa_score {
+                    return Err(ContractError::Range);
+                }
+                check_public_origin_after_draw_v1(row.origin(), &draw.draw_point)?;
+            }
+            Claimant::Outsider(_) if admission.rescue.max_outsiders == 0 => return Err(ContractError::Budget),
+            Claimant::Outsider(_) => {}
+        }
         let [_, _, _, ready, _, _, filed, _] = admission.deadlines;
         row.check_admission(
             admission.carrier.origin.accepted_daa,

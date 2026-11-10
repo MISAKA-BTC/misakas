@@ -752,6 +752,14 @@ impl PendingManifestCaseRecordV1 {
         self.signer
     }
 
+    pub fn claimant(&self) -> Result<Claimant, ContractError> {
+        self.claimant.decode()
+    }
+
+    pub fn inspection_scope(&self) -> Digest {
+        self.inspection_scope
+    }
+
     pub fn origin(&self) -> AcceptedOrigin {
         self.origin
     }
