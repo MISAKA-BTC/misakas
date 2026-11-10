@@ -623,6 +623,45 @@ pub fn fetch_public_manifest_v1(
     read_public_manifest_v1(original, scope_limits, total_limit, max_manifest_bytes, bytes.len() as u64, bytes.as_slice())
 }
 
+/// The Panel either acquired the manifest or prepared a first request under
+/// its own draw slot. A prepared request still needs native inclusion.
+pub enum PublicManifestAcquisitionV1 {
+    Acquired(Box<CheckedManifestV1>),
+    Request(Box<misaka_palw_positive_contract::public_one_honest::SignedManifestRequestV1>),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn acquire_or_request_public_manifest_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    admitted: &kaspa_consensus_core::palw_positive_contract_v2::PreparedPublicOriginalV1,
+    draw: &kaspa_consensus_core::palw_positive_contract_v2::PreparedPublicDrawV1,
+    bond: misaka_palw_positive_contract::public_one_honest::PanelBond,
+    supply_obligation: misaka_palw_positive_contract::identity::Digest,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+    key: &[u8; PUBKEY_BYTES],
+    sign: impl FnOnce(&[u8], &[u8]) -> Result<[u8; SIGNATURE_BYTES], String>,
+) -> Result<PublicManifestAcquisitionV1, PanelSourceErrorR1> {
+    use misaka_palw_positive_contract::{
+        identity::principal,
+        public_one_honest::{MANIFEST_REQUEST_SIGN_CONTEXT, SignedManifestRequestV1, stateless_wide_replay_plan_v1},
+    };
+    match fetch_public_manifest_v1(provider, original, scope_limits, total_limit, max_manifest_bytes) {
+        Ok(manifest) => return Ok(PublicManifestAcquisitionV1::Acquired(Box::new(manifest))),
+        Err(PanelSourceErrorR1::Incomplete) => {}
+        Err(error) => return Err(error),
+    }
+    let request = admitted.drawn_manifest_request(draw, original, bond, stateless_wide_replay_plan_v1(), supply_obligation)?;
+    if principal(key) != request.signer {
+        return Err(ContractError::Identity.into());
+    }
+    let signature = sign(&request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT).map_err(PanelSourceErrorR1::ReplaySigner)?;
+    request.authenticate(request.signer, key, &signature)?;
+    Ok(PublicManifestAcquisitionV1::Request(Box::new(SignedManifestRequestV1 { request, key: *key, signature })))
+}
+
 /// Read a single length-framed manifest response and authenticate it before
 /// interpreting any entries. The caller provides the frame's body length
 /// and applies the transport deadline.

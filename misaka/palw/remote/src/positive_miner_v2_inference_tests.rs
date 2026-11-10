@@ -902,8 +902,9 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     use crate::{
         evidence::fs::FsProvider,
         positive_panel_sources::{
-            PanelSourceErrorR1, PanelSourceLimitsR1, PublicTraceAcquisitionV1, fetch_public_manifest_v1,
-            fetch_public_replay_inputs_v1, fetch_public_replay_output_v1, replay_and_sign_drawn_public_wide_v1,
+            PanelSourceErrorR1, PanelSourceLimitsR1, PublicManifestAcquisitionV1, PublicTraceAcquisitionV1,
+            acquire_or_request_public_manifest_v1, fetch_public_manifest_v1, fetch_public_replay_inputs_v1,
+            fetch_public_replay_output_v1, replay_and_sign_drawn_public_wide_v1,
         },
         public_material::{MaterialProvider, artifact_leaf_path, prepare_public_manifest_response_v1},
         transport::{
@@ -1137,7 +1138,38 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     let draw = accepted.prepare_draw(d(47), draw_point, &members, stateless_wide_replay_plan_v1()).unwrap();
     let request_origin =
         AcceptedOrigin { accepting_block: NativeHash64([5; 64]), accepted_daa: 102, accepted_blue_score: 102, ..origin };
-    let request = accepted.drawn_manifest_request(&draw, admitted, bond, stateless_wide_replay_plan_v1(), obligation).unwrap();
+    let acquire = |source: &dyn MaterialProvider, bond, should_sign: bool| {
+        acquire_or_request_public_manifest_v1(
+            source,
+            admitted,
+            &accepted,
+            &draw,
+            bond,
+            obligation,
+            &rules,
+            1 << 20,
+            ManifestV1::WIRE_BYTES,
+            panel_key,
+            |message, domain| {
+                assert!(should_sign);
+                assert_eq!(domain, MANIFEST_REQUEST_SIGN_CONTEXT);
+                Ok(*libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, message, domain, [0; 32]).unwrap().as_ref())
+            },
+        )
+    };
+    assert!(
+        matches!(acquire(&provider, bond, false).unwrap(), PublicManifestAcquisitionV1::Acquired(checked) if *checked == manifest)
+    );
+    let missing = FsProvider { id: "empty".into(), root: root.join("empty-manifest-provider") };
+    std::fs::create_dir_all(&missing.root).unwrap();
+    assert!(matches!(
+        acquire(&missing, PanelBond { index: 1, ..bond }, false),
+        Err(PanelSourceErrorR1::Contract(ContractError::Identity))
+    ));
+    let PublicManifestAcquisitionV1::Request(request_carrier) = acquire(&missing, bond, true).unwrap() else {
+        panic!("a missing manifest must produce a request");
+    };
+    let SignedManifestRequestV1 { request, key: request_key, signature: request_signature } = *request_carrier;
     let request_context = ManifestRequestContext {
         original: admitted,
         claimant: request.claimant,
@@ -1151,11 +1183,7 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
         schedule: accepted.schedule,
         origin: request_origin,
     };
-    let request_signature =
-        libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [0; 32])
-            .unwrap();
-    let pending =
-        accepted.verify_drawn_manifest_request(&draw, &request, &request_context, panel_key, request_signature.as_ref()).unwrap();
+    let pending = accepted.verify_drawn_manifest_request(&draw, &request, &request_context, &request_key, &request_signature).unwrap();
     let miner_pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([62; 32]);
     let response =
         prepare_public_manifest_response_v1(&provider, &pending, admitted, admitted.miner, &signed.key, |message, domain| {
