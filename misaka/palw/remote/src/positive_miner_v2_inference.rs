@@ -296,10 +296,13 @@ pub fn publish_public_trace_tile_v1(
     capture.public_trace_index().check(original, max_step_leaf_count).map_err(|_| MinerErrorV2::Binding)?;
     let cap = max_value_bytes.min(crate::public_material::MATERIAL_UNIT_MAX_BYTES);
     let material = capture.public_trace_tile(index, max_step_leaf_count, cap as u64).map_err(MinerErrorV2::Journal)?;
-    let bytes = borsh::to_vec(&material).map_err(|_| MinerErrorV2::Binding)?;
-    if bytes.len() > crate::public_material::MATERIAL_UNIT_MAX_BYTES {
+    let wire_bytes = borsh::object_length(&material).map_err(|_| MinerErrorV2::Binding)?;
+    if wire_bytes > crate::public_material::MATERIAL_UNIT_MAX_BYTES {
         return Err(MinerErrorV2::Budget);
     }
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(wire_bytes).map_err(|_| MinerErrorV2::Budget)?;
+    borsh::BorshSerialize::serialize(&material, &mut bytes).map_err(|_| MinerErrorV2::Binding)?;
     let path = crate::public_material::public_original_trace_tile_path(original.id(), index);
     crate::evidence::fs::write_provider_chunk(&provider_root.join(path), &bytes)
         .map_err(|error| MinerErrorV2::Journal(format!("public trace tile: {error}")))

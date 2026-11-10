@@ -106,7 +106,7 @@ pub fn fetch_public_trace_tile_v1(
     }
     let header = OPENING_PREFIX + siblings as usize * 64 + TILE_PREFIX;
     let values = read_u32(header - 4)? as usize;
-    if values > max_value_bytes || bytes.len() - header != values {
+    if values > max_value_bytes || bytes.len().checked_sub(header) != Some(values) {
         return Err(PanelSourceErrorR1::Binding);
     }
     let (opening, tile) = borsh::from_slice(&bytes).map_err(|_| PanelSourceErrorR1::Binding)?;
