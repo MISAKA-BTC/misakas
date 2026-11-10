@@ -74,6 +74,46 @@ impl OriginalCommit {
         }
         authenticate_actor(self.miner, key, signature, self.id().0, ORIGINAL_SIGN_CONTEXT)
     }
+
+    /// Authenticate the bounded bytes obtained for this original. The caller
+    /// resolves the byte cap from the accepted profile before reading or
+    /// allocating the body. Schema and service-opportunity checks are separate.
+    pub fn authenticate_manifest<'a>(&self, bytes: &'a [u8], max_bytes: u32) -> Result<AuthenticatedManifest<'a>, ContractError> {
+        if manifest_root(self.scope.ruleset, bytes, max_bytes)? != self.manifest_root {
+            return Err(ContractError::Identity);
+        }
+        Ok(AuthenticatedManifest { id: self.manifest_material_id(), bytes })
+    }
+
+    fn manifest_material_id(&self) -> MaterialId {
+        MaterialId(hash(b"misaka/palw/public-manifest-material/v1", &(self.scope.ruleset, self.manifest_root)))
+    }
+}
+
+/// The commitment the Miner puts in its original over canonical manifest
+/// bytes. Rulesets cannot reinterpret the same bytes under this root.
+pub fn manifest_root(ruleset: Digest, bytes: &[u8], max_bytes: u32) -> Result<Digest, ContractError> {
+    if bytes.is_empty() || bytes.len() > max_bytes as usize {
+        return Err(ContractError::Range);
+    }
+    Ok(hash(b"misaka/palw/public-manifest-root/v1", &(ruleset, bytes)))
+}
+
+/// A byte identity check. It carries no observation of when or to whom the
+/// material was made available and confers no inspection rights by itself.
+pub struct AuthenticatedManifest<'a> {
+    id: MaterialId,
+    bytes: &'a [u8],
+}
+
+impl<'a> AuthenticatedManifest<'a> {
+    pub fn id(&self) -> MaterialId {
+        self.id
+    }
+
+    pub fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
 }
 
 /// A Panel member's assertion of complete replay under the rules bound by the
@@ -159,7 +199,7 @@ impl ManifestRequest {
         if self.original != original.id() || self.manifest_root != original.manifest_root {
             return Err(ContractError::Scope);
         }
-        Ok(MaterialId(hash(b"misaka/palw/public-manifest-material/v1", &(original.scope.ruleset, self.manifest_root))))
+        Ok(original.manifest_material_id())
     }
 
     pub fn case_id(&self, original: &OriginalCommit, eligible_claimant: Claimant) -> Result<CaseId, ContractError> {
@@ -531,14 +571,14 @@ mod tests {
             max_context: 1,
             output: d,
             trace_root: d,
-            manifest_root: d,
+            manifest_root: manifest_root(d, b"manifest", 8).unwrap(),
             service_contract: d,
         };
         let first = Claimant::DrawnBond(PanelBond { transaction: d, index: 0 });
         let second = Claimant::DrawnBond(PanelBond { transaction: d, index: 1 });
         let request = ManifestRequest {
             original: original.id(),
-            manifest_root: d,
+            manifest_root: original.manifest_root,
             claimant: first,
             signer: PrincipalId(d),
             inspection_scope: d,
@@ -547,6 +587,12 @@ mod tests {
             reservation: d,
         };
         let other = ManifestRequest { claimant: second, ..request.clone() };
+        let material = original.authenticate_manifest(b"manifest", 8).unwrap();
+        assert_eq!(material.bytes(), b"manifest");
+        assert_eq!(request.material_id(&original), Ok(material.id()));
+        assert!(matches!(original.authenticate_manifest(b"manifest", 7), Err(ContractError::Range)));
+        assert!(matches!(original.authenticate_manifest(b"Manifest", 8), Err(ContractError::Identity)));
+        assert_ne!(manifest_root(Digest([8; 64]), b"manifest", 8), Ok(original.manifest_root));
         assert_eq!(request.material_id(&original), other.material_id(&original));
         assert_ne!(request.case_id(&original, first), other.case_id(&original, second));
         assert_eq!(other.case_id(&original, first), Err(ContractError::Identity));
