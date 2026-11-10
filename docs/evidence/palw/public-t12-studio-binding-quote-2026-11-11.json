@@ -97,5 +97,37 @@
       "path": "/tmp/misaka-studio-t12-registration-live.iRmft4/candidate-binding.borsh",
       "sha256": "23de13ddb5f8f89fe0dc7692a25c078099ab8fcff390d61c50f16810da9af4c9"
     }
+  ],
+  "quoteObservations": [
+    {
+      "recordedAt": "2026-11-10T15:57:19.521829+00:00",
+      "claimId": "7645bc8bbba0e00a35ccbac77ecb0e28d489688161bd0130649f3575919a83df225e509936a52c4b0e30a415e71d50da1f38dd87a1f02ce4267bc145fc6a3711",
+      "chain": {
+        "network": "testnet-12",
+        "virtualDaaScore": 21019,
+        "sink": "6d0d17c90c95f8013f7b3794543bf7cbb5ef46b69231229b7feab8024fa1a5dd157d3f0b373c4cce526ca49e8e2ae01f4c4f72b72371bc4c2e7607bfb689dc61"
+      },
+      "params": {
+        "consensusParamsId": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+        "consensusScheduleId": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04"
+      },
+      "quote": {
+        "available": true,
+        "quoted": false,
+        "refusal": "class 7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625 earns no reward or consensus work weight: G14_ROUTE_ABSENT (palw_g14_route_required_v1: FP job version 5 needs G14 routes [FpTokenizer] that are not armed at DAA 21019 (framed: true): refused at admission, no reward, weight or consensus credit)",
+        "quoteDaa": 0,
+        "hasPlan": false
+      },
+      "rawFile": {
+        "path": "/tmp/t12-tokenizer-eof.YD2ITr/public-quote-latest.jsonl",
+        "sha256": "2385b54e1003dc1a9394ff6507b8335425edac4ab449370c8d57be17a47e02ad"
+      },
+      "scope": "Quote and network readback only; binding and bond observations above are from DAA 21012.",
+      "requestFile": {
+        "path": "/tmp/t12-tokenizer-eof.YD2ITr/public-quote-request.json",
+        "sha256": "151478e0a566c8afcee9c3a5e66a4ba3f132df52f84d2f3985a490496d338f3e",
+        "matchesFixedStudioRequest": "/tmp/misaka-studio-tfp1-native.k1U16c/quote-request.json"
+      }
+    }
   ]
 }

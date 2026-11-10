@@ -160,3 +160,11 @@ commitment を native Borsh decoder で読み、executor bond が `550c7e88…70
 native schema の再生成が PublicOneHonest の手動 codec と既存 aux table の読み取り分岐を失わせる問題を修正した。生成元に owner-local codec と process-local 型の区別を登録し、既存の aux table 分岐を再生成後も保存する。生成処理を二回実行した出力は同一。今回のコードを含む `cargo check -j 2 -p kaspa-consensus-core --lib` は成功した。新規回帰テストの実行は未完了。先行ビルド（`15ab590b0` 時点）の `g14_native_funded_batch_candidate_v1` と `maximum_graph_with_latest_notice_and_recovery_is_atomic_at_10000` は各 1 件成功したが、新版 Output 差分の検証とは分ける。
 
 tokenizer 登録の接続も再監査した。`install_verified_tokenizer_registration_v1` の呼出しはテスト内だけで、公開の funded carrier から raw 資料を再生して登録行を作る入口は未接続。この行の存在を前提とする opening 計算だけでは公開 quote は成功しない。新入口の費用・配信・再生と、新 allocation の意味を保つ実装が必要である。
+
+公開 seat 7 の DAA 21,019 で、同じ候補の quote を読み戻した。params/schedule は前回と一致し、`available=true`、`quoted=false`、`G14_ROUTE_ABSENT (FpTokenizer)`、plan なしだった。結果と raw ファイルの SHA-256 を既存の公開読戻し JSON の `quoteObservations` に追記した。この照会では binding と bond を再照会しておらず、それらの証跡は DAA 21,012 のものとして維持する。
+
+独立した静的監査で、現在の G14 拒否と、その先の Batch 用登録を分けた。現在の gate は既存 staged/filer/tokenizer-match に加え、対象 class の raw byte 数と key-event 上限を要求する。未有効の class semantics と未受理の宣言を解消することが第一段階であり、検査済み tokenizer row の追加だけで現行 gate が変わるわけではない。既存 EOF は hash と全長を確認するが raw を保持せず、family raw 取得は受理済み claim を前提とするため、受付前の全 rendering 検査へ循環なく接続できない。
+
+[RFC-0051](../../../rfc/0051-funded-preclaim-tokenizer-registration.md) と [ADR-0219](../../../adr/0219-funded-preclaim-tokenizer-registration.md) に、有限の preclaim Open/Part/Finish を Draft として追加した。既存担当エージェントの三回の静的レビューを反映し、署名、先行 parent、競合登録、料金の一回 burn、原期限内の再試行、native raw GC と通常履歴の保持を区別した。設計凍結規約に基づく採択をユーザーへ確認中。料金の数値、公開 activation、runtime 実装は未承認・未実施であり、この案の作成を TFP1 quote 成功に数えない。既存の Output コードのテストは引き続きコンパイル中。
+
+その後、`5bc8b7b88` の core test build が 19 分 16 秒で完了し、`plain_output_control_length_and_signing_scope_v2` が成功した。同じ生成済み test binary で `g14_native_funded_batch_candidate_v1`、`family_supplier_four_role_prefix_native_original_and_financial_transitions`、`family_supplier_constraint_native_original_material_and_adjudication` も各 1 件成功した。[回帰結果](../../../evidence/palw/native-plain-output-v2-regression-2026-11-11.json) に source commit、binary/log の SHA-256 と範囲を保存した。計 4 件のローカル回帰であり、新 tokenizer 登録案の実装・公開 quote・同じ claim の受付を検証したものではない。

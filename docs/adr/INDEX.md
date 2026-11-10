@@ -222,3 +222,4 @@
 | ADR-0216 | [EXEC credit・事前公開schedule・1 BPSとcourt容量](0216-exec-credit-schedule-one-bps-and-court-capacity.md) | Accepted design / EXEC・1 BPS追加採択、未有効化 |
 | ADR-0217 | [PALW実行整合性と一人による反証の完結契約](0217-palw-execution-integrity-and-unilateral-refutation.md) | Accepted design / PALW条件付き保証の追加採択、未有効化 |
 | ADR-0218 | [公開資料とモデル未保有の一人検証](0218-public-materials-and-one-honest-panel.md) | Accepted design / 一人前提・最低一件承認の追加採択、未有効化 |
+| ADR-0219 | [受付前 tokenizer 資料の有料 native 登録案](0219-funded-preclaim-tokenizer-registration.md) | Proposed / 未採択・未有効化 |
