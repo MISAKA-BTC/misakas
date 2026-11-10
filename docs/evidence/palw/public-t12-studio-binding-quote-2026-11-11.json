@@ -1,0 +1,101 @@
+{
+  "recordedAt": "2026-11-10T15:27:13.279038+00:00",
+  "endpoint": "169.58.232.113:26354 (SSH localhost wRPC)",
+  "readOnly": true,
+  "claimId": "7645bc8bbba0e00a35ccbac77ecb0e28d489688161bd0130649f3575919a83df225e509936a52c4b0e30a415e71d50da1f38dd87a1f02ce4267bc145fc6a3711",
+  "anchorDaa": 20791,
+  "identity": {
+    "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "artifact_root": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+    "container_root": "bb10e9a486a4d4f0b925907b7579056cb799380aef404218a5d8bd99e54a502b3e370cd041d651df5c471da81094675cb46b2b5e51a7002bfeeadcdffd8da20c",
+    "network_domain": "24ad68f58ea4c11a3cce9e7f9a1080266fb9a2f1edcf8581cd339913cc434a1624af360cd74279ed2ef9fcc08788de73355b5c673261aeb5ba6094e91c72149f"
+  },
+  "chain": {
+    "network": "testnet-12",
+    "virtualDaaScore": 21012,
+    "sink": "3036d7c3d7f34b9a9e4fca78eea23dd61e33385986af7d53c3dcf3012459efb405e7f474d2a7949a37e2542faf7981a33a58c68c13d618e36aee990cff979599"
+  },
+  "params": {
+    "consensusParamsId": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "consensusScheduleId": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04"
+  },
+  "bindingAcceptance": [
+    {
+      "transactionId": "2080b9fb04e67eb445d098f3f17325403d30c24bd82887674ce19d9582f1124103b8008a67349625206f2b02090bbaaf489abb6a31bbadab80cdffd577f459fb",
+      "acceptingBlockHash": "bdacc76cb9a2a910f820cf7c4be13db74fd8a52bf1d250340e57ca76d8936b59c815ecf0f11978249c70de32a9004e65d17159c31a0fcd3444350362fb38e62e"
+    }
+  ],
+  "quote": {
+    "available": true,
+    "quoted": false,
+    "refusal": "class 7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625 earns no reward or consensus work weight: G14_ROUTE_ABSENT (palw_g14_route_required_v1: FP job version 5 needs G14 routes [FpTokenizer] that are not armed at DAA 21012 (framed: true): refused at admission, no reward, weight or consensus credit)",
+    "quoteDaa": 0,
+    "planHex": ""
+  },
+  "fences": [
+    {
+      "activationDaa": 0,
+      "armed": true,
+      "lists": [],
+      "name": "palw_rcore_plus",
+      "scheduled": true
+    },
+    {
+      "activationDaa": null,
+      "armed": false,
+      "lists": [],
+      "name": "palw_class_semantics_v1",
+      "scheduled": false
+    },
+    {
+      "activationDaa": 18400,
+      "armed": true,
+      "lists": [
+        "fullActivation",
+        "g14At16600"
+      ],
+      "name": "palw_tir_container_identity_v1",
+      "scheduled": true
+    },
+    {
+      "activationDaa": null,
+      "armed": false,
+      "lists": [
+        "fullActivation"
+      ],
+      "name": "palw_court_family_supplier_v1",
+      "scheduled": false
+    }
+  ],
+  "executor": {
+    "bond": "550c7e88c00773a80e65cf57133bb8fb408992d90d46783aa2927d58cccb1cc98f01fad01c30adbcec279e3d6f2a22320243c817e0581943f2b3332d953670bb:0",
+    "status": "active",
+    "collateralSompi": 1299900000000,
+    "slashedSompi": 100000000,
+    "registrationExposureSompi": "40000"
+  },
+  "executorFacts": {
+    "daaScore": 21012,
+    "bondProducerFloorShortfall": 100000000,
+    "bondClaimExposure": "320085221019",
+    "notReadyReason": "the bond's posted collateral is below the producer floor"
+  },
+  "rawFiles": [
+    {
+      "path": "/tmp/misaka-studio-t12-registration-live.iRmft4/binding-quote-readback-21012.jsonl",
+      "sha256": "7056fd6105c87c9a9be7345b11d794487b37388f2bc922eee3bcfe020fa6b041"
+    },
+    {
+      "path": "/tmp/misaka-studio-t12-registration-live.iRmft4/candidate-public-readback.jsonl",
+      "sha256": "343f174d67034a2d58e6b3631fd81ae45e693d8d3a00ae0fe774b2b9a9b34ac2"
+    },
+    {
+      "path": "/tmp/misaka-studio-t12-registration-live.iRmft4/candidate-commitment.borsh",
+      "sha256": "8b5e1d44a665ffda350c2ce58498b9523d3603e5c47ff5d66b498af345a726f9"
+    },
+    {
+      "path": "/tmp/misaka-studio-t12-registration-live.iRmft4/candidate-binding.borsh",
+      "sha256": "23de13ddb5f8f89fe0dc7692a25c078099ab8fcff390d61c50f16810da9af4c9"
+    }
+  ]
+}

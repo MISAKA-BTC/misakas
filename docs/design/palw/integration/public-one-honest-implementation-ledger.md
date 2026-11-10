@@ -146,3 +146,9 @@ Batch の数値資料量の導出を、旧 allocation と署名済み custody fr
 先行実行していた SDK example の実ファイル診断が完了した。同じ完全 claim ID について 270 numerical roots の local replay と最大 work 値を出力し、公開費用条件の quote は必要 8,567,151 / 許容 3,120 DAA、Batch v5 比較は 72,565 / 6,880 DAA の拒否だった。raw EOF の再生を含むが、包含時刻・署名欄は fixture で、公開 quote ではない。先行する `cargo check -p kaspa-p2p-flows` も成功したが、今回の reservation 分離後の検証には数えない。
 
 tokenizer の範囲について記述を訂正した。既存 FpTokenizer terminal は raw tokenizer から token ID ごとの rendering が正しいかを判定し、原文から prompt IDs への full retokenization は行わない。rooted tokenizer registration は全 rendering table を再導出して root と照合し、EOG は別提供の署名済み設定を同じ table root で認証する。これを後者の入力変換検証へ読み替えない。
+
+2026-11-11、公開 seat 7 の DAA 21,012 で対象 binding の送信 tx を選択チェーンの受理一覧から読み戻した。受理 block は引き続き `bdacc76c…e62e`、tx は `2080b9fb…59fb`。固定した class・artifact root・container root、完全 claim ID、params/schedule、quote と資金の抜粋を [公開読戻し記録](../../../evidence/palw/public-t12-studio-binding-quote-2026-11-11.json) に保存した。元の RPC 出力は同記録のローカルパスと SHA-256 で識別する。同じ未変更候補は `available=true`、`quoted=false`、`refusal=G14_ROUTE_ABSENT (FpTokenizer)`、空の `planHex`。`palw_class_semantics_v1` と `palw_court_family_supplier_v1` は今回の公開 fence 読戻しでも未スケジュール。binding の再送は不要で、quote 成功・TFP1 送信には未到達。
+
+commitment を native Borsh decoder で読み、executor bond が `550c7e88…70bb:0` であることを確認した。DAA 21,012 の公開 bond は Active、担保 1,299,900,000,000 sompi、producer floor の不足 100,000,000 sompi（1 BILI）。この不足は別の登録者についての推測ではなく、対象候補自身の executor に対する `getPalwProducerFacts` の結果である。`FreePromptCommitted` の受理処理も `palw_bond_producer_floor_shortfall_v1` を呼び、同条件で拒否するため、tokenizer 経路だけを直しても受付は成立しない。
+
+現行の bond 登録は同じ outpoint・公開鍵・operator の重複を拒否し、担保への任意の追加送金を反映する native object は見つからなかった。既存コードが案内する復帰方法は新しい鍵と operator による再登録であり、executor bond の変更は別 claim ID になる。ActivationPool の top-up はこの担保の補充ではない。今回は追加支払・再登録・候補の置換は行っていない。既存候補の不足と、新候補を使う場合の別追跡を混同しない。
