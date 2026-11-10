@@ -9,6 +9,7 @@ pub mod journal;
 pub mod messages;
 pub mod native;
 pub mod ports;
+pub mod public_one_honest;
 pub mod record;
 pub mod reservations;
 pub mod rows;

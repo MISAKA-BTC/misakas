@@ -1,0 +1,273 @@
+//! Shared contracts for the public-materials profile. These values carry no
+//! native admission, availability, verdict, or settlement authority.
+
+use crate::ContractError;
+use crate::identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, SIGNATURE_BYTES, hash, principal, verify_signature};
+use borsh::{BorshDeserialize, BorshSerialize};
+
+pub const ORIGINAL_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-original/v1";
+pub const FULL_REPLAY_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-full-replay/v1";
+pub const MANIFEST_REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-request/v1";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct OriginalId(pub Digest);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct MaterialId(pub Digest);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CaseId(pub Digest);
+
+/// The canonical identity native admission must resolve from the draw or
+/// from admitted outsider eligibility before using a request's case ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Claimant {
+    DrawnBond { transaction: Digest, index: u32 },
+    Outsider(PrincipalId),
+}
+
+/// The version of this signed body is bound by its domain. The ruleset in
+/// scope binds the execution profile and its parameters independently of any
+/// future wire tag or activation height.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct OriginalCommit {
+    pub scope: ChainScope,
+    pub job: Digest,
+    pub execution: Digest,
+    pub miner: PrincipalId,
+    pub registered_class: Digest,
+    pub artifact: Digest,
+    pub program: Digest,
+    pub prompt: Digest,
+    pub input_tokens: Digest,
+    pub tokenizer: Digest,
+    pub execution_rules: Digest,
+    pub generation_seed: [u8; 32],
+    pub initial_state: Digest,
+    pub dependencies: Digest,
+    pub prefill: u32,
+    pub decode: u32,
+    pub max_context: u32,
+    pub output: Digest,
+    pub trace_root: Digest,
+    pub manifest_root: Digest,
+    pub service_contract: Digest,
+}
+
+impl OriginalCommit {
+    pub fn id(&self) -> OriginalId {
+        OriginalId(hash(b"misaka/palw/public-original-id/v1", self))
+    }
+
+    pub fn authenticate(&self, key: &[u8; PUBKEY_BYTES], signature: &[u8; SIGNATURE_BYTES]) -> Result<(), ContractError> {
+        let positions =
+            self.prefill.checked_add(self.decode.checked_sub(1).ok_or(ContractError::Range)?).ok_or(ContractError::Range)?;
+        if self.prefill == 0 || positions > self.max_context {
+            return Err(ContractError::Range);
+        }
+        authenticate_actor(self.miner, key, signature, self.id().0, ORIGINAL_SIGN_CONTEXT)
+    }
+}
+
+/// A Panel member's assertion of complete replay under the rules bound by the
+/// original. Native consumers must check that this member belongs to the
+/// original's actual post-commit draw and independently enforce the Final gate.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct FullReplayApproval {
+    pub original: OriginalId,
+    pub draw: Digest,
+    pub member: PrincipalId,
+}
+
+impl FullReplayApproval {
+    pub fn signing_digest(&self) -> Digest {
+        hash(b"misaka/palw/public-full-replay-id/v1", self)
+    }
+
+    pub fn authenticate(&self, key: &[u8; PUBKEY_BYTES], signature: &[u8; SIGNATURE_BYTES]) -> Result<(), ContractError> {
+        authenticate_actor(self.member, key, signature, self.signing_digest(), FULL_REPLAY_SIGN_CONTEXT)
+    }
+}
+
+/// Request the original's manifest itself, before a claimant knows any
+/// chunk index or has obtained any execution data. This request covers the
+/// canonical manifest entry point. The profile must supply its size cap and
+/// the native rules for validating the inspection scope and reservation.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ManifestRequest {
+    pub original: OriginalId,
+    pub manifest_root: Digest,
+    pub claimant: Claimant,
+    pub signer: PrincipalId,
+    pub inspection_scope: Digest,
+    pub supply_obligation: Digest,
+    pub collect_until: u64,
+    pub reservation: Digest,
+}
+
+impl ManifestRequest {
+    pub fn material_id(&self, original: &OriginalCommit) -> Result<MaterialId, ContractError> {
+        if self.original != original.id() || self.manifest_root != original.manifest_root {
+            return Err(ContractError::Scope);
+        }
+        Ok(MaterialId(hash(b"misaka/palw/public-manifest-material/v1", &(original.scope.ruleset, self.manifest_root))))
+    }
+
+    pub fn case_id(&self, original: &OriginalCommit, eligible_claimant: Claimant) -> Result<CaseId, ContractError> {
+        if self.claimant != eligible_claimant {
+            return Err(ContractError::Identity);
+        }
+        let material = self.material_id(original)?;
+        Ok(CaseId(hash(b"misaka/palw/public-manifest-case/v1", &(self.original, eligible_claimant, material, self.inspection_scope))))
+    }
+
+    pub fn signing_digest(&self) -> Digest {
+        hash(b"misaka/palw/public-manifest-request-id/v1", self)
+    }
+
+    pub fn authenticate(
+        &self,
+        eligible_signer: PrincipalId,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<(), ContractError> {
+        if self.signer != eligible_signer {
+            return Err(ContractError::Identity);
+        }
+        authenticate_actor(eligible_signer, key, signature, self.signing_digest(), MANIFEST_REQUEST_SIGN_CONTEXT)
+    }
+}
+
+fn authenticate_actor(
+    actor: PrincipalId,
+    key: &[u8; PUBKEY_BYTES],
+    signature: &[u8; SIGNATURE_BYTES],
+    id: Digest,
+    context: &[u8],
+) -> Result<(), ContractError> {
+    if principal(key) != actor {
+        return Err(ContractError::Identity);
+    }
+    if !verify_signature(key, id, signature, context) {
+        return Err(ContractError::Signature);
+    }
+    Ok(())
+}
+
+/// Timing derived only from canonical original admission. On restore,
+/// reconstruct it from that admission rather than trusting saved deadlines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OriginalClock {
+    accepted_at: u64,
+}
+
+impl OriginalClock {
+    pub fn new(accepted_at: u64) -> Result<Self, ContractError> {
+        accepted_at.checked_add(10_001).ok_or(ContractError::Range)?;
+        Ok(Self { accepted_at })
+    }
+
+    pub fn notice_until(self) -> u64 {
+        self.accepted_at + 3_120
+    }
+
+    pub fn hard(self) -> u64 {
+        self.accepted_at + 10_000
+    }
+
+    pub fn accepts_first_notice(self, now: u64) -> bool {
+        (self.accepted_at..=self.notice_until()).contains(&now)
+    }
+
+    pub fn accepts_case_evidence(self, now: u64, opened_at: u64, collect_until: u64) -> bool {
+        self.accepts_first_notice(opened_at) && collect_until <= self.hard() && (opened_at..=collect_until).contains(&now)
+    }
+
+    /// This predicate covers only time. Final also requires the native
+    /// verification, unresolved-case and dependency checks.
+    pub fn permits_final_time(self, now: u64) -> bool {
+        now > self.notice_until() && now <= self.hard()
+    }
+
+    pub fn is_past_hard(self, now: u64) -> bool {
+        now > self.hard()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_bytes_are_shared_but_each_claimant_keeps_a_case() {
+        let d = Digest([7; 64]);
+        let original = OriginalCommit {
+            scope: ChainScope { network: d, ruleset: d, branch: d },
+            job: d,
+            execution: d,
+            miner: PrincipalId(d),
+            registered_class: d,
+            artifact: d,
+            program: d,
+            prompt: d,
+            input_tokens: d,
+            tokenizer: d,
+            execution_rules: d,
+            generation_seed: [0; 32],
+            initial_state: d,
+            dependencies: d,
+            prefill: 1,
+            decode: 1,
+            max_context: 1,
+            output: d,
+            trace_root: d,
+            manifest_root: d,
+            service_contract: d,
+        };
+        let first = Claimant::DrawnBond { transaction: d, index: 0 };
+        let second = Claimant::DrawnBond { transaction: d, index: 1 };
+        let request = ManifestRequest {
+            original: original.id(),
+            manifest_root: d,
+            claimant: first,
+            signer: PrincipalId(d),
+            inspection_scope: d,
+            supply_obligation: d,
+            collect_until: 100,
+            reservation: d,
+        };
+        let other = ManifestRequest { claimant: second, ..request.clone() };
+        assert_eq!(request.material_id(&original), other.material_id(&original));
+        assert_ne!(request.case_id(&original, first), other.case_id(&original, second));
+        assert_eq!(other.case_id(&original, first), Err(ContractError::Identity));
+
+        let retry = ManifestRequest { collect_until: 101, reservation: Digest([8; 64]), ..request.clone() };
+        assert_eq!(request.case_id(&original, first), retry.case_id(&original, first));
+        assert_ne!(request.signing_digest(), retry.signing_digest());
+
+        let wrong_root = ManifestRequest { manifest_root: Digest([8; 64]), ..request };
+        assert_eq!(wrong_root.material_id(&original), Err(ContractError::Scope));
+    }
+
+    #[test]
+    fn original_clock_keeps_inclusive_notice_and_hard_boundaries() {
+        let clock = OriginalClock::new(100).unwrap();
+        let notice = 3_220;
+        let hard = 10_100;
+        assert!(!clock.accepts_first_notice(99));
+        assert!(clock.accepts_first_notice(100));
+        assert!(clock.accepts_first_notice(notice));
+        assert!(!clock.accepts_first_notice(notice + 1));
+        assert!(!clock.permits_final_time(notice));
+        assert!(clock.permits_final_time(notice + 1));
+        assert!(clock.permits_final_time(hard));
+        assert!(!clock.permits_final_time(hard + 1));
+        assert!(clock.accepts_case_evidence(hard, notice, hard));
+        assert!(!clock.accepts_case_evidence(hard, notice, hard - 1));
+        assert!(!clock.accepts_case_evidence(hard, notice + 1, hard));
+        assert!(!clock.accepts_case_evidence(hard, notice, hard + 1));
+        assert!(!clock.is_past_hard(hard));
+        assert!(clock.is_past_hard(hard + 1));
+        assert_eq!(OriginalClock::new(u64::MAX - 10_000), Err(ContractError::Range));
+    }
+}
