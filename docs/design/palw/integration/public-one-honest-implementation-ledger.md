@@ -74,3 +74,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 2026-11-10 12:57 CET の公開 seat 5 では、他ピアからのブロック受理は継続していた。seat 5 自身の producer は、設定クラス `f1c5635c…f623c8` について court の hard-deadline bucket 0 が 21/21 に達したと報告した。このログは当該クラスのローカル生成停止を示す。Studio TFP1 候補の受付や生成の証跡は未取得。
 
 同日 13:12 CET に隔離カナリアの pruning 取り込みは完了し、RPC は epoch 18、phase `idle`、`pruningImportStable=true` を返した。DAA 5,187 で `isSynced=false`。その後の virtual 更新で native RAM の予約済み 3,124,136,432 bytes に要求 7,721,437,122 bytes が加わり、上限 9,019,431,316 bytes を超えた。受信 lease の寿命修正を別途検証する前に、同じ隔離 DB と同じ旧バイナリを 16 GiB cgroup で起動し、RAM 上限だけを変えて検証する。隔離状態を解除するフラグは付けていない。
+
+同日の Studio T12 送信履歴の再監査では、outbox に署名済みの commitment と受付票が各 1 件あった。署名済み carrier の txid `4453a999…43afe` から claim ID `28fbc2b0…71afc3` を再導出し、payload は旧 `PalwFpCommitmentTxPayloadV3` として decode できた。TFP1 framing はない。DAA 18,561 の受理ブロックは公開 seat 5 と Explorer で照合した。Studio の TFP1 実機レポートは `tfp1CarrierSubmitted=false`、`claimId=null` を記録している。別の候補 `7645bc8b…a3711` は outbox 外の未署名データで、公開 DAA 20,969 の claim 照会でも見つからなかった。
