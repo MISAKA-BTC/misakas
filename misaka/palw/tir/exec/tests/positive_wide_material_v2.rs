@@ -274,6 +274,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     )
     .unwrap();
     assert_eq!(capture.run().generated(), EXPECTED);
+    let rows = capture.run().logits_rows();
+    let vocab = rows[0].len();
+    let logit_values = (rows.len() * vocab) as u64;
+    let event = capture.public_logits_event(0, 0, logit_values).unwrap();
+    event.authenticate(&f.job, &capture.run().trace_root(), vocab, capture.run().leaf_count()).unwrap();
+    assert!(capture.public_logits_event(0, 0, logit_values - 1).is_err());
     let signed = SignedMiner::new(f, wrong_miner);
     let r = &signed.result;
     let mut original = misaka_palw_positive_contract::public_one_honest::OriginalCommit {

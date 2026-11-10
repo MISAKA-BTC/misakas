@@ -87,6 +87,31 @@ impl WidePanelCaptureV2<'_> {
         }
     }
 
+    /// Open the separately committed logits of the original capture. The
+    /// caller reserves temporary tree storage and the returned event.
+    pub fn public_logits_event(
+        &self,
+        row: u32,
+        tile: u32,
+        max_logit_values: u64,
+    ) -> Result<kaspa_consensus_core::palw_logits_q24_v2::WideLogitsEventV2, Error> {
+        use kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES;
+        let rows = self.run.logits_rows();
+        let lanes = rows.get(row as usize).ok_or("wide public logits row range")?;
+        if tile as usize >= lanes.len().div_ceil(PALW_LOGITS_TILE_LANES) {
+            return Err("wide public logits tile range".into());
+        }
+        let values = mul(count(rows.len())?, count(lanes.len())?)?;
+        if values > max_logit_values {
+            return Err("wide public logits exceeds value cap".into());
+        }
+        self.session.charge(Charge::Visit, values)?;
+        self.session.charge(Charge::Hash, mul(values, 256)?)?;
+        self.session.charge(Charge::Proof, 2)?;
+        crate::node::wide_q24::event(self.expected.job, rows, self.run.generated(), row, tile)
+            .ok_or_else(|| "wide public logits opening".into())
+    }
+
     /// Open one tile from the original run without replaying or constructing a
     /// new tree buffer. The caller reserves the returned tile and path.
     pub fn public_trace_tile(
