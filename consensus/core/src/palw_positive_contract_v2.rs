@@ -212,6 +212,23 @@ pub struct PublicReplayApprovalRecordV1 {
     approval_digest: Digest,
 }
 
+impl PublicReplayApprovalRecordV1 {
+    pub fn check_restore(
+        &self,
+        draw: &PreparedPublicDrawV1,
+        approval_until: u64,
+        included_at: u64,
+        approval: &FullReplayApproval,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<(), ContractError> {
+        if *self != draw.verify_replay_approval(approval_until, included_at, approval, key, signature)? {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+}
+
 impl PreparedPublicDrawV1 {
     pub fn record(&self) -> PublicDrawRecordV1 {
         PublicDrawRecordV1 {
@@ -241,6 +258,23 @@ impl PreparedPublicDrawV1 {
         Ok(self.per_bond)
     }
 
+    /// Validate a single included vote before it enters the native tally.
+    pub fn verify_replay_approval(
+        &self,
+        approval_until: u64,
+        included_at: u64,
+        approval: &FullReplayApproval,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<PublicReplayApprovalRecordV1, ContractError> {
+        if approval_until > self.hard || !(self.draw_daa..=approval_until).contains(&included_at) {
+            return Err(ContractError::Range);
+        }
+        let bond = approval.bond;
+        approval.authenticate(&self.approval_context(bond)?, key, signature)?;
+        Ok(PublicReplayApprovalRecordV1 { bond, included_at, approval_digest: approval.signing_digest() })
+    }
+
     /// Check a quorum of included replay assertions. The caller resolves the
     /// canonical inclusion DAA of each assertion and the profile's deadline.
     /// Local checks, inspection opportunity and Final are separate gates.
@@ -255,16 +289,13 @@ impl PreparedPublicDrawV1 {
         }
         let mut checked = std::collections::BTreeMap::new();
         for &(included_at, approval, key, signature) in approvals {
-            if !(self.draw_daa..=approval_until).contains(&included_at) {
-                return Err(ContractError::Range);
-            }
             let bond = approval.bond;
             let key_order = (bond.transaction, bond.index);
             if checked.contains_key(&key_order) {
                 return Err(ContractError::Identity);
             }
-            approval.authenticate(&self.approval_context(bond)?, key, signature)?;
-            checked.insert(key_order, PublicReplayApprovalRecordV1 { bond, included_at, approval_digest: approval.signing_digest() });
+            let record = self.verify_replay_approval(approval_until, included_at, approval, key, signature)?;
+            checked.insert(key_order, record);
         }
         Ok(checked.into_values().collect())
     }

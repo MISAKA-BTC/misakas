@@ -655,6 +655,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         &borsh::to_vec(&approval_records).unwrap(),
     )
     .unwrap();
+    assert_eq!(restored_approvals[0].check_restore(&draw, 102, 102, &assertion, &signed.key, signed_approval.as_ref()), Ok(()));
+    assert_eq!(
+        restored_approvals[0].check_restore(&draw, 102, 101, &assertion, &signed.key, signed_approval.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     assert_eq!(draw.verify_replay_quorum(1, prepared.schedule.hard(), &[signed_assertion]), Ok(restored_approvals));
     assert_ne!(
         draw.verify_replay_quorum(1, 102, &[(101, &assertion, &signed.key, signed_approval.as_ref())]).unwrap(),
