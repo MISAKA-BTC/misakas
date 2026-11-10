@@ -275,6 +275,37 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     .unwrap();
     assert_eq!(capture.run().generated(), EXPECTED);
     let signed = SignedMiner::new(f, wrong_miner);
+    let r = &signed.result;
+    let mut original = misaka_palw_positive_contract::public_one_honest::OriginalCommit {
+        scope: r.scope,
+        job: r.job,
+        execution: r.execution,
+        miner: r.miner,
+        registered_class: r.registered_class,
+        artifact: r.artifact,
+        program: r.program,
+        prompt: d(1),
+        input_tokens: r.input,
+        tokenizer: r.tokenizer,
+        execution_rules: r.execution_rules,
+        generation_seed: r.generation_seed,
+        initial_state: d(2),
+        dependencies: r.dependencies,
+        prefill: r.prefill,
+        decode: r.decode,
+        max_context: r.max_context,
+        output: d(0),
+        trace_root: d(0),
+        manifest_root: d(0),
+        service_contract: r.service_contract,
+    };
+    let mut other = original.clone();
+    other.execution = d(77);
+    assert!(capture.bind_public_original(&mut other).is_err());
+    assert_eq!(other.trace_root, d(0));
+    capture.bind_public_original(&mut original).unwrap();
+    assert_eq!(original.trace_root, digest(capture.run().execution_root()));
+    assert_eq!(original.output, digest(palw_attempt_output_root_v1(f.job, EXPECTED)));
     let result = signed.authenticate();
     let prep = signed.preparation(f);
     let source = TirParamsSourceV1(f.params);

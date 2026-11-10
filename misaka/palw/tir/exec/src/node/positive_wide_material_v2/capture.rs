@@ -9,6 +9,7 @@ use kaspa_consensus_core::{
     palw_step_leg::{PalwStepTileLeafV1, step_tile_leaf_hash_v1},
     palw_tir_step_v1::{palw_tir_execution_root_v1, palw_tir_leaf_values_v2},
 };
+use misaka_palw_positive_contract::{identity::Digest, public_one_honest::OriginalCommit};
 use misaka_palw_tir::{Prim, demand::history_length_v1};
 use std::{cell::Cell, rc::Rc};
 /// Compare canonical original program bytes without allocating an encoded Vec.
@@ -66,6 +67,36 @@ impl WidePanelCaptureV2<'_> {
     }
     pub fn run(&self) -> &TirJobRunWideQ24V2 {
         &self.run
+    }
+
+    /// Set the original's trace and output from this single observed run.
+    /// The native execution root binds both the step tree and logits trace.
+    /// Call before constructing the manifest and signing the original.
+    pub fn bind_public_original(&self, original: &mut OriginalCommit) -> Result<(), Error> {
+        let expected = &self.expected;
+        let job = expected.job;
+        if original.manifest_root != Digest([0; 64])
+            || original.job.0 != job.job_id.as_bytes()
+            || original.execution.0 != self.context.as_bytes()
+            || original.registered_class.0 != job.shape_profile_id.as_bytes()
+            || original.artifact.0 != expected.artifact.as_bytes()
+            || original.input_tokens.0 != job.prompt_token_ids_hash.as_bytes()
+            || original.tokenizer.0 != job.tokenizer_id.as_bytes()
+            || original.execution_rules.0 != job.cu_ruleset_id.as_bytes()
+            || original.generation_seed != job.execution_seed
+            || original.prefill != job.declared_prefill_tokens
+            || original.decode != job.exact_decode_tokens
+            || original.max_context != job.max_context_tokens
+        {
+            return Err("public original does not match the captured job".into());
+        }
+        self.session.charge(Charge::Hash, count(expected.class.program.len())?)?;
+        if original.program.0 != expected.class.graph_ir_root().as_bytes() {
+            return Err("public original does not match the captured program".into());
+        }
+        original.trace_root = Digest(self.run.execution_root().as_bytes());
+        original.output = Digest(self.run.output_root().as_bytes());
+        Ok(())
     }
     /// Owned metadata export. The caller MUST acquire an independent export
     /// guard before this call, additive to all earlier copies, and retain it
