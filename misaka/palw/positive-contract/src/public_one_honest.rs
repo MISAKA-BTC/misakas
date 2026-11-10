@@ -9,6 +9,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub const ORIGINAL_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-original/v1";
 pub const FULL_REPLAY_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-full-replay/v1";
 pub const MANIFEST_REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-request/v1";
+pub const MANIFEST_RESPONSE_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-response/v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct OriginalId(pub Digest);
@@ -440,9 +441,26 @@ pub struct PendingManifestCase {
     original: OriginalId,
     material: MaterialId,
     reservation: Digest,
+    supply_obligation: Digest,
     request_digest: Digest,
     opened_at: u64,
     schedule: VerificationSchedule,
+}
+
+/// A provider's response for one case. Bytes travel separately under the
+/// fixed manifest limit and are identified here before interpretation.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedManifestResponseV1 {
+    pub case: CaseId,
+    pub supply_obligation: Digest,
+    pub provider: PrincipalId,
+    pub body_root: Digest,
+}
+
+impl SignedManifestResponseV1 {
+    pub fn signing_digest(&self) -> Digest {
+        hash(b"misaka/palw/public-manifest-response-id/v1", self)
+    }
 }
 
 /// Durable identity for a pending case. Restore must reauthenticate the
@@ -478,6 +496,33 @@ impl PendingManifestCaseRecordV1 {
 }
 
 impl PendingManifestCase {
+    /// Validate the provider named by the actual native obligation.
+    /// Neither the signature nor this response settles the case.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_provider_response(
+        &self,
+        response: &SignedManifestResponseV1,
+        expected_provider: PrincipalId,
+        original: &OriginalCommit,
+        inclusion_daa: u64,
+        bytes: &[u8],
+        max_manifest_bytes: u32,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<(), ContractError> {
+        self.check_delivery_context(original, inclusion_daa)?;
+        if response.case != self.id || response.supply_obligation != self.supply_obligation {
+            return Err(ContractError::Scope);
+        }
+        if response.provider != expected_provider {
+            return Err(ContractError::Identity);
+        }
+        if manifest_root(original.scope.ruleset, bytes, max_manifest_bytes)? != response.body_root {
+            return Err(ContractError::Identity);
+        }
+        authenticate_actor(expected_provider, key, signature, response.signing_digest(), MANIFEST_RESPONSE_SIGN_CONTEXT)
+    }
+
     pub fn authenticate_delivery(
         &self,
         original: &OriginalCommit,
@@ -592,6 +637,7 @@ impl ManifestRequest {
             original: self.original,
             material: context.original.manifest_material_id(),
             reservation: context.reservation,
+            supply_obligation: context.supply_obligation,
             request_digest: self.signing_digest(),
             opened_at: context.inclusion_daa,
             schedule: context.schedule,
@@ -1115,6 +1161,29 @@ mod tests {
         );
         let mut changed_bytes = bytes.clone();
         changed_bytes[0] ^= 1;
+        let response = SignedManifestResponseV1 {
+            case: pending.id(),
+            supply_obligation: context.supply_obligation,
+            provider: principal(key),
+            body_root: bound_original.manifest_root,
+        };
+        let provider_signature =
+            libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &response.signing_digest().0, MANIFEST_RESPONSE_SIGN_CONTEXT, [0; 32])
+                .unwrap();
+        let verify = |body: &[u8]| {
+            pending.verify_provider_response(
+                &response,
+                principal(key),
+                &bound_original,
+                schedule.material_ready_by(),
+                body,
+                max,
+                key,
+                provider_signature.as_ref(),
+            )
+        };
+        assert_eq!(verify(&bytes), Ok(()));
+        assert_eq!(verify(&changed_bytes), Err(ContractError::Identity));
         assert_eq!(
             pending.authenticate_delivery(&bound_original, schedule.material_ready_by(), &changed_bytes, &rules, 90, max),
             Err(ContractError::Identity)
