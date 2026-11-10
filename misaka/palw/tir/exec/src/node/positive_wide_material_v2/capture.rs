@@ -96,10 +96,35 @@ impl WidePanelCaptureV2<'_> {
     /// The native execution root binds both the step tree and logits trace.
     /// Call before constructing the manifest and signing the original.
     pub fn bind_public_original(&self, original: &mut OriginalCommit) -> Result<(), Error> {
+        if original.manifest_root != Digest([0; 64]) {
+            return Err("public original already has a manifest".into());
+        }
+        self.check_public_original_job(original)?;
+        original.trace_root = Digest(self.run.execution_root().as_bytes());
+        original.output = Digest(self.run.output_root().as_bytes());
+        Ok(())
+    }
+
+    /// Compare a Panel's independent capture with the same original and its
+    /// opened output. The execution root covers the step and logits traces.
+    pub fn check_public_original_replay(&self, original: &OriginalCommit, opened_output: &[u32]) -> Result<(), Error> {
+        if original.manifest_root == Digest([0; 64]) {
+            return Err("public original is missing its manifest".into());
+        }
+        self.check_public_original_job(original)?;
+        if original.trace_root.0 != self.run.execution_root().as_bytes() {
+            return Err("public original execution trace differs from replay".into());
+        }
+        if original.output.0 != self.run.output_root().as_bytes() || opened_output != self.run.generated() {
+            return Err("public original output differs from replay".into());
+        }
+        Ok(())
+    }
+
+    fn check_public_original_job(&self, original: &OriginalCommit) -> Result<(), Error> {
         let expected = &self.expected;
         let job = expected.job;
-        if original.manifest_root != Digest([0; 64])
-            || original.job.0 != job.job_id.as_bytes()
+        if original.job.0 != job.job_id.as_bytes()
             || original.execution.0 != self.context.as_bytes()
             || original.registered_class.0 != job.shape_profile_id.as_bytes()
             || original.artifact.0 != expected.artifact.as_bytes()
@@ -117,8 +142,6 @@ impl WidePanelCaptureV2<'_> {
         if original.program.0 != expected.class.graph_ir_root().as_bytes() {
             return Err("public original does not match the captured program".into());
         }
-        original.trace_root = Digest(self.run.execution_root().as_bytes());
-        original.output = Digest(self.run.output_root().as_bytes());
         Ok(())
     }
     /// Owned metadata export. The caller MUST acquire an independent export

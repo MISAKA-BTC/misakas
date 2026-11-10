@@ -317,7 +317,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     // fetching its manifest. This fixture tests that boundary only.
     use kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionV1;
     use misaka_palw_positive_contract::public_one_honest::{ManifestV1, ORIGINAL_SIGN_CONTEXT};
+    assert!(capture.check_public_original_replay(&original, EXPECTED).is_err());
     original.manifest_root = d(4);
+    capture.check_public_original_replay(&original, EXPECTED).unwrap();
+    assert!(capture.check_public_original_replay(&original, &EXPECTED[1..]).is_err());
+    let different_trace = misaka_palw_positive_contract::public_one_honest::OriginalCommit { trace_root: d(77), ..original.clone() };
+    assert!(capture.check_public_original_replay(&different_trace, EXPECTED).is_err());
     let admission = PublicOriginalAdmissionV1 {
         scope: r.scope,
         job: &f.job,

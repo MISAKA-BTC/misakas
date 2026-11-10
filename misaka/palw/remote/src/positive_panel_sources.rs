@@ -72,6 +72,18 @@ pub fn fetch_public_replay_output_v1(
     Ok(ids)
 }
 
+/// Compare an independently captured Panel run with the original's
+/// authenticated output and execution root.
+pub fn check_public_replay_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
+) -> Result<(), PanelSourceErrorR1> {
+    let output = fetch_public_replay_output_v1(provider, original, manifest)?;
+    capture.check_public_original_replay(original, &output).map_err(PanelSourceErrorR1::ReplayMismatch)
+}
+
 fn fetch_public_replay_material(
     provider: &dyn MaterialProvider,
     original: &OriginalCommit,
@@ -276,6 +288,7 @@ pub enum PanelSourceErrorR1 {
     ManifestRead(ErrorKind),
     ManifestProvider(String),
     ReplayProvider(String),
+    ReplayMismatch(String),
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {
