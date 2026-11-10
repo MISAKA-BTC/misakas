@@ -1096,7 +1096,7 @@ impl DbPalwStateV2Store {
         if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(canonical) {
             return Err(StoreError::DataInconsistency(format!("palw v2 {label}: {why}")));
         }
-        let restored = retain_native_carriage_decode_with_preflight_error_v1(
+        let mut restored = retain_native_carriage_decode_with_preflight_error_v1(
             block,
             canonical,
             |why| {
@@ -1133,6 +1133,7 @@ impl DbPalwStateV2Store {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => e,
         })?;
         self.check_native39_frontier_context_v1(&restored)?;
+        restored.release_decode_workspace_v1().map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))?;
         Ok(restored)
     }
 }

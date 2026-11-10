@@ -108,6 +108,19 @@ impl<T: NativeHeapV1> NativeRetainedV1<T> {
         let lease = reserve_native_requests_v1(value_requests_v1(&value)?)?;
         Ok(Self::from_owner_reserved_v1(value, lease))
     }
+    /// Release reconstruction workspace after decoding and validation have returned.
+    pub fn release_decode_workspace_v1(&mut self) -> Result<(), NativeCoverageV1> {
+        if let Some(lease) = &mut self._lease {
+            let retained = tracked_value_requests_v1(&self.value)?;
+            let workspace = lease.memory_v1().checked_sub(retained).ok_or_else(|| {
+                NativeCoverageV1::unsupported::<T>("native decode workspace", "retained value exceeds the preflight reservation")
+            })?;
+            if workspace != 0 {
+                drop(lease.split_memory_v1(workspace)?);
+            }
+        }
+        Ok(())
+    }
     /// Reserve a separately owned payload before a fallible construction. The
     /// source's complete typed request is an explicit conservative copy bound.
     fn try_project_v1<U>(&self, f: impl FnOnce(&T) -> U) -> Result<NativeRetainedV1<U>, NativeCoverageV1> {
@@ -330,6 +343,19 @@ mod tests {
             matches!(result, Err(NativeDecodeErrorV1::Decode(ref why)) if matches!(why.kind(), io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof))
         );
     }
+    #[test]
+    fn cold_decode_releases_scratch_but_keeps_retained_bytes() {
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 1 << 20, database_bytes: 0 });
+        let value = crate::palw_state_v2::PalwChainStateV2::genesis();
+        let retained = tracked_value_requests_v1(&value).unwrap();
+        let mut owner = NativeRetainedV1::from_owner_reserved_v1(value, Some(checker.reserve_requests_v1(retained + 512, 0).unwrap()));
+        assert_eq!(checker.outstanding(), (retained + 512, 0));
+        owner.release_decode_workspace_v1().unwrap();
+        assert_eq!(checker.outstanding(), (retained, 0));
+        drop(owner);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+
     #[test]
     fn cache_replacement_cannot_release_live_shared_payload_ticket() {
         let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 64, database_bytes: 0 });
