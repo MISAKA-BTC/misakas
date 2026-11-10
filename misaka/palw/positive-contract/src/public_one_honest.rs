@@ -489,6 +489,39 @@ pub enum ManifestDeliveryV1 {
     WrongMaterial,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ManifestResponseRecordV1 {
+    case: CaseId,
+    response_digest: Digest,
+    inclusion_daa: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct VerifiedManifestDeliveryV1 {
+    record: ManifestResponseRecordV1,
+    outcome: ManifestDeliveryV1,
+}
+
+impl VerifiedManifestDeliveryV1 {
+    pub fn record(&self) -> ManifestResponseRecordV1 {
+        self.record
+    }
+
+    pub fn into_outcome(self) -> ManifestDeliveryV1 {
+        self.outcome
+    }
+}
+
+impl ManifestResponseRecordV1 {
+    /// The caller re-verifies the original signed packet before this check.
+    pub fn check_restore(&self, delivery: &VerifiedManifestDeliveryV1) -> Result<(), ContractError> {
+        if *self != delivery.record() {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+}
+
 impl PendingManifestCaseRecordV1 {
     pub fn check_restore(&self, pending: &PendingManifestCase) -> Result<(), ContractError> {
         if *self != pending.record() {
@@ -514,7 +547,7 @@ impl PendingManifestCase {
         max_manifest_bytes: u32,
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
-    ) -> Result<ManifestDeliveryV1, ContractError> {
+    ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
         self.check_delivery_context(original, inclusion_daa)?;
         if response.case != self.id || response.supply_obligation != self.supply_obligation {
             return Err(ContractError::Scope);
@@ -526,15 +559,18 @@ impl PendingManifestCase {
         if body_root != response.body_root {
             return Err(ContractError::Identity);
         }
-        authenticate_actor(expected_provider, key, signature, response.signing_digest(), MANIFEST_RESPONSE_SIGN_CONTEXT)?;
-        if body_root != original.manifest_root {
-            return Ok(ManifestDeliveryV1::WrongMaterial);
-        }
-        let authenticated = AuthenticatedManifest { id: self.material, bytes };
-        Ok(match authenticated.decode(original, scope_limits, total_limit) {
-            Ok(manifest) => ManifestDeliveryV1::Checked(manifest),
-            Err(error) => ManifestDeliveryV1::CommittedButInvalid(error),
-        })
+        let response_digest = response.signing_digest();
+        authenticate_actor(expected_provider, key, signature, response_digest, MANIFEST_RESPONSE_SIGN_CONTEXT)?;
+        let outcome = if body_root != original.manifest_root {
+            ManifestDeliveryV1::WrongMaterial
+        } else {
+            let authenticated = AuthenticatedManifest { id: self.material, bytes };
+            match authenticated.decode(original, scope_limits, total_limit) {
+                Ok(manifest) => ManifestDeliveryV1::Checked(manifest),
+                Err(error) => ManifestDeliveryV1::CommittedButInvalid(error),
+            }
+        };
+        Ok(VerifiedManifestDeliveryV1 { record: ManifestResponseRecordV1 { case: self.id, response_digest, inclusion_daa }, outcome })
     }
 
     pub fn record(&self) -> PendingManifestCaseRecordV1 {
@@ -1177,7 +1213,7 @@ mod tests {
                 provider_signature.as_ref(),
             )
         };
-        assert_eq!(verify(&bytes, 89), Ok(ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget)));
+        assert_eq!(verify(&bytes, 89).unwrap().into_outcome(), ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget));
         assert_eq!(verify(&changed_bytes, 90), Err(ContractError::Identity));
         let wrong_response = SignedManifestResponseV1 {
             body_root: manifest_root(bound_original.scope.ruleset, &changed_bytes, max).unwrap(),
@@ -1190,8 +1226,8 @@ mod tests {
             [0; 32],
         )
         .unwrap();
-        assert_eq!(
-            pending.verify_provider_response(
+        let wrong = pending
+            .verify_provider_response(
                 &wrong_response,
                 principal(key),
                 &bound_original,
@@ -1202,11 +1238,16 @@ mod tests {
                 max,
                 key,
                 wrong_signature.as_ref(),
-            ),
-            Ok(ManifestDeliveryV1::WrongMaterial)
-        );
+            )
+            .unwrap();
+        let verified = verify(&bytes, 90).unwrap();
+        let stored = borsh::to_vec(&verified.record()).unwrap();
+        let restored: ManifestResponseRecordV1 = borsh::from_slice(&stored).unwrap();
+        assert_eq!(restored.check_restore(&verified), Ok(()));
+        assert_eq!(restored.check_restore(&wrong), Err(ContractError::Scope));
+        assert_eq!(wrong.into_outcome(), ManifestDeliveryV1::WrongMaterial);
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
-        assert_eq!(verify(&bytes, 90), Ok(ManifestDeliveryV1::Checked(checked)));
+        assert_eq!(verified.into_outcome(), ManifestDeliveryV1::Checked(checked));
         assert_eq!(pending.unresolved_at(clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
         let changed = OriginalCommit { trace_root: Digest([8; 64]), ..bound_original };
         assert_eq!(authenticated.decode(&changed, &rules, 90), Err(ContractError::Scope));
