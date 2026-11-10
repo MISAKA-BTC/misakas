@@ -2198,7 +2198,7 @@ impl VirtualStateProcessor {
         let mut palw_state = match self.palw_state_params_v2.as_ref() {
             None => None,
             Some(params) => {
-                let loaded = match self.palw_state_v2_store.read().load_tip_retained_v1(params) {
+                let loaded = match self.palw_state_v2_store.read().take_tip_for_transition_v1(params) {
                     Ok(loaded) => loaded,
                     Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) => {
                         return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
