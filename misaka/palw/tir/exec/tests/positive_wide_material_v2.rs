@@ -398,19 +398,21 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         count_evidence.check_wide_leaf_count(&original, &f.job, &f.class, trace_len),
         Err(PalwStepRefuteError::NoFaultFound)
     ));
-    bad_index.step_leaf_count += 1;
-    let mut wrong_count = original.clone();
-    wrong_count.trace_root = digest(palw_tir_execution_root_v1(
-        &f.job.context_hash(),
-        &bad_index.full_logits_trace_root,
-        &f.job.shape_profile_id,
-        bad_index.step_leaf_count,
-        &bad_index.step_merkle_root,
-    ));
-    let count_evidence = PublicOriginalTraceCountV1 { original: wrong_count.id(), trace: bad_index };
-    assert!(count_evidence.check_wide_leaf_count(&original, &f.job, &f.class, trace_len + 1).is_err());
-    let count_verdict = count_evidence.check_wide_leaf_count(&wrong_count, &f.job, &f.class, trace_len + 1).unwrap();
-    assert_eq!(count_verdict.fault, PalwStepFaultV1::StepLeafCountNotCanonical);
+    for declared in [0, trace_len + 1] {
+        bad_index.step_leaf_count = declared;
+        let mut wrong_count = original.clone();
+        wrong_count.trace_root = digest(palw_tir_execution_root_v1(
+            &f.job.context_hash(),
+            &bad_index.full_logits_trace_root,
+            &f.job.shape_profile_id,
+            bad_index.step_leaf_count,
+            &bad_index.step_merkle_root,
+        ));
+        let count_evidence = PublicOriginalTraceCountV1 { original: wrong_count.id(), trace: bad_index.clone() };
+        assert!(count_evidence.check_wide_leaf_count(&original, &f.job, &f.class, trace_len).is_err());
+        let count_verdict = count_evidence.check_wide_leaf_count(&wrong_count, &f.job, &f.class, trace_len).unwrap();
+        assert_eq!(count_verdict.fault, PalwStepFaultV1::StepLeafCountNotCanonical);
+    }
     // Commit a different step value while preserving the independently
     // committed logits event. The changed tile really opens the changed claim.
     let mut bad = material;

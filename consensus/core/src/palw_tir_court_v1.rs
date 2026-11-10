@@ -3790,17 +3790,27 @@ impl PublicOriginalTraceIndexV1 {
         original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
         max_step_leaf_count: u64,
     ) -> Result<(), PalwStepRefuteError> {
-        if self.step_leaf_count == 0
-            || self.step_leaf_count > max_step_leaf_count
-            || palw_tir_execution_root_v1(
-                &Hash64::from_bytes(original.execution.0),
-                &self.full_logits_trace_root,
-                &Hash64::from_bytes(original.registered_class.0),
-                self.step_leaf_count,
-                &self.step_merkle_root,
-            )
-            .as_bytes()
-                != original.trace_root.0
+        if self.step_leaf_count == 0 || self.step_leaf_count > max_step_leaf_count {
+            return Err(bad("public trace leaf count is outside the opening cap"));
+        }
+        self.authenticate(original)
+    }
+
+    /// Authenticate fixed-size metadata even when its declared extent is
+    /// malformed. Opening a tile still requires the separate count cap.
+    pub fn authenticate(
+        &self,
+        original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+    ) -> Result<(), PalwStepRefuteError> {
+        if palw_tir_execution_root_v1(
+            &Hash64::from_bytes(original.execution.0),
+            &self.full_logits_trace_root,
+            &Hash64::from_bytes(original.registered_class.0),
+            self.step_leaf_count,
+            &self.step_merkle_root,
+        )
+        .as_bytes()
+            != original.trace_root.0
         {
             return Err(bad("public trace index does not bind the original execution"));
         }
@@ -3827,7 +3837,7 @@ impl PublicOriginalTraceCountV1 {
         if self.original != original.id() {
             return Err(bad("public trace count names another original"));
         }
-        self.trace.check(original, max_step_leaf_count)?;
+        self.trace.authenticate(original)?;
         let expected = public_original_wide_space(original, job, class)?
             .leaf_count_capped(job, max_step_leaf_count)
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;

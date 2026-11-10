@@ -56,7 +56,6 @@ use crate::public_material::{MaterialProvider, public_original_manifest_path};
 pub fn fetch_public_trace_index_v1(
     provider: &dyn MaterialProvider,
     original: &OriginalCommit,
-    max_step_leaf_count: u64,
 ) -> Result<PublicOriginalTraceIndexV1, PanelSourceErrorR1> {
     let path = crate::public_material::public_original_trace_index_path(original.id());
     let bytes = provider
@@ -67,7 +66,7 @@ pub fn fetch_public_trace_index_v1(
         return Err(PanelSourceErrorR1::Binding);
     }
     let index: PublicOriginalTraceIndexV1 = borsh::from_slice(&bytes).map_err(|_| PanelSourceErrorR1::Binding)?;
-    index.check(original, max_step_leaf_count).map_err(|_| PanelSourceErrorR1::Binding)?;
+    index.authenticate(original).map_err(|_| PanelSourceErrorR1::Binding)?;
     Ok(index)
 }
 
@@ -237,7 +236,7 @@ pub fn run_public_wide_replay_v1(
     if let Some(search) = search
         && capture.run().execution_root().as_bytes() != original.trace_root.0
     {
-        let trace = fetch_public_trace_index_v1(provider, original, search.max_step_leaf_count)?;
+        let trace = fetch_public_trace_index_v1(provider, original)?;
         let expected_leaf_count = capture.run().leaf_count();
         if trace.step_leaf_count != expected_leaf_count {
             let evidence = PublicOriginalTraceCountV1 { original: original.id(), trace };
