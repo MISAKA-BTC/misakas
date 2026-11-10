@@ -12,6 +12,7 @@ use crate::mempool::{
 use kaspa_consensus_core::{
     api::ConsensusApi,
     constants::UNACCEPTED_DAA_SCORE,
+    palw_tokenizer_registration_carriage_v1::TokenizerRegistrationLocalWorkRefusalV1,
     tx::{MutableTransaction, Transaction, TransactionId, TransactionOutpoint, UtxoEntry},
 };
 use kaspa_core::{debug, info, warn};
@@ -23,6 +24,14 @@ impl Mempool {
         mut transaction: MutableTransaction,
         rbf_policy: RbfPolicy,
     ) -> RuleResult<TransactionPreValidation> {
+        // Charge newly submitted carriers before duplicate/standardness
+        // checks. Revalidation and template selection have separate limits.
+        if let Some(charge) = consensus.tokenizer_registration_local_charge_v1(&transaction.tx) {
+            self.tokenizer_registration_work.lock().charge_v1(charge, std::time::Instant::now()).map_err(|why| match why {
+                TokenizerRegistrationLocalWorkRefusalV1::Throttled => RuleError::LocalTokenizerRegistrationWorkThrottled,
+                TokenizerRegistrationLocalWorkRefusalV1::SourceExceeded => RuleError::RejectTokenizerRegistrationSourceWork,
+            })?;
+        }
         self.validate_transaction_unacceptance(&transaction)?;
         // Populate mass and estimated_size in the beginning, it will be used in multiple places throughout the validation and insertion.
         transaction.calculated_non_contextual_masses = Some(consensus.calculate_transaction_non_contextual_masses(&transaction.tx));

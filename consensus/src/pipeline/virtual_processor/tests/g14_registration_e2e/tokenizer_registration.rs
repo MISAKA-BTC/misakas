@@ -380,6 +380,21 @@ async fn run() {
     let node = TestConsensus::with_db(db.clone(), &config, sender);
     let chain = t12_genesis_chain_on(node, &config, &bundle, &premine, &floats);
     let mut env = Env::around(chain, (config, bundle, premine, floats));
+    let mut malformed = b"TKR1".to_vec();
+    malformed.resize(policy.source_budget_v1().unwrap().bytes as usize + 1, 0xff);
+    let over_work = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![],
+        vec![],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        malformed,
+    );
+    assert!(
+        env.chain.ctx.consensus.tokenizer_registration_local_charge_v1(&over_work).is_none(),
+        "the dormant wire retains its legacy meaning"
+    );
     warm_to(&mut env, START).await;
     let (mut m, body, raw, eog) = prepare_class(env, policy).await;
     // A tick-bearing heartbeat uses the recovery cadence. Target block time
@@ -403,6 +418,36 @@ async fn run() {
     let gross = quote.quote.charge + FEE;
     let open_tx = tkr_carrier(&m.env, &open_wire, OPENER, gross);
     mempool_verdict(&m.env, &open_tx).expect("a properly funded signed TKR1 Open is standard at the test clock");
+    {
+        use kaspa_mining::{
+            MiningCounters,
+            errors::MiningManagerError,
+            manager::MiningManager,
+            mempool::{
+                errors::RuleError,
+                tx::{Orphan, Priority, RbfPolicy},
+            },
+        };
+        let manager = MiningManager::new(
+            m.env.config.params.target_time_per_block(),
+            true,
+            m.env.config.params.max_block_mass,
+            None,
+            std::sync::Arc::new(MiningCounters::default()),
+        );
+        let consensus = m.env.chain.ctx.consensus.consensus_clone();
+        let insert = |tx| {
+            manager.validate_and_insert_transaction(consensus.as_ref(), tx, Priority::High, Orphan::Forbidden, RbfPolicy::Forbidden)
+        };
+        assert!(
+            matches!(insert(over_work), Err(MiningManagerError::MempoolError(RuleError::RejectTokenizerRegistrationSourceWork))),
+            "local TKR1 work rejects the oversized carrier before ordinary transaction checks"
+        );
+        assert!(insert(open_tx.clone()).unwrap().accepted.iter().any(|tx| tx.id() == open_tx.id()));
+        assert!(
+            matches!(insert(open_tx.clone()), Err(MiningManagerError::MempoolError(RuleError::RejectDuplicate(id))) if id == open_tx.id())
+        );
+    }
 
     // Observe the accepted Open before constructing or submitting its Part.
     // The first source at the reserved DAA becomes its clock reference. Its

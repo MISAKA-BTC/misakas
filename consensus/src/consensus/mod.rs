@@ -1344,6 +1344,20 @@ impl ConsensusApi for Consensus {
         self.lkg_virtual_state.load().daa_score
     }
 
+    fn tokenizer_registration_local_charge_v1(
+        &self,
+        transaction: &Transaction,
+    ) -> Option<kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationLocalChargeV1> {
+        let fence = self.config.params.palw_tokenizer_registration_v1_fence()?;
+        if !fence.active_at(self.get_virtual_daa_score()) {
+            return None;
+        }
+        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::tokenizer_registration_local_charge_v1(
+            transaction,
+            &fence.policy,
+        )
+    }
+
     fn palw_producer_facts_v2(
         &self,
         class_id: kaspa_hashes::Hash64,

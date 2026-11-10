@@ -427,6 +427,15 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Conservative local intake work for a TKR1 carrier under the active
+    /// transport profile. Does not authenticate or load a parent snapshot.
+    fn tokenizer_registration_local_charge_v1(
+        &self,
+        _transaction: &Transaction,
+    ) -> Option<crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationLocalChargeV1> {
+        None
+    }
+
     /// **What a `ConsensusV2` block producer must read from chain state** — see
     /// [`crate::palw_producer_v2`] for why it is one derived answer rather than the ingredients.
     ///

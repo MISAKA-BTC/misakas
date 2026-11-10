@@ -28,6 +28,12 @@ use crate::{
 use borsh::BorshDeserialize;
 use std::sync::Arc;
 
+mod local_work;
+pub use local_work::{
+    TokenizerRegistrationLocalChargeV1, TokenizerRegistrationLocalWorkRefusalV1, TokenizerRegistrationLocalWorkV1,
+    tokenizer_registration_local_charge_v1,
+};
+
 pub const TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1: &[u8; 4] = b"TKR1";
 
 fn body(tx: &Transaction) -> Option<&[u8]> {

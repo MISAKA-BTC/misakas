@@ -3,7 +3,10 @@ use crate::{
     flow_trait::Flow,
     flowcontext::transactions::MAX_INV_PER_TX_INV_MSG,
 };
-use kaspa_consensus_core::tx::{Transaction, TransactionId};
+use kaspa_consensus_core::{
+    palw_tokenizer_registration_carriage_v1::TokenizerRegistrationLocalWorkV1,
+    tx::{Transaction, TransactionId},
+};
 use kaspa_consensusmanager::ConsensusProxy;
 use kaspa_core::{time::unix_now, warn};
 use kaspa_mining::{
@@ -56,6 +59,8 @@ pub struct RelayTransactionsFlow {
     /// Liveness hotfix (L-LC-02): this peer's budget of H-1 carriers handed to the mempool, and how many were held back over it.
     palw_carrier_budget: super::palw_carriers::PalwPeerCarrierBudgetV1,
     palw_carriers_held_back: u64,
+    tokenizer_registration_work: TokenizerRegistrationLocalWorkV1,
+    tokenizer_registration_held_back: u64,
 }
 
 /// Holds the state information for whether we will throttle tx relay or not
@@ -86,6 +91,13 @@ impl RelayTransactionsFlow {
             spam_counter: 0,
             palw_carrier_budget: Default::default(),
             palw_carriers_held_back: 0,
+            // Follow the H1 peer burst/refill convention in full TKR1
+            // source partitions. These local values are uncalibrated.
+            tokenizer_registration_work: TokenizerRegistrationLocalWorkV1::new(
+                super::palw_carriers::PALW_PEER_CARRIER_BURST_V1,
+                super::palw_carriers::PALW_PEER_CARRIERS_PER_SEC_V1,
+            ),
+            tokenizer_registration_held_back: 0,
         }
     }
 
@@ -214,6 +226,7 @@ impl RelayTransactionsFlow {
         should_throttle: bool,
     ) -> Result<(), ProtocolError> {
         let mut transactions: Vec<Transaction> = Vec::with_capacity(requests.len());
+        let mut tokenizer_held = 0u64;
         for request in requests {
             let response = self.read_response().await?;
             let transaction_id = response.transaction_id();
@@ -224,7 +237,23 @@ impl RelayTransactionsFlow {
                 )));
             }
             if let Response::Transaction(transaction) = response {
+                if let Some(charge) = consensus.with_consensus_api_v1(|api| api.tokenizer_registration_local_charge_v1(&transaction))
+                    && self.tokenizer_registration_work.charge_v1(charge, std::time::Instant::now()).is_err()
+                {
+                    tokenizer_held += 1;
+                    continue;
+                }
                 transactions.push(transaction);
+            }
+        }
+        if tokenizer_held != 0 {
+            let previous = self.tokenizer_registration_held_back;
+            self.tokenizer_registration_held_back = previous.saturating_add(tokenizer_held);
+            if previous == 0 || previous / 100 != self.tokenizer_registration_held_back / 100 {
+                warn!(
+                    "Peer {} has {} TKR1 carrier(s) withheld by the local relay work limit",
+                    self.router, self.tokenizer_registration_held_back
+                );
             }
         }
         // Liveness hotfix (L-LC-02): an H-1 carrier over this peer's budget is not handed to the mempool (whose gate rehearses it);

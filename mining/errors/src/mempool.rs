@@ -10,6 +10,10 @@ pub enum RuleError {
     LocalNativeCapacityUnavailable(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
     #[error("local native context unavailable: {0}")]
     LocalNativeStateContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
+    #[error("local tokenizer registration admission work exhausted; retry later")]
+    LocalTokenizerRegistrationWorkThrottled,
+    #[error("tokenizer registration carrier exceeds its active source work partition")]
+    RejectTokenizerRegistrationSourceWork,
     /// A consensus transaction rule error
     ///
     /// Note that following variants are converted:
@@ -193,6 +197,11 @@ pub type NonStandardResult<T> = std::result::Result<T, NonStandardError>;
 
 impl RuleError {
     pub fn is_local_native_retry_v1(&self) -> bool {
-        matches!(self, Self::LocalNativeCapacityUnavailable(_) | Self::LocalNativeStateContextUnavailable(_))
+        matches!(
+            self,
+            Self::LocalNativeCapacityUnavailable(_)
+                | Self::LocalNativeStateContextUnavailable(_)
+                | Self::LocalTokenizerRegistrationWorkThrottled
+        )
     }
 }
