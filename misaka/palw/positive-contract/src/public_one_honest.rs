@@ -262,8 +262,12 @@ impl CheckedManifestV1 {
         self.original
     }
 
+    pub fn entry(&self, scope: MaterialScope) -> &ManifestEntryV1 {
+        self.manifest.entry(scope)
+    }
+
     pub fn chunk(&self, scope: MaterialScope, index: u64) -> Result<ManifestChunkV1, ContractError> {
-        let entry = self.manifest.entry(scope);
+        let entry = self.entry(scope);
         Ok(ManifestChunkV1 {
             id: entry.chunk_material_id(self.ruleset, index)?,
             content_root: entry.content_root,
@@ -271,6 +275,11 @@ impl CheckedManifestV1 {
             range: entry.chunk_range(index)?,
         })
     }
+}
+
+/// One complete canonical TIR v1 program, opened by its native graph IR hash.
+pub fn tir_program_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tir-program-v1/native-graph-ir/whole")
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -814,17 +823,25 @@ mod tests {
         context.inclusion_daa += 1;
         assert_eq!(request.check_inclusion(&context), Err(ContractError::Range));
 
-        let rules = [ManifestScopeRules { codec: d, max_bytes: 16, chunk_bytes: 8 }; MaterialScope::COUNT];
-        let manifest = ManifestV1 {
+        let mut rules = [ManifestScopeRules { codec: d, max_bytes: 16, chunk_bytes: 8 }; MaterialScope::COUNT];
+        let mut manifest = ManifestV1 {
             service_contract: original.service_contract,
             entries: [ManifestEntryV1 { subject: d, content_root: d, codec: d, total_bytes: 9, chunk_bytes: 8 }; MaterialScope::COUNT],
         };
+        let program_codec = tir_program_material_codec_v1();
+        rules[MaterialScope::Program as usize] = ManifestScopeRules { codec: program_codec, max_bytes: 16, chunk_bytes: 16 };
+        manifest.entries[MaterialScope::Program as usize].codec = program_codec;
+        manifest.entries[MaterialScope::Program as usize].chunk_bytes = 16;
         let bytes = borsh::to_vec(&manifest).unwrap();
         let max = u32::try_from(bytes.len()).unwrap();
         let bound_original = OriginalCommit { manifest_root: manifest_root(d, &bytes, max).unwrap(), ..original.clone() };
         let authenticated = bound_original.authenticate_manifest(&bytes, max).unwrap();
         let checked = authenticated.decode(&bound_original, &rules, 90).unwrap();
         assert_eq!(checked.original(), bound_original.id());
+        let program = checked.chunk(MaterialScope::Program, 0).unwrap();
+        assert_eq!(program.codec, program_codec);
+        assert_eq!(program.range, 0..9);
+        assert_eq!(checked.chunk(MaterialScope::Program, 1), Err(ContractError::Range));
         let chunk = checked.chunk(MaterialScope::Trace, 1).unwrap();
         assert_eq!(chunk.range, 8..9);
         assert_eq!(chunk.content_root, d);

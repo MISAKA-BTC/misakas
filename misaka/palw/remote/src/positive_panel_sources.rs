@@ -11,6 +11,7 @@ use kaspa_consensus_core::{
         PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, prompt_ids_tile_count_v1, prompt_token_ids_match_v1,
         verify_prompt_ids_opening_v1,
     },
+    palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
     palw_tir_court_v1::PalwTirInventoryIndexV1,
 };
@@ -19,6 +20,7 @@ use misaka_palw_positive_contract::{
     identity::{PUBKEY_BYTES, SIGNATURE_BYTES},
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
+    public_one_honest::{CheckedManifestV1, MaterialScope, tir_program_material_codec_v1},
 };
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir_artifact::{
@@ -27,6 +29,21 @@ use misaka_palw_tir_artifact::{
 use misaka_palw_tir_exec::node::TirArtifactV1;
 
 use crate::miner::positive_v2::{CanonicalDataDutyV2, MinerErrorV2, PreparedDataV2, StoredUnitV2};
+
+/// Authenticate the complete canonical program before decoding it for replay.
+/// The caller bounds acquisition using the checked manifest's Program entry.
+pub fn open_public_tir_program_v1(manifest: &CheckedManifestV1, bytes: &[u8]) -> Result<TirProgramV1, PanelSourceErrorR1> {
+    let entry = manifest.entry(MaterialScope::Program);
+    if entry.codec != tir_program_material_codec_v1()
+        || entry.content_root != entry.subject
+        || entry.total_bytes > u64::from(entry.chunk_bytes)
+        || entry.total_bytes != bytes.len() as u64
+        || palw_tir_graph_ir_root_v1(bytes).as_bytes() != entry.subject.0
+    {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    TirProgramV1::decode_canonical(bytes).map_err(|_| PanelSourceErrorR1::Binding)
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct PanelSourceLimitsR1 {
