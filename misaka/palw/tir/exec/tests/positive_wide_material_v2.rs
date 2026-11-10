@@ -688,8 +688,16 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let request_sig =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [0; 32])
             .unwrap();
-    let accepted =
-        prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
+    use kaspa_consensus_core::palw_positive_contract_v2::PublicManifestClaimantAuthorityV1;
+    use misaka_palw_positive_contract::public_one_honest::SignedManifestRequestV1;
+    let request_carrier = SignedManifestRequestV1 { request: request.clone(), key: signed.key, signature: *request_sig.as_ref() };
+    let accepted = prepared
+        .verify_manifest_request_bytes(
+            PublicManifestClaimantAuthorityV1::Drawn(&draw),
+            &borsh::to_vec(&request_carrier).unwrap(),
+            &request_context,
+        )
+        .unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
     let stale_origin = AcceptedOrigin { accepted_blue_score: reservation.origin.accepted_blue_score, ..request_context.origin };
     let stale_request = ManifestRequestContext { origin: stale_origin, ..request_context };

@@ -522,6 +522,27 @@ pub struct ManifestRequest {
     pub reservation: Digest,
 }
 
+/// Bounded carrier for a first material request. The claimant kind is the
+/// only field that changes its encoded length.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedManifestRequestV1 {
+    pub request: ManifestRequest,
+    pub key: [u8; PUBKEY_BYTES],
+    pub signature: [u8; SIGNATURE_BYTES],
+}
+
+impl SignedManifestRequestV1 {
+    const OUTSIDER_BYTES: usize = 7 * 64 + 1 + 8 + PUBKEY_BYTES + SIGNATURE_BYTES;
+    pub const MAX_WIRE_BYTES: usize = Self::OUTSIDER_BYTES + 4;
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ContractError> {
+        if !matches!(bytes.len(), Self::OUTSIDER_BYTES | Self::MAX_WIRE_BYTES) {
+            return Err(ContractError::NonCanonical);
+        }
+        borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)
+    }
+}
+
 /// Identity of the accepted profile limits used to interpret the manifest.
 pub fn manifest_limits_id_v1(
     scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
@@ -1517,6 +1538,19 @@ mod tests {
         let signature =
             libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [0; 32])
                 .unwrap();
+        let carrier = SignedManifestRequestV1 { request: request.clone(), key: *key, signature: *signature.as_ref() };
+        let mut wire = borsh::to_vec(&carrier).unwrap();
+        assert_eq!(wire.len(), SignedManifestRequestV1::MAX_WIRE_BYTES);
+        assert_eq!(SignedManifestRequestV1::decode(&wire), Ok(carrier.clone()));
+        wire.push(0);
+        assert_eq!(SignedManifestRequestV1::decode(&wire), Err(ContractError::NonCanonical));
+        let outsider = SignedManifestRequestV1 {
+            request: ManifestRequest { claimant: Claimant::Outsider(request.signer), ..request.clone() },
+            ..carrier
+        };
+        let wire = borsh::to_vec(&outsider).unwrap();
+        assert_eq!(wire.len() + 4, SignedManifestRequestV1::MAX_WIRE_BYTES);
+        assert_eq!(SignedManifestRequestV1::decode(&wire), Ok(outsider));
         let pending = request.verify_for_inclusion(&context, key, signature.as_ref()).unwrap();
         assert_eq!(pending.id(), request.case_id(&bound_original, first).unwrap());
         assert_eq!(pending.reservation(), context.reservation);

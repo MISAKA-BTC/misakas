@@ -486,7 +486,31 @@ impl PreparedPublicDrawV1 {
     }
 }
 
+pub enum PublicManifestClaimantAuthorityV1<'a> {
+    Drawn(&'a PreparedPublicDrawV1),
+    Outsider(u64),
+}
+
 impl PreparedPublicOriginalV1 {
+    /// Decode an included request and apply the authority already resolved by
+    /// the native fold. The packet cannot choose its own draw or slot.
+    pub fn verify_manifest_request_bytes(
+        &self,
+        authority: PublicManifestClaimantAuthorityV1<'_>,
+        bytes: &[u8],
+        context: &ManifestRequestContext<'_>,
+    ) -> Result<PendingManifestCase, ContractError> {
+        let signed = misaka_palw_positive_contract::public_one_honest::SignedManifestRequestV1::decode(bytes)?;
+        match authority {
+            PublicManifestClaimantAuthorityV1::Drawn(draw) => {
+                self.verify_drawn_manifest_request(draw, &signed.request, context, &signed.key, &signed.signature)
+            }
+            PublicManifestClaimantAuthorityV1::Outsider(slot) => {
+                self.verify_outsider_manifest_request(slot, &signed.request, context, &signed.key, &signed.signature)
+            }
+        }
+    }
+
     /// Restore the draw using the members and inclusion DAA read from native
     /// history. An archived draw record cannot supply its own inputs.
     pub fn restore_draw(
