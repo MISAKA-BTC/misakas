@@ -283,12 +283,13 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let signed = SignedMiner::new(f, wrong_miner);
     let r = &signed.result;
     let body = u64::from(ManifestV1::WIRE_BYTES);
+    let manifest_total_limit = u64::from(f.job.exact_decode_tokens) * 4 * MaterialScope::COUNT as u64;
     let budget = AggregateBudget {
         rounds: 1,
         unique_source_bytes: body,
-        transmitted_bytes: body * 3,
-        additional_work: 3,
-        retained_bytes: body * 3,
+        transmitted_bytes: body * 4,
+        additional_work: 4,
+        retained_bytes: body * 4 + manifest_total_limit,
         retention_until: 10_100,
         fee: 1,
         witness_attempts: 1,
@@ -469,7 +470,6 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let different_trace = misaka_palw_positive_contract::public_one_honest::OriginalCommit { trace_root: d(77), ..original.clone() };
     assert!(capture.check_public_original_replay(&different_trace, EXPECTED).is_err());
     let manifest_scope_limits = [rules; MaterialScope::COUNT];
-    let manifest_total_limit = rules.max_bytes * MaterialScope::COUNT as u64;
     let admission = PublicOriginalAdmissionV1 {
         scope: r.scope,
         job: &f.job,
@@ -521,7 +521,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
             filing_daa: 1,
             adjudication_and_recovery_daa: 1,
         },
-        initial_supply: supply,
+        initial_supply: RemainingCapacity { retained_bytes: body + manifest_total_limit, ..supply },
         rescue: ProtectedRescueDemand {
             max_drawn_bonds: 2,
             per_drawn_bond: supply,
@@ -538,6 +538,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(bytes.len(), SignedPublicOriginalV1::WIRE_BYTES);
     assert!(SignedPublicOriginalV1::decode(&bytes[..bytes.len() - 1]).is_err());
     let prepared = admission.prepare_signed_bytes(&bytes, &reservation).unwrap();
+    let short_retention = PublicOriginalReservationV1 { initial_supply: supply, ..reservation };
+    assert_eq!(admission.prepare_signed_bytes(&bytes, &short_retention), Err(misaka_palw_positive_contract::ContractError::Budget));
     let mut unavailable_scope = manifest_scope_limits;
     unavailable_scope[MaterialScope::Trace as usize].chunk_bytes = 0;
     let invalid_profile = PublicOriginalAdmissionV1 { manifest_scope_limits: &unavailable_scope, ..admission };
@@ -746,10 +748,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         prepared.verify_outsider_manifest_request(0, &outside, &request_context, &signed.key, outside_sig.as_ref()),
         Err(misaka_palw_positive_contract::ContractError::Budget)
     );
-    let outsider_budget = AggregateBudget { transmitted_bytes: body * 4, retained_bytes: body * 4, additional_work: 4, ..budget };
     let outsider_reservation = PublicOriginalReservationV1 {
         rescue: ProtectedRescueDemand { max_outsiders: 1, per_outsider: supply, ..reservation.rescue },
-        budget: &outsider_budget,
         ..reservation
     };
     let with_outsider = admission.prepare(&original, &signed.key, signature.as_ref(), &outsider_reservation).unwrap();

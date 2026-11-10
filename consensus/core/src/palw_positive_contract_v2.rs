@@ -156,6 +156,7 @@ pub struct PublicOriginalReservationV1<'a> {
     pub service_obligation: Digest,
     pub notice: FirstNoticeDemand,
     pub case: MaterialCaseDemand,
+    /// Includes the manifest body and the profile's maximum referenced payload.
     pub initial_supply: RemainingCapacity,
     pub rescue: ProtectedRescueDemand,
     pub usage: &'a AggregateUsage,
@@ -164,11 +165,14 @@ pub struct PublicOriginalReservationV1<'a> {
 
 fn public_original_capacity_v1(
     max_manifest_bytes: u32,
+    manifest_payload_bytes: u64,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
 ) -> Result<RemainingCapacity, ContractError> {
     let body_bytes = u64::from(ManifestV1::fetch_size(max_manifest_bytes)?);
-    if initial_supply.retained_bytes < body_bytes
+    let retained_bytes = body_bytes.checked_add(manifest_payload_bytes).ok_or(ContractError::Budget)?;
+    if manifest_payload_bytes < MaterialScope::COUNT as u64
+        || initial_supply.retained_bytes < retained_bytes
         || rescue.per_drawn_bond.transmitted_bytes < body_bytes
         || (rescue.max_outsiders != 0 && rescue.per_outsider.transmitted_bytes < body_bytes)
     {
@@ -190,6 +194,7 @@ pub struct PreparedPublicOriginalV1 {
     rescue: ProtectedRescueDemand,
     budget: AggregateBudget,
     max_manifest_bytes: u32,
+    manifest_payload_bytes: u64,
     manifest_limits: Digest,
 }
 
@@ -204,6 +209,7 @@ pub struct PublicOriginalAdmissionRecordV1 {
     rescue: ProtectedRescueDemand,
     budget: AggregateBudget,
     max_manifest_bytes: u32,
+    manifest_payload_bytes: u64,
     manifest_limits: Digest,
     deadlines: [u64; 8],
 }
@@ -323,8 +329,8 @@ wire_struct!(PanelBond; Digest, u32);
 
 native_tuple_struct!(MaterialId; id);
 wire_struct!(MaterialId; Digest);
-native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, manifest_material, reservation, initial_supply, rescue, budget, max_manifest_bytes, manifest_limits, deadlines);
-wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, MaterialId, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, Digest, [u64; 8]);
+native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, manifest_material, reservation, initial_supply, rescue, budget, max_manifest_bytes, manifest_payload_bytes, manifest_limits, deadlines);
+wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, MaterialId, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, u64, Digest, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, beacon, draw_point, hard, full_scope, ordered_members, per_bond);
@@ -661,6 +667,7 @@ impl PreparedPublicOriginalV1 {
             rescue: self.rescue,
             budget: self.budget,
             max_manifest_bytes: self.max_manifest_bytes,
+            manifest_payload_bytes: self.manifest_payload_bytes,
             manifest_limits: self.manifest_limits,
             deadlines: [
                 self.draw_ready_by,
@@ -706,6 +713,7 @@ impl PublicOriginalAdmissionRecordV1 {
                 witness_attempts: 1,
             },
             max_manifest_bytes: ManifestV1::WIRE_BYTES,
+            manifest_payload_bytes: MaterialScope::COUNT as u64,
             manifest_limits: Digest([3; 64]),
             deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
         }
@@ -716,7 +724,8 @@ impl PublicOriginalAdmissionRecordV1 {
         if key != row.original.0.0.as_slice() {
             return Err(ContractError::Identity);
         }
-        let capacity = public_original_capacity_v1(row.max_manifest_bytes, row.initial_supply, row.rescue)?;
+        let capacity =
+            public_original_capacity_v1(row.max_manifest_bytes, row.manifest_payload_bytes, row.initial_supply, row.rescue)?;
         let clock = OriginalClock::new(row.carrier.origin.accepted_daa)?;
         let [draw, first_notice, first_request, ready, inspection, localized, filed, terminal] = row.deadlines;
         if draw <= row.carrier.origin.accepted_daa
@@ -1095,7 +1104,17 @@ impl PublicOriginalAdmissionV1<'_> {
         signature: &[u8; SIGNATURE_BYTES],
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<PreparedPublicOriginalV1, ContractError> {
-        let capacity = public_original_capacity_v1(self.max_manifest_bytes, reservation.initial_supply, reservation.rescue)?;
+        let manifest_payload_bytes = self
+            .manifest_scope_limits
+            .iter()
+            .fold(0u64, |total, scope| total.saturating_add(scope.max_bytes))
+            .min(self.manifest_total_limit);
+        let capacity = public_original_capacity_v1(
+            self.max_manifest_bytes,
+            manifest_payload_bytes,
+            reservation.initial_supply,
+            reservation.rescue,
+        )?;
         let clock = OriginalClock::new(reservation.origin.accepted_daa)?;
         if reservation.notice.draw_ready_by <= reservation.origin.accepted_daa {
             return Err(ContractError::Range);
@@ -1123,6 +1142,7 @@ impl PublicOriginalAdmissionV1<'_> {
             rescue: reservation.rescue,
             budget: *reservation.budget,
             max_manifest_bytes: self.max_manifest_bytes,
+            manifest_payload_bytes,
             manifest_limits: manifest_limits_id_v1(self.manifest_scope_limits, self.manifest_total_limit, self.max_manifest_bytes),
         })
     }
@@ -1176,6 +1196,10 @@ fn stored_public_admission_requires_manifest_capacity_for_each_rescue_path() {
         PublicOriginalAdmissionRecordV1::decode_row(&original.0.0, &borsh::to_vec(row).unwrap())
     };
     assert!(decode(&row).is_ok());
+
+    let mut short_retention = row;
+    short_retention.initial_supply.retained_bytes = u64::from(ManifestV1::WIRE_BYTES);
+    assert_eq!(decode(&short_retention), Err(ContractError::Budget));
 
     // The smaller allocation still fits the aggregate budget, but the
     // outsider could no longer obtain even the fixed-size manifest.
