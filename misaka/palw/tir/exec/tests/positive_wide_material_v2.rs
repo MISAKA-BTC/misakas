@@ -745,21 +745,39 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let signed_approval =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &assertion.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [0; 32]).unwrap();
-    let signed_assertion = (102, &assertion, &signed.key, signed_approval.as_ref());
+    let vote_origin = AcceptedOrigin {
+        accepting_block: NativeHash64([10; 64]),
+        carrier_block: NativeHash64([11; 64]),
+        carrier_transaction: NativeHash64([12; 64]),
+        accepted_daa: 102,
+        accepted_blue_score: 102,
+        ..reservation.origin
+    };
+    let at_draw = AcceptedOrigin { accepted_daa: 101, ..vote_origin };
+    let before_draw = AcceptedOrigin { accepted_daa: 100, ..vote_origin };
+    let signed_assertion = (vote_origin, &assertion, &signed.key, signed_approval.as_ref());
     let approval_records = draw.verify_replay_quorum(1, 102, &[signed_assertion]).unwrap();
     assert_eq!(approval_records.len(), 1);
     let restored_approvals = borsh::from_slice::<Vec<kaspa_consensus_core::palw_positive_contract_v2::PublicReplayApprovalRecordV1>>(
         &borsh::to_vec(&approval_records).unwrap(),
     )
     .unwrap();
-    assert_eq!(restored_approvals[0].check_restore(&draw, 102, 102, &assertion, &signed.key, signed_approval.as_ref()), Ok(()));
     assert_eq!(
-        restored_approvals[0].check_restore(&draw, 102, 101, &assertion, &signed.key, signed_approval.as_ref()),
+        restored_approvals[0].check_restore(&draw, 102, vote_origin, &assertion, &signed.key, signed_approval.as_ref()),
+        Ok(())
+    );
+    assert_eq!(
+        restored_approvals[0].check_restore(&draw, 102, at_draw, &assertion, &signed.key, signed_approval.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
+    let other_vote = AcceptedOrigin { accepted_tx_ordinal: vote_origin.accepted_tx_ordinal + 1, ..vote_origin };
+    assert_eq!(
+        restored_approvals[0].check_restore(&draw, 102, other_vote, &assertion, &signed.key, signed_approval.as_ref()),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
     assert_eq!(draw.verify_replay_quorum(1, prepared.schedule.hard(), &[signed_assertion]), Ok(restored_approvals));
     assert_ne!(
-        draw.verify_replay_quorum(1, 102, &[(101, &assertion, &signed.key, signed_approval.as_ref())]).unwrap(),
+        draw.verify_replay_quorum(1, 102, &[(at_draw, &assertion, &signed.key, signed_approval.as_ref())]).unwrap(),
         approval_records
     );
     assert_eq!(
@@ -769,7 +787,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert!(draw.verify_replay_quorum(2, 102, &[signed_assertion]).is_err());
     assert_eq!(draw.verify_replay_quorum(1, 101, &[signed_assertion]), Err(misaka_palw_positive_contract::ContractError::Range));
     assert_eq!(
-        draw.verify_replay_quorum(1, 102, &[(100, &assertion, &signed.key, signed_approval.as_ref())]),
+        draw.verify_replay_quorum(1, 102, &[(before_draw, &assertion, &signed.key, signed_approval.as_ref())]),
         Err(misaka_palw_positive_contract::ContractError::Range)
     );
     assert_eq!(

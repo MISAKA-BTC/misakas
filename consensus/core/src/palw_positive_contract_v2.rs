@@ -215,7 +215,7 @@ impl PublicDrawRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicReplayApprovalRecordV1 {
     bond: PanelBond,
-    included_at: u64,
+    origin: AcceptedOrigin,
     approval_digest: Digest,
 }
 
@@ -236,8 +236,8 @@ native_struct!(PublicOriginalCourtRecordV1; original, admission_origin, reservat
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedOrigin, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
 wire_struct!(PublicDrawRecordV1; OriginalId, Digest, u64, u64, Digest, Digest, RemainingCapacity);
-native_struct!(PublicReplayApprovalRecordV1; bond, included_at, approval_digest);
-wire_struct!(PublicReplayApprovalRecordV1; PanelBond, u64, Digest);
+native_struct!(PublicReplayApprovalRecordV1; bond, origin, approval_digest);
+wire_struct!(PublicReplayApprovalRecordV1; PanelBond, AcceptedOrigin, Digest);
 
 // Shared contract records keep their fields private. Read exactly the fixed
 // frame and let Borsh validate it, including the delivery classification tag.
@@ -272,12 +272,12 @@ impl PublicReplayApprovalRecordV1 {
         &self,
         draw: &PreparedPublicDrawV1,
         approval_until: u64,
-        included_at: u64,
+        origin: AcceptedOrigin,
         approval: &FullReplayApproval,
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<(), ContractError> {
-        if *self != draw.verify_replay_approval(approval_until, included_at, approval, key, signature)? {
+        if *self != draw.verify_replay_approval(approval_until, origin, approval, key, signature)? {
             return Err(ContractError::Scope);
         }
         Ok(())
@@ -317,39 +317,39 @@ impl PreparedPublicDrawV1 {
     pub fn verify_replay_approval(
         &self,
         approval_until: u64,
-        included_at: u64,
+        origin: AcceptedOrigin,
         approval: &FullReplayApproval,
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<PublicReplayApprovalRecordV1, ContractError> {
-        if approval_until > self.hard || !(self.draw_daa..=approval_until).contains(&included_at) {
+        if approval_until > self.hard || !(self.draw_daa..=approval_until).contains(&origin.accepted_daa) {
             return Err(ContractError::Range);
         }
         let bond = approval.bond;
         approval.authenticate(&self.approval_context(bond)?, key, signature)?;
-        Ok(PublicReplayApprovalRecordV1 { bond, included_at, approval_digest: approval.signing_digest() })
+        Ok(PublicReplayApprovalRecordV1 { bond, origin, approval_digest: approval.signing_digest() })
     }
 
     /// Check a quorum of included replay assertions. The caller resolves the
-    /// canonical inclusion DAA of each assertion and the profile's deadline.
+    /// canonical accepted origin of each assertion and the profile's deadline.
     /// Local checks, inspection opportunity and Final are separate gates.
     pub fn verify_replay_quorum(
         &self,
         required: usize,
         approval_until: u64,
-        approvals: &[(u64, &FullReplayApproval, &[u8; PUBKEY_BYTES], &[u8; SIGNATURE_BYTES])],
+        approvals: &[(AcceptedOrigin, &FullReplayApproval, &[u8; PUBKEY_BYTES], &[u8; SIGNATURE_BYTES])],
     ) -> Result<Vec<PublicReplayApprovalRecordV1>, ContractError> {
         if approval_until > self.hard || required == 0 || approvals.len() < required || approvals.len() > self.members.len() {
             return Err(ContractError::Range);
         }
         let mut checked = std::collections::BTreeMap::new();
-        for &(included_at, approval, key, signature) in approvals {
+        for &(origin, approval, key, signature) in approvals {
             let bond = approval.bond;
             let key_order = (bond.transaction, bond.index);
             if checked.contains_key(&key_order) {
                 return Err(ContractError::Identity);
             }
-            let record = self.verify_replay_approval(approval_until, included_at, approval, key, signature)?;
+            let record = self.verify_replay_approval(approval_until, origin, approval, key, signature)?;
             checked.insert(key_order, record);
         }
         Ok(checked.into_values().collect())
