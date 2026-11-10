@@ -593,7 +593,9 @@ mod prefix_history_tests {
 #[cfg(test)]
 mod candidate_summary_route_tests {
     use super::*;
-    use crate::pb::{BlockLocatorMessage, BlockMessage, IbdCandidateSummaryMessage};
+    use crate::pb::{
+        BlockLocatorMessage, BlockMessage, IbdCandidateSummaryMessage, IbdChainBlockLocatorMessage, PruningPointProofMessage,
+    };
     use crate::{dequeue_with_timeout, make_response};
     use std::time::Duration;
 
@@ -633,6 +635,28 @@ mod candidate_summary_route_tests {
         router.route_to_flow(make_response!(KaspadMessagePayload::Block, BlockMessage::default(), route.id())).unwrap();
         let block: Result<_, ProtocolError> = dequeue_with_timeout!(route, KaspadMessagePayload::Block);
         assert!(matches!(block, Err(ProtocolError::UnexpectedMessage(..))));
+    }
+
+    #[test]
+    fn late_challenger_proof_stays_off_the_ibd_route() {
+        let router = router();
+        let mut ibd =
+            router.subscribe(vec![KaspadMessagePayloadType::IbdChainBlockLocator, KaspadMessagePayloadType::PruningPointProof]);
+        let mut challenger = router.subscribe_with_capacity(vec![], 1);
+        let proof = || KaspadMessagePayload::PruningPointProof(PruningPointProofMessage::default());
+        router.route_to_flow(KaspadMessage { payload: Some(proof()), response_id: challenger.id(), request_id: 0 }).unwrap();
+        router
+            .route_to_flow(KaspadMessage {
+                payload: Some(KaspadMessagePayload::IbdChainBlockLocator(IbdChainBlockLocatorMessage::default())),
+                response_id: 0,
+                request_id: 0,
+            })
+            .unwrap();
+        router.route_to_flow(KaspadMessage { payload: Some(proof()), response_id: 0, request_id: 0 }).unwrap();
+
+        assert!(matches!(ibd.try_recv().unwrap().payload, Some(KaspadMessagePayload::IbdChainBlockLocator(_))));
+        assert!(matches!(ibd.try_recv().unwrap().payload, Some(KaspadMessagePayload::PruningPointProof(_))));
+        assert!(matches!(challenger.try_recv().unwrap().payload, Some(KaspadMessagePayload::PruningPointProof(_))));
     }
 
     #[tokio::test]
