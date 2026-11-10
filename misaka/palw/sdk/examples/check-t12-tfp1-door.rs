@@ -1,6 +1,7 @@
 //! Offline resource quote for a retained TIR worker result under the compiled public t12 settings.
-//! The EOF certificate is a fixture. The optional authenticated table comparison uses the
-//! family V4 allocation locally. It does not check network activation or produce a carrier.
+//! The EOF inventory is replayed locally using a fixture offer. The optional authenticated
+//! table comparison uses the family V4 allocation locally. This does not check network
+//! activation or produce a carrier.
 //! `--dense-replay` checks the retained original's numerical roots with the existing court
 //! builder and checker and reports their maximum replay cost.
 use kaspa_consensus_core::{
@@ -19,6 +20,7 @@ use kaspa_consensus_core::{
         NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, native_declared_logical_limits_v1, reserve_native_requests_v1,
     },
     palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+    palw_rendering_resources_v1::{PalwRenderingResourcePlanV1, PalwStagedPublicCourtConfigV1},
     palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,
     palw_state_v2::PalwBondKeyV2,
     palw_tir_admission_v1::palw_tir_class_record_v1,
@@ -34,7 +36,10 @@ use kaspa_consensus_core::{
         derive_tir_public_allocation_native_v2,
     },
     palw_tir_public_source_v1::{PalwTirPublicSourceV1, parameter_cover_v1::OriginalParameterCoverBudgetV1},
-    palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+    palw_tokenizer_artifact_inventory_v1::{
+        PALW_ARTIFACT_INVENTORY_PART_BYTES_V1, PalwTokenizerArtifactInventoryActionV1, PalwTokenizerArtifactInventoryCertificateV1,
+        PalwTokenizerArtifactInventoryOfferV1, PalwTokenizerArtifactInventoryV1,
+    },
     palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1,
 };
 use misaka_palw_sdk::lineages::tir::TirLineageV1;
@@ -48,6 +53,34 @@ fn read(path: &Path, cap: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         return Err(format!("{} exceeds the diagnostic input cap of {cap} bytes", path.display()).into());
     }
     Ok(bytes)
+}
+
+fn replay_tokenizer_inventory(
+    raw: &[u8],
+    tokenizer: Hash64,
+    opener: PalwBondKeyV2,
+    quote_daa: u64,
+) -> Result<(PalwTokenizerArtifactInventoryCertificateV1, PalwRenderingResourcePlanV1), Box<dyn std::error::Error>> {
+    let opened_daa = quote_daa.checked_sub(2).ok_or("EOF replay requires quote DAA at least 2")?;
+    let offer = PalwTokenizerArtifactInventoryOfferV1 {
+        version: 1,
+        artifact_hash: tokenizer,
+        opener,
+        maximum_bytes: raw.len() as u64,
+        accept_until_daa: quote_daa,
+        // Only shape is checked by the local inventory row. No offer is sent.
+        signature: vec![0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+    };
+    let mut inventory = PalwTokenizerArtifactInventoryV1::new_v1(offer, opened_daa, PalwStagedPublicCourtConfigV1::network_v1())?;
+    let replay_daa = quote_daa - 1;
+    for bytes in raw.chunks(PALW_ARTIFACT_INVENTORY_PART_BYTES_V1) {
+        let action = PalwTokenizerArtifactInventoryActionV1::Part { offset: inventory.offset, bytes: bytes.to_vec() };
+        inventory.apply_v1(&action, replay_daa)?;
+    }
+    let certificate = inventory
+        .apply_v1(&PalwTokenizerArtifactInventoryActionV1::Finish, replay_daa)?
+        .ok_or("tokenizer EOF replay did not produce a certificate")?;
+    Ok((certificate, inventory.plan))
 }
 
 #[derive(Clone, Copy)]
@@ -303,14 +336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         job_identity: palw_fp_job_pin_v1(&original),
         accepted_daa: daa,
     };
-    let inventory = PalwTokenizerArtifactInventoryCertificateV1 {
-        artifact_hash: declaration.tokenizer_id,
-        actual_bytes: raw.len() as u64,
-        inventory_id: Hash64::from_u64_word(1),
-        opener: geometry.producer,
-        opened_daa: daa - 2,
-        completed_daa: daa - 1,
-    };
+    let (inventory, inventory_plan) = replay_tokenizer_inventory(&raw, declaration.tokenizer_id, geometry.producer, daa)?;
     let (record, _) = palw_tir_class_record_v1(&entry.class, &entry.artifact_root)?;
     let rules = PalwTirPublicAllocationRulesV1 {
         maximum_leaves: original.work_leaves,
@@ -537,6 +563,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "fixture_commitment":original_file.is_none(),
             "daa":daa,
             "fixture_eof":true,
+            "offline_tokenizer_inventory":{
+                "actual_bytes":inventory.actual_bytes,
+                "maximum_key_events":inventory.key_event_upper_bound_v1(),
+                "maximum_moves":inventory_plan.maximum_moves,
+                "inclusion_daa":inventory_plan.inclusion_daa,
+                "rent_sompi":inventory_plan.rent_sompi,
+                "deposit_sompi":inventory_plan.deposit_sompi,
+            },
             "custodian_upper":maximum_custodians,
             "maximum_door_daa":cost.clock.maximum_door_daa,
             "public_cost_quote":public,
