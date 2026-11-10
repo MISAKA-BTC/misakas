@@ -179,7 +179,10 @@ impl IbdFlow {
                 RequestIbdChainBlockLocatorMessage { low_hash: low.map(|h| h.into()), high_hash: high.map(|h| h.into()) }
             ))
             .await?;
-        let msg = dequeue_with_timeout!(self.incoming_route, Payload::IbdChainBlockLocator, timeout)?;
+        let msg = dequeue_with_timeout!(self.incoming_route, Payload::IbdChainBlockLocator, timeout).map_err(|err| match err {
+            ProtocolError::Timeout(waited) => ProtocolError::IbdChainLocatorTimeout(waited),
+            other => other,
+        })?;
         if msg.block_locator_hashes.len() > 64 {
             return Err(ProtocolError::Other(
                 "Got block locator of size > 64 while expecting
