@@ -305,6 +305,16 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(other.trace_root, d(0));
     capture.bind_public_original(&mut original).unwrap();
     assert_eq!(original.trace_root, digest(capture.run().execution_root()));
+    let mut trace_index = capture.public_trace_index();
+    let trace_len = trace_index.step_leaf_count;
+    trace_index.check(&original, trace_len).unwrap();
+    assert_eq!(
+        borsh::to_vec(&trace_index).unwrap().len(),
+        kaspa_consensus_core::palw_tir_court_v1::PublicOriginalTraceIndexV1::WIRE_BYTES
+    );
+    assert!(trace_index.check(&original, trace_len - 1).is_err());
+    trace_index.step_merkle_root = Hash64::from_bytes([77; 64]);
+    assert!(trace_index.check(&original, trace_len).is_err());
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
     use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
     let size = original.decode * 4;

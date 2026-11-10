@@ -20,7 +20,7 @@ use kaspa_consensus_core::{
     },
     palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
-    palw_tir_court_v1::PalwTirInventoryIndexV1,
+    palw_tir_court_v1::{PalwTirInventoryIndexV1, PublicOriginalTraceIndexV1},
     palw_tir_step_v1::PalwTirStepSpaceV2,
     palw_v2::{PalwJobContextV2, output_commitment_v2},
 };
@@ -47,6 +47,25 @@ use misaka_palw_tir_exec::node::{
 
 use crate::miner::positive_v2::{CanonicalDataDutyV2, MinerErrorV2, PreparedDataV2, StoredUnitV2};
 use crate::public_material::{MaterialProvider, public_original_manifest_path};
+
+/// Obtain fixed trace metadata whose root is bound by the signed original.
+pub fn fetch_public_trace_index_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    max_step_leaf_count: u64,
+) -> Result<PublicOriginalTraceIndexV1, PanelSourceErrorR1> {
+    let path = crate::public_material::public_original_trace_index_path(original.id());
+    let bytes = provider
+        .get(&path, PublicOriginalTraceIndexV1::WIRE_BYTES)
+        .map_err(|error| PanelSourceErrorR1::ReplayProvider(error.0))?
+        .ok_or(PanelSourceErrorR1::Incomplete)?;
+    if bytes.len() != PublicOriginalTraceIndexV1::WIRE_BYTES {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let index: PublicOriginalTraceIndexV1 = borsh::from_slice(&bytes).map_err(|_| PanelSourceErrorR1::Binding)?;
+    index.check(original, max_step_leaf_count).map_err(|_| PanelSourceErrorR1::Binding)?;
+    Ok(index)
+}
 
 /// Fetch the program and prompt inputs for one checked original. Each payload
 /// is bounded before acquisition and authenticated before use by the replay.

@@ -274,6 +274,10 @@ pub fn finalize_public_capture_v1(
         crate::evidence::fs::write_provider_chunk(&provider_root.join(path), bytes)
             .map_err(|error| MinerErrorV2::Journal(format!("public replay material {scope:?}: {error}")))?;
     }
+    let trace_index_path = crate::public_material::public_original_trace_index_path(original.id());
+    let trace_index = borsh::to_vec(&capture.public_trace_index()).map_err(|_| MinerErrorV2::Binding)?;
+    crate::evidence::fs::write_provider_chunk(&provider_root.join(trace_index_path), &trace_index)
+        .map_err(|error| MinerErrorV2::Journal(format!("public trace index: {error}")))?;
     super::store::store_public_manifest_v1(provider_root, &original, scope_limits, total_limit, max_manifest_bytes, &bytes)
         .map_err(|error| MinerErrorV2::Journal(format!("public manifest: {error:?}")))?;
     Ok((original, signature))

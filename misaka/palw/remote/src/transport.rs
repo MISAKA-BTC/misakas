@@ -1480,6 +1480,10 @@ pub mod server {
             #[cfg(feature = "positive-miner")]
             Target::PublicOriginalManifest(_) => misaka_palw_positive_contract::public_one_honest::ManifestV1::WIRE_BYTES as usize,
             #[cfg(feature = "positive-miner")]
+            Target::PublicOriginalReplay(path) if path.ends_with("/trace-index") => {
+                kaspa_consensus_core::palw_tir_court_v1::PublicOriginalTraceIndexV1::WIRE_BYTES
+            }
+            #[cfg(feature = "positive-miner")]
             Target::PublicOriginalReplay(_) => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
             Target::Material(path) if path.ends_with("manifest") => crate::public_material::MATERIAL_MANIFEST_MAX_BYTES,
             Target::Material(_) => crate::public_material::MATERIAL_UNIT_MAX_BYTES,

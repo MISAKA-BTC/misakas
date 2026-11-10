@@ -3760,6 +3760,40 @@ pub struct PublicOriginalStepRootV1 {
     pub step_leaf_count: u64,
 }
 
+/// Fixed metadata for locating authenticated tiles of a captured execution.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PublicOriginalTraceIndexV1 {
+    pub full_logits_trace_root: Hash64,
+    pub step_leaf_count: u64,
+    pub step_merkle_root: Hash64,
+}
+
+impl PublicOriginalTraceIndexV1 {
+    pub const WIRE_BYTES: usize = 64 + 8 + 64;
+
+    pub fn check(
+        &self,
+        original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+        max_step_leaf_count: u64,
+    ) -> Result<(), PalwStepRefuteError> {
+        if self.step_leaf_count == 0
+            || self.step_leaf_count > max_step_leaf_count
+            || palw_tir_execution_root_v1(
+                &Hash64::from_bytes(original.execution.0),
+                &self.full_logits_trace_root,
+                &Hash64::from_bytes(original.registered_class.0),
+                self.step_leaf_count,
+                &self.step_merkle_root,
+            )
+            .as_bytes()
+                != original.trace_root.0
+        {
+            return Err(bad("public trace index does not bind the original execution"));
+        }
+        Ok(())
+    }
+}
+
 /// Authenticate the bytes of one original step leaf. Interpretation of its
 /// coordinates and execution semantics belongs to the selected court profile.
 pub fn check_public_original_step_data_v1(
