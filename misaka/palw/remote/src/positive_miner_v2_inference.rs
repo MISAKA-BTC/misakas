@@ -11,7 +11,10 @@ use kaspa_consensus_core::{
     palw_tir_class_v1::PalwTirClassV1,
     palw_v2::PalwJobContextV2,
 };
-use misaka_palw_positive_contract::tir::greedy_selector_id;
+use misaka_palw_positive_contract::{
+    public_one_honest::{ManifestEntryV1, ManifestScopeRules, tir_program_material_codec_v1},
+    tir::greedy_selector_id,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ParameterIdentityLimitsV2 {
@@ -158,6 +161,25 @@ pub struct TirMinerJobV2<'a> {
     pub context: &'a PalwJobContextV2,
     pub prompt: &'a [u32],
     pub prompt_form: PalwPromptIdsFormV1,
+}
+
+impl TirMinerJobV2<'_> {
+    /// Describe the same registered program bytes used by the execution.
+    pub fn public_program_material(&self, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {
+        let total_bytes = self.class.program.len() as u64;
+        if rules.codec != tir_program_material_codec_v1() {
+            return Err(ContractError::UnsupportedProfile);
+        }
+        if total_bytes == 0
+            || total_bytes > u64::from(rules.chunk_bytes)
+            || total_bytes > rules.max_bytes
+            || total_bytes > misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64
+        {
+            return Err(ContractError::Budget);
+        }
+        let subject = Digest(self.class.graph_ir_root().as_bytes());
+        Ok(ManifestEntryV1 { subject, content_root: subject, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes })
+    }
 }
 
 /// The concrete A2 inference→result path. Every job/class/input/selector field

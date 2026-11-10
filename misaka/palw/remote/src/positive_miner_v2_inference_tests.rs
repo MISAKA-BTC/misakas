@@ -30,6 +30,25 @@ fn limits() -> InferenceLimitsV2 {
 fn identity_limits() -> ParameterIdentityLimitsV2 {
     ParameterIdentityLimitsV2 { max_bytes: 16, max_leaves: 4, max_compiled_nodes: 1024, max_parameter_instances: 1024 }
 }
+
+#[test]
+fn program_material_is_the_registered_graph_in_one_chunk() {
+    let fixture = Fixture::new();
+    let job = TirMinerJobV2 {
+        class: &fixture.class,
+        context: &fixture.context,
+        prompt: &fixture.prompt,
+        prompt_form: PalwPromptIdsFormV1::Flat,
+    };
+    let size = u32::try_from(fixture.class.program.len()).unwrap();
+    let rules = ManifestScopeRules { codec: tir_program_material_codec_v1(), max_bytes: u64::from(size), chunk_bytes: size };
+    let entry = job.public_program_material(rules).unwrap();
+    assert_eq!(entry.subject, fixture.result.program);
+    assert_eq!(entry.content_root, fixture.result.program);
+    assert_eq!(entry.chunk_range(0), Ok(0..u64::from(size)));
+    assert_eq!(job.public_program_material(ManifestScopeRules { chunk_bytes: size - 1, ..rules }), Err(ContractError::Budget));
+    assert_eq!(job.public_program_material(ManifestScopeRules { codec: d(0), ..rules }), Err(ContractError::UnsupportedProfile));
+}
 fn model_params(plan: &TirPlan, first: i128) -> TirParams<'static> {
     let mut map = MapParams::default();
     let mut values: Vec<i128> = (1..=16).collect();

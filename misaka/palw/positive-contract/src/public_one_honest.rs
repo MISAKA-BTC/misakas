@@ -62,6 +62,20 @@ pub struct OriginalCommit {
 }
 
 impl OriginalCommit {
+    /// Validate and encode the manifest before binding its root for signing.
+    pub fn bind_manifest(
+        &mut self,
+        manifest: &ManifestV1,
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
+        max_manifest_bytes: u32,
+    ) -> Result<Vec<u8>, ContractError> {
+        manifest.check(self, scope_limits, total_limit)?;
+        let bytes = borsh::to_vec(manifest).map_err(|_| ContractError::NonCanonical)?;
+        self.manifest_root = manifest_root(self.scope.ruleset, &bytes, max_manifest_bytes)?;
+        Ok(bytes)
+    }
+
     pub fn id(&self) -> OriginalId {
         OriginalId(hash(b"misaka/palw/public-original-id/v1", self))
     }
@@ -832,9 +846,12 @@ mod tests {
         rules[MaterialScope::Program as usize] = ManifestScopeRules { codec: program_codec, max_bytes: 16, chunk_bytes: 16 };
         manifest.entries[MaterialScope::Program as usize].codec = program_codec;
         manifest.entries[MaterialScope::Program as usize].chunk_bytes = 16;
-        let bytes = borsh::to_vec(&manifest).unwrap();
-        let max = u32::try_from(bytes.len()).unwrap();
-        let bound_original = OriginalCommit { manifest_root: manifest_root(d, &bytes, max).unwrap(), ..original.clone() };
+        let max = u32::try_from(borsh::object_length(&manifest).unwrap()).unwrap();
+        let mut bound_original = original.clone();
+        assert_eq!(bound_original.bind_manifest(&manifest, &rules, 89, max), Err(ContractError::Budget));
+        assert_eq!(bound_original.bind_manifest(&manifest, &rules, 90, max - 1), Err(ContractError::Range));
+        assert_eq!(bound_original.manifest_root, original.manifest_root);
+        let bytes = bound_original.bind_manifest(&manifest, &rules, 90, max).unwrap();
         let authenticated = bound_original.authenticate_manifest(&bytes, max).unwrap();
         let checked = authenticated.decode(&bound_original, &rules, 90).unwrap();
         assert_eq!(checked.original(), bound_original.id());

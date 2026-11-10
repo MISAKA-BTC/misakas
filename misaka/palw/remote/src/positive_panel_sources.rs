@@ -36,6 +36,7 @@ pub fn open_public_tir_program_v1(manifest: &CheckedManifestV1, bytes: &[u8]) ->
     let entry = manifest.entry(MaterialScope::Program);
     if entry.codec != tir_program_material_codec_v1()
         || entry.content_root != entry.subject
+        || bytes.len() > misaka_palw_tir::program::MAX_PROGRAM_BYTES
         || entry.total_bytes > u64::from(entry.chunk_bytes)
         || entry.total_bytes != bytes.len() as u64
         || palw_tir_graph_ir_root_v1(bytes).as_bytes() != entry.subject.0
