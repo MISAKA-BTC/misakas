@@ -542,7 +542,7 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         Ok(PublicFinalReplayPrerequisiteV1::ReadyForRemainingChecks)
     );
     use misaka_palw_positive_contract::public_one_honest::{
-        Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequest, ManifestRequestContext, SignedManifestRequestV1,
+        Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequestContext, SignedManifestRequestV1,
     };
     let request_context = ManifestRequestContext {
         original: &commit,
@@ -557,16 +557,25 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         schedule: prepared.schedule,
         origin,
     };
-    let request = ManifestRequest {
-        original,
-        manifest_root: commit.manifest_root,
-        claimant: request_context.claimant,
-        signer: member,
-        inspection_scope: request_context.inspection_scope,
-        supply_obligation: request_context.supply_obligation,
-        collect_until: prepared.schedule.filed_by(),
-        reservation: request_context.reservation,
-    };
+    let request = prepared
+        .drawn_manifest_request(&draw, &commit, bond, request_context.inspection_scope, request_context.supply_obligation)
+        .unwrap();
+    assert_eq!(request.signer, member);
+    assert_eq!(request.reservation, request_context.reservation);
+    assert_eq!(
+        prepared.drawn_manifest_request(
+            &draw,
+            &commit,
+            PanelBond { index: 1, ..bond },
+            request_context.inspection_scope,
+            request_context.supply_obligation,
+        ),
+        Err(misaka_palw_positive_contract::ContractError::Identity)
+    );
+    assert_eq!(
+        prepared.drawn_manifest_request(&draw, &commit, bond, Digest([12; 64]), request_context.supply_obligation),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     let case = request.case_id(&commit, request_context.claimant).unwrap();
     let signature =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [2; 32])

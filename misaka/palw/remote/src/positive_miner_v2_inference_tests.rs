@@ -1137,16 +1137,7 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     let draw = accepted.prepare_draw(d(47), draw_point, &members, stateless_wide_replay_plan_v1()).unwrap();
     let request_origin =
         AcceptedOrigin { accepting_block: NativeHash64([5; 64]), accepted_daa: 102, accepted_blue_score: 102, ..origin };
-    let request = ManifestRequest {
-        original: admitted.id(),
-        manifest_root: admitted.manifest_root,
-        claimant: Claimant::DrawnBond(bond),
-        signer: principal(panel_key),
-        inspection_scope: stateless_wide_replay_plan_v1(),
-        supply_obligation: obligation,
-        collect_until: accepted.schedule.filed_by(),
-        reservation: members[0].rescue_reservation,
-    };
+    let request = accepted.drawn_manifest_request(&draw, admitted, bond, stateless_wide_replay_plan_v1(), obligation).unwrap();
     let request_context = ManifestRequestContext {
         original: admitted,
         claimant: request.claimant,

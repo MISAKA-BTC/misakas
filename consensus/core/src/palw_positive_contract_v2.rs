@@ -718,6 +718,37 @@ pub enum PublicManifestClaimantAuthorityV1<'a> {
 }
 
 impl PreparedPublicOriginalV1 {
+    /// Construct the packet a drawn member signs before inclusion. Draw
+    /// membership supplies the signer and reservation, and the native supply
+    /// ledger supplies the obligation. Inclusion verifies them again.
+    pub fn drawn_manifest_request(
+        &self,
+        draw: &PreparedPublicDrawV1,
+        original: &OriginalCommit,
+        bond: PanelBond,
+        inspection_scope: Digest,
+        supply_obligation: Digest,
+    ) -> Result<ManifestRequest, ContractError> {
+        if original.id() != self.original
+            || draw.original != self.original
+            || draw.admission_carrier != self.carrier
+            || self.original.full_replay_scope(inspection_scope) != draw.full_scope
+        {
+            return Err(ContractError::Scope);
+        }
+        let member = draw.members.get(&(bond.transaction, bond.index)).ok_or(ContractError::Identity)?;
+        Ok(ManifestRequest {
+            original: self.original,
+            manifest_root: original.manifest_root,
+            claimant: Claimant::DrawnBond(bond),
+            signer: member.principal,
+            inspection_scope,
+            supply_obligation,
+            collect_until: self.schedule.filed_by(),
+            reservation: member.rescue_reservation,
+        })
+    }
+
     /// Decode an included request and apply the authority already resolved by
     /// the native fold. The packet cannot choose its own draw or slot.
     pub fn verify_manifest_request_bytes(
