@@ -190,6 +190,15 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
         Err(PanelSourceErrorR1::ManifestRead(std::io::ErrorKind::UnexpectedEof))
     );
     let bytes = &fixture.class.program;
+    use crate::positive_panel_sources::check_public_prompt_v1;
+    assert_eq!(
+        check_public_prompt_v1(&original, &checked, PalwPromptIdsFormV1::MerkleV1, prompt_text.as_bytes(), tokenizer_json),
+        Ok(prompt.clone())
+    );
+    assert_eq!(
+        check_public_prompt_v1(&original, &checked, PalwPromptIdsFormV1::Flat, prompt_text.as_bytes(), tokenizer_json),
+        Err(PanelSourceErrorR1::Binding)
+    );
     assert_eq!(open_public_tir_program_v1(&checked, bytes).unwrap(), fixture.plan.program);
     assert_eq!(open_public_tir_program_v1(&checked, &bytes[..bytes.len() - 1]), Err(PanelSourceErrorR1::Binding));
     let mut substituted = bytes.clone();
@@ -223,9 +232,8 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     manifest.entries[MaterialScope::Output as usize] = output_entry(original.output);
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
     let flat = read_public_manifest_v1(&original, &rules, limit, 4096, encoded.len() as u64, encoded.as_slice()).unwrap();
-    use crate::positive_panel_sources::check_public_flat_prompt_v1;
-    assert_eq!(check_public_flat_prompt_v1(&original, &flat, prompt_text.as_bytes(), tokenizer_json), Ok(prompt.clone()));
-    assert!(check_public_flat_prompt_v1(&original, &flat, prompt_text.as_bytes(), b"{}").is_err());
+    assert_eq!(check_public_prompt_v1(&original, &flat, form, prompt_text.as_bytes(), tokenizer_json), Ok(prompt.clone()));
+    assert!(check_public_prompt_v1(&original, &flat, form, prompt_text.as_bytes(), b"{}").is_err());
     assert_eq!(open_public_output_tokens_v1(&original, &checked, &output_ids), Err(PanelSourceErrorR1::Binding));
     assert_eq!(open_public_output_tokens_v1(&original, &flat, &output_ids), Ok(()));
     assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt), Ok(()));

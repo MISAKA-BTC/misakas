@@ -105,9 +105,10 @@ pub fn check_public_tokenizer_v1(manifest: &CheckedManifestV1, bytes: &[u8]) -> 
 
 /// Replay plain text with the native byte-level tokenizer, without allowing
 /// text to introduce special tokens. Run inside the Panel's reserved work.
-pub fn check_public_flat_prompt_v1(
+pub fn check_public_prompt_v1(
     original: &OriginalCommit,
     manifest: &CheckedManifestV1,
+    form: PalwPromptIdsFormV1,
     prompt: &[u8],
     tokenizer: &[u8],
 ) -> Result<Vec<u32>, PanelSourceErrorR1> {
@@ -118,7 +119,7 @@ pub fn check_public_flat_prompt_v1(
     check_public_tokenizer_v1(manifest, tokenizer)?;
     let tokenizer = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(tokenizer).map_err(|_| PanelSourceErrorR1::Binding)?;
     let ids = tokenizer.encode_without_specials(text).map_err(|_| PanelSourceErrorR1::Binding)?;
-    open_public_flat_input_tokens_v1(original, manifest, &ids)?;
+    check_public_input_tokens_v1(original, manifest, form, &ids)?;
     Ok(ids)
 }
 
@@ -149,13 +150,25 @@ pub fn open_public_flat_input_tokens_v1(
     manifest: &CheckedManifestV1,
     ids: &[u32],
 ) -> Result<(), PanelSourceErrorR1> {
-    let form = PalwPromptIdsFormV1::Flat;
+    check_public_input_tokens_v1(original, manifest, PalwPromptIdsFormV1::Flat, ids)
+}
+
+fn check_public_input_tokens_v1(
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    form: PalwPromptIdsFormV1,
+    ids: &[u32],
+) -> Result<(), PanelSourceErrorR1> {
     let entry = manifest.entry(MaterialScope::InputTokens);
+    let canonical_layout = match form {
+        PalwPromptIdsFormV1::Flat => entry.total_bytes <= u64::from(entry.chunk_bytes),
+        PalwPromptIdsFormV1::MerkleV1 => entry.chunk_bytes == PALW_PROMPT_IDS_TILE_LEN * 4,
+    };
     if manifest.original() != original.id()
         || entry.codec.0 != prompt_ids_form_id_v1(form).as_bytes()
         || entry.content_root != original.input_tokens
         || entry.total_bytes != u64::from(original.prefill) * 4
-        || entry.total_bytes > u64::from(entry.chunk_bytes)
+        || !canonical_layout
         || ids.len() != original.prefill as usize
         || !prompt_token_ids_match_v1(form, ids, &Hash64::from_bytes(entry.content_root.0))
     {
