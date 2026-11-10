@@ -129,12 +129,17 @@ pub struct IbdFlow {
     pub(super) ctx: FlowContext,
     pub(super) router: Arc<Router>,
     pub(super) incoming_route: IncomingRoute,
+    challenger_proof_route: IncomingRoute,
+    challenger_proof_pending: bool,
     pub(super) body_only_ibd_permitted: bool,
     header_format: HeaderFormat,
     pub(super) native_palw_receive_lease_v1: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
     /// Retry on the existing bounded tick even if the peer's tip did not move.
     /// This is a wakeup hint; every attempt redoes native negotiation/admission.
     native_capacity_retry_v1: Option<Arc<Header>>,
+    // A verified sidecar set already installed by this flow. The durable
+    // session still has to match before another UTXO stream can reuse it.
+    prepared_utxo_import_v1: Option<(std::sync::Weak<dyn kaspa_consensus_core::api::ConsensusApi>, PruningImportSessionV1)>,
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
@@ -198,18 +203,24 @@ impl IbdFlow {
         body_only_ibd_permitted: bool,
         header_format: HeaderFormat,
     ) -> Self {
+        // A challenger request may outlive its lease. Route its eventual reply away
+        // from the locator and pruning-proof exchanges of the next IBD attempt.
+        let challenger_proof_route = router.subscribe_with_capacity(vec![], 1);
         let challenger_receiver = ctx.subscribe_challenger_nominations();
         let handoff_receiver = ctx.subscribe_ibd_handoffs();
         Self {
             ctx,
             router,
             incoming_route,
+            challenger_proof_route,
+            challenger_proof_pending: false,
             relay_receiver,
             body_only_ibd_permitted,
             header_format,
             connection_generation: verification_trace::next_connection_generation(),
             native_palw_receive_lease_v1: None,
             native_capacity_retry_v1: None,
+            prepared_utxo_import_v1: None,
             active_recovery_permit: None,
             earned_adoption_permit: Mutex::new(None),
             challenger_receiver,
@@ -395,10 +406,10 @@ impl IbdFlow {
                             );
                             continue;
                         }
-                        if matches!(e, ProtocolError::UnexpectedMessage(..)) {
-                            // An earlier attempt can leave replies on this route. Close
-                            // the connection to discard them, but keep an incomplete
-                            // adopted import held and eligible for a clean retry.
+                        self.prepared_utxo_import_v1 = None;
+                        if matches!(e, ProtocolError::UnexpectedMessage(..) | ProtocolError::IbdChainLocatorTimeout(_)) {
+                            // Close this connection before retrying on a clean route.
+                            // An incomplete adopted import must stay held and retryable.
                             self.ctx.finish_ibd_after_local_resource_failure();
                             return Err(e);
                         }
@@ -1063,41 +1074,19 @@ impl IbdFlow {
         attempt_stamp: Option<Instant>,
     ) -> Result<kaspa_p2p_lib::pb::PruningPointProofMessage, ProtocolError> {
         let deadline = Instant::now() + budget;
-        let mut discarded = 0usize;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(ProtocolError::Timeout(budget));
             }
             let slice = remaining.min(LEASE_REVOKE_CHECK_INTERVAL);
-            match tokio::time::timeout(slice, self.incoming_route.recv()).await {
+            match tokio::time::timeout(slice, self.challenger_proof_route.recv()).await {
                 Ok(None) => return Err(ProtocolError::ConnectionClosed),
-                Ok(Some(msg)) => match msg.payload {
-                    Some(Payload::PruningPointProof(proof)) => {
-                        if discarded > 0 {
-                            debug!("discarded {discarded} leftover message(s) from {} before its pruning point proof", self.router);
-                        }
-                        return Ok(proof);
-                    }
-                    // Anything else is the wreckage of the IBD this flow just abandoned.
-                    //
-                    // The route carries every payload the IBD uses, and an aborted sync leaves
-                    // replies it will never read — `TrustedData`, chunks already in flight. Keeping
-                    // the connection after a refused IBD (which is what lets the challenger be
-                    // checked at all) means those arrive on the same route the proof does.
-                    //
-                    // Measured: a challenger dequeued a leftover `TrustedData`, the type mismatch
-                    // was reported as "could not be backed by a valid pruning proof", and the chain
-                    // was marked InvalidProof — PERMANENTLY. A statement about a dirty channel,
-                    // recorded as a verdict on a chain. The node then stayed on the lighter branch
-                    // with the heavier one written off.
-                    //
-                    // So leftovers are discarded rather than mistaken for an answer. The deadline
-                    // still bounds the wait, so a peer cannot stall by sending junk forever.
-                    _ => {
-                        discarded += 1;
-                    }
-                },
+                Ok(Some(msg)) => {
+                    let proof = kaspa_p2p_lib::unwrap_message!(Some(msg), Payload::PruningPointProof)?;
+                    self.challenger_proof_pending = false;
+                    return Ok(proof);
+                }
                 Err(_) => {
                     // Nothing arrived in this slice. Still our lease?
                     if attempt_stamp.is_some() && self.ctx.ibd_candidates().read().proof_attempt_stamp(&id) != attempt_stamp {
@@ -1116,6 +1105,16 @@ impl IbdFlow {
         budget: Duration,
         attempt_stamp: Option<Instant>,
     ) -> Result<(BlueWorkType, kaspa_hashes::Hash), ProtocolError> {
+        let started = Instant::now();
+        // There is no cancellation on the wire. Drain the old reply before issuing
+        // another request on this route so it cannot be credited to a new lease.
+        if self.challenger_proof_pending {
+            self.await_pruning_point_proof(id, budget, attempt_stamp).await?;
+        }
+        let remaining = budget.saturating_sub(started.elapsed());
+        if remaining < MIN_USEFUL_PROOF_BUDGET {
+            return Err(ProtocolError::Timeout(budget));
+        }
         record_stage(
             RecoveryStage::ProofRequestSent,
             Some(attempt),
@@ -1124,8 +1123,15 @@ impl IbdFlow {
             self.ctx.chain_participation().state().as_str(),
             "",
         );
-        self.router.enqueue(make_message!(Payload::RequestPruningPointProof, RequestPruningPointProofMessage {})).await?;
-        let msg = self.await_pruning_point_proof(id, budget, attempt_stamp).await?;
+        self.router
+            .enqueue(make_request!(
+                Payload::RequestPruningPointProof,
+                RequestPruningPointProofMessage {},
+                self.challenger_proof_route.id()
+            ))
+            .await?;
+        self.challenger_proof_pending = true;
+        let msg = self.await_pruning_point_proof(id, remaining, attempt_stamp).await?;
         record_stage(
             RecoveryStage::ProofReceived,
             Some(attempt),
@@ -1645,7 +1651,19 @@ impl IbdFlow {
 
                     // Imports the pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
                     // atomically before marking the utxoset stable — see sync_new_utxo_set.
-                    let import_session = self.prepare_pruning_point_sidecars(&session, pruning_point).await?;
+                    let previously_prepared = self.prepared_utxo_import_v1.take();
+                    let import_session = if let Some((instance, prepared)) = previously_prepared
+                        && instance.ptr_eq(&session.weak_consensus_api_v1())
+                        && prepared.point == pruning_point
+                        && session.async_pruning_import_session().await?.active == Some(prepared)
+                    {
+                        // Rotate the epoch before clearing the UTXO stream;
+                        // the authenticated sidecars remain keyed to this point.
+                        info!("Reusing verified sidecars for pruning import at {} after a local resource refusal", pruning_point);
+                        session.async_begin_pruning_point_import(pruning_point).await?
+                    } else {
+                        self.prepare_pruning_point_sidecars(&session, pruning_point).await?
+                    };
                     self.sync_new_utxo_set(&session, import_session).await?;
                 }
                 // Once utxo is valid, simply sync missing headers
@@ -2637,12 +2655,14 @@ impl IbdFlow {
         consensus: &ConsensusProxy,
         import_session: PruningImportSessionV1,
     ) -> Result<(), ProtocolError> {
+        self.prepared_utxo_import_v1 = Some((consensus.weak_consensus_api_v1(), import_session));
         consensus.async_clear_pruning_utxo_set_for_session(import_session).await?;
         self.sync_pruning_point_utxoset(consensus, import_session).await?;
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
         // The target may have changed after virtual/head commit released its pruning
         // guard. Refuse completion unless UTXO and all sidecars share this generation.
         consensus.async_complete_pruning_point_import_for_session(import_session).await?;
+        self.prepared_utxo_import_v1 = None;
         // Once a new utxoset is stored, the utxoindex needs to be resynced as well. This happens through the reset handler mechanism.
         let consensus_manager = self.ctx.consensus_manager.clone();
         spawn_blocking(move || consensus_manager.invoke_consensus_reset_handlers()).await.unwrap();

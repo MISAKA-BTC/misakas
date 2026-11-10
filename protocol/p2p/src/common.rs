@@ -12,6 +12,9 @@ pub enum ProtocolError {
     #[error("timeout expired after {0:?}")]
     Timeout(Duration),
 
+    #[error("IBD chain locator response timed out after {0:?}")]
+    IbdChainLocatorTimeout(Duration),
+
     #[error("P2P protocol version mismatch - local: {0}, remote: {1}")]
     VersionMismatch(u32, u32),
 

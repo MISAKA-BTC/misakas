@@ -246,6 +246,11 @@ impl ConsensusSessionOwned {
         visit(self.consensus.as_ref())
     }
 
+    /// An instance identity that does not retain the database or a pruning guard.
+    pub fn weak_consensus_api_v1(&self) -> std::sync::Weak<dyn ConsensusApi> {
+        Arc::downgrade(&self.consensus)
+    }
+
     /// Uses [`tokio::task::spawn_blocking`] to run the provided consensus closure on a thread where blocking is acceptable.
     /// Note that this function is only available on the *owned* session, and requires cloning the session. In fact this
     /// function is the main motivation for a separate session type.

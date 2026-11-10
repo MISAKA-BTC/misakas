@@ -90,7 +90,7 @@ pub enum PruningImportError {
     // kaspa-pq (ADR-0004 / design §12): both muhash/multiset values are 64-byte Hash64.
     ImportedMultisetHashMismatch(Hash64, Hash64),
 
-    #[error("pruning import data lead to validation rule error")]
+    #[error("pruning import data lead to validation rule error: {0}")]
     PruningImportRuleError(#[from] RuleError),
 
     #[error("process exit was initiated while validating pruning point proof")]
