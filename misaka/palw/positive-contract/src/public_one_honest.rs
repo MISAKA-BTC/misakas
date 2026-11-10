@@ -509,6 +509,7 @@ pub struct PendingManifestCase {
     supply_obligation: Digest,
     request_digest: Digest,
     opened_at: u64,
+    max_manifest_bytes: u32,
     schedule: VerificationSchedule,
 }
 
@@ -538,6 +539,7 @@ pub struct PendingManifestCaseRecordV1 {
     reservation: Digest,
     request_digest: Digest,
     opened_at: u64,
+    max_manifest_bytes: u32,
     material_ready_by: u64,
     filed_by: u64,
     hard: u64,
@@ -597,6 +599,8 @@ impl ManifestResponseRecordV1 {
 }
 
 impl PendingManifestCaseRecordV1 {
+    pub const WIRE_BYTES: usize = 5 * 64 + 4 * 8 + 4;
+
     pub fn check_restore(&self, pending: &PendingManifestCase) -> Result<(), ContractError> {
         if *self != pending.record() {
             return Err(ContractError::Scope);
@@ -618,7 +622,6 @@ impl PendingManifestCase {
         bytes: &[u8],
         scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
         total_limit: u64,
-        max_manifest_bytes: u32,
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
@@ -629,7 +632,7 @@ impl PendingManifestCase {
         if response.provider != expected_provider {
             return Err(ContractError::Identity);
         }
-        let body_root = manifest_root(original.scope.ruleset, bytes, max_manifest_bytes)?;
+        let body_root = manifest_root(original.scope.ruleset, bytes, self.max_manifest_bytes)?;
         if body_root != response.body_root {
             return Err(ContractError::Identity);
         }
@@ -649,7 +652,7 @@ impl PendingManifestCase {
             ManifestDeliveryV1::CommittedButInvalid(_) => ManifestDeliveryClassV1::CommittedButInvalid,
             ManifestDeliveryV1::WrongMaterial => ManifestDeliveryClassV1::WrongMaterial,
         };
-        let limits = hash(b"misaka/palw/public-manifest-limits/v1", &(*scope_limits, total_limit, max_manifest_bytes));
+        let limits = hash(b"misaka/palw/public-manifest-limits/v1", &(*scope_limits, total_limit, self.max_manifest_bytes));
         Ok(VerifiedManifestDeliveryV1 {
             record: ManifestResponseRecordV1 { case: self.id, response_digest, inclusion_daa, limits, classification },
             outcome,
@@ -664,6 +667,7 @@ impl PendingManifestCase {
             reservation: self.reservation,
             request_digest: self.request_digest,
             opened_at: self.opened_at,
+            max_manifest_bytes: self.max_manifest_bytes,
             material_ready_by: self.schedule.material_ready_by(),
             filed_by: self.schedule.filed_by(),
             hard: self.schedule.clock.hard(),
@@ -756,6 +760,7 @@ impl ManifestRequest {
             supply_obligation: context.supply_obligation,
             request_digest: self.signing_digest(),
             opened_at: context.inclusion_daa,
+            max_manifest_bytes: context.max_manifest_bytes,
             schedule: context.schedule,
         })
     }
@@ -1280,9 +1285,12 @@ mod tests {
         assert_eq!(pending.id(), request.case_id(&bound_original, first).unwrap());
         assert_eq!(pending.reservation(), context.reservation);
         let stored = borsh::to_vec(&pending.record()).unwrap();
+        assert_eq!(stored.len(), PendingManifestCaseRecordV1::WIRE_BYTES);
         let restored: PendingManifestCaseRecordV1 = borsh::from_slice(&stored).unwrap();
         assert_eq!(restored.check_restore(&pending), Ok(()));
         let altered = PendingManifestCaseRecordV1 { opened_at: restored.opened_at - 1, ..restored };
+        assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));
+        let altered = PendingManifestCaseRecordV1 { max_manifest_bytes: restored.max_manifest_bytes + 1, ..restored };
         assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by()), Ok(()));
         let mut changed_bytes = bytes.clone();
@@ -1305,7 +1313,6 @@ mod tests {
                 body,
                 &rules,
                 total_limit,
-                max,
                 key,
                 provider_signature.as_ref(),
             )
@@ -1332,7 +1339,6 @@ mod tests {
                 &changed_bytes,
                 &rules,
                 90,
-                max,
                 key,
                 wrong_signature.as_ref(),
             )

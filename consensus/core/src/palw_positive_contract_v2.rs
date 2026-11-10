@@ -264,7 +264,7 @@ fn scan_fixed_manifest_record<T: Copy + borsh::BorshDeserialize, const N: usize>
 
 impl NativeWireScanV1 for PendingManifestCaseRecordV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
-        scan_fixed_manifest_record::<Self, { 5 * 64 + 4 * 8 }>(reader)
+        scan_fixed_manifest_record::<Self, { Self::WIRE_BYTES }>(reader)
     }
 }
 
