@@ -237,7 +237,7 @@ pub struct PreparedPublicDrawV1 {
     original: OriginalId,
     admission_carrier: AcceptedMaterial,
     draw: Digest,
-    draw_daa: u64,
+    draw_point: crate::palw_state_v2::PalwBlockContextV2,
     hard: u64,
     full_scope: Digest,
     members: std::collections::BTreeMap<(Digest, u32), PublicDrawMemberV1>,
@@ -250,7 +250,7 @@ pub struct PublicDrawRecordV1 {
     original: OriginalId,
     admission_carrier: AcceptedMaterial,
     draw: Digest,
-    draw_daa: u64,
+    draw_point: crate::palw_state_v2::PalwBlockContextV2,
     hard: u64,
     full_scope: Digest,
     ordered_members: Digest,
@@ -302,8 +302,8 @@ native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, 
 wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
-native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
-wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, u64, u64, Digest, Digest, RemainingCapacity);
+native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, draw_point, hard, full_scope, ordered_members, per_bond);
+wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, crate::palw_state_v2::PalwBlockContextV2, u64, Digest, Digest, RemainingCapacity);
 native_struct!(PublicReplayApprovalRecordV1; original, draw, full_scope, ordered_members, bond, origin, approval_digest);
 wire_struct!(PublicReplayApprovalRecordV1; OriginalId, Digest, Digest, Digest, PanelBond, AcceptedOrigin, Digest);
 
@@ -376,7 +376,7 @@ impl PreparedPublicDrawV1 {
             original: self.original,
             admission_carrier: self.admission_carrier,
             draw: self.draw,
-            draw_daa: self.draw_daa,
+            draw_point: self.draw_point,
             hard: self.hard,
             full_scope: self.full_scope,
             ordered_members: self.ordered_members,
@@ -409,9 +409,10 @@ impl PreparedPublicDrawV1 {
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<PublicReplayApprovalRecordV1, ContractError> {
-        if approval_until > self.hard || !(self.draw_daa..=approval_until).contains(&origin.accepted_daa) {
+        if approval_until > self.hard || !(self.draw_point.daa_score..=approval_until).contains(&origin.accepted_daa) {
             return Err(ContractError::Range);
         }
+        check_public_origin_after_draw_v1(origin, &self.draw_point)?;
         let bond = approval.bond;
         approval.authenticate(&self.approval_context(bond)?, key, signature)?;
         Ok(PublicReplayApprovalRecordV1 {
@@ -458,11 +459,11 @@ impl PreparedPublicOriginalV1 {
         &self,
         record: &PublicDrawRecordV1,
         draw: Digest,
-        draw_daa: u64,
+        draw_point: crate::palw_state_v2::PalwBlockContextV2,
         members: &[PublicDrawMemberV1],
         relation_plan: Digest,
     ) -> Result<PreparedPublicDrawV1, ContractError> {
-        let prepared = self.prepare_draw(draw, draw_daa, members, relation_plan)?;
+        let prepared = self.prepare_draw(draw, draw_point, members, relation_plan)?;
         record.check_restore(&prepared)?;
         Ok(prepared)
     }
@@ -518,9 +519,10 @@ impl PreparedPublicOriginalV1 {
         {
             return Err(ContractError::Scope);
         }
-        if context.origin.accepted_daa < draw.draw_daa {
+        if context.origin.accepted_daa < draw.draw_point.daa_score {
             return Err(ContractError::Range);
         }
+        check_public_origin_after_draw_v1(context.origin, &draw.draw_point)?;
         let Claimant::DrawnBond(bond) = context.claimant else {
             return Err(ContractError::Identity);
         };
@@ -576,11 +578,14 @@ impl PreparedPublicOriginalV1 {
     pub fn prepare_draw(
         &self,
         draw: Digest,
-        draw_daa: u64,
+        draw_point: crate::palw_state_v2::PalwBlockContextV2,
         members: &[PublicDrawMemberV1],
         relation_plan: Digest,
     ) -> Result<PreparedPublicDrawV1, ContractError> {
-        if draw_daa <= self.carrier.origin.accepted_daa || draw_daa > self.draw_ready_by {
+        if draw_point.daa_score <= self.carrier.origin.accepted_daa
+            || draw_point.daa_score > self.draw_ready_by
+            || draw_point.blue_score <= self.carrier.origin.accepted_blue_score
+        {
             return Err(ContractError::Range);
         }
         if members.is_empty() || members.len() as u64 > self.rescue.max_drawn_bonds {
@@ -599,7 +604,7 @@ impl PreparedPublicOriginalV1 {
             original: self.original,
             admission_carrier: self.carrier,
             draw,
-            draw_daa,
+            draw_point,
             hard: self.schedule.hard(),
             full_scope: self.original.full_replay_scope(relation_plan),
             members: checked,
@@ -740,6 +745,19 @@ impl PublicOriginalAdmissionRecordV1 {
     }
 }
 
+fn check_public_origin_after_draw_v1(
+    origin: AcceptedOrigin,
+    draw: &crate::palw_state_v2::PalwBlockContextV2,
+) -> Result<(), ContractError> {
+    if origin.accepted_blue_score < draw.blue_score
+        || (origin.accepted_blue_score == draw.blue_score
+            && (origin.accepting_block.0 != draw.block.as_bytes() || origin.accepted_daa != draw.daa_score))
+    {
+        return Err(ContractError::Scope);
+    }
+    Ok(())
+}
+
 fn check_public_origin_point_v1(
     origin: AcceptedOrigin,
     point: &crate::palw_state_v2::PalwBlockContextV2,
@@ -854,10 +872,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let row = PublicReplayApprovalRecordV1::decode_row(key, bytes)?;
         check_public_origin_point_v1(row.origin, self.last_point().ok_or(ContractError::Scope)?)?;
         let draw = self.public_draw_record_v1(row.original)?.ok_or(ContractError::Scope)?;
+        check_public_origin_after_draw_v1(row.origin, &draw.draw_point)?;
         if row.draw != draw.draw
             || row.full_scope != draw.full_scope
             || row.ordered_members != draw.ordered_members
-            || !(draw.draw_daa..=draw.hard).contains(&row.origin.accepted_daa)
+            || !(draw.draw_point.daa_score..=draw.hard).contains(&row.origin.accepted_daa)
         {
             return Err(ContractError::Scope);
         }
@@ -877,8 +896,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let point = self.last_point().ok_or(ContractError::Scope)?;
         let clock = OriginalClock::new(admission.carrier.origin.accepted_daa)?;
         if row.admission_carrier != admission.carrier
-            || row.draw_daa <= admission.carrier.origin.accepted_daa
-            || row.draw_daa > admission.deadlines[0].min(point.daa_score)
+            || row.draw_point.daa_score <= admission.carrier.origin.accepted_daa
+            || row.draw_point.daa_score > admission.deadlines[0].min(point.daa_score)
+            || row.draw_point.blue_score <= admission.carrier.origin.accepted_blue_score
+            || row.draw_point.blue_score > point.blue_score
+            || (row.draw_point.blue_score == point.blue_score && row.draw_point != *point)
             || row.hard != clock.hard()
             || row.per_bond != admission.rescue.per_drawn_bond
         {

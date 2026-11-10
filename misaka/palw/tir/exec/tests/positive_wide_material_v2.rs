@@ -606,23 +606,34 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         PublicDrawMemberV1 { bond, principal: r.miner, rescue_reservation: d(8) },
         PublicDrawMemberV1 { bond: second_bond, principal: r.miner, rescue_reservation: d(9) },
     ];
-    let draw = prepared.prepare_draw(d(11), 101, &members, d(12)).unwrap();
+    let draw_point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: Hash64::from_bytes([16; 64]),
+        daa_score: 101,
+        blue_score: 101,
+        subsidy: 0,
+    };
+    let draw = prepared.prepare_draw(d(11), draw_point, &members, d(12)).unwrap();
     let record = borsh::to_vec(&draw.record()).unwrap();
     let restored: kaspa_consensus_core::palw_positive_contract_v2::PublicDrawRecordV1 = borsh::from_slice(&record).unwrap();
-    let draw = prepared.restore_draw(&restored, d(11), 101, &members, d(12)).unwrap();
+    let draw = prepared.restore_draw(&restored, d(11), draw_point, &members, d(12)).unwrap();
+    let other_block = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: Hash64::from_bytes([17; 64]), ..draw_point };
     assert!(matches!(
-        prepared.restore_draw(&restored, d(11), 101, &[members[1], members[0]], d(12)),
+        prepared.restore_draw(&restored, d(11), other_block, &members, d(12)),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     ));
     assert!(matches!(
-        prepared.restore_draw(&restored, d(11), 101, &members, d(13)),
+        prepared.restore_draw(&restored, d(11), draw_point, &[members[1], members[0]], d(12)),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    ));
+    assert!(matches!(
+        prepared.restore_draw(&restored, d(11), draw_point, &members, d(13)),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     ));
     let approval = draw.approval_context(bond).unwrap();
     assert_eq!(approval.original, original.id());
     assert_eq!(approval.member, r.miner);
     assert_eq!(approval.full_scope, original.id().full_replay_scope(d(12)));
-    let other_plan = prepared.prepare_draw(d(11), 101, &members, d(13)).unwrap();
+    let other_plan = prepared.prepare_draw(d(11), draw_point, &members, d(13)).unwrap();
     assert_ne!(approval.full_scope, other_plan.approval_context(bond).unwrap().full_scope);
     assert_eq!(draw.rescue_capacity(bond), Ok(supply));
     use misaka_palw_positive_contract::public_one_honest::{
@@ -639,7 +650,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         manifest_body_bytes_reserved: body,
         schedule: prepared.schedule,
         origin: AcceptedOrigin {
-            accepting_block: NativeHash64([13; 64]),
+            accepting_block: NativeHash64(draw_point.block.as_bytes()),
             carrier_block: NativeHash64([14; 64]),
             carrier_transaction: NativeHash64([15; 64]),
             accepted_daa: 101,
@@ -755,8 +766,9 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     );
     assert!(with_outsider.verify_outsider_manifest_request(1, &outside, &request_context, &signed.key, outside_sig.as_ref()).is_err());
     assert!(draw.rescue_capacity(PanelBond { index: 2, ..bond }).is_err());
-    assert!(prepared.prepare_draw(d(11), 100, &members, d(12)).is_err());
-    assert!(prepared.prepare_draw(d(11), 101, &[members[0], members[0]], d(12)).is_err());
+    let early_draw = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { daa_score: 100, ..draw_point };
+    assert!(prepared.prepare_draw(d(11), early_draw, &members, d(12)).is_err());
+    assert!(prepared.prepare_draw(d(11), draw_point, &[members[0], members[0]], d(12)).is_err());
     let assertion = FullReplayApproval {
         original: approval.original,
         draw: approval.draw,
@@ -796,7 +808,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         restored_approvals[0].check_restore(&draw, 102, other_vote, &assertion, &signed.key, signed_approval.as_ref()),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
-    let reordered_draw = prepared.prepare_draw(d(11), 101, &[members[1], members[0]], d(12)).unwrap();
+    let reordered_draw = prepared.prepare_draw(d(11), draw_point, &[members[1], members[0]], d(12)).unwrap();
     assert_eq!(
         restored_approvals[0].check_restore(&reordered_draw, 102, vote_origin, &assertion, &signed.key, signed_approval.as_ref()),
         Err(misaka_palw_positive_contract::ContractError::Scope)
@@ -834,7 +846,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let alternate_prepared = admission.prepare_signed_bytes(&alternate_bytes, &reservation).unwrap();
     assert_eq!(alternate_prepared.original, prepared.original);
     assert!(matches!(
-        alternate_prepared.restore_draw(&draw.record(), d(11), 101, &members, d(12)),
+        alternate_prepared.restore_draw(&draw.record(), d(11), draw_point, &members, d(12)),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     ));
     assert_eq!(
