@@ -39,6 +39,7 @@ def main():
     parser.add_argument("cases", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--source-commit", required=True)
+    parser.add_argument("--mode", choices=("parser", "native"), default="parser")
     parser.add_argument("--repetitions", type=int, default=5, choices=range(1, 101))
     args = parser.parse_args()
     binary, cases, output = args.binary.resolve(), args.cases.resolve(), args.output.resolve()
@@ -50,28 +51,36 @@ def main():
         "runnerSha256": digest(Path(__file__)),
         "before": observation(),
         "runs": [],
-        "scope": "Parser only; shared host, default affinity, nice 10. Not complete native service qualification.",
+        "scope": ("Parser" if args.mode == "parser" else "Native replay of seeded accepted-parent bundles")
+                 + "; shared host, default affinity, nice 10. Not complete native service qualification.",
+        "mode": args.mode,
         "publicProfileSelected": False,
         "publicDeployment": False,
     }
     env = dict(os.environ, LC_ALL="C")
-    for case in CASES:
-        command = ["/usr/bin/time", "-v", "-o", str(output / (case + ".time")),
-                   "nice", "-n", "10", str(binary), "run", str(cases), case, str(args.repetitions)]
-        with (output / (case + ".jsonl")).open("w") as stdout, (output / (case + ".stderr")).open("w") as stderr:
+    jobs = [(case, case, ["run", str(cases), case, str(args.repetitions)]) for case in CASES]
+    if args.mode == "native":
+        jobs = [(case, f"{case}-{iteration}", ["native-run", str(cases / case)])
+                for case in ("actual", "maximum_raw") for iteration in range(args.repetitions)]
+    for case, name, arguments in jobs:
+        command = ["/usr/bin/time", "-v", "-o", str(output / (name + ".time")),
+                   "nice", "-n", "10", str(binary), *arguments]
+        with (output / (name + ".jsonl")).open("w") as stdout, (output / (name + ".stderr")).open("w") as stderr:
             completed = subprocess.run(command, env=env, stdout=stdout, stderr=stderr)
         run = {
-            "case": case, "command": command, "exitCode": completed.returncode,
-            "rawSha256": digest(cases / (case + ".raw")),
-            "operandsSha256": digest(cases / (case + ".case")),
-            "stdoutSha256": digest(output / (case + ".jsonl")),
-            "stderrSha256": digest(output / (case + ".stderr")),
-            "timeSha256": digest(output / (case + ".time")),
+            "case": case, "name": name, "command": command, "exitCode": completed.returncode,
+            "stdoutSha256": digest(output / (name + ".jsonl")),
+            "stderrSha256": digest(output / (name + ".stderr")),
+            "timeSha256": digest(output / (name + ".time")),
         }
+        if args.mode == "parser":
+            run.update(rawSha256=digest(cases / (case + ".raw")), operandsSha256=digest(cases / (case + ".case")))
+        else:
+            run["bundleFilesSha256"] = {p.name: digest(p) for p in sorted((cases / case).iterdir()) if p.is_file()}
         record["runs"].append(run)
         # Persist progress even if a later invocation is interrupted.
         (output / "measurement.json").write_text(json.dumps(record, indent=2) + "\n")
-        print(json.dumps({"case": case, "exitCode": completed.returncode}), flush=True)
+        print(json.dumps({"case": case, "name": name, "exitCode": completed.returncode}), flush=True)
     record["after"] = observation()
     (output / "measurement.json").write_text(json.dumps(record, indent=2) + "\n")
     raise SystemExit(0 if all(run["exitCode"] == 0 for run in record["runs"]) else 1)
