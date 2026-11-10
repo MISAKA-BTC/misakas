@@ -226,3 +226,7 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 実 tokenizer の搬送 mass も[出典を固定して再測定](../../../evidence/palw/tokenizer-registration-mass-source-pinned-2026-11-11.json)した。使用した4 library の fingerprint を成功した node test の依存情報と照合し、core/txscript の source tree と binary SHA-256 を保存した。最大 Part は mass 312,004、標準 relay 上限480,000以内。固定テスト UTXO と仮 pins の結果であり、公開登録料・CPU/RSS・履歴保管の資格測定ではない。元の出典未特定の記録は変更せず残す。
 
 [認証済み PALW sidecar の復元試験](../../../evidence/palw/tokenizer-registration-pruned-sidecar-regression-2026-11-11.json)が通過した。Part 受理点の予約 book・session・raw Part を取り込み、同じ Finish 取引の受理と Complete、後続各ブロックの状態 root 一致を確認した。取り込み未完了時には厳格な status RPC が拒否することも検査した。試験は検証済み UTXO を保持し既存の epoch-zero 完了処理を使う構成であり、P2P handshake と UTXO stream 全体の pruned IBD 試験ではない。ノード2件と CLI1件が成功した。
+
+`8a6923139` にオフラインの parser 計測ツールを追加した。入力生成を別プロセスに分け、実 tokenizer と最大 raw/vocab/EOG、巨大文字列、疎な ID、末尾重複キー、最後の leaf 不一致など8ケースの期待結果を確認した。[機能確認記録](../../../evidence/palw/tokenizer-registration-parser-fixtures-2026-11-11.json)は opt-level 0 の既存 core rlib による結果であり、機材適格性や native fold 全体の測定ではない。release build と指定機材での CPU/RSS 測定は別に実施する。
+
+先の入力形状記録の `jsonKeyEvents=49302` は、測定方法に書いたとおり JSON object のキー数だけだった。native の key-event 算式は vocab entries 49,152 と added tokens 17 も加算し、今回の実入力では **98,471** となる。見積もり・容量には native 値を使う。元の JSON は過去の観測として保持し、新記録に訂正を残した。既に取得した EOF の `maximum_key_events=1052278` はこの値を上回っており、公開で新しい登録が成立したことは意味しない。
