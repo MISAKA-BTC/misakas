@@ -3,6 +3,7 @@
 
 use crate::ContractError;
 use crate::identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, SIGNATURE_BYTES, hash, principal, verify_signature};
+use crate::reservations::RemainingCapacity;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const ORIGINAL_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-original/v1";
@@ -309,9 +310,53 @@ impl VerificationSchedule {
     }
 }
 
+/// Pre-draw demand in a common physical resource pool. Reserve an entire
+/// protected opportunity for every possible drawn bond. Outsider and
+/// defensive demand are accounted for separately from that protected demand.
+/// The native owner derives the projection and assigns it to distinct bonds
+/// after the draw. This does not fund fees or allocate actual service slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProtectedRescueDemand {
+    pub max_drawn_bonds: u64,
+    pub per_drawn_bond: RemainingCapacity,
+    pub max_outsiders: u64,
+    pub per_outsider: RemainingCapacity,
+    pub defensive: RemainingCapacity,
+}
+
+impl ProtectedRescueDemand {
+    pub fn total(self) -> Result<RemainingCapacity, ContractError> {
+        if self.max_drawn_bonds == 0 {
+            return Err(ContractError::Range);
+        }
+        self.per_drawn_bond
+            .checked_scale(self.max_drawn_bonds)?
+            .checked_add(self.per_outsider.checked_scale(self.max_outsiders)?)?
+            .checked_add(self.defensive)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rescue_demand_includes_every_drawn_bond_and_independent_response_capacity() {
+        let demand = ProtectedRescueDemand {
+            max_drawn_bonds: 3,
+            per_drawn_bond: RemainingCapacity { transmitted_bytes: 100, additional_work: 40, retained_bytes: 20 },
+            max_outsiders: 2,
+            per_outsider: RemainingCapacity { transmitted_bytes: 50, additional_work: 15, retained_bytes: 5 },
+            defensive: RemainingCapacity { transmitted_bytes: 25, additional_work: 10, retained_bytes: 15 },
+        };
+        assert_eq!(demand.total(), Ok(RemainingCapacity { transmitted_bytes: 425, additional_work: 160, retained_bytes: 85 }));
+        assert_eq!(ProtectedRescueDemand { max_drawn_bonds: 0, ..demand }.total(), Err(ContractError::Range));
+        assert_eq!(ProtectedRescueDemand { max_drawn_bonds: u64::MAX, ..demand }.total(), Err(ContractError::Budget));
+        assert_eq!(
+            ProtectedRescueDemand { defensive: RemainingCapacity { retained_bytes: u64::MAX, ..demand.defensive }, ..demand }.total(),
+            Err(ContractError::Budget)
+        );
+    }
 
     #[test]
     fn verification_schedule_reserves_both_windows_from_original_admission() {
