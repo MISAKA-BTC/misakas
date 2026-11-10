@@ -37,6 +37,8 @@ use misaka_palw_positive_contract::{
 
 pub const PART_OVERHEAD: u64 = (EVIDENCE_HEADER_BYTES + EXACT_PART_HEADER_BYTES) as u64;
 
+pub(crate) const PUBLIC_ORIGINAL_ADMISSION_TABLE_V1: u8 = 198;
+
 /// Transport quote only; A4 reserves native wrapper/transaction overhead too.
 /// Existing frame limits remain unsigned and are never silently reinterpreted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -527,6 +529,25 @@ impl PreparedPublicOriginalV1 {
 }
 
 impl PublicOriginalAdmissionRecordV1 {
+    pub(crate) fn decode_row(
+        key: &[u8],
+        bytes: &[u8],
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Self, ContractError> {
+        let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
+        if key != row.original.0.0.as_slice() {
+            return Err(ContractError::Identity);
+        }
+        let origin = row.carrier.origin;
+        if origin.accepted_daa > point.daa_score
+            || origin.accepted_blue_score > point.blue_score
+            || (origin.accepted_blue_score == point.blue_score && origin.accepting_block.0 != point.block.as_bytes())
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(row)
+    }
+
     /// Resolve this reference from canonical accepted history on restore.
     pub fn carrier(&self) -> AcceptedMaterial {
         self.carrier
