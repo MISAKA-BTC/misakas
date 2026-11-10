@@ -1121,7 +1121,7 @@ async fn register_remote(
                 .fix("top up the wallet (gas) or the bond's collateral (bond), then re-run — nothing was signed or sent"),
         )
     })?;
-    remote::show(flow, &quote);
+    remote::show(flow, &quote, &bundle.state);
     if remote_args.quote_only {
         return Err(Halt::Declined("--quote: the quote above was read from the chain; nothing was signed or sent".into()));
     }
@@ -1548,7 +1548,7 @@ async fn register_export(
                 .fix("top up the payer address (gas) or the bond's collateral (bond), then export again — nothing was signed or sent"),
         )
     })?;
-    remote::show(flow, &quote);
+    remote::show(flow, &quote, &bundle.state);
     let Some(out_path) = out_path else {
         return Err(Halt::Declined("--quote: the quote above was read from the chain; nothing was signed, written or sent".into()));
     };
