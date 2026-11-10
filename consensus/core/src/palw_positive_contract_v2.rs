@@ -70,6 +70,32 @@ pub fn public_tokenizer_material_v1(
     Ok(ManifestEntryV1 { subject, content_root: subject, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes })
 }
 
+/// Match the original against execution metadata resolved by admission or court.
+pub(crate) fn check_public_original_execution_v1(
+    original: &OriginalCommit,
+    job: &PalwJobContextV2,
+    class: &PalwTirClassV1,
+    artifact: Hash64,
+) -> Result<(), ContractError> {
+    if original.job != digest(job.job_id)
+        || original.artifact != digest(artifact)
+        || original.registered_class != digest(job.shape_profile_id)
+        || original.input_tokens != digest(job.prompt_token_ids_hash)
+        || original.tokenizer != digest(job.tokenizer_id)
+        || original.execution_rules != digest(job.cu_ruleset_id)
+        || original.generation_seed != job.execution_seed
+        || original.prefill != job.declared_prefill_tokens
+        || original.decode != job.exact_decode_tokens
+        || original.max_context != job.max_context_tokens
+        || original.execution != digest(job.context_hash())
+        || original.registered_class != digest(class.class_id(&artifact))
+        || original.program != digest(class.graph_ir_root())
+    {
+        return Err(ContractError::Scope);
+    }
+    Ok(())
+}
+
 /// Facts resolved from the canonical job, class and funded execution owner.
 /// The native admission path supplies these independently of the candidate.
 pub struct PublicOriginalAdmissionV1<'a> {
@@ -379,34 +405,17 @@ impl PublicOriginalAdmissionV1<'_> {
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<OriginalId, ContractError> {
         ManifestV1::fetch_size(self.max_manifest_bytes)?;
-        let job = self.job;
-        let class = self.class;
         if original.scope != self.scope
             || original.miner != self.miner
-            || original.job != digest(job.job_id)
-            || original.artifact != digest(self.artifact)
-            || original.registered_class != digest(job.shape_profile_id)
             || original.prompt != self.prompt
-            || original.input_tokens != digest(job.prompt_token_ids_hash)
-            || original.tokenizer != digest(job.tokenizer_id)
-            || original.execution_rules != digest(job.cu_ruleset_id)
-            || original.generation_seed != job.execution_seed
             || original.initial_state != self.initial_state
             || original.dependencies != self.dependencies
-            || original.prefill != job.declared_prefill_tokens
-            || original.decode != job.exact_decode_tokens
-            || original.max_context != job.max_context_tokens
             || original.service_contract != self.service_contract
             || original.manifest_root == Digest([0; 64])
         {
             return Err(ContractError::Scope);
         }
-        if original.execution != digest(job.context_hash())
-            || original.registered_class != digest(class.class_id(&self.artifact))
-            || original.program != digest(class.graph_ir_root())
-        {
-            return Err(ContractError::Scope);
-        }
+        check_public_original_execution_v1(original, self.job, self.class, self.artifact)?;
         original.authenticate(key, signature)?;
         Ok(original.id())
     }

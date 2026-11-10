@@ -377,6 +377,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         check_public_original_wide_greedy_decode_v1(&other_output, &binding, &event, &event, selected, &rules),
         Err(PalwStepRefuteError::InputSetNotCanonical("wide decode court output does not bind the original"))
     ));
+    let mut other_job = original.clone();
+    other_job.job = d(99);
+    assert!(matches!(
+        check_public_original_wide_greedy_decode_v1(&other_job, &binding, &event, &event, selected, &rules),
+        Err(PalwStepRefuteError::InputSetNotCanonical("public court binding names another original execution"))
+    ));
     assert!(matches!(
         material.check_wide_logits_consistency(&original, &binding, logits_leaf.index, &event, material.tile.values_le.len(), &rules,),
         Err(PalwStepRefuteError::NoFaultFound)

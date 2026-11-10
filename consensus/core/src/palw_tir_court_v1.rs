@@ -3850,12 +3850,13 @@ impl PublicOriginalTraceTileV1 {
     ) -> Result<PublicWideTileGeometryV1, PalwStepRefuteError> {
         use crate::palw_tir_step_v1::{PalwTirStepSpaceV2, palw_tir_leaf_values_v2};
         self.authenticate(original, index, max_step_leaf_count, max_value_bytes)?;
-        if job.context_hash().as_bytes() != original.execution.0
-            || job.shape_profile_id.as_bytes() != original.registered_class.0
-            || class.class_id(&Hash64::from_bytes(original.artifact.0)) != job.shape_profile_id
-        {
-            return Err(bad("public trace court job or class mismatch"));
-        }
+        crate::palw_positive_contract_v2::check_public_original_execution_v1(
+            original,
+            job,
+            class,
+            Hash64::from_bytes(original.artifact.0),
+        )
+        .map_err(|_| bad("public trace court job or class mismatch"))?;
         let space = PalwTirStepSpaceV2::new(class).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         let expected = space.leaf_count_capped(job, max_step_leaf_count).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         if self.trace.step_leaf_count != expected {
@@ -3895,14 +3896,16 @@ fn check_public_original_court_binding(
     original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
     binding: &PalwTirStepBindingV1,
 ) -> Result<(), PalwStepRefuteError> {
-    if binding.committed_execution_root.as_bytes() != original.trace_root.0
-        || binding.job_context.context_hash().as_bytes() != original.execution.0
-        || binding.job_context.shape_profile_id.as_bytes() != original.registered_class.0
-        || binding.artifact_root.as_bytes() != original.artifact.0
-    {
+    if binding.committed_execution_root.as_bytes() != original.trace_root.0 {
         return Err(bad("public court binding names another original execution"));
     }
-    Ok(())
+    crate::palw_positive_contract_v2::check_public_original_execution_v1(
+        original,
+        &binding.job_context,
+        &binding.class,
+        binding.artifact_root,
+    )
+    .map_err(|_| bad("public court binding names another original execution"))
 }
 
 /// Evaluate a decode dispute for the wide public profile's fixed greedy
