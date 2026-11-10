@@ -100,3 +100,5 @@ Linux の T12 復旧候補をリリースビルドし、バイナリの SHA-256 
 DAA 20,999 を仮定し、受理済みのクラス登録 carrier から class/layout を復号して、同じ commitment・binding・raw tokenizer を照合した。EOF 証明と semantics の受理は fixture。出荷時の価格・資源条件を維持し、共有受付クロック v5 とその hard deadline のみを使うオフライン比較では、custodian 上限 2 / 3 / 6 に対して `PublicRecoveryExceedsNoticeBudget` の要求がそれぞれ 60,730 / 72,565 / 108,087 DAA、許容はすべて 6,880 DAA だった。v5 の owner queue 待ちを外しても、この候補の公開回復経路は予算内に収まらない。
 
 同じ候補について native の取得プランを直接分解した。custodian 上限 3 の v5 比較は取得 72,182 DAA、提出・収集 383 DAA。取得のうち 64,890 DAA は依存 cone の `StepRun` 21 回に対応し、1 回は最大 256 葉、4,219,029 bytes、3,090 DAA。logits の 12 タイルは 624 DAA。取得枠を短縮するには、同じ原 claim に対する依存資料の認証・供給を保ったまま、`StepRun` を順番に要求する経路を変更する必要がある。SDK example のビルドはローカルの空き容量不足で停止し、この内訳は既存の consensus-core ビルドにリンクした別のオフライン実行で確認した。
+
+既存の共有資料経路が使う native 全 root 入力 cover を、同じ commitment、登録済み class/layout、binding に対してオフラインで実行した。原トレースは 5,154 葉で、G14 の見積もり用設定の 4,096 葉上限を超える。診断で葉上限だけを 5,154 に合わせても、依存探索が 262,144 edge の上限で停止した。現行の共有資料設定をそのまま流用する場合、取得時間とは独立にこの探索上限も満たせない。公開チェーンや設定には変更を加えていない。
