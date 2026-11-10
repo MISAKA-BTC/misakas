@@ -1142,7 +1142,9 @@ fn stored_public_admission_requires_manifest_capacity_for_each_rescue_path() {
         accepted_blue_score: 1,
     };
     let mut row = PublicOriginalAdmissionRecordV1::storage_fixture(original, origin);
-    let decode = |row| PublicOriginalAdmissionRecordV1::decode_row(&original.0.0, &borsh::to_vec(row).unwrap());
+    let decode = |row: &PublicOriginalAdmissionRecordV1| {
+        PublicOriginalAdmissionRecordV1::decode_row(&original.0.0, &borsh::to_vec(row).unwrap())
+    };
     assert!(decode(&row).is_ok());
 
     // The smaller allocation still fits the aggregate budget, but the
