@@ -6,7 +6,7 @@ use crate::node::{
 use crate::{NodeValue, Slice};
 use kaspa_consensus_core::{
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1},
-    palw_step_leg::{PalwStepTileLeafV1, step_tile_leaf_hash_v1},
+    palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_opening_from_leaf_source_capped_v1, step_tile_leaf_hash_v1},
     palw_tir_court_v1::{PublicOriginalStepRootV1, PublicOriginalTraceIndexV1},
     palw_tir_step_v1::{palw_tir_execution_root_v1, palw_tir_leaf_values_v2},
 };
@@ -85,6 +85,31 @@ impl WidePanelCaptureV2<'_> {
             step_leaf_count: self.run.leaf_count(),
             step_merkle_root: self.run.step_merkle_root(),
         }
+    }
+
+    /// Open one tile from the original run without replaying or constructing a
+    /// new tree buffer. The caller reserves the returned tile and path.
+    pub fn public_trace_tile(
+        &self,
+        index: u64,
+        max_step_leaf_count: u64,
+        max_value_bytes: u64,
+    ) -> Result<(PalwStepOpeningV1, PalwStepTileLeafV1), Error> {
+        let count = self.run.leaf_count();
+        let hashes = self.run.leaf_hashes();
+        if index >= count || count > max_step_leaf_count || count != hashes.len() as u64 {
+            return Err("wide public trace index or leaf count cap".into());
+        }
+        if self.preimage_bytes(index)? > max_value_bytes {
+            return Err("wide public trace tile exceeds value cap".into());
+        }
+        // Walking the sibling subtrees touches at most count leaves and count
+        // pairs. Charge before hashing so repeated opens share the same cap.
+        self.session.charge(Charge::Visit, mul(count, 2)?)?;
+        self.session.charge(Charge::Hash, mul(count, 256)?)?;
+        let opening = step_opening_from_leaf_source_capped_v1(count, index, max_step_leaf_count, |i| hashes[i as usize])
+            .map_err(|error| error.to_string())?;
+        Ok((opening, self.preimage(index)?))
     }
 
     /// The exact output of the same observed run, as one canonical chunk.

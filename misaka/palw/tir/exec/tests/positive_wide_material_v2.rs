@@ -315,6 +315,19 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert!(trace_index.check(&original, trace_len - 1).is_err());
     trace_index.step_merkle_root = Hash64::from_bytes([77; 64]);
     assert!(trace_index.check(&original, trace_len).is_err());
+    let (opening, tile) = capture.public_trace_tile(0, trace_len, u64::MAX).unwrap();
+    kaspa_consensus_core::palw_tir_court_v1::check_public_original_step_data_v1(
+        &original,
+        &capture.public_step_root(),
+        0,
+        &opening,
+        &tile,
+        trace_len,
+        tile.values_le.len(),
+    )
+    .unwrap();
+    assert!(capture.public_trace_tile(0, trace_len, 0).is_err());
+    assert!(capture.public_trace_tile(trace_len, trace_len, u64::MAX).is_err());
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
     use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
     let size = original.decode * 4;
