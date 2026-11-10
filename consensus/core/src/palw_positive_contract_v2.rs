@@ -529,6 +529,25 @@ impl PreparedPublicOriginalV1 {
 }
 
 impl PublicOriginalAdmissionRecordV1 {
+    #[cfg(test)]
+    pub(crate) fn storage_fixture(original: OriginalId, origin: AcceptedOrigin) -> Self {
+        let supply = RemainingCapacity { transmitted_bytes: 4096, additional_work: 16, retained_bytes: 4096 };
+        Self {
+            original,
+            carrier: AcceptedMaterial { origin, digest: Digest([1; 64]) },
+            reservation: Digest([2; 64]),
+            initial_supply: supply,
+            rescue: ProtectedRescueDemand {
+                max_drawn_bonds: 1,
+                per_drawn_bond: supply,
+                max_outsiders: 1,
+                per_outsider: supply,
+                defensive: supply,
+            },
+            deadlines: [102, 103, 103, 104, 105, 106, 107, 108],
+        }
+    }
+
     pub(crate) fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
         let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
         if key != row.original.0.0.as_slice() {

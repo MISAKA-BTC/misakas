@@ -304,3 +304,57 @@ fn malformed_public_admission_delta_cannot_install_on_replay_or_revert() {
     ));
     assert_eq!(state.state_root(), root);
 }
+
+#[test]
+fn public_admission_row_round_trips_through_delta_and_snapshot() {
+    use crate::palw_positive_contract_v2::{PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PublicOriginalAdmissionRecordV1};
+    use misaka_palw_positive_contract::{
+        identity::Digest,
+        public_one_honest::OriginalId,
+        rows::{AcceptedOrigin, NativeHash64},
+    };
+
+    let params = params();
+    let (mut parent, _) = apply(&PalwChainStateV2::genesis(), &params, &ctx(1, 100, 1), &register_class_and_bond(), None);
+    parent.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
+        crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
+        None,
+        misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 100, burned: 0 },
+    ));
+    let point = ctx(2, 101, 2);
+    let original = OriginalId(Digest([3; 64]));
+    let row = PublicOriginalAdmissionRecordV1::storage_fixture(
+        original,
+        AcceptedOrigin {
+            accepting_block: NativeHash64(point.block.as_bytes()),
+            carrier_block: NativeHash64(h64(3).as_bytes()),
+            carrier_transaction: NativeHash64(h64(4).as_bytes()),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: point.daa_score,
+            accepted_blue_score: point.blue_score,
+        },
+    );
+    let extras = PalwTransitionExtrasV1 {
+        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+            network_domain: h64(1),
+            ruleset_digest: h64(2),
+            ..Default::default()
+        }),
+        exec_v2_test_kernel_rows: vec![(
+            PUBLIC_ORIGINAL_ADMISSION_TABLE_V1,
+            original.0.0.to_vec(),
+            Some(borsh::to_vec(&row).unwrap()),
+        )],
+        ..Default::default()
+    };
+    let (child, delta) =
+        apply_palw_transition_v2_with_extras(&parent, &params, &point, &[], None, false, false, false, false, &extras).unwrap();
+    assert_eq!(child.public_original_admission_record_v1(original), Ok(Some(row)));
+    assert_eq!(apply_delta_v2(&parent, &delta, &params).unwrap(), child);
+    assert_eq!(revert_delta_v2(&child, &delta, &params).unwrap(), parent);
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap();
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, Some(child.state_root())).unwrap();
+    assert_eq!(restored, child);
+    assert_eq!(restored.public_original_admission_record_v1(original), Ok(Some(row)));
+}
