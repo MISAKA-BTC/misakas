@@ -37,7 +37,14 @@ pub(super) fn staged_legacy_alias_subject_v2(key: PalwStagedCourtKeyV1) -> Optio
         | CourtBatchNumericalReceipt(id)
         | CourtBatchPlainOutputReceiptV2(id) => Some(id),
         TirOwnerSchedule(id) => Some(id),
-        TirLayout(_) | TirContainer(_) | VerifiedTokenizerRegistration(..) | CourtService | CourtMaterialPart(..) => None,
+        TirLayout(_)
+        | TirContainer(_)
+        | VerifiedTokenizerRegistration(..)
+        | CourtService
+        | CourtMaterialPart(..)
+        | TokenizerRegistrationSession(_)
+        | TokenizerRegistrationPart(..)
+        | TokenizerRegistrationBook => None,
     }
 }
 
@@ -1236,6 +1243,48 @@ impl TransitionBuilder<'_> {
         self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService, Some(row))
     }
 
+    /// Only the paid registration fold and its expiry sweep call this writer.
+    /// Validate and reserve every dependent write before changing any row.
+    pub(super) fn commit_tokenizer_rows_v1(
+        &mut self,
+        mut changes: Vec<(PalwStagedCourtKeyV1, Option<PalwStagedCourtRowV1>)>,
+    ) -> Result<(), PalwStateV2Error> {
+        changes.sort_unstable_by_key(|(key, _)| *key);
+        if changes.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(PalwStateV2Error::CarriageInconsistent("duplicate tokenizer native write".into()));
+        }
+        for (key, new) in &changes {
+            if !matches!(
+                key,
+                PalwStagedCourtKeyV1::TokenizerRegistrationSession(_)
+                    | PalwStagedCourtKeyV1::TokenizerRegistrationPart(..)
+                    | PalwStagedCourtKeyV1::TokenizerRegistrationBook
+                    | PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(..)
+            ) {
+                return Err(PalwStateV2Error::CarriageInconsistent("foreign tokenizer native write".into()));
+            }
+            if let Some(row) = new {
+                row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            self.reserve_map_row_v1(key, new, |state| &state.staged_courts, true, "native tokenizer multi-row writer")?;
+            self.reserve_staged_indices_v1(key, new)?;
+        }
+        for (key, new) in changes {
+            let old = self.state.staged_courts.get(&key).cloned();
+            match &new {
+                Some(row) => {
+                    self.state.staged_courts.insert(key, row.clone());
+                }
+                None => {
+                    self.state.staged_courts.remove(&key);
+                }
+            }
+            update_indices(&mut self.state, key, old.as_ref(), new.as_ref());
+            self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new });
+        }
+        Ok(())
+    }
+
     /// Private native installation seam. A future funded carrier must supply
     /// the accepted parent and bounded replayable operands. A decoded row
     /// cannot enter through this function or the generic staged writer.
@@ -1745,6 +1794,21 @@ impl TransitionBuilder<'_> {
             || matches!(&new, Some(PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(_)))
         {
             return Err(PalwStateV2Error::CarriageInconsistent("plain Batch Output receipt requires native adjudication".into()));
+        }
+        if matches!(
+            key,
+            PalwStagedCourtKeyV1::TokenizerRegistrationSession(_)
+                | PalwStagedCourtKeyV1::TokenizerRegistrationPart(..)
+                | PalwStagedCourtKeyV1::TokenizerRegistrationBook
+        ) || matches!(
+            &new,
+            Some(
+                PalwStagedCourtRowV1::TokenizerRegistrationSession(_)
+                    | PalwStagedCourtRowV1::TokenizerRegistrationPart(_)
+                    | PalwStagedCourtRowV1::TokenizerRegistrationBook(_)
+            )
+        ) {
+            return Err(PalwStateV2Error::CarriageInconsistent("tokenizer registration requires its paid native writer".into()));
         }
         self.check_archive_progress_write_v1(&key, new.as_ref())?;
         self.check_material_intake_write_v1(&key, new.as_ref())?;
@@ -4423,6 +4487,11 @@ pub(super) fn index_rows(
             };
             (due, vec![(c.owner, c.plan.terms.material_until_daa, key)])
         }
+        PalwStagedCourtRowV1::TokenizerRegistrationSession(row) => {
+            (row.open.body.material_until_daa, vec![(row.open.body.opener, row.open.body.material_until_daa, key)])
+        }
+        PalwStagedCourtRowV1::TokenizerRegistrationPart(row) => (row.material_until_daa, Vec::new()),
+        PalwStagedCourtRowV1::TokenizerRegistrationBook(_) => (u64::MAX, Vec::new()),
         PalwStagedCourtRowV1::ArtifactInventoryOpen(c) => (c.until_daa, vec![(c.offer.opener, c.until_daa, key)]),
         PalwStagedCourtRowV1::ArtifactInventory(_)
         | PalwStagedCourtRowV1::TirLayout(_)
@@ -4794,6 +4863,7 @@ pub(super) fn update_response_indices(
     state.staged_prefix_responders.extend(new);
 }
 pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    b.sweep_tokenizer_registrations_v1(ctx)?;
     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
     let due: Vec<_> = b
         .state

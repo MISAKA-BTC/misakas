@@ -59,4 +59,4 @@
 | RFC-0048 | [EXEC credit・事前公開schedule・1 BPSとcourt容量の統合契約](0048-exec-credit-schedule-and-one-bps.md) | Accepted design / EXEC 1 BPS・court容量、未有効化 |
 | RFC-0049 | [PALW実行整合性と一人による反証の完結契約](0049-palw-execution-integrity-and-unilateral-refutation.md) | Accepted design / PALW実行整合性・単独反証、未有効化 |
 | RFC-0050 | [公開資料とモデル未保有の一人検証](0050-public-materials-and-one-honest-panel.md) | Accepted design / 公開資料・モデル未保有の一人検証、未有効化 |
-| RFC-0051 | [受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md) | Draft / 未採択・未有効化 |
+| RFC-0051 | [受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md) | Accepted design / 有料 tokenizer 登録、未有効化 |

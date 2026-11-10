@@ -843,6 +843,10 @@ pub mod palw_tir_work_v1;
 pub mod palw_tokenizer_json_stream_v1;
 pub mod palw_tokenizer_rendering_v1;
 pub mod palw_tokenizer_rendering_v2;
+pub mod palw_tokenizer_registration_v1;
+pub mod palw_tokenizer_registration_state_v1;
+pub mod palw_tokenizer_registration_snapshot_v1;
+pub mod palw_tokenizer_registration_carriage_v1;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
 /// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;

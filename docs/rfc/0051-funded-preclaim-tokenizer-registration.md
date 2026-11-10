@@ -1,10 +1,10 @@
 # RFC-0051 — 受付前 tokenizer 資料の有料搬送と native 登録
 
-Status: **Draft / Review Required / NOT ADOPTED / NOT ACTIVATED**  
+Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-11  
-Decision proposal: [ADR-0219](../adr/0219-funded-preclaim-tokenizer-registration.md)
+Decision: [ADR-0219](../adr/0219-funded-preclaim-tokenizer-registration.md)
 
-本書は公開 T12 の実装調査から作成した変更案であり、ユーザーによる採択記録ではない。番号はこの checkout で未使用だったものを使用する。採択済みの [実装計画](../design/palw/integration/public-one-honest-vertical-implementation-plan-2026-11-10.md) 全体を置換しない。
+本書は公開 T12 の実装調査から作成し、2026-11-11 のユーザー指示「採用するゴールまで進めて」により採択された追加設計である。登録サービス料金の一回 burn を含む設計と実装着手を採択し、未測定の数値 policy と公開 activation は別途判断する。番号はこの checkout で未使用だったものを使用する。採択済みの [実装計画](../design/palw/integration/public-one-honest-vertical-implementation-plan-2026-11-10.md) 全体を置換しない。
 
 ## 1. 問題と現在の到達点
 
@@ -18,7 +18,7 @@ Decision proposal: [ADR-0219](../adr/0219-funded-preclaim-tokenizer-registration
 
 ## 2. 変更範囲
 
-別 version の `TokenizerRegistrationOpen/Part/Finish` と専用の pending/raw/accepted 状態を追加する案とする。名称は論理名であり、wire tag、fence、domain、params fingerprint の実値は中央 registry への衝突検査後に割り当てる。既存 EOF、TFP1、BCT1/BCT2、staged movement の既存 tag の意味を変更しない。
+別 version の `TokenizerRegistrationOpen/Part/Finish` と専用の pending/raw/accepted 状態を追加する。名称は論理名であり、wire tag、fence、domain、params fingerprint の実値は中央 registry への衝突検査後に割り当てる。既存 EOF、TFP1、BCT1/BCT2、staged movement の既存 tag の意味を変更しない。
 
 既存の署名付き court carrier 搬送と native の実手数料検証を利用するが、旧 action として復号できる形式にはしない。新 action の dispatch は新 fence と採択済みの有限 policy の両方を必須とする。policy がない場合は拒否し、公開 default を埋めない。
 
@@ -60,7 +60,7 @@ policy は少なくとも raw bytes、vocab、key events、EOG IDs、総 renderi
 
 個別上限だけでなく、各 block/DAA の同時転送・署名・parser・retained bytes・reorg 再実行の合計を同じ予約 book で制限する。Node 固有の一時 RAM 不足は local capacity failure とし、合法な chain を無効と判定する理由にしない。policy による合意上の超過とはエラーを区別する。
 
-work の入力単位は raw bytes、JSON key-event 上限、vocab leaves、EOG IDs、総 rendering bytes、署名回数、hash bytes とする。有限で正の policy 係数との checked な積和から quote を一意に導出し、実行時間や Node の機材を合意入力にしない。Open は通常 Finish と同じ原期限内の一回の recovery Finish の枠を予約する。取り逃した通常枠は recovery 枠でのみ再試行でき、両方を失えば未完 expiry とする。再送で元期限や枠を延長しない。reorg replay は元の受理操作の再生であって、新しいサービス枠・charge ではない。無効入力にも最大検査費用が発生するため、受理前の work scanner と既存 mempool/peer の local work 制限を接続する。
+work の入力単位は raw bytes、JSON key-event 上限、vocab leaves、EOG IDs、総 rendering bytes、署名回数、hash bytes とする。予約表の検査・割当探索・解放と復元には、policy の最大 session 数・断片数・探索期間から導く有限の bookkeeping operation 上限を別に計上する。期限処理と snapshot 検査も、それぞれの実行境界で上限を適用する。有限で正の policy 係数との checked な積和から quote を一意に導出し、実行時間や Node の機材を合意入力にしない。Open は通常 Finish と同じ原期限内の一回の recovery Finish の枠を予約する。取り逃した通常枠は recovery 枠でのみ再試行でき、両方を失えば未完 expiry とする。再送で元期限や枠を延長しない。reorg replay は元の受理操作の再生であって、新しいサービス枠・charge ではない。無効入力にも最大検査費用が発生するため、受理前の work scanner と既存 mempool/peer の local work 制限を接続する。
 
 候補 block の総 work scanner は parser より前に、無効・重複 action も含む全 carrier の費用を数える。同じ予約 Finish slot に複数の不正 carrier を詰めても、一本分の予約だけで複数回 parser を実行できないことを回帰検査する。local mempool/peer 制限をこの合意上の block 上限の代わりにしない。
 
@@ -68,11 +68,11 @@ work の入力単位は raw bytes、JSON key-event 上限、vocab leaves、EOG I
 
 旧 EOF の rent 11,929,756 sompi と deposit 35 sompi は hash 継続用の実ファイル見積もりであり、本案の料金に流用しない。新 quote は転送、native 認証、raw 保持、全パース、復元と GC の費用を分けて出す。
 
-料金は Open carrier の実 native 手数料から登録サービス費用として一度だけ取り分け、残りだけを通常の collectible fee とする案とする。Open で約束する保持・検査サービスは Open で前払いし、Part/Finish から同じサービス代を再徴収しない。後続 carrier の通常送信手数料とは分ける。`max_registration_charge` は登録サービス代だけの上限で、未知の将来 carrier の通常手数料を含まない。wallet は別の通常手数料上限を各送信で確認する。
+料金は Open carrier の実 native 手数料から登録サービス費用として一度だけ取り分け、残りだけを通常の collectible fee とする。Open で約束する保持・検査サービスは Open で前払いし、Part/Finish から同じサービス代を再徴収しない。後続 carrier の通常送信手数料とは分ける。`max_registration_charge` は登録サービス代だけの上限で、未知の将来 carrier の通常手数料を含まない。wallet は別の通常手数料上限を各送信で確認する。
 
 同じ `(Open ID, policy ID, charge kind)` の charge ID と算式を transaction fee projection、fold、miner collectible、再編成の undo/redo で共用する。重複・拒否された action に新しい登録 charge を作らない。失敗 carrier の通常取引手数料の扱いは既存規則を維持し、追加サービス料金と混同しない。旧 branch の取り分けを rollback した後の再採用は新 branch の一回の charge として再現する。
 
-初期版の登録 charge は **burn** とする提案であり、新 escrow、報酬請求権、架空の支払先を作らない。通常 UTXO/署名検証、native action の原子的受理と charge の導出、その受理結果を使う collectible/coinbase 照合の順を必須とする。Open が不受理なら追加 burn はゼロ。既存規則がその carrier 自体を無効とする場合は包含を拒否し、通常取引として扱える場合だけ既存の通常 fee を適用する。費用不足を「既に支払った」と見なして row を書く fallback を設けない。
+初期版の登録 charge は **burn** とし、新 escrow、報酬請求権、架空の支払先を作らない。通常 UTXO/署名検証、native action の原子的受理と charge の導出、その受理結果を使う collectible/coinbase 照合の順を必須とする。Open が不受理なら追加 burn はゼロ。既存規則がその carrier 自体を無効とする場合は包含を拒否し、通常取引として扱える場合だけ既存の通常 fee を適用する。費用不足を「既に支払った」と見なして row を書く fallback を設けない。
 
 opener の署名上限を超えて引かず、claim の将来報酬を原資にしない。未利用予約を期限で解放しても、既に購入した期間のサービス料金を架空の refund として発行しない。本案は追加の slashable deposit を導入せず、release hold は既存 bond の有限な義務保持に限定する。実装前にこの料金分解と既存 native fee accounting の接続をレビューする。
 

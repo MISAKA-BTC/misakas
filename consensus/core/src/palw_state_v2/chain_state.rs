@@ -4472,6 +4472,9 @@ impl PalwChainStateV2 {
         self.assert_public_fp_jobs_consistency_v1(params)?;
         self.assert_legacy_answers_v2()?;
         self.assert_terminal_evidence_v1()?;
+        crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_snapshot_v1(
+            self, |bond, until, key| self.staged_holds.contains(&(bond, until, key)),
+        ).map_err(PalwStateV2Error::CarriageInconsistent)?;
         for (key, row) in &self.staged_courts {
             row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::VerifiedTokenizerRegistration(registration) = row {

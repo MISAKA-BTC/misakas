@@ -5,6 +5,10 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# RFC-0051: derived field order; bounded Part bytes and EOG vectors; semantic subset checks.
+'crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenV1': ('reviewed-field-layout', '573c1020c772630340d1af5ff5da629a5a5d146eebf212dc4b3c2945b38e04cb'),
+'crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartV1': ('reviewed-field-layout', 'b64d372cf2a4b95e48cbcd40b9f1e1a39425c56b8d0a8febaa48d4948f899230'),
+'crate::palw_tokenizer_registration_v1::TokenizerRegistrationFinishV1': ('reviewed-field-layout', '309a499f6a4bdb37cfa9d073897c715ba0bfe7e1786eccc2b727ee275cb12570'),
 'crate::tx::script_public_key::ScriptPublicKey': ('adapter', 'b09c259eb179559998c7f9db8a51f40dc7afd81c0b2b5851f126ccba479b7f4b'),
 'crate::tx::TransactionMass': ('adapter', '65e95a8b99dee19d4612d720ab0fa64e28ef24c2f571a0c862690dbb22773151'),
 # Version 2 alone appends the shared Stop control.

@@ -2,6 +2,7 @@
 //! scripts/drills/gen_rfc06_native_inventory.py after schema changes.
 //! Every field/variant is exhaustive; private layouts are visited beside owners.
 use super::*;
+native_enum!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationWireV1; Open(f0), Part(f0), Finish(f0));
 native_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1; version, source, ordinal, binding, tiles);
 native_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1; source_claim, point, bond, budget_id, liability_until, material_until, liability_sompi, convicted_daa);
 native_struct!(crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1; clocks, detection, certification, court_capacity);
@@ -257,6 +258,9 @@ native_struct!(crate::palw_native_mining_v39::NativeMiningModelRecordV39; versio
 native_struct!(crate::palw_native_mining_v39::NativeMiningSeatRecordV39; version, model, bond, operator, stake, since, last_use, live_claims);
 native_struct!(crate::palw_native_mining_v39::NativeMiningClaimRecordV39; version, id, model, master, master_final, master_established, complete_source, stages, producer, operator, admitted_daa, epoch, policy, work, price, closed);
 native_struct!(crate::palw_native_mining_v39::NativeMiningReceiptRecordV39; version, id, claim, model, master, producer, operator, approval, price, established_daa, expires, spent_quanta, spent);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenV1; body, signature);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartV1; body, signature, bytes);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationFinishV1; body, signature, eog);
 native_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1; intent, source_claim, accepted_block, accepted_daa, accepted_blue_score);
 native_struct!(crate::palw_step_leg::PalwStepBindingV2; version, job_context, shape_profile, checkpoint_profile, state_chunk_map_id, full_logits_trace_root, activation_leg_root, step_leaf_count, step_merkle_root, checkpoint_count, checkpoint_merkle_root, committed_execution_root);
 native_struct!(crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1; opening, preimage);
@@ -565,8 +569,8 @@ native_struct!(crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1; version, con
 native_struct!(crate::palw_panel_da_disclosure_v1::PalwPanelDaDisclosureRowV1; version, bond, accepted_daa, deadline_daa, deposit_sompi, prompt_token_ids_hash, prompt_tokens, disclosed_daa, prompt_token_ids);
 native_struct!(crate::palw_class_semantics_v1::PalwClassSemanticsV1; version, class_id, artifact_root, bound_from_daa, model_profile_id, runtime_manifest_hash, runtime_class_id, tokenizer_id, cu_ruleset_id, token_table_root, rendering_rule, raw_tokenizer_bytes, tokenizer_key_events, prefix_state_relation);
 native_struct!(crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2; declaration, deadline_daa, parts);
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1), CourtEndArchive(f0), CourtCloseReceipt(f0, f1), CourtSharedRoot(f0, f1), CourtSharedRound(f0), CourtSharedBottom(f0), CourtArchiveProgress(f0, f1), CourtMaterialDraft(f0, f1), CourtMaterialPart(f0, f1), CourtMaterial(f0, f1), CourtMaterialLedger(f0, f1), TirOwnerSchedule(f0), VerifiedTokenizerRegistration(f0, f1), CourtBatchDemand(f0, f1), CourtBatchStopReceipt(f0), CourtBatchNumericalReceipt(f0), CourtBatchPlainOutputReceiptV2(f0));
-native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0), CourtEndArchive(f0), CourtCloseReceipt(f0), CourtSharedRoot(f0), CourtSharedRound(f0), CourtSharedBottom(f0), CourtArchiveProgress(f0), CourtMaterialDraft(f0), CourtMaterialPart(f0), CourtMaterial(f0), CourtMaterialLedger(f0), CourtServiceV3(f0), TirOwnerSchedule(f0), VerifiedTokenizerRegistration(f0), CourtBatchDemand(f0), CourtBatchStopReceipt(f0), CourtBatchNumericalReceipt(f0), CourtBatchPlainOutputReceiptV2(f0));
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1; Claim(f0), Owner(f0, f1), InventoryOpen(f0, f1), Inventory(f0), TirLayout(f0), TirAcquisition(f0, f1, f2), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0, f1), TirClaim(f0), TirWitness(f0, f1), TirContainer(f0), CourtService, CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0, f1), CourtSharedResponse(f0, f1), CourtEndArchive(f0), CourtCloseReceipt(f0, f1), CourtSharedRoot(f0, f1), CourtSharedRound(f0), CourtSharedBottom(f0), CourtArchiveProgress(f0, f1), CourtMaterialDraft(f0, f1), CourtMaterialPart(f0, f1), CourtMaterial(f0, f1), CourtMaterialLedger(f0, f1), TirOwnerSchedule(f0), VerifiedTokenizerRegistration(f0, f1), CourtBatchDemand(f0, f1), CourtBatchStopReceipt(f0), CourtBatchNumericalReceipt(f0), CourtBatchPlainOutputReceiptV2(f0), TokenizerRegistrationSession(f0), TokenizerRegistrationPart(f0, f1), TokenizerRegistrationBook);
+native_enum!(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1; Claim(f0), Constraint(f0), Tokenizer(f0), Prefix(f0), PublicPrefix(f0), ClaimBundle(f0), OwnerBundle(f0), ArtifactInventoryOpen(f0), ArtifactInventory(f0), TirPrefix(f0), TirLayout(f0), TirAcquisition(f0), TirRawChunk(f0), TirAcceptedBody(f0), TirPreparation(f0), TirClaim(f0), TirWitness(f0), TirContainer(f0), CourtService(f0), CourtDutyClock(f0), CourtSharedContext(f0), CourtSharedQuery(f0), CourtSharedIds(f0), CourtSharedStream(f0), CourtSharedChunk(f0), CourtSharedResponse(f0), CourtEndArchive(f0), CourtCloseReceipt(f0), CourtSharedRoot(f0), CourtSharedRound(f0), CourtSharedBottom(f0), CourtArchiveProgress(f0), CourtMaterialDraft(f0), CourtMaterialPart(f0), CourtMaterial(f0), CourtMaterialLedger(f0), CourtServiceV3(f0), TirOwnerSchedule(f0), VerifiedTokenizerRegistration(f0), CourtBatchDemand(f0), CourtBatchStopReceipt(f0), CourtBatchNumericalReceipt(f0), CourtBatchPlainOutputReceiptV2(f0), TokenizerRegistrationSession(f0), TokenizerRegistrationPart(f0), TokenizerRegistrationBook(f0));
 native_struct!(crate::palw_terminal_carriage_v1::PalwPendingTerminalV1; declaration, deadline_daa, parts);
 native_struct!(crate::palw_state_v2::PalwPanelDutyRowV1; seats, seat_exposure);
 native_struct!(crate::palw_execution_lane_v1::PalwExecFinalV1; domain, bond, operator_id, claim_id, execution_root, credit, accepted_blue_score);
@@ -719,6 +723,10 @@ native_struct!(crate::palw_native_master_v39::NativeMasterComponentFinalV39; ori
 native_enum!(crate::palw_native_master_v39::NativeMetadataTargetV39; Master, ProducerConsent);
 native_struct!(crate::palw_native_mining_v39::NativeInferenceWorkV39; version, source, first_position, end_position, mac_equivalents, bytes_read, bytes_written);
 native_struct!(crate::palw_native_mining_v39::NativeMiningPriceV39; version, model, master, work, credited_mac, quantum_mac, quanta, reserved_exposure);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenBodyV1; version, network, policy, pins, artifact_root, statement, eog_digest, opener, nonce, accept_until_daa, finish_until_daa, material_until_daa, max_registration_charge);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartBodyV1; version, network, policy, open_id, opener, index, offset, payload_digest);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationFinishBodyV1; version, network, policy, open_id, opener, eog_digest, finish_until_daa);
+native_struct!(crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1; ids, opening);
 native_struct!(crate::palw_legs::PalwCheckpointProfileV1; version, checkpoint_interval, state_layout_id);
 native_struct!(crate::palw_step_leg::PalwStepOpeningV1; leaf_index, leaf_hash, siblings);
 native_struct!(crate::palw_step_leg::PalwStepTileLeafV1; version, coord, value_count, values_le);
@@ -973,6 +981,9 @@ native_struct!(crate::palw_court_service_release_v1::CourtServiceRowV3; version,
 native_struct!(crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1; version, claim, source_id, operands_digest, at, material_until_daa, fault_position, operands);
 native_struct!(crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1; version, claim, scope, source, notice, leaf, intent_digest, at, material_until_daa, fault_evidence, fault_bytes);
 native_struct!(crate::palw_batch_plain_output_receipt_v2::RootedBatchPlainOutputReceiptV2; receipt, material_until_daa);
+native_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationSessionV1; open, policy, quote, accepted, key_hash, declared_key_events, received, finish_attempts, status);
+native_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationPartRowV1; part, accepted, material_until_daa);
+native_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationBookV1; policy, book, sessions);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetBondRowV1; window, open_claims, latest_release_daa, open_liability_sompi, open_final_weight, liability_hold_until);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetClaimRowV1; bond, model, accepted_daa, reuse_not_before, reserved, consumed, open, in_window, live, origin, liability_sompi);
 native_struct!(crate::palw_bond_budget_v1::PalwCapitalAssignmentRowV1; sequence, effective, pending, pending_since_epoch);
@@ -1040,6 +1051,8 @@ native_enum!(crate::palw_native_text_stop_v29::NativeTextStopV29; FirstEos, Maxi
 native_struct!(misaka_palw_kernel::flat_execution11::ExecutionHorizonsV11; commit_window, challenge_window, seal_maturity, seal_ttl, da_answer, proof_grace, retention);
 native_struct!(misaka_palw_kernel::flat_quota11::source16::opening::HeaderV16; dtype, rank, shape, row_root, col_root);
 native_struct!(misaka_palw_kernel::flat_execution11::ExecutionJobInputV11; version, prompt_root, prompt_len, generated_count, lengths, positions);
+native_struct!(crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2; class_id, container_root, semantics_id, inventory_id);
+native_struct!(crate::palw_tokenizer_rendering_v2::PalwTokenizerRenderingStatementV2; tokenizer_id, exact_raw_bytes, table_root, vocab, rule);
 native_struct!(crate::palw_step::PalwStepCoordinateV1; call_index, node_slot, position, tile_index);
 native_struct!(misaka_palw_kernel::merkle3::RowRangeV3; first_leaf, leaves, bytes, siblings, col_root);
 native_struct!(misaka_palw_kernel::hide::HidingHashRangeV1; first, leaves, siblings);
@@ -1071,7 +1084,6 @@ native_enum!(crate::palw_improve_eval_court_v1::PalwEvalParamsV1; Single(f0), Co
 native_enum!(crate::palw_improve_eval_court_v1::PalwEvalOutputCloseV1; Token { t, row }, Score { tiles });
 native_struct!(crate::palw_gen_close_v1::PalwGenTensorBindingV1; version, job, stage_roots, step_leaf_count, output_root, committed_execution_root);
 native_struct!(crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1; id, rendering, opening);
-native_struct!(crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1; ids, opening);
 native_struct!(crate::palw_decode_pipeline_v4::DecodeConfigV4; repeat_penalty_q, penalty_window, frequency_penalty_q, presence_penalty_q, logit_bias, stop_sequences);
 native_enum!(crate::palw_freeprompt_v3::PalwFpJobTailV1; Gen(f0), V5(f0), Eval(f0), Prefix(f0), Constraint(f0));
 native_enum!(crate::palw_improve_eval_v1::PalwEvalModeV1; Generate { seed, max_new, stop_ids }, TeacherForced { reference_commitment }, Judged { judge });
@@ -1204,11 +1216,14 @@ native_struct!(crate::palw_court_shared_tir_round_v1::SignedSharedTirRoundV1; ve
 native_struct!(crate::palw_court_shared_tir_bottom_v1::SignedSharedTirBottomV1; version, claim, leaf, root_id, path, parent_id, filer, bottom, signature);
 native_struct!(crate::palw_court_archive_discharge_v1::ArchivedPositiveFulfillmentV1; point, close);
 native_struct!(crate::palw_court_service_release_v1::ResolvedServiceBindingV1; claim, allocation_id, source_id, original_accepted_daa, hard_deadline_daa, released_daa, packets, served, missing, retained_packet_ids);
-native_struct!(crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2; class_id, container_root, semantics_id, inventory_id);
 native_struct!(crate::palw_tokenizer_rendering_v2::PalwDerivedTokenizerRenderingV2; statement, key_events, maximum_rendering_bytes, total_rendering_bytes, eog_leaf, eog_count, lowest_eog_id);
 native_struct!(crate::palw_batch_court_v1::BatchDemandV1; case_id, case_window, opened_daa, response_deadline_daa, maximum_bytes, part_bytes, ranges);
 native_struct!(crate::palw_batch_court_v1::carriage::BatchStopControlV1; operands);
 native_struct!(crate::palw_court_shared_material_intake_v1::batch::plain_output::BatchPlainOutputReceiptV2; signed, at, carrier_bytes, control_rules, control_cost, verdict);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1; version, max_raw_bytes, max_vocab, max_key_events, max_eog_ids, max_rendering_bytes, max_parser_scratch_bytes, max_carrier_bytes, max_retained_bytes, max_retained_total_bytes, service_budget, max_work, max_pending_per_opener, max_pending_total, max_session_daa, retention_daa, carrier_overhead_bytes, retention_copies, metadata_bytes, work_rates, bookkeeping_work_per_step, rent_per_carrier_byte, rent_per_retained_byte_daa, rent_per_work, max_registration_charge);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationQuoteV1; geometry, parser_scratch_bytes, open_carrier_bytes, total_carrier_bytes, finish_carrier_bytes, maximum_part_carrier_bytes, finish_work, open_work, maximum_part_work, finish_workspace_bytes, open_cost, part_cost, finish_cost, retained_bytes, retained_byte_daa, work, charge);
+native_enum!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationStatusV1; Pending, Complete { point, record }, Superseded { point }, Expired { point });
+native_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationReservationV1; opener, accepted_daa, finish_until_daa, material_until_daa, quote, assigned_slots, released_at);
 native_struct!(crate::palw_bond_budget_v1::PalwBudgetVectorV1; claims, block_units, reward_sompi, final_weight, round_rights);
 native_enum!(crate::palw_bond_budget_v1::PalwBudgetOriginV1; Attempt, Rider, FreePrompt, Legacy, KernelRoute, RoundRights, MarketFee, RoundFee, SourceFee, NativeIncome, NativeIncomeQueued, NativeIncomePartial, DeferredReporterIncome, HoldDay, HoldBurst, HoldLiability);
 native_enum!(crate::palw_bond_budget_v1::PalwMaterialPaymentV1; Pending { income }, Queued { income, queue, queued_daa, paid_daa, release_daa }, Historical { until }, UnprovenPhysicalPayment { until }, HeldEscrow { obligation });
@@ -1315,11 +1330,11 @@ native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicOriginalPanelV1; 
 native_struct!(crate::palw_tir_public_custody_v1::PalwTirPublicOriginalCreditV1; receipt, ready);
 native_struct!(crate::palw_court_service_v1::ServicePacket; id, release_daa, service_before, cost);
 native_struct!(crate::palw_court_service_v1::ServiceSupply; accepting_block, reserved);
-native_struct!(crate::palw_tokenizer_rendering_v2::PalwTokenizerRenderingStatementV2; tokenizer_id, exact_raw_bytes, table_root, vocab, rule);
 native_struct!(crate::palw_batch_court_v1::BatchCourtWindowV1; claim_accepted_daa, challenge_opened_daa, collect_until_daa, material_until_daa);
 native_struct!(crate::palw_batch_court_v1::BatchRangeV1; id, bytes, authentication);
 native_struct!(crate::palw_court_shared_material_intake_v1::batch::plain_output::SignedBatchPlainOutputV2; version, claim, scope, source, notice, policy, material, filer, signature);
 native_enum!(crate::palw_tir_objective_v1::PalwTirOutputStopVerdictV1; Holds, OutputRootFault, ExecutionFault);
+native_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationGeometryV1; raw_bytes, part_count);
 native_enum!(misaka_palw_tir::pipeline::TripRule; Fixed { n }, JobSteps, TokenCount, TextStream, Decode);
 native_struct!(misaka_palw_tir::pipeline::TokenRule; prefix, source, suffix, pad);
 native_enum!(misaka_palw_tir::pipeline::Binding; JobScalar { index }, JobTokens { rule }, StageRows { stage, drop, pad_to }, StageFinal { stage }, StageRowCount { stage, drop }, JobTokenCount { rule }, JobImage { index });

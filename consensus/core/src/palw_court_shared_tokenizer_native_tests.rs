@@ -631,3 +631,220 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     accepted.staged_courts.remove(&eof_key);
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).is_err());
 }
+
+#[test]
+fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
+    use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2};
+    use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
+    use crate::palw_tokenizer_registration_carriage_v1::*;
+    use crate::palw_tokenizer_registration_state_v1::{TokenizerRegistrationStatusV1, packet_id};
+    use crate::palw_tokenizer_registration_v1::*;
+    use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, PalwTokenizerRenderingStatementV2};
+    use crate::tx::{
+        PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
+        ValidatedTransaction,
+    };
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut base, params, mut extras) = world(&fx, &fx.frame);
+    extras.class_semantics_active = true;
+    extras.tir_container_identity_active = true;
+    extras.tir_public_conviction_active = true;
+    extras.staged_public_court = Some(fx.rules.config);
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([166; 32]);
+    base.bonds.get_mut(&outsider()).unwrap().pubkey = keypair.verification_key.as_ref().to_vec();
+    let class = semantics.class_id;
+    let binding = test_binding_v1(&fx.record, semantics.artifact_root, b"funded-tokenizer");
+    let container = check_tir_container_binding_v1(&binding, &class, &semantics.artifact_root, &fx.record, 1).unwrap();
+    let pins = PalwTfp1TokenizerIntakePinsV2 {
+        class_id: class,
+        container_root: container.container_root,
+        semantics_id: semantics.commitment(),
+        inventory_id: eof.inventory_id,
+    };
+    let (policy, mut body) = crate::palw_tokenizer_registration_v1::tests::fixture();
+    let point = at(&fx.frame, 1);
+    body.pins = pins;
+    body.artifact_root = semantics.artifact_root;
+    body.statement = PalwTokenizerRenderingStatementV2 {
+        tokenizer_id: semantics.tokenizer_id,
+        exact_raw_bytes: raw.len() as u64,
+        table_root: semantics.token_table_root.unwrap(),
+        vocab: fx.record.logits_vocab,
+        rule: semantics.rendering_rule.unwrap(),
+    };
+    let eog = table.eog_opening().unwrap();
+    body.eog_digest = TokenizerRegistrationFinishV1::eog_digest_v1(&eog).unwrap();
+    body.opener = outsider();
+    body.accept_until_daa = point.daa_score + 5;
+    body.finish_until_daa = point.daa_score + 40;
+    body.material_until_daa = body.finish_until_daa + policy.retention_daa;
+    let quote = policy.quote_v1(&body, point.daa_score, semantics.tokenizer_key_events.unwrap()).unwrap();
+    let open_id = body.id_v1().unwrap();
+    base.last_point = Some(at(&fx.frame, 0));
+    base.class_semantics.insert(class, semantics);
+    let mut prerequisite = TransitionBuilder::new(&base, &params, false, false, false, false, &extras);
+    prerequisite.write_staged_row_v1(Key::Inventory(eof.artifact_hash), Some(Row::ArtifactInventory(eof))).unwrap();
+    prerequisite.write_staged_row_v1(Key::TirContainer(class), Some(Row::TirContainer(Box::new(container)))).unwrap();
+    let mut state = prerequisite.state;
+    let mut open = TokenizerRegistrationOpenV1 { body, signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] };
+    let open_message = open.signing_message_v1().unwrap();
+    open.signature.copy_from_slice(
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &keypair.signing_key,
+            open_message.as_byte_slice(),
+            TOKENIZER_REGISTRATION_OPEN_CONTEXT_V1,
+            [167; 32],
+        )
+        .unwrap()
+        .as_ref(),
+    );
+    let apply = |state: &PalwChainStateV2, point: PalwBlockContextV2, wire: &TokenizerRegistrationWireV1, paid: u64| {
+        let prevout = TransactionOutpoint::new(h(point.blue_score + 80_000), 0);
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(prevout, vec![], 0, 0)],
+            vec![TransactionOutput::new(10, ScriptPublicKey::default())],
+            0,
+            crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            encode_tokenizer_registration_payload_v1(wire).unwrap(),
+        );
+        let populated = PopulatedTransaction::new(&tx, vec![UtxoEntry::new(paid + 10, ScriptPublicKey::default(), 0, false)]);
+        let validated = ValidatedTransaction::new(populated, paid);
+        let context = TokenizerRegistrationCarrierContextV1 {
+            parent_root: state.state_root(),
+            at: point,
+            accepted_ordinal: 0,
+            network: body.network,
+            policy: body.policy,
+        };
+        let carrier = ValidatedTokenizerRegistrationCarrierV1::prepare_v1(&validated, context, &policy, 0).unwrap().unwrap();
+        let mut b = TransitionBuilder::new(state, &params, false, false, false, false, &extras);
+        let result = b.apply_tokenizer_registration_carrier_v1(state, context.parent_root, context, policy, tx.id(), carrier).unwrap();
+        b.state.last_point = Some(point);
+        b.entries.push(PalwDeltaEntryV2::LastPoint { old: state.last_point().copied(), new: Some(point) });
+        let delta = PalwStateDeltaV2 { point, entries: b.entries };
+        let next = apply_delta_v2(state, &delta, &params).unwrap();
+        assert_eq!(next.state_root(), b.state.state_root());
+        assert_eq!(revert_delta_v2(&next, &delta, &params).unwrap().state_root(), state.state_root());
+        crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_snapshot_v1(&next, |bond, until, key| {
+            next.staged_holds.contains(&(bond, until, key))
+        })
+        .unwrap();
+        (next, result)
+    };
+    let wire = TokenizerRegistrationWireV1::Open(open);
+    let (unfunded, (fee, reason)) = apply(&state, point, &wire, quote.charge - 1);
+    assert!(reason.is_some());
+    assert_eq!(fee.registration_burn, 0);
+    assert!(unfunded.staged_court_row_v1(&Key::TokenizerRegistrationSession(open_id)).is_none());
+    let (next, (fee, reason)) = apply(&state, point, &wire, quote.charge + 7);
+    assert_eq!(reason, None);
+    assert_eq!((fee.registration_burn, fee.collectible_fee), (quote.charge, 7));
+    state = next;
+    let repeated = PalwBlockContextV2 { block: h(99_001), blue_score: point.blue_score + 1, ..point };
+    let (next, (fee, reason)) = apply(&state, repeated, &wire, quote.charge + 7);
+    assert_eq!(reason, None);
+    assert_eq!(fee.registration_burn, 0);
+    state = next;
+    let mut indices: Vec<_> = (0..quote.geometry.part_count).collect();
+    let Some(Row::TokenizerRegistrationBook(schedule)) = state.staged_court_row_v1(&Key::TokenizerRegistrationBook) else { panic!() };
+    indices.sort_by_key(|index| schedule.assigned_slot(open_id, 0, *index));
+    for index in indices {
+        let Some(Row::TokenizerRegistrationBook(book)) = state.staged_court_row_v1(&Key::TokenizerRegistrationBook) else { panic!() };
+        let daa = book.book.assigned_daa(&packet_id(open_id, 0, index).unwrap()).unwrap();
+        let (offset, len) = quote.geometry.part_v1(index).unwrap();
+        let bytes = raw[offset as usize..offset as usize + len].to_vec();
+        let mut part = TokenizerRegistrationPartV1 {
+            body: TokenizerRegistrationPartBodyV1 {
+                version: 1,
+                network: body.network,
+                policy: body.policy,
+                open_id,
+                opener: body.opener,
+                index,
+                offset,
+                payload_digest: TokenizerRegistrationPartV1::payload_digest_v1(&bytes).unwrap(),
+            },
+            signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            bytes,
+        };
+        let part_message = part.signing_message_v1().unwrap();
+        part.signature.copy_from_slice(
+            libcrux_ml_dsa::ml_dsa_87::sign(
+                &keypair.signing_key,
+                part_message.as_byte_slice(),
+                TOKENIZER_REGISTRATION_PART_CONTEXT_V1,
+                [168; 32],
+            )
+            .unwrap()
+            .as_ref(),
+        );
+        let point = PalwBlockContextV2 {
+            block: h(100_000 + index as u64),
+            daa_score: daa,
+            blue_score: state.last_point().unwrap().blue_score + 1,
+            subsidy: 0,
+        };
+        let (next, (fee, reason)) = apply(&state, point, &TokenizerRegistrationWireV1::Part(part), 7);
+        assert_eq!(reason, None);
+        assert_eq!(fee.registration_burn, 0);
+        state = next;
+    }
+    let Some(Row::TokenizerRegistrationBook(book)) = state.staged_court_row_v1(&Key::TokenizerRegistrationBook) else { panic!() };
+    let daa = book.book.assigned_daa(&packet_id(open_id, 1, 0).unwrap()).unwrap();
+    let point =
+        PalwBlockContextV2 { block: h(101_000), daa_score: daa, blue_score: state.last_point().unwrap().blue_score + 1, subsidy: 0 };
+    let mut finish = TokenizerRegistrationFinishV1 {
+        body: TokenizerRegistrationFinishBodyV1 {
+            version: 1,
+            network: body.network,
+            policy: body.policy,
+            open_id,
+            opener: body.opener,
+            eog_digest: body.eog_digest,
+            finish_until_daa: body.finish_until_daa,
+        },
+        signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        eog,
+    };
+    let finish_message = finish.signing_message_v1().unwrap();
+    finish.signature.copy_from_slice(
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &keypair.signing_key,
+            finish_message.as_byte_slice(),
+            TOKENIZER_REGISTRATION_FINISH_CONTEXT_V1,
+            [169; 32],
+        )
+        .unwrap()
+        .as_ref(),
+    );
+    let (next, (fee, reason)) = apply(&state, point, &TokenizerRegistrationWireV1::Finish(finish), 7);
+    assert_eq!(reason, None);
+    assert_eq!(fee.registration_burn, 0);
+    state = next;
+    let Some(Row::TokenizerRegistrationSession(session)) = state.staged_court_row_v1(&Key::TokenizerRegistrationSession(open_id))
+    else {
+        panic!()
+    };
+    assert!(matches!(session.status, TokenizerRegistrationStatusV1::Complete { .. }));
+    assert!(session.finish_attempts.contains(&0));
+    let registered = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
+    assert!(state.staged_court_row_v1(&registered).is_some());
+    let gc_point = PalwBlockContextV2 {
+        block: h(102_000),
+        daa_score: body.material_until_daa,
+        blue_score: state.last_point().unwrap().blue_score + 1,
+        subsidy: 0,
+    };
+    let mut gc = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    gc.sweep_tokenizer_registrations_v1(&gc_point).unwrap();
+    gc.state.last_point = Some(gc_point);
+    gc.entries.push(PalwDeltaEntryV2::LastPoint { old: state.last_point().copied(), new: Some(gc_point) });
+    let delta = PalwStateDeltaV2 { point: gc_point, entries: gc.entries };
+    let expired = apply_delta_v2(&state, &delta, &params).unwrap();
+    assert!(expired.staged_court_row_v1(&Key::TokenizerRegistrationSession(open_id)).is_none());
+    assert!(expired.staged_court_row_v1(&Key::TokenizerRegistrationBook).is_none());
+    assert!(expired.staged_court_row_v1(&registered).is_some());
+    assert_eq!(revert_delta_v2(&expired, &delta, &params).unwrap().state_root(), state.state_root());
+}

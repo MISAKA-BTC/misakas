@@ -672,3 +672,6 @@ pub mod router_binding_v2;
 
 /// Explicit RFC-0042 independent service consents and material controls.
 pub mod court_family_supplier_v1;
+
+/// Offline RFC-0051 tokenizer registration carrier preparation.
+pub mod tokenizer_registration;

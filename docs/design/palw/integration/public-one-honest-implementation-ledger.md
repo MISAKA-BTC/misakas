@@ -168,3 +168,19 @@ tokenizer 登録の接続も再監査した。`install_verified_tokenizer_regist
 [RFC-0051](../../../rfc/0051-funded-preclaim-tokenizer-registration.md) と [ADR-0219](../../../adr/0219-funded-preclaim-tokenizer-registration.md) に、有限の preclaim Open/Part/Finish を Draft として追加した。既存担当エージェントの三回の静的レビューを反映し、署名、先行 parent、競合登録、料金の一回 burn、原期限内の再試行、native raw GC と通常履歴の保持を区別した。設計凍結規約に基づく採択をユーザーへ確認中。料金の数値、公開 activation、runtime 実装は未承認・未実施であり、この案の作成を TFP1 quote 成功に数えない。既存の Output コードのテストは引き続きコンパイル中。
 
 その後、`5bc8b7b88` の core test build が 19 分 16 秒で完了し、`plain_output_control_length_and_signing_scope_v2` が成功した。同じ生成済み test binary で `g14_native_funded_batch_candidate_v1`、`family_supplier_four_role_prefix_native_original_and_financial_transitions`、`family_supplier_constraint_native_original_material_and_adjudication` も各 1 件成功した。[回帰結果](../../../evidence/palw/native-plain-output-v2-regression-2026-11-11.json) に source commit、binary/log の SHA-256 と範囲を保存した。計 4 件のローカル回帰であり、新 tokenizer 登録案の実装・公開 quote・同じ claim の受付を検証したものではない。
+
+
+## 2026-11-11 — RFC-0051 採択後の native 登録実装
+
+ユーザー指示「採用するゴールまで進めて」により RFC-0051 / ADR-0219 を設計採択へ更新した。追加登録料の一回 burn を含む設計と実装着手の採択であり、公開 profile の測定値や activation 日時を暗黙に固定していない。
+
+`TKR1` の Open/Part/Finish、署名と bounded wire decode、実 UTXO fee からの料金分離、prior parent の全 Part による一回の rendering 検査、native 登録 writer を追加した。新規 Open だけに登録料を計上し、重複・拒否・Part・Finish は追加登録料ゼロ。検査失敗でも消費した Finish 枠を記録し、同じ DAA の別 block からの再検査を防ぐ。正常・Superseded・期限切れでは未使用の実行容量を解放し、元の割当履歴と raw は固定保持期限まで残す。
+
+snapshot / journal 検査で固定 quote・Part 集合・元の割当・終端 / 解放点・bond hold を突き合わせ、期限前削除や他契約の再配置を拒否する。native heap / wire inventory も新行に対応した。core library の `cargo check` はこの段階で成功した。新規登録の統合テストと料金・予約・復元の回帰テストは追加済みだが、実行結果はまだ未記録。
+
+公開 dispatcher、coinbase / template / Round の同一 fee 投影、block 合計 work、CLI / RPC と公開 profile の測定・activation は未接続。新 native writer は公開有効化していない。公開 binding の受理済み証跡は維持し、対象 TFP1 quote 成功・受付・Final をこの実装の成果として報告しない。
+
+
+本番接続の変更箇所を [チェックリスト](rfc-0051-production-wiring-2026-11-11.md) に記録した。Open 成功時だけ決まる焼却額は、Round の採否や template coinbase の前に、同じ受理順の一時状態から算出して actual fold と照合する必要がある。単に最終段で fee を減らす接続にはしていない。
+
+対象 raw tokenizer をローカルで読み取り、2,104,556 bytes、JSON key events 49,302、model vocab 49,152、33 Part（最終 7,404 bytes）を確認した。[入力形状](../../../evidence/palw/tokenizer-registration-input-geometry-2026-11-11.json) は SHA-256 と測定範囲を記録する。Python での入力確認であり、native parser の測定・登録・公開 quote の証跡ではない。

@@ -4688,6 +4688,18 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            36 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            37 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            38 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4999,6 +5011,25 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV
             42 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum=sum.merge(<Box<crate::palw_batch_plain_output_receipt_v2::RootedBatchPlainOutputReceiptV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            43 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum=sum.merge(<Box<crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationSessionV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            44 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<
+                    crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationPartRowV1,
+                > as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            45 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::palw_staged_court_state_v1::PalwSharedCourtV1<
+                    crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationBookV1,
+                > as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
@@ -8508,6 +8539,79 @@ wire_struct!(crate::palw_tokenizer_json_stream_v1::NumberState; u8, bool, Option
 wire_struct!(crate::palw_tokenizer_json_stream_v1::PalwTokenizerRenderingDigestV1; u64, crate::Hash64);
 wire_struct!(crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCheckpointV1; crate::palw_tokenizer_table_stream_v1::PalwTokenizerTableStreamV1, u64, u64);
 wire_struct!(crate::palw_tokenizer_owned_court_v1::PalwOwnedTokenizerCourtV1; crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1, u64, u64, u64, u64, crate::Hash64, crate::Hash64, u64, crate::palw_tokenizer_table_stream_v1::PalwTokenizerTableStreamV1);
+wire_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationBookV1; crate::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1, crate::palw_court_service_v1::ServiceReservations, BTreeMap<crate::Hash64, crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationReservationV1>);
+wire_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationPartRowV1; crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartV1, crate::palw_state_v2::PalwBlockContextV2, u64);
+wire_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationReservationV1; crate::palw_state_v2::PalwBondKeyV2, u64, u64, u64, crate::palw_tokenizer_registration_v1::TokenizerRegistrationQuoteV1, Vec<u64>, Option<crate::palw_state_v2::PalwBlockContextV2>);
+wire_struct!(crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationSessionV1; crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenV1, crate::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1, crate::palw_tokenizer_registration_v1::TokenizerRegistrationQuoteV1, crate::palw_state_v2::PalwBlockContextV2, crate::Hash64, u64, BTreeSet<u32>, BTreeSet<u8>, crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationStatusV1);
+impl NativeWireScanV1 for crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationStatusV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationFinishBodyV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, u64);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationFinishV1; crate::palw_tokenizer_registration_v1::TokenizerRegistrationFinishBodyV1, [u8; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN], crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationGeometryV1; u64, u32);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenBodyV1; u16, crate::Hash64, crate::Hash64, crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2, crate::Hash64, crate::palw_tokenizer_rendering_v2::PalwTokenizerRenderingStatementV2, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, u64, u64, u64, u64);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenV1; crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenBodyV1, [u8; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN]);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartBodyV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, u32, u64, crate::Hash64);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartV1; crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartBodyV1, [u8; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN], Vec<u8>);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1; u16, u64, u32, u64, u32, u64, u64, u64, u64, u64, crate::palw_court_service_v1::ServiceCost, u64, u32, u32, u64, u64, u64, u64, u64, [u64; 7], u64, u64, u64, u64, u64);
+wire_struct!(crate::palw_tokenizer_registration_v1::TokenizerRegistrationQuoteV1; crate::palw_tokenizer_registration_v1::TokenizerRegistrationGeometryV1, u64, u64, u64, u64, u64, u64, u64, u64, u64, crate::palw_court_service_v1::ServiceCost, crate::palw_court_service_v1::ServiceCost, crate::palw_court_service_v1::ServiceCost, u64, u64, u64, u64);
+impl NativeWireScanV1 for crate::palw_tokenizer_registration_v1::TokenizerRegistrationWireV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenV1 as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            1 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <crate::palw_tokenizer_registration_v1::TokenizerRegistrationPartV1 as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <crate::palw_tokenizer_registration_v1::TokenizerRegistrationFinishV1 as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 impl NativeWireScanV1 for crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;

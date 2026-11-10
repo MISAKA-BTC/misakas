@@ -252,6 +252,8 @@ mod palw_legacy_public_filer_fold_v1;
 mod palw_panel_da_disclosure_fold_v1;
 #[path = "palw_staged_court_fold_v1.rs"]
 mod palw_staged_court_fold_v1;
+#[path = "palw_tokenizer_registration_fold_v1.rs"]
+mod palw_tokenizer_registration_fold_v1;
 // G14 lane r5-f02-wire: RFC-0026 F02 default during the RFC08 post-Final liability hold (text29 / funded v11), dormant.
 #[path = "palw_native_post_final_default_fold_v1.rs"]
 mod palw_native_post_final_default_fold_v1;
@@ -23664,9 +23666,14 @@ pub(crate) fn replay_delta_owned_v1(
     // insertion. Its prerequisite rows must already exist on the exact parent,
     // including when unrelated writes occur before it in this journal.
     let mut tokenizer_registration_changed = false;
+    let mut tokenizer_intake_changed = false;
     let mut batch_numerical_receipt_changed = false;
     let mut batch_plain_output_receipt_changed = false;
     for entry in &delta.entries {
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry {
+            tokenizer_intake_changed |= crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_delta_entry_v1(key, old, new, &delta.point).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
             && (matches!(key, CourtKey::CourtBatchPlainOutputReceiptV2(_))
                 || matches!(old, Some(CourtRow::CourtBatchPlainOutputReceiptV2(_)))
@@ -23751,6 +23758,11 @@ pub(crate) fn replay_delta_owned_v1(
     }
     palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, revert, params)?;
     palw_claim_local_context_gc_v3::settle_state_v3(&mut state).map_err(palw_claim_local_paid_archive_v2::state_error)?;
+    if tokenizer_intake_changed {
+        crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_snapshot_v1(
+            &state, |bond, until, key| state.staged_holds.contains(&(bond, until, key)),
+        ).map_err(PalwStateV2Error::CarriageInconsistent)?;
+    }
     if tokenizer_registration_changed {
         for entry in &delta.entries {
             if let PalwDeltaEntryV2::StagedCourtSeed { new: Some(CourtRow::VerifiedTokenizerRegistration(row)), .. } = entry {

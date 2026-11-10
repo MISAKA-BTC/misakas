@@ -279,6 +279,27 @@ fn tfp1_tokenizer_intake_active(extras: &PalwTransitionExtrasV1) -> bool {
         && extras.staged_public_court.is_some()
 }
 
+/// RFC-0051 preflight on an already accepted parent. These are authenticated
+/// declarations and EOF identity, not a rendering-verification result. The
+/// public registration must still acquire every raw byte and run Finish.
+pub(crate) fn tokenizer_registration_parent_v1(
+    parent: &PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    pins: &PalwTfp1TokenizerIntakePinsV2,
+    artifact_root: Hash64,
+    statement: PalwTokenizerRenderingStatementV2,
+) -> Result<u64, String> {
+    if !tfp1_tokenizer_intake_active(extras) {
+        return Err("tokenizer registration prerequisites are dormant".into());
+    }
+    let (identity, _) = PalwTokenizerRenderingCacheV2::tfp1_identity(parent, now_daa, pins)?;
+    if identity.artifact_root != artifact_root || identity.statement != statement {
+        return Err("tokenizer registration substitutes its accepted artifact or rendering statement".into());
+    }
+    Ok(identity.declared_key_events)
+}
+
 const VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1: u16 = 1;
 const VERIFIED_TOKENIZER_REGISTRATION_DOMAIN_V1: &[u8] = b"misaka-palw/verified-tokenizer-registration/v1";
 
@@ -963,6 +984,8 @@ pub struct PalwRootedTokenizerRegistrationRowV1 {
 }
 
 impl PalwRootedTokenizerRegistrationRowV1 {
+    pub(crate) fn registration_point_v1(&self) -> crate::palw_state_v2::PalwBlockContextV2 { self.point }
+
     pub(crate) fn derive(
         parent: &PalwChainStateV2,
         extras: &PalwTransitionExtrasV1,
@@ -971,21 +994,44 @@ impl PalwRootedTokenizerRegistrationRowV1 {
         raw: &[u8],
         eog: &PalwTokenTableEogOpeningV1,
     ) -> Result<Self, PalwVerifiedTokenizerRegistrationErrorV1> {
+        Self::derive_budgeted_v1(parent, extras, point, pins, raw, eog, ROOTED_TOKENIZER_LIMITS_V1)
+    }
+
+    /// A paid registration may impose stricter processing limits while keeping
+    /// the existing V1 record identity. Successful facts checked under these
+    /// limits also satisfy the original limits; no extra parse is necessary.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn derive_budgeted_v1(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        point: crate::palw_state_v2::PalwBlockContextV2,
+        pins: PalwTfp1TokenizerIntakePinsV2,
+        raw: &[u8],
+        eog: &PalwTokenTableEogOpeningV1,
+        budget: PalwTokenizerRenderingBudgetV2,
+    ) -> Result<Self, PalwVerifiedTokenizerRegistrationErrorV1> {
         use PalwVerifiedTokenizerRegistrationErrorV1::Parent;
+        let cap = ROOTED_TOKENIZER_LIMITS_V1;
+        if budget.raw_bytes == 0
+            || budget.raw_bytes > cap.raw_bytes
+            || budget.vocab == 0
+            || budget.vocab > cap.vocab
+            || budget.key_events == 0
+            || budget.key_events > cap.key_events
+            || budget.eog_ids == 0
+            || budget.eog_ids > cap.eog_ids
+            || budget.total_rendering_bytes == 0
+            || budget.total_rendering_bytes > cap.total_rendering_bytes
+        {
+            return Err(Parent("paid tokenizer limits must refine the original registration limits"));
+        }
         let prior = *parent.last_point().ok_or(Parent("tokenizer registration lacks an accepted parent"))?;
         if prior.block == point.block || prior.blue_score >= point.blue_score || prior.daa_score > point.daa_score {
             return Err(Parent("tokenizer registration point does not follow its parent"));
         }
-        let record = PalwVerifiedTokenizerRegistrationV1::derive_v1(
-            parent,
-            extras,
-            point.daa_score,
-            pins,
-            raw,
-            eog,
-            ROOTED_TOKENIZER_LIMITS_V1,
-        )?
-        .ok_or(Parent("tokenizer registration prerequisites are dormant"))?;
+        let mut record = PalwVerifiedTokenizerRegistrationV1::derive_v1(parent, extras, point.daa_score, pins, raw, eog, budget)?
+            .ok_or(Parent("tokenizer registration prerequisites are dormant"))?;
+        record.limits = ROOTED_TOKENIZER_LIMITS_V1;
         let semantics = parent.class_semantics_v1(&pins.class_id).ok_or(Parent("tokenizer registration lost its semantics"))?;
         Ok(Self {
             version: VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1,

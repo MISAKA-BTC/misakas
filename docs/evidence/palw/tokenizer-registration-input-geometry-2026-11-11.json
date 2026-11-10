@@ -1,0 +1,17 @@
+{
+  "schema": "palw-tokenizer-registration-input-geometry-v1",
+  "date": "2026-11-11",
+  "scope": "Local input inspection only; not native registration, performance qualification, public acceptance or quote success.",
+  "source": "HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json",
+  "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+  "rawBytes": 2104556,
+  "jsonKeyEvents": 49302,
+  "modelVocabEntries": 49152,
+  "addedTokens": 17,
+  "partBytes": 65536,
+  "partCount": 33,
+  "lastPartBytes": 7404,
+  "measurementMethod": "Python json.loads over exact raw bytes with an object_pairs_hook counting keys and rejecting duplicate keys. No native rendering-table or EOG validation performed by this measurement.",
+  "publicPolicySelected": false,
+  "publicActivationPerformed": false
+}

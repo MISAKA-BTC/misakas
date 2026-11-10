@@ -120,6 +120,10 @@ pub enum PalwStagedCourtKeyV1 {
     CourtBatchNumericalReceipt(Hash64),
     /// Verified plain output result, appended key 35.
     CourtBatchPlainOutputReceiptV2(Hash64),
+    /// RFC-0051 independent preclaim input namespace; appended keys 36–38.
+    TokenizerRegistrationSession(Hash64),
+    TokenizerRegistrationPart(Hash64, u32),
+    TokenizerRegistrationBook,
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -190,6 +194,10 @@ pub enum PalwStagedCourtRowV1 {
     CourtBatchNumericalReceipt(Box<crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1>),
     /// Verified plain output result, appended row 42.
     CourtBatchPlainOutputReceiptV2(Box<crate::palw_batch_plain_output_receipt_v2::RootedBatchPlainOutputReceiptV2>),
+    /// RFC-0051 append-only rows 43–45.
+    TokenizerRegistrationSession(Box<crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationSessionV1>),
+    TokenizerRegistrationPart(PalwSharedCourtV1<crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationPartRowV1>),
+    TokenizerRegistrationBook(PalwSharedCourtV1<crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationBookV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -231,7 +239,10 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtBatchDemand(_)
             | Self::CourtBatchStopReceipt(_)
             | Self::CourtBatchNumericalReceipt(_)
-            | Self::CourtBatchPlainOutputReceiptV2(_) => None,
+            | Self::CourtBatchPlainOutputReceiptV2(_)
+            | Self::TokenizerRegistrationSession(_)
+            | Self::TokenizerRegistrationPart(_)
+            | Self::TokenizerRegistrationBook(_) => None,
             _ => Some(self),
         }
     }
@@ -274,7 +285,10 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtBatchDemand(_)
             | Self::CourtBatchStopReceipt(_)
             | Self::CourtBatchNumericalReceipt(_)
-            | Self::CourtBatchPlainOutputReceiptV2(_) => None,
+            | Self::CourtBatchPlainOutputReceiptV2(_)
+            | Self::TokenizerRegistrationSession(_)
+            | Self::TokenizerRegistrationPart(_)
+            | Self::TokenizerRegistrationBook(_) => None,
             _ => Some(self),
         }
     }
@@ -378,6 +392,11 @@ impl PalwStagedCourtRowV1 {
                 Self::Claim(c.claim.clone()).check(key)
             }
             (PalwStagedCourtKeyV1::Owner(claim, bond), Self::OwnerBundle(c)) if (*claim, *bond) == (c.claim, c.owner) => c.check_v1(),
+            (PalwStagedCourtKeyV1::TokenizerRegistrationSession(id), Self::TokenizerRegistrationSession(row)) => row.check(*id),
+            (PalwStagedCourtKeyV1::TokenizerRegistrationPart(id, index), Self::TokenizerRegistrationPart(row)) => {
+                row.check_stored(*id, *index)
+            }
+            (PalwStagedCourtKeyV1::TokenizerRegistrationBook, Self::TokenizerRegistrationBook(row)) => row.check(),
             (PalwStagedCourtKeyV1::InventoryOpen(hash, owner), Self::ArtifactInventoryOpen(c))
                 if (*hash, *owner) == (c.offer.artifact_hash, c.offer.opener) =>
             {

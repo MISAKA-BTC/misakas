@@ -98,7 +98,7 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
 primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()','PalwLegacyCarrierLocatorV9'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1','NativeRetainedV1'}
-queue=['crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1','crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1','crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
+queue=['crate::palw_tokenizer_registration_v1::TokenizerRegistrationWireV1','crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1','crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1','crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
        'crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4','crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4',
        'crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4',
        'crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4',
@@ -231,7 +231,8 @@ wire_visited = None
 while queue or wire_visited is None:
  if not queue:
     wire_visited = visited.copy()
-    queue.append('crate::palw_batch_court_v1::carriage::BatchCourtWireV1')
+    queue.extend(['crate::palw_batch_court_v1::carriage::BatchCourtWireV1',
+                  'crate::palw_tokenizer_registration_v1::TokenizerRegistrationWireV1'])
  path=queue.pop(0)
  if path in visited:continue
  visited.add(path)
