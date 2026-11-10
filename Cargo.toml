@@ -53,6 +53,7 @@ members = [
     "tools/palw-jobs-export",
     "tools/palw-job-replay",
     "tools/opv-meas",
+    "tools/tokenizer-registration-probe",
     "testing/reference/palw-reference2",
     "misaka/palw/reexecutor",
     "misaka/palw/tir/lower",
