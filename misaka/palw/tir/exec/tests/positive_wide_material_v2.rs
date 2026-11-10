@@ -427,6 +427,25 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()),
         Err(misaka_palw_positive_contract::ContractError::Budget)
     );
+    request_context.manifest_body_bytes_reserved = body;
+    request_context.claimant = Claimant::Outsider(r.miner);
+    let outside = ManifestRequest { claimant: request_context.claimant, ..request };
+    let outside_sig =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &outside.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [0; 32])
+            .unwrap();
+    assert_eq!(
+        prepared.verify_outsider_manifest_request(0, &outside, &request_context, &signed.key, outside_sig.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Budget)
+    );
+    let outsider_budget = AggregateBudget { transmitted_bytes: body * 4, retained_bytes: body * 4, additional_work: 4, ..budget };
+    let outsider_reservation = PublicOriginalReservationV1 {
+        rescue: ProtectedRescueDemand { max_outsiders: 1, per_outsider: supply, ..reservation.rescue },
+        budget: &outsider_budget,
+        ..reservation
+    };
+    let with_outsider = admission.prepare(&original, &signed.key, signature.as_ref(), &outsider_reservation).unwrap();
+    assert!(with_outsider.verify_outsider_manifest_request(0, &outside, &request_context, &signed.key, outside_sig.as_ref()).is_ok());
+    assert!(with_outsider.verify_outsider_manifest_request(1, &outside, &request_context, &signed.key, outside_sig.as_ref()).is_err());
     assert!(draw.rescue_capacity(PanelBond { index: 2, ..bond }).is_err());
     assert!(prepared.prepare_draw(d(11), 100, &members, d(12)).is_err());
     assert!(prepared.prepare_draw(d(11), 101, &[members[0], members[0]], d(12)).is_err());

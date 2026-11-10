@@ -145,6 +145,25 @@ impl PreparedPublicDrawV1 {
 }
 
 impl PreparedPublicOriginalV1 {
+    /// Authenticate a request against an outsider slot assigned by the
+    /// native eligibility and reservation ledger.
+    pub fn verify_outsider_manifest_request(
+        &self,
+        slot: u64,
+        request: &ManifestRequest,
+        context: &ManifestRequestContext<'_>,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<PendingManifestCase, ContractError> {
+        if !matches!(context.claimant, Claimant::Outsider(principal) if principal == context.signer) {
+            return Err(ContractError::Identity);
+        }
+        if slot >= self.rescue.max_outsiders {
+            return Err(ContractError::Budget);
+        }
+        self.verify_manifest_request_with_capacity(self.rescue.per_outsider, request, context, key, signature)
+    }
+
     /// Check the protected draw slot before authenticating a manifest request.
     /// The ledger supplies the reservation identity and remaining body bytes.
     pub fn verify_drawn_manifest_request(
@@ -155,7 +174,7 @@ impl PreparedPublicOriginalV1 {
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<PendingManifestCase, ContractError> {
-        if draw.original != self.original || context.original.id() != self.original || context.schedule != self.schedule {
+        if draw.original != self.original {
             return Err(ContractError::Scope);
         }
         if context.inclusion_daa < draw.draw_daa {
@@ -167,7 +186,21 @@ impl PreparedPublicOriginalV1 {
         if context.signer != draw.approval_context(bond)?.member {
             return Err(ContractError::Identity);
         }
-        if context.manifest_body_bytes_reserved > draw.per_bond.transmitted_bytes {
+        self.verify_manifest_request_with_capacity(draw.per_bond, request, context, key, signature)
+    }
+
+    fn verify_manifest_request_with_capacity(
+        &self,
+        capacity: RemainingCapacity,
+        request: &ManifestRequest,
+        context: &ManifestRequestContext<'_>,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<PendingManifestCase, ContractError> {
+        if context.original.id() != self.original || context.schedule != self.schedule {
+            return Err(ContractError::Scope);
+        }
+        if context.manifest_body_bytes_reserved > capacity.transmitted_bytes {
             return Err(ContractError::Budget);
         }
         request.verify_for_inclusion(context, key, signature)
