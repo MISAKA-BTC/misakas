@@ -20,6 +20,46 @@ pub(super) struct TokenizerRegistrationAcceptanceV1 {
     >,
 }
 
+/// Index the complete accepted stream before any object decoder filters it.
+struct NativeAcceptedOrdinalsV1 {
+    ordinals: std::collections::BTreeMap<TransactionId, usize>,
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+
+impl NativeAcceptedOrdinalsV1 {
+    fn new(
+        ids: impl Iterator<Item = TransactionId> + Clone,
+    ) -> Result<Self, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{
+            NativeCoverageV1, btree_node_envelope_bytes_v1, reserve_native_pending_requests_v1,
+        };
+        let bytes = ids
+            .clone()
+            .count()
+            .checked_mul(btree_node_envelope_bytes_v1::<TransactionId, usize>())
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("native accepted transaction ordinals"))?;
+        let lease = reserve_native_pending_requests_v1(bytes)?;
+        let mut ordinals = std::collections::BTreeMap::new();
+        for (ordinal, id) in ids.enumerate() {
+            // Preserve first-occurrence lookup semantics.
+            ordinals.entry(id).or_insert(ordinal);
+        }
+        if let Some(lease) = &lease {
+            lease.materialized_v1();
+        }
+        Ok(Self { ordinals, _lease: lease })
+    }
+
+    fn get(&self, id: TransactionId) -> Option<usize> {
+        self.ordinals.get(&id).copied()
+    }
+
+    fn order_key(&self, id: Option<TransactionId>) -> usize {
+        id.map_or(0, |id| self.get(id).map_or(usize::MAX, |ordinal| ordinal + 1))
+    }
+}
+
 /// Immutable output of the existing production resolver at one block. The legacy
 /// extras remain readable for the existing fold APIs, but cannot be mutated through
 /// this boundary. Accepted-fact assembly explicitly takes ownership of those extras.
@@ -1286,33 +1326,32 @@ impl VirtualStateProcessor {
                 AcceptedNativeCourtItemV1::Ordinary(carried) => carried,
                 AcceptedNativeCourtItemV1::Tokenizer(handoff) => {
                     let extras = self.palw_transition_extras_for_rehearsal_v1(point, &[], &fee_extras);
-                    let (next, fee, refused) =
-                        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_tokenizer_registration_retained_v1(
-                            &folded,
-                            state,
-                            tokenizer_parent_root.expect("tokenizer candidate has parent root"),
-                            state_params,
-                            point,
-                            handoff,
-                            self.palw_unavailable_abstains_at(point.daa_score),
-                            self.palw_capability_bound_at(point.daa_score),
-                            self.palw_uncertified_weightless_at(point.daa_score),
-                            self.palw_da_court_at(point.daa_score),
-                            &extras,
+                    let (next, fee, refused) = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_tokenizer_registration_owned_v1(
+                        folded,
+                        state,
+                        tokenizer_parent_root.expect("tokenizer candidate has parent root"),
+                        state_params,
+                        point,
+                        handoff,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_capability_bound_at(point.daa_score),
+                        self.palw_uncertified_weightless_at(point.daa_score),
+                        self.palw_da_court_at(point.daa_score),
+                        &extras,
+                    )
+                    .map_err(|why| match why {
+                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => {
+                            PalwLocalTransitionFaultV1::Resource(why)
+                        }
+                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why) => {
+                            PalwLocalTransitionFaultV1::Context(why)
+                        }
+                        why => kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                            "tokenizer rehearsal",
+                            &why.to_string(),
                         )
-                        .map_err(|why| match why {
-                            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => {
-                                PalwLocalTransitionFaultV1::Resource(why)
-                            }
-                            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why) => {
-                                PalwLocalTransitionFaultV1::Context(why)
-                            }
-                            why => kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                                "tokenizer rehearsal",
-                                &why.to_string(),
-                            )
-                            .into(),
-                        })?;
+                        .into(),
+                    })?;
                     // Failed parsing can consume the assigned attempt. Preserve
                     // that state and its zero-burn projection through final fold.
                     folded = next;
@@ -3882,24 +3921,29 @@ impl VirtualStateProcessor {
                 })
             }))
             .collect::<Result<Vec<_>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>>()?;
-        if self
-            .palw_positive_assignment_params_v2
-            .as_ref()
-            .is_some_and(|params| params.palw_positive_assignment_v2_at(block_daa).is_some())
-            || !tokenizer.is_empty()
+        // A transport activation changes the ordering contract for every
+        // candidate at that DAA, even if it carries no TKR1 transaction.
+        let literal_order = self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(block_daa).is_some();
+        if literal_order && carried.is_empty() && batch.is_empty() && tokenizer.is_empty() {
+            return Ok((carried, batch, tokenizer));
+        }
+        if literal_order
+            || self
+                .palw_positive_assignment_params_v2
+                .as_ref()
+                .is_some_and(|params| params.palw_positive_assignment_v2_at(block_daa).is_some())
         {
-            // With TKR1, ordinals refer to the complete accepted transaction
-            // stream, including entries removed from decoder views above.
-            let ordinal = |id: TransactionId| {
-                if tokenizer_handoffs.is_empty() {
-                    txs.iter().position(|tx| tx.id() == id)
-                } else {
-                    acceptance.iter().flat_map(|block| &block.accepted_transactions).position(|entry| entry.transaction_id == id)
-                }
-            };
-            if !tokenizer_handoffs.is_empty()
-                && (tokenizer.iter().any(|(_, h)| ordinal(h.carrier_v1()) != Some(h.accepted_ordinal_v1()))
-                    || batch_handoffs.iter().any(|(id, h)| ordinal(*id) != Some(h.accepted_ordinal_v1())))
+            // The literal stream includes entries removed from decoder views.
+            let native_ordinals = literal_order
+                .then(|| {
+                    NativeAcceptedOrdinalsV1::new(
+                        acceptance.iter().flat_map(|block| &block.accepted_transactions).map(|entry| entry.transaction_id),
+                    )
+                })
+                .transpose()?;
+            if let Some(ordinals) = &native_ordinals
+                && (tokenizer.iter().any(|(_, h)| ordinals.get(h.carrier_v1()) != Some(h.accepted_ordinal_v1()))
+                    || batch_handoffs.iter().any(|(id, h)| ordinals.get(*id) != Some(h.accepted_ordinal_v1())))
             {
                 return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
                     "native accepted order",
@@ -3907,29 +3951,48 @@ impl VirtualStateProcessor {
                 )
                 .into());
             }
-            // The stable sort may allocate at most one full element buffer.
-            // Reserve that actual typed scratch before the sort, not afterward.
-            let sort_bytes =
-                (carried.len() as u64).checked_mul(std::mem::size_of::<PalwCarriedObjectV1>() as u64).ok_or_else(|| {
-                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>(
-                        "Assignment accepted-prefix sort",
-                    )
-                })?;
-            let _sort_lease =
-                kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(sort_bytes)?.ok_or_else(|| {
+            // The decorated sort stores one (key, original index) per item.
+            // The legacy stable sort can use a full element buffer.
+            let sort_element = if native_ordinals.is_some() {
+                std::mem::size_of::<(usize, usize)>()
+            } else {
+                std::mem::size_of::<PalwCarriedObjectV1>()
+            };
+            let sort_bytes = (carried.len() as u64).checked_mul(sort_element as u64).ok_or_else(|| {
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>("Assignment accepted-prefix sort")
+            })?;
+            let _sort_lease = if literal_order && sort_bytes == 0 {
+                None
+            } else {
+                let lease = if literal_order {
+                    kaspa_consensus_core::palw_native_resource_v1::reserve_native_pending_requests_v1(sort_bytes)?
+                } else {
+                    kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(sort_bytes)?
+                };
+                Some(lease.ok_or_else(|| {
                     kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
                         "Assignment accepted-prefix sort",
                         "actual native capacity lease is not armed",
                     )
-                })?;
-            carried.sort_by_key(|object| object.native_carrier.map_or(0, |id| ordinal(id).map_or(usize::MAX, |n| n + 1)));
+                })?)
+            };
+            let legacy_ordinal = |id: TransactionId| txs.iter().position(|tx| tx.id() == id);
+            if let Some(ordinals) = &native_ordinals {
+                carried.sort_by_cached_key(|object| ordinals.order_key(object.native_carrier));
+            } else {
+                carried.sort_by_key(|object| object.native_carrier.map_or(0, |id| legacy_ordinal(id).map_or(usize::MAX, |n| n + 1)));
+            }
+            if literal_order && let Some(lease) = &_sort_lease {
+                lease.materialized_v1();
+            }
             for (before, position) in batch
                 .iter_mut()
                 .map(|(before, handoff)| (before, handoff.accepted_ordinal_v1()))
                 .chain(tokenizer.iter_mut().map(|(before, handoff)| (before, handoff.accepted_ordinal_v1())))
             {
-                *before = carried.partition_point(|object| {
-                    object.native_carrier.is_none_or(|id| ordinal(id).is_some_and(|index| index < position))
+                *before = carried.partition_point(|object| match &native_ordinals {
+                    Some(ordinals) => ordinals.order_key(object.native_carrier) <= position,
+                    None => object.native_carrier.is_none_or(|id| legacy_ordinal(id).is_some_and(|index| index < position)),
                 });
             }
         } else {
@@ -5008,5 +5071,27 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             self.cursor += 1;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod native_accepted_ordinal_tests {
+    use super::NativeAcceptedOrdinalsV1;
+    use kaspa_hashes::Hash64;
+
+    #[test]
+    fn tokenizer_ordinals_keep_decoder_gaps_and_stable_ordinary_order() {
+        let h = Hash64::from_u64_word;
+        let ids = [h(10), h(20), h(30), h(40), h(50)];
+        let ordinals = NativeAcceptedOrdinalsV1::new(ids.into_iter()).unwrap();
+        // 20 was filtered from the decoder view, 40 is the TKR carrier.
+        let mut objects = [(Some(h(50)), "last"), (Some(h(30)), "first"), (None, "derived"), (Some(h(30)), "second")];
+        objects.sort_by_cached_key(|(id, _)| ordinals.order_key(*id));
+        assert_eq!(objects.map(|(_, label)| label), ["derived", "first", "second", "last"]);
+        let tokenizer = ordinals.get(h(40)).unwrap();
+        assert_eq!(tokenizer, 3);
+        assert_eq!(objects.partition_point(|(id, _)| ordinals.order_key(*id) <= tokenizer), 3);
+        assert_eq!(objects.partition_point(|(id, _)| ordinals.order_key(*id) <= 0), 1);
+        assert_eq!(ordinals.order_key(Some(h(999))), usize::MAX);
     }
 }

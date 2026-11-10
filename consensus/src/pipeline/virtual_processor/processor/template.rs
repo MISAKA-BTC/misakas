@@ -530,6 +530,16 @@ impl VirtualStateProcessor {
         // A Batch carrier outside its booked slot can become eligible on a
         // later template or a reorg. Defer it without evicting it from the pool.
         let mut batch_deferred_ids = std::collections::HashSet::new();
+        // Every retained body must fit its source partition, including refill
+        // selections. Refusal leaves the meter unchanged and keeps the tx in
+        // the pool for a later body.
+        let mut tokenizer_budget =
+            self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(virtual_state.daa_score).map(|policy| {
+                kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationSourceWorkV1::new(*policy)
+                    .expect("validated tokenizer source policy")
+            });
+        let mut tokenizer_deferred_ids = std::collections::HashSet::new();
+        let mut tokenizer_room_for = |tx: &Transaction| tokenizer_budget.as_mut().is_none_or(|meter| meter.charge_v1(tx).is_ok());
         let results = self.validate_block_template_transactions_in_parallel(&txs, &virtual_state, &virtual_utxo_view);
         for (tx, res) in txs.iter().zip(results) {
             match res {
@@ -556,7 +566,12 @@ impl VirtualStateProcessor {
                         &mut dropped_malformed,
                         &mut dropped_attestation_shards,
                     ) {
-                        calculated_fees.push(fee);
+                        if tokenizer_room_for(tx) {
+                            calculated_fees.push(fee);
+                        } else {
+                            tokenizer_deferred_ids.insert(tx.id());
+                            tx_selector.reject_selection_for_refill(tx.id());
+                        }
                     } else {
                         dropped_shard_ids.insert(tx.id());
                         // kaspa-pq audit v26 (H-3): a classifier DROP (valid tx, ineligible
@@ -571,13 +586,15 @@ impl VirtualStateProcessor {
         let mut has_rejections = !invalid_transactions.is_empty()
             || !dropped_shard_ids.is_empty()
             || !market_deferred_ids.is_empty()
-            || !batch_deferred_ids.is_empty();
+            || !batch_deferred_ids.is_empty()
+            || !tokenizer_deferred_ids.is_empty();
         if has_rejections {
             txs.retain(|tx| {
                 !invalid_transactions.contains_key(&tx.id())
                     && !dropped_shard_ids.contains(&tx.id())
                     && !market_deferred_ids.contains(&tx.id())
                     && !batch_deferred_ids.contains(&tx.id())
+                    && !tokenizer_deferred_ids.contains(&tx.id())
             });
         }
 
@@ -613,8 +630,13 @@ impl VirtualStateProcessor {
                             &mut dropped_malformed,
                             &mut dropped_attestation_shards,
                         ) {
-                            txs.push(tx);
-                            calculated_fees.push(fee);
+                            if tokenizer_room_for(&tx) {
+                                txs.push(tx);
+                                calculated_fees.push(fee);
+                            } else {
+                                tx_selector.reject_selection_for_refill(tx.id());
+                                has_rejections = true;
+                            }
                         } else {
                             // kaspa-pq audit v26 (H-3): classifier DROP during the refill loop —
                             // free the slot but do not count it as a validation rejection.

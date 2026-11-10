@@ -23,6 +23,14 @@ pub const TOKENIZER_REGISTRATION_PART_CONTEXT_V1: &[u8] = b"misaka-palw/tokenize
 pub const TOKENIZER_REGISTRATION_FINISH_CONTEXT_V1: &[u8] = b"misaka-palw/tokenizer-registration/finish/v1/mldsa87";
 pub const TOKENIZER_REGISTRATION_FINISH_ATTEMPTS_V1: u64 = 2;
 
+// Isolated UTXO projection, optional Positive fee-plan rehearsal and UTXO
+// replay, observed rehearsal, and authoritative fold. Only the two UTXO
+// passes can abandon a Round body and undo its private tokenizer journal.
+const TOKENIZER_REGISTRATION_NATIVE_PASSES_V1: u64 = 5;
+const TOKENIZER_REGISTRATION_ROLLBACK_PASSES_V1: u64 = 2;
+// Canonical parent, session, slot and EOG are fixed across those passes.
+const TOKENIZER_REGISTRATION_FINISH_PARSER_PASSES_V1: u64 = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct TokenizerRegistrationOpenBodyV1 {
     pub version: u16,
@@ -324,6 +332,8 @@ pub struct TokenizerRegistrationPolicyV1 {
     pub max_retained_total_bytes: u64,
     /// Candidate-block total, including the once-per-block registration sweep.
     pub service_budget: crate::palw_court_service_v1::ServiceCost,
+    /// Upper bound on source blocks merged by one accepting block.
+    pub maximum_source_blocks: u64,
     pub max_work: u64,
     pub max_pending_per_opener: u32,
     pub max_pending_total: u32,
@@ -372,7 +382,7 @@ pub struct TokenizerRegistrationBookkeepingWorkV1 {
     pub open: u64,
     pub part: u64,
     pub finish: u64,
-    /// Charge once before a candidate's registration GC sweep.
+    /// Aggregate registration GC work charged once for the whole candidate.
     pub sweep: u64,
     /// Charge once when rechecking the full authenticated snapshot.
     pub snapshot: u64,
@@ -395,8 +405,16 @@ impl TokenizerRegistrationPolicyV1 {
     /// Encode even an invalid configuration for identity/debugging. Native
     /// admission uses id_v1(), which checks shape first.
     pub(crate) fn fingerprint_v1(&self) -> Hash64 {
-        stream_digest(b"misaka-palw/tokenizer-registration/policy/v1", self)
-            .expect("fixed-size tokenizer registration policy serialization")
+        stream_digest(
+            b"misaka-palw/tokenizer-registration/policy/v1",
+            &(
+                self,
+                TOKENIZER_REGISTRATION_NATIVE_PASSES_V1,
+                TOKENIZER_REGISTRATION_ROLLBACK_PASSES_V1,
+                TOKENIZER_REGISTRATION_FINISH_PARSER_PASSES_V1,
+            ),
+        )
+        .expect("fixed-size tokenizer registration policy serialization")
     }
 
     pub fn check_v1(&self) -> Result<(), &'static str> {
@@ -415,6 +433,7 @@ impl TokenizerRegistrationPolicyV1 {
             || self.work_rates.contains(&0)
             || [
                 self.bookkeeping_work_per_step,
+                self.maximum_source_blocks,
                 self.max_parser_scratch_bytes,
                 self.max_carrier_bytes,
                 self.max_retained_bytes,
@@ -449,7 +468,7 @@ impl TokenizerRegistrationPolicyV1 {
         // Open body, signed Open, duplicated policy and quote, accepted/key
         // context, vector prefixes, and worst Complete status.
         const OPEN: u64 = 2 + 11 * HASH + BOND + 5 * 8 + 4 + 1 + SIG;
-        const POLICY: u64 = 2 + 4 * 4 + 29 * 8;
+        const POLICY: u64 = 2 + 4 * 4 + 30 * 8;
         const QUOTE: u64 = 8 + 4 + 25 * 8;
         const SESSION: u64 = OPEN + POLICY + QUOTE + POINT + HASH + 8 + 4 + 4 + 2 + 1 + POINT + HASH;
         const PART: u64 = 2 + 4 * HASH + BOND + 4 + 8 + SIG + 4 + POINT + 8;
@@ -510,34 +529,122 @@ impl TokenizerRegistrationPolicyV1 {
         let snapshot_book = scale(add(full_check, ownership)?)?;
         let retained = mul(sessions, add(mul(self.max_raw_bytes, self.retention_copies)?, self.metadata_bytes)?)?;
         let material_work = mul(mul(retained, 2)?, self.work_rates[6])?;
+        // Undo compares and moves journaled rows and restores their indices.
+        // One full forward book envelope also bounds one inverse pass,
+        // including book equality and reversal of all superseded sessions.
+        let carrier_passes = TOKENIZER_REGISTRATION_NATIVE_PASSES_V1 + TOKENIZER_REGISTRATION_ROLLBACK_PASSES_V1;
         Ok(TokenizerRegistrationBookkeepingWorkV1 {
-            open: scale(open)?,
-            part: scale(part)?,
-            finish: scale(finish)?,
-            sweep: add(scale(sweep)?, material_work)?,
+            open: mul(scale(open)?, carrier_passes)?,
+            part: mul(scale(part)?, carrier_passes)?,
+            finish: mul(scale(finish)?, carrier_passes)?,
+            sweep: mul(add(scale(sweep)?, material_work)?, TOKENIZER_REGISTRATION_NATIVE_PASSES_V1)?,
             snapshot: add(snapshot_book, material_work)?,
         })
     }
 
-    /// Leave room for the accepted-parent sweep in every service slot.
+    /// Independent source-body partition. Keep the accepting candidate's
+    /// aggregate sweep envelope outside the partitions.
+    pub fn source_budget_v1(&self) -> Result<ServiceCost, &'static str> {
+        let budget = self.service_budget;
+        let sweep = self.bookkeeping_work_v1()?.sweep;
+        let work = budget.work.checked_sub(sweep).ok_or("tokenizer sweep exceeds the total work budget")?;
+        let sources = self.maximum_source_blocks;
+        let budget = ServiceCost {
+            bytes: budget.bytes / sources,
+            work: work / sources,
+            io: budget.io / sources,
+            controls: budget.controls / sources,
+        };
+        if [budget.bytes, budget.work, budget.io, budget.controls].contains(&0) {
+            return Err("tokenizer source partition cannot carry a reservation");
+        }
+        Ok(budget)
+    }
+
+    /// Reserve against one source body so the complete slot can be supplied
+    /// without depending on multiple sources being merged at the same DAA.
     pub fn effective_reservation_budget_v1(&self) -> Result<ServiceCost, &'static str> {
-        let work = self
-            .service_budget
-            .work
-            .checked_sub(self.bookkeeping_work_v1()?.sweep)
-            .filter(|work| *work != 0)
-            .ok_or("tokenizer registration sweep leaves no work for reservations")?;
-        Ok(ServiceCost { work, ..self.service_budget })
+        self.source_budget_v1()
+    }
+
+    fn repeated_authentication_work_v1(&self, hash_bytes: u64, eog_ids: u64) -> Result<u64, &'static str> {
+        let per_pass = add(add(self.work_rates[5], mul(hash_bytes, self.work_rates[6])?)?, mul(eog_ids, self.work_rates[3])?)?;
+        mul(per_pass, TOKENIZER_REGISTRATION_NATIVE_PASSES_V1)
     }
 
     pub(crate) fn open_work_v1(&self, carrier_bytes: u64) -> Result<u64, &'static str> {
-        add(add(self.work_rates[5], mul(carrier_bytes, self.work_rates[6])?)?, self.bookkeeping_work_v1()?.open)
+        // The repeated Open ID computations cover only its fixed signed body.
+        // Full carrier multiples also cover context/domain and fee-scope hashes.
+        add(self.repeated_authentication_work_v1(mul(carrier_bytes, 4)?, 0)?, self.bookkeeping_work_v1()?.open)
     }
 
     pub(crate) fn part_work_v1(&self, carrier_bytes: u64) -> Result<u64, &'static str> {
         // Scope, signature, retained-row verification and duplicate checking
         // can each touch the complete signed payload.
-        add(add(self.work_rates[5], mul(mul(carrier_bytes, 4)?, self.work_rates[6])?)?, self.bookkeeping_work_v1()?.part)
+        add(self.repeated_authentication_work_v1(mul(carrier_bytes, 4)?, 0)?, self.bookkeeping_work_v1()?.part)
+    }
+
+    fn finish_cost_v1(&self, raw: u64, vocab: u32, declared_key_events: u64) -> Result<ServiceCost, &'static str> {
+        let framing = add(self.carrier_overhead_bytes, 1)?;
+        let eog = u64::from(self.max_eog_ids);
+        let sig = MLDSA87_SIGNATURE_LEN as u64;
+        let bytes = add(framing, add(2 + 4 * 64 + 68 + 8 + sig + 4 + 8 + 64 + 4 + EOG_SIBLINGS_MAX as u64 * 64, mul(4, eog)?)?)?;
+        // A refused input can build its DOM before counting key events and
+        // materialize one last raw-bounded token beyond the rendering limit.
+        let parser_quantities = [
+            raw,
+            raw.max(declared_key_events),
+            u64::from(vocab),
+            eog,
+            add(self.max_rendering_bytes, raw)?,
+            0, // The signature and opening are rechecked outside the cache.
+            add(mul(raw, 2)?, self.max_rendering_bytes)?,
+        ];
+        let parser =
+            parser_quantities.into_iter().zip(self.work_rates).try_fold(0, |sum, (quantity, rate)| add(sum, mul(quantity, rate)?))?;
+        let parser = mul(parser, TOKENIZER_REGISTRATION_FINISH_PARSER_PASSES_V1)?;
+        // Every pass verifies the signed Finish and EOG path and rehashes all
+        // retained parent Parts before using the memoized parser result.
+        // One Finish carrier bounds the combined fixed signed Open and Part
+        // bodies plus domain/length framing for each retained Part.
+        let part_metadata = mul(raw.div_ceil(TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64), bytes)?;
+        let hashes = add(mul(bytes, 4)?, add(raw, part_metadata)?)?;
+        let authentication = self.repeated_authentication_work_v1(hashes, eog)?;
+        let work = add(add(parser, authentication)?, self.bookkeeping_work_v1()?.finish)?;
+        Ok(ServiceCost { bytes, work, io: add(raw, self.metadata_bytes)?, controls: 1 })
+    }
+
+    /// Root-independent physical Finish bound, derived by the same monotone
+    /// formula as an accepted Open's exact Finish quote.
+    pub fn maximum_finish_cost_v1(&self) -> Result<ServiceCost, &'static str> {
+        self.finish_cost_v1(self.max_raw_bytes, self.max_vocab, self.max_key_events)
+    }
+
+    pub(crate) fn check_source_budget_v1(&self) -> Result<(), &'static str> {
+        let framing = add(self.carrier_overhead_bytes, 1)?;
+        let sig = MLDSA87_SIGNATURE_LEN as u64;
+        let open_bytes = add(framing, 2 + 11 * 64 + 68 + 5 * 8 + 4 + 1 + sig)?;
+        let raw = self.max_raw_bytes.min(TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64);
+        let part_bytes = add(add(framing, 2 + 4 * 64 + 68 + 4 + 8 + sig + 4)?, raw)?;
+        let open = ServiceCost { bytes: open_bytes, work: self.open_work_v1(open_bytes)?, io: self.metadata_bytes, controls: 1 };
+        let part = ServiceCost {
+            bytes: part_bytes,
+            work: self.part_work_v1(part_bytes)?,
+            io: add(mul(raw, self.retention_copies)?, self.metadata_bytes)?,
+            controls: 1,
+        };
+        let finish = self.maximum_finish_cost_v1()?;
+        let budget = self.source_budget_v1()?;
+        if [open, part, finish].into_iter().any(|cost| {
+            cost.bytes > self.max_carrier_bytes
+                || cost.bytes > budget.bytes
+                || cost.work > budget.work
+                || cost.io > budget.io
+                || cost.controls > budget.controls
+        }) {
+            return Err("tokenizer source partition cannot carry a maximum policy packet");
+        }
+        Ok(())
     }
 
     /// Prices the exact signed Open using key-work bounds from accepted class
@@ -569,8 +676,9 @@ impl TokenizerRegistrationPolicyV1 {
         let open_carrier_bytes = add(add(borsh::object_length(open).map_err(|err| err.to_string())? as u64, sig)?, framing)?;
         let part_overhead = add(framing, 2 + 4 * 64 + 68 + 4 + 8 + sig + 4)?;
         let eog = u64::from(self.max_eog_ids);
-        let finish_carrier_bytes =
-            add(framing, add(2 + 4 * 64 + 68 + 8 + sig + 4 + 8 + 64 + 4 + EOG_SIBLINGS_MAX as u64 * 64, mul(4, eog)?)?)?;
+        let finish_cost = self.finish_cost_v1(raw, open.statement.vocab, declared_key_events)?;
+        let finish_carrier_bytes = finish_cost.bytes;
+        let finish_work = finish_cost.work;
         let part_max = add(part_overhead, raw.min(TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64))?;
         let total_carrier_bytes = add(
             add(open_carrier_bytes, mul(count, part_max)?)?,
@@ -581,32 +689,8 @@ impl TokenizerRegistrationPolicyV1 {
         let retained_byte_daa = mul(retained_bytes, open.material_until_daa - accepted_daa)?;
         let attempts = TOKENIZER_REGISTRATION_FINISH_ATTEMPTS_V1;
         let finish_workspace_bytes = add(add(parser_scratch_bytes, raw)?, finish_carrier_bytes)?;
-        let work_for = |quantities: [u64; 7]| {
-            quantities.into_iter().zip(self.work_rates).try_fold(0, |sum, (quantity, rate)| add(sum, mul(quantity, rate)?))
-        };
-        // Price carrier hashing and payload binding in addition to raw EOF
-        // and rendering checks. An adopted rate also covers fixed node work
-        // per leaf/ID such as hashing its Merkle parent and verifying openings.
         let open_work = self.open_work_v1(open_carrier_bytes)?;
         let maximum_part_work = self.part_work_v1(part_max)?;
-        // The DOM is built before counting key events, so an input later
-        // rejected at its declared limit still incurs raw-bounded key work.
-        // The renderer can also materialize one last raw-bounded token before
-        // detecting that its cumulative rendering-byte limit was exceeded.
-        let key_work = raw.max(declared_key_events);
-        let rendering_work = add(self.max_rendering_bytes, raw)?;
-        let finish_work = add(
-            work_for([
-                raw,
-                key_work,
-                u64::from(open.statement.vocab),
-                eog,
-                rendering_work,
-                1,
-                add(mul(finish_carrier_bytes, 3)?, add(mul(raw, 2)?, self.max_rendering_bytes)?)?,
-            ])?,
-            self.bookkeeping_work_v1()?.finish,
-        )?;
         let open_cost = ServiceCost { bytes: open_carrier_bytes, work: open_work, io: self.metadata_bytes, controls: 1 };
         let part_cost = ServiceCost {
             bytes: part_max,
@@ -614,8 +698,6 @@ impl TokenizerRegistrationPolicyV1 {
             io: add(mul(raw.min(TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64), self.retention_copies)?, self.metadata_bytes)?,
             controls: 1,
         };
-        let finish_cost =
-            ServiceCost { bytes: finish_carrier_bytes, work: finish_work, io: add(raw, self.metadata_bytes)?, controls: 1 };
         // The actual book reserves the full part profile at every part slot,
         // including the short tail. Billing work uses the same upper bound.
         let work = add(add(open_work, mul(count, maximum_part_work)?)?, mul(attempts, finish_work)?)?;
@@ -664,6 +746,23 @@ impl TokenizerRegistrationPolicyV1 {
 pub(crate) mod tests {
     use super::*;
 
+    #[test]
+    fn finish_work_rehashes_parent_parts_in_every_pass_but_parses_once() {
+        let (policy, _) = fixture();
+        // Keep both raw lengths in one Part; the fixed transport/opening
+        // geometry and policy book bounds cancel when comparing quotes.
+        let shorter = policy.finish_cost_v1(60_000, 128, 10).unwrap();
+        let longer = policy.finish_cost_v1(60_001, 128, 10).unwrap();
+        let parser_per_byte = 1 + 1 + 1 + 2;
+        let repeated_part_hash_per_byte = 1;
+        assert_eq!(
+            longer.work - shorter.work,
+            parser_per_byte * TOKENIZER_REGISTRATION_FINISH_PARSER_PASSES_V1
+                + repeated_part_hash_per_byte * TOKENIZER_REGISTRATION_NATIVE_PASSES_V1
+        );
+        assert_ne!(policy.id_v1().unwrap(), stream_digest(b"misaka-palw/tokenizer-registration/policy/v1", &policy).unwrap());
+    }
+
     pub(crate) fn fixture() -> (TokenizerRegistrationPolicyV1, TokenizerRegistrationOpenBodyV1) {
         let h = Hash64::from_u64_word;
         let policy = TokenizerRegistrationPolicyV1 {
@@ -677,9 +776,10 @@ pub(crate) mod tests {
             max_carrier_bytes: 80_000,
             max_retained_bytes: 1_000_000,
             max_retained_total_bytes: 8_000_000,
-            // Covers the conservative full-book sweep and one maximal Finish.
-            service_budget: ServiceCost { bytes: 100_000, work: 12_000_000, io: 1_000_000, controls: 2 },
-            max_work: 10_000_000,
+            maximum_source_blocks: 1,
+            // Scale the local single-pass fixture by the full forward and inverse bound.
+            service_budget: ServiceCost { bytes: 100_000, work: 7 * 12_000_000, io: 1_000_000, controls: 2 },
+            max_work: 7 * 10_000_000,
             max_pending_per_opener: 2,
             max_pending_total: 8,
             max_session_daa: 100,

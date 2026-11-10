@@ -1,0 +1,161 @@
+{
+  "scope": "Offline TKR1 wire, UTXO script verification and transaction-mass measurement using fixed test keys.",
+  "public_submission": false,
+  "public_admission_verified": false,
+  "policy_adopted_or_quoted": false,
+  "checkout_head_when_recorded_not_rlib_provenance": "aa1071df4f4458aada253a868e0e43504fa77e2a",
+  "rustc": [
+    "rustc 1.93.0 (254b59607 2026-01-19)",
+    "binary: rustc",
+    "commit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c",
+    "commit-date: 2026-01-19",
+    "host: aarch64-apple-darwin",
+    "release: 1.93.0",
+    "LLVM version: 21.1.8"
+  ],
+  "compile": {
+    "command": "/tmp/t12-tokenizer-mass.FEqN1T/compile.sh",
+    "stdout": "/tmp/t12-tokenizer-mass.FEqN1T/compile.stdout",
+    "stderr": "/tmp/t12-tokenizer-mass.FEqN1T/compile.stderr",
+    "exit_code_file": "/tmp/t12-tokenizer-mass.FEqN1T/compile.exit"
+  },
+  "replay": {
+    "command": "/tmp/t12-tokenizer-mass.FEqN1T/run.sh",
+    "stdout": "/tmp/t12-tokenizer-mass.FEqN1T/replay.csv",
+    "stderr": "/tmp/t12-tokenizer-mass.FEqN1T/run.stderr"
+  },
+  "artifacts": [
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json",
+      "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c",
+      "size_bytes": 2104556
+    },
+    {
+      "path": "/tmp/misaka-studio-tfp1-native.k1U16c/studio-token-table.palwttb",
+      "sha256": "f1d8cdbabdccd58e988f689c3d4296de6e66b2d2702736f5629f7633b5559f90",
+      "size_bytes": 578215
+    },
+    {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_consensus_core-1ae7c6f5cf89b13b.rlib",
+      "sha256": "f8e2055c83d7363fab1a417598681cbc6d89198e1b1ed7ab60e7ae708f6da82d",
+      "size_bytes": 1015077480,
+      "source_commit": null,
+      "source_provenance": "Exact source commit unknown; reused an existing build artifact from the shared Cargo target."
+    },
+    {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_txscript-ac4138da362dae90.rlib",
+      "sha256": "94e531dca05da8a11d6c8a9817a04b0803d7e2a596da45be043bf98b1c3e111f",
+      "size_bytes": 12661936,
+      "source_commit": null,
+      "source_provenance": "Exact source commit unknown; reused an existing build artifact from the shared Cargo target."
+    },
+    {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_hashes-809eb1c36e40821b.rlib",
+      "sha256": "481643b3fafe230634cfa06b7e27108305476df0e4abdd6b0696611e9a8409c5",
+      "size_bytes": 1369312,
+      "source_commit": null,
+      "source_provenance": "Exact source commit unknown; reused an existing build artifact from the shared Cargo target."
+    },
+    {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/liblibcrux_ml_dsa-0b2424abe2d920a7.rlib",
+      "sha256": "30dbf1b481286a84d4e251c7b4736a59f2105121ca9de32e565a0beb66aa35d6",
+      "size_bytes": 9049240,
+      "source_commit": null,
+      "source_provenance": "Exact source commit unknown; reused an existing build artifact from the shared Cargo target."
+    },
+    {
+      "path": "/tmp/t12-tokenizer-mass.FEqN1T/main.rs",
+      "sha256": "c015198962a1f99dc0ef6ff246b1fe350525e85cd322371e24ce1faadde8c37f",
+      "size_bytes": 10237
+    },
+    {
+      "path": "/tmp/t12-tokenizer-mass.FEqN1T/result.csv",
+      "sha256": "2cae1a1e1dccee6cb07559c9428c04f5f189637fe4eb18f74fb3dab3b1cc0974",
+      "size_bytes": 880
+    }
+  ],
+  "fixture": {
+    "hash_words": "Values below use Hash64::from_u64_word, not public IDs.",
+    "open": {
+      "version": 1,
+      "network_hash_word": 1,
+      "policy_hash_word": 2,
+      "class_hash_word": 3,
+      "container_root_hash_word": 4,
+      "semantics_hash_word": 5,
+      "inventory_hash_word": 6,
+      "artifact_root_hash_word": 7,
+      "opener_outpoint_txid_hash_word": 8,
+      "opener_outpoint_index": 0,
+      "nonce_hash_word": 9,
+      "accept_until_daa": 101,
+      "finish_until_daa": 200,
+      "material_until_daa": 220,
+      "max_registration_charge_sompi": 1,
+      "rendering_rule": "QwenByteLevelJsonV1",
+      "statement_inputs": "Exact raw length from tokenizer.json; tokenizer identity, table root and vocabulary from PALWTTB; canonical EOG opening from that table."
+    },
+    "parts": {
+      "tested_indices": [
+        0,
+        32
+      ],
+      "part_bytes": [
+        65536,
+        7404
+      ],
+      "total_geometry_parts": 33
+    },
+    "control_signer": {
+      "fixed_local_seed_byte_hex": "31",
+      "randomness_byte_by_carrier": [
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    "payer_signer": {
+      "fixed_local_seed_byte_hex": "52",
+      "randomness_byte_by_carrier": [
+        30,
+        31,
+        32,
+        33
+      ]
+    },
+    "utxo": {
+      "input_count": 1,
+      "output_count": 1,
+      "input_coinbase": false,
+      "input_daa": 0,
+      "input_outpoint_txid_hash_words": [
+        50,
+        51,
+        52,
+        53
+      ],
+      "input_outpoint_index": 0,
+      "input_sompi": 1000000000,
+      "output_sompi": 999000000,
+      "fixture_fee_sompi": 1000000,
+      "script_type": "P2PKH-ML-DSA-87; input and output use the same payer script",
+      "script_public_key_bytes": 69,
+      "serialized_output_bytes_for_mass": 87,
+      "sigops": 1,
+      "sighash": "SIG_HASH_ALL",
+      "utxo_signature_script_bytes": 7226,
+      "lock_time": 0,
+      "sequence": 0,
+      "gas": 0,
+      "transaction_version": 0,
+      "subnetwork": "PALW_LIFECYCLE"
+    }
+  },
+  "limits": {
+    "parameter_entry_point": "kaspa_consensus_core::config::params::palw_t12_shipped_params",
+    "block_mass": 500000,
+    "mempool_standard_mass": 480000,
+    "checks": "MassCalculator noncontextual compute/transient and contextual storage; TxScriptEngine executes each signed UTXO input. No node, relay, state, fee-policy or acceptance test."
+  }
+}

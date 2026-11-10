@@ -551,6 +551,217 @@ impl VirtualStateProcessor {
         self.exec_lane_adapt_block_template(template, None, payout)
     }
 
+    fn check_round_template_fee_budget_v1(
+        &self,
+        template: &BlockTemplate,
+        virtual_state: &Arc<VirtualState>,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        round: u64,
+        payout: &kaspa_consensus_core::tx::ScriptPublicKey,
+        source_daa: u64,
+    ) -> Result<(), RuleError> {
+        let sink = virtual_state.ghostdag_data.selected_parent;
+        let (parent_hash, state) = self
+            .palw_v2_state_at(sink)
+            .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient state is unavailable".into()))?;
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: Default::default(),
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
+        };
+        let mut budget = state
+            .round_fee_admission_v1(params, &point, self.palw_escrow_carve_at(point.daa_score, point.daa_score))
+            .map_err(Self::palw_round_fee_admission_fault_v1)
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
+            .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient budget is unavailable".into()))?;
+        let view = self
+            .palw_round_view_v1(round)
+            .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the execution schedule is unavailable".into()))?;
+        let recipients: std::collections::BTreeSet<_> = view
+            .permits
+            .iter()
+            .filter(|permit| !view.used.contains(&permit.index))
+            .filter(|permit| {
+                state.bond(&permit.bond).is_some_and(|bond| {
+                    kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes()) == *payout
+                })
+            })
+            .map(|permit| permit.bond)
+            .collect();
+        if recipients.len() != 1 || template.calculated_fees.len() + 1 != template.block.transactions.len() {
+            return Err(RuleError::RoundFeeBudgetRefused(
+                "an unambiguous bonded permit and validated transaction fees are required".into(),
+            ));
+        }
+        let burned =
+            self.palw_v2_bond_burn_obligations(&state, point.daa_score).map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+        let maximum_sompi = template
+            .block
+            .transactions
+            .iter()
+            .skip(1)
+            .zip(&template.calculated_fees)
+            .try_fold(0u64, |sum, (tx, fee)| {
+                let bond_burned = tx
+                    .inputs
+                    .iter()
+                    .map(|input| burned.get(&input.previous_outpoint).copied().unwrap_or(0))
+                    .fold(0u64, u64::saturating_add);
+                sum.checked_add(self.palw_collectible_transaction_fee_v1(tx, *fee, bond_burned, point.daa_score))
+            })
+            .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the collectible fee overflows".into()))?;
+        let income = |tip| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
+            block: Default::default(),
+            bond: *recipients.first().expect("one permit recipient"),
+            maximum_sompi: tip,
+            actual_sompi: tip,
+        };
+        let Err(unreduced_refusal) = budget.admit(income(maximum_sompi)) else { return Ok(()) };
+        let point =
+            kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: kaspa_consensus_core::blockhash::ORIGIN, ..point };
+        if let Some(tip) = self.round_template_tkr_tip_v1(
+            template,
+            virtual_state,
+            parent_hash,
+            &state,
+            params,
+            point,
+            source_daa,
+            &burned,
+            maximum_sompi,
+        )? {
+            return budget.admit(income(tip)).map_err(|why| RuleError::RoundFeeBudgetRefused(why.to_string()));
+        }
+        Err(RuleError::RoundFeeBudgetRefused(unreduced_refusal.to_string()))
+    }
+
+    /// A miner-side estimate at the currently authenticated sink. A Round
+    /// body has no accepting block yet, so the normal mergeset fold still
+    /// establishes its fee and admission when it is actually included.
+    fn round_template_tkr_tip_v1(
+        &self,
+        template: &BlockTemplate,
+        virtual_state: &Arc<VirtualState>,
+        parent_hash: BlockHash,
+        parent: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        source_daa: u64,
+        bond_burns: &std::collections::HashMap<TransactionOutpoint, u64>,
+        gross_tip: u64,
+    ) -> Result<Option<u64>, RuleError> {
+        use super::tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1;
+        use crate::model::stores::utxo_set::UtxoSetStoreReader;
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::{NativeCoverageV1, reserve_native_pending_requests_v1},
+            palw_tokenizer_registration_carriage_v1::TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1,
+            subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        };
+
+        let is_tkr = |tx: &Transaction| {
+            tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE && tx.payload.starts_with(TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1)
+        };
+        if self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(source_daa).is_none() {
+            return Ok(None);
+        }
+        let Some(policy) = self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(point.daa_score) else {
+            return Ok(None);
+        };
+        let txs = &template.block.transactions[1..];
+        if parent_hash != template.selected_parent_hash || !txs.iter().any(is_tkr) {
+            return Ok(None);
+        }
+        // A prior mergeset TKR carrier can change the reservation/winner
+        // prefix. Keep the ordinary estimate if this template lacks that prefix.
+        for source in virtual_state.ghostdag_data.unordered_mergeset() {
+            let Ok(daa) = self.headers_store.get_daa_score(source) else { return Ok(None) };
+            if self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(daa).is_some() {
+                let Ok(body) = self.block_transactions_store.get(source) else { return Ok(None) };
+                if body.iter().any(is_tkr) {
+                    return Ok(None);
+                }
+            }
+        }
+        let gate = self.palw_mempool_bond_gate(point.daa_score).map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+        let Some(gate) = gate else { return Ok(None) };
+        if gate.escrow.assignment_invalid
+            || gate.burns != *bond_burns
+            || gate.case_source_parent.as_ref().is_some_and(|(hash, _)| *hash != parent_hash)
+        {
+            return Ok(None);
+        }
+        let mut prefix = TokenizerRegistrationFeePrefixV1::begin(self, parent, params, point, *policy)
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+        let mut tip = gross_tip;
+        for (index, (tx, &gross)) in txs.iter().zip(&template.calculated_fees).enumerate() {
+            if !is_tkr(tx) {
+                continue;
+            }
+            let mut bond_burn = 0u64;
+            for input in &tx.inputs {
+                let outpoint = &input.previous_outpoint;
+                if gate.locked.contains(outpoint)
+                    || gate.escrow.rows.contains_key(outpoint)
+                    || gate.escrow.assignment.contains_key(outpoint)
+                    || gate.escrow.positive_case.contains_key(outpoint)
+                    || gate.escrow.assignment_prover.contains_key(outpoint)
+                {
+                    return Ok(None);
+                }
+                bond_burn = bond_burn.saturating_add(bond_burns.get(outpoint).copied().unwrap_or_default());
+            }
+            let Some(ordinal) = virtual_state.accepted_tx_ids.len().checked_add(index) else { return Ok(None) };
+            let Ok(physical_index) = u32::try_from(index + 1) else { return Ok(None) };
+            let (validated, lease) = {
+                let stores = self.virtual_stores.read();
+                if !stores.state.get().is_ok_and(|current| Arc::ptr_eq(&current, virtual_state)) {
+                    return Ok(None);
+                }
+                // Reserve the temporary validated input vector and owned scripts.
+                let mut bytes = 0u64;
+                for input in &tx.inputs {
+                    let Ok(entry) = UtxoSetStoreReader::get(&stores.utxo_set, &input.previous_outpoint) else {
+                        return Ok(None);
+                    };
+                    bytes = bytes
+                        .checked_add(std::mem::size_of::<UtxoEntry>() as u64)
+                        .and_then(|bytes| bytes.checked_add(entry.script_public_key.script().len() as u64))
+                        .ok_or_else(|| {
+                            RuleError::LocalNativeCapacityUnavailable(NativeCoverageV1::overflow::<UtxoEntry>("Round TKR inputs"))
+                        })?;
+                }
+                let lease = reserve_native_pending_requests_v1(bytes).map_err(RuleError::LocalNativeCapacityUnavailable)?;
+                let validated =
+                    self.validate_transaction_in_utxo_context(tx, &stores.utxo_set, point.daa_score, TxValidationFlags::Full, None);
+                let Ok(validated) = validated else { return Ok(None) };
+                if let Some(lease) = &lease {
+                    lease.materialized_v1();
+                }
+                (validated, lease)
+            };
+            if validated.calculated_fee != gross {
+                return Ok(None);
+            }
+            let tx_tip = self.palw_collectible_transaction_fee_v1(tx, gross, bond_burn, point.daa_score);
+            let body = [(validated, physical_index)];
+            let trial =
+                prefix.trial_body(&body, ordinal, |_| Ok(gross - tx_tip)).map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+            for carrier in trial.carriers_v1() {
+                let Some(projected_tip) = round_template_projected_tip_v1(tip, tx.id(), ordinal, gross, tx_tip, &carrier.fee) else {
+                    return Ok(None);
+                };
+                tip = projected_tip;
+            }
+            // Commit inside this disposable prefix so later carriers in the
+            // same template see the earlier carrier's trial state.
+            trial.commit();
+            drop(body);
+            drop(lease);
+        }
+        Ok(Some(tip))
+    }
+
     /// The one builder of a lane block's template. `round` is `Some` for a permit holder (a v1 round block, a v2 `EXEC_TX`) and `None`
     /// for a v2 `EXEC_SLICE`.
     pub(super) fn exec_lane_adapt_block_template(
@@ -567,68 +778,6 @@ impl VirtualStateProcessor {
             return Err(RuleError::UnknownPowAlgoId(POW_ALGO_ID_PALW_ROUND_V1));
         };
         let sink = virtual_state.ghostdag_data.selected_parent;
-        if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref())
-            && params.bond_budget_active_at(virtual_state.daa_score)
-        {
-            let (_, state) = self
-                .palw_v2_state_at(sink)
-                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient state is unavailable".into()))?;
-            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                block: Default::default(),
-                daa_score: virtual_state.daa_score,
-                blue_score: virtual_state.ghostdag_data.blue_score,
-                subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
-            };
-            let mut budget = state
-                .round_fee_admission_v1(params, &point, self.palw_escrow_carve_at(point.daa_score, point.daa_score))
-                .map_err(Self::palw_round_fee_admission_fault_v1)
-                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
-                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient budget is unavailable".into()))?;
-            let view = self
-                .palw_round_view_v1(round)
-                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the execution schedule is unavailable".into()))?;
-            let recipients: std::collections::BTreeSet<_> = view
-                .permits
-                .iter()
-                .filter(|permit| !view.used.contains(&permit.index))
-                .filter(|permit| {
-                    state.bond(&permit.bond).is_some_and(|bond| {
-                        kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&bond.payout_payload.as_bytes()) == payout
-                    })
-                })
-                .map(|permit| permit.bond)
-                .collect();
-            if recipients.len() != 1 || template.calculated_fees.len() + 1 != template.block.transactions.len() {
-                return Err(RuleError::RoundFeeBudgetRefused(
-                    "an unambiguous bonded permit and validated transaction fees are required".into(),
-                ));
-            }
-            let burned =
-                self.palw_v2_bond_burn_obligations(&state, point.daa_score).map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
-            let maximum_sompi = template
-                .block
-                .transactions
-                .iter()
-                .skip(1)
-                .zip(&template.calculated_fees)
-                .try_fold(0u64, |sum, (tx, fee)| {
-                    let bond_burned = tx
-                        .inputs
-                        .iter()
-                        .map(|input| burned.get(&input.previous_outpoint).copied().unwrap_or(0))
-                        .fold(0u64, u64::saturating_add);
-                    sum.checked_add(self.palw_collectible_transaction_fee_v1(tx, *fee, bond_burned, point.daa_score))
-                })
-                .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the collectible fee overflows".into()))?;
-            budget
-                .admit(kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
-                    block: Default::default(),
-                    bond: *recipients.first().expect("one permit recipient"),
-                    maximum_sompi,
-                    actual_sompi: maximum_sompi,
-                })
-                .map_err(|why| RuleError::RoundFeeBudgetRefused(why.to_string()))?;
-        }
         let anchor = self
             .ghostdag_store
             .get_selected_parent(sink)
@@ -741,6 +890,22 @@ impl VirtualStateProcessor {
         if !lane.activation.is_active(daa_window.daa_score) {
             return Err(RuleError::UnknownPowAlgoId(POW_ALGO_ID_PALW_ROUND_V1));
         }
+        // This header can fall on a different side of transport activation
+        // than the virtual DAA used during initial transaction selection.
+        if round.is_some()
+            && let Some(policy) = self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(daa_window.daa_score)
+        {
+            kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::preflight_tokenizer_registration_source_body_v1(
+                template.block.transactions.iter().skip(1),
+                policy,
+            )
+            .map_err(RuleError::PalwTokenizerRegistrationServiceExceeded)?;
+        }
+        if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref())
+            && params.bond_budget_active_at(virtual_state.daa_score)
+        {
+            self.check_round_template_fee_budget_v1(&template, &virtual_state, params, round, &payout, daa_window.daa_score)?;
+        }
         let bits = self.window_manager.calculate_difficulty_bits(&ghostdag, &daa_window);
         let (past_median_time, _) = self.window_manager.calc_past_median_time(&ghostdag)?;
         // A permit holder is stamped inside its round; a slice holds no round, so it is stamped at the template's own time.
@@ -836,5 +1001,62 @@ impl VirtualStateProcessor {
             Vec::new(),
         )
         .with_coinbase_allocation_v2(allocation))
+    }
+}
+
+fn round_template_projected_tip_v1(
+    running_tip: u64,
+    txid: TransactionId,
+    ordinal: usize,
+    gross: u64,
+    pre_registration_tip: u64,
+    fee: &kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1,
+) -> Option<u64> {
+    if fee.carrier != txid
+        || fee.context.accepted_ordinal != ordinal
+        || fee.actual_fee != gross
+        || pre_registration_tip.checked_sub(fee.registration_burn) != Some(fee.collectible_fee)
+    {
+        return None;
+    }
+    running_tip.checked_sub(fee.registration_burn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::round_template_projected_tip_v1;
+    use kaspa_consensus_core::{
+        blockhash::ORIGIN,
+        palw_state_v2::PalwBlockContextV2,
+        palw_tokenizer_registration_carriage_v1::{TokenizerRegistrationCarrierContextV1, TokenizerRegistrationFeeV1},
+    };
+    use kaspa_hashes::Hash64;
+
+    #[test]
+    fn round_template_tip_counts_only_matching_registration_burn() {
+        let carrier = Hash64::from_bytes([1; 64]);
+        let context = TokenizerRegistrationCarrierContextV1 {
+            parent_root: Hash64::from_bytes([2; 64]),
+            at: PalwBlockContextV2 { block: ORIGIN, daa_score: 100, blue_score: 99, subsidy: 0 },
+            accepted_ordinal: 4,
+            network: Hash64::from_bytes([3; 64]),
+            policy: Hash64::from_bytes([4; 64]),
+        };
+        let open = TokenizerRegistrationFeeV1 {
+            carrier,
+            context,
+            actual_fee: 14,
+            collectible_fee: 3,
+            registration_burn: 8,
+            charge_id: Some(Hash64::from_bytes([5; 64])),
+        };
+        // 3 precedes the registration burn, and 4 belongs to another tx.
+        assert_eq!(round_template_projected_tip_v1(15, carrier, 4, 14, 11, &open), Some(7));
+        let duplicate = TokenizerRegistrationFeeV1 { registration_burn: 0, collectible_fee: 11, charge_id: None, ..open };
+        assert_eq!(round_template_projected_tip_v1(15, carrier, 4, 14, 11, &duplicate), Some(15));
+        assert_eq!(round_template_projected_tip_v1(15, carrier, 5, 14, 11, &open), None);
+        assert_eq!(round_template_projected_tip_v1(15, carrier, 4, 13, 11, &open), None);
+        assert_eq!(round_template_projected_tip_v1(15, carrier, 4, 14, 10, &open), None);
+        assert_eq!(round_template_projected_tip_v1(15, Hash64::from_bytes([6; 64]), 4, 14, 11, &open), None);
     }
 }

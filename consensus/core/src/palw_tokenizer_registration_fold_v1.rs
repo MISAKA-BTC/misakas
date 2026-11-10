@@ -1,5 +1,7 @@
 //! RFC-0051 native paid registration writer. No public activation preset.
 use super::*;
+#[path = "palw_tokenizer_registration_fold_v1/fee_working_state.rs"]
+mod fee_working_state;
 use crate::{
     palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row},
     palw_tokenizer_registration_carriage_v1::{
@@ -11,6 +13,7 @@ use crate::{
     palw_tokenizer_registration_v1::{TokenizerRegistrationPolicyV1, TokenizerRegistrationWireV1 as Wire},
     palw_tokenizer_rendering_v2::PalwVerifiedTokenizerRegistrationErrorV1,
 };
+pub use fee_working_state::TokenizerRegistrationFeeWorkingStateV1;
 
 fn refusal(why: String) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(why)
@@ -26,7 +29,69 @@ fn rendering_error(why: PalwVerifiedTokenizerRegistrationErrorV1) -> PalwStateV2
     }
 }
 
+/// Prepare the tokenizer-only prefix for native fee projection. This keeps
+/// the original accepted parent point and performs only TKR expiry/GC; ordinary
+/// block preparation and the authoritative fold still run on the real parent.
+pub fn palw_v2_pre_tokenizer_registration_base_retained_v1(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    point: &PalwBlockContextV2,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+    if let Some(previous) = parent.last_point() {
+        if point.blue_score <= previous.blue_score {
+            return Err(PalwStateV2Error::NonMonotonicContext("blue_score must strictly increase along a chain"));
+        }
+        if point.daa_score < previous.daa_score {
+            return Err(PalwStateV2Error::NonMonotonicContext("daa_score must not decrease along a chain"));
+        }
+    }
+    let mut builder = TransitionBuilder::try_new(parent, params, false, false, false, false, extras)?;
+    builder.sweep_tokenizer_registrations_v1(point)?;
+    builder
+        .native_reservation
+        .finish_state_v1(builder.state, "native tokenizer pre-object state")
+        .map_err(PalwStateV2Error::NativeResource)
+}
+
+/// Apply one TKR1 handoff to the tokenizer-only fee prefix. This calls the
+/// same context checks and writer as the full rehearsal and fold, with no
+/// ordinary block or claim maintenance.
+pub fn palw_v2_apply_one_tokenizer_registration_fee_retained_v1(
+    base: &PalwChainStateV2,
+    accepted_parent: &PalwChainStateV2,
+    accepted_parent_root: Hash64,
+    params: &PalwStateParamsV2,
+    point: &PalwBlockContextV2,
+    carrier: &ValidatedTokenizerRegistrationCarrierV1,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<(crate::palw_native_resource_v1::NativeChainStateV1, TokenizerRegistrationFeeV1, Option<String>), PalwStateV2Error> {
+    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let (fee, refusal) = builder.apply_tokenizer_registration_at_v1(accepted_parent, accepted_parent_root, point, carrier)?;
+    let state = builder
+        .native_reservation
+        .finish_state_v1(builder.state, "native tokenizer fee prefix")
+        .map_err(PalwStateV2Error::NativeResource)?;
+    Ok((state, fee, refusal))
+}
+
 impl TransitionBuilder<'_> {
+    pub(super) fn apply_tokenizer_registration_at_v1(
+        &mut self,
+        parent: &PalwChainStateV2,
+        parent_root: Hash64,
+        point: &PalwBlockContextV2,
+        carrier: &ValidatedTokenizerRegistrationCarrierV1,
+    ) -> Result<(TokenizerRegistrationFeeV1, Option<String>), PalwStateV2Error> {
+        let policy =
+            self.extras.tokenizer_registration_policy_v1.ok_or_else(|| refusal("tokenizer registration is dormant".into()))?;
+        let context = carrier.context_v1();
+        if context.at != *point || Some(context.network) != self.extras.tokenizer_registration_network_domain_v1 {
+            return Err(refusal("tokenizer handoff changes native accepting point or network".into()));
+        }
+        self.apply_tokenizer_registration_carrier_v1(parent, parent_root, context, policy, carrier.carrier_v1(), carrier)
+    }
+
     /// Context and fee authority originate in the native UTXO validator. This
     /// shares the immutable handoff, and projects a fee only after the insertion.
     /// Semantic refusal is an ordinary paid carrier with zero registration burn.
@@ -203,8 +268,9 @@ impl TransitionBuilder<'_> {
                         _ => Err(refusal("tokenizer Part row has a foreign type".into())),
                     })
                     .collect();
-                let (slot, derived) =
-                    session.derive_finish(parent, self.params, self.extras, at, finish, book, &parts?).map_err(rendering_error)?;
+                let (slot, derived) = session
+                    .derive_finish(parent, context.parent_root, self.params, self.extras, at, finish, book, &parts?)
+                    .map_err(rendering_error)?;
                 if let Err(error @ PalwVerifiedTokenizerRegistrationErrorV1::Capacity(_)) = derived {
                     return Err(rendering_error(error));
                 }

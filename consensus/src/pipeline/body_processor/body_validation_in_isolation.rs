@@ -21,6 +21,13 @@ impl BlockBodyProcessor {
         self.check_exec_v2_shape(block)?;
         self.check_transactions_in_isolation(block)?;
         let mass = self.check_block_mass(block)?;
+        if let Some(fence) = self.palw_tokenizer_registration_v1.filter(|f| f.active_at(block.header.daa_score)) {
+            kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::preflight_tokenizer_registration_source_body_v1(
+                block.transactions.iter(),
+                &fence.policy,
+            )
+            .map_err(RuleError::PalwTokenizerRegistrationServiceExceeded)?;
+        }
         self.check_duplicate_transactions(block)?;
         self.check_block_double_spends(block)?;
         self.check_no_chained_transactions(block)?;

@@ -254,6 +254,10 @@ mod palw_panel_da_disclosure_fold_v1;
 mod palw_staged_court_fold_v1;
 #[path = "palw_tokenizer_registration_fold_v1.rs"]
 mod palw_tokenizer_registration_fold_v1;
+pub use palw_tokenizer_registration_fold_v1::{
+    TokenizerRegistrationFeeWorkingStateV1, palw_v2_apply_one_tokenizer_registration_fee_retained_v1,
+    palw_v2_pre_tokenizer_registration_base_retained_v1,
+};
 // G14 lane r5-f02-wire: RFC-0026 F02 default during the RFC08 post-Final liability hold (text29 / funded v11), dormant.
 #[path = "palw_native_post_final_default_fold_v1.rs"]
 mod palw_native_post_final_default_fold_v1;
@@ -14932,13 +14936,6 @@ pub fn palw_v2_apply_one_tokenizer_registration_retained_v1(
     ),
     PalwStateV2Error,
 > {
-    let policy = extras
-        .tokenizer_registration_policy_v1
-        .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("tokenizer registration is dormant".into()))?;
-    let context = carrier.context_v1();
-    if context.at != *ctx || Some(context.network) != extras.tokenizer_registration_network_domain_v1 {
-        return Err(PalwStateV2Error::CarriageInconsistent("tokenizer handoff changes native accepting point or network".into()));
-    }
     let mut result = None;
     let state = rehearse_palw_object_retained_v1(
         base,
@@ -14951,19 +14948,62 @@ pub fn palw_v2_apply_one_tokenizer_registration_retained_v1(
         extras,
         None,
         |builder| {
-            result = Some(builder.apply_tokenizer_registration_carrier_v1(
-                accepted_parent,
-                accepted_parent_root,
-                context,
-                policy,
-                carrier.carrier_v1(),
-                carrier,
-            )?);
+            result = Some(builder.apply_tokenizer_registration_at_v1(accepted_parent, accepted_parent_root, ctx, carrier)?);
             Ok(())
         },
     )?;
     let (fee, refusal) = result.ok_or(PalwStateV2Error::DeltaMismatch("tokenizer rehearsal returned no fee projection"))?;
     Ok((state, fee, refusal))
+}
+
+/// Rehearse a tokenizer carrier by moving the current prefix state. This
+/// uses the same pre/post maintenance and writer as borrowed rehearsal.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_tokenizer_registration_owned_v1(
+    base: crate::palw_native_resource_v1::NativeChainStateV1,
+    accepted_parent: &PalwChainStateV2,
+    accepted_parent_root: Hash64,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    carrier: &crate::palw_tokenizer_registration_carriage_v1::ValidatedTokenizerRegistrationCarrierV1,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1,
+        Option<String>,
+    ),
+    PalwStateV2Error,
+> {
+    let (state, reservation) = crate::palw_native_resource_v1::NativeTransitionReservationV1::take_state_v1(base)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let previous_requests = reservation.requests_v1();
+    let mut builder = TransitionBuilder::from_native_parts_v1(
+        state,
+        reservation,
+        params,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .with_native_original_parent_v19(accepted_parent);
+    prepare_rehearsal_builder_v1(&mut builder, ctx)?;
+    let (fee, refusal) = builder.apply_tokenizer_registration_at_v1(accepted_parent, accepted_parent_root, ctx, carrier)?;
+    settle_rehearsal_builder_v1(&mut builder, ctx)?;
+    if builder.entries.is_empty() {
+        // No persistent write: release the carrier's discarded construction
+        // scratch, so duplicate/refused carriers cannot accumulate RAM tickets.
+        builder.entries = Vec::new();
+        builder.native_reservation.restore_requests_v1(previous_requests).map_err(PalwStateV2Error::NativeResource)?;
+    }
+    let next = builder.native_reservation.finish_state_envelope_v1(builder.state);
+    Ok((next, fee, refusal))
 }
 
 /// Read-only block-template filter for reserved Batch Court slots.
@@ -15078,17 +15118,25 @@ fn rehearse_palw_object_retained_v1(
     } else {
         builder = builder.with_native_original_parent_v19(base);
     }
-    builder.claim_local_lock_point_v6 = params.claim_local_settlement_active_at(ctx.daa_score).then_some(*ctx);
+    prepare_rehearsal_builder_v1(&mut builder, ctx)?;
+    apply(&mut builder)?;
+    settle_rehearsal_builder_v1(&mut builder, ctx)?;
+    builder.native_reservation.finish_state_v1(builder.state, "native single-object state").map_err(PalwStateV2Error::NativeResource)
+}
+
+fn prepare_rehearsal_builder_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    builder.claim_local_lock_point_v6 = builder.params.claim_local_settlement_active_at(ctx.daa_score).then_some(*ctx);
     builder.claim_local_gc_defer_v3 = true;
     // Step 3's reservation for the block's own attempt, as the fold takes it (see
     // `PalwTransitionExtrasV1::own_attempt_class`).
-    builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
-    source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    apply(&mut builder)?;
+    builder.own_attempt_class = builder.extras.own_attempt_class.filter(|_| builder.extras.audit_2026_09_23_active);
+    source_bootstrap_v1::prepare(builder, ctx)
+}
+
+fn settle_rehearsal_builder_v1(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
-    palw_claim_local_execution_cohort_census_v15::invalidate_partial_view_v15(&mut builder);
-    palw_claim_local_context_gc_v3::settle_builder_v3(&mut builder).map_err(palw_claim_local_paid_archive_v2::state_error)?;
-    builder.native_reservation.finish_state_v1(builder.state, "native single-object state").map_err(PalwStateV2Error::NativeResource)
+    palw_claim_local_execution_cohort_census_v15::invalidate_partial_view_v15(builder);
+    palw_claim_local_context_gc_v3::settle_builder_v3(builder).map_err(palw_claim_local_paid_archive_v2::state_error)
 }
 
 /// Raw native action rehearsal. A fresh builder resolves every expected field
@@ -15796,21 +15844,10 @@ fn apply_palw_transition_v7_inner(
             }
             AcceptedNativeCourtItemV1::Batch(carrier) => builder.apply_batch_court_carrier_v1(ctx, carrier)?,
             AcceptedNativeCourtItemV1::Tokenizer(carrier) => {
-                let policy = extras
-                    .tokenizer_registration_policy_v1
-                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("tokenizer registration is dormant".into()))?;
-                let context = carrier.context_v1();
-                if context.at != *ctx || Some(context.network) != extras.tokenizer_registration_network_domain_v1 {
-                    return Err(PalwStateV2Error::CarriageInconsistent(
-                        "tokenizer handoff changes native accepting point or network".into(),
-                    ));
-                }
-                let (fee, _refusal) = builder.apply_tokenizer_registration_carrier_v1(
+                let (fee, _refusal) = builder.apply_tokenizer_registration_at_v1(
                     parent,
                     tokenizer_parent_root.expect("carrier requires parent root"),
-                    context,
-                    policy,
-                    carrier.carrier_v1(),
+                    ctx,
                     carrier,
                 )?;
                 if extras.tokenizer_registration_expected_fees_v1.get(&carrier.carrier_v1()) != Some(&fee) {

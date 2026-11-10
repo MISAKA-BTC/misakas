@@ -4863,7 +4863,6 @@ pub(super) fn update_response_indices(
     state.staged_prefix_responders.extend(new);
 }
 pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    b.sweep_tokenizer_registrations_v1(ctx)?;
     // The due index gives rooted-clock ordering;64 row removals bound every accepted block.
     let due: Vec<_> = b
         .state
@@ -4876,6 +4875,9 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
                 PalwStagedCourtKeyV1::CourtSharedRoot(..)
                     | PalwStagedCourtKeyV1::CourtSharedRound(..)
                     | PalwStagedCourtKeyV1::CourtSharedBottom(..)
+                    | PalwStagedCourtKeyV1::TokenizerRegistrationSession(..)
+                    | PalwStagedCourtKeyV1::TokenizerRegistrationPart(..)
+                    | PalwStagedCourtKeyV1::TokenizerRegistrationBook
             ) && !b.state.court_service_holds_material_v1(key)
         })
         .take(64)

@@ -1,5 +1,9 @@
 //! RFC-0051 carrier framing and ephemeral UTXO fee handoff. A prepared
 //! carrier can neither install a session nor claim a registration charge.
+//!
+//! TKR1 is eligible only from a source body at or past transport activation.
+//! Earlier source bodies retain their ordinary transaction and fee semantics
+//! even when merged by an accepting block after activation.
 
 use crate::{
     Hash64, TransactionId,
@@ -340,6 +344,15 @@ impl ValidatedTokenizerRegistrationCarrierV1 {
         })
     }
 
+    /// Part never opens a registration charge. This projection is safe before
+    /// ordinary-object rehearsal; acceptance and state writes still run there.
+    pub fn part_fee_v1(&self) -> Option<TokenizerRegistrationFeeV1> {
+        matches!(self.wire, TokenizerRegistrationWireV1::Part(_)).then(|| {
+            self.project_after_fold_v1(&self.context, self.carrier_v1(), None)
+                .expect("a retained Part owns its exact context and remaining native fee")
+        })
+    }
+
     /// Compatibility for native callers that own the entire handoff.
     pub(crate) fn settle_after_fold_v1(
         handoff: NativeRetainedV1<Self>,
@@ -374,8 +387,8 @@ pub fn scan_tokenizer_registration_work_v1(
     let bytes = charged_carrier_bytes(tx.payload.len(), policy)?;
     let mut finish_open_id = None;
     let fallback = || -> Result<ServiceCost, &'static str> {
-        let budget = policy.effective_reservation_budget_v1()?;
-        Ok(ServiceCost { bytes: bytes.max(policy.max_carrier_bytes), work: budget.work, io: budget.io, controls: 1 })
+        let maximum = policy.maximum_finish_cost_v1()?;
+        Ok(ServiceCost { bytes: bytes.max(maximum.bytes), ..maximum })
     };
     let cost = match body.first().copied() {
         Some(0 | 1) if bytes <= policy.max_carrier_bytes => {
@@ -417,43 +430,123 @@ pub fn scan_tokenizer_registration_work_v1(
     Ok(Some(TokenizerRegistrationWorkScanV1 { cost, finish_open_id }))
 }
 
-/// Validate the aggregate candidate-block budget before native TKR1 work.
-/// Feed the physical transaction stream, before deduplication or refusal.
-/// Charge the post-object sweep once for a parent book or an Open that can create one.
-/// Snapshot verification is separately metered at its restoration boundary.
+fn checked_work_sum(
+    used: ServiceCost,
+    next: ServiceCost,
+    budget: ServiceCost,
+    error: &'static str,
+) -> Result<ServiceCost, &'static str> {
+    let add = |used: u64, next: u64, limit: u64| used.checked_add(next).filter(|sum| *sum <= limit).ok_or(error);
+    Ok(ServiceCost {
+        bytes: add(used.bytes, next.bytes, budget.bytes)?,
+        work: add(used.work, next.work, budget.work)?,
+        io: add(used.io, next.io, budget.io)?,
+        controls: add(used.controls, next.controls, budget.controls)?,
+    })
+}
+
+/// Allocation-free source body meter. No parent state is needed because every
+/// Finish is charged at the maximum that any authenticated quote can reach.
+pub struct TokenizerRegistrationSourceWorkV1 {
+    policy: TokenizerRegistrationPolicyV1,
+    budget: ServiceCost,
+    used: ServiceCost,
+}
+impl TokenizerRegistrationSourceWorkV1 {
+    pub fn new(policy: TokenizerRegistrationPolicyV1) -> Result<Self, String> {
+        let budget = policy.source_budget_v1()?;
+        Ok(Self { policy, budget, used: ServiceCost::default() })
+    }
+
+    pub fn charge_v1(&mut self, tx: &Transaction) -> Result<(), String> {
+        if let Some(scan) = scan_tokenizer_registration_work_v1(tx, &self.policy, |_| None)? {
+            self.used = checked_work_sum(self.used, scan.cost, self.budget, "TKR1 source body exceeds its service partition")?;
+        }
+        Ok(())
+    }
+
+    pub fn used_v1(&self) -> ServiceCost {
+        self.used
+    }
+}
+
+/// Check the full physical body using its source partition. No expiry/sweep
+/// is charged here. The accepting candidate accounts it once separately.
+pub fn preflight_tokenizer_registration_source_body_v1<'a>(
+    transactions: impl IntoIterator<Item = &'a Transaction>,
+    policy: &TokenizerRegistrationPolicyV1,
+) -> Result<ServiceCost, String> {
+    let mut meter = TokenizerRegistrationSourceWorkV1::new(*policy)?;
+    for tx in transactions {
+        meter.charge_v1(tx)?;
+    }
+    Ok(meter.used_v1())
+}
+
+/// Allocation-free work accounting across physical mergeset bodies. Keep the
+/// same meter even when UTXO or Round admission later refuses a body.
+pub struct TokenizerRegistrationCandidateWorkV1 {
+    policy: TokenizerRegistrationPolicyV1,
+    used: ServiceCost,
+    sweep_charged: bool,
+}
+impl TokenizerRegistrationCandidateWorkV1 {
+    pub fn new(policy: TokenizerRegistrationPolicyV1, parent_has_book: bool) -> Result<Self, String> {
+        policy.effective_reservation_budget_v1()?;
+        let used =
+            ServiceCost { work: if parent_has_book { policy.bookkeeping_work_v1()?.sweep } else { 0 }, ..ServiceCost::default() };
+        Ok(Self { policy, used, sweep_charged: parent_has_book })
+    }
+
+    pub fn charge_v1(
+        &mut self,
+        tx: &Transaction,
+        parent_quote: impl FnOnce(Hash64) -> Option<TokenizerRegistrationQuoteV1>,
+    ) -> Result<(), String> {
+        let Some(scan) = scan_tokenizer_registration_work_v1(tx, &self.policy, parent_quote)? else { return Ok(()) };
+        let budget = self.policy.service_budget;
+        let first_open = !self.sweep_charged && body(tx).is_some_and(|body| body.first() == Some(&0));
+        let sweep = if first_open { self.policy.bookkeeping_work_v1()?.sweep } else { 0 };
+        let error = "TKR1 candidate exceeds its service budget";
+        let mut cost = scan.cost;
+        cost.work = cost.work.checked_add(sweep).ok_or(error)?;
+        self.used = checked_work_sum(self.used, cost, budget, error)?;
+        self.sweep_charged |= first_open;
+        Ok(())
+    }
+
+    pub fn used_v1(&self) -> ServiceCost {
+        self.used
+    }
+}
+
+/// Read a Finish's original quote from an already authenticated parent. This
+/// does not authenticate an arbitrary decoded state or create an admission.
+pub fn tokenizer_registration_parent_quote_v1(
+    parent: &crate::palw_state_v2::PalwChainStateV2,
+    id: Hash64,
+) -> Option<TokenizerRegistrationQuoteV1> {
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    match parent.staged_court_row_v1(&Key::TokenizerRegistrationSession(id)) {
+        Some(Row::TokenizerRegistrationSession(session)) => Some(session.quote),
+        _ => None,
+    }
+}
+
+/// Validate the aggregate candidate budget before native work. The physical
+/// stream includes duplicates and refused carriers. Reserve pre-object expiry
+/// once, conservatively also for a first Open. Snapshot validation is separate.
 pub fn preflight_tokenizer_registration_candidate_v1<'a>(
     transactions: impl IntoIterator<Item = &'a Transaction>,
     policy: &TokenizerRegistrationPolicyV1,
     parent_has_book: bool,
     mut parent_quote: impl FnMut(Hash64) -> Option<TokenizerRegistrationQuoteV1>,
 ) -> Result<ServiceCost, String> {
-    let budget = policy.service_budget;
-    let mut total = ServiceCost::default();
-    let mut sweep_charged = parent_has_book;
-    if parent_has_book {
-        total.work = policy.bookkeeping_work_v1()?.sweep;
-        if total.work > budget.work {
-            return Err("TKR1 candidate sweep exceeds the work budget".into());
-        }
-    }
-    let add = |used: u64, next: u64, limit: u64| {
-        used.checked_add(next).filter(|sum| *sum <= limit).ok_or("TKR1 candidate exceeds its service budget")
-    };
+    let mut meter = TokenizerRegistrationCandidateWorkV1::new(*policy, parent_has_book)?;
     for tx in transactions {
-        let Some(scan) = scan_tokenizer_registration_work_v1(tx, policy, &mut parent_quote)? else { continue };
-        if !sweep_charged && body(tx).is_some_and(|body| body.first() == Some(&0)) {
-            total.work = add(total.work, policy.bookkeeping_work_v1()?.sweep, budget.work)?;
-            sweep_charged = true;
-        }
-        let cost = scan.cost;
-        total = ServiceCost {
-            bytes: add(total.bytes, cost.bytes, budget.bytes)?,
-            work: add(total.work, cost.work, budget.work)?,
-            io: add(total.io, cost.io, budget.io)?,
-            controls: add(total.controls, cost.controls, budget.controls)?,
-        };
+        meter.charge_v1(tx, &mut parent_quote)?;
     }
-    Ok(total)
+    Ok(meter.used_v1())
 }
 
 #[cfg(test)]
@@ -468,7 +561,7 @@ mod tests {
     fn candidate_preflight_meters_physical_finish_copies_and_sweeps_once() {
         let (mut policy, mut open) = crate::palw_tokenizer_registration_v1::tests::fixture();
         // Leave headroom for two full Finish projections plus the sweep.
-        policy.service_budget.work = 20_000_000;
+        policy.service_budget.work = 2 * policy.maximum_finish_cost_v1().unwrap().work + policy.bookkeeping_work_v1().unwrap().sweep;
         open.policy = policy.id_v1().unwrap();
         let quote = policy.quote_v1(&open, 20, 10_000).unwrap();
         let open_id = open.id_v1().unwrap();
@@ -496,6 +589,13 @@ mod tests {
         let cost = quote.finish_cost;
         let sweep = policy.bookkeeping_work_v1().unwrap().sweep;
         assert_eq!(lookups, 2);
+        let mut across_bodies = TokenizerRegistrationCandidateWorkV1::new(policy, true).unwrap();
+        across_bodies.charge_v1(&tx, |_| Some(quote)).unwrap();
+        across_bodies.charge_v1(&tx, |_| Some(quote)).unwrap();
+        assert_eq!(across_bodies.used_v1(), total);
+        assert!(across_bodies.charge_v1(&tx, |_| Some(quote)).is_err());
+        assert_eq!(across_bodies.used_v1(), total);
+
         assert_eq!(total, ServiceCost { bytes: 2 * cost.bytes, work: 2 * cost.work + sweep, io: 2 * cost.io, controls: 2 });
         assert!(preflight_tokenizer_registration_candidate_v1([&tx, &tx, &tx], &policy, true, |_| Some(quote)).is_err());
         assert_eq!(
@@ -503,7 +603,10 @@ mod tests {
             ServiceCost { work: sweep, ..ServiceCost::default() }
         );
         assert_eq!(preflight_tokenizer_registration_candidate_v1([], &policy, false, |_| None).unwrap(), ServiceCost::default());
-        assert!(preflight_tokenizer_registration_candidate_v1([&tx, &tx], &policy, false, |_| None).is_err());
+        assert_eq!(
+            preflight_tokenizer_registration_candidate_v1([&tx], &policy, false, |_| None).unwrap(),
+            policy.maximum_finish_cost_v1().unwrap()
+        );
         let open_tx = Transaction::new(
             0,
             vec![],
@@ -526,6 +629,52 @@ mod tests {
     }
 
     #[test]
+    fn source_partition_bounds_any_legal_mergeset_and_refusal_is_atomic() {
+        let (mut policy, mut open) = crate::palw_tokenizer_registration_v1::tests::fixture();
+        policy.maximum_source_blocks = 2;
+        let max_finish = policy.maximum_finish_cost_v1().unwrap();
+        let sweep = policy.bookkeeping_work_v1().unwrap().sweep;
+        policy.service_budget.work = sweep + 2 * max_finish.work;
+        policy.service_budget.bytes *= 2;
+        policy.service_budget.io *= 2;
+        policy.service_budget.controls = 2;
+        open.policy = policy.id_v1().unwrap();
+        assert_eq!(policy.source_budget_v1().unwrap().controls, 1);
+        assert_eq!(policy.source_budget_v1(), policy.effective_reservation_budget_v1());
+        let quote = policy.quote_v1(&open, 20, 10_000).unwrap();
+        assert!(quote.finish_cost.work <= max_finish.work && quote.finish_cost.io <= max_finish.io);
+        let finish = TokenizerRegistrationFinishBodyV1 {
+            version: open.version,
+            network: open.network,
+            policy: open.policy,
+            open_id: open.id_v1().unwrap(),
+            opener: open.opener,
+            eog_digest: open.eog_digest,
+            finish_until_daa: open.finish_until_daa,
+        };
+        let mut payload = TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1.to_vec();
+        payload.push(2);
+        payload.extend(borsh::to_vec(&finish).unwrap());
+        let tx = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
+        let ordinary = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_NATIVE, 0, vec![]);
+        let mut meter = TokenizerRegistrationSourceWorkV1::new(policy).unwrap();
+        meter.charge_v1(&ordinary).unwrap();
+        assert_eq!(meter.used_v1(), ServiceCost::default());
+        meter.charge_v1(&tx).unwrap();
+        assert_eq!(meter.used_v1(), max_finish);
+        assert!(meter.charge_v1(&tx).is_err());
+        assert_eq!(meter.used_v1(), max_finish);
+        assert_eq!(preflight_tokenizer_registration_source_body_v1([&tx], &policy).unwrap(), max_finish);
+
+        // Two individually legal bodies consume the entire candidate work
+        // envelope even when no accepted parent quote can resolve either.
+        let total = preflight_tokenizer_registration_candidate_v1([&tx, &tx], &policy, true, |_| None).unwrap();
+        assert_eq!(total.work, policy.service_budget.work);
+        assert_eq!(total.controls, policy.service_budget.controls);
+        assert!(preflight_tokenizer_registration_candidate_v1([&tx, &tx, &tx], &policy, true, |_| None).is_err());
+    }
+
+    #[test]
     fn real_fee_context_and_zero_service_burn_for_parts() {
         let h = Hash64::from_u64_word;
         let policy = TokenizerRegistrationPolicyV1 {
@@ -539,8 +688,9 @@ mod tests {
             max_carrier_bytes: 100_000,
             max_retained_bytes: 2_000_000,
             max_retained_total_bytes: 4_000_000,
-            service_budget: ServiceCost { bytes: 100_000, work: 2_000_000, io: 2_000_000, controls: 2 },
-            max_work: 2_000_000,
+            service_budget: ServiceCost { bytes: 100_000, work: 7 * 2_000_000, io: 2_000_000, controls: 2 },
+            maximum_source_blocks: 1,
+            max_work: 7 * 2_000_000,
             max_pending_per_opener: 1,
             max_pending_total: 2,
             max_session_daa: 100,

@@ -64,7 +64,31 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<Self, PalwStateV2Error> {
         let (state, native_reservation) = crate::palw_native_resource_v1::NativeTransitionReservationV1::copy_parent_v1(parent)
             .map_err(PalwStateV2Error::NativeResource)?;
-        Ok(Self {
+        Ok(Self::from_native_parts_v1(
+            state,
+            native_reservation,
+            params,
+            unavailable_abstains,
+            capability_bound,
+            uncertified_weightless,
+            da_court,
+            extras,
+        ))
+    }
+
+    /// Transfer an already reserved state into a writer without copying or
+    /// remeasuring the unrelated chain state. The caller retains its owner.
+    pub(super) fn from_native_parts_v1(
+        state: PalwChainStateV2,
+        native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
+        params: &'a PalwStateParamsV2,
+        unavailable_abstains: bool,
+        capability_bound: bool,
+        uncertified_weightless: bool,
+        da_court: bool,
+        extras: &'a PalwTransitionExtrasV1,
+    ) -> Self {
+        Self {
             native_reservation,
             claim_local_gc_undo_v3: BTreeMap::new(),
             claim_local_gc_sequence_v3: 0,
@@ -120,7 +144,7 @@ impl<'a> TransitionBuilder<'a> {
             court_family_unreserved_service_spent_v2: Default::default(),
             court_family_charged_v2: None,
             court_one_move_spent: Default::default(),
-        })
+        }
     }
 
     pub(super) fn registration_index_v1(&mut self) -> Result<&PalwBondRegistrationIndexV1, PalwStateV2Error> {

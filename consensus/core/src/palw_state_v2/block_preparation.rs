@@ -71,6 +71,9 @@ pub(super) fn prepare_block_objects_v1(
     sweep_da_sessions(builder, ctx)?;
     palw_legacy_answer_chunks_fold_v2::sweep(builder, ctx)?;
     palw_terminal_carriage_fold_v1::sweep(builder, ctx)?;
+    // New tokenizer sessions have future deadlines, and Part/Finish cannot
+    // shorten them. The post-object staged sweep has no additional TKR work.
+    builder.sweep_tokenizer_registrations_v1(ctx)?;
     palw_staged_court_fold_v1::sweep(builder, ctx)?;
     // Lane LG14-A: every dispute reservation whose claim's hard deadline is behind this block lapses, right after the DA sweep.
     palw_legacy_public_filer_fold_v1::sweep_legacy_disputes(builder, ctx)?;

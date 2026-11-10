@@ -1,0 +1,8 @@
+tokenizer_raw=2104556 parts=33 full_part=65536 last_part=7404 vocab=49152 eog_ids=2 eog_siblings=2 table_root=b1f2391a4f17d5f675c78d5c893c3a38ea2588e90f98537071932b26c0c732755a01834b357c8e00bdc88203b090cdb4f7913eb6d19b43c2d23e0f32509bdb09
+net=testnet-12 compute_tx_byte=1 compute_spk_byte=10 sig_op_mass=10000 transient_byte=4 storage_parameter=1000000000000 block_cap=500000 relay_cap=480000
+inputs=1 outputs=1 input_sompi=1000000000 output_sompi=999000000 input_coinbase=false spk_bytes=69 input_plurality=2
+carrier,payload_bytes,unlock_bytes,output_bytes,estimated_tx_bytes,compute,transient,storage,max,relay_margin,block_margin
+Open,5451,7226,87,12942,23652,51768,4,51768,428232,448232
+Part/max,70510,7226,87,78001,88711,312004,4,312004,167996,187996
+Part/tail,12378,7226,87,19869,30579,79476,4,79476,400524,420524
+Finish,5182,7226,87,12673,23383,50692,4,50692,429308,449308

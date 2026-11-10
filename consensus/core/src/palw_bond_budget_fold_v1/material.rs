@@ -386,6 +386,9 @@ impl TransitionBuilder<'_> {
                     .map(|(id, _)| *id),
             );
         }
+        if roots.is_empty() {
+            return Ok(());
+        }
         // A dependency's payment updates every authenticated native root which references it.
         let dependencies = roots.clone();
         roots.extend(

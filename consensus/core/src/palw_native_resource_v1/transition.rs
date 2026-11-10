@@ -29,6 +29,43 @@ impl NativeTransitionReservationV1 {
         construction.grow_v1(crate::palw_exec_v2_verify::PALW_EXEC_APPROVAL_KEY_BYTES_V1 as u64)?;
         Ok((value, construction))
     }
+    /// Move the complete existing reservation with its state. No global heap
+    /// walk or clone is needed; any later writer must reserve its own growth.
+    pub(crate) fn take_state_v1(owner: NativeChainStateV1) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
+        let (state, lease) = owner.into_parts_v1();
+        if lease.is_none() && (native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1()) {
+            return Err(NativeCoverageV1::unsupported::<Self>("native state handoff", "tracked state has no owning reservation"));
+        }
+        let requests = lease.as_ref().map_or(0, NativeDemandLeaseV1::memory_v1);
+        Ok((state, Self { lease, requests }))
+    }
+
+    pub(crate) fn requests_v1(&self) -> u64 {
+        self.requests
+    }
+
+    /// Release discarded scratch only after its values have been dropped or
+    /// moved back to the pre-operation state covered by this earlier ticket.
+    pub(crate) fn restore_requests_v1(&mut self, previous: u64) -> Result<(), NativeCoverageV1> {
+        let released = self.requests.checked_sub(previous).ok_or_else(|| {
+            NativeCoverageV1::unsupported::<Self>("native scratch release", "checkpoint exceeds current reservation")
+        })?;
+        if released != 0
+            && let Some(lease) = &mut self.lease
+        {
+            drop(lease.split_memory_v1(released)?);
+        }
+        self.requests = previous;
+        Ok(())
+    }
+
+    /// Retain the conservative construction envelope without an O(state)
+    /// measurement after each TKR carrier. Unused scratch remains reserved
+    /// until this candidate owner is dropped or an ordinary writer replaces it.
+    pub(crate) fn finish_state_envelope_v1(self, state: PalwChainStateV2) -> NativeChainStateV1 {
+        NativeRetainedV1::from_owner_reserved_v1(state, self.lease)
+    }
+
     /// Reserve the typed carriage copy before stream-counting canonical bytes,
     /// then admit root workspace before root hashing allocates its buffers.
     pub(crate) fn state_root_v2(&mut self, state: &PalwChainStateV2) -> Result<crate::Hash64, NativeCoverageV1> {
@@ -179,6 +216,29 @@ mod tests {
             tracked.finish_state_v1(state, "tracked test state").is_err(),
             "a zero-sized explicit ticket cannot approve an unreserved output"
         );
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+
+    #[test]
+    fn tokenizer_state_moves_preserve_the_complete_native_envelope() {
+        let state = PalwChainStateV2::genesis();
+        let root = state.state_root();
+        let bytes = tracked_value_requests_v1(&state).unwrap();
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: bytes + 64, database_bytes: 0 });
+        let owner = NativeRetainedV1::from_owner_reserved_v1(state, Some(checker.reserve_requests_v1(bytes, 0).unwrap()));
+        let (state, mut construction) = NativeTransitionReservationV1::take_state_v1(owner).unwrap();
+        construction.grow_v1(64).unwrap();
+        let owner = construction.finish_state_envelope_v1(state);
+        assert_eq!(checker.outstanding(), (bytes + 64, 0));
+        assert_eq!(owner.state_root(), root);
+        let (state, mut construction) = NativeTransitionReservationV1::take_state_v1(owner).unwrap();
+        assert_eq!(construction.requests, bytes + 64);
+        assert!(construction.restore_requests_v1(bytes + 65).is_err());
+        assert_eq!(checker.outstanding(), (bytes + 64, 0));
+        construction.restore_requests_v1(bytes).unwrap();
+        let owner = construction.finish_state_envelope_v1(state);
+        assert_eq!(checker.outstanding(), (bytes, 0));
+        drop(owner);
         assert_eq!(checker.outstanding(), (0, 0));
     }
 

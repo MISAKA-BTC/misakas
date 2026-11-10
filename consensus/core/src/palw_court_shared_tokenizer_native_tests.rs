@@ -635,8 +635,10 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
 #[test]
 fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     use crate::palw_state_v2::{
-        PalwBlockWorkV3, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateV2Error, apply_delta_v2, apply_palw_transition_retained_v7,
-        palw_v2_apply_one_tokenizer_registration_retained_v1, palw_v2_pre_object_base_retained_v1, revert_delta_v2,
+        PalwBlockWorkV3, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateV2Error, TokenizerRegistrationFeeWorkingStateV1, apply_delta_v2,
+        apply_palw_transition_retained_v7, palw_v2_apply_one_tokenizer_registration_fee_retained_v1,
+        palw_v2_apply_one_tokenizer_registration_owned_v1, palw_v2_apply_one_tokenizer_registration_retained_v1,
+        palw_v2_pre_object_base_retained_v1, palw_v2_pre_tokenizer_registration_base_retained_v1, revert_delta_v2,
     };
     use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
     use crate::palw_tokenizer_registration_carriage_v1::*;
@@ -749,6 +751,38 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
         )
         .unwrap()
     };
+    let rehearse_owned = |parent: &PalwChainStateV2, carrier: &ValidatedTokenizerRegistrationCarrierV1| {
+        let context = carrier.context_v1();
+        let prefix = palw_v2_pre_object_base_retained_v1(parent, &params, &context.at, false, false, false, false, &extras).unwrap();
+        palw_v2_apply_one_tokenizer_registration_owned_v1(
+            prefix,
+            parent,
+            context.parent_root,
+            &params,
+            &context.at,
+            carrier,
+            false,
+            false,
+            false,
+            false,
+            &extras,
+        )
+        .unwrap()
+    };
+    let rehearse_fee = |parent: &PalwChainStateV2, carrier: &ValidatedTokenizerRegistrationCarrierV1| {
+        let context = carrier.context_v1();
+        let prefix = palw_v2_pre_tokenizer_registration_base_retained_v1(parent, &params, &context.at, &extras).unwrap();
+        palw_v2_apply_one_tokenizer_registration_fee_retained_v1(
+            &prefix,
+            parent,
+            context.parent_root,
+            &params,
+            &context.at,
+            carrier,
+            &extras,
+        )
+        .unwrap()
+    };
     let actual = |parent: &PalwChainStateV2, carrier: &SharedValidatedTokenizerRegistrationCarrierV1, expected| {
         let mut authoritative = extras.clone();
         authoritative.tokenizer_registration_carriers_v1.push((0, carrier.clone()));
@@ -814,6 +848,64 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     let session_key = Key::TokenizerRegistrationSession(open_id);
     assert!(authoritative.staged_court_row_v1(&session_key).is_some());
     assert_eq!(authoritative.staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
+    let (isolated, isolated_fee, refusal) = rehearse_fee(&state, &handoff);
+    assert_eq!((isolated_fee, refusal), (expected, None));
+    for key in [session_key, Key::TokenizerRegistrationBook] {
+        assert_eq!(isolated.staged_court_row_v1(&key), authoritative.staged_court_row_v1(&key));
+    }
+    // A body whose gross fee exceeds its recipient's reward capacity may
+    // still fit after the independently derived Open service burn. A rejected
+    // trial must leave no reservation that makes a later retry look prepaid.
+    {
+        use crate::palw_bond_budget_v1::{
+            PalwBondBudgetPolicyV1, PalwBondBudgetStateV1, PalwRoundFeeAdmissionV1, PalwRoundFeeIncomeV1,
+        };
+        let budget_policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        let mut budget = PalwRoundFeeAdmissionV1 {
+            policy: budget_policy.clone(),
+            book: PalwBondBudgetStateV1::new(point.daa_score, &budget_policy),
+            capital: [(body.opener, 7)].into_iter().collect(),
+            daa_score: point.daa_score,
+        };
+        let income =
+            |amount| PalwRoundFeeIncomeV1 { block: point.block, bond: body.opener, maximum_sompi: amount, actual_sompi: amount };
+        assert!(budget.admit(income(expected.actual_fee)).is_err());
+        let mut scratch = TokenizerRegistrationFeeWorkingStateV1::new(&state, &params, &point, &extras).unwrap();
+        let original_root = scratch.state_v1().state_root();
+        let hold = (body.opener, body.material_until_daa, session_key);
+        assert!(!scratch.state_v1().staged_holds.contains(&hold));
+        let trial = |scratch: &mut TokenizerRegistrationFeeWorkingStateV1| {
+            scratch.apply_v1(&state, handoff.context_v1().parent_root, &params, &point, &handoff, &extras).unwrap()
+        };
+        scratch.begin_body_v1(&params, &extras).unwrap();
+        let (projected, reason) = trial(&mut scratch);
+        assert_eq!((projected, reason), (expected, None));
+        assert!(scratch.state_v1().staged_holds.contains(&hold));
+        let mut exhausted = budget.clone();
+        exhausted.capital.insert(body.opener, 6);
+        assert!(exhausted.admit(income(projected.collectible_fee)).is_err());
+        scratch.begin_body_v1(&params, &extras).unwrap();
+        assert_eq!(scratch.state_v1().state_root(), original_root);
+        assert_eq!(scratch.state_v1().staged_holds, state.staged_holds);
+        assert!(scratch.state_v1().staged_court_row_v1(&session_key).is_none());
+        assert!(scratch.state_v1().staged_court_row_v1(&Key::TokenizerRegistrationBook).is_none());
+        let (retried, reason) = trial(&mut scratch);
+        assert_eq!((retried, reason), (projected, None));
+        budget.admit(income(retried.collectible_fee)).unwrap();
+        scratch.commit_body_v1();
+        scratch.begin_body_v1(&params, &extras).unwrap();
+        assert!(scratch.state_v1().staged_holds.contains(&hold));
+        let (duplicate, reason) = trial(&mut scratch);
+        assert_eq!(
+            (duplicate.registration_burn, duplicate.collectible_fee, duplicate.charge_id, reason),
+            (0, expected.actual_fee, None, None)
+        );
+        let (accepted, _, _) = actual(&state, &handoff, retried).unwrap();
+        assert_eq!(accepted.staged_court_row_v1(&session_key), authoritative.staged_court_row_v1(&session_key));
+    }
+    let (owned, owned_fee, owned_refusal) = rehearse_owned(&state, &handoff);
+    assert_eq!((owned_fee, owned_refusal), (expected, refused));
+    assert_eq!(owned.state_root(), rehearsed.state_root());
     let wrong_fee = TokenizerRegistrationFeeV1 { collectible_fee: expected.collectible_fee + 1, ..expected };
     assert!(matches!(
         actual(&state, &handoff, wrong_fee),
@@ -941,10 +1033,57 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     let Some(Row::TokenizerRegistrationSession(session)) = rehearsed.staged_court_row_v1(&session_key) else { panic!() };
     assert_eq!(session.status, TokenizerRegistrationStatusV1::Pending);
     assert_eq!(session.finish_attempts, std::collections::BTreeSet::from([0]));
-    assert!(rehearsed.staged_court_row_v1(&Key::VerifiedTokenizerRegistration(class, pins.semantics_id)).is_none());
+    let registered = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
+    assert!(rehearsed.staged_court_row_v1(&registered).is_none());
+    let (owned, owned_fee, owned_refusal) = rehearse_owned(&invalid_raw_branch, &rejected_finish);
+    assert_eq!(owned.state_root(), rehearsed.state_root());
+    assert_eq!((owned_fee, owned_refusal.as_deref()), (fee, refusal.as_deref()));
     let (authoritative, _, _) = actual(&invalid_raw_branch, &rejected_finish, fee).unwrap();
     assert_eq!(authoritative.staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
+    let (isolated, isolated_fee, isolated_refusal) = rehearse_fee(&invalid_raw_branch, &rejected_finish);
+    assert_eq!((isolated_fee, isolated_refusal.as_deref()), (fee, refusal.as_deref()));
+    for key in [session_key, Key::TokenizerRegistrationBook, registered] {
+        assert_eq!(isolated.staged_court_row_v1(&key), authoritative.staged_court_row_v1(&key));
+    }
 
+    {
+        let mut scratch = TokenizerRegistrationFeeWorkingStateV1::new(&invalid_raw_branch, &params, &point, &extras).unwrap();
+        let original_root = scratch.state_v1().state_root();
+        let original_session = scratch.state_v1().staged_court_row_v1(&session_key).cloned();
+        let memo = crate::palw_tokenizer_finish_derivation_cache_v1::TokenizerFinishDerivationCacheV1::new(
+            &invalid_raw_branch,
+            point,
+            &policy,
+        )
+        .unwrap();
+        let trial = |scratch: &mut TokenizerRegistrationFeeWorkingStateV1| {
+            memo.scope_v1(|| scratch.apply_v1(&invalid_raw_branch, memo.parent_root_v1(), &params, &point, &rejected_finish, &extras))
+                .unwrap()
+        };
+        scratch.begin_body_v1(&params, &extras).unwrap();
+        let (projected, reason) = trial(&mut scratch);
+        assert_eq!((projected, reason.as_deref()), (fee, refusal.as_deref()));
+        assert_eq!(scratch.state_v1().staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
+        scratch.begin_body_v1(&params, &extras).unwrap();
+        assert_eq!(scratch.state_v1().state_root(), original_root);
+        assert_eq!(scratch.state_v1().staged_court_row_v1(&session_key), original_session.as_ref());
+        let (retried, reason) = trial(&mut scratch);
+        assert_eq!((retried, reason.as_deref()), (fee, refusal.as_deref()));
+        scratch.commit_body_v1();
+        scratch.begin_body_v1(&params, &extras).unwrap();
+        assert_eq!(scratch.state_v1().staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
+    }
+
+    let handoff = prepare(&state, point, &finish_wire, 7);
+    let memo =
+        crate::palw_tokenizer_finish_derivation_cache_v1::TokenizerFinishDerivationCacheV1::new(&state, point, &policy).unwrap();
+    let (isolated, isolated_fee, isolated_refusal) = memo.scope_v1(|| rehearse_fee(&state, &handoff));
+    assert_eq!(isolated_refusal, None);
+    let (authoritative, _, _) = memo.scope_v1(|| actual(&state, &handoff, isolated_fee)).unwrap();
+    drop(memo);
+    for key in [session_key, Key::TokenizerRegistrationBook, registered] {
+        assert_eq!(isolated.staged_court_row_v1(&key), authoritative.staged_court_row_v1(&key));
+    }
     let (next, (fee, reason)) = apply(&state, point, &finish_wire, 7);
     assert_eq!(reason, None);
     assert_eq!(fee.registration_burn, 0);
@@ -955,7 +1094,6 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     };
     assert!(matches!(session.status, TokenizerRegistrationStatusV1::Complete { .. }));
     assert!(session.finish_attempts.contains(&0));
-    let registered = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
     assert!(state.staged_court_row_v1(&registered).is_some());
     let gc_point = PalwBlockContextV2 {
         block: h(102_000),
@@ -963,6 +1101,29 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
         blue_score: state.last_point().unwrap().blue_score + 1,
         subsidy: 0,
     };
+    let expiry_point = PalwBlockContextV2 {
+        block: h(102_001),
+        daa_score: body.finish_until_daa,
+        blue_score: invalid_raw_branch.last_point().unwrap().blue_score + 1,
+        subsidy: 0,
+    };
+    let expiry = palw_v2_pre_tokenizer_registration_base_retained_v1(&invalid_raw_branch, &params, &expiry_point, &extras).unwrap();
+    let Some(Row::TokenizerRegistrationSession(expired)) = expiry.staged_court_row_v1(&session_key) else { panic!() };
+    assert_eq!(expired.status, TokenizerRegistrationStatusV1::Expired { point: expiry_point });
+    assert!(expiry.staged_court_row_v1(&Key::TokenizerRegistrationPart(open_id, 0)).is_some());
+
+    let isolated = palw_v2_pre_tokenizer_registration_base_retained_v1(&state, &params, &gc_point, &extras).unwrap();
+    let prepared = palw_v2_pre_object_base_retained_v1(&state, &params, &gc_point, false, false, false, false, &extras).unwrap();
+    let mut generic = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    super::super::palw_staged_court_fold_v1::sweep(&mut generic, &gc_point).unwrap();
+    assert_eq!(isolated.last_point(), state.last_point());
+    for key in [session_key, Key::TokenizerRegistrationBook, Key::TokenizerRegistrationPart(open_id, 0), registered] {
+        assert_eq!(generic.state.staged_court_row_v1(&key), state.staged_court_row_v1(&key));
+        assert_eq!(isolated.staged_court_row_v1(&key), prepared.staged_court_row_v1(&key));
+    }
+    assert!(isolated.staged_court_row_v1(&session_key).is_none());
+    assert!(isolated.staged_court_row_v1(&Key::TokenizerRegistrationPart(open_id, 0)).is_none());
+
     let mut gc = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     gc.sweep_tokenizer_registrations_v1(&gc_point).unwrap();
     gc.state.last_point = Some(gc_point);

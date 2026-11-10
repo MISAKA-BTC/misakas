@@ -4,7 +4,9 @@ use crate::{
     Hash64,
     palw_court_service_v1::{ServicePacket, ServiceReservations, causal::CausalServicePacketV1},
     palw_court_shared_tir_stream_v1::stream_digest,
+    palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1},
     palw_state_v2::{PalwBlockContextV2, PalwBondStatusV2, PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1},
+    palw_tokenizer_finish_derivation_cache_v1::{FinishDerivationKeyV1, derive_tokenizer_finish_once_v1},
     palw_tokenizer_registration_v1::{
         TokenizerRegistrationFinishV1, TokenizerRegistrationOpenV1, TokenizerRegistrationPartV1, TokenizerRegistrationPolicyV1,
         TokenizerRegistrationQuoteV1,
@@ -197,6 +199,7 @@ impl TokenizerRegistrationSessionV1 {
     pub(crate) fn derive_finish(
         &self,
         parent: &PalwChainStateV2,
+        parent_root: Hash64,
         params: &PalwStateParamsV2,
         extras: &PalwTransitionExtrasV1,
         at: PalwBlockContextV2,
@@ -223,46 +226,63 @@ impl TokenizerRegistrationSessionV1 {
         if !follows(*prior, at) || parts.len() != self.quote.geometry.part_count as usize || self.received.len() != parts.len() {
             return Err(E("tokenizer Finish requires all parts in the preceding accepted parent".into()));
         }
-        let bytes = self.open.body.statement.exact_raw_bytes;
-        let _raw_lease =
-            kaspa_core::memory_budget::global_memory_budget().try_reserve(kaspa_core::memory_budget::MemoryClass::Native, bytes)?;
-        let mut raw = Vec::new();
-        raw.try_reserve_exact(bytes as usize).map_err(|error| {
-            PalwVerifiedTokenizerRegistrationErrorV1::Capacity(kaspa_core::memory_budget::MemoryBudgetError {
-                class: kaspa_core::memory_budget::MemoryClass::Native,
-                requested_bytes: bytes,
-                available_bytes: 0,
-                external_reason: Some(format!("tokenizer raw allocation failed: {error}")),
-            })
-        })?;
-        for (index, part) in parts.iter().enumerate() {
-            part.check(self, index as u32).map_err(E)?;
-            if !follows(part.accepted, at)
+        for (index, part) in parts.iter().copied().enumerate() {
+            let index = index as u32;
+            part.check(self, index).map_err(E)?;
+            let parent_part = parent.staged_court_row_v1(&PalwStagedCourtKeyV1::TokenizerRegistrationPart(id, index));
+            if !matches!(parent_part, Some(PalwStagedCourtRowV1::TokenizerRegistrationPart(row)) if std::ptr::eq(row.as_ref(), part))
+                || !follows(part.accepted, at)
                 || part.accepted.blue_score > prior.blue_score
                 || part.accepted.daa_score > prior.daa_score
                 || (part.accepted.blue_score == prior.blue_score && part.accepted != *prior)
-                || !self.received.contains(&(index as u32))
+                || !self.received.contains(&index)
             {
                 return Err(E("tokenizer Finish contains a non-parent or missing part".into()));
             }
-            raw.extend_from_slice(&part.part.bytes);
         }
-        let p = self.policy;
-        let result = PalwRootedTokenizerRegistrationRowV1::derive_budgeted_v1(
-            parent,
-            extras,
-            at,
-            self.open.body.pins,
-            &raw,
-            &finish.eog,
-            PalwTokenizerRenderingBudgetV2 {
-                raw_bytes: p.max_raw_bytes,
-                vocab: p.max_vocab,
-                key_events: p.max_key_events,
-                eog_ids: p.max_eog_ids,
-                total_rendering_bytes: p.max_rendering_bytes,
-            },
-        );
+        let open = &self.open.body;
+        if let Err(why) =
+            tokenizer_registration_parent_v1(parent, extras, at.daa_score, &open.pins, open.artifact_root, open.statement)
+        {
+            // Preserve the refused slot result without assembling raw bytes
+            // that cannot qualify under the accepted prerequisites.
+            return Ok((slot, Err(E(why))));
+        }
+        let derive = || {
+            let bytes = self.open.body.statement.exact_raw_bytes;
+            let _raw_lease = kaspa_core::memory_budget::global_memory_budget()
+                .try_reserve(kaspa_core::memory_budget::MemoryClass::Native, bytes)?;
+            let mut raw = Vec::new();
+            raw.try_reserve_exact(bytes as usize).map_err(|error| {
+                PalwVerifiedTokenizerRegistrationErrorV1::Capacity(kaspa_core::memory_budget::MemoryBudgetError {
+                    class: kaspa_core::memory_budget::MemoryClass::Native,
+                    requested_bytes: bytes,
+                    available_bytes: 0,
+                    external_reason: Some(format!("tokenizer raw allocation failed: {error}")),
+                })
+            })?;
+            for part in parts {
+                raw.extend_from_slice(&part.part.bytes);
+            }
+            let p = self.policy;
+            PalwRootedTokenizerRegistrationRowV1::derive_budgeted_v1(
+                parent,
+                extras,
+                at,
+                self.open.body.pins,
+                &raw,
+                &finish.eog,
+                PalwTokenizerRenderingBudgetV2 {
+                    raw_bytes: p.max_raw_bytes,
+                    vocab: p.max_vocab,
+                    key_events: p.max_key_events,
+                    eog_ids: p.max_eog_ids,
+                    total_rendering_bytes: p.max_rendering_bytes,
+                },
+            )
+        };
+        let key = FinishDerivationKeyV1 { open: id, slot, eog: finish.body.eog_digest };
+        let result = derive_tokenizer_finish_once_v1(parent, parent_root, at, &self.policy, key, derive);
         Ok((slot, result))
     }
 }
@@ -680,7 +700,7 @@ mod tests {
         let replay = |daa_score| {
             let at = PalwBlockContextV2 { block: h(106), daa_score, blue_score: 101, subsidy: 0 };
             session
-                .derive_finish(&state, &params, &PalwTransitionExtrasV1::default(), at, &finish, &book, &[])
+                .derive_finish(&state, state.state_root(), &params, &PalwTransitionExtrasV1::default(), at, &finish, &book, &[])
                 .unwrap_err()
                 .to_string()
         };

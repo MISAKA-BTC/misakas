@@ -1440,6 +1440,8 @@ pub(super) mod positive_assignment_archive;
 mod positive_source_read;
 mod template;
 mod template_parent_snapshot_v1;
+mod tokenizer_registration_admission_v1;
+pub(super) mod tokenizer_registration_v1;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
 
@@ -2734,37 +2736,48 @@ impl VirtualStateProcessor {
                     if self.palw_lifecycle_kind_fences.batch_court_in_force_at(pov_daa_score) {
                         ctx.palw_batch_accepting_point_v1 = Some(positive_point);
                     }
-                    if let (Some(state), Some(policy)) =
-                        (palw_state.as_deref(), self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(pov_daa_score))
-                    {
-                        ctx.palw_tokenizer_context_v1 = Some((
-                            kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationCarrierContextV1 {
-                                parent_root: state.state_root(),
-                                at: positive_point,
-                                accepted_ordinal: 0,
-                                network: self.palw_network_domain_v2(),
-                                policy: policy.id_v1().map_err(|why| {
-                                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                                        "tokenizer registration policy",
-                                        &why,
-                                    )
-                                })?,
-                            },
-                            *policy,
-                        ));
-                    }
-                    self.calculate_utxo_state(
+                    let mut tokenizer_prefix = if let Some(parent) = palw_state.as_deref() {
+                        let present = match self.preflight_tokenizer_candidate_v1(&ctx, parent, pov_daa_score) {
+                            Ok(present) => present,
+                            Err(RuleError::LocalNativeCapacityUnavailable(why)) => return Err(why.into()),
+                            Err(why) => {
+                                info!("Block {current} is disqualified from virtual chain: {why}");
+                                self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                chain_disqualified_counter += 1;
+                                continue;
+                            }
+                        };
+                        if present {
+                            Some(tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1::begin(
+                                self,
+                                parent,
+                                self.palw_state_params_v2.as_ref().expect("authenticated PALW parent has params"),
+                                positive_point,
+                                *self
+                                    .palw_lifecycle_kind_fences
+                                    .tokenizer_registration_v1_at(pov_daa_score)
+                                    .expect("active scanner policy"),
+                            )?)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    self.calculate_utxo_state_with_tokenizer_v1(
                         &mut ctx,
                         &selected_parent_utxo_view,
                         &*bond_view,
                         pov_daa_score,
                         palw_state.as_deref(),
+                        tokenizer_prefix.as_mut(),
                     )?;
                     let mut assignment_raw_actions =
                         self.take_assignment_actions_v2(&mut ctx, positive_point, &selected_parent_utxo_view, palw_state.as_deref())?;
                     if let Some(state) = palw_state.as_deref()
-                        && let Some(plan) =
-                            self.preview_candidate_relay_fees_v2(&ctx, state, &positive_point, &header, &assignment_raw_actions)?
+                        && let Some(plan) = tokenizer_registration_v1::with_prefix_scope_v1(tokenizer_prefix.as_ref(), || {
+                            self.preview_candidate_relay_fees_v2(&ctx, state, &positive_point, &header, &assignment_raw_actions)
+                        })?
                     {
                         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
                         drop(assignment_raw_actions);
@@ -2779,6 +2792,7 @@ impl VirtualStateProcessor {
                             state,
                             parent_multiset,
                             plan,
+                            tokenizer_prefix.as_mut(),
                         )?;
                         assignment_raw_actions = self.take_assignment_actions_v2(
                             &mut ctx,
@@ -2880,7 +2894,8 @@ impl VirtualStateProcessor {
                         // is disqualified rather than skipped, and `palw_state` is moved only on
                         // success.
                         let mut committed_court_observation = None;
-                        let palw_v2_staged = match palw_state.as_mut() {
+                        let mut next_palw_state = None;
+                        let palw_v2_staged = match palw_state.as_ref() {
                             Some(state) => {
                                 // One block's paid whole-root work survives the acceptance walk,
                                 // nested rehearsals and final fold, despite other threads' work.
@@ -3044,23 +3059,32 @@ impl VirtualStateProcessor {
                                         carrier_input_spends,
                                     ),
                                     assignment_rehearsal,
-                                ) = self.palw_v2_accepted_objects_and_raw_assignments_v2(
-                                    state,
-                                    state_params,
-                                    &point,
-                                    objects,
-                                    current,
-                                    own_attempt_class,
-                                    &ctx.palw_round_fee_incomes,
-                                    &ctx.palw_escrow_settlements,
-                                    native_original_context_v19.as_deref(),
-                                    assignment_raw_actions,
-                                    &ctx.accepted_tx_ids,
-                                    palw_accept::NativeAssignmentRehearsalModeV2::Observed,
-                                    &batch_candidates,
-                                    &mut accepted_batch,
-                                    &mut tokenizer,
-                                )?;
+                                ) = tokenizer_registration_v1::with_prefix_scope_v1(tokenizer_prefix.as_ref(), || {
+                                    self.palw_v2_accepted_objects_and_raw_assignments_v2(
+                                        state,
+                                        state_params,
+                                        &point,
+                                        objects,
+                                        current,
+                                        own_attempt_class,
+                                        &ctx.palw_round_fee_incomes,
+                                        &ctx.palw_escrow_settlements,
+                                        native_original_context_v19.as_deref(),
+                                        assignment_raw_actions,
+                                        &ctx.accepted_tx_ids,
+                                        palw_accept::NativeAssignmentRehearsalModeV2::Observed,
+                                        &batch_candidates,
+                                        &mut accepted_batch,
+                                        &mut tokenizer,
+                                    )
+                                })?;
+                                if tokenizer.fees != ctx.palw_tokenizer_fees_v1 {
+                                    return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                        "tokenizer fee reconciliation",
+                                        "ordered full rehearsal differs from credited UTXO fees",
+                                    )
+                                    .into());
+                                }
                                 let palw_accept::NativeAssignmentRehearsalResultV2::Observed(assignment_raw_schedule) =
                                     assignment_rehearsal
                                 else {
@@ -3384,30 +3408,32 @@ impl VirtualStateProcessor {
                                         })?
                                         .ok_or(PalwStateV2Error::NativeContextUnavailable(HistoryUnavailable))
                                 };
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
-                                    state,
-                                    state_params,
-                                    self.palw_admission_params_v2.as_ref(),
-                                    &point,
-                                    &objects,
-                                    work,
-                                    &merged_refs,
-                                    own_execution_key,
-                                    self.palw_unavailable_abstains_at(point.daa_score),
-                                    self.palw_capability_bound_at(point.daa_score),
-                                    // ADR-0069 Decision 7, at this BLOCK's DAA. `false` on every
-                                    // shipped preset, where the fold is byte-identical.
-                                    self.palw_uncertified_weightless_at(point.daa_score),
-                                    self.palw_da_court_at(point.daa_score),
-                                    // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
-                                    // DAA: the fences, and the actions this block's EVM step queued.
-                                    &transition_extras,
-                                    kaspa_consensus_core::palw_state_v2::PositiveCaseReplayInputV2 {
-                                        selected_parent,
-                                        live_case_cap,
-                                        load: &mut load_positive_case,
-                                    },
-                                ) {
+                                match tokenizer_registration_v1::with_prefix_scope_v1(tokenizer_prefix.as_ref(), || {
+                                    kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
+                                        state,
+                                        state_params,
+                                        self.palw_admission_params_v2.as_ref(),
+                                        &point,
+                                        &objects,
+                                        work,
+                                        &merged_refs,
+                                        own_execution_key,
+                                        self.palw_unavailable_abstains_at(point.daa_score),
+                                        self.palw_capability_bound_at(point.daa_score),
+                                        // ADR-0069 Decision 7, at this BLOCK's DAA. `false` on every
+                                        // shipped preset, where the fold is byte-identical.
+                                        self.palw_uncertified_weightless_at(point.daa_score),
+                                        self.palw_da_court_at(point.daa_score),
+                                        // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
+                                        // DAA: the fences, and the actions this block's EVM step queued.
+                                        &transition_extras,
+                                        kaspa_consensus_core::palw_state_v2::PositiveCaseReplayInputV2 {
+                                            selected_parent,
+                                            live_case_cap,
+                                            load: &mut load_positive_case,
+                                        },
+                                    )
+                                }) {
                                     Ok((next, delta, merged_skips, assignment_materials)) => {
                                         committed_court_observation = court_observation_guard.finish().map(|outcomes| {
                                             kaspa_consensus_core::palw_court_observation_v1::CommittedCourtObservationV1 {
@@ -3461,7 +3487,8 @@ impl VirtualStateProcessor {
                                         }
                                         // The construction ticket moves with the state; no
                                         // post-construction reservation can authorize its clone.
-                                        *state = next;
+                                        let next_root = next.state_root();
+                                        next_palw_state = Some(next);
                                         // Launch blockers §8: say it out loud. A voided claim's
                                         // escrow is burned by don't-mint (Decision 10), and a
                                         // network whose panels never bind burns the whole worker
@@ -3477,7 +3504,7 @@ impl VirtualStateProcessor {
                                         // Keep the observed fee evidence even when the fold wrote
                                         // no rows, so staging can detect a debit with no custody.
                                         let relay_carriers = transition_extras.into_assignment_actions_v2();
-                                        Some((state.state_root(), delta, delta_lease, assignment_materials, relay_carriers))
+                                        Some((next_root, delta, delta_lease, assignment_materials, relay_carriers))
                                     }
                                     Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
                                         return Err(why.into());
@@ -3495,6 +3522,10 @@ impl VirtualStateProcessor {
                             }
                             None => None,
                         };
+                        drop(tokenizer_prefix);
+                        if let Some(next) = next_palw_state {
+                            palw_state = Some(next);
+                        }
                         // Everything that can disqualify has run. Only now does the walk MOVE —
                         // `diff` and `diff_point` are advanced after the last refusal, not before
                         // it. Advancing first was a real bug: a block disqualified afterwards left
@@ -4328,6 +4359,7 @@ impl VirtualStateProcessor {
         parent_state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         parent_multiset: MuHash,
         plan: palw_accept::NativeRelayFeePlanV2,
+        mut tokenizer: Option<&mut tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1<'_>>,
     ) -> Result<(), PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
         let fault = |why| PalwLocalTransitionFaultV1::Resource(NativeCoverageV1::unsupported::<Self>("relay fee replay", why));
@@ -4342,7 +4374,17 @@ impl VirtualStateProcessor {
         }
         let round_incomes = std::mem::take(&mut ctx.palw_round_fee_incomes);
         let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan);
-        self.calculate_utxo_state(ctx, selected_parent_utxo_view, bond_view, point.daa_score, Some(parent_state))?;
+        if let Some(prefix) = tokenizer.as_deref_mut() {
+            prefix.restart_v1()?;
+        }
+        self.calculate_utxo_state_with_tokenizer_v1(
+            ctx,
+            selected_parent_utxo_view,
+            bond_view,
+            point.daa_score,
+            Some(parent_state),
+            tokenizer,
+        )?;
         if round_incomes != ctx.palw_round_fee_incomes {
             return Err(fault("Round income changed during replay"));
         }
@@ -4465,6 +4507,29 @@ impl VirtualStateProcessor {
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
             .flatten();
 
+        let tokenizer_point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: kaspa_consensus_core::blockhash::ORIGIN,
+            daa_score: daa,
+            blue_score: virtual_ghostdag_data.blue_score,
+            subsidy: self.coinbase_manager.calc_block_subsidy(daa),
+        };
+        let mut tokenizer_prefix = if let Some(parent) = virtual_palw_state.as_deref()
+            && self.preflight_tokenizer_candidate_v1(&ctx, parent, daa)?
+        {
+            Some(
+                tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1::begin(
+                    self,
+                    parent,
+                    self.palw_state_params_v2.as_ref().expect("authenticated PALW parent has params"),
+                    tokenizer_point,
+                    *self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(daa).expect("active scanner policy"),
+                )
+                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?,
+            )
+        } else {
+            None
+        };
+
         // The reserved origin distinguishes scratch records from every real block.
         // The preview uses the real virtual bits. Timestamp-dependent Round
         // inputs and the own-attempt-dependent overlay carve need later inputs.
@@ -4483,17 +4548,25 @@ impl VirtualStateProcessor {
         let relay_parent_multiset = ctx.positive_relay_preview_point.map(|_| ctx.multiset_hash.clone());
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, daa, virtual_palw_state.as_deref())
-            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+        self.calculate_utxo_state_with_tokenizer_v1(
+            &mut ctx,
+            &selected_parent_utxo_view,
+            selected_parent_bond_view,
+            daa,
+            virtual_palw_state.as_deref(),
+            tokenizer_prefix.as_mut(),
+        )
+        .map_err(RuleError::LocalNativeCapacityUnavailable)?;
         if let (Some(point), Some(parent_multiset), Some(state)) =
             (ctx.positive_relay_preview_point, relay_parent_multiset, virtual_palw_state.as_ref())
         {
             let actions = self
                 .take_assignment_actions_v2(&mut ctx, point, &selected_parent_utxo_view, Some(state))
                 .map_err(RuleError::LocalNativeCapacityUnavailable)?;
-            let plan = self
-                .preview_template_relay_fees_v2(&ctx, state, virtual_bits, &actions)
-                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+            let plan = tokenizer_registration_v1::with_prefix_scope_v1(tokenizer_prefix.as_ref(), || {
+                self.preview_template_relay_fees_v2(&ctx, state, virtual_bits, &actions)
+            })
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
             drop(actions);
             if let Some(plan) = plan {
                 self.replay_relay_utxo_fees_v2(
@@ -4504,6 +4577,7 @@ impl VirtualStateProcessor {
                     state,
                     parent_multiset,
                     plan,
+                    tokenizer_prefix.as_mut(),
                 )
                 .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
             }

@@ -1,7 +1,10 @@
 #[path = "positive_native_context_v2.rs"]
 pub(super) mod positive_native_context_v2;
 
-use super::{VirtualStateProcessor, processor::palw_accept::NativeRelayFeePlanV2};
+use super::{
+    VirtualStateProcessor,
+    processor::{palw_accept::NativeRelayFeePlanV2, tokenizer_registration_v1::TokenizerRegistrationFeePrefixV1},
+};
 use crate::{
     errors::{
         BlockProcessResult,
@@ -213,12 +216,6 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Real accepting point and BCT1 facts retained only for the candidate
     /// block's Court walk. The virtual template needs fee projection only.
     pub palw_batch_accepting_point_v1: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
-    /// TKR1 authority is derived once from the authenticated selected parent.
-    /// The actual ordinal is filled only while validated UTXO entries are live.
-    pub palw_tokenizer_context_v1: Option<(
-        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationCarrierContextV1,
-        kaspa_consensus_core::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1,
-    )>,
     pub palw_tokenizer_handoffs_v1: std::collections::BTreeMap<
         TransactionId,
         kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::SharedValidatedTokenizerRegistrationCarrierV1,
@@ -226,6 +223,12 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub palw_batch_handoffs_v1: std::collections::BTreeMap<
         TransactionId,
         kaspa_consensus_core::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1,
+    >,
+    /// Exact provisional fee results already applied to native rewards. The
+    /// later full native rehearsal must reproduce every one of these values.
+    pub palw_tokenizer_fees_v1: std::collections::BTreeMap<
+        TransactionId,
+        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1,
     >,
     /// **ADR-0125: the merged round blocks and which of them hold their permit**, decided against
     /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
@@ -452,6 +455,7 @@ impl<'a> UtxoProcessingContext<'a> {
         self.palw_v2_rent_available_fees.clear();
         self.palw_batch_handoffs_v1.clear();
         self.palw_tokenizer_handoffs_v1.clear();
+        self.palw_tokenizer_fees_v1.clear();
         self.palw_round_fee_incomes.clear();
         self.palw_escrow_locks.provisional.clear();
         self.palw_escrow_settlements.clear();
@@ -488,8 +492,8 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_accepted_tx_fees: Default::default(),
             palw_v2_rent_available_fees: Default::default(),
             palw_batch_accepting_point_v1: None,
-            palw_tokenizer_context_v1: None,
             palw_tokenizer_handoffs_v1: Default::default(),
+            palw_tokenizer_fees_v1: Default::default(),
             palw_batch_handoffs_v1: Default::default(),
             palw_round_verdicts: None,
             palw_round_fee_incomes: Vec::new(),
@@ -994,6 +998,27 @@ impl VirtualStateProcessor {
             pov_daa_score,
             case_source_state,
             None,
+            None,
+        )
+    }
+
+    pub(super) fn calculate_utxo_state_with_tokenizer_v1<V: UtxoView + Sync>(
+        &self,
+        ctx: &mut UtxoProcessingContext,
+        selected_parent_utxo_view: &V,
+        selected_parent_bond_view: &ActiveBondView,
+        pov_daa_score: u64,
+        parent: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        tokenizer: Option<&mut TokenizerRegistrationFeePrefixV1<'_>>,
+    ) -> Result<(), NativeCoverageV1> {
+        self.calculate_utxo_state_with_funded_candidates_v1(
+            ctx,
+            selected_parent_utxo_view,
+            selected_parent_bond_view,
+            pov_daa_score,
+            parent,
+            None,
+            tokenizer,
         )
     }
 
@@ -1008,6 +1033,7 @@ impl VirtualStateProcessor {
         pov_daa_score: u64,
         case_source_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
+        mut tokenizer_prefix: Option<&mut TokenizerRegistrationFeePrefixV1<'_>>,
     ) -> Result<(), NativeCoverageV1> {
         let relay_plan = ctx.relay_fee_plan.take();
         let accepting = ctx.positive_accepting_point.or(ctx.positive_relay_preview_point);
@@ -1159,6 +1185,36 @@ impl VirtualStateProcessor {
             let (mut validated_transactions, mut inner_multiset) =
                 self.validate_transactions_with_muhash_in_parallel(txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
 
+            // TKR fee effects are evaluated on a body-local branch. The
+            // ordinary fold still owns Part acceptance and every other lane.
+            let tokenizer_source_active = if tokenizer_prefix.is_some() {
+                let source_daa = self
+                    .headers_store
+                    .get_daa_score(merged_block)
+                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("tokenizer source activation", &why.to_string()))?;
+                self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(source_daa).is_some()
+            } else {
+                false
+            };
+            let tokenizer_trial = tokenizer_prefix
+                .as_deref_mut()
+                .filter(|_| tokenizer_source_active)
+                .map(|prefix| {
+                    prefix.trial_body(&validated_transactions, ctx.accepted_tx_ids.len(), |validated| {
+                        let burned = bond_filter
+                            .map(|filter| {
+                                filter.burn_owed(validated.tx).saturating_add(filter.escrow_burned(validated.tx, &validated.entries))
+                            })
+                            .unwrap_or(0);
+                        let remaining =
+                            self.palw_collectible_transaction_fee_v1(validated.tx, validated.calculated_fee, burned, pov_daa_score);
+                        Ok(validated.calculated_fee - remaining)
+                    })
+                })
+                .transpose()
+                .map_err(|why| NativeCoverageV1::unsupported::<Self>("tokenizer UTXO fee trial", &why.to_string()))?;
+            let mut body_admitted = true;
+
             // A permit grants execution rights, but cannot mint monetary R.
             // Reserve the entire actual collectible native fee before any
             // transaction changes the UTXO diff, accepted IDs or MuHash. On a
@@ -1179,7 +1235,17 @@ impl VirtualStateProcessor {
                         .unwrap_or(0);
                     let before_relay = self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score);
                     let fees = match_relay(first_ordinal + offset, merged_block, tx.tx, tx.calculated_fee, burned, before_relay)?;
-                    Ok(sum.checked_add(fees.map_or(before_relay, |fees| fees.credited_tip())))
+                    let ordinary_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
+                    let tip = tokenizer_trial
+                        .as_ref()
+                        .and_then(|trial| {
+                            let rows = trial.carriers_v1();
+                            rows.binary_search_by_key(&(first_ordinal + offset), |row| row.fee.context.accepted_ordinal)
+                                .ok()
+                                .map(|index| &rows[index])
+                        })
+                        .map_or(ordinary_tip, |row| row.fee.collectible_fee);
+                    Ok(sum.checked_add(tip))
                 })?;
                 let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
                     block: merged_block,
@@ -1190,11 +1256,19 @@ impl VirtualStateProcessor {
                 if income.is_some_and(|income| budget.admit(income).is_ok()) {
                     round_income = income;
                 } else {
+                    body_admitted = false;
                     validated_transactions.clear();
                     inner_multiset = MuHash::new();
                     info!("[palw-round-lane] Round {merged_block} native body refused: recipient reward budget exhausted");
                 }
             }
+
+            let tokenizer_body = if body_admitted {
+                tokenizer_trial.map(|trial| trial.commit())
+            } else {
+                drop(tokenizer_trial);
+                None
+            };
 
             ctx.multiset_hash.combine(&inner_multiset);
 
@@ -1447,32 +1521,31 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
-                if let Some((mut context, policy)) = ctx.palw_tokenizer_context_v1
-                    && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
-                    && validated_tx.tx.payload.starts_with(
-                        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1,
-                    )
-                {
-                    context.accepted_ordinal = accepted_ordinal;
-                    let remaining =
-                        self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
-                    match kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::ValidatedTokenizerRegistrationCarrierV1::prepare_shared_v1(
-                        validated_tx, context, &policy, validated_tx.calculated_fee - remaining,
-                    ) {
-                        Ok(Some(handoff)) => { ctx.palw_tokenizer_handoffs_v1.insert(validated_tx.id(), handoff); }
-                        Ok(None) => {}
-                        Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)) => return Err(why),
-                        Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) => {
-                            kaspa_core::debug!("[palw-tokenizer] carrier {} did not yield a UTXO handoff: {why}", validated_tx.id());
-                        }
-                    }
-                }
                 let before_relay =
                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
                 let fees =
                     match_relay(accepted_ordinal, merged_block, validated_tx.tx, validated_tx.calculated_fee, owed, before_relay)?;
                 applied_relay_debits += usize::from(fees.is_some());
-                let credited_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
+                let mut credited_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
+                if let Some(row) = tokenizer_body.as_ref().and_then(|body| {
+                    let rows = body.carriers_v1();
+                    rows.binary_search_by_key(&accepted_ordinal, |row| row.fee.context.accepted_ordinal).ok().map(|index| &rows[index])
+                }) {
+                    let fee = row.fee;
+                    if fee.carrier != validated_tx.id()
+                        || fee.actual_fee != validated_tx.calculated_fee
+                        || fee.context.accepted_ordinal != accepted_ordinal
+                        || credited_tip.checked_sub(fee.registration_burn) != Some(fee.collectible_fee)
+                        || ctx.palw_tokenizer_fees_v1.insert(validated_tx.id(), fee).is_some()
+                    {
+                        return Err(NativeCoverageV1::unsupported::<Self>(
+                            "tokenizer fee collection",
+                            "actual carrier, ordinal or fee differs from body trial",
+                        ));
+                    }
+                    ctx.palw_tokenizer_handoffs_v1.insert(validated_tx.id(), row.handoff.clone());
+                    credited_tip = fee.collectible_fee;
+                }
                 if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
                 {
@@ -1490,7 +1563,7 @@ impl VirtualStateProcessor {
             }
 
             if let Some(income) = round_income {
-                if relay_plan.is_some() && income.actual_sompi != block_fee {
+                if (relay_plan.is_some() || tokenizer_body.is_some()) && income.actual_sompi != block_fee {
                     return Err(NativeCoverageV1::unsupported::<Self>(
                         "relay fee plan input",
                         "Round reserve and final credited fees differ",

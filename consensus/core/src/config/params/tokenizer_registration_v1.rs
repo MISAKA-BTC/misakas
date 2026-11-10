@@ -29,7 +29,8 @@ impl TokenizerRegistrationFenceV1 {
         }
         let p = self.policy;
         let work = p.bookkeeping_work_v1().map_err(PalwModeV2Error::Invalid)?;
-        let budget = p.effective_reservation_budget_v1().map_err(PalwModeV2Error::Invalid)?;
+        p.check_source_budget_v1().map_err(PalwModeV2Error::Invalid)?;
+        let budget = p.source_budget_v1().map_err(PalwModeV2Error::Invalid)?;
         if p.carrier_overhead_bytes < TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1.len() as u64
             || p.carrier_overhead_bytes >= p.max_carrier_bytes
             || p.metadata_bytes >= p.max_retained_bytes
@@ -52,11 +53,24 @@ impl Params {
         self.palw_tokenizer_registration_v1_fence().filter(|f| f.active_at(daa))
     }
 
+    /// The header caps the two source lanes separately. The selected parent
+    /// is already included in the non-Round mergeset bound.
+    pub fn tokenizer_registration_source_blocks_bound_v1(&self) -> Result<u64, PalwModeV2Error> {
+        self.mergeset_size_limit_history()
+            .upper_bound()
+            .checked_add(self.palw_execution_lane_fence().map_or(0, |lane| lane.max_per_mergeset))
+            .filter(|bound| *bound != 0)
+            .ok_or(PalwModeV2Error::Invalid("tokenizer source-block count is zero or overflows"))
+    }
+
     pub fn validate_palw_tokenizer_registration_v1(&self) -> Result<(), PalwModeV2Error> {
         let Some(fence) = self.palw_tokenizer_registration_v1_fence() else {
             return Ok(());
         };
         fence.validate_shape()?;
+        if fence.policy.maximum_source_blocks < self.tokenizer_registration_source_blocks_bound_v1()? {
+            return Err(PalwModeV2Error::Invalid("tokenizer source policy understates the network mergeset bound"));
+        }
         let at = fence.activation.daa_score();
         // Ordered TKR1 rehearsal requires the audit's pre-object prefix,
         // which preserves the selected-parent point between native carriers.
@@ -92,7 +106,18 @@ mod tests {
     #[test]
     fn schedule_fingerprint_and_header_gate_preserve_dormant_rules() {
         let baseline = TESTNET_PARAMS.clone();
-        let (policy, body) = crate::palw_tokenizer_registration_v1::tests::fixture();
+        let (mut policy, mut body) = crate::palw_tokenizer_registration_v1::tests::fixture();
+        let sources = baseline.tokenizer_registration_source_blocks_bound_v1().unwrap();
+        let sweep = policy.bookkeeping_work_v1().unwrap().sweep;
+        // Preserve the original fixture's source capacity after partitioning
+        // this test configuration by the actual Params bound.
+        let budget = policy.service_budget;
+        policy.maximum_source_blocks = sources;
+        policy.service_budget.bytes = budget.bytes * sources;
+        policy.service_budget.work = sweep + (budget.work - sweep) * sources;
+        policy.service_budget.io = budget.io * sources;
+        policy.service_budget.controls = budget.controls * sources;
+        body.policy = policy.id_v1().unwrap();
         let mut params = baseline.clone();
         let mut fence = TokenizerRegistrationFenceV1 { activation: ForkActivation::never(), open_cutoff: None, policy };
         params.palw_tokenizer_registration_v1 = Some(fence);
@@ -106,6 +131,12 @@ mod tests {
         assert_ne!(params.consensus_params_id(), baseline.consensus_params_id());
         assert!(fence.validate_shape().is_ok());
         assert!(params.validate_palw_tokenizer_registration_v1().is_err()); // Missing prerequisite forks.
+        let mut undercount = params.clone();
+        undercount.palw_tokenizer_registration_v1.as_mut().unwrap().policy.maximum_source_blocks = sources - 1;
+        assert!(matches!(
+            undercount.validate_palw_tokenizer_registration_v1(),
+            Err(PalwModeV2Error::Invalid("tokenizer source policy understates the network mergeset bound"))
+        ));
         let mut changed = params.clone();
         changed.palw_tokenizer_registration_v1.as_mut().unwrap().policy.rent_per_work += 1;
         assert_ne!(changed.consensus_schedule_id(), params.consensus_schedule_id());

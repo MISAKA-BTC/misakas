@@ -843,6 +843,7 @@ pub mod palw_tir_work_v1;
 pub mod palw_tokenizer_json_stream_v1;
 pub mod palw_tokenizer_rendering_v1;
 pub mod palw_tokenizer_rendering_v2;
+pub mod palw_tokenizer_finish_derivation_cache_v1;
 pub mod palw_tokenizer_registration_v1;
 pub mod palw_tokenizer_registration_state_v1;
 pub mod palw_tokenizer_registration_snapshot_v1;
