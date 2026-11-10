@@ -20,7 +20,7 @@ use misaka_palw_positive_contract::{
     },
     ports::{NodeChecker, require_next},
     public_one_honest::{
-        FirstNoticeDemand, ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond,
+        FirstNoticeDemand, FullReplayApproval, ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond,
         ProtectedRescueDemand, ReplayApprovalContext, VerificationSchedule,
     },
     reservations::RemainingCapacity,
@@ -118,6 +118,27 @@ impl PreparedPublicDrawV1 {
     pub fn rescue_capacity(&self, bond: PanelBond) -> Result<RemainingCapacity, ContractError> {
         self.approval_context(bond)?;
         Ok(self.per_bond)
+    }
+
+    /// Check the configured quorum of authenticated replay assertions.
+    /// Local checks, inspection opportunity and Final are separate gates.
+    pub fn verify_replay_quorum(
+        &self,
+        required: usize,
+        approvals: &[(&FullReplayApproval, &[u8; PUBKEY_BYTES], &[u8; SIGNATURE_BYTES])],
+    ) -> Result<(), ContractError> {
+        if required == 0 || approvals.len() < required || approvals.len() > self.members.len() {
+            return Err(ContractError::Range);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for &(approval, key, signature) in approvals {
+            let bond = approval.bond;
+            if !seen.insert((bond.transaction, bond.index)) {
+                return Err(ContractError::Identity);
+            }
+            approval.authenticate(&self.approval_context(bond)?, key, signature)?;
+        }
+        Ok(())
     }
 }
 

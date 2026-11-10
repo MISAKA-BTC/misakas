@@ -382,9 +382,10 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
     assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
-    use misaka_palw_positive_contract::public_one_honest::PanelBond;
+    use misaka_palw_positive_contract::public_one_honest::{FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond};
     let bond = PanelBond { transaction: d(10), index: 1 };
-    let members = [(bond, r.miner)];
+    let second_bond = PanelBond { transaction: d(11), index: 1 };
+    let members = [(bond, r.miner), (second_bond, r.miner)];
     let draw = prepared.prepare_draw(d(11), 101, &members, d(12)).unwrap();
     let approval = draw.approval_context(bond).unwrap();
     assert_eq!(approval.original, original.id());
@@ -393,6 +394,22 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert!(draw.rescue_capacity(PanelBond { index: 2, ..bond }).is_err());
     assert!(prepared.prepare_draw(d(11), 100, &members, d(12)).is_err());
     assert!(prepared.prepare_draw(d(11), 101, &[members[0], members[0]], d(12)).is_err());
+    let assertion = FullReplayApproval {
+        original: approval.original,
+        draw: approval.draw,
+        bond,
+        member: approval.member,
+        full_scope: approval.full_scope,
+    };
+    let signed_approval =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &assertion.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [0; 32]).unwrap();
+    let signed_assertion = (&assertion, &signed.key, signed_approval.as_ref());
+    assert_eq!(draw.verify_replay_quorum(1, &[signed_assertion]), Ok(()));
+    assert!(draw.verify_replay_quorum(2, &[signed_assertion]).is_err());
+    assert_eq!(
+        draw.verify_replay_quorum(2, &[signed_assertion, signed_assertion]),
+        Err(misaka_palw_positive_contract::ContractError::Identity)
+    );
     let record = prepared.record(d(8));
     let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1>(
         &borsh::to_vec(&record).unwrap(),
