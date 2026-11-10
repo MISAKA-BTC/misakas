@@ -1,6 +1,9 @@
 //! Offline parser measurements for RFC-0051. No RPC, keys or chain writes.
 //! Fixture construction is a separate invocation so it does not inflate the
 //! measured process's peak RSS. This is not a full native-fold qualification.
+mod native_bundle;
+mod native_run;
+
 use kaspa_consensus_core::{
     palw_fp_constraint_job_v1::{PalwTokenTableEogOpeningV1, PalwTokenTableV1, palw_token_table_file_decode_v1},
     palw_tokenizer_rendering_v1::{PalwTokenizerRenderingRuleV1, palw_tokenizer_raw_commitment_v1},
@@ -159,6 +162,10 @@ fn main() {
     match args.get(1).map(String::as_str) {
         Some("prepare") if args.len() == 5 => prepare(Path::new(&args[2]), Path::new(&args[3]), Path::new(&args[4])),
         Some("run") if args.len() == 5 => measure(Path::new(&args[2]), &args[3], args[4].parse().unwrap()),
-        _ => panic!("usage: prepare NEW_DIR RAW_TOKENIZER TOKEN_TABLE | run DIR CASE REPETITIONS"),
+        Some("native-run") if args.len() == 3 => {
+            let dir = std::path::PathBuf::from(&args[2]);
+            std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || native_run::run(&dir)).unwrap().join().unwrap();
+        }
+        _ => panic!("usage: prepare NEW_DIR RAW_TOKENIZER TOKEN_TABLE | run DIR CASE REPETITIONS | native-run BUNDLE_DIR"),
     }
 }

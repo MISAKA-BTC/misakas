@@ -38,3 +38,40 @@ rows, verifies signatures, manages reservations, and retains cached results,
 journals and snapshots. Measure those paths and physical storage separately
 before adopting a public policy. Parser-only time or RSS cannot establish a
 public throughput, fee, activation height, or complete T12 claim result.
+
+## Native replay
+
+Export the opted-in native fixture from the same source revision. The
+functional exporter can use a non-optimized build. For the actual-input case,
+set `TKR_MEASUREMENT_CASE=actual`, `TKR_MEASUREMENT_RAW` and
+`TKR_MEASUREMENT_TABLE`. The default `maximum_raw` case uses a separate valid
+8 MiB tokenizer and class.
+
+```sh
+TKR_MEASUREMENT_EXPORT=/tmp/tkr-native-max \
+  cargo test -p kaspa-consensus-core --lib measure_tokenizer_registration_native_workload -- --ignored --nocapture
+/usr/bin/time -v target/release/misaka-tokenizer-registration-probe native-run /tmp/tkr-native-max
+```
+
+The exporter writes the initial accepted-parent carriage and purpose-signed
+TKR1 payload files to a new directory. It writes the manifest after its final
+assertions. The manifest contains the test policy, the nondefault transition
+inputs, the expected roots and fees for each action, and the snapshot boundary.
+
+The runner uses production core APIs and checks the exact transaction IDs,
+fees, journal sizes and state roots against the fixture. It reports separate
+timings for fee rehearsal, rollback, authoritative folding, snapshot
+encode/restore and journal undo/redo. Take external peak RSS and CPU readings
+from a fresh process per bundle. Record the bundle file hashes as well as the
+binary and source provenance.
+
+The starting state and transaction funding are seeded measurement inputs.
+This replay covers the native state transition from that starting point.
+Node UTXO script validation, P2P transport and physical database storage
+require their own measurements.
+
+Native replay reports whether logical and resource admission are enabled.
+For a separate run with declared logical limits, set both
+`TKR_MEASUREMENT_LOGICAL_RAM_BYTES` and `TKR_MEASUREMENT_LOGICAL_DB_BYTES` to
+finite positive byte counts. These limits exercise logical admission. The
+runner does not install a filesystem quota.

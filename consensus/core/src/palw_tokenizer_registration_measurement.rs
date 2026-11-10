@@ -1,3 +1,8 @@
+#[allow(dead_code)]
+mod tokenizer_native_bundle {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tools/tokenizer-registration-probe/src/native_bundle.rs"));
+}
+
 // Explicitly seeded accepted-parent measurements. This fixture times native
 // admission and replay; it does not run UTXO script verification or a node.
 #[test]
@@ -31,7 +36,12 @@ fn run_tokenizer_registration_measurement() {
             ValidatedTransaction,
         },
     };
-    use std::{collections::BTreeMap, path::Path, time::Instant};
+    use std::{
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+        time::Instant,
+    };
+    use tokenizer_native_bundle::{Action, MANIFEST_FILE, MAX_ACTIONS, Manifest, STATE_FILE, VERSION, action_file};
 
     let (fx, synthetic_semantics, _, mut synthetic_raw, mut synthetic_table) =
         crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
@@ -199,6 +209,27 @@ fn run_tokenizer_registration_measurement() {
     let second = TokenizerRegistrationOpenBodyV1 { nonce: h(909), ..body };
     let open_id = second.id_v1().unwrap();
     let quote = policy.quote_v1(&body, 1_001, declared_events).unwrap();
+    let mut export = std::env::var_os("TKR_MEASUREMENT_EXPORT").map(|dir| {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir(&dir).expect("measurement export requires a new directory");
+        std::fs::write(dir.join(STATE_FILE), borsh::to_vec(&PalwStateCarriageV2::from_state(&state)).unwrap()).unwrap();
+        let manifest = Manifest {
+            version: VERSION,
+            case: which.clone(),
+            params: params.clone(),
+            policy,
+            network: body.network,
+            allocation_network: extras.tir_public_network_domain_v1.unwrap(),
+            allocation: extras.tir_public_allocation_rules_v1.unwrap().into(),
+            initial: *state.last_point().unwrap(),
+            initial_root: state.state_root(),
+            open_ids: [first_id, open_id],
+            snapshot_before: 0,
+            snapshot_bytes: 0,
+            actions: Vec::new(),
+        };
+        (dir, manifest)
+    });
     let mut metrics = BTreeMap::<&str, u128>::new();
     let mut run = |state: &PalwChainStateV2, at: PalwBlockContextV2, wire: TokenizerRegistrationWireV1, paid, label: &'static str| {
         let start = Instant::now();
@@ -261,13 +292,30 @@ fn run_tokenizer_registration_measurement() {
             })
             .unwrap();
         *metrics.entry(label).or_default() += start.elapsed().as_nanos();
-        *metrics.entry("journal_bytes").or_default() += borsh::object_length(&*delta).unwrap() as u128;
+        let delta_bytes = borsh::object_length(&*delta).unwrap() as u64;
+        *metrics.entry("journal_bytes").or_default() += u128::from(delta_bytes);
         let start = Instant::now();
         let undo = revert_delta_v2(&next, &delta, &params).unwrap();
         let redo = apply_delta_v2(&undo, &delta, &params).unwrap();
         *metrics.entry("journal_undo_redo_ns").or_default() += start.elapsed().as_nanos();
         assert_eq!(undo.state_root(), parent_root);
         assert_eq!(redo.state_root(), next.state_root());
+        if let Some((dir, manifest)) = &mut export {
+            let index = manifest.actions.len();
+            assert!(index < MAX_ACTIONS);
+            std::fs::write(dir.join(action_file(index)), &tx.payload).unwrap();
+            manifest.actions.push(Action {
+                at,
+                txid: tx.id(),
+                paid,
+                burn: fee.registration_burn,
+                collectible: fee.collectible_fee,
+                charge_id: fee.charge_id,
+                parent_root,
+                next_root: next.state_root(),
+                delta_bytes,
+            });
+        }
         (*next).clone()
     };
 
@@ -357,6 +405,11 @@ fn run_tokenizer_registration_measurement() {
     let superseded = palw_tokenizer_registration_status_v1(&state, first_id).unwrap().unwrap();
     assert!(matches!(superseded.status, TokenizerRegistrationStatusV1::Superseded { .. }));
     assert!(superseded.finishes.iter().all(|finish| !finish.attempted));
+    if let Some((dir, mut manifest)) = export {
+        manifest.snapshot_before = u32::try_from(manifest.actions.len() - 1).unwrap();
+        manifest.snapshot_bytes = snapshot.len() as u64;
+        std::fs::write(dir.join(MANIFEST_FILE), borsh::to_vec(&manifest).unwrap()).unwrap();
+    }
 
     println!(
         "{}",
