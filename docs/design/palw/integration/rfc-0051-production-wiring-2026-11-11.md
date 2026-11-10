@@ -8,7 +8,9 @@
 | 設定・新規 Open cutoff・header gate・ノード UTXO handoff と受理順 | 隔離した実ノードで署名済み Open/Part/Finish/重複が通過。出荷 preset は未設定 |
 | coinbase・テンプレート・Round の焼却反映、work scanner 実行境界 | 接続コードと段階3のローカル回帰30件が通過。公開適格性の測定は未完了 |
 | RPC・CLI | unsigned Open quote / accepted status の回帰22件通過。prepare/send CLI と通常 UTXO funding API 実装済み。予約枠・署名検査通過、live CLI broadcast は未検証 |
-| 公開 T12 の有効化、同一 Studio TFP1 の G14 quote・対話・Final・ブロック生成 | 未確認 |
+| mempool / peer の local work 制限 | 接続済み。関連25件と既存 peer 2件が通過。実 TKR1 peer 通信は未検証 |
+| 復元と物理資源 | restart / replay / reorg / 認証済み PALW sidecar の復元を検査済み。全 P2P pruned IBD・最大負荷の native/history 測定は未完了 |
+| 公開 T12 の有効化、同一 Studio TFP1 の G14 quote・対話・Final・ブロック生成 | binding の受理証跡あり。最終 quote 観測は拒否。公開 profile の測定・採択・有効化と quote 以降は未達 |
 
 - [ ] **設定と入口**。候補ブロックの DAA で TKR1 専用の activation と policy を解決する。未設定のネットワークは既存の挙動と fingerprint を維持する。設定の形状、fence visitor、ruleset と consensus params ID に、設定時だけ値を組み込む。header-context の入口で fence を確認し、前段で候補ブロック内の TKR1 carrier 全件と期限処理の作業量を集計する。未知版・重複・拒否される carrier も作業量に含める。[設定検証](../../../../consensus/core/src/config/params/validation.rs#L271) · [設定 fingerprint](../../../../consensus/core/src/config/params/identity.rs#L1985) · [header-context 検査](../../../../consensus/src/processes/transaction_validator/tx_validation_in_header_context.rs#L73) · [TKR1 scanner](../../../../consensus/core/src/palw_tokenizer_registration_carriage_v1.rs#L244)
 - [ ] **UTXO handoff と受理順**。実 UTXO と先行控除から handoff を準備し、認証済み親 root、受理点、policy、txid、受理順に束縛する。Batch と同じ共有 lease の形式で読み取り用 handoff を渡し、仮実行で同じ fee budget を消費しないようにする。既存 lifecycle・Batch・TKR1 と raw assignment を候補仮実行と確定 fold で同じ順に処理する。[UTXO handoff の既存入口](../../../../consensus/src/pipeline/virtual_processor/utxo_validation.rs#L1410) · [Batch の共有 lease](../../../../consensus/core/src/palw_court_shared_material_intake_v1/storage_rent.rs#L147) · [受理順の組み立て](../../../../consensus/src/pipeline/virtual_processor/processor/palw_accept.rs#L3615) · [確定 fold](../../../../consensus/core/src/palw_state_v2.rs#L15713)
@@ -46,3 +48,5 @@ TKR1 transport が有効になった候補から、通常 PALW object・Batch・
 [Round の追加試験](../../../evidence/palw/tokenizer-registration-round-sender-regression-2026-11-11.json)では、実署名済み Round 本文の Open を焼却後の collectible fee で判定した。1 sompi 超過時に本文の TKR 行・UTXO・RoundFee income が残らず、ヘッダー permit は既存規則どおり消費され、同じ Open 再試行に全額の burn が発生した。既存のテスト用 V2 budget 上限を使う機能検査であり、公開 arming に必要な V3 profile の検証とは区別する。
 
 [認証済み PALW sidecar の復元試験](../../../evidence/palw/tokenizer-registration-pruned-sidecar-regression-2026-11-11.json)が通過した。Part 受理点の予約 book・session・raw Part を取り込み、同じ Finish 取引の受理と Complete、後続各ブロックの状態 root 一致を確認した。取り込み未完了時には厳格な status RPC が拒否することも検査した。試験は検証済み UTXO を保持し既存の epoch-zero 完了処理を使う構成であり、P2P handshake と UTXO stream 全体の pruned IBD 試験ではない。ノード2件と CLI1件が成功した。
+
+`ee879a1d6` で TKR1 の local work 計上を通常 mempool 受付と peer relay に接続した。認証済み状態や parser を読む前に、有効 policy の最大 source cost を使い、不正・重複・上限超過も含めて peer と process の別枠に計上する。枠は monotonic clock で補充し、policy ID の変更で残枠をリセットしない。上限到達は retryable とし peer への不正判定にしない。burst/refill は既存 H1 のローカル運用値を参照し、未測定の公開容量や合意値にはしていない。[関連25件と既存 peer 2件](../../../evidence/palw/tokenizer-registration-local-admission-regression-2026-11-11.json)が成功した。実 MiningManager で有効化前の従来扱い、上限超過の早期拒否、資金付き Open の受付と重複拒否を検査した。TKR1 の P2P ネットワーク通し試験はこの結果に含めない。

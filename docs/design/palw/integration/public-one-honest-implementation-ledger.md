@@ -230,3 +230,5 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 `8a6923139` にオフラインの parser 計測ツールを追加した。入力生成を別プロセスに分け、実 tokenizer と最大 raw/vocab/EOG、巨大文字列、疎な ID、末尾重複キー、最後の leaf 不一致など8ケースの期待結果を確認した。[機能確認記録](../../../evidence/palw/tokenizer-registration-parser-fixtures-2026-11-11.json)は opt-level 0 の既存 core rlib による結果であり、機材適格性や native fold 全体の測定ではない。release build と指定機材での CPU/RSS 測定は別に実施する。
 
 先の入力形状記録の `jsonKeyEvents=49302` は、測定方法に書いたとおり JSON object のキー数だけだった。native の key-event 算式は vocab entries 49,152 と added tokens 17 も加算し、今回の実入力では **98,471** となる。見積もり・容量には native 値を使う。元の JSON は過去の観測として保持し、新記録に訂正を残した。既に取得した EOF の `maximum_key_events=1052278` はこの値を上回っており、公開で新しい登録が成立したことは意味しない。
+
+`ee879a1d6` で TKR1 の local work 計上を通常 mempool 受付と peer relay に接続した。認証済み状態や parser を読む前に、有効 policy の最大 source cost を使い、不正・重複・上限超過も含めて peer と process の別枠に計上する。枠は monotonic clock で補充し、policy ID の変更で残枠をリセットしない。上限到達は retryable とし peer への不正判定にしない。burst/refill は既存 H1 のローカル運用値を参照し、未測定の公開容量や合意値にはしていない。[関連25件と既存 peer 2件](../../../evidence/palw/tokenizer-registration-local-admission-regression-2026-11-11.json)が成功した。実 MiningManager で有効化前の従来扱い、上限超過の早期拒否、資金付き Open の受付と重複拒否を検査した。TKR1 の P2P ネットワーク通し試験はこの結果に含めない。
