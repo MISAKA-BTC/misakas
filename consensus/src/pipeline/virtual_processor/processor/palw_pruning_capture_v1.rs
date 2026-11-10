@@ -266,6 +266,9 @@ impl VirtualStateProcessor {
             publication_started.elapsed().as_millis(),
             started.elapsed().as_millis()
         );
+        // Publication no longer needs the replay state. Release its retained
+        // native leases before reserving memory for the independent readback.
+        drop(state);
         // Serving verification may decode/copy the carriage. It also belongs
         // outside the global PALW write lock; GC still waits for its success.
         let carriage = detached
