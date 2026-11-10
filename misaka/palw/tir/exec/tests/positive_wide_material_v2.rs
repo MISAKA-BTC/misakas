@@ -648,11 +648,16 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let signed_approval =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &assertion.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [0; 32]).unwrap();
-    let signed_assertion = (&assertion, &signed.key, signed_approval.as_ref());
-    assert_eq!(draw.verify_replay_quorum(1, &[signed_assertion]), Ok(()));
-    assert!(draw.verify_replay_quorum(2, &[signed_assertion]).is_err());
+    let signed_assertion = (102, &assertion, &signed.key, signed_approval.as_ref());
+    assert_eq!(draw.verify_replay_quorum(1, 102, &[signed_assertion]), Ok(()));
+    assert!(draw.verify_replay_quorum(2, 102, &[signed_assertion]).is_err());
+    assert_eq!(draw.verify_replay_quorum(1, 101, &[signed_assertion]), Err(misaka_palw_positive_contract::ContractError::Range));
     assert_eq!(
-        draw.verify_replay_quorum(2, &[signed_assertion, signed_assertion]),
+        draw.verify_replay_quorum(1, 102, &[(100, &assertion, &signed.key, signed_approval.as_ref())]),
+        Err(misaka_palw_positive_contract::ContractError::Range)
+    );
+    assert_eq!(
+        draw.verify_replay_quorum(2, 102, &[signed_assertion, signed_assertion]),
         Err(misaka_palw_positive_contract::ContractError::Identity)
     );
     let record = prepared.record(d(8));

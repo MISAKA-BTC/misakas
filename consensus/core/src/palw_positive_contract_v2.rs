@@ -230,18 +230,23 @@ impl PreparedPublicDrawV1 {
         Ok(self.per_bond)
     }
 
-    /// Check the configured quorum of authenticated replay assertions.
+    /// Check a quorum of included replay assertions. The caller resolves the
+    /// canonical inclusion DAA of each assertion and the profile's deadline.
     /// Local checks, inspection opportunity and Final are separate gates.
     pub fn verify_replay_quorum(
         &self,
         required: usize,
-        approvals: &[(&FullReplayApproval, &[u8; PUBKEY_BYTES], &[u8; SIGNATURE_BYTES])],
+        approval_until: u64,
+        approvals: &[(u64, &FullReplayApproval, &[u8; PUBKEY_BYTES], &[u8; SIGNATURE_BYTES])],
     ) -> Result<(), ContractError> {
         if required == 0 || approvals.len() < required || approvals.len() > self.members.len() {
             return Err(ContractError::Range);
         }
         let mut seen = std::collections::BTreeSet::new();
-        for &(approval, key, signature) in approvals {
+        for &(included_at, approval, key, signature) in approvals {
+            if !(self.draw_daa..=approval_until).contains(&included_at) {
+                return Err(ContractError::Range);
+            }
             let bond = approval.bond;
             if !seen.insert((bond.transaction, bond.index)) {
                 return Err(ContractError::Identity);
