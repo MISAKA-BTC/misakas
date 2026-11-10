@@ -969,6 +969,7 @@ mod targeted_lineage_tests {
         let p = PalwStateParamsV2::new(100, 100, 10, 20, 50, 1000, h(1), 4, 1000, 100, 1000, 0)
             .unwrap()
             .with_claim_local_settlement_from_daa(Some(0))
+            .with_reporter_income_from(Some(0))
             .with_material_income_from(Some(0))
             .with_bond_budget(Some(PalwBondBudgetMirrorV1 { from_daa: 0, policy: policy(), allocation: None }));
         let e = PalwTransitionExtrasV1 {
@@ -1022,11 +1023,9 @@ mod targeted_lineage_tests {
             .unwrap();
         let old = b.state.last_point;
         b.state.last_point = Some(point(at));
-        let projected =
-            super::super::palw_claim_local_checkpoint_fold_v1::expected_claim_local_checkpoint_v1(&b.state, b.params, &point(at))
-                .unwrap()
-                .unwrap();
-        super::super::palw_claim_local_descriptor_v2::write(b, &projected).unwrap();
+        let (checkpoint, bases) =
+            super::super::palw_claim_local_checkpoint_fold_v1::prepared_expected_for_test_v3(&b.state, b.params, &point(at)).unwrap();
+        super::super::palw_claim_local_checkpoint_descriptor_v3::write_prepared_v3(b, &checkpoint, &bases).unwrap();
         b.reserve_mutation_sequence_v1(0, 1).unwrap();
         b.entries.push(PalwDeltaEntryV2::LastPoint { old, new: Some(point(at)) });
     }
@@ -1101,7 +1100,9 @@ mod targeted_lineage_tests {
         assert_eq!(cold.state_root(), expected);
         validate_v7(&cold).unwrap();
         assert_eq!(root(&cold, INSTANCE, None).unwrap().rows, 1);
-        assert_eq!(cold.bond_budget.as_ref().unwrap().material_income.len(), 2);
+        let restored = &cold.bond_budget.as_ref().unwrap().material_income;
+        assert_eq!(restored, &b.state.bond_budget.as_ref().unwrap().material_income);
+        assert_eq!(restored.len(), state.bond_budget.as_ref().unwrap().material_income.len() + 2);
     }
     #[test]
     fn rfc23s2_material_lineage_real_engine_inverse_restores_after_observer_fault() {
