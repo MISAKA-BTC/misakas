@@ -2349,6 +2349,7 @@ fn closure_bound_on_a_real_class() {
 ///
 /// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> cargo test -p misaka-palw-tir-exec --features node --test
 /// frame_measure -- --ignored --nocapture public_remedy_on_a_real_class`
+#[cfg(unix)]
 #[test]
 #[ignore = "bounded public-remedy measurement of an external PALWTIR1; set MISAKA_TIR_FRAME_MEASURE_PALWTIR"]
 fn public_remedy_on_a_real_class() {
@@ -2549,6 +2550,7 @@ fn public_remedy_on_a_real_class() {
 ///
 /// Run: `MISAKA_TIR_FRAME_MEASURE_PALWTIR=<file> cargo test -p misaka-palw-tir-exec --features node --test
 /// frame_measure -- --ignored --nocapture public_remedy_adversarial_on_a_real_class`
+#[cfg(unix)]
 #[test]
 #[ignore = "adversarial public-remedy measurement of an external PALWTIR1; set MISAKA_TIR_FRAME_MEASURE_PALWTIR"]
 fn public_remedy_adversarial_on_a_real_class() {
