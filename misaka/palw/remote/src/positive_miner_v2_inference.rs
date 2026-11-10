@@ -270,6 +270,8 @@ pub fn finalize_public_capture_v1(
         return Err(MinerErrorV2::Binding);
     }
     manifest.entries[execution_rules] = rules_entry;
+    let trace = MaterialScope::Trace as usize;
+    manifest.entries[trace] = capture.public_trace_material(scope_limits[trace])?;
     let program = MaterialScope::Program as usize;
     let prompt = MaterialScope::Prompt as usize;
     let tokenizer = MaterialScope::Tokenizer as usize;

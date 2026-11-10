@@ -13,7 +13,9 @@ use kaspa_consensus_core::{
 use misaka_palw_positive_contract::{
     ContractError,
     identity::Digest,
-    public_one_honest::{ManifestEntryV1, ManifestScopeRules, OriginalCommit, tir_output_material_codec_v1},
+    public_one_honest::{
+        ManifestEntryV1, ManifestScopeRules, OriginalCommit, tir_output_material_codec_v1, tir_trace_material_codec_v1,
+    },
 };
 use misaka_palw_tir::{Prim, demand::history_length_v1};
 use std::{cell::Cell, rc::Rc};
@@ -85,6 +87,28 @@ impl WidePanelCaptureV2<'_> {
             step_leaf_count: self.run.leaf_count(),
             step_merkle_root: self.run.step_merkle_root(),
         }
+    }
+
+    /// Measure the committed raw trace from the same retained execution,
+    /// without loading tile bodies or constructing their Merkle openings.
+    pub fn public_trace_material(&self, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {
+        if rules.codec != tir_trace_material_codec_v1() {
+            return Err(ContractError::UnsupportedProfile);
+        }
+        let index_bytes = PublicOriginalTraceIndexV1::WIRE_BYTES as u64;
+        let chunk_cap = u64::from(rules.chunk_bytes);
+        if index_bytes > chunk_cap || self.leaves.is_empty() {
+            return Err(ContractError::Budget);
+        }
+        self.session.charge(Charge::Visit, self.leaves.len() as u64).map_err(|_| ContractError::Budget)?;
+        let total_bytes = self.leaves.iter().try_fold(index_bytes, |total, leaf| {
+            if leaf.bytes > chunk_cap {
+                return Err(ContractError::Budget);
+            }
+            total.checked_add(leaf.bytes).filter(|bytes| *bytes <= rules.max_bytes).ok_or(ContractError::Budget)
+        })?;
+        let subject = Digest(self.run.execution_root().as_bytes());
+        Ok(ManifestEntryV1 { subject, content_root: subject, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes })
     }
 
     /// Open the separately committed logits of the original capture. The

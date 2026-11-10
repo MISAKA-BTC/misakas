@@ -286,6 +286,15 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     )
     .unwrap();
     assert_eq!(capture.run().generated(), EXPECTED);
+    use misaka_palw_positive_contract::public_one_honest::tir_trace_material_codec_v1;
+    let trace_rules = ManifestScopeRules { codec: tir_trace_material_codec_v1(), max_bytes: 1 << 24, chunk_bytes: 1 << 16 };
+    let trace_material = capture.public_trace_material(trace_rules).unwrap();
+    assert_eq!(trace_material.subject, digest(capture.run().execution_root()));
+    assert!(trace_material.total_bytes > 136);
+    assert_eq!(
+        capture.public_trace_material(ManifestScopeRules { max_bytes: trace_material.total_bytes - 1, ..trace_rules }),
+        Err(misaka_palw_positive_contract::ContractError::Budget)
+    );
     let rows = capture.run().logits_rows();
     let vocab = rows[0].len();
     let logit_values = (rows.len() * vocab) as u64;

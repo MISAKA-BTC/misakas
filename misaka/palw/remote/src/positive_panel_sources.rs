@@ -286,6 +286,11 @@ pub fn run_public_wide_replay_v1(
     )
     .map_err(PanelSourceErrorR1::ReplayExecution)?;
     let Err(mismatch) = capture.check_public_original_replay(original, &output) else {
+        let trace = manifest.entry(MaterialScope::Trace);
+        let rules = ManifestScopeRules { codec: trace.codec, max_bytes: trace.total_bytes, chunk_bytes: trace.chunk_bytes };
+        if capture.public_trace_material(rules)? != *trace {
+            return Err(PanelSourceErrorR1::Binding);
+        }
         return check_public_replay_trace_v1(provider, original, &capture.public_trace_index());
     };
     if let Some(search) = search

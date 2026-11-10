@@ -525,6 +525,12 @@ pub fn tir_output_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-output/core-v1/u32-le/whole")
 }
 
+/// Native trace index and raw tile values in canonical leaf order.
+/// Merkle openings travel separately and have their own transport cap.
+pub fn tir_trace_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tir-trace-v1/index-and-native-leaf-values")
+}
+
 pub fn prompt_text_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"prompt-text/utf8-exact/whole")
 }
