@@ -55,12 +55,12 @@ fn program_material_is_the_registered_graph_in_one_chunk() {
 fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     use crate::miner::positive_v2::store::{StoreErrorV2, load_public_manifest_v1, store_public_manifest_v1};
     use crate::positive_panel_sources::{
-        PanelSourceErrorR1, fetch_public_manifest_v1, open_public_input_token_tile_v1, open_public_output_tokens_v1,
-        open_public_tir_program_v1, read_public_manifest_v1,
+        PanelSourceErrorR1, fetch_public_manifest_v1, fetch_public_replay_inputs_v1, open_public_input_token_tile_v1,
+        open_public_output_tokens_v1, open_public_tir_program_v1, read_public_manifest_v1,
     };
     use crate::{
         evidence::fs::FsProvider,
-        public_material::{MaterialProvider, public_original_manifest_path},
+        public_material::{MaterialProvider, public_original_manifest_path, public_original_replay_path},
     };
     use kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1;
     use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, OriginalCommit, tir_output_material_codec_v1};
@@ -170,7 +170,25 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     let provider = FsProvider::new(&store);
     let fetched = fetch_public_manifest_v1(&provider, &original, &rules, limit, 4096);
     let overwrite = provider.put(&public_original_manifest_path(original.id()), &forged);
+    let replay_manifest = fetched.as_ref().unwrap();
+    let missing = fetch_public_replay_inputs_v1(&provider, &original, replay_manifest, form);
+    for (scope, bytes) in [
+        (MaterialScope::Program, fixture.class.program.as_slice()),
+        (MaterialScope::Prompt, prompt_text.as_bytes()),
+        (MaterialScope::Tokenizer, tokenizer_json.as_slice()),
+    ] {
+        let path = public_original_replay_path(original.id(), scope).unwrap();
+        crate::evidence::fs::write_provider_chunk(&store.join(&path), bytes).unwrap();
+        assert!(provider.put(&path, bytes).is_err());
+    }
+    let replay = fetch_public_replay_inputs_v1(&provider, &original, replay_manifest, form);
+    let path = public_original_replay_path(original.id(), MaterialScope::Prompt).unwrap();
+    std::fs::write(store.join(path), "b".repeat(prompt_text.len())).unwrap();
+    let altered = fetch_public_replay_inputs_v1(&provider, &original, replay_manifest, form);
     std::fs::remove_dir_all(&store).unwrap();
+    assert!(matches!(missing, Err(PanelSourceErrorR1::Incomplete)));
+    assert_eq!(replay.unwrap(), (fixture.plan.program.clone(), prompt.clone()));
+    assert!(matches!(altered, Err(PanelSourceErrorR1::Contract(ContractError::Identity))));
     written.unwrap();
     assert_eq!(refused, Err(StoreErrorV2::Authentication));
     assert_eq!(unchanged.unwrap(), encoded);

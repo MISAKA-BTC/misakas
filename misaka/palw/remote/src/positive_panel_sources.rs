@@ -41,6 +41,41 @@ use misaka_palw_tir_exec::node::TirArtifactV1;
 use crate::miner::positive_v2::{CanonicalDataDutyV2, MinerErrorV2, PreparedDataV2, StoredUnitV2};
 use crate::public_material::{MaterialProvider, public_original_manifest_path};
 
+/// Fetch the program and prompt inputs for one checked original. Each payload
+/// is bounded before acquisition and authenticated before use by the replay.
+pub fn fetch_public_replay_inputs_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    form: PalwPromptIdsFormV1,
+) -> Result<(TirProgramV1, Vec<u32>), PanelSourceErrorR1> {
+    if manifest.original() != original.id() {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let fetch = |scope| {
+        let entry = manifest.entry(scope);
+        let size = usize::try_from(entry.total_bytes).map_err(|_| PanelSourceErrorR1::Budget)?;
+        if size > crate::public_material::MATERIAL_UNIT_MAX_BYTES || entry.total_bytes > u64::from(entry.chunk_bytes) {
+            return Err(PanelSourceErrorR1::Budget);
+        }
+        let path =
+            crate::public_material::public_original_replay_path(original.id(), scope).ok_or(ContractError::UnsupportedProfile)?;
+        let bytes = provider
+            .get(&path, size)
+            .map_err(|error| PanelSourceErrorR1::ReplayProvider(error.0))?
+            .ok_or(PanelSourceErrorR1::Incomplete)?;
+        if bytes.len() != size {
+            return Err(PanelSourceErrorR1::Binding);
+        }
+        Ok(bytes)
+    };
+    let program = open_public_tir_program_v1(manifest, &fetch(MaterialScope::Program)?)?;
+    let prompt = fetch(MaterialScope::Prompt)?;
+    let tokenizer = fetch(MaterialScope::Tokenizer)?;
+    let ids = check_public_prompt_v1(original, manifest, form, &prompt, &tokenizer)?;
+    Ok((program, ids))
+}
+
 /// Obtain the original manifest from a configured public material provider.
 pub fn fetch_public_manifest_v1(
     provider: &dyn MaterialProvider,
@@ -219,6 +254,7 @@ pub enum PanelSourceErrorR1 {
     Incomplete,
     ManifestRead(ErrorKind),
     ManifestProvider(String),
+    ReplayProvider(String),
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {

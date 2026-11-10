@@ -251,10 +251,24 @@ pub fn finalize_public_capture_v1(
         kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1(tokenizer_json, scope_limits[tokenizer])?;
     manifest.entries[input] = job.public_input_token_material(scope_limits[input])?;
     manifest.entries[output] = capture.public_output_material(scope_limits[output])?;
+    let replay_material = [
+        (MaterialScope::Program, job.class.program.as_slice()),
+        (MaterialScope::Prompt, prompt_text.as_bytes()),
+        (MaterialScope::Tokenizer, tokenizer_json),
+    ];
+    if replay_material.iter().any(|(_, bytes)| bytes.len() > crate::public_material::MATERIAL_UNIT_MAX_BYTES) {
+        return Err(ContractError::Budget.into());
+    }
     let bytes = original.bind_manifest(&manifest, scope_limits, total_limit, max_manifest_bytes)?;
     let digest = original.id().0;
     let signature = sign(&digest.0, ORIGINAL_SIGN_CONTEXT).map_err(MinerErrorV2::Signer)?;
     original.authenticate(key, &signature)?;
+    for (scope, bytes) in replay_material {
+        let path =
+            crate::public_material::public_original_replay_path(original.id(), scope).ok_or(ContractError::UnsupportedProfile)?;
+        crate::evidence::fs::write_provider_chunk(&provider_root.join(path), bytes)
+            .map_err(|error| MinerErrorV2::Journal(format!("public replay material {scope:?}: {error}")))?;
+    }
     super::store::store_public_manifest_v1(provider_root, &original, scope_limits, total_limit, max_manifest_bytes, &bytes)
         .map_err(|error| MinerErrorV2::Journal(format!("public manifest: {error:?}")))?;
     Ok((original, signature))
