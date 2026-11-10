@@ -649,8 +649,17 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let signed_approval =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &assertion.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [0; 32]).unwrap();
     let signed_assertion = (102, &assertion, &signed.key, signed_approval.as_ref());
-    assert_eq!(draw.verify_replay_quorum(1, 102, &[signed_assertion]), Ok(()));
-    assert_eq!(draw.verify_replay_quorum(1, prepared.schedule.hard(), &[signed_assertion]), Ok(()));
+    let approval_records = draw.verify_replay_quorum(1, 102, &[signed_assertion]).unwrap();
+    assert_eq!(approval_records.len(), 1);
+    let restored_approvals = borsh::from_slice::<Vec<kaspa_consensus_core::palw_positive_contract_v2::PublicReplayApprovalRecordV1>>(
+        &borsh::to_vec(&approval_records).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(draw.verify_replay_quorum(1, prepared.schedule.hard(), &[signed_assertion]), Ok(restored_approvals));
+    assert_ne!(
+        draw.verify_replay_quorum(1, 102, &[(101, &assertion, &signed.key, signed_approval.as_ref())]).unwrap(),
+        approval_records
+    );
     assert_eq!(
         draw.verify_replay_quorum(1, prepared.schedule.hard() + 1, &[signed_assertion]),
         Err(misaka_palw_positive_contract::ContractError::Range)

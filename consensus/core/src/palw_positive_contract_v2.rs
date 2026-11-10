@@ -204,6 +204,14 @@ impl PublicDrawRecordV1 {
     }
 }
 
+/// Canonical inclusion identity of an authenticated replay approval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PublicReplayApprovalRecordV1 {
+    bond: PanelBond,
+    included_at: u64,
+    approval_digest: Digest,
+}
+
 impl PreparedPublicDrawV1 {
     pub fn record(&self) -> PublicDrawRecordV1 {
         PublicDrawRecordV1 {
@@ -241,22 +249,24 @@ impl PreparedPublicDrawV1 {
         required: usize,
         approval_until: u64,
         approvals: &[(u64, &FullReplayApproval, &[u8; PUBKEY_BYTES], &[u8; SIGNATURE_BYTES])],
-    ) -> Result<(), ContractError> {
+    ) -> Result<Vec<PublicReplayApprovalRecordV1>, ContractError> {
         if approval_until > self.hard || required == 0 || approvals.len() < required || approvals.len() > self.members.len() {
             return Err(ContractError::Range);
         }
-        let mut seen = std::collections::BTreeSet::new();
+        let mut checked = std::collections::BTreeMap::new();
         for &(included_at, approval, key, signature) in approvals {
             if !(self.draw_daa..=approval_until).contains(&included_at) {
                 return Err(ContractError::Range);
             }
             let bond = approval.bond;
-            if !seen.insert((bond.transaction, bond.index)) {
+            let key_order = (bond.transaction, bond.index);
+            if checked.contains_key(&key_order) {
                 return Err(ContractError::Identity);
             }
             approval.authenticate(&self.approval_context(bond)?, key, signature)?;
+            checked.insert(key_order, PublicReplayApprovalRecordV1 { bond, included_at, approval_digest: approval.signing_digest() });
         }
-        Ok(())
+        Ok(checked.into_values().collect())
     }
 }
 
