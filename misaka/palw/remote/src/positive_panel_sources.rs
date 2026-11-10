@@ -174,6 +174,14 @@ pub fn fetch_public_replay_output_v1(
     Ok(ids)
 }
 
+/// Caller-reserved acquisition limits for localizing a mismatched replay.
+pub struct PublicTraceSearchV1 {
+    pub range: std::ops::Range<u64>,
+    pub max_tiles: u64,
+    pub max_step_leaf_count: u64,
+    pub max_value_bytes: usize,
+}
+
 /// Acquire the public inputs and compare an independent wide TIR run with the
 /// original. The caller supplies rooted job/class metadata and reserves
 /// acquisition memory and work, including artifact identity verification.
@@ -190,6 +198,7 @@ pub fn run_public_wide_replay_v1(
     work: &WidePanelWorkV2,
     tape: File,
     reserver: &TirMemoryReserverV1,
+    search: Option<PublicTraceSearchV1>,
 ) -> Result<(), PanelSourceErrorR1> {
     if original.job.0 != job.job_id.as_bytes() || original.registered_class.0 != job.shape_profile_id.as_bytes() {
         return Err(PanelSourceErrorR1::Binding);
@@ -220,7 +229,28 @@ pub fn run_public_wide_replay_v1(
         reserver,
     )
     .map_err(PanelSourceErrorR1::ReplayExecution)?;
-    capture.check_public_original_replay(original, &output).map_err(PanelSourceErrorR1::ReplayMismatch)
+    let Err(mismatch) = capture.check_public_original_replay(original, &output) else {
+        return Ok(());
+    };
+    if let Some(search) = search
+        && capture.run().execution_root().as_bytes() != original.trace_root.0
+    {
+        let trace = fetch_public_trace_index_v1(provider, original, search.max_step_leaf_count)?;
+        let difference = find_public_trace_difference_v1(
+            provider,
+            original,
+            &trace,
+            &capture,
+            search.range,
+            search.max_tiles,
+            search.max_step_leaf_count,
+            search.max_value_bytes,
+        )?;
+        if let Some(difference) = difference {
+            return Err(PanelSourceErrorR1::LocatedTraceDifference(Box::new(difference)));
+        }
+    }
+    Err(PanelSourceErrorR1::ReplayMismatch(mismatch))
 }
 
 fn fetch_public_replay_material(
@@ -429,6 +459,7 @@ pub enum PanelSourceErrorR1 {
     ReplayProvider(String),
     ReplayExecution(String),
     ReplayMismatch(String),
+    LocatedTraceDifference(Box<(PalwStepOpeningV1, PalwStepTileLeafV1)>),
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {
@@ -564,6 +595,7 @@ impl PanelSourceCacheR1 {
         work: &WidePanelWorkV2,
         tape: File,
         reserver: &TirMemoryReserverV1,
+        search: Option<PublicTraceSearchV1>,
     ) -> Result<(), PanelSourceErrorR1> {
         if manifest.original() != original.id()
             || original.job.0 != job.job_id.as_bytes()
@@ -576,7 +608,20 @@ impl PanelSourceCacheR1 {
         }
         let space = PalwTirStepSpaceV2::new(&self.class).map_err(|error| PanelSourceErrorR1::ReplayExecution(error.to_string()))?;
         let artifact = self.assemble_artifact(container)?;
-        run_public_wide_replay_v1(provider, original, manifest, job, &self.class, &artifact, &space, run_limits, work, tape, reserver)
+        run_public_wide_replay_v1(
+            provider,
+            original,
+            manifest,
+            job,
+            &self.class,
+            &artifact,
+            &space,
+            run_limits,
+            work,
+            tape,
+            reserver,
+            search,
+        )
     }
 
     fn source(&self, kind: SourceKind) -> misaka_palw_positive_contract::identity::Digest {
