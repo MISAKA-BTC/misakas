@@ -663,6 +663,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let accepted =
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
+    let stale_origin = AcceptedOrigin { accepted_blue_score: reservation.origin.accepted_blue_score, ..request_context.origin };
+    let stale_request = ManifestRequestContext { origin: stale_origin, ..request_context };
+    assert_eq!(
+        prepared.verify_drawn_manifest_request(&draw, &request, &stale_request, &signed.key, request_sig.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     let other_limit = ManifestRequestContext { max_manifest_bytes: ManifestV1::WIRE_BYTES + 1, ..request_context };
     assert_eq!(
         prepared.verify_drawn_manifest_request(&draw, &request, &other_limit, &signed.key, request_sig.as_ref()),

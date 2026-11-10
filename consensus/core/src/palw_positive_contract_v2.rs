@@ -27,7 +27,7 @@ use misaka_palw_positive_contract::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
         ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
         PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1,
-        VerificationSchedule, public_draw_members_digest_v1, public_original_service_contract_id_v1,
+        VerificationSchedule, public_draw_members_digest_v1, public_original_service_contract_id_v1, require_accepted_after_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -491,6 +491,7 @@ impl PreparedPublicOriginalV1 {
         if context.manifest_body_bytes_reserved > capacity.transmitted_bytes {
             return Err(ContractError::Budget);
         }
+        require_accepted_after_v1(self.carrier.origin, context.origin)?;
         request.verify_for_inclusion(context, key, signature)
     }
 
@@ -657,6 +658,7 @@ impl PublicOriginalAdmissionRecordV1 {
         verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
     ) -> Result<PublicOriginalCourtRecordV1, ContractError> {
         let (original, evidence_id) = self.court_verdict_key(prepared, reservation, origin.accepted_daa, verdict)?;
+        require_accepted_after_v1(self.carrier.origin, origin)?;
         Ok(PublicOriginalCourtRecordV1 { original, admission_carrier: self.carrier, reservation, evidence_id, origin })
     }
 }
@@ -667,7 +669,8 @@ fn check_public_origin_point_v1(
 ) -> Result<(), ContractError> {
     if origin.accepted_daa > point.daa_score
         || origin.accepted_blue_score > point.blue_score
-        || (origin.accepted_blue_score == point.blue_score && origin.accepting_block.0 != point.block.as_bytes())
+        || (origin.accepted_blue_score == point.blue_score
+            && (origin.accepting_block.0 != point.block.as_bytes() || origin.accepted_daa != point.daa_score))
     {
         return Err(ContractError::Scope);
     }
@@ -702,6 +705,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let admission = self.public_original_admission_record_v1(row.original())?.ok_or(ContractError::Scope)?;
         let point = self.last_point().ok_or(ContractError::Scope)?;
         check_public_origin_point_v1(row.origin(), point)?;
+        require_accepted_after_v1(admission.carrier.origin, row.origin())?;
         let [_, _, _, ready, _, _, filed, _] = admission.deadlines;
         row.check_admission(admission.carrier.origin.accepted_daa, point.daa_score, admission.max_manifest_bytes, ready, filed)?;
         Ok(row)

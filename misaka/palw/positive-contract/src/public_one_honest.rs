@@ -621,7 +621,7 @@ impl ManifestResponseRecordV1 {
         if self.case != pending.id || !(pending.origin.accepted_daa..=pending.material_ready_by).contains(&self.origin.accepted_daa) {
             return Err(ContractError::Scope);
         }
-        check_delivery_order(pending.origin, self.origin)
+        require_accepted_after_v1(pending.origin, self.origin)
     }
 
     /// The caller re-verifies the original signed packet before this check.
@@ -633,11 +633,14 @@ impl ManifestResponseRecordV1 {
     }
 }
 
-fn check_delivery_order(request: AcceptedOrigin, response: AcceptedOrigin) -> Result<(), ContractError> {
-    if response.accepted_blue_score < request.accepted_blue_score
-        || (response.accepted_blue_score == request.accepted_blue_score
-            && (response.accepting_block != request.accepting_block
-                || (response.accepted_tx_ordinal, response.event_ordinal) <= (request.accepted_tx_ordinal, request.event_ordinal)))
+/// Compare two events already resolved from the same canonical accepted history.
+pub fn require_accepted_after_v1(prior: AcceptedOrigin, later: AcceptedOrigin) -> Result<(), ContractError> {
+    if later.accepted_daa < prior.accepted_daa
+        || later.accepted_blue_score < prior.accepted_blue_score
+        || (later.accepted_blue_score == prior.accepted_blue_score
+            && (later.accepting_block != prior.accepting_block
+                || later.accepted_daa != prior.accepted_daa
+                || (later.accepted_tx_ordinal, later.event_ordinal) <= (prior.accepted_tx_ordinal, prior.event_ordinal)))
     {
         return Err(ContractError::Scope);
     }
@@ -710,7 +713,7 @@ impl PendingManifestCase {
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
         self.check_delivery_context(original, origin.accepted_daa)?;
-        check_delivery_order(self.origin, origin)?;
+        require_accepted_after_v1(self.origin, origin)?;
         if response.case != self.id || response.supply_obligation != self.supply_obligation {
             return Err(ContractError::Scope);
         }
