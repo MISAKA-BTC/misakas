@@ -390,6 +390,9 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let approval = draw.approval_context(bond).unwrap();
     assert_eq!(approval.original, original.id());
     assert_eq!(approval.member, r.miner);
+    assert_eq!(approval.full_scope, original.id().full_replay_scope(d(12)));
+    let other_plan = prepared.prepare_draw(d(11), 101, &members, d(13)).unwrap();
+    assert_ne!(approval.full_scope, other_plan.approval_context(bond).unwrap().full_scope);
     assert_eq!(draw.rescue_capacity(bond), Ok(supply));
     use misaka_palw_positive_contract::public_one_honest::{
         Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequest, ManifestRequestContext,

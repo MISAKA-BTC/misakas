@@ -13,6 +13,14 @@ pub const MANIFEST_REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-r
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct OriginalId(pub Digest);
 
+impl OriginalId {
+    /// Scope of a replay approval over the complete native relation plan.
+    /// The original identity commits to its rules, execution and manifest.
+    pub fn full_replay_scope(self, relation_plan: Digest) -> Digest {
+        hash(b"misaka/palw/public-replay-scope/v1", &(self, relation_plan))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct MaterialId(pub Digest);
 

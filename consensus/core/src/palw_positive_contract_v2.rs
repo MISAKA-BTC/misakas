@@ -213,7 +213,7 @@ impl PreparedPublicOriginalV1 {
         draw: Digest,
         draw_daa: u64,
         members: &[(PanelBond, PrincipalId)],
-        full_scope: Digest,
+        relation_plan: Digest,
     ) -> Result<PreparedPublicDrawV1, ContractError> {
         if draw_daa <= self.inclusion_daa || draw_daa > self.draw_ready_by {
             return Err(ContractError::Range);
@@ -231,7 +231,7 @@ impl PreparedPublicOriginalV1 {
             original: self.original,
             draw,
             draw_daa,
-            full_scope,
+            full_scope: self.original.full_replay_scope(relation_plan),
             members: checked,
             per_bond: self.rescue.per_drawn_bond,
         })
