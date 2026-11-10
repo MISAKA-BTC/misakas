@@ -970,6 +970,39 @@ impl PendingManifestCaseRecordV1 {
 }
 
 impl PendingManifestCase {
+    pub fn max_manifest_bytes(&self) -> u32 {
+        self.max_manifest_bytes
+    }
+
+    /// Prepare a response from the restored native request. The provider and
+    /// its signing key must match the native supply obligation.
+    pub fn sign_provider_response(
+        &self,
+        original: &OriginalCommit,
+        provider: PrincipalId,
+        key: &[u8; PUBKEY_BYTES],
+        body: &[u8],
+        sign: impl FnOnce(&[u8; 64], &[u8]) -> Result<[u8; SIGNATURE_BYTES], ContractError>,
+    ) -> Result<ManifestResponseCarrierV1, ContractError> {
+        if original.id() != self.original || original.manifest_material_id() != self.material {
+            return Err(ContractError::Scope);
+        }
+        if principal(key) != provider {
+            return Err(ContractError::Identity);
+        }
+        original.authenticate_manifest(body, self.max_manifest_bytes)?;
+        let response = SignedManifestResponseV1 {
+            case: self.id,
+            supply_obligation: self.supply_obligation,
+            provider,
+            body_root: original.manifest_root,
+        };
+        let digest = response.signing_digest();
+        let signature = sign(&digest.0, MANIFEST_RESPONSE_SIGN_CONTEXT)?;
+        authenticate_actor(provider, key, &signature, digest, MANIFEST_RESPONSE_SIGN_CONTEXT)?;
+        Ok(ManifestResponseCarrierV1 { response, key: *key, signature })
+    }
+
     /// Recover a delivery only by replaying its literal packet against the
     /// restored request and the canonical provider obligation.
     #[allow(clippy::too_many_arguments)]
@@ -1817,21 +1850,21 @@ mod tests {
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by()), Ok(()));
         let mut changed_bytes = bytes.clone();
         changed_bytes[0] ^= 1;
-        let response = SignedManifestResponseV1 {
-            case: pending.id(),
-            supply_obligation: context.supply_obligation,
-            provider: principal(key),
-            body_root: bound_original.manifest_root,
+        let sign_response = |message: &[u8; 64], domain: &[u8]| {
+            let signature = libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, message, domain, [0; 32]).unwrap();
+            Ok(*signature.as_ref())
         };
-        let provider_signature =
-            libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &response.signing_digest().0, MANIFEST_RESPONSE_SIGN_CONTEXT, [0; 32])
-                .unwrap();
-        let header = borsh::to_vec(&ManifestResponseCarrierV1 {
-            response: response.clone(),
-            key: *key,
-            signature: *provider_signature.as_ref(),
-        })
-        .unwrap();
+        assert_eq!(
+            pending.sign_provider_response(&bound_original, principal(key), key, &changed_bytes, |_, _| panic!("wrong body")),
+            Err(ContractError::Identity)
+        );
+        assert_eq!(
+            pending.sign_provider_response(&bound_original, PrincipalId(Digest([0; 64])), key, &bytes, |_, _| panic!("wrong actor")),
+            Err(ContractError::Identity)
+        );
+        let carrier = pending.sign_provider_response(&bound_original, principal(key), key, &bytes, sign_response).unwrap();
+        let response = carrier.response.clone();
+        let header = borsh::to_vec(&carrier).unwrap();
         assert_eq!(header.len(), ManifestResponseCarrierV1::HEADER_BYTES);
         let delivery_origin = AcceptedOrigin {
             accepting_block: crate::rows::NativeHash64([4; 64]),

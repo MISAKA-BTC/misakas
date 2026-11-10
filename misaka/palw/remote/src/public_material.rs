@@ -47,6 +47,12 @@ use kaspa_consensus_core::palw_public_material_v1::{
 use kaspa_consensus_core::palw_step_leg::PalwStepBindingV2;
 use kaspa_hashes::Hash64;
 use misaka_palw_kernel::ledger::KernelLedgerV1;
+#[cfg(feature = "positive-miner")]
+use misaka_palw_positive_contract::{
+    ContractError,
+    identity::{PUBKEY_BYTES, PrincipalId, SIGNATURE_BYTES},
+    public_one_honest::{OriginalCommit, PendingManifestCase},
+};
 use misaka_palw_tir::TirProgramV1;
 
 use crate::evidence::ProviderError;
@@ -251,6 +257,28 @@ impl MaterialProvider for crate::transport::HttpProvider {
         }
         Ok(())
     }
+}
+
+/// Read the original manifest from a public provider and prepare its signed
+/// response packet for an existing native case. This does not submit a carrier.
+#[cfg(feature = "positive-miner")]
+pub fn prepare_public_manifest_response_v1(
+    source: &dyn MaterialProvider,
+    pending: &PendingManifestCase,
+    original: &OriginalCommit,
+    provider: PrincipalId,
+    key: &[u8; PUBKEY_BYTES],
+    sign: impl FnOnce(&[u8; 64], &[u8]) -> Result<[u8; SIGNATURE_BYTES], ContractError>,
+) -> Result<Vec<u8>, ProviderError> {
+    let body = source
+        .get(&public_original_manifest_path(original.id()), pending.max_manifest_bytes() as usize)?
+        .ok_or_else(|| ProviderError("public original manifest is unavailable".into()))?;
+    let carrier = pending
+        .sign_provider_response(original, provider, key, &body, sign)
+        .map_err(|error| ProviderError(format!("public manifest response refused: {error:?}")))?;
+    let mut packet = borsh::to_vec(&carrier).map_err(|error| ProviderError(error.to_string()))?;
+    packet.extend_from_slice(&body);
+    Ok(packet)
 }
 
 /// The providers a list names, as material providers.

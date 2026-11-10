@@ -905,7 +905,7 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
             PanelSourceErrorR1, PanelSourceLimitsR1, PublicTraceAcquisitionV1, fetch_public_manifest_v1,
             fetch_public_replay_inputs_v1, fetch_public_replay_output_v1, replay_and_sign_drawn_public_wide_v1,
         },
-        public_material::{MaterialProvider, artifact_leaf_path},
+        public_material::{MaterialProvider, artifact_leaf_path, prepare_public_manifest_response_v1},
         transport::{
             HttpProvider,
             server::{self, ServerConfig},
@@ -1135,6 +1135,48 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     let draw_point = PalwBlockContextV2 { block: h(101), daa_score: 101, blue_score: 101, subsidy: 0 };
     let members = [PublicDrawMemberV1 { bond, principal: principal(panel_key), rescue_reservation: d(46) }];
     let draw = accepted.prepare_draw(d(47), draw_point, &members, stateless_wide_replay_plan_v1()).unwrap();
+    let request_origin =
+        AcceptedOrigin { accepting_block: NativeHash64([5; 64]), accepted_daa: 102, accepted_blue_score: 102, ..origin };
+    let request = ManifestRequest {
+        original: admitted.id(),
+        manifest_root: admitted.manifest_root,
+        claimant: Claimant::DrawnBond(bond),
+        signer: principal(panel_key),
+        inspection_scope: stateless_wide_replay_plan_v1(),
+        supply_obligation: obligation,
+        collect_until: accepted.schedule.filed_by(),
+        reservation: members[0].rescue_reservation,
+    };
+    let request_context = ManifestRequestContext {
+        original: admitted,
+        claimant: request.claimant,
+        signer: request.signer,
+        inspection_scope: request.inspection_scope,
+        supply_obligation: obligation,
+        reservation: request.reservation,
+        max_manifest_bytes: ManifestV1::WIRE_BYTES,
+        manifest_limits: manifest_limits_id_v1(&rules, 1 << 20, ManifestV1::WIRE_BYTES),
+        manifest_body_bytes_reserved: u64::from(ManifestV1::WIRE_BYTES),
+        schedule: accepted.schedule,
+        origin: request_origin,
+    };
+    let request_signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [0; 32])
+            .unwrap();
+    let pending =
+        accepted.verify_drawn_manifest_request(&draw, &request, &request_context, panel_key, request_signature.as_ref()).unwrap();
+    let miner_pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([62; 32]);
+    let response =
+        prepare_public_manifest_response_v1(&provider, &pending, admitted, admitted.miner, &signed.key, |message, domain| {
+            assert_eq!(domain, MANIFEST_RESPONSE_SIGN_CONTEXT);
+            Ok(*libcrux_ml_dsa::ml_dsa_87::sign(&miner_pair.signing_key, message, domain, [0; 32]).unwrap().as_ref())
+        })
+        .unwrap();
+    let response_origin =
+        AcceptedOrigin { accepting_block: NativeHash64([6; 64]), accepted_daa: 103, accepted_blue_score: 103, ..origin };
+    let delivery =
+        pending.verify_provider_response_bytes(&response, admitted.miner, admitted, response_origin, &rules, 1 << 20).unwrap();
+    assert!(matches!(delivery.into_outcome(), ManifestDeliveryV1::Checked(checked) if checked == manifest));
     let other_plan = accepted.prepare_draw(d(47), draw_point, &members, d(48)).unwrap();
     let panel_signatures = Cell::new(0);
     let artifact_path = |index| artifact_leaf_path(&artifact_root, index);
