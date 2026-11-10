@@ -80,8 +80,8 @@ pub fn fetch_public_replay_output_v1(
 }
 
 /// Acquire the public inputs and compare an independent wide TIR run with the
-/// original. The caller supplies rooted job/class metadata, authenticated
-/// model parameters via the runner, and reserves acquisition memory and work.
+/// original. The caller supplies rooted job/class metadata and reserves
+/// acquisition memory and work, including artifact identity verification.
 #[allow(clippy::too_many_arguments)]
 pub fn run_public_wide_replay_v1(
     provider: &dyn MaterialProvider,
@@ -89,15 +89,14 @@ pub fn run_public_wide_replay_v1(
     manifest: &CheckedManifestV1,
     job: &PalwJobContextV2,
     class: &PalwTirClassV1,
-    artifact: Hash64,
+    artifact: &TirArtifactV1,
     space: &PalwTirStepSpaceV2,
-    runner: &TirClassRunnerWideQ24V2<'_>,
     run_limits: TirWideRunLimitsV2,
     work: &WidePanelWorkV2,
     tape: File,
     reserver: &TirMemoryReserverV1,
 ) -> Result<(), PanelSourceErrorR1> {
-    if original.job.0 != job.job_id.as_bytes() || original.artifact.0 != artifact.as_bytes() {
+    if original.job.0 != job.job_id.as_bytes() || original.registered_class.0 != job.shape_profile_id.as_bytes() {
         return Err(PanelSourceErrorR1::Binding);
     }
     // The wide capture currently accepts the native Flat input commitment.
@@ -107,9 +106,19 @@ pub fn run_public_wide_replay_v1(
     }
     drop(program);
     let output = fetch_public_replay_output_v1(provider, original, manifest)?;
+    if &artifact.class().map_err(PanelSourceErrorR1::Artifact)? != class {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let (root, _) = artifact.inventory_root().map_err(PanelSourceErrorR1::Artifact)?;
+    let class_id = class.class_id(&root);
+    if original.artifact.0 != root.as_bytes() || class_id != job.shape_profile_id {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let runner = TirClassRunnerWideQ24V2::new(space, artifact.plan(), artifact.params(), class_id)
+        .map_err(PanelSourceErrorR1::ReplayExecution)?;
     let capture = capture_one_pass_v2(
-        CaptureExpectedV2 { class, artifact, job, space, prompt: &prompt },
-        runner,
+        CaptureExpectedV2 { class, artifact: root, job, space, prompt: &prompt },
+        &runner,
         run_limits,
         work,
         tape,
