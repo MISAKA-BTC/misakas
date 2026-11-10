@@ -359,17 +359,22 @@ impl PublicOriginalAdmissionRecordV1 {
     }
 
     /// Join a computed verdict to a restored admission before the native fold
-    /// applies its case, deadline and economic rules.
+    /// applies its case and economic rules. The original schedule bounds
+    /// inclusion even after the reservation is restored.
     pub fn court_verdict_key(
         &self,
         prepared: &PreparedPublicOriginalV1,
         reservation: Digest,
+        inclusion_daa: u64,
         verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
     ) -> Result<(OriginalId, Hash64), ContractError> {
         self.check_restore(prepared, reservation)?;
         let key = verdict.key();
         if key.0 != self.original {
             return Err(ContractError::Scope);
+        }
+        if inclusion_daa < self.inclusion_daa || inclusion_daa > prepared.schedule.terminal_by() {
+            return Err(ContractError::Range);
         }
         Ok(key)
     }

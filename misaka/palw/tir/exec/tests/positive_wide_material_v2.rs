@@ -429,6 +429,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     bad_binding.committed_execution_root =
         palw_tir_execution_root_v1(&context, &bad.trace.full_logits_trace_root, &class_id, trace_len, &bad.trace.step_merkle_root);
     let mut bad_original = original.clone();
+    bad_original.manifest_root = d(4);
     bad_original.trace_root = digest(bad_binding.committed_execution_root);
     bad.original = bad_original.id();
     let verdict = bad
@@ -519,7 +520,20 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
     let reserved = d(21);
     let record = prepared.record(reserved);
-    assert_eq!(record.court_verdict_key(&prepared, reserved, &verdict), Err(misaka_palw_positive_contract::ContractError::Scope),);
+    let terminal = prepared.schedule.terminal_by();
+    assert_eq!(
+        record.court_verdict_key(&prepared, reserved, terminal, &verdict),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
+    let bad_signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &bad_original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0; 32]).unwrap();
+    let bad_prepared = admission.prepare(&bad_original, &signed.key, bad_signature.as_ref(), &reservation).unwrap();
+    let bad_record = bad_prepared.record(reserved);
+    assert_eq!(bad_record.court_verdict_key(&bad_prepared, reserved, terminal, &verdict), Ok(verdict.key()));
+    assert_eq!(
+        bad_record.court_verdict_key(&bad_prepared, reserved, terminal + 1, &verdict),
+        Err(misaka_palw_positive_contract::ContractError::Range)
+    );
     assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
     use misaka_palw_positive_contract::public_one_honest::{
         FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond, PublicDrawMemberV1,
