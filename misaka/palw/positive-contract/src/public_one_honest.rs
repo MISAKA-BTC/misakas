@@ -484,6 +484,9 @@ pub struct PendingManifestCaseRecordV1 {
 pub enum ManifestDeliveryV1 {
     Checked(CheckedManifestV1),
     CommittedButInvalid(ContractError),
+    /// The obligated provider signed these exact bytes for this case, but
+    /// they do not open the original manifest commitment.
+    WrongMaterial,
 }
 
 impl PendingManifestCaseRecordV1 {
@@ -525,7 +528,7 @@ impl PendingManifestCase {
         }
         authenticate_actor(expected_provider, key, signature, response.signing_digest(), MANIFEST_RESPONSE_SIGN_CONTEXT)?;
         if body_root != original.manifest_root {
-            return Err(ContractError::Identity);
+            return Ok(ManifestDeliveryV1::WrongMaterial);
         }
         let authenticated = AuthenticatedManifest { id: self.material, bytes };
         Ok(match authenticated.decode(original, scope_limits, total_limit) {
@@ -1176,6 +1179,32 @@ mod tests {
         };
         assert_eq!(verify(&bytes, 89), Ok(ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget)));
         assert_eq!(verify(&changed_bytes, 90), Err(ContractError::Identity));
+        let wrong_response = SignedManifestResponseV1 {
+            body_root: manifest_root(bound_original.scope.ruleset, &changed_bytes, max).unwrap(),
+            ..response.clone()
+        };
+        let wrong_signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &pair.signing_key,
+            &wrong_response.signing_digest().0,
+            MANIFEST_RESPONSE_SIGN_CONTEXT,
+            [0; 32],
+        )
+        .unwrap();
+        assert_eq!(
+            pending.verify_provider_response(
+                &wrong_response,
+                principal(key),
+                &bound_original,
+                schedule.material_ready_by(),
+                &changed_bytes,
+                &rules,
+                90,
+                max,
+                key,
+                wrong_signature.as_ref(),
+            ),
+            Ok(ManifestDeliveryV1::WrongMaterial)
+        );
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
         assert_eq!(verify(&bytes, 90), Ok(ManifestDeliveryV1::Checked(checked)));
         assert_eq!(pending.unresolved_at(clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
