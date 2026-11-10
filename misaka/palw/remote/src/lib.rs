@@ -37,10 +37,6 @@ pub mod miner;
 #[cfg(feature = "positive-panel")]
 pub mod positive_panel;
 #[cfg(feature = "positive-panel")]
-pub mod positive_panel;
-#[cfg(feature = "positive-panel")]
-pub mod positive_panel_sources;
-#[cfg(feature = "positive-panel")]
 pub mod positive_panel_sources;
 pub mod proof;
 /// Lane DA16: the public material transport — artifacts (both roots of a binding) and claim material (kernel positions, V2 held units).
