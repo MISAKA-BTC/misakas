@@ -33,6 +33,11 @@ pub struct PanelBond {
     pub index: u32,
 }
 
+/// Compact identity of the ordered bond/principal pairs in a native draw.
+pub fn public_draw_members_digest_v1(members: &[(PanelBond, PrincipalId)]) -> Digest {
+    hash(b"misaka/palw/public-draw-members/v1", &members)
+}
+
 /// The canonical identity native admission must resolve from the draw or
 /// from admitted outsider eligibility before using a request's case ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

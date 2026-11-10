@@ -22,7 +22,7 @@ use misaka_palw_positive_contract::{
     public_one_honest::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestV1, MaterialCaseDemand,
         OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase, ProtectedRescueDemand, ReplayApprovalContext,
-        VerificationSchedule,
+        VerificationSchedule, public_draw_members_digest_v1,
     },
     reservations::RemainingCapacity,
     rows::AggregateUsage,
@@ -108,10 +108,42 @@ pub struct PreparedPublicDrawV1 {
     draw_daa: u64,
     full_scope: Digest,
     members: std::collections::BTreeMap<(Digest, u32), PrincipalId>,
+    ordered_members: Digest,
     per_bond: RemainingCapacity,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PublicDrawRecordV1 {
+    original: OriginalId,
+    draw: Digest,
+    draw_daa: u64,
+    full_scope: Digest,
+    ordered_members: Digest,
+    per_bond: RemainingCapacity,
+}
+
+impl PublicDrawRecordV1 {
+    /// Restore only against a draw re-derived from the native history.
+    pub fn check_restore(&self, draw: &PreparedPublicDrawV1) -> Result<(), ContractError> {
+        if *self != draw.record() {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+}
+
 impl PreparedPublicDrawV1 {
+    pub fn record(&self) -> PublicDrawRecordV1 {
+        PublicDrawRecordV1 {
+            original: self.original,
+            draw: self.draw,
+            draw_daa: self.draw_daa,
+            full_scope: self.full_scope,
+            ordered_members: self.ordered_members,
+            per_bond: self.per_bond,
+        }
+    }
+
     pub fn approval_context(&self, bond: PanelBond) -> Result<ReplayApprovalContext, ContractError> {
         let member = *self.members.get(&(bond.transaction, bond.index)).ok_or(ContractError::Identity)?;
         Ok(ReplayApprovalContext { original: self.original, draw: self.draw, bond, member, full_scope: self.full_scope })
@@ -233,6 +265,7 @@ impl PreparedPublicOriginalV1 {
             draw_daa,
             full_scope: self.original.full_replay_scope(relation_plan),
             members: checked,
+            ordered_members: public_draw_members_digest_v1(members),
             per_bond: self.rescue.per_drawn_bond,
         })
     }
@@ -285,6 +318,9 @@ impl PublicOriginalAdmissionV1<'_> {
             return Err(ContractError::Budget);
         }
         let clock = OriginalClock::new(reservation.inclusion_daa)?;
+        if reservation.notice.draw_ready_by <= reservation.inclusion_daa {
+            return Err(ContractError::Range);
+        }
         if reservation.budget.retention_until < clock.hard() {
             return Err(ContractError::Budget);
         }
