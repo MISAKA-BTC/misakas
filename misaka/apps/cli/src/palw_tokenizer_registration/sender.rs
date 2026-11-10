@@ -228,8 +228,12 @@ pub(super) async fn run(ctx: &Ctx, payload: &Path, saved_quote: &Path, keys: Key
         if fresh.observation != read.observation || fresh.charge != read.charge || fresh.slot != read.slot {
             return Err(input_error("accepted parent, quote or reservation changed before submission; retry from the new view"));
         }
-        let submitted_id =
-            nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|e| CliError::connection(e.to_string()))?;
+        let submitted_id = nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|e| {
+            CliError::connection(format!(
+                "submission result unknown for transaction {}: {e}; inspect its mempool/accepted state before retrying",
+                tx.id()
+            ))
+        })?;
         if submitted_id != tx.id() {
             return Err(input_error(format!(
                 "submission returned a different transaction ID; inspect local transaction {} before retrying",

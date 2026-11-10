@@ -16,6 +16,8 @@ use kaspa_consensus_core::{
     palw_constraint_stream_court_v1::PalwConstraintStreamPhaseV1,
     palw_court_service_v1::ServiceCost,
     palw_fp_constraint_job_v1::PalwTokenTableV1,
+    palw_staged_court_state_v1::PalwStagedCourtKeyV1,
+    palw_state_v2::PalwStateCarriageV2,
     palw_tir_container_v1::*,
     palw_tokenizer_artifact_inventory_v1::*,
     palw_tokenizer_registration_carriage_v1::encode_tokenizer_registration_payload_v1,
@@ -459,6 +461,7 @@ async fn run() {
     assert_eq!(part_fold.header.daa_score, part_slot);
     assert_utxo_accepted(&m.env, &part_fold, &part_tx);
     let part_status = m.env.chain.ctx.consensus.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap().value.unwrap();
+    let part_state = m.env.chain.tip_state().1;
     let received = part_status.parts[0].accepted.expect("the actual Part folded");
     assert_eq!(received.block, part_fold.header.hash);
     assert_eq!(received.daa_score, open_status.parts[0].slot_daa);
@@ -514,6 +517,78 @@ async fn run() {
     let selected = chain_blocks(&m.env.chain, sink);
     let fold_roots =
         [open_fold.header.hash, part_fold.header.hash, finish_fold.header.hash].map(|hash| (hash, root_at(&m.env.chain, hash)));
+    // Restore the accepted Part point from the wire carriage authenticated
+    // by its child's committed parent root. Discard the importer's locally
+    // replayed PALW history through the import point before applying it.
+    let fork = selected.iter().position(|block| block.header.hash == part_fold.header.hash).unwrap();
+    let p = part_fold.header.hash;
+    let importer = fresh_node(&m);
+    for block in &selected[..=fork] {
+        arrive(&importer, block.clone(), "block through the TKR1 pruning point").await;
+    }
+    arrive(&importer, Block::from_header_arc(selected[fork + 1].header.clone()), "pruning point child's header").await;
+    let api = &importer.ctx.consensus;
+    let virtual_utxos = || api.get_virtual_utxos(None, 10_000, false).into_iter().collect::<std::collections::HashMap<_, _>>();
+    let verified_utxos = virtual_utxos();
+    let wire = {
+        let donor = m.env.chain.vp();
+        donor.capture_pruning_point_palw_state(p).unwrap();
+        borsh::to_vec(&donor.pruning_point_palw_state(p).unwrap()).unwrap()
+    };
+    let carriage: PalwStateCarriageV2 = borsh::from_slice(&wire).unwrap();
+    {
+        let vp = importer.vp();
+        let mut store = vp.palw_state_v2_store.write();
+        store.delete_tip_for_tests().unwrap();
+        for hash in std::iter::once(importer.config.params.genesis.hash).chain(selected[..=fork].iter().map(|b| b.header.hash)) {
+            store.delete_delta_for_tests(hash).unwrap();
+        }
+    }
+    importer.establish_pruning_import_target(p);
+    importer.vp().import_pruning_point_palw_state(p, carriage).expect("authenticated TKR1 snapshot imports at the Part point");
+    let (at, imported) = importer.tip_state();
+    assert_eq!(at, p);
+    assert_eq!(imported.state_root(), fold_roots[1].1);
+    for key in [
+        PalwStagedCourtKeyV1::TokenizerRegistrationBook,
+        PalwStagedCourtKeyV1::TokenizerRegistrationSession(open_id),
+        PalwStagedCourtKeyV1::TokenizerRegistrationPart(open_id, 0),
+    ] {
+        let expected = part_state.staged_court_row_v1(&key).expect("donor row at the accepted Part point");
+        assert_eq!(imported.staged_court_row_v1(&key), Some(expected), "imported paid state, including original Part bytes");
+    }
+    // The snapshot import invalidates the stable marker until the UTXO
+    // generation completes. This epoch-zero fixture retains its verified
+    // UTXOs throughout, so only the marker needs to be restored.
+    assert!(!api.is_pruning_utxoset_stable());
+    assert!(api.palw_tokenizer_registration_status_v1(open_id).is_err(), "an incomplete import cannot serve an authoritative status");
+    assert_eq!(virtual_utxos(), verified_utxos);
+    api.set_pruning_utxoset_stable_flag(true).expect("fixture retains the verified pruning-point UTXOs");
+    let imported_status = api.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap();
+    assert_eq!(imported_status.parent_point.block, p);
+    assert_eq!(imported_status.parent_root, fold_roots[1].1);
+    assert_eq!(*imported_status.value.unwrap(), *part_status);
+    for block in &selected[fork + 1..] {
+        arrive(&importer, block.clone(), "block after the TKR1 pruning point").await;
+        assert_eq!(importer.sink(), block.header.hash);
+        assert_eq!(importer.tip_state().1.state_root(), root_at(&m.env.chain, block.header.hash));
+        if block.header.hash == finish_fold.header.hash {
+            let status = importer.ctx.consensus.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap().value.unwrap();
+            assert_eq!(*status, *complete, "Finish folds from the authenticated imported Part bytes");
+            assert!(
+                importer
+                    .ctx
+                    .consensus
+                    .get_block_acceptance_data(block.header.hash)
+                    .unwrap()
+                    .iter()
+                    .flat_map(|entry| &entry.accepted_transactions)
+                    .any(|entry| entry.transaction_id == finish_tx.id())
+            );
+        }
+    }
+    assert_eq!(importer.tip_state().1.state_root(), root);
+    drop(importer);
     let (simulated_time, nonce) = (m.env.chain.ctx.simulated_time, m.env.chain.nonce_for_reopen());
     let Env { chain, config, bundle, premine, floats, .. } = m.env;
     drop(chain);
@@ -552,7 +627,6 @@ async fn run() {
     // Fork after Part but before Finish. The competing branch has the same
     // paid Open and accepted Part and never consumes the original Finish slot.
     let mut competing = t12_genesis_chain(&config, &bundle, &premine, &floats);
-    let fork = selected.iter().position(|block| block.header.hash == part_fold.header.hash).unwrap();
     for block in &selected[..=fork] {
         arrive(&competing, block.clone(), "common TKR1 block").await;
     }
