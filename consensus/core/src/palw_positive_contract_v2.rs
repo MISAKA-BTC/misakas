@@ -83,6 +83,42 @@ pub struct PreparedPublicOriginalV1 {
     pub original: OriginalId,
     pub schedule: VerificationSchedule,
     pub capacity: RemainingCapacity,
+    inclusion_daa: u64,
+}
+
+/// Fixed-size record to store in the same state update as the reservation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PublicOriginalAdmissionRecordV1 {
+    original: OriginalId,
+    inclusion_daa: u64,
+    reservation: Digest,
+    transmitted_bytes: u64,
+    additional_work: u64,
+    retained_bytes: u64,
+}
+
+impl PreparedPublicOriginalV1 {
+    pub fn record(&self, reservation: Digest) -> PublicOriginalAdmissionRecordV1 {
+        PublicOriginalAdmissionRecordV1 {
+            original: self.original,
+            inclusion_daa: self.inclusion_daa,
+            reservation,
+            transmitted_bytes: self.capacity.transmitted_bytes,
+            additional_work: self.capacity.additional_work,
+            retained_bytes: self.capacity.retained_bytes,
+        }
+    }
+}
+
+impl PublicOriginalAdmissionRecordV1 {
+    /// Match against admission re-derived at the original DAA and against the
+    /// reservation from native state. A stored record alone grants no rights.
+    pub fn check_restore(&self, prepared: &PreparedPublicOriginalV1, reservation: Digest) -> Result<(), ContractError> {
+        if *self != prepared.record(reservation) {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
 }
 
 impl PublicOriginalAdmissionV1<'_> {
@@ -108,7 +144,7 @@ impl PublicOriginalAdmissionV1<'_> {
         let capacity = reservation.initial_supply.checked_add(reservation.rescue.total()?)?;
         capacity.check(reservation.usage, reservation.budget)?;
         let original = self.authenticate(original, key, signature)?;
-        Ok(PreparedPublicOriginalV1 { original, schedule, capacity })
+        Ok(PreparedPublicOriginalV1 { original, schedule, capacity, inclusion_daa: reservation.inclusion_daa })
     }
 
     /// Verify the signed original against native facts. The caller must still

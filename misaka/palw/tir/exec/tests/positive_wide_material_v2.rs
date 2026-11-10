@@ -382,6 +382,13 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
     assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
+    let record = prepared.record(d(8));
+    let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1>(
+        &borsh::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored.check_restore(&prepared, d(8)), Ok(()));
+    assert_eq!(restored.check_restore(&prepared, d(9)), Err(misaka_palw_positive_contract::ContractError::Scope));
     let short = AggregateBudget { transmitted_bytes: body * 3 - 1, ..budget };
     reservation.budget = &short;
     assert_eq!(
