@@ -398,6 +398,11 @@ pub struct ManifestRequestContext<'a> {
     pub inspection_scope: Digest,
     pub supply_obligation: Digest,
     pub reservation: Digest,
+    /// Limit from the accepted material profile.
+    pub max_manifest_bytes: u32,
+    /// Body bytes still booked for this claimant and obligation. The native
+    /// consumer accounts for the envelope, verification work and retention separately.
+    pub manifest_body_bytes_reserved: u64,
     pub schedule: VerificationSchedule,
     pub inclusion_daa: u64,
 }
@@ -457,6 +462,10 @@ impl ManifestRequest {
             return Err(ContractError::Scope);
         }
         if self.reservation != context.reservation {
+            return Err(ContractError::Budget);
+        }
+        let body_bytes = ManifestV1::fetch_size(context.max_manifest_bytes)?;
+        if context.manifest_body_bytes_reserved < u64::from(body_bytes) {
             return Err(ContractError::Budget);
         }
         if !context.schedule.clock.accepts_first_notice(context.inclusion_daa) || self.collect_until != context.schedule.filed_by() {
@@ -844,11 +853,19 @@ mod tests {
             inspection_scope: d,
             supply_obligation: d,
             reservation: d,
+            max_manifest_bytes: ManifestV1::WIRE_BYTES,
+            manifest_body_bytes_reserved: u64::from(ManifestV1::WIRE_BYTES),
             schedule,
             inclusion_daa: clock.notice_until(),
         };
         let request = ManifestRequest { collect_until: schedule.filed_by(), ..request };
         assert_eq!(request.check_inclusion(&context), request.case_id(&original, first));
+        context.manifest_body_bytes_reserved -= 1;
+        assert_eq!(request.check_inclusion(&context), Err(ContractError::Budget));
+        context.manifest_body_bytes_reserved += 1;
+        context.max_manifest_bytes -= 1;
+        assert_eq!(request.check_inclusion(&context), Err(ContractError::Range));
+        context.max_manifest_bytes += 1;
         assert_eq!(wrong_root.check_inclusion(&context), Err(ContractError::Scope));
         let other_reservation = ManifestRequest { reservation: Digest([8; 64]), ..request.clone() };
         assert_eq!(other_reservation.check_inclusion(&context), Err(ContractError::Budget));
