@@ -53,7 +53,9 @@ fn program_material_is_the_registered_graph_in_one_chunk() {
 #[cfg(feature = "positive-panel")]
 #[test]
 fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
-    use crate::positive_panel_sources::{PanelSourceErrorR1, open_public_input_token_tile_v1, open_public_tir_program_v1};
+    use crate::positive_panel_sources::{
+        PanelSourceErrorR1, open_public_input_token_tile_v1, open_public_tir_program_v1, read_public_manifest_v1,
+    };
     use kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1;
     use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, OriginalCommit};
 
@@ -119,7 +121,18 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     };
     let limit = u64::from(size) + input_rules.max_bytes + (MaterialScope::COUNT - 2) as u64;
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
-    let checked = original.authenticate_manifest(&encoded, 4096).unwrap().decode(&original, &rules, limit).unwrap();
+    let len = encoded.len() as u64;
+    let checked = read_public_manifest_v1(&original, &rules, limit, 4096, len, encoded.as_slice()).unwrap();
+    let mut wrong_frame = encoded.as_slice();
+    assert_eq!(
+        read_public_manifest_v1(&original, &rules, limit, 4096, len + 1, &mut wrong_frame),
+        Err(ContractError::NonCanonical.into())
+    );
+    assert_eq!(wrong_frame.len(), encoded.len());
+    assert_eq!(
+        read_public_manifest_v1(&original, &rules, limit, 4096, len, &encoded[..encoded.len() - 1]),
+        Err(PanelSourceErrorR1::ManifestRead(std::io::ErrorKind::UnexpectedEof))
+    );
     let bytes = &fixture.class.program;
     assert_eq!(open_public_tir_program_v1(&checked, bytes).unwrap(), fixture.plan.program);
     assert_eq!(open_public_tir_program_v1(&checked, &bytes[..bytes.len() - 1]), Err(PanelSourceErrorR1::Binding));

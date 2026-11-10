@@ -2,7 +2,11 @@
 //! MinerSource port with an authenticated canonical duty; no budgets, service
 //! ledgers, completion receipts, source trees or wire formats are created here.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    io::{ErrorKind, Read},
+    path::Path,
+};
 
 use kaspa_consensus_core::{
     Hash64,
@@ -20,7 +24,9 @@ use misaka_palw_positive_contract::{
     identity::{PUBKEY_BYTES, SIGNATURE_BYTES},
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
-    public_one_honest::{CheckedManifestV1, MaterialScope, OriginalCommit, tir_program_material_codec_v1},
+    public_one_honest::{
+        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_program_material_codec_v1,
+    },
 };
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir_artifact::{
@@ -29,6 +35,26 @@ use misaka_palw_tir_artifact::{
 use misaka_palw_tir_exec::node::TirArtifactV1;
 
 use crate::miner::positive_v2::{CanonicalDataDutyV2, MinerErrorV2, PreparedDataV2, StoredUnitV2};
+
+/// Read a single length-framed manifest response and authenticate it before
+/// interpreting any entries. The caller provides the frame's body length
+/// and applies the transport deadline.
+pub fn read_public_manifest_v1(
+    original: &OriginalCommit,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+    frame_body_bytes: u64,
+    mut body: impl Read,
+) -> Result<CheckedManifestV1, PanelSourceErrorR1> {
+    let size = ManifestV1::fetch_size(max_manifest_bytes)?;
+    if frame_body_bytes != u64::from(size) {
+        return Err(ContractError::NonCanonical.into());
+    }
+    let mut bytes = [0; ManifestV1::WIRE_BYTES as usize];
+    body.read_exact(&mut bytes).map_err(|error| PanelSourceErrorR1::ManifestRead(error.kind()))?;
+    Ok(original.authenticate_manifest(&bytes, max_manifest_bytes)?.decode(original, scope_limits, total_limit)?)
+}
 
 /// Authenticate the complete canonical program before decoding it for replay.
 /// The caller bounds acquisition using the checked manifest's Program entry.
@@ -86,6 +112,7 @@ pub enum PanelSourceErrorR1 {
     Binding,
     Budget,
     Incomplete,
+    ManifestRead(ErrorKind),
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {
