@@ -17,6 +17,7 @@ use kaspa_consensus_core::{
 #[cfg(feature = "positive-panel")]
 use misaka_palw_positive_contract::public_one_honest::{
     ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, OriginalCommit, prompt_text_material_v1, public_original_service_contract_id_v1,
+    tir_inventory_material_v1,
 };
 use misaka_palw_positive_contract::{
     public_one_honest::{ManifestEntryV1, ManifestScopeRules, tir_program_material_codec_v1},
@@ -218,6 +219,7 @@ impl TirMinerJobV2<'_> {
 #[allow(clippy::too_many_arguments)]
 pub fn finalize_public_capture_v1(
     capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
+    params: &AuthenticatedTirParamsV2<'_, '_>,
     job: &TirMinerJobV2<'_>,
     prompt_text: &str,
     tokenizer_json: &[u8],
@@ -243,6 +245,11 @@ pub fn finalize_public_capture_v1(
         return Err(ContractError::UnsupportedProfile.into());
     }
     capture.bind_public_original(&mut original).map_err(|_| MinerErrorV2::Binding)?;
+    if params.artifact() != original.artifact {
+        return Err(MinerErrorV2::Binding);
+    }
+    let artifact = MaterialScope::Artifact as usize;
+    manifest.entries[artifact] = tir_inventory_material_v1(params.artifact(), params.bytes_hashed(), scope_limits[artifact])?;
     let program = MaterialScope::Program as usize;
     let prompt = MaterialScope::Prompt as usize;
     let tokenizer = MaterialScope::Tokenizer as usize;

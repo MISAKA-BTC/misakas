@@ -34,8 +34,8 @@ use misaka_palw_positive_contract::{
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
     public_one_honest::{
-        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_output_material_codec_v1,
-        tir_program_material_codec_v1,
+        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_inventory_material_v1,
+        tir_output_material_codec_v1, tir_program_material_codec_v1,
     },
 };
 use misaka_palw_tir::TirProgramV1;
@@ -229,6 +229,20 @@ pub fn run_public_wide_replay_v1(
     }
     let (root, _) = artifact.inventory_root().map_err(PanelSourceErrorR1::Artifact)?;
     if root != expected_root {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    if artifact.composite_ref().is_some() {
+        return Err(ContractError::UnsupportedProfile.into());
+    }
+    let parameter_bytes = artifact
+        .header()
+        .tensors
+        .iter()
+        .try_fold(0u64, |bytes, tensor| bytes.checked_add(tensor.bytes))
+        .ok_or(PanelSourceErrorR1::Budget)?;
+    let entry = manifest.entry(MaterialScope::Artifact);
+    let rules = ManifestScopeRules { codec: entry.codec, max_bytes: entry.total_bytes, chunk_bytes: entry.chunk_bytes };
+    if tir_inventory_material_v1(original.artifact, parameter_bytes, rules)? != *entry {
         return Err(PanelSourceErrorR1::Binding);
     }
     let runner = TirClassRunnerWideQ24V2::new(space, artifact.plan(), artifact.params(), job.shape_profile_id)

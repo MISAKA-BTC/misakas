@@ -423,6 +423,31 @@ pub fn tir_program_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-program-v1/native-graph-ir/whole")
 }
 
+/// Raw parameter bytes authenticated by the native TIR inventory.
+pub fn tir_inventory_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tir-inventory-v1/raw-parameter-bytes")
+}
+
+pub fn tir_inventory_material_v1(
+    inventory_root: Digest,
+    parameter_bytes: u64,
+    rules: ManifestScopeRules,
+) -> Result<ManifestEntryV1, ContractError> {
+    if rules.codec != tir_inventory_material_codec_v1() {
+        return Err(ContractError::UnsupportedProfile);
+    }
+    if parameter_bytes == 0 || rules.chunk_bytes == 0 || parameter_bytes > rules.max_bytes {
+        return Err(ContractError::Budget);
+    }
+    Ok(ManifestEntryV1 {
+        subject: inventory_root,
+        content_root: inventory_root,
+        codec: rules.codec,
+        total_bytes: parameter_bytes,
+        chunk_bytes: rules.chunk_bytes,
+    })
+}
+
 /// One complete generated token sequence under the native CoreV1 output rule.
 pub fn tir_output_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-output/core-v1/u32-le/whole")
@@ -1342,6 +1367,17 @@ impl ProtectedRescueDemand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tir_inventory_descriptor_binds_root_and_raw_parameter_length() {
+        let root = Digest([1; 64]);
+        let rules = ManifestScopeRules { codec: tir_inventory_material_codec_v1(), max_bytes: 64, chunk_bytes: 32 };
+        let entry = tir_inventory_material_v1(root, 64, rules).unwrap();
+        assert_eq!((entry.subject, entry.content_root, entry.total_bytes), (root, root, 64));
+        assert_eq!(tir_inventory_material_v1(root, 65, rules), Err(ContractError::Budget));
+        let unknown = ManifestScopeRules { codec: tir_program_material_codec_v1(), ..rules };
+        assert_eq!(tir_inventory_material_v1(root, 64, unknown), Err(ContractError::UnsupportedProfile));
+    }
 
     #[test]
     fn manifest_chunk_ranges_have_one_canonical_final_boundary() {
