@@ -313,6 +313,19 @@ pub struct CheckedManifestV1 {
 }
 
 impl CheckedManifestV1 {
+    pub fn open_prompt_text<'a>(&self, bytes: &'a [u8]) -> Result<&'a str, ContractError> {
+        let entry = self.entry(MaterialScope::Prompt);
+        if bytes.len() as u64 != entry.total_bytes || entry.total_bytes > u64::from(entry.chunk_bytes) {
+            return Err(ContractError::Range);
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| ContractError::NonCanonical)?;
+        let rules = ManifestScopeRules { codec: entry.codec, max_bytes: entry.total_bytes, chunk_bytes: entry.chunk_bytes };
+        if prompt_text_material_v1(self.ruleset, text, rules)? != *entry {
+            return Err(ContractError::Identity);
+        }
+        Ok(text)
+    }
+
     pub fn original(&self) -> OriginalId {
         self.original
     }
@@ -340,6 +353,24 @@ pub fn tir_program_material_codec_v1() -> Digest {
 /// One complete generated token sequence under the native CoreV1 output rule.
 pub fn tir_output_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-output/core-v1/u32-le/whole")
+}
+
+pub fn prompt_text_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"prompt-text/utf8-exact/whole")
+}
+
+/// Preserve the exact UTF-8 bytes independently of token IDs. The relation
+/// between these bytes and the token sequence is checked by the profile.
+pub fn prompt_text_material_v1(ruleset: Digest, text: &str, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {
+    if rules.codec != prompt_text_material_codec_v1() {
+        return Err(ContractError::UnsupportedProfile);
+    }
+    let total_bytes = text.len() as u64;
+    if total_bytes == 0 || total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
+        return Err(ContractError::Budget);
+    }
+    let subject = hash(b"misaka/palw/public-prompt-text/v1", &(ruleset, text.as_bytes()));
+    Ok(ManifestEntryV1 { subject, content_root: subject, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes })
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1143,12 +1174,22 @@ mod tests {
         assert_eq!(ManifestV1::fetch_size(max), Ok(max));
         assert_eq!(ManifestV1::fetch_size(max - 1), Err(ContractError::Range));
         let mut bound_original = original.clone();
+        let prompt = "abcあdef";
+        let prompt_rules = ManifestScopeRules { codec: prompt_text_material_codec_v1(), max_bytes: 16, chunk_bytes: 16 };
+        let prompt_entry = prompt_text_material_v1(d, prompt, prompt_rules).unwrap();
+        assert_eq!(prompt_entry.total_bytes, 9);
+        rules[MaterialScope::Prompt as usize] = prompt_rules;
+        manifest.entries[MaterialScope::Prompt as usize] = prompt_entry;
+        bound_original.prompt = prompt_entry.subject;
         assert_eq!(bound_original.bind_manifest(&manifest, &rules, 89, max), Err(ContractError::Budget));
         assert_eq!(bound_original.bind_manifest(&manifest, &rules, 90, max - 1), Err(ContractError::Range));
         assert_eq!(bound_original.manifest_root, original.manifest_root);
         let bytes = bound_original.bind_manifest(&manifest, &rules, 90, max).unwrap();
         let authenticated = bound_original.authenticate_manifest(&bytes, max).unwrap();
         let checked = authenticated.decode(&bound_original, &rules, 90).unwrap();
+        assert_eq!(checked.open_prompt_text(prompt.as_bytes()), Ok(prompt));
+        assert_eq!(checked.open_prompt_text(b"abcXXXdef"), Err(ContractError::Identity));
+        assert_eq!(checked.open_prompt_text(&[255; 9]), Err(ContractError::NonCanonical));
         assert_eq!(checked.original(), bound_original.id());
         let program = checked.chunk(MaterialScope::Program, 0).unwrap();
         assert_eq!(program.codec, program_codec);
