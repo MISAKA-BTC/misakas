@@ -141,6 +141,7 @@ pub struct PreparedPublicOriginalV1 {
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
     budget: AggregateBudget,
+    max_manifest_bytes: u32,
 }
 
 /// Fixed-size record to store in the same state update as the reservation.
@@ -152,6 +153,7 @@ pub struct PublicOriginalAdmissionRecordV1 {
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
     budget: AggregateBudget,
+    max_manifest_bytes: u32,
     deadlines: [u64; 8],
 }
 
@@ -235,8 +237,8 @@ wire_struct!(ProtectedRescueDemand; u64, RemainingCapacity, u64, RemainingCapaci
 native_struct!(PanelBond; transaction, index);
 wire_struct!(PanelBond; Digest, u32);
 
-native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, budget, deadlines);
-wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, [u64; 8]);
+native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, budget, max_manifest_bytes, deadlines);
+wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
@@ -465,7 +467,10 @@ impl PreparedPublicOriginalV1 {
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<PendingManifestCase, ContractError> {
-        if context.original.id() != self.original || context.schedule != self.schedule {
+        if context.original.id() != self.original
+            || context.schedule != self.schedule
+            || context.max_manifest_bytes != self.max_manifest_bytes
+        {
             return Err(ContractError::Scope);
         }
         if context.manifest_body_bytes_reserved > capacity.transmitted_bytes {
@@ -518,6 +523,7 @@ impl PreparedPublicOriginalV1 {
             initial_supply: self.initial_supply,
             rescue: self.rescue,
             budget: self.budget,
+            max_manifest_bytes: self.max_manifest_bytes,
             deadlines: [
                 self.draw_ready_by,
                 self.schedule.first_notice_by(),
@@ -560,6 +566,7 @@ impl PublicOriginalAdmissionRecordV1 {
                 fee: 1,
                 witness_attempts: 1,
             },
+            max_manifest_bytes: ManifestV1::WIRE_BYTES,
             deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
         }
     }
@@ -569,6 +576,7 @@ impl PublicOriginalAdmissionRecordV1 {
         if key != row.original.0.0.as_slice() {
             return Err(ContractError::Identity);
         }
+        ManifestV1::fetch_size(row.max_manifest_bytes)?;
         let clock = OriginalClock::new(row.carrier.origin.accepted_daa)?;
         let [draw, first_notice, first_request, ready, inspection, localized, filed, terminal] = row.deadlines;
         if draw <= row.carrier.origin.accepted_daa
@@ -727,6 +735,7 @@ impl PublicOriginalAdmissionV1<'_> {
             initial_supply: reservation.initial_supply,
             rescue: reservation.rescue,
             budget: *reservation.budget,
+            max_manifest_bytes: self.max_manifest_bytes,
         })
     }
 

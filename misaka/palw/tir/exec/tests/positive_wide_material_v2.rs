@@ -656,6 +656,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let accepted =
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
+    let other_limit = ManifestRequestContext { max_manifest_bytes: ManifestV1::WIRE_BYTES + 1, ..request_context };
+    assert_eq!(
+        prepared.verify_drawn_manifest_request(&draw, &request, &other_limit, &signed.key, request_sig.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     let case_bytes = borsh::to_vec(&accepted.record()).unwrap();
     preflight_native_value_v1::<misaka_palw_positive_contract::public_one_honest::PendingManifestCaseRecordV1>(
         case_bytes.as_slice(),
