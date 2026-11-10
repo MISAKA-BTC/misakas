@@ -25,6 +25,23 @@
 
 対象 profile の実アーティファクト、program、tokenizer、数値規則の digest と、各行の実際の kernel・witness・上限が揃うまで coverage は未確定。全体再実行は Panel 側で行い、Node は個別関係の有界な検査を担当する。
 
+## 資料 scope と認証経路
+
+| scope | 現在コードで使える認証 | profile を接続するための残件 |
+| --- | --- | --- |
+| Artifact | 既存の inventory root と tensor・layer・row の opening | 可変長の leaf 座標を manifest の要求・予算に結び付ける |
+| Program | 元 claim の graph IR root に対する単一チャンクの照合と正規 decode | 実行 profile が要求する program を公開取得経路から渡す |
+| Prompt | 元 claim に prompt digest の欄あり | 原文の codec と tokenizer による入力対応を確定する |
+| InputTokens | Flat 全体の native hash、Merkle の native token tile opening | 初回 wide capture で使う Flat の取得・再実行・資源上限を接続する |
+| Tokenizer | 登録クラスとジョブの tokenizer ID を照合 | tokenizer 本体・前処理の資料と局所検査を結び付ける |
+| ExecutionRules | ジョブと元 claim の CU ruleset ID を照合 | 乱数・選択・停止・算術規則を実行 profile の資料として固定する |
+| InitialState | 元 claim と rooted 入力の digest を照合 | 初期状態と先行実行からの読み込みの正規資料を取得・検査する |
+| Dependencies | 元 claim と rooted 入力の digest を照合 | 空集合を含む正規形式、依存 ID の公開・失効経路を接続する |
+| Trace | 初回 capture の execution root と、局所 step opening を照合 | trace 全体の取得、座標ごとの canonical codec、全関係の局所化を接続する |
+| Output | 元の実行コンテキストに対する生成 token 列の native output root | 公開取得と、停止・生成長・会計を含む End 検査を接続する |
+
+固定長 manifest の取得と、資料供給義務に結び付いた署名済み応答の認証は別経路。前者は元 claim と資料の同一性、後者は当該 case への応答の帰属を確認する。どちらも単独では検査機会を成立させない。
+
 ## 接続時の判定
 
 - 初回 wide capture の元 claim には、step tree と logits trace を束縛した native execution root と、その実行の output root を設定する。現行 capture が要求する Flat 入力は、manifest の単一チャンクから native flat hash で照合できる。Merkle 入力には既存の token tile opening を使い、実行側の対応は別に確認する。
