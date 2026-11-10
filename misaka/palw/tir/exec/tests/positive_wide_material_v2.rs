@@ -376,6 +376,31 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         ),
         Err(PalwStepRefuteError::NoFaultFound)
     ));
+    use kaspa_consensus_core::{
+        palw_step_leg::{PalwStepFaultV1, step_merkle_root_v1, step_opening_v1, step_tile_leaf_hash_v1},
+        palw_tir_step_v1::palw_tir_execution_root_v1,
+    };
+    // Commit a different step value while preserving the independently
+    // committed logits event. The changed tile really opens the changed claim.
+    let mut bad = material;
+    bad.tile.values_le[0] ^= 1;
+    let context = f.job.context_hash();
+    let class_id = f.job.shape_profile_id;
+    let mut hashes = capture.run().leaf_hashes().to_vec();
+    hashes[logits_leaf.index as usize] = step_tile_leaf_hash_v1(&context, &class_id, &bad.tile);
+    bad.opening = step_opening_v1(&hashes, logits_leaf.index).unwrap();
+    bad.trace.step_merkle_root = step_merkle_root_v1(&hashes).unwrap();
+    let mut bad_binding = capture.binding().unwrap();
+    bad_binding.step_merkle_root = bad.trace.step_merkle_root;
+    bad_binding.committed_execution_root =
+        palw_tir_execution_root_v1(&context, &bad.trace.full_logits_trace_root, &class_id, trace_len, &bad.trace.step_merkle_root);
+    let mut bad_original = original.clone();
+    bad_original.trace_root = digest(bad_binding.committed_execution_root);
+    bad.original = bad_original.id();
+    let verdict = bad
+        .check_wide_logits_consistency(&bad_original, &bad_binding, logits_leaf.index, &event, bad.tile.values_le.len(), &rules)
+        .unwrap();
+    assert_eq!(verdict.fault, PalwStepFaultV1::TirLogitsTraceMismatch { value_index: 0 });
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
     use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
     let size = original.decode * 4;
