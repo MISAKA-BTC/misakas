@@ -529,6 +529,7 @@ pub struct PendingManifestCase {
     id: CaseId,
     original: OriginalId,
     material: MaterialId,
+    signer: PrincipalId,
     reservation: Digest,
     supply_obligation: Digest,
     request_digest: Digest,
@@ -561,7 +562,9 @@ pub struct PendingManifestCaseRecordV1 {
     id: CaseId,
     original: OriginalId,
     material: MaterialId,
+    signer: PrincipalId,
     reservation: Digest,
+    supply_obligation: Digest,
     request_digest: Digest,
     origin: AcceptedOrigin,
     max_manifest_bytes: u32,
@@ -586,6 +589,7 @@ pub enum ManifestDeliveryV1 {
 pub struct ManifestResponseRecordV1 {
     original: OriginalId,
     case: CaseId,
+    supply_obligation: Digest,
     response_digest: Digest,
     origin: AcceptedOrigin,
     limits: Digest,
@@ -616,7 +620,7 @@ impl VerifiedManifestDeliveryV1 {
 }
 
 impl ManifestResponseRecordV1 {
-    pub const WIRE_BYTES: usize = 4 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 1;
+    pub const WIRE_BYTES: usize = 5 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 1;
     pub const KEY_BYTES: usize = 2 * 64;
 
     pub fn key(&self) -> [u8; Self::KEY_BYTES] {
@@ -649,6 +653,7 @@ impl ManifestResponseRecordV1 {
     pub fn check_case(&self, pending: &PendingManifestCaseRecordV1) -> Result<(), ContractError> {
         if self.original != pending.original
             || self.case != pending.id
+            || self.supply_obligation != pending.supply_obligation
             || self.limits != pending.manifest_limits
             || !(pending.origin.accepted_daa..=pending.material_ready_by).contains(&self.origin.accepted_daa)
         {
@@ -681,7 +686,7 @@ pub fn require_accepted_after_v1(prior: AcceptedOrigin, later: AcceptedOrigin) -
 }
 
 impl PendingManifestCaseRecordV1 {
-    pub const WIRE_BYTES: usize = 6 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 4;
+    pub const WIRE_BYTES: usize = 8 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 4;
     pub const KEY_BYTES: usize = 2 * 64;
 
     pub fn key(original: OriginalId, case: CaseId) -> [u8; Self::KEY_BYTES] {
@@ -702,6 +707,10 @@ impl PendingManifestCaseRecordV1 {
 
     pub fn original(&self) -> OriginalId {
         self.original
+    }
+
+    pub fn signer(&self) -> PrincipalId {
+        self.signer
     }
 
     pub fn origin(&self) -> AcceptedOrigin {
@@ -799,6 +808,7 @@ impl PendingManifestCase {
             record: ManifestResponseRecordV1 {
                 original: self.original,
                 case: self.id,
+                supply_obligation: response.supply_obligation,
                 response_digest,
                 origin,
                 limits,
@@ -813,7 +823,9 @@ impl PendingManifestCase {
             id: self.id,
             original: self.original,
             material: self.material,
+            signer: self.signer,
             reservation: self.reservation,
+            supply_obligation: self.supply_obligation,
             request_digest: self.request_digest,
             origin: self.origin,
             max_manifest_bytes: self.max_manifest_bytes,
@@ -906,6 +918,7 @@ impl ManifestRequest {
             id,
             original: self.original,
             material: context.original.manifest_material_id(),
+            signer: context.signer,
             reservation: context.reservation,
             supply_obligation: context.supply_obligation,
             request_digest: self.signing_digest(),
@@ -1456,6 +1469,7 @@ mod tests {
         assert_eq!(stored.len(), PendingManifestCaseRecordV1::WIRE_BYTES);
         let case_key = PendingManifestCaseRecordV1::key(bound_original.id(), pending.id());
         let restored = PendingManifestCaseRecordV1::decode_row(&case_key, &stored).unwrap();
+        assert_eq!(restored.signer(), request.signer);
         let wrong_original = PendingManifestCaseRecordV1::key(OriginalId(Digest([0; 64])), pending.id());
         assert_eq!(PendingManifestCaseRecordV1::decode_row(&wrong_original, &stored), Err(ContractError::Identity));
         assert_eq!(PendingManifestCaseRecordV1::decode_row(&[], &stored), Err(ContractError::Identity));
@@ -1545,6 +1559,8 @@ mod tests {
         assert_eq!(restored.check_case(&pending.record()), Ok(()));
         let wrong_case = PendingManifestCaseRecordV1 { id: CaseId(Digest([8; 64])), ..pending.record() };
         assert_eq!(restored.check_case(&wrong_case), Err(ContractError::Scope));
+        let wrong_obligation = PendingManifestCaseRecordV1 { supply_obligation: Digest([99; 64]), ..pending.record() };
+        assert_eq!(restored.check_case(&wrong_obligation), Err(ContractError::Scope));
         assert_eq!(restored.check_restore(&verified), Ok(()));
         assert_eq!(stored.len(), ManifestResponseRecordV1::WIRE_BYTES);
         let alternate = AcceptedOrigin { carrier_transaction: crate::rows::NativeHash64([7; 64]), ..delivery_origin };
