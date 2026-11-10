@@ -230,6 +230,108 @@ pub struct PublicTraceSearchV1 {
     pub max_value_bytes: usize,
 }
 
+/// Stream a registered artifact from public inventory rows into a caller-owned
+/// temporary container. No model bytes are used for execution until the root
+/// of the complete canonical inventory is authenticated.
+pub fn fetch_public_wide_artifact_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    class: &PalwTirClassV1,
+    container: &Path,
+    limits: PanelSourceLimitsR1,
+) -> Result<TirArtifactV1, PanelSourceErrorR1> {
+    use crate::public_material::{MATERIAL_UNIT_MAX_BYTES, artifact_leaf_path};
+    use kaspa_consensus_core::palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1};
+
+    if borsh::object_length(class).map_err(|_| PanelSourceErrorR1::Binding)? as u64 > limits.max_class_bytes {
+        return Err(PanelSourceErrorR1::Budget);
+    }
+    let root = Hash64::from_bytes(original.artifact.0);
+    if manifest.original() != original.id()
+        || class.class_id(&root).as_bytes() != original.registered_class.0
+        || class.graph_ir_root().as_bytes() != original.program.0
+    {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let program = class.decode_program().map_err(|_| PanelSourceErrorR1::Binding)?;
+    guard_inventory_metadata(program.params.iter().map(|param| param.per_layer), program.schedule.layers.len(), limits.max_units)?;
+    let inventory = PalwTirInventoryIndexV1::new(&program).ok_or(PanelSourceErrorR1::Binding)?;
+    let leaves = inventory.leaf_count();
+    if leaves == 0 || u64::from(leaves) > limits.max_units {
+        return Err(PanelSourceErrorR1::Budget);
+    }
+    let entry = manifest.entry(MaterialScope::Artifact);
+    // Borsh string, optional layer, byte offset, and byte vector.
+    let wire_len = |name: &str, layer: Option<u16>, len: u32| 13 + name.len() + 2 * usize::from(layer.is_some()) + len as usize;
+    let mut raw_bytes = 0u64;
+    let mut wire_bytes = 0u64;
+    for index in 0..leaves {
+        let (param, layer, _, len) = inventory.piece_of(index).ok_or(PanelSourceErrorR1::Binding)?;
+        let name = &program.params[param as usize].name;
+        let wire = wire_len(name, layer, len) as u64;
+        if len > entry.chunk_bytes || wire > limits.max_unit_bytes.min(MATERIAL_UNIT_MAX_BYTES as u64) {
+            return Err(PanelSourceErrorR1::Budget);
+        }
+        raw_bytes = raw_bytes.checked_add(u64::from(len)).ok_or(PanelSourceErrorR1::Budget)?;
+        wire_bytes = wire_bytes.checked_add(wire).filter(|n| *n <= limits.max_total_bytes).ok_or(PanelSourceErrorR1::Budget)?;
+    }
+    let rules = ManifestScopeRules { codec: entry.codec, max_bytes: entry.total_bytes, chunk_bytes: entry.chunk_bytes };
+    if tir_inventory_material_v1(original.artifact, raw_bytes, rules)? != *entry {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let mut frontier = PalwArtifactMerkleFrontierV1::default();
+    let mut next_index = 0;
+    let mut failure = None;
+    let result = write_bounded_artifact_container_v1(
+        &program,
+        class,
+        container,
+        raw_bytes,
+        limits.max_container_bytes,
+        &mut |param, layer, out| {
+            let read = (|| {
+                let name = &program.params[param as usize].name;
+                let mut offset = 0;
+                while offset < tensor_bytes_v1(&program, param) {
+                    let (piece_param, piece_layer, start, len) = inventory.piece_of(next_index).ok_or(PanelSourceErrorR1::Binding)?;
+                    if (param, layer, offset) != (piece_param, piece_layer, u64::from(start)) {
+                        return Err(PanelSourceErrorR1::Binding);
+                    }
+                    let cap = wire_len(name, layer, len);
+                    let path = artifact_leaf_path(&root, next_index);
+                    let bytes = provider
+                        .get(&path, cap)
+                        .map_err(|error| PanelSourceErrorR1::ReplayProvider(error.0))?
+                        .ok_or(PanelSourceErrorR1::Incomplete)?;
+                    let prefix = borsh::to_vec(&(name, layer, start, len)).map_err(|_| PanelSourceErrorR1::Binding)?;
+                    let values = bytes
+                        .strip_prefix(prefix.as_slice())
+                        .filter(|values| values.len() == len as usize)
+                        .ok_or(PanelSourceErrorR1::Binding)?;
+                    frontier.push(artifact_leaf_parts_v1(name, layer, start, values));
+                    out.write_all(values).map_err(|error| PanelSourceErrorR1::Artifact(error.to_string()))?;
+                    offset += u64::from(len);
+                    next_index += 1;
+                }
+                Ok(())
+            })();
+            read.map_err(|error| {
+                failure = Some(error);
+                "public artifact inventory row could not be acquired".into()
+            })
+        },
+    );
+    if let Some(error) = failure {
+        return Err(error);
+    }
+    result?;
+    if next_index != leaves || frontier.root() != Some(root) {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    TirArtifactV1::open(container).map_err(PanelSourceErrorR1::Artifact)
+}
+
 /// Acquire the public inputs and compare an independent wide TIR run with the
 /// original. The caller supplies rooted job/class metadata and reserves
 /// acquisition memory and work, including artifact identity verification.
@@ -968,40 +1070,12 @@ impl PanelSourceCacheR1 {
             };
             data_bytes = data_bytes.checked_add(opening.operand.bytes.len() as u64).ok_or(PanelSourceErrorR1::Budget)?;
         }
-        let instances = param_instances_v1(&self.program);
-        let tensors = instances
-            .iter()
-            .enumerate()
-            .flat_map(|(param, layers)| {
-                layers.iter().map(move |layer| PalwTirTensorEntryV1 {
-                    param: param as u16,
-                    layer: *layer,
-                    offset: 0,
-                    bytes: tensor_bytes_v1(&self.program, param as u16),
-                })
-            })
-            .collect::<Vec<_>>();
-        let header = PalwTirContainerHeaderV1 {
-            version: 1,
-            program: self.class.program.clone(),
-            layout: borsh::to_vec(&self.class.layout).map_err(|_| PanelSourceErrorR1::Binding)?,
-            tokenizer_id: self.class.tokenizer_id.as_bytes(),
-            tensors,
-            meta: String::new(),
-        };
-        let header_bytes = borsh::object_length(&header).map_err(|_| PanelSourceErrorR1::Binding)? as u64;
-        let _total_bound = data_bytes
-            .checked_add(header_bytes)
-            .and_then(|n| n.checked_add(14))
-            .and_then(|n| (header.tensors.len() as u64).checked_mul(63).and_then(|padding| n.checked_add(padding)))
-            .filter(|n| *n <= self.limits.max_container_bytes)
-            .ok_or(PanelSourceErrorR1::Budget)?;
-        write_container_v1_streamed(
-            temporary_path,
+        write_bounded_artifact_container_v1(
             &self.program,
-            header.layout,
-            header.tokenizer_id,
-            String::new(),
+            &self.class,
+            temporary_path,
+            data_bytes,
+            self.limits.max_container_bytes,
             &mut |param, layer, out| {
                 let size = tensor_bytes_v1(&self.program, param);
                 let mut at = 0u64;
@@ -1019,8 +1093,7 @@ impl PanelSourceCacheR1 {
                 }
                 Ok(())
             },
-        )
-        .map_err(|error| PanelSourceErrorR1::Artifact(error.to_string()))?;
+        )?;
         let artifact = TirArtifactV1::open(temporary_path).map_err(PanelSourceErrorR1::Artifact)?;
         if artifact.class().map_err(PanelSourceErrorR1::Artifact)? != self.class
             || artifact.inventory_root().map_err(PanelSourceErrorR1::Artifact)?.0.as_bytes() != self.result.artifact.0
@@ -1029,6 +1102,47 @@ impl PanelSourceCacheR1 {
         }
         Ok(artifact)
     }
+}
+
+fn write_bounded_artifact_container_v1(
+    program: &TirProgramV1,
+    class: &PalwTirClassV1,
+    path: &Path,
+    data_bytes: u64,
+    max_container_bytes: u64,
+    tensor: &mut dyn FnMut(u16, Option<u16>, &mut dyn std::io::Write) -> Result<(), String>,
+) -> Result<(), PanelSourceErrorR1> {
+    let instances = param_instances_v1(program);
+    let tensors = instances
+        .iter()
+        .enumerate()
+        .flat_map(|(param, layers)| {
+            layers.iter().map(move |layer| PalwTirTensorEntryV1 {
+                param: param as u16,
+                layer: *layer,
+                offset: 0,
+                bytes: tensor_bytes_v1(program, param as u16),
+            })
+        })
+        .collect::<Vec<_>>();
+    let header = PalwTirContainerHeaderV1 {
+        version: 1,
+        program: class.program.clone(),
+        layout: borsh::to_vec(&class.layout).map_err(|_| PanelSourceErrorR1::Binding)?,
+        tokenizer_id: class.tokenizer_id.as_bytes(),
+        tensors,
+        meta: String::new(),
+    };
+    let header_bytes = borsh::object_length(&header).map_err(|_| PanelSourceErrorR1::Binding)? as u64;
+    let _total_bound = data_bytes
+        .checked_add(header_bytes)
+        .and_then(|n| n.checked_add(14))
+        .and_then(|n| (header.tensors.len() as u64).checked_mul(63).and_then(|padding| n.checked_add(padding)))
+        .filter(|n| *n <= max_container_bytes)
+        .ok_or(PanelSourceErrorR1::Budget)?;
+    write_container_v1_streamed(path, program, header.layout, header.tokenizer_id, String::new(), tensor)
+        .map_err(|error| PanelSourceErrorR1::Artifact(error.to_string()))?;
+    Ok(())
 }
 
 #[cfg(test)]
