@@ -1,0 +1,45 @@
+{
+  "schema": "palw-tokenizer-registration-pruning-utxo-session-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "13b755c4a2eba1f88a972c7349ea4dd78fd0d62e",
+  "passedTotal": 3,
+  "command": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' --config 'profile.dev.package.kaspa-consensus.opt-level=0' test -p kaspa-consensus -p misaka-cli --lib --bin misaka tokenizer_registration -j 2",
+  "log": "/tmp/t12-tokenizer-pruning-utxo-session-tests.log",
+  "logSha256": "be4f111e525834aa7def6b72110a4edcb0ef8cd7d54d013edd4a16989562e63a",
+  "runs": [
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus-5d5050182ad43097",
+      "binarySha256": "5811639335bf2e268d5a36116e3c64642c8e7451d40db92fa78c85e97f2a6510",
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1381 filtered out; finished in 21.54s",
+      "passed": 2,
+      "testNames": [
+        "pipeline::virtual_processor::tests::g14_registration_e2e::tokenizer_registration::signed_tkr1_open_parts_finish_and_duplicate_use_the_actual_node",
+        "pipeline::virtual_processor::tests::t12_round_lane_e2e::tokenizer_registration::signed_tokenizer_registration_round_fee_body_boundary_is_atomic"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka-f25c52b5ee0a359d",
+      "binarySha256": "48ddb40908ccb20248ac4534e2add4d65d22943d998e31bb160ac3c264451122",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 283 filtered out; finished in 0.00s",
+      "passed": 1,
+      "testNames": [
+        "palw_tokenizer_registration::sender::tests::tokenizer_registration_sender_preserves_slots_and_requires_accepted_parts"
+      ]
+    }
+  ],
+  "checks": [
+    "Donor exact pruning-point past UTXOs reconstructed by reversing virtual-only diff and match the point header MuHash.",
+    "Real import session receives authenticated PALW and overlay, clears the staged UTXO set, and consumes multiple eight-row UTXO chunks.",
+    "Premature completion and partial streamed UTXO commitment are rejected; full stream and locked staged commitment match before completion.",
+    "Strict status RPC refuses while session is active/unstable and succeeds only after production session completion, without manual stable-marker shortcut.",
+    "Imported Part book/session/raw, donor state roots and accepted Finish transaction/Complete all match; existing Round and CLI regressions also pass."
+  ],
+  "limitations": [
+    "Local node import API fixture, not a P2P transfer or trusted-history proof exchange, nor natural pruning advancement.",
+    "Tiny signed tokenizer fixture; maximum native retained workload is measured separately.",
+    "Opt-level 0 functional checks, not minimum-hardware qualification or public T12 registration."
+  ],
+  "publicSubmission": false,
+  "publicActivation": false,
+  "mainPush": false
+}
