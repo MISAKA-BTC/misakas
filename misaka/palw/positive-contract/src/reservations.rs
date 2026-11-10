@@ -9,7 +9,7 @@ use crate::{ContractError, messages::AggregateBudget, rows::AggregateUsage};
 /// Include every protected role; do not reset this demand on Panel replacement
 /// or release retention merely because a source response completed. No Default
 /// is supplied: the policy owner must explicitly resolve every dimension.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct RemainingCapacity {
     pub transmitted_bytes: u64,
     pub additional_work: u64,

@@ -389,6 +389,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     .unwrap();
     assert_eq!(restored.check_restore(&prepared, d(8)), Ok(()));
     assert_eq!(restored.check_restore(&prepared, d(9)), Err(misaka_palw_positive_contract::ContractError::Scope));
+    reservation.initial_supply.additional_work += 2;
+    reservation.rescue.per_drawn_bond.additional_work -= 1;
+    let shifted = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
+    assert_eq!(shifted.capacity, prepared.capacity);
+    assert_eq!(restored.check_restore(&shifted, d(8)), Err(misaka_palw_positive_contract::ContractError::Scope));
     let short = AggregateBudget { transmitted_bytes: body * 3 - 1, ..budget };
     reservation.budget = &short;
     assert_eq!(

@@ -84,6 +84,8 @@ pub struct PreparedPublicOriginalV1 {
     pub schedule: VerificationSchedule,
     pub capacity: RemainingCapacity,
     inclusion_daa: u64,
+    initial_supply: RemainingCapacity,
+    rescue: ProtectedRescueDemand,
 }
 
 /// Fixed-size record to store in the same state update as the reservation.
@@ -92,9 +94,9 @@ pub struct PublicOriginalAdmissionRecordV1 {
     original: OriginalId,
     inclusion_daa: u64,
     reservation: Digest,
-    transmitted_bytes: u64,
-    additional_work: u64,
-    retained_bytes: u64,
+    initial_supply: RemainingCapacity,
+    rescue: ProtectedRescueDemand,
+    deadlines: [u64; 7],
 }
 
 impl PreparedPublicOriginalV1 {
@@ -103,9 +105,17 @@ impl PreparedPublicOriginalV1 {
             original: self.original,
             inclusion_daa: self.inclusion_daa,
             reservation,
-            transmitted_bytes: self.capacity.transmitted_bytes,
-            additional_work: self.capacity.additional_work,
-            retained_bytes: self.capacity.retained_bytes,
+            initial_supply: self.initial_supply,
+            rescue: self.rescue,
+            deadlines: [
+                self.schedule.first_notice_by(),
+                self.schedule.first_material_request_by(),
+                self.schedule.material_ready_by(),
+                self.schedule.inspection_by(),
+                self.schedule.localized_by(),
+                self.schedule.filed_by(),
+                self.schedule.terminal_by(),
+            ],
         }
     }
 }
@@ -144,7 +154,14 @@ impl PublicOriginalAdmissionV1<'_> {
         let capacity = reservation.initial_supply.checked_add(reservation.rescue.total()?)?;
         capacity.check(reservation.usage, reservation.budget)?;
         let original = self.authenticate(original, key, signature)?;
-        Ok(PreparedPublicOriginalV1 { original, schedule, capacity, inclusion_daa: reservation.inclusion_daa })
+        Ok(PreparedPublicOriginalV1 {
+            original,
+            schedule,
+            capacity,
+            inclusion_daa: reservation.inclusion_daa,
+            initial_supply: reservation.initial_supply,
+            rescue: reservation.rescue,
+        })
     }
 
     /// Verify the signed original against native facts. The caller must still

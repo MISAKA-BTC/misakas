@@ -656,7 +656,7 @@ impl VerificationSchedule {
 /// defensive demand are accounted for separately from that protected demand.
 /// The native owner derives the projection and assigns it to distinct bonds
 /// after the draw. This does not fund fees or allocate actual service slots.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProtectedRescueDemand {
     pub max_drawn_bonds: u64,
     pub per_drawn_bond: RemainingCapacity,
