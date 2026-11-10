@@ -230,6 +230,53 @@ pub struct PublicTraceSearchV1 {
     pub max_value_bytes: usize,
 }
 
+/// Authenticate a signed original and replay it from public material. The
+/// caller resolves the job, class, and limits from accepted state and owns
+/// the temporary container and tape for this attempt.
+#[allow(clippy::too_many_arguments)]
+pub fn run_cold_public_wide_replay_v1(
+    provider: &dyn MaterialProvider,
+    signed: &misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1,
+    job: &PalwJobContextV2,
+    class: &PalwTirClassV1,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+    artifact_limits: PanelSourceLimitsR1,
+    container: &Path,
+    run_limits: TirWideRunLimitsV2,
+    work: &WidePanelWorkV2,
+    tape: File,
+    reserver: &TirMemoryReserverV1,
+    acquisition: PublicTraceAcquisitionV1,
+    search: Option<PublicTraceSearchV1>,
+) -> Result<(), PanelSourceErrorR1> {
+    let original = &signed.original;
+    original.authenticate(&signed.key, &signed.signature)?;
+    if borsh::object_length(class).map_err(|_| PanelSourceErrorR1::Binding)? as u64 > artifact_limits.max_class_bytes {
+        return Err(PanelSourceErrorR1::Budget);
+    }
+    check_public_original_execution_v1(original, job, class, Hash64::from_bytes(original.artifact.0))?;
+    let manifest = fetch_public_manifest_v1(provider, original, scope_limits, total_limit, max_manifest_bytes)?;
+    let space = PalwTirStepSpaceV2::new(class).map_err(|error| PanelSourceErrorR1::ReplayExecution(error.to_string()))?;
+    let artifact = fetch_public_wide_artifact_v1(provider, original, &manifest, class, container, artifact_limits)?;
+    run_public_wide_replay_v1(
+        provider,
+        original,
+        &manifest,
+        job,
+        class,
+        &artifact,
+        &space,
+        run_limits,
+        work,
+        tape,
+        reserver,
+        acquisition,
+        search,
+    )
+}
+
 /// Stream a registered artifact from public inventory rows into a caller-owned
 /// temporary container. No model bytes are used for execution until the root
 /// of the complete canonical inventory is authenticated.

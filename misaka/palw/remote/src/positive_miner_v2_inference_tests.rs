@@ -903,9 +903,13 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
         evidence::fs::FsProvider,
         positive_panel_sources::{
             PanelSourceErrorR1, PanelSourceLimitsR1, PublicTraceAcquisitionV1, fetch_public_manifest_v1,
-            fetch_public_replay_inputs_v1, fetch_public_replay_output_v1, fetch_public_wide_artifact_v1, run_public_wide_replay_v1,
+            fetch_public_replay_inputs_v1, fetch_public_replay_output_v1, run_cold_public_wide_replay_v1,
         },
         public_material::{MaterialProvider, artifact_leaf_path},
+        transport::{
+            HttpProvider,
+            server::{self, ServerConfig},
+        },
     };
     use misaka_palw_positive_contract::public_one_honest::*;
     use misaka_palw_tir_exec::node::{
@@ -984,7 +988,8 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     let held = AuthenticatedTirParamsV2::authenticate(&fixture.plan, &fixture.params, fixture.artifact, identity_limits()).unwrap();
     let root = std::env::temp_dir().join(format!("misaka-first-wide-original-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
-    let tape = |name| std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(root.join(name)).unwrap();
+    let store_root = root.join("published");
+    let tape = |name: &str| std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(root.join(name)).unwrap();
     let disk: WidePanelDiskReserverV2 = Arc::new(|_, _, _| Ok(Box::new(())));
     let limits = WidePanelLimitsV2 {
         max_records: 1024,
@@ -1023,7 +1028,7 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
         &rules,
         1 << 20,
         ManifestV1::WIRE_BYTES,
-        &root,
+        &store_root,
         run_limits,
         &work(),
         tape("miner-tape"),
@@ -1039,7 +1044,9 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     .unwrap();
     assert_eq!(signs.get(), 1);
     signed.original.authenticate(&signed.key, &signed.signature).unwrap();
-    let provider = FsProvider { id: "miner".into(), root: root.clone() };
+    let store = FsProvider { id: "miner".into(), root: store_root.clone() };
+    let server = server::start("127.0.0.1:0", store_root.clone(), ServerConfig::default()).unwrap();
+    let provider = HttpProvider::new(server.url());
     let manifest = fetch_public_manifest_v1(&provider, &signed.original, &rules, 1 << 20, ManifestV1::WIRE_BYTES).unwrap();
     assert_eq!(
         fetch_public_replay_inputs_v1(&provider, &signed.original, &manifest, PalwPromptIdsFormV1::Flat).unwrap(),
@@ -1055,28 +1062,17 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     };
     let artifact_root = Hash64::from_bytes(signed.original.artifact.0);
     let artifact_path = |index| artifact_leaf_path(&artifact_root, index);
-    let fetch = |name| fetch_public_wide_artifact_v1(&provider, &signed.original, &manifest, &fixture.class, &root.join(name), limits);
-    assert!(matches!(fetch("missing-artifact"), Err(PanelSourceErrorR1::Incomplete)));
-    for row in 0..4u32 {
-        let operand = PalwArtifactOperandV1 {
-            tensor_name: "embedding".into(),
-            layer: None,
-            row_start: row * 4,
-            bytes: (row * 4 + 1..=row * 4 + 4).map(|value| value as u8).collect(),
-        };
-        provider.put(&artifact_path(row), &borsh::to_vec(&operand).unwrap()).unwrap();
-    }
-    let artifact = fetch("panel-artifact").unwrap();
-    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV2::new(&fixture.class).unwrap();
-    let replay = |name| {
-        run_public_wide_replay_v1(
+    let replay = |name: &str| {
+        run_cold_public_wide_replay_v1(
             &provider,
-            &signed.original,
-            &manifest,
+            &signed,
             &fixture.context,
             &fixture.class,
-            &artifact,
-            &space,
+            &rules,
+            1 << 20,
+            ManifestV1::WIRE_BYTES,
+            limits,
+            &root.join(format!("{name}-artifact")),
             run_limits,
             &work(),
             tape(name),
@@ -1085,13 +1081,24 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
             None,
         )
     };
+    assert_eq!(replay("missing-artifact"), Err(PanelSourceErrorR1::Incomplete));
+    for row in 0..4u32 {
+        let operand = PalwArtifactOperandV1 {
+            tensor_name: "embedding".into(),
+            layer: None,
+            row_start: row * 4,
+            bytes: (row * 4 + 1..=row * 4 + 4).map(|value| value as u8).collect(),
+        };
+        store.put(&artifact_path(row), &borsh::to_vec(&operand).unwrap()).unwrap();
+    }
     replay("panel-tape").unwrap();
     let tile = crate::public_material::public_original_trace_tile_path(signed.original.id(), 0);
-    std::fs::remove_file(root.join(tile)).unwrap();
+    std::fs::remove_file(store_root.join(tile)).unwrap();
     assert_eq!(replay("incomplete-tape"), Err(PanelSourceErrorR1::Incomplete));
     let mut corrupt = provider.get(&artifact_path(0), 64).unwrap().unwrap();
     *corrupt.last_mut().unwrap() ^= 1;
-    provider.put(&artifact_path(0), &corrupt).unwrap();
-    assert!(matches!(fetch("corrupt-artifact"), Err(PanelSourceErrorR1::Binding)));
+    store.put(&artifact_path(0), &corrupt).unwrap();
+    assert_eq!(replay("corrupt-artifact"), Err(PanelSourceErrorR1::Binding));
+    server.stop();
     std::fs::remove_dir_all(root).unwrap();
 }
