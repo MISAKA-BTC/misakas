@@ -397,11 +397,30 @@ pub(crate) async fn read_facts_many(
 }
 
 /// Print a quote.
-pub(crate) fn show(flow: &crate::operator::tty::Flow, quote: &RegistrationQuoteV1) {
+pub(crate) fn show(
+    flow: &mut crate::operator::tty::Flow,
+    quote: &RegistrationQuoteV1,
+    state: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+) {
     flow.ui.say("");
     flow.ui.say(&crate::operator::finding::paint::bold("  Quote (RFC-0009 §3.4) — what this registration costs, by payer:"));
     for line in quote.lines() {
         flow.ui.sub(&line);
+    }
+    if state.rcore_plus_active_at(quote.facts.tip_daa) && state.bond_collateral_is_net_v1() {
+        let posted = quote.facts.bond.collateral_sompi.saturating_sub(quote.bond_debit_sompi);
+        let floor = state.min_collateral_sompi();
+        if posted < floor {
+            flow.row(
+                crate::operator::finding::Severity::Warning,
+                "producer bond after registration",
+                format!(
+                    "{} posted after the debit, {} below the producer floor",
+                    crate::palw_model::msk(posted),
+                    crate::palw_model::msk(floor - posted),
+                ),
+            );
+        }
     }
     flow.ui.sub(&format!("quote      {}", quote.digest()));
 }
