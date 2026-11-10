@@ -214,7 +214,7 @@ impl MaterialScope {
     pub const COUNT: usize = 10;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ManifestScopeRules {
     pub codec: Digest,
     pub max_bytes: u64,
@@ -548,6 +548,7 @@ pub struct ManifestResponseRecordV1 {
     case: CaseId,
     response_digest: Digest,
     inclusion_daa: u64,
+    limits: Digest,
     classification: ManifestDeliveryClassV1,
 }
 
@@ -637,8 +638,9 @@ impl PendingManifestCase {
             ManifestDeliveryV1::CommittedButInvalid(_) => ManifestDeliveryClassV1::CommittedButInvalid,
             ManifestDeliveryV1::WrongMaterial => ManifestDeliveryClassV1::WrongMaterial,
         };
+        let limits = hash(b"misaka/palw/public-manifest-limits/v1", &(*scope_limits, total_limit, max_manifest_bytes));
         Ok(VerifiedManifestDeliveryV1 {
-            record: ManifestResponseRecordV1 { case: self.id, response_digest, inclusion_daa, classification },
+            record: ManifestResponseRecordV1 { case: self.id, response_digest, inclusion_daa, limits, classification },
             outcome,
         })
     }
@@ -1329,6 +1331,9 @@ mod tests {
         let restored: ManifestResponseRecordV1 = borsh::from_slice(&stored).unwrap();
         assert_eq!(restored.check_restore(&verified), Ok(()));
         assert_eq!(restored.check_restore(&verify(&bytes, 89).unwrap()), Err(ContractError::Scope));
+        let other_limits = verify(&bytes, 91).unwrap();
+        assert_eq!(restored.check_restore(&other_limits), Err(ContractError::Scope));
+        assert!(matches!(other_limits.into_outcome(), ManifestDeliveryV1::Checked(_)));
         assert_eq!(restored.check_restore(&wrong), Err(ContractError::Scope));
         assert_eq!(wrong.into_outcome(), ManifestDeliveryV1::WrongMaterial);
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
