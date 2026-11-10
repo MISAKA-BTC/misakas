@@ -3880,11 +3880,8 @@ impl PublicOriginalTraceTileV1 {
         rules: &PalwTirCourtRulesV1,
     ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
         self.authenticate(original, index, rules.max_step_leaf_count, max_value_bytes)?;
-        if binding.committed_execution_root.as_bytes() != original.trace_root.0
-            || binding.job_context.context_hash().as_bytes() != original.execution.0
-            || binding.job_context.shape_profile_id.as_bytes() != original.registered_class.0
-            || binding.artifact_root.as_bytes() != original.artifact.0
-            || binding.full_logits_trace_root != self.trace.full_logits_trace_root
+        check_public_original_court_binding(original, binding)?;
+        if binding.full_logits_trace_root != self.trace.full_logits_trace_root
             || binding.step_leaf_count != self.trace.step_leaf_count
             || binding.step_merkle_root != self.trace.step_merkle_root
         {
@@ -3892,6 +3889,49 @@ impl PublicOriginalTraceTileV1 {
         }
         check_tir_logits_consistency_wide_q24_v2(binding, &self.opening, &self.tile, event, rules)
     }
+}
+
+fn check_public_original_court_binding(
+    original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+    binding: &PalwTirStepBindingV1,
+) -> Result<(), PalwStepRefuteError> {
+    if binding.committed_execution_root.as_bytes() != original.trace_root.0
+        || binding.job_context.context_hash().as_bytes() != original.execution.0
+        || binding.job_context.shape_profile_id.as_bytes() != original.registered_class.0
+        || binding.artifact_root.as_bytes() != original.artifact.0
+    {
+        return Err(bad("public court binding names another original execution"));
+    }
+    Ok(())
+}
+
+/// Evaluate a decode dispute for the wide public profile's fixed greedy
+/// selector. The generated IDs must also match the original's output.
+pub fn check_public_original_wide_greedy_decode_v1(
+    original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+    binding: &PalwTirStepBindingV1,
+    committed: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+    beat: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+    beat_lane: usize,
+    rules: &PalwTirCourtRulesV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    check_public_original_court_binding(original, binding)?;
+    if committed.generated.len() != original.decode as usize
+        || original.decode != binding.job_context.exact_decode_tokens
+        || u64::from(original.decode) > rules.max_step_leaf_count
+        || crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, &committed.generated).as_bytes()
+            != original.output.0
+    {
+        return Err(bad("wide decode court output does not bind the original"));
+    }
+    check_tir_decode_wide_q24_v2(
+        binding,
+        committed,
+        beat,
+        beat_lane,
+        &crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
+        rules,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
