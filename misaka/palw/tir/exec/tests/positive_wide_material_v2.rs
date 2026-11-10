@@ -385,11 +385,14 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     use misaka_palw_positive_contract::public_one_honest::PanelBond;
     let bond = PanelBond { transaction: d(10), index: 1 };
     let members = [(bond, r.miner)];
-    let approval = prepared.approval_context(d(11), 101, &members, bond, d(12)).unwrap();
+    let draw = prepared.prepare_draw(d(11), 101, &members, d(12)).unwrap();
+    let approval = draw.approval_context(bond).unwrap();
     assert_eq!(approval.original, original.id());
     assert_eq!(approval.member, r.miner);
-    assert!(prepared.approval_context(d(11), 100, &members, bond, d(12)).is_err());
-    assert!(prepared.approval_context(d(11), 101, &[members[0], members[0]], bond, d(12)).is_err());
+    assert_eq!(draw.rescue_capacity(bond), Ok(supply));
+    assert!(draw.rescue_capacity(PanelBond { index: 2, ..bond }).is_err());
+    assert!(prepared.prepare_draw(d(11), 100, &members, d(12)).is_err());
+    assert!(prepared.prepare_draw(d(11), 101, &[members[0], members[0]], d(12)).is_err());
     let record = prepared.record(d(8));
     let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1>(
         &borsh::to_vec(&record).unwrap(),

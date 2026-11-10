@@ -100,35 +100,50 @@ pub struct PublicOriginalAdmissionRecordV1 {
     deadlines: [u64; 8],
 }
 
+/// Membership and per-bond rescue capacity validated for one original.
+pub struct PreparedPublicDrawV1 {
+    original: OriginalId,
+    draw: Digest,
+    full_scope: Digest,
+    members: std::collections::BTreeMap<(Digest, u32), PrincipalId>,
+    per_bond: RemainingCapacity,
+}
+
+impl PreparedPublicDrawV1 {
+    pub fn approval_context(&self, bond: PanelBond) -> Result<ReplayApprovalContext, ContractError> {
+        let member = *self.members.get(&(bond.transaction, bond.index)).ok_or(ContractError::Identity)?;
+        Ok(ReplayApprovalContext { original: self.original, draw: self.draw, bond, member, full_scope: self.full_scope })
+    }
+
+    pub fn rescue_capacity(&self, bond: PanelBond) -> Result<RemainingCapacity, ContractError> {
+        self.approval_context(bond)?;
+        Ok(self.per_bond)
+    }
+}
+
 impl PreparedPublicOriginalV1 {
-    /// Resolve one approval against the actual native draw. The caller
+    /// Validate membership against the original's reservation. The caller
     /// supplies the draw identity and ordered member list from chain state.
-    pub fn approval_context(
+    pub fn prepare_draw(
         &self,
         draw: Digest,
         draw_daa: u64,
         members: &[(PanelBond, PrincipalId)],
-        bond: PanelBond,
         full_scope: Digest,
-    ) -> Result<ReplayApprovalContext, ContractError> {
+    ) -> Result<PreparedPublicDrawV1, ContractError> {
         if draw_daa <= self.inclusion_daa || draw_daa > self.draw_ready_by {
             return Err(ContractError::Range);
         }
         if members.is_empty() || members.len() as u64 > self.rescue.max_drawn_bonds {
             return Err(ContractError::Budget);
         }
-        let mut seen = std::collections::BTreeSet::new();
-        let mut member = None;
+        let mut checked = std::collections::BTreeMap::new();
         for &(candidate, principal) in members {
-            if !seen.insert((candidate.transaction, candidate.index)) {
+            if checked.insert((candidate.transaction, candidate.index), principal).is_some() {
                 return Err(ContractError::Identity);
             }
-            if candidate == bond {
-                member = Some(principal);
-            }
         }
-        let member = member.ok_or(ContractError::Identity)?;
-        Ok(ReplayApprovalContext { original: self.original, draw, bond, member, full_scope })
+        Ok(PreparedPublicDrawV1 { original: self.original, draw, full_scope, members: checked, per_bond: self.rescue.per_drawn_bond })
     }
 
     pub fn record(&self, reservation: Digest) -> PublicOriginalAdmissionRecordV1 {
