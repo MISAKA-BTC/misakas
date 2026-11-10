@@ -17,7 +17,7 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     ContractError,
-    identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
+    identity::{CaseId, ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
     messages::{
         AdmissionContext, AggregateBudget, CheckProfile, ClaimForm, CoverageCursor, CoverageDescriptor, MinerResultCommit,
         PanelWitnessCommit, coverage_plan_id,
@@ -38,6 +38,15 @@ use misaka_palw_positive_contract::{
 pub const PART_OVERHEAD: u64 = (EVIDENCE_HEADER_BYTES + EXACT_PART_HEADER_BYTES) as u64;
 
 pub(crate) const PUBLIC_ORIGINAL_ADMISSION_TABLE_V1: u8 = 198;
+pub(crate) const PUBLIC_PENDING_MANIFEST_TABLE_V1: u8 = 199;
+
+pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u8]) -> Result<(), ContractError> {
+    match table {
+        PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => PublicOriginalAdmissionRecordV1::decode_row(key, bytes).map(|_| ()),
+        PUBLIC_PENDING_MANIFEST_TABLE_V1 => PendingManifestCaseRecordV1::decode_row(key, bytes).map(|_| ()),
+        _ => Ok(()),
+    }
+}
 
 /// Transport quote only; A4 reserves native wrapper/transaction overhead too.
 /// Existing frame limits remain unsigned and are never silently reinterpreted.
@@ -654,6 +663,30 @@ impl PublicOriginalAdmissionRecordV1 {
 }
 
 impl crate::palw_state_v2::PalwChainStateV2 {
+    pub fn public_pending_manifest_record_v1(&self, case: CaseId) -> Result<Option<PendingManifestCaseRecordV1>, ContractError> {
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
+        let key = (PUBLIC_PENDING_MANIFEST_TABLE_V1, case.0.0.to_vec());
+        route.aux.get(&key).map(|bytes| self.decode_public_pending_manifest_row_v1(&key.1, bytes)).transpose()
+    }
+
+    pub(crate) fn decode_public_pending_manifest_row_v1(
+        &self,
+        key: &[u8],
+        bytes: &[u8],
+    ) -> Result<PendingManifestCaseRecordV1, ContractError> {
+        let row = PendingManifestCaseRecordV1::decode_row(key, bytes)?;
+        let admission = self.public_original_admission_record_v1(row.original())?.ok_or(ContractError::Scope)?;
+        let [_, _, _, ready, _, _, filed, _] = admission.deadlines;
+        row.check_admission(
+            admission.carrier.origin.accepted_daa,
+            self.last_point().ok_or(ContractError::Scope)?.daa_score,
+            admission.max_manifest_bytes,
+            ready,
+            filed,
+        )?;
+        Ok(row)
+    }
+
     /// Read the record from this state point. Callers must still resolve its
     /// carrier in accepted history and revalidate it with the native reservation.
     pub fn public_original_admission_record_v1(

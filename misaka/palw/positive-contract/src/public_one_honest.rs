@@ -601,6 +601,40 @@ impl ManifestResponseRecordV1 {
 impl PendingManifestCaseRecordV1 {
     pub const WIRE_BYTES: usize = 5 * 64 + 4 * 8 + 4;
 
+    pub fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
+        let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
+        if key != row.id.0.0.as_slice() {
+            return Err(ContractError::Identity);
+        }
+        ManifestV1::fetch_size(row.max_manifest_bytes)?;
+        Ok(row)
+    }
+
+    pub fn original(&self) -> OriginalId {
+        self.original
+    }
+
+    pub fn check_admission(
+        &self,
+        accepted_at: u64,
+        state_daa: u64,
+        max_manifest_bytes: u32,
+        material_ready_by: u64,
+        filed_by: u64,
+    ) -> Result<(), ContractError> {
+        let clock = OriginalClock::new(accepted_at)?;
+        if !clock.accepts_first_notice(self.opened_at)
+            || self.opened_at > state_daa
+            || self.max_manifest_bytes != max_manifest_bytes
+            || self.material_ready_by != material_ready_by
+            || self.filed_by != filed_by
+            || self.hard != clock.hard()
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+
     pub fn check_restore(&self, pending: &PendingManifestCase) -> Result<(), ContractError> {
         if *self != pending.record() {
             return Err(ContractError::Scope);
@@ -1286,7 +1320,16 @@ mod tests {
         assert_eq!(pending.reservation(), context.reservation);
         let stored = borsh::to_vec(&pending.record()).unwrap();
         assert_eq!(stored.len(), PendingManifestCaseRecordV1::WIRE_BYTES);
-        let restored: PendingManifestCaseRecordV1 = borsh::from_slice(&stored).unwrap();
+        let restored = PendingManifestCaseRecordV1::decode_row(&pending.id().0.0, &stored).unwrap();
+        assert_eq!(PendingManifestCaseRecordV1::decode_row(&[], &stored), Err(ContractError::Identity));
+        assert_eq!(
+            restored.check_admission(100, clock.notice_until(), max, schedule.material_ready_by(), schedule.filed_by()),
+            Ok(())
+        );
+        assert_eq!(
+            restored.check_admission(100, clock.notice_until() - 1, max, schedule.material_ready_by(), schedule.filed_by()),
+            Err(ContractError::Scope)
+        );
         assert_eq!(restored.check_restore(&pending), Ok(()));
         let altered = PendingManifestCaseRecordV1 { opened_at: restored.opened_at - 1, ..restored };
         assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));

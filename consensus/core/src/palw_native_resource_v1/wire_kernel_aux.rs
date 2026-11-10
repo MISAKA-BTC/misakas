@@ -332,6 +332,12 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => {
             return Err(wire::wire_bad("unallocated public original admission key"));
         }
+        crate::palw_positive_contract_v2::PUBLIC_PENDING_MANIFEST_TABLE_V1 if key_bytes == 64 => {
+            misaka_palw_positive_contract::public_one_honest::PendingManifestCaseRecordV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_PENDING_MANIFEST_TABLE_V1 => {
+            return Err(wire::wire_bad("unallocated public pending manifest key"));
+        }
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,

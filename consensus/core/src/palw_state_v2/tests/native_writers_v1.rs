@@ -296,11 +296,11 @@ fn malformed_public_admission_delta_cannot_install_on_replay_or_revert() {
     let malformed = Some(vec![2]);
     assert!(matches!(
         apply_kernel_route_row_v1(&mut state, table, &key, &None, &malformed, false),
-        Err(PalwStateV2Error::DeltaMismatch("invalid public original admission row in kernel route delta"))
+        Err(PalwStateV2Error::DeltaMismatch("invalid public verification row in kernel route delta"))
     ));
     assert!(matches!(
         apply_kernel_route_row_v1(&mut state, table, &key, &malformed, &None, true),
-        Err(PalwStateV2Error::DeltaMismatch("invalid public original admission row in kernel route delta"))
+        Err(PalwStateV2Error::DeltaMismatch("invalid public verification row in kernel route delta"))
     ));
     assert_eq!(state.state_root(), root);
 }

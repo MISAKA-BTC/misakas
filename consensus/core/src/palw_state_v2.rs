@@ -23703,12 +23703,9 @@ fn apply_kernel_route_row_v1(
     revert: bool,
 ) -> Result<(), PalwStateV2Error> {
     let (expected, install) = if revert { (new, old) } else { (old, new) };
-    use crate::palw_positive_contract_v2::{PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PublicOriginalAdmissionRecordV1};
-    if table == PUBLIC_ORIGINAL_ADMISSION_TABLE_V1
-        && let Some(bytes) = install.as_deref()
-    {
-        PublicOriginalAdmissionRecordV1::decode_row(key, bytes)
-            .map_err(|_| PalwStateV2Error::DeltaMismatch("invalid public original admission row in kernel route delta"))?;
+    if let Some(bytes) = install.as_deref() {
+        crate::palw_positive_contract_v2::check_public_verification_row_v1(table, key, bytes)
+            .map_err(|_| PalwStateV2Error::DeltaMismatch("invalid public verification row in kernel route delta"))?;
     }
     let cohort_update = palw_claim_local_execution_cohort_census_v15::prepare_frame_change_v15(state, table, key, install.as_deref())?;
     let compact_update =
