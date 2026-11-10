@@ -670,7 +670,31 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         ..reservation
     };
     let with_outsider = admission.prepare(&original, &signed.key, signature.as_ref(), &outsider_reservation).unwrap();
-    assert!(with_outsider.verify_outsider_manifest_request(0, &outside, &request_context, &signed.key, outside_sig.as_ref()).is_ok());
+    let outsider_case =
+        with_outsider.verify_outsider_manifest_request(0, &outside, &request_context, &signed.key, outside_sig.as_ref()).unwrap();
+    let outsider_record = borsh::from_slice(&borsh::to_vec(&outsider_case.record()).unwrap()).unwrap();
+    assert_eq!(
+        with_outsider.restore_outsider_manifest_request(
+            &outsider_record,
+            0,
+            &outside,
+            &request_context,
+            &signed.key,
+            outside_sig.as_ref()
+        ),
+        Ok(outsider_case)
+    );
+    assert_eq!(
+        with_outsider.restore_outsider_manifest_request(
+            &case_record,
+            0,
+            &outside,
+            &request_context,
+            &signed.key,
+            outside_sig.as_ref()
+        ),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     assert!(with_outsider.verify_outsider_manifest_request(1, &outside, &request_context, &signed.key, outside_sig.as_ref()).is_err());
     assert!(draw.rescue_capacity(PanelBond { index: 2, ..bond }).is_err());
     assert!(prepared.prepare_draw(d(11), 100, &members, d(12)).is_err());
