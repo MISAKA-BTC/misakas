@@ -25,10 +25,10 @@ use misaka_palw_positive_contract::{
     ports::{NodeChecker, require_next},
     public_one_honest::{
         CaseId, Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
-        ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialScope, MissingInspectionOutcome, OriginalClock, OriginalCommit,
-        OriginalId, PanelBond, PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1,
-        ReplayApprovalContext, SignedPublicOriginalV1, VerificationSchedule, manifest_limits_id_v1, public_draw_id_v1,
-        public_draw_members_digest_v1, public_original_service_contract_id_v1, require_accepted_after_v1,
+        ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialId, MaterialScope, MissingInspectionOutcome, OriginalClock,
+        OriginalCommit, OriginalId, PanelBond, PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand,
+        PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1, VerificationSchedule, manifest_limits_id_v1,
+        public_draw_id_v1, public_draw_members_digest_v1, public_original_service_contract_id_v1, require_accepted_after_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -184,6 +184,7 @@ pub struct PreparedPublicOriginalV1 {
     pub schedule: VerificationSchedule,
     pub capacity: RemainingCapacity,
     carrier: AcceptedMaterial,
+    manifest_material: MaterialId,
     draw_ready_by: u64,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
@@ -197,6 +198,7 @@ pub struct PreparedPublicOriginalV1 {
 pub struct PublicOriginalAdmissionRecordV1 {
     original: OriginalId,
     carrier: AcceptedMaterial,
+    manifest_material: MaterialId,
     reservation: Digest,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
@@ -319,8 +321,10 @@ wire_struct!(ProtectedRescueDemand; u64, RemainingCapacity, u64, RemainingCapaci
 native_struct!(PanelBond; transaction, index);
 wire_struct!(PanelBond; Digest, u32);
 
-native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, initial_supply, rescue, budget, max_manifest_bytes, manifest_limits, deadlines);
-wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, Digest, [u64; 8]);
+native_tuple_struct!(MaterialId; id);
+wire_struct!(MaterialId; Digest);
+native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, manifest_material, reservation, initial_supply, rescue, budget, max_manifest_bytes, manifest_limits, deadlines);
+wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, MaterialId, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, Digest, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, beacon, draw_point, hard, full_scope, ordered_members, per_bond);
@@ -651,6 +655,7 @@ impl PreparedPublicOriginalV1 {
         PublicOriginalAdmissionRecordV1 {
             original: self.original,
             carrier: self.carrier,
+            manifest_material: self.manifest_material,
             reservation,
             initial_supply: self.initial_supply,
             rescue: self.rescue,
@@ -680,6 +685,7 @@ impl PublicOriginalAdmissionRecordV1 {
         Self {
             original,
             carrier: AcceptedMaterial { origin, digest: Digest([1; 64]) },
+            manifest_material: MaterialId(Digest([4; 64])),
             reservation: Digest([2; 64]),
             initial_supply: supply,
             rescue: ProtectedRescueDemand {
@@ -1010,6 +1016,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let row = PendingManifestCaseRecordV1::decode_row(key, bytes)?;
         let admission = self.public_original_admission_record_v1(row.original())?.ok_or(ContractError::Scope)?;
         let point = self.last_point().ok_or(ContractError::Scope)?;
+        if row.material() != admission.manifest_material {
+            return Err(ContractError::Scope);
+        }
         check_public_origin_point_v1(row.origin(), point)?;
         require_accepted_after_v1(admission.carrier.origin, row.origin())?;
         match row.claimant()? {
@@ -1108,6 +1117,7 @@ impl PublicOriginalAdmissionV1<'_> {
                 origin: reservation.origin,
                 digest: SignedPublicOriginalV1::carrier_digest(original, key, signature),
             },
+            manifest_material: original.manifest_material_id(),
             draw_ready_by: reservation.notice.draw_ready_by,
             initial_supply: reservation.initial_supply,
             rescue: reservation.rescue,

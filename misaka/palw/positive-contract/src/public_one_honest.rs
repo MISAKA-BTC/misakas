@@ -197,7 +197,7 @@ impl OriginalCommit {
         Ok(AuthenticatedManifest { id: self.manifest_material_id(), bytes })
     }
 
-    fn manifest_material_id(&self) -> MaterialId {
+    pub fn manifest_material_id(&self) -> MaterialId {
         MaterialId(hash(b"misaka/palw/public-manifest-material/v1", &(self.scope.ruleset, self.manifest_root)))
     }
 }
@@ -750,6 +750,10 @@ impl PendingManifestCaseRecordV1 {
 
     pub fn signer(&self) -> PrincipalId {
         self.signer
+    }
+
+    pub fn material(&self) -> MaterialId {
+        self.material
     }
 
     pub fn claimant(&self) -> Result<Claimant, ContractError> {
