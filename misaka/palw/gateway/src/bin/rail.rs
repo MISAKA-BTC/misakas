@@ -2384,7 +2384,7 @@ mod watch {
                 true,
             ))
             .map_err(|e| format!("cannot read the node's producer facts: {e}"))?;
-        if !facts.available || !facts.fp_certified || !facts.bond_known {
+        if !facts.available || !facts.fp_certified || !facts.bond_known || facts.bond_producer_floor_shortfall > 0 {
             quiet.say(
                 "chain",
                 format!(
@@ -2394,8 +2394,13 @@ mod watch {
                         "the chain this node follows does not know the job's class".to_string()
                     } else if !facts.fp_certified {
                         "the job's class is not certified on the free-prompt lane (the chain would refuse the commitment)".to_string()
-                    } else {
+                    } else if !facts.bond_known {
                         format!("the job's bond {}:{} is not registered on this chain", bond.transaction_id, bond.index)
+                    } else {
+                        format!(
+                            "the job's bond {}:{} is {} sompi below the producer floor",
+                            bond.transaction_id, bond.index, facts.bond_producer_floor_shortfall
+                        )
                     }
                 ),
             );
