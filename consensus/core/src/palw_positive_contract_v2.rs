@@ -27,8 +27,8 @@ use misaka_palw_positive_contract::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
         ManifestV1, MaterialCaseDemand, MissingInspectionOutcome, OriginalClock, OriginalCommit, OriginalId, PanelBond,
         PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext,
-        SignedPublicOriginalV1, VerificationSchedule, public_draw_members_digest_v1, public_original_service_contract_id_v1,
-        require_accepted_after_v1,
+        SignedPublicOriginalV1, VerificationSchedule, public_draw_id_v1, public_draw_members_digest_v1,
+        public_original_service_contract_id_v1, require_accepted_after_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -237,6 +237,7 @@ pub struct PreparedPublicDrawV1 {
     original: OriginalId,
     admission_carrier: AcceptedMaterial,
     draw: Digest,
+    beacon: Digest,
     draw_point: crate::palw_state_v2::PalwBlockContextV2,
     hard: u64,
     full_scope: Digest,
@@ -250,6 +251,7 @@ pub struct PublicDrawRecordV1 {
     original: OriginalId,
     admission_carrier: AcceptedMaterial,
     draw: Digest,
+    beacon: Digest,
     draw_point: crate::palw_state_v2::PalwBlockContextV2,
     hard: u64,
     full_scope: Digest,
@@ -302,8 +304,8 @@ native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, 
 wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
-native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, draw_point, hard, full_scope, ordered_members, per_bond);
-wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, crate::palw_state_v2::PalwBlockContextV2, u64, Digest, Digest, RemainingCapacity);
+native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, beacon, draw_point, hard, full_scope, ordered_members, per_bond);
+wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, Digest, crate::palw_state_v2::PalwBlockContextV2, u64, Digest, Digest, RemainingCapacity);
 native_struct!(PublicReplayApprovalRecordV1; original, draw, full_scope, ordered_members, bond, origin, approval_digest);
 wire_struct!(PublicReplayApprovalRecordV1; OriginalId, Digest, Digest, Digest, PanelBond, AcceptedOrigin, Digest);
 
@@ -376,6 +378,7 @@ impl PreparedPublicDrawV1 {
             original: self.original,
             admission_carrier: self.admission_carrier,
             draw: self.draw,
+            beacon: self.beacon,
             draw_point: self.draw_point,
             hard: self.hard,
             full_scope: self.full_scope,
@@ -458,12 +461,12 @@ impl PreparedPublicOriginalV1 {
     pub fn restore_draw(
         &self,
         record: &PublicDrawRecordV1,
-        draw: Digest,
+        beacon: Digest,
         draw_point: crate::palw_state_v2::PalwBlockContextV2,
         members: &[PublicDrawMemberV1],
         relation_plan: Digest,
     ) -> Result<PreparedPublicDrawV1, ContractError> {
-        let prepared = self.prepare_draw(draw, draw_point, members, relation_plan)?;
+        let prepared = self.prepare_draw(beacon, draw_point, members, relation_plan)?;
         record.check_restore(&prepared)?;
         Ok(prepared)
     }
@@ -574,10 +577,10 @@ impl PreparedPublicOriginalV1 {
     }
 
     /// Validate membership against the original's reservation. The caller
-    /// supplies the draw identity and ordered member list from chain state.
+    /// supplies the beacon and ordered member list from canonical chain history.
     pub fn prepare_draw(
         &self,
-        draw: Digest,
+        beacon: Digest,
         draw_point: crate::palw_state_v2::PalwBlockContextV2,
         members: &[PublicDrawMemberV1],
         relation_plan: Digest,
@@ -600,15 +603,26 @@ impl PreparedPublicOriginalV1 {
                 return Err(ContractError::Identity);
             }
         }
+        let full_scope = self.original.full_replay_scope(relation_plan);
+        let ordered_members = public_draw_members_digest_v1(members);
+        let draw = public_draw_id_v1(
+            self.original,
+            self.carrier.digest,
+            Digest(draw_point.block.as_bytes()),
+            beacon,
+            full_scope,
+            ordered_members,
+        );
         Ok(PreparedPublicDrawV1 {
             original: self.original,
             admission_carrier: self.carrier,
             draw,
+            beacon,
             draw_point,
             hard: self.schedule.hard(),
-            full_scope: self.original.full_replay_scope(relation_plan),
+            full_scope,
             members: checked,
-            ordered_members: public_draw_members_digest_v1(members),
+            ordered_members,
             per_bond: self.rescue.per_drawn_bond,
         })
     }
@@ -903,6 +917,15 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             || (row.draw_point.blue_score == point.blue_score && row.draw_point != *point)
             || row.hard != clock.hard()
             || row.per_bond != admission.rescue.per_drawn_bond
+            || row.draw
+                != public_draw_id_v1(
+                    row.original,
+                    row.admission_carrier.digest,
+                    Digest(row.draw_point.block.as_bytes()),
+                    row.beacon,
+                    row.full_scope,
+                    row.ordered_members,
+                )
         {
             return Err(ContractError::Scope);
         }

@@ -54,6 +54,18 @@ pub fn public_draw_members_digest_v1(members: &[PublicDrawMemberV1]) -> Digest {
     hash(b"misaka/palw/public-draw-members/v1", &members)
 }
 
+/// Identity of a draw whose beacon and membership were resolved by consensus.
+pub fn public_draw_id_v1(
+    original: OriginalId,
+    admission_carrier: Digest,
+    block: Digest,
+    beacon: Digest,
+    full_scope: Digest,
+    members: Digest,
+) -> Digest {
+    hash(b"misaka/palw/public-draw-id/v1", &(original, admission_carrier, block, beacon, full_scope, members))
+}
+
 /// The canonical identity native admission must resolve from the draw or
 /// from admitted outsider eligibility before using a request's case ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

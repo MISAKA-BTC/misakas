@@ -788,6 +788,14 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let at_draw = AcceptedOrigin { accepted_daa: 101, ..vote_origin };
     let before_draw = AcceptedOrigin { accepted_daa: 100, ..vote_origin };
+    let fork_draw = prepared.prepare_draw(d(11), other_block, &members, d(12)).unwrap();
+    assert_ne!(fork_draw.approval_context(bond).unwrap().draw, assertion.draw);
+    assert_eq!(
+        fork_draw.verify_replay_approval(102, vote_origin, &assertion, &signed.key, signed_approval.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
+    let other_beacon = prepared.prepare_draw(d(13), draw_point, &members, d(12)).unwrap();
+    assert_ne!(other_beacon.approval_context(bond).unwrap().draw, assertion.draw);
     let signed_assertion = (vote_origin, &assertion, &signed.key, signed_approval.as_ref());
     let approval_records = draw.verify_replay_quorum(1, 102, &[signed_assertion]).unwrap();
     assert_eq!(approval_records.len(), 1);
