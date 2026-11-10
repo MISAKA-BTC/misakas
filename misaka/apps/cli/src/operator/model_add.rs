@@ -472,19 +472,23 @@ async fn walk(
     flow.ui.say(&paint::bold(&format!("MISAKA model add · {net}")));
     flow.ui.say(&paint::dim("  Each step reads what the chain already holds, so running this again resumes where it stopped."));
     flow.ui.say("");
-    flow.ui.mark(Severity::Info, "catalog", "building this build's class table (it drills each family once, a few seconds)…");
-    let sdk = crate::operator::model_add::chain_sdk(&params, &bundle, &net.to_string());
-    let ledger = sdk.ledger();
-
     // **An IR artifact** (`--artifact <.palwtir>`, the pack gate already passed in `run`): its own route below, once the node answers.
     let tir_artifact = args
         .artifact
         .as_deref()
         .map(std::path::Path::new)
         .filter(|a| args.model.is_none() && args.manifest.is_none() && misaka_palw_sdk::tir_manifest::PalwTirManifestV1::sniff(a));
+    let sdk = tir_artifact.is_none().then(|| {
+        flow.ui.mark(Severity::Info, "catalog", "building this build's class table (it drills each family once, a few seconds)…");
+        chain_sdk(&params, &bundle, &net.to_string())
+    });
+    let ledger = sdk.as_ref().map_or_else(Vec::new, misaka_palw_sdk::PalwClassSdk::ledger);
     // No model named and no manifest: the catalog, and which of it the chain already holds.
     let selector = args.model.clone();
-    if selector.is_none() && args.manifest.is_none() && tir_artifact.is_none() {
+    if let Some(sdk) = &sdk
+        && selector.is_none()
+        && args.manifest.is_none()
+    {
         let node = snapshot::connect_to(&profile.network, profile.rpc.as_deref(), Duration::from_secs(5)).await.ok();
         let held: Vec<String> = match &node {
             Some(n) if n.ops_0122 => {
@@ -519,7 +523,7 @@ async fn walk(
             let registrable = if on_chain == "yes" {
                 "—".to_string()
             } else {
-                match catalog_row_admissible(&params, &bundle, &sdk, e, &chain_certified, daa) {
+                match catalog_row_admissible(&params, &bundle, sdk, e, &chain_certified, daa) {
                     Ok(()) => "yes".to_string(),
                     Err(why) => {
                         refused += 1;
@@ -632,6 +636,7 @@ async fn walk(
     if let Some(artifact) = tir_artifact {
         return register_tir_v1(ctx, profile, args, flow, doc, params.clone(), &bundle, node, &terms, artifact).await;
     }
+    let sdk = sdk.as_ref().expect("non-TIR registration uses the catalog SDK");
     let (entry, manifest_root) = match (catalog_entry, &args.manifest) {
         (Some(entry), _) => (entry, None),
         (None, Some(path)) => {
@@ -686,7 +691,7 @@ async fn walk(
             row
         }
         None => {
-            register(&walk, flow, &bundle, &sdk, &entry, &terms).await?;
+            register(&walk, flow, &bundle, sdk, &entry, &terms).await?;
             // `--export-bundle` ends here: an unsigned bundle is written, and nothing is signed, funded or sent.
             if let Some(path) = walk.exported.borrow().clone() {
                 doc.insert("export_bundle".into(), path.display().to_string().into());
