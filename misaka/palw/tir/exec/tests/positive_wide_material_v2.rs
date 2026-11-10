@@ -638,7 +638,14 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
         manifest_body_bytes_reserved: body,
         schedule: prepared.schedule,
-        inclusion_daa: 101,
+        origin: AcceptedOrigin {
+            accepting_block: NativeHash64([13; 64]),
+            carrier_block: NativeHash64([14; 64]),
+            carrier_transaction: NativeHash64([15; 64]),
+            accepted_daa: 101,
+            accepted_blue_score: 101,
+            ..reservation.origin
+        },
     };
     let request = ManifestRequest {
         original: original.id(),

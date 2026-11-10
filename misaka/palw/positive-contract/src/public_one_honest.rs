@@ -4,6 +4,7 @@
 use crate::ContractError;
 use crate::identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, SIGNATURE_BYTES, hash, principal, verify_signature};
 use crate::reservations::RemainingCapacity;
+use crate::rows::AcceptedOrigin;
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const ORIGINAL_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-original/v1";
@@ -495,7 +496,7 @@ pub struct ManifestRequestContext<'a> {
     /// consumer accounts for the envelope, verification work and retention separately.
     pub manifest_body_bytes_reserved: u64,
     pub schedule: VerificationSchedule,
-    pub inclusion_daa: u64,
+    pub origin: AcceptedOrigin,
 }
 
 /// An authenticated request ready for the native fold to install alongside
@@ -508,7 +509,7 @@ pub struct PendingManifestCase {
     reservation: Digest,
     supply_obligation: Digest,
     request_digest: Digest,
-    opened_at: u64,
+    origin: AcceptedOrigin,
     max_manifest_bytes: u32,
     schedule: VerificationSchedule,
 }
@@ -538,7 +539,7 @@ pub struct PendingManifestCaseRecordV1 {
     material: MaterialId,
     reservation: Digest,
     request_digest: Digest,
-    opened_at: u64,
+    origin: AcceptedOrigin,
     max_manifest_bytes: u32,
     material_ready_by: u64,
     filed_by: u64,
@@ -599,7 +600,7 @@ impl ManifestResponseRecordV1 {
 }
 
 impl PendingManifestCaseRecordV1 {
-    pub const WIRE_BYTES: usize = 5 * 64 + 4 * 8 + 4;
+    pub const WIRE_BYTES: usize = 5 * 64 + (3 * 64 + 2 * 4 + 2 * 8) + 3 * 8 + 4;
 
     pub fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
         let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
@@ -614,6 +615,10 @@ impl PendingManifestCaseRecordV1 {
         self.original
     }
 
+    pub fn origin(&self) -> AcceptedOrigin {
+        self.origin
+    }
+
     pub fn check_admission(
         &self,
         accepted_at: u64,
@@ -623,8 +628,8 @@ impl PendingManifestCaseRecordV1 {
         filed_by: u64,
     ) -> Result<(), ContractError> {
         let clock = OriginalClock::new(accepted_at)?;
-        if !clock.accepts_first_notice(self.opened_at)
-            || self.opened_at > state_daa
+        if !clock.accepts_first_notice(self.origin.accepted_daa)
+            || self.origin.accepted_daa > state_daa
             || self.max_manifest_bytes != max_manifest_bytes
             || self.material_ready_by != material_ready_by
             || self.filed_by != filed_by
@@ -700,7 +705,7 @@ impl PendingManifestCase {
             material: self.material,
             reservation: self.reservation,
             request_digest: self.request_digest,
-            opened_at: self.opened_at,
+            origin: self.origin,
             max_manifest_bytes: self.max_manifest_bytes,
             material_ready_by: self.schedule.material_ready_by(),
             filed_by: self.schedule.filed_by(),
@@ -732,14 +737,14 @@ impl PendingManifestCase {
         if original.id() != self.original || original.manifest_material_id() != self.material {
             return Err(ContractError::Scope);
         }
-        if !self.schedule.material_arrival_fits(self.opened_at, inclusion_daa) {
+        if !self.schedule.material_arrival_fits(self.origin.accepted_daa, inclusion_daa) {
             return Err(ContractError::Range);
         }
         Ok(())
     }
 
     pub fn unresolved_at(&self, inclusion_daa: u64) -> Result<MissingInspectionOutcome, ContractError> {
-        self.schedule.missing_inspection_outcome(self.opened_at, inclusion_daa)
+        self.schedule.missing_inspection_outcome(self.origin.accepted_daa, inclusion_daa)
     }
 }
 
@@ -793,7 +798,7 @@ impl ManifestRequest {
             reservation: context.reservation,
             supply_obligation: context.supply_obligation,
             request_digest: self.signing_digest(),
-            opened_at: context.inclusion_daa,
+            origin: context.origin,
             max_manifest_bytes: context.max_manifest_bytes,
             schedule: context.schedule,
         })
@@ -814,7 +819,9 @@ impl ManifestRequest {
         if context.manifest_body_bytes_reserved < u64::from(body_bytes) {
             return Err(ContractError::Budget);
         }
-        if !context.schedule.clock.accepts_first_notice(context.inclusion_daa) || self.collect_until != context.schedule.filed_by() {
+        if !context.schedule.clock.accepts_first_notice(context.origin.accepted_daa)
+            || self.collect_until != context.schedule.filed_by()
+        {
             return Err(ContractError::Range);
         }
         Ok(id)
@@ -1238,7 +1245,15 @@ mod tests {
             max_manifest_bytes: ManifestV1::WIRE_BYTES,
             manifest_body_bytes_reserved: u64::from(ManifestV1::WIRE_BYTES),
             schedule,
-            inclusion_daa: clock.notice_until(),
+            origin: AcceptedOrigin {
+                accepting_block: crate::rows::NativeHash64([1; 64]),
+                carrier_block: crate::rows::NativeHash64([2; 64]),
+                carrier_transaction: crate::rows::NativeHash64([3; 64]),
+                accepted_tx_ordinal: 1,
+                event_ordinal: 0,
+                accepted_daa: clock.notice_until(),
+                accepted_blue_score: clock.notice_until(),
+            },
         };
         let request = ManifestRequest { collect_until: schedule.filed_by(), ..request };
         assert_eq!(request.check_inclusion(&context), request.case_id(&original, first));
@@ -1253,7 +1268,7 @@ mod tests {
         assert_eq!(other_reservation.check_inclusion(&context), Err(ContractError::Budget));
         let shortened = ManifestRequest { collect_until: schedule.filed_by() - 1, ..request.clone() };
         assert_eq!(shortened.check_inclusion(&context), Err(ContractError::Range));
-        context.inclusion_daa += 1;
+        context.origin.accepted_daa += 1;
         assert_eq!(request.check_inclusion(&context), Err(ContractError::Range));
 
         let mut rules = [ManifestScopeRules { codec: d, max_bytes: 16, chunk_bytes: 8 }; MaterialScope::COUNT];
@@ -1309,7 +1324,7 @@ mod tests {
         let context = ManifestRequestContext {
             original: &bound_original,
             signer: request.signer,
-            inclusion_daa: clock.notice_until(),
+            origin: AcceptedOrigin { accepted_daa: clock.notice_until(), ..context.origin },
             ..context
         };
         let signature =
@@ -1331,7 +1346,8 @@ mod tests {
             Err(ContractError::Scope)
         );
         assert_eq!(restored.check_restore(&pending), Ok(()));
-        let altered = PendingManifestCaseRecordV1 { opened_at: restored.opened_at - 1, ..restored };
+        let alternate = AcceptedOrigin { accepted_tx_ordinal: restored.origin.accepted_tx_ordinal + 1, ..restored.origin };
+        let altered = PendingManifestCaseRecordV1 { origin: alternate, ..restored };
         assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));
         let altered = PendingManifestCaseRecordV1 { max_manifest_bytes: restored.max_manifest_bytes + 1, ..restored };
         assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));

@@ -436,7 +436,7 @@ impl PreparedPublicOriginalV1 {
         if draw.original != self.original || self.original.full_replay_scope(context.inspection_scope) != draw.full_scope {
             return Err(ContractError::Scope);
         }
-        if context.inclusion_daa < draw.draw_daa {
+        if context.origin.accepted_daa < draw.draw_daa {
             return Err(ContractError::Range);
         }
         let Claimant::DrawnBond(bond) = context.claimant else {
@@ -605,14 +605,7 @@ impl PublicOriginalAdmissionRecordV1 {
     }
 
     pub(crate) fn check_state_point(&self, point: &crate::palw_state_v2::PalwBlockContextV2) -> Result<(), ContractError> {
-        let origin = self.carrier.origin;
-        if origin.accepted_daa > point.daa_score
-            || origin.accepted_blue_score > point.blue_score
-            || (origin.accepted_blue_score == point.blue_score && origin.accepting_block.0 != point.block.as_bytes())
-        {
-            return Err(ContractError::Scope);
-        }
-        Ok(())
+        check_public_origin_point_v1(self.carrier.origin, point)
     }
 
     /// Resolve this reference from canonical accepted history on restore.
@@ -662,6 +655,19 @@ impl PublicOriginalAdmissionRecordV1 {
     }
 }
 
+fn check_public_origin_point_v1(
+    origin: AcceptedOrigin,
+    point: &crate::palw_state_v2::PalwBlockContextV2,
+) -> Result<(), ContractError> {
+    if origin.accepted_daa > point.daa_score
+        || origin.accepted_blue_score > point.blue_score
+        || (origin.accepted_blue_score == point.blue_score && origin.accepting_block.0 != point.block.as_bytes())
+    {
+        return Err(ContractError::Scope);
+    }
+    Ok(())
+}
+
 impl crate::palw_state_v2::PalwChainStateV2 {
     pub fn public_pending_manifest_record_v1(&self, case: CaseId) -> Result<Option<PendingManifestCaseRecordV1>, ContractError> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
@@ -676,14 +682,10 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<PendingManifestCaseRecordV1, ContractError> {
         let row = PendingManifestCaseRecordV1::decode_row(key, bytes)?;
         let admission = self.public_original_admission_record_v1(row.original())?.ok_or(ContractError::Scope)?;
+        let point = self.last_point().ok_or(ContractError::Scope)?;
+        check_public_origin_point_v1(row.origin(), point)?;
         let [_, _, _, ready, _, _, filed, _] = admission.deadlines;
-        row.check_admission(
-            admission.carrier.origin.accepted_daa,
-            self.last_point().ok_or(ContractError::Scope)?.daa_score,
-            admission.max_manifest_bytes,
-            ready,
-            filed,
-        )?;
+        row.check_admission(admission.carrier.origin.accepted_daa, point.daa_score, admission.max_manifest_bytes, ready, filed)?;
         Ok(row)
     }
 
