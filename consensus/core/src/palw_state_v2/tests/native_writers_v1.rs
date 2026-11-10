@@ -518,6 +518,41 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         Ok(PublicFinalReplayPrerequisiteV1::PastHardDeadline)
     );
 
+    let court_point = ctx(5, 104, 5);
+    let court_origin = AcceptedOrigin {
+        accepting_block: NativeHash64(court_point.block.as_bytes()),
+        accepted_daa: 104,
+        accepted_blue_score: 5,
+        ..origin
+    };
+    let evidence_id = h64(41);
+    let court = row.storage_court_fixture(evidence_id, court_origin);
+    let court_extras = PalwTransitionExtrasV1 {
+        kernel_route: extras.kernel_route.clone(),
+        public_court_records: vec![court, court],
+        ..Default::default()
+    };
+    let (refuted, court_delta) =
+        apply_palw_transition_v2_with_extras(&voted, &params, &court_point, &[], None, false, false, false, false, &court_extras)
+            .unwrap();
+    assert!(refuted.public_original_court_record_v1(original, evidence_id).unwrap().is_some());
+    assert_eq!(
+        refuted.public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("recorded refutation takes precedence")),
+        Ok(PublicFinalReplayPrerequisiteV1::RecordedRefutation)
+    );
+    assert_eq!(apply_delta_v2(&voted, &court_delta, &params).unwrap(), refuted);
+    assert_eq!(revert_delta_v2(&refuted, &court_delta, &params).unwrap(), voted);
+    let restored_refuted = PalwStateCarriageV2::from_state(&refuted).into_state(&params, Some(refuted.state_root())).unwrap();
+    assert_eq!(
+        restored_refuted.public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("restored refutation takes precedence")),
+        Ok(PublicFinalReplayPrerequisiteV1::RecordedRefutation)
+    );
+    let fork_point = PalwBlockContextV2 { block: h64(42), ..court_point };
+    assert!(
+        apply_palw_transition_v2_with_extras(&voted, &params, &fork_point, &[], None, false, false, false, false, &court_extras)
+            .is_err()
+    );
+
     let earlier = FullReplayApproval { original, draw: context.draw, bond: other_bond, member, full_scope: context.full_scope };
     let signature =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &earlier.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [1; 32]).unwrap();

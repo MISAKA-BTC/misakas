@@ -237,13 +237,8 @@ impl PreparedPublicOriginalRecordV1 {
         point: &crate::palw_state_v2::PalwBlockContextV2,
     ) -> Result<Option<([u8; 64], &PublicOriginalAdmissionRecordV1)>, ContractError> {
         let row = &self.0;
-        let origin = row.carrier.origin;
-        if origin.accepting_block.0 != point.block.as_bytes()
-            || origin.accepted_daa != point.daa_score
-            || origin.accepted_blue_score != point.blue_score
-            || row.reservation == Digest([0; 64])
-            || state.kernel_route_state_v1().is_none()
-        {
+        require_current_public_origin_v1(row.carrier.origin, point)?;
+        if row.reservation == Digest([0; 64]) || state.kernel_route_state_v1().is_none() {
             return Err(ContractError::Scope);
         }
         if let Some(existing) = state.public_original_admission_record_v1(row.original)? {
@@ -278,6 +273,26 @@ pub struct PublicOriginalCourtRecordV1 {
     reservation: Digest,
     evidence_id: Hash64,
     origin: AcceptedOrigin,
+}
+
+/// A local refutation linked to its admitted original and inclusion point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedPublicCourtRecordV1(PublicOriginalCourtRecordV1);
+
+impl PreparedPublicCourtRecordV1 {
+    pub(crate) fn storage_row(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; PublicOriginalCourtRecordV1::KEY_BYTES], &PublicOriginalCourtRecordV1)>, ContractError> {
+        let row = &self.0;
+        require_current_public_origin_v1(row.origin, point)?;
+        state.check_public_court_record_v1(row)?;
+        if let Some(existing) = state.public_original_court_record_v1(row.original, row.evidence_id)? {
+            return if existing == *row { Ok(None) } else { Err(ContractError::Scope) };
+        }
+        Ok(Some((PublicOriginalCourtRecordV1::key(row.original, row.evidence_id), row)))
+    }
 }
 
 impl PublicOriginalCourtRecordV1 {
@@ -409,6 +424,7 @@ wire_struct!(MaterialId; Digest);
 native_tuple_struct!(PreparedPublicOriginalRecordV1; admission);
 native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, manifest_material, reservation, initial_supply, rescue, budget, max_manifest_bytes, manifest_payload_bytes, manifest_limits, deadlines);
 wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, MaterialId, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, u64, Digest, [u64; 8]);
+native_tuple_struct!(PreparedPublicCourtRecordV1; court);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_tuple_struct!(PreparedPublicDrawRecordV1; draw);
@@ -499,11 +515,8 @@ impl PreparedPublicReplayApprovalV1 {
         point: &crate::palw_state_v2::PalwBlockContextV2,
     ) -> Result<Option<([u8; PublicReplayApprovalRecordV1::KEY_BYTES], &PublicReplayApprovalRecordV1)>, ContractError> {
         let row = &self.row;
-        if row.origin.accepted_daa != point.daa_score
-            || row.origin.accepted_blue_score != point.blue_score
-            || row.origin.accepting_block.0 != point.block.as_bytes()
-            || state.public_draw_record_v1(row.original)? != Some(self.draw)
-        {
+        require_current_public_origin_v1(row.origin, point)?;
+        if state.public_draw_record_v1(row.original)? != Some(self.draw) {
             return Err(ContractError::Scope);
         }
         if let Some(existing) = state.public_replay_approval_record_v1(row.original, row.bond)? {
@@ -985,6 +998,29 @@ impl PublicOriginalAdmissionRecordV1 {
         Ok(key)
     }
 
+    /// Seal a computed verdict for the native fold. Inclusion and the
+    /// original's reservation are checked again against the executing state.
+    pub fn prepare_court_storage_record(
+        &self,
+        prepared: &PreparedPublicOriginalV1,
+        reservation: Digest,
+        origin: AcceptedOrigin,
+        verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
+    ) -> Result<PreparedPublicCourtRecordV1, ContractError> {
+        self.court_record(prepared, reservation, origin, verdict).map(PreparedPublicCourtRecordV1)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_court_fixture(&self, evidence_id: Hash64, origin: AcceptedOrigin) -> PreparedPublicCourtRecordV1 {
+        PreparedPublicCourtRecordV1(PublicOriginalCourtRecordV1 {
+            original: self.original,
+            admission_carrier: self.carrier,
+            reservation: self.reservation,
+            evidence_id,
+            origin,
+        })
+    }
+
     pub fn court_record(
         &self,
         prepared: &PreparedPublicOriginalV1,
@@ -1005,6 +1041,19 @@ fn check_public_origin_after_draw_v1(
     if origin.accepted_blue_score < draw.blue_score
         || (origin.accepted_blue_score == draw.blue_score
             && (origin.accepting_block.0 != draw.block.as_bytes() || origin.accepted_daa != draw.daa_score))
+    {
+        return Err(ContractError::Scope);
+    }
+    Ok(())
+}
+
+fn require_current_public_origin_v1(
+    origin: AcceptedOrigin,
+    point: &crate::palw_state_v2::PalwBlockContextV2,
+) -> Result<(), ContractError> {
+    if origin.accepting_block.0 != point.block.as_bytes()
+        || origin.accepted_daa != point.daa_score
+        || origin.accepted_blue_score != point.blue_score
     {
         return Err(ContractError::Scope);
     }
@@ -1062,6 +1111,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
 
     fn decode_public_court_row_v1(&self, key: &[u8], bytes: &[u8]) -> Result<PublicOriginalCourtRecordV1, ContractError> {
         let row = PublicOriginalCourtRecordV1::decode_row(key, bytes)?;
+        self.check_public_court_record_v1(&row)?;
+        Ok(row)
+    }
+
+    fn check_public_court_record_v1(&self, row: &PublicOriginalCourtRecordV1) -> Result<(), ContractError> {
         check_public_origin_point_v1(row.origin, self.last_point().ok_or(ContractError::Scope)?)?;
         let admission = self.public_original_admission_record_v1(row.original)?.ok_or(ContractError::Scope)?;
         require_accepted_after_v1(admission.carrier.origin, row.origin)?;
@@ -1071,7 +1125,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         {
             return Err(ContractError::Scope);
         }
-        Ok(row)
+        Ok(())
     }
 
     fn validate_public_verification_row_v1(
