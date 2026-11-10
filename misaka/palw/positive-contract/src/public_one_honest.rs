@@ -607,6 +607,19 @@ impl SignedManifestResponseV1 {
     }
 }
 
+/// Signed response header, followed by the bounded manifest body in a
+/// delivery packet. Keeping the body separate avoids allocation on decode.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ManifestResponseCarrierV1 {
+    pub response: SignedManifestResponseV1,
+    pub key: [u8; PUBKEY_BYTES],
+    pub signature: [u8; SIGNATURE_BYTES],
+}
+
+impl ManifestResponseCarrierV1 {
+    pub const HEADER_BYTES: usize = 4 * 64 + PUBKEY_BYTES + SIGNATURE_BYTES;
+}
+
 /// Durable identity for a pending case. Restore must reauthenticate the
 /// signed request against its original canonical reservation and compare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -829,6 +842,36 @@ impl PendingManifestCaseRecordV1 {
 }
 
 impl PendingManifestCase {
+    /// Verify a raw delivery under the provider and profile resolved from
+    /// the native obligation. A delivery record leaves inspection pending.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_provider_response_bytes(
+        &self,
+        packet: &[u8],
+        expected_provider: PrincipalId,
+        original: &OriginalCommit,
+        origin: AcceptedOrigin,
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
+    ) -> Result<VerifiedManifestDeliveryV1, ContractError> {
+        let (header, body) = packet.split_at_checked(ManifestResponseCarrierV1::HEADER_BYTES).ok_or(ContractError::NonCanonical)?;
+        if body.len() > self.max_manifest_bytes as usize {
+            return Err(ContractError::Range);
+        }
+        let carrier: ManifestResponseCarrierV1 = borsh::from_slice(header).map_err(|_| ContractError::NonCanonical)?;
+        self.verify_provider_response(
+            &carrier.response,
+            expected_provider,
+            original,
+            origin,
+            body,
+            scope_limits,
+            total_limit,
+            &carrier.key,
+            &carrier.signature,
+        )
+    }
+
     /// Validate the provider named by the actual native obligation.
     /// Neither the signature nor this response settles the case.
     #[allow(clippy::too_many_arguments)]
@@ -1601,6 +1644,13 @@ mod tests {
         let provider_signature =
             libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &response.signing_digest().0, MANIFEST_RESPONSE_SIGN_CONTEXT, [0; 32])
                 .unwrap();
+        let header = borsh::to_vec(&ManifestResponseCarrierV1 {
+            response: response.clone(),
+            key: *key,
+            signature: *provider_signature.as_ref(),
+        })
+        .unwrap();
+        assert_eq!(header.len(), ManifestResponseCarrierV1::HEADER_BYTES);
         let delivery_origin = AcceptedOrigin {
             accepting_block: crate::rows::NativeHash64([4; 64]),
             carrier_block: crate::rows::NativeHash64([5; 64]),
@@ -1610,18 +1660,22 @@ mod tests {
             ..context.origin
         };
         let verify = |origin, body: &[u8], total_limit| {
-            pending.verify_provider_response(
-                &response,
+            let mut packet = header.clone();
+            packet.extend_from_slice(body);
+            pending.verify_provider_response_bytes(&packet, principal(key), &bound_original, origin, &rules, total_limit)
+        };
+        assert_eq!(
+            pending.verify_provider_response_bytes(
+                &header[..header.len() - 1],
                 principal(key),
                 &bound_original,
-                origin,
-                body,
+                delivery_origin,
                 &rules,
-                total_limit,
-                key,
-                provider_signature.as_ref(),
-            )
-        };
+                90,
+            ),
+            Err(ContractError::NonCanonical)
+        );
+        assert_eq!(verify(delivery_origin, &vec![0; max as usize + 1], 90), Err(ContractError::Range));
         assert_eq!(verify(delivery_origin, &bytes, 89), Err(ContractError::Scope));
         assert_eq!(verify(delivery_origin, &changed_bytes, 90), Err(ContractError::Identity));
         let wrong_response = SignedManifestResponseV1 {
