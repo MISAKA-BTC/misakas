@@ -251,10 +251,15 @@ pub fn finalize_public_capture_v1(
         kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1(tokenizer_json, scope_limits[tokenizer])?;
     manifest.entries[input] = job.public_input_token_material(scope_limits[input])?;
     manifest.entries[output] = capture.public_output_material(scope_limits[output])?;
+    if manifest.entries[output].total_bytes > crate::public_material::MATERIAL_UNIT_MAX_BYTES as u64 {
+        return Err(ContractError::Budget.into());
+    }
+    let output_bytes: Vec<u8> = capture.run().generated().iter().flat_map(|id| id.to_le_bytes()).collect();
     let replay_material = [
         (MaterialScope::Program, job.class.program.as_slice()),
         (MaterialScope::Prompt, prompt_text.as_bytes()),
         (MaterialScope::Tokenizer, tokenizer_json),
+        (MaterialScope::Output, output_bytes.as_slice()),
     ];
     if replay_material.iter().any(|(_, bytes)| bytes.len() > crate::public_material::MATERIAL_UNIT_MAX_BYTES) {
         return Err(ContractError::Budget.into());

@@ -49,31 +49,52 @@ pub fn fetch_public_replay_inputs_v1(
     manifest: &CheckedManifestV1,
     form: PalwPromptIdsFormV1,
 ) -> Result<(TirProgramV1, Vec<u32>), PanelSourceErrorR1> {
+    let program =
+        open_public_tir_program_v1(manifest, &fetch_public_replay_material(provider, original, manifest, MaterialScope::Program)?)?;
+    let prompt = fetch_public_replay_material(provider, original, manifest, MaterialScope::Prompt)?;
+    let tokenizer = fetch_public_replay_material(provider, original, manifest, MaterialScope::Tokenizer)?;
+    let ids = check_public_prompt_v1(original, manifest, form, &prompt, &tokenizer)?;
+    Ok((program, ids))
+}
+
+/// Fetch the original's committed output for comparison with Panel replay.
+pub fn fetch_public_replay_output_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+) -> Result<Vec<u32>, PanelSourceErrorR1> {
+    if manifest.entry(MaterialScope::Output).total_bytes != u64::from(original.decode) * 4 {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let bytes = fetch_public_replay_material(provider, original, manifest, MaterialScope::Output)?;
+    let ids: Vec<_> = bytes.chunks_exact(4).map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])).collect();
+    open_public_output_tokens_v1(original, manifest, &ids)?;
+    Ok(ids)
+}
+
+fn fetch_public_replay_material(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    scope: MaterialScope,
+) -> Result<Vec<u8>, PanelSourceErrorR1> {
     if manifest.original() != original.id() {
         return Err(PanelSourceErrorR1::Binding);
     }
-    let fetch = |scope| {
-        let entry = manifest.entry(scope);
-        let size = usize::try_from(entry.total_bytes).map_err(|_| PanelSourceErrorR1::Budget)?;
-        if size > crate::public_material::MATERIAL_UNIT_MAX_BYTES || entry.total_bytes > u64::from(entry.chunk_bytes) {
-            return Err(PanelSourceErrorR1::Budget);
-        }
-        let path =
-            crate::public_material::public_original_replay_path(original.id(), scope).ok_or(ContractError::UnsupportedProfile)?;
-        let bytes = provider
-            .get(&path, size)
-            .map_err(|error| PanelSourceErrorR1::ReplayProvider(error.0))?
-            .ok_or(PanelSourceErrorR1::Incomplete)?;
-        if bytes.len() != size {
-            return Err(PanelSourceErrorR1::Binding);
-        }
-        Ok(bytes)
-    };
-    let program = open_public_tir_program_v1(manifest, &fetch(MaterialScope::Program)?)?;
-    let prompt = fetch(MaterialScope::Prompt)?;
-    let tokenizer = fetch(MaterialScope::Tokenizer)?;
-    let ids = check_public_prompt_v1(original, manifest, form, &prompt, &tokenizer)?;
-    Ok((program, ids))
+    let entry = manifest.entry(scope);
+    let size = usize::try_from(entry.total_bytes).map_err(|_| PanelSourceErrorR1::Budget)?;
+    if size > crate::public_material::MATERIAL_UNIT_MAX_BYTES || entry.total_bytes > u64::from(entry.chunk_bytes) {
+        return Err(PanelSourceErrorR1::Budget);
+    }
+    let path = crate::public_material::public_original_replay_path(original.id(), scope).ok_or(ContractError::UnsupportedProfile)?;
+    let bytes = provider
+        .get(&path, size)
+        .map_err(|error| PanelSourceErrorR1::ReplayProvider(error.0))?
+        .ok_or(PanelSourceErrorR1::Incomplete)?;
+    if bytes.len() != size {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(bytes)
 }
 
 /// Obtain the original manifest from a configured public material provider.
