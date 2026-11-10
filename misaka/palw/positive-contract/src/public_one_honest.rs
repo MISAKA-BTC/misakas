@@ -194,9 +194,172 @@ impl OriginalClock {
     }
 }
 
+/// Bounds for the path from a fixed draw and available material to the first
+/// canonical notice. Bounds must come from the selected profile's service
+/// reservations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FirstNoticeDemand {
+    pub draw_ready_by: u64,
+    pub material_ready_by: u64,
+    pub cold_acquisition_daa: u64,
+    pub full_inspection_daa: u64,
+    pub notice_inclusion_daa: u64,
+    pub missing_material_detected_by: u64,
+    pub material_request_inclusion_daa: u64,
+}
+
+/// Worst-case path when a claimant opens a material case at the last legal
+/// notice DAA. Filing includes evidence assembly and canonical inclusion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaterialCaseDemand {
+    pub material_delivery_daa: u64,
+    pub full_inspection_daa: u64,
+    pub localization_daa: u64,
+    pub filing_daa: u64,
+    pub adjudication_and_recovery_daa: u64,
+}
+
+/// Timing contract only. The native admission path must also fund and book
+/// both paths and preserve the per-claimant service and response capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerificationSchedule {
+    clock: OriginalClock,
+    first_notice_by: u64,
+    first_material_request_by: u64,
+    material_ready_by: u64,
+    inspection_by: u64,
+    localized_by: u64,
+    filed_by: u64,
+    terminal_by: u64,
+}
+
+impl VerificationSchedule {
+    pub fn new(clock: OriginalClock, notice: FirstNoticeDemand, case: MaterialCaseDemand) -> Result<Self, ContractError> {
+        if notice.draw_ready_by < clock.accepted_at
+            || notice.material_ready_by < clock.accepted_at
+            || notice.missing_material_detected_by < clock.accepted_at
+        {
+            return Err(ContractError::Range);
+        }
+        let first_notice_by = notice
+            .draw_ready_by
+            .max(notice.material_ready_by)
+            .checked_add(notice.cold_acquisition_daa)
+            .and_then(|daa| daa.checked_add(notice.full_inspection_daa))
+            .and_then(|daa| daa.checked_add(notice.notice_inclusion_daa))
+            .ok_or(ContractError::Range)?;
+        let first_material_request_by = notice
+            .draw_ready_by
+            .max(notice.missing_material_detected_by)
+            .checked_add(notice.material_request_inclusion_daa)
+            .ok_or(ContractError::Range)?;
+        let material_ready_by = clock.notice_until().checked_add(case.material_delivery_daa).ok_or(ContractError::Range)?;
+        let inspection_by = material_ready_by.checked_add(case.full_inspection_daa).ok_or(ContractError::Range)?;
+        let localized_by = inspection_by.checked_add(case.localization_daa).ok_or(ContractError::Range)?;
+        let filed_by = localized_by.checked_add(case.filing_daa).ok_or(ContractError::Range)?;
+        let terminal_by = filed_by.checked_add(case.adjudication_and_recovery_daa).ok_or(ContractError::Range)?;
+        if first_notice_by.max(first_material_request_by) > clock.notice_until() || terminal_by > clock.hard() {
+            return Err(ContractError::Budget);
+        }
+        Ok(Self {
+            clock,
+            first_notice_by,
+            first_material_request_by,
+            material_ready_by,
+            inspection_by,
+            localized_by,
+            filed_by,
+            terminal_by,
+        })
+    }
+
+    pub fn first_notice_by(self) -> u64 {
+        self.first_notice_by
+    }
+
+    pub fn first_material_request_by(self) -> u64 {
+        self.first_material_request_by
+    }
+
+    pub fn material_ready_by(self) -> u64 {
+        self.material_ready_by
+    }
+
+    pub fn inspection_by(self) -> u64 {
+        self.inspection_by
+    }
+
+    pub fn localized_by(self) -> u64 {
+        self.localized_by
+    }
+
+    pub fn filed_by(self) -> u64 {
+        self.filed_by
+    }
+
+    pub fn terminal_by(self) -> u64 {
+        self.terminal_by
+    }
+
+    /// Run only with the profile's authenticated availability observation.
+    /// This checks time, leaving authentication and the inclusion opportunity
+    /// to the native admission procedure.
+    pub fn material_arrival_fits(self, opened_at: u64, ready_at: u64) -> bool {
+        self.clock.accepts_first_notice(opened_at) && (opened_at..=self.material_ready_by).contains(&ready_at)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn verification_schedule_reserves_both_windows_from_original_admission() {
+        let clock = OriginalClock::new(100).unwrap();
+        let notice = FirstNoticeDemand {
+            draw_ready_by: 120,
+            material_ready_by: 200,
+            cold_acquisition_daa: 1_000,
+            full_inspection_daa: 1_000,
+            notice_inclusion_daa: 1_020,
+            missing_material_detected_by: 3_200,
+            material_request_inclusion_daa: 20,
+        };
+        let case = MaterialCaseDemand {
+            material_delivery_daa: 3_000,
+            full_inspection_daa: 1_000,
+            localization_daa: 1_000,
+            filing_daa: 1_000,
+            adjudication_and_recovery_daa: 880,
+        };
+        let schedule = VerificationSchedule::new(clock, notice, case).unwrap();
+        assert_eq!(schedule.first_notice_by(), clock.notice_until());
+        assert_eq!(schedule.first_material_request_by(), clock.notice_until());
+        assert_eq!(schedule.material_ready_by(), 6_220);
+        assert_eq!(schedule.inspection_by(), 7_220);
+        assert_eq!(schedule.localized_by(), 8_220);
+        assert_eq!(schedule.filed_by(), 9_220);
+        assert_eq!(schedule.terminal_by(), clock.hard());
+        assert!(schedule.material_arrival_fits(clock.notice_until(), schedule.material_ready_by()));
+        assert!(!schedule.material_arrival_fits(clock.notice_until(), schedule.material_ready_by() + 1));
+        assert!(!schedule.material_arrival_fits(clock.notice_until() + 1, schedule.material_ready_by()));
+        assert_eq!(
+            VerificationSchedule::new(clock, FirstNoticeDemand { material_ready_by: 201, ..notice }, case),
+            Err(ContractError::Budget)
+        );
+        assert_eq!(
+            VerificationSchedule::new(clock, FirstNoticeDemand { material_request_inclusion_daa: 21, ..notice }, case),
+            Err(ContractError::Budget)
+        );
+        assert_eq!(
+            VerificationSchedule::new(clock, notice, MaterialCaseDemand { filing_daa: 1_001, ..case }),
+            Err(ContractError::Budget)
+        );
+        assert_eq!(
+            VerificationSchedule::new(clock, notice, MaterialCaseDemand { filing_daa: u64::MAX, ..case }),
+            Err(ContractError::Range)
+        );
+    }
 
     #[test]
     fn manifest_bytes_are_shared_but_each_claimant_keeps_a_case() {
