@@ -412,6 +412,47 @@ pub struct ManifestRequestContext<'a> {
     pub inclusion_daa: u64,
 }
 
+/// An authenticated request ready for the native fold to install alongside
+/// its reservation. Delivery of this one object does not close inspection.
+#[derive(Debug, PartialEq, Eq)]
+pub struct PendingManifestCase {
+    id: CaseId,
+    original: OriginalId,
+    material: MaterialId,
+    reservation: Digest,
+    opened_at: u64,
+    schedule: VerificationSchedule,
+}
+
+impl PendingManifestCase {
+    pub fn id(&self) -> CaseId {
+        self.id
+    }
+
+    pub fn reservation(&self) -> Digest {
+        self.reservation
+    }
+
+    pub fn check_delivery(
+        &self,
+        manifest: &CheckedManifestV1,
+        original: &OriginalCommit,
+        inclusion_daa: u64,
+    ) -> Result<(), ContractError> {
+        if manifest.original() != self.original || original.id() != self.original || original.manifest_material_id() != self.material {
+            return Err(ContractError::Scope);
+        }
+        if !self.schedule.material_arrival_fits(self.opened_at, inclusion_daa) {
+            return Err(ContractError::Range);
+        }
+        Ok(())
+    }
+
+    pub fn unresolved_at(&self, inclusion_daa: u64) -> Result<MissingInspectionOutcome, ContractError> {
+        self.schedule.missing_inspection_outcome(self.opened_at, inclusion_daa)
+    }
+}
+
 impl ManifestRequest {
     pub fn material_id(&self, original: &OriginalCommit) -> Result<MaterialId, ContractError> {
         if self.original != original.id() || self.manifest_root != original.manifest_root {
@@ -452,10 +493,17 @@ impl ManifestRequest {
         context: &ManifestRequestContext<'_>,
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
-    ) -> Result<CaseId, ContractError> {
+    ) -> Result<PendingManifestCase, ContractError> {
         let id = self.check_inclusion(context)?;
         self.authenticate(context.signer, key, signature)?;
-        Ok(id)
+        Ok(PendingManifestCase {
+            id,
+            original: self.original,
+            material: context.original.manifest_material_id(),
+            reservation: context.reservation,
+            opened_at: context.inclusion_daa,
+            schedule: context.schedule,
+        })
     }
 
     fn check_inclusion(&self, context: &ManifestRequestContext<'_>) -> Result<CaseId, ContractError> {
@@ -943,6 +991,29 @@ mod tests {
         assert_eq!(checked.chunk(MaterialScope::Trace, 2), Err(ContractError::Range));
         assert_eq!(authenticated.decode(&bound_original, &rules, 89), Err(ContractError::Budget));
         assert_eq!(authenticated.decode(&original, &rules, 90), Err(ContractError::Scope));
+        let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([41; 32]);
+        let key = pair.verification_key.as_ref();
+        let request = ManifestRequest {
+            original: bound_original.id(),
+            manifest_root: bound_original.manifest_root,
+            signer: principal(key),
+            ..request
+        };
+        let context = ManifestRequestContext {
+            original: &bound_original,
+            signer: request.signer,
+            inclusion_daa: clock.notice_until(),
+            ..context
+        };
+        let signature =
+            libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [0; 32])
+                .unwrap();
+        let pending = request.verify_for_inclusion(&context, key, signature.as_ref()).unwrap();
+        assert_eq!(pending.id(), request.case_id(&bound_original, first).unwrap());
+        assert_eq!(pending.reservation(), context.reservation);
+        assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by()), Ok(()));
+        assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
+        assert_eq!(pending.unresolved_at(clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
         let changed = OriginalCommit { trace_root: Digest([8; 64]), ..bound_original };
         assert_eq!(authenticated.decode(&changed, &rules, 90), Err(ContractError::Scope));
     }
