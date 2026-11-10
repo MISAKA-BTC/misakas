@@ -13,7 +13,7 @@ use kaspa_consensus_core::{
     Hash64,
     palw_artifact::verify_artifact_opening_v1,
     palw_attempt_rules_v1::palw_attempt_rendered_output_v1,
-    palw_positive_contract_v2::public_tokenizer_material_v1,
+    palw_positive_contract_v2::{check_public_original_execution_v1, public_tokenizer_material_v1},
     palw_prompt_ids_v1::{
         PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, prompt_ids_form_id_v1, prompt_ids_tile_count_v1,
         prompt_token_ids_match_v1, verify_prompt_ids_opening_v1,
@@ -201,9 +201,8 @@ pub fn run_public_wide_replay_v1(
     reserver: &TirMemoryReserverV1,
     search: Option<PublicTraceSearchV1>,
 ) -> Result<(), PanelSourceErrorR1> {
-    if original.job.0 != job.job_id.as_bytes() || original.registered_class.0 != job.shape_profile_id.as_bytes() {
-        return Err(PanelSourceErrorR1::Binding);
-    }
+    let expected_root = Hash64::from_bytes(original.artifact.0);
+    check_public_original_execution_v1(original, job, class, expected_root)?;
     // The wide capture currently accepts the native Flat input commitment.
     let (program, prompt) = fetch_public_replay_inputs_v1(provider, original, manifest, PalwPromptIdsFormV1::Flat)?;
     if &program != space.program() {
@@ -215,11 +214,10 @@ pub fn run_public_wide_replay_v1(
         return Err(PanelSourceErrorR1::Binding);
     }
     let (root, _) = artifact.inventory_root().map_err(PanelSourceErrorR1::Artifact)?;
-    let class_id = class.class_id(&root);
-    if original.artifact.0 != root.as_bytes() || class_id != job.shape_profile_id {
+    if root != expected_root {
         return Err(PanelSourceErrorR1::Binding);
     }
-    let runner = TirClassRunnerWideQ24V2::new(space, artifact.plan(), artifact.params(), class_id)
+    let runner = TirClassRunnerWideQ24V2::new(space, artifact.plan(), artifact.params(), job.shape_profile_id)
         .map_err(PanelSourceErrorR1::ReplayExecution)?;
     let capture = capture_one_pass_v2(
         CaptureExpectedV2 { class, artifact: root, job, space, prompt: &prompt },
@@ -607,6 +605,7 @@ impl PanelSourceCacheR1 {
         {
             return Err(PanelSourceErrorR1::Binding);
         }
+        check_public_original_execution_v1(original, job, &self.class, Hash64::from_bytes(self.result.artifact.0))?;
         let space = PalwTirStepSpaceV2::new(&self.class).map_err(|error| PanelSourceErrorR1::ReplayExecution(error.to_string()))?;
         let artifact = self.assemble_artifact(container)?;
         run_public_wide_replay_v1(

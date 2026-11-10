@@ -71,7 +71,7 @@ pub fn public_tokenizer_material_v1(
 }
 
 /// Match the original against execution metadata resolved by admission or court.
-pub(crate) fn check_public_original_execution_v1(
+pub fn check_public_original_execution_v1(
     original: &OriginalCommit,
     job: &PalwJobContextV2,
     class: &PalwTirClassV1,
