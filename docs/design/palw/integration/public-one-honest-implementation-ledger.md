@@ -98,3 +98,5 @@ Linux の T12 復旧候補をリリースビルドし、バイナリの SHA-256 
 元登録者鍵で同じクラス・inventory root・tokenizer ID に対する `ClassSemanticsDeclaredV1` object を作成した。SHA-256 は `d3f4ed9508d82205408ebb3b5982f131bdc37d56956f1306ff578908be0fd61a`。公開 T12 の [受付検証](../../../../consensus/src/pipeline/virtual_processor/processor/palw_validate/class_registration.rs) は当該 fence が有効になるまでこの object を拒否するため、送信は保留。宣言の受理で raw tokenizer の有無を確認する段階と、実際の供給・裁定が期限内に収まることを検証する段階を分ける。
 
 DAA 20,999 を仮定し、受理済みのクラス登録 carrier から class/layout を復号して、同じ commitment・binding・raw tokenizer を照合した。EOF 証明と semantics の受理は fixture。出荷時の価格・資源条件を維持し、共有受付クロック v5 とその hard deadline のみを使うオフライン比較では、custodian 上限 2 / 3 / 6 に対して `PublicRecoveryExceedsNoticeBudget` の要求がそれぞれ 60,730 / 72,565 / 108,087 DAA、許容はすべて 6,880 DAA だった。v5 の owner queue 待ちを外しても、この候補の公開回復経路は予算内に収まらない。
+
+同じ候補について native の取得プランを直接分解した。custodian 上限 3 の v5 比較は取得 72,182 DAA、提出・収集 383 DAA。取得のうち 64,890 DAA は依存 cone の `StepRun` 21 回に対応し、1 回は最大 256 葉、4,219,029 bytes、3,090 DAA。logits の 12 タイルは 624 DAA。取得枠を短縮するには、同じ原 claim に対する依存資料の認証・供給を保ったまま、`StepRun` を順番に要求する経路を変更する必要がある。SDK example のビルドはローカルの空き容量不足で停止し、この内訳は既存の consensus-core ビルドにリンクした別のオフライン実行で確認した。
