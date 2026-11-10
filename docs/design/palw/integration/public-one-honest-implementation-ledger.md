@@ -30,15 +30,15 @@
 | scope | 現在コードで使える認証 | profile を接続するための残件 |
 | --- | --- | --- |
 | Artifact | 既存の inventory root と tensor・layer・row の opening | 可変長の leaf 座標を manifest の要求・予算に結び付ける |
-| Program | 元 claim の graph IR root に対する単一チャンクの照合と正規 decode | 実行 profile が要求する program を公開取得経路から渡す |
-| Prompt | 元 claim に prompt digest の欄あり | 原文の codec と tokenizer による入力対応を確定する |
-| InputTokens | Flat 全体の native hash、Merkle の native token tile opening | 初回 wide capture で使う Flat の取得・再実行・資源上限を接続する |
-| Tokenizer | 登録クラスとジョブの tokenizer ID を照合 | tokenizer 本体・前処理の資料と局所検査を結び付ける |
+| Program | 公開単一チャンクを元 claim の graph IR root と照合して正規 decode | native の供給義務と取得予算へ接続する |
+| Prompt | 公開 UTF-8 原文を認証し、元 claim の tokenizer で再トークン化する | profile ごとの前処理と局所検査を固定する |
+| InputTokens | 再生成したトークン列を Flat または Merkle の native commitment と照合する。wide 再実行は Flat に対応 | Merkle の wide 再実行と native の取得予算を接続する |
+| Tokenizer | 公開 tokenizer JSON を native の raw commitment と照合してから parse する | 局所検査と native の供給義務を接続する |
 | ExecutionRules | ジョブと元 claim の CU ruleset ID を照合 | 乱数・選択・停止・算術規則を実行 profile の資料として固定する |
 | InitialState | 元 claim と rooted 入力の digest を照合 | 初期状態と先行実行からの読み込みの正規資料を取得・検査する |
 | Dependencies | 元 claim と rooted 入力の digest を照合 | 空集合を含む正規形式、依存 ID の公開・失効経路を接続する |
-| Trace | 初回 capture の execution root と、局所 step opening を照合 | trace 全体の取得、座標ごとの canonical codec、全関係の局所化を接続する |
-| Output | 元の実行コンテキストに対する生成 token 列の native output root | 公開取得と、停止・生成長・会計を含む End 検査を接続する |
+| Trace | 初回 capture の固定長索引と局所 step opening を認証する。葉数と wide logits の裁定結果は元 claim ID と証拠 ID の組で参照できる | trace 全体の取得、全関係の局所化、裁定結果から native 状態更新への接続 |
+| Output | 公開の生成 token 列を native output root と照合し、wide 再実行と比較する | 停止・生成長・会計を含む End 検査を接続する |
 
 固定長 manifest の取得と、資料供給義務に結び付いた署名済み応答の認証は別経路。前者は元 claim と資料の同一性、後者は当該 case への応答の帰属を確認する。どちらも単独では検査機会を成立させない。
 
@@ -52,3 +52,5 @@
 - 検証 runner は通常の V1〜V4 と長時間の V5/V6 を分ける。対象 profile、ケース名と件数、実アーティファクト、機材、必要資源上限は候補固定時に記録する。現時点の V1〜V6 は未実施。
 
 公開 T12 の Studio TFP1 は別途、現在の G14 ルート上で同じ claim ID の受理、対話、Final、ブロック生成を照合する。新 profile の契約や既存の T12 復旧試験だけで、この結果を記録しない。
+
+2026-11-10 の公開 T12 では、同期済み seat 7 の受付見積もりが DAA 20,850 で対象の Studio claim をクラス未登録として拒否した。復旧後の seat 5 の作業ブロックは別の claim を含む。Studio の登録見積もりは取得済みで、登録の署名、受付、対話、Final、ブロック生成の記録は未取得。
