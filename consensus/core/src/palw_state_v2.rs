@@ -16381,6 +16381,7 @@ fn apply_palw_transition_v7_inner(
     // is removed here and none of these values is serialized into the delta.
     builder.claim_local_retired_exec_events_v24.clear();
     builder.claim_local_retired_claim_events_v25.clear();
+    builder.state.validate_public_verification_delta_v1(&builder.entries, false)?;
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
     let materials =
         PositiveAssignmentMaterialOutcomeV2 { records: builder.assignment_materials, case_records: builder.assignment_case_materials };
@@ -23687,6 +23688,7 @@ pub(crate) fn replay_delta_owned_v1(
     rebuild_deadline_index_v2(&mut state, params)?;
     rebuild_capacity_weight_index_v1(&mut state, params);
     palw_claim_local_execution_cohort_census_v15::settle_replay_boundary_v15(&mut state, params)?;
+    state.validate_public_verification_delta_v1(&delta.entries, revert)?;
     Ok(state)
 }
 

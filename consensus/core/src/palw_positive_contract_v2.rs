@@ -780,25 +780,57 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         Ok(row)
     }
 
-    pub(crate) fn validate_public_verification_rows_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+    fn validate_public_verification_row_v1(
+        &self,
+        table: u8,
+        key: &[u8],
+        bytes: &[u8],
+    ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
+        let result = match table {
+            PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => PublicOriginalAdmissionRecordV1::decode_row(key, bytes)
+                .and_then(|row| row.check_state_point(self.last_point().ok_or(ContractError::Scope)?)),
+            PUBLIC_PENDING_MANIFEST_TABLE_V1 => self.decode_public_pending_manifest_row_v1(key, bytes).map(|_| ()),
+            PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => self.decode_public_manifest_response_row_v1(key, bytes).map(|_| ()),
+            PUBLIC_DRAW_TABLE_V1 => self.decode_public_draw_row_v1(key, bytes).map(|_| ()),
+            PUBLIC_REPLAY_APPROVAL_TABLE_V1 => self.decode_public_replay_approval_row_v1(key, bytes).map(|_| ()),
+            PUBLIC_COURT_RECORD_TABLE_V1 => self.decode_public_court_row_v1(key, bytes).map(|_| ()),
+            _ => Err(ContractError::NonCanonical),
+        };
+        result.map_err(|error| {
+            PalwStateV2Error::CarriageInconsistent(format!("inconsistent public verification row in table {table}: {error:?}"))
+        })
+    }
+
+    pub(crate) fn validate_public_verification_rows_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
         for ((table, key), bytes) in
             route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_COURT_RECORD_TABLE_V1 + 1, Vec::new()))
         {
-            let result = match *table {
-                PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => PublicOriginalAdmissionRecordV1::decode_row(key, bytes)
-                    .and_then(|row| row.check_state_point(self.last_point().ok_or(ContractError::Scope)?)),
-                PUBLIC_PENDING_MANIFEST_TABLE_V1 => self.decode_public_pending_manifest_row_v1(key, bytes).map(|_| ()),
-                PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => self.decode_public_manifest_response_row_v1(key, bytes).map(|_| ()),
-                PUBLIC_DRAW_TABLE_V1 => self.decode_public_draw_row_v1(key, bytes).map(|_| ()),
-                PUBLIC_REPLAY_APPROVAL_TABLE_V1 => self.decode_public_replay_approval_row_v1(key, bytes).map(|_| ()),
-                PUBLIC_COURT_RECORD_TABLE_V1 => self.decode_public_court_row_v1(key, bytes).map(|_| ()),
-                _ => Err(ContractError::NonCanonical),
-            };
-            result.map_err(|error| {
-                PalwStateV2Error::CarriageInconsistent(format!("inconsistent public verification row in table {table}: {error:?}"))
-            })?;
+            self.validate_public_verification_row_v1(*table, key, bytes)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_public_verification_delta_v1(
+        &self,
+        entries: &[crate::palw_state_v2::PalwDeltaEntryV2],
+        revert: bool,
+    ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwDeltaEntryV2;
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
+        for entry in entries {
+            let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else { continue };
+            if !is_public_verification_table_v1(*table) {
+                continue;
+            }
+            if (if revert { old } else { new }).is_none() {
+                // A removed row could leave surviving records without a parent.
+                return self.validate_public_verification_rows_v1();
+            }
+            if let Some(bytes) = route.aux.get(&(*table, key.clone())) {
+                self.validate_public_verification_row_v1(*table, key, bytes)?;
+            }
         }
         Ok(())
     }

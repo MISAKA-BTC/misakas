@@ -359,6 +359,19 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, Some(child.state_root())).unwrap();
     assert_eq!(restored, child);
     assert_eq!(restored.public_original_admission_record_v1(original), Ok(Some(row)));
+    let mut invalid_delta = delta.clone();
+    let future_origin = AcceptedOrigin { accepted_blue_score: point.blue_score + 1, ..row.carrier().origin };
+    let future_row = PublicOriginalAdmissionRecordV1::storage_fixture(original, future_origin);
+    let new = invalid_delta
+        .entries
+        .iter_mut()
+        .find_map(|entry| match entry {
+            PalwDeltaEntryV2::KernelRouteRow { table: PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, new, .. } => Some(new),
+            _ => None,
+        })
+        .unwrap();
+    *new = Some(borsh::to_vec(&future_row).unwrap());
+    assert!(matches!(apply_delta_v2(&parent, &invalid_delta, &params), Err(PalwStateV2Error::CarriageInconsistent(_))));
     let table = PUBLIC_ORIGINAL_ADMISSION_TABLE_V1;
     let key = original.0.0.to_vec();
     let old = Some(borsh::to_vec(&row).unwrap());
