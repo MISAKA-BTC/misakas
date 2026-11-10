@@ -2125,3 +2125,6 @@ fn g14_genesis_class_declarations_commit_and_reopen_through_actual_sync_getter()
     assert_eq!(second.palw_state_v2_tip().unwrap().state_root(), root);
     assert_eq!(second.palw_class_carriages_for_sync_v1().into_iter().collect::<BTreeMap<_, _>>(), sync);
 }
+
+#[path = "g14_registration_e2e/tokenizer_registration.rs"]
+mod tokenizer_registration;
