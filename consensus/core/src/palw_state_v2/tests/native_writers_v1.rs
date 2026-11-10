@@ -376,8 +376,14 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let key = *pair.verification_key.as_ref();
     let bond = PanelBond { transaction: Digest([8; 64]), index: 0 };
     let member = principal(&key);
-    let draw =
-        row.storage_draw_fixture(draw_point, PublicDrawMemberV1 { bond, principal: member, rescue_reservation: Digest([9; 64]) });
+    let other_bond = PanelBond { transaction: Digest([7; 64]), index: 0 };
+    let draw = row.storage_draw_fixture(
+        draw_point,
+        &[
+            PublicDrawMemberV1 { bond, principal: member, rescue_reservation: Digest([9; 64]) },
+            PublicDrawMemberV1 { bond: other_bond, principal: member, rescue_reservation: Digest([10; 64]) },
+        ],
+    );
     let draw_extras = PalwTransitionExtrasV1 {
         kernel_route: extras.kernel_route.clone(),
         public_draws: vec![draw.prepare_storage_record(), draw.prepare_storage_record()],
@@ -446,6 +452,47 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let restored_vote = PalwStateCarriageV2::from_state(&voted).into_state(&params, Some(voted.state_root())).unwrap();
     assert_eq!(restored_vote.public_draw_record_v1(original), Ok(Some(draw.record())));
     assert_eq!(restored_vote.public_replay_approval_record_v1(original, bond), Ok(Some(record)));
+    use crate::palw_positive_contract_v2::PublicReplayApprovalLookupErrorV1;
+    assert_eq!(drawn.has_reauthenticated_public_replay_approval_v1(&draw, 104, |_| panic!("no vote")), Ok(false));
+    assert_eq!(
+        restored_vote.has_reauthenticated_public_replay_approval_v1(&draw, 104, |_| None),
+        Err(PublicReplayApprovalLookupErrorV1::CarrierUnavailable(origin))
+    );
+    let bytes: [u8; SignedFullReplayApprovalV1::WIRE_BYTES] = bytes.try_into().unwrap();
+    assert_eq!(
+        restored_vote.has_reauthenticated_public_replay_approval_v1(&draw, 104, |accepted_origin| {
+            assert_eq!(accepted_origin, origin);
+            Some(bytes)
+        }),
+        Ok(true)
+    );
+    let mut wrong = bytes;
+    *wrong.last_mut().unwrap() ^= 1;
+    assert_eq!(
+        restored_vote.has_reauthenticated_public_replay_approval_v1(&draw, 104, |_| Some(wrong)),
+        Err(PublicReplayApprovalLookupErrorV1::Contract(misaka_palw_positive_contract::ContractError::Signature))
+    );
+
+    let earlier = FullReplayApproval { original, draw: context.draw, bond: other_bond, member, full_scope: context.full_scope };
+    let signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &earlier.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [1; 32]).unwrap();
+    let earlier_wire = borsh::to_vec(&SignedFullReplayApprovalV1 { approval: earlier, key, signature: *signature.as_ref() }).unwrap();
+    let other_origin = AcceptedOrigin { event_ordinal: origin.event_ordinal + 1, ..origin };
+    let other_vote = draw.prepare_replay_approval_bytes(104, other_origin, &earlier_wire).unwrap();
+    let both_extras = PalwTransitionExtrasV1 { public_replay_approvals: vec![accepted, other_vote], ..vote_extras.clone() };
+    let (both, _) =
+        apply_palw_transition_v2_with_extras(&drawn, &params, &vote_point, &[], None, false, false, false, false, &both_extras)
+            .unwrap();
+    let mut reads = Vec::new();
+    assert_eq!(
+        both.has_reauthenticated_public_replay_approval_v1(&draw, 104, |point| {
+            reads.push(point);
+            (point == origin).then_some(bytes)
+        }),
+        Ok(true)
+    );
+    assert_eq!(reads, [other_origin, origin]);
+
     let other_point = PalwBlockContextV2 { block: h64(8), ..vote_point };
     assert!(
         apply_palw_transition_v2_with_extras(&drawn, &params, &other_point, &[], None, false, false, false, false, &vote_extras,)

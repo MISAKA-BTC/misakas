@@ -889,11 +889,11 @@ impl PublicOriginalAdmissionRecordV1 {
     pub(crate) fn storage_draw_fixture(
         &self,
         draw_point: crate::palw_state_v2::PalwBlockContextV2,
-        member: PublicDrawMemberV1,
+        members: &[PublicDrawMemberV1],
     ) -> PreparedPublicDrawV1 {
         let beacon = Digest([5; 64]);
         let full_scope = self.original.full_replay_scope(Digest([6; 64]));
-        let ordered_members = public_draw_members_digest_v1(&[member]);
+        let ordered_members = public_draw_members_digest_v1(members);
         let draw = public_draw_id_v1(
             self.original,
             self.carrier.digest,
@@ -910,7 +910,7 @@ impl PublicOriginalAdmissionRecordV1 {
             draw_point,
             hard: OriginalClock::new(self.carrier.origin.accepted_daa).unwrap().hard(),
             full_scope,
-            members: [((member.bond.transaction, member.bond.index), member)].into(),
+            members: members.iter().map(|&member| ((member.bond.transaction, member.bond.index), member)).collect(),
             ordered_members,
             per_bond: self.rescue.per_drawn_bond,
         }
@@ -1025,6 +1025,18 @@ fn check_public_origin_point_v1(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicReplayApprovalLookupErrorV1 {
+    Contract(ContractError),
+    CarrierUnavailable(AcceptedOrigin),
+}
+
+impl From<ContractError> for PublicReplayApprovalLookupErrorV1 {
+    fn from(error: ContractError) -> Self {
+        Self::Contract(error)
+    }
+}
+
 impl crate::palw_state_v2::PalwChainStateV2 {
     /// Read an archived court identity. Restore still reruns the local adjudicator.
     pub fn public_original_court_record_v1(
@@ -1104,6 +1116,45 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             }
         }
         Ok(())
+    }
+
+    /// Resolve the profile's one-approval condition from rooted state. The
+    /// reader supplies the literal accepted carrier at the stored origin.
+    /// Missing history does not count as an absent vote.
+    pub fn has_reauthenticated_public_replay_approval_v1(
+        &self,
+        draw: &PreparedPublicDrawV1,
+        approval_until: u64,
+        mut read_carrier: impl FnMut(
+            AcceptedOrigin,
+        ) -> Option<
+            [u8; misaka_palw_positive_contract::public_one_honest::SignedFullReplayApprovalV1::WIRE_BYTES],
+        >,
+    ) -> Result<bool, PublicReplayApprovalLookupErrorV1> {
+        if self.public_draw_record_v1(draw.original)? != Some(draw.record()) {
+            return Err(ContractError::Scope.into());
+        }
+        if approval_until > draw.hard || approval_until < draw.draw_point.daa_score {
+            return Err(ContractError::Range.into());
+        }
+        let mut unavailable = None;
+        for member in draw.members.values() {
+            let Some(record) = self.public_replay_approval_record_v1(draw.original, member.bond)? else {
+                continue;
+            };
+            let Some(bytes) = read_carrier(record.origin) else {
+                unavailable.get_or_insert(record.origin);
+                continue;
+            };
+            if record != draw.verify_replay_approval_bytes(approval_until, record.origin, &bytes)? {
+                return Err(ContractError::Scope.into());
+            }
+            return Ok(true);
+        }
+        match unavailable {
+            Some(origin) => Err(PublicReplayApprovalLookupErrorV1::CarrierUnavailable(origin)),
+            None => Ok(false),
+        }
     }
 
     /// Read the stored approval and check its draw link. Before tallying,
