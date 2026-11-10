@@ -3794,6 +3794,36 @@ impl PublicOriginalTraceIndexV1 {
     }
 }
 
+/// Original-side material for a localized court case. Authentication establishes
+/// which bytes the Miner committed. The court still evaluates the relation.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PublicOriginalTraceTileV1 {
+    pub original: misaka_palw_positive_contract::public_one_honest::OriginalId,
+    pub trace: PublicOriginalTraceIndexV1,
+    pub opening: PalwStepOpeningV1,
+    pub tile: PalwStepTileLeafV1,
+}
+
+impl PublicOriginalTraceTileV1 {
+    pub fn authenticate(
+        &self,
+        original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+        index: u64,
+        max_step_leaf_count: u64,
+        max_value_bytes: usize,
+    ) -> Result<(), PalwStepRefuteError> {
+        if self.original != original.id() {
+            return Err(bad("public trace tile names another original"));
+        }
+        self.trace.check(original, max_step_leaf_count)?;
+        let root = PublicOriginalStepRootV1 {
+            full_logits_trace_root: self.trace.full_logits_trace_root,
+            step_leaf_count: self.trace.step_leaf_count,
+        };
+        check_public_original_step_data_v1(original, &root, index, &self.opening, &self.tile, max_step_leaf_count, max_value_bytes)
+    }
+}
+
 /// Authenticate the bytes of one original step leaf. Interpretation of its
 /// coordinates and execution semantics belongs to the selected court profile.
 pub fn check_public_original_step_data_v1(

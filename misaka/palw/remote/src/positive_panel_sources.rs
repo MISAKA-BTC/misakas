@@ -22,7 +22,8 @@ use kaspa_consensus_core::{
     palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
     palw_tir_court_v1::{
-        PalwTirInventoryIndexV1, PublicOriginalStepRootV1, PublicOriginalTraceIndexV1, check_public_original_step_data_v1,
+        PalwTirInventoryIndexV1, PublicOriginalStepRootV1, PublicOriginalTraceIndexV1, PublicOriginalTraceTileV1,
+        check_public_original_step_data_v1,
     },
     palw_tir_step_v1::PalwTirStepSpaceV2,
     palw_v2::{PalwJobContextV2, output_commitment_v2},
@@ -128,7 +129,7 @@ pub fn find_public_trace_difference_v1(
     max_tiles: u64,
     max_step_leaf_count: u64,
     max_value_bytes: usize,
-) -> Result<Option<(PalwStepOpeningV1, PalwStepTileLeafV1)>, PanelSourceErrorR1> {
+) -> Result<Option<PublicOriginalTraceTileV1>, PanelSourceErrorR1> {
     trace.check(original, max_step_leaf_count).map_err(|_| PanelSourceErrorR1::Binding)?;
     if range.start >= range.end || range.end > trace.step_leaf_count || range.end - range.start > max_tiles {
         return Err(PanelSourceErrorR1::Budget);
@@ -137,7 +138,7 @@ pub fn find_public_trace_difference_v1(
     for index in range {
         let (opening, tile) = fetch_public_trace_tile_v1(provider, original, trace, index, max_step_leaf_count, max_value_bytes)?;
         if opening.leaf_hash != hashes[index as usize] {
-            return Ok(Some((opening, tile)));
+            return Ok(Some(PublicOriginalTraceTileV1 { original: original.id(), trace: trace.clone(), opening, tile }));
         }
     }
     Ok(None)
@@ -459,7 +460,7 @@ pub enum PanelSourceErrorR1 {
     ReplayProvider(String),
     ReplayExecution(String),
     ReplayMismatch(String),
-    LocatedTraceDifference(Box<(PalwStepOpeningV1, PalwStepTileLeafV1)>),
+    LocatedTraceDifference(Box<PublicOriginalTraceTileV1>),
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {

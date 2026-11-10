@@ -326,6 +326,17 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         tile.values_le.len(),
     )
     .unwrap();
+    let trace_material = kaspa_consensus_core::palw_tir_court_v1::PublicOriginalTraceTileV1 {
+        original: original.id(),
+        trace: capture.public_trace_index(),
+        opening,
+        tile,
+    };
+    let cap = trace_material.tile.values_le.len();
+    trace_material.authenticate(&original, 0, trace_len, cap).unwrap();
+    let mut other_original = original.clone();
+    other_original.manifest_root = d(99);
+    assert!(trace_material.authenticate(&other_original, 0, trace_len, cap).is_err());
     assert!(capture.public_trace_tile(0, trace_len, 0).is_err());
     assert!(capture.public_trace_tile(trace_len, trace_len, u64::MAX).is_err());
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
