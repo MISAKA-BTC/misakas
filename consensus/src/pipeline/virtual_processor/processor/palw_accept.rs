@@ -2825,6 +2825,7 @@ impl VirtualStateProcessor {
             public_original_admissions: Vec::new(),
             public_draws: Vec::new(),
             public_drawn_manifest_cases: Vec::new(),
+            public_manifest_responses: Vec::new(),
             public_court_records: Vec::new(),
             public_replay_approvals: Vec::new(),
             positive_decision_histories: Vec::new(),

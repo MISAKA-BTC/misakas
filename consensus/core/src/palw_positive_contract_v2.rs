@@ -28,7 +28,7 @@ use misaka_palw_positive_contract::{
         ManifestResponseRecordV1, ManifestScopeRules, ManifestV1, MaterialCaseDemand, MaterialId, MaterialScope,
         MissingInspectionOutcome, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
         PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1,
-        VerificationSchedule, manifest_limits_id_v1, public_draw_id_v1, public_draw_members_digest_v1,
+        VerificationSchedule, VerifiedManifestDeliveryV1, manifest_limits_id_v1, public_draw_id_v1, public_draw_members_digest_v1,
         public_original_service_contract_id_v1, require_accepted_after_v1, tir_wide_rules_material_entry_v1,
     },
     reservations::RemainingCapacity,
@@ -677,6 +677,41 @@ impl PreparedDrawnPublicManifestCaseV1 {
     }
 }
 
+/// A provider delivery authenticated against the obligation for an open case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedPublicManifestResponseV1 {
+    pending: PendingManifestCaseRecordV1,
+    row: ManifestResponseRecordV1,
+}
+
+native_struct!(PreparedPublicManifestResponseV1; pending, row);
+
+impl PreparedPublicManifestResponseV1 {
+    pub fn new(pending: &PendingManifestCase, delivery: &VerifiedManifestDeliveryV1) -> Result<Self, ContractError> {
+        let pending = pending.record();
+        let row = delivery.record();
+        row.check_case(&pending)?;
+        Ok(Self { pending, row })
+    }
+
+    pub(crate) fn storage_row(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; ManifestResponseRecordV1::KEY_BYTES], &ManifestResponseRecordV1)>, ContractError> {
+        let row = &self.row;
+        require_current_public_origin_v1(row.origin(), point)?;
+        if state.public_pending_manifest_record_v1(row.original(), row.case())? != Some(self.pending) {
+            return Err(ContractError::Scope);
+        }
+        let key = row.key();
+        if let Some(existing) = state.public_manifest_response_record_v1(&key)? {
+            return if existing == *row { Ok(None) } else { Err(ContractError::Scope) };
+        }
+        Ok(Some((key, row)))
+    }
+}
+
 pub enum PublicManifestClaimantAuthorityV1<'a> {
     Drawn(&'a PreparedPublicDrawV1),
     Outsider(u64),
@@ -950,8 +985,10 @@ impl PublicOriginalAdmissionRecordV1 {
     pub(crate) fn storage_fixture_with_manifest(
         original: &OriginalCommit,
         origin: AcceptedOrigin,
+        manifest_limits: Digest,
     ) -> (Self, PreparedPublicOriginalV1) {
         let mut row = Self::storage_fixture(original.id(), origin);
+        row.manifest_limits = manifest_limits;
         row.manifest_material = original.manifest_material_id();
         let draw_by = row.deadlines[0];
         let schedule = VerificationSchedule::new(
@@ -1434,6 +1471,15 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             return Err(ContractError::Scope);
         }
         Ok(())
+    }
+
+    pub fn public_manifest_response_record_v1(
+        &self,
+        key: &[u8; ManifestResponseRecordV1::KEY_BYTES],
+    ) -> Result<Option<ManifestResponseRecordV1>, ContractError> {
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
+        let key = (PUBLIC_MANIFEST_RESPONSE_TABLE_V1, key.to_vec());
+        route.aux.get(&key).map(|bytes| self.decode_public_manifest_response_row_v1(&key.1, bytes)).transpose()
     }
 
     pub(crate) fn decode_public_manifest_response_row_v1(

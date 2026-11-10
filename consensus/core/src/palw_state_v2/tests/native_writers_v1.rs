@@ -326,7 +326,10 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let point = ctx(2, 101, 2);
     use misaka_palw_positive_contract::{
         identity::{ChainScope, PrincipalId},
-        public_one_honest::OriginalCommit,
+        public_one_honest::{
+            MANIFEST_RESPONSE_SIGN_CONTEXT, ManifestResponseCarrierV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit,
+            SignedManifestResponseV1, manifest_limits_id_v1, manifest_root,
+        },
     };
     let digest = Digest([3; 64]);
     let commit = OriginalCommit {
@@ -353,6 +356,9 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         service_contract: digest,
     };
     let original = commit.id();
+    let scope_limits = [ManifestScopeRules { codec: digest, max_bytes: 1, chunk_bytes: 1 }; MaterialScope::COUNT];
+    let total_limit = MaterialScope::COUNT as u64;
+    let manifest_limits = manifest_limits_id_v1(&scope_limits, total_limit, ManifestV1::WIRE_BYTES);
     let (row, prepared) = PublicOriginalAdmissionRecordV1::storage_fixture_with_manifest(
         &commit,
         AcceptedOrigin {
@@ -364,6 +370,7 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
             accepted_daa: point.daa_score,
             accepted_blue_score: point.blue_score,
         },
+        manifest_limits,
     );
     let extras = PalwTransitionExtrasV1 {
         kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
@@ -535,7 +542,7 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         Ok(PublicFinalReplayPrerequisiteV1::ReadyForRemainingChecks)
     );
     use misaka_palw_positive_contract::public_one_honest::{
-        Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequest, ManifestRequestContext, ManifestV1, SignedManifestRequestV1,
+        Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequest, ManifestRequestContext, SignedManifestRequestV1,
     };
     let request_context = ManifestRequestContext {
         original: &commit,
@@ -545,7 +552,7 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         supply_obligation: Digest([11; 64]),
         reservation: Digest([9; 64]),
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
-        manifest_limits: Digest([3; 64]),
+        manifest_limits,
         manifest_body_bytes_reserved: u64::from(ManifestV1::WIRE_BYTES),
         schedule: prepared.schedule,
         origin,
@@ -582,6 +589,53 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         fold_at(&restored_case, 6, clock.notice_until() + 1).public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("case open")),
         Ok(PublicFinalReplayPrerequisiteV1::ManifestCasePending)
     );
+
+    let pending = prepared
+        .verify_manifest_request_bytes(
+            crate::palw_positive_contract_v2::PublicManifestClaimantAuthorityV1::Drawn(&draw),
+            &wire,
+            &request_context,
+        )
+        .unwrap();
+    let delivery_point = ctx(5, 104, 5);
+    let delivery_origin = AcceptedOrigin {
+        accepting_block: NativeHash64(delivery_point.block.as_bytes()),
+        accepted_blue_score: delivery_point.blue_score,
+        accepted_daa: delivery_point.daa_score,
+        ..origin
+    };
+    let body = b"authenticated but wrong material";
+    let response = SignedManifestResponseV1 {
+        case,
+        supply_obligation: request_context.supply_obligation,
+        provider: member,
+        body_root: manifest_root(commit.scope.ruleset, body, ManifestV1::WIRE_BYTES).unwrap(),
+    };
+    let signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &response.signing_digest().0, MANIFEST_RESPONSE_SIGN_CONTEXT, [3; 32])
+            .unwrap();
+    let mut packet = borsh::to_vec(&ManifestResponseCarrierV1 { response, key, signature: *signature.as_ref() }).unwrap();
+    packet.extend_from_slice(body);
+    let delivery =
+        pending.verify_provider_response_bytes(&packet, member, &commit, delivery_origin, &scope_limits, total_limit).unwrap();
+    let delivery_row = delivery.record();
+    let prepared_delivery = crate::palw_positive_contract_v2::PreparedPublicManifestResponseV1::new(&pending, &delivery).unwrap();
+    let response_extras = PalwTransitionExtrasV1 {
+        kernel_route: extras.kernel_route.clone(),
+        public_manifest_responses: vec![prepared_delivery, prepared_delivery],
+        ..Default::default()
+    };
+    let fold_response = |parent| {
+        apply_palw_transition_v2_with_extras(parent, &params, &delivery_point, &[], None, false, false, false, false, &response_extras)
+    };
+    assert!(fold_response(&voted).is_err());
+    let (delivered, delivery_delta) = fold_response(&with_case).unwrap();
+    assert_eq!(delivered.public_manifest_response_record_v1(&delivery_row.key()), Ok(Some(delivery_row)));
+    assert_eq!(delivered.has_public_pending_manifest_v1(original), Ok(true));
+    assert_eq!(apply_delta_v2(&with_case, &delivery_delta, &params).unwrap(), delivered);
+    assert_eq!(revert_delta_v2(&delivered, &delivery_delta, &params).unwrap(), with_case);
+    let restored_delivery = PalwStateCarriageV2::from_state(&delivered).into_state(&params, Some(delivered.state_root())).unwrap();
+    assert_eq!(restored_delivery.public_manifest_response_record_v1(&delivery_row.key()), Ok(Some(delivery_row)));
 
     let absent_vote = fold_at(&drawn, 6, clock.notice_until() + 1);
     assert_eq!(
