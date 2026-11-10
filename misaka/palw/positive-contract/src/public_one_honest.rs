@@ -460,6 +460,14 @@ pub struct PendingManifestCaseRecordV1 {
     hard: u64,
 }
 
+/// Distinguish unusable committed data from a packet that failed authentication.
+/// The native court decides responsibility under the applicable profile.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ManifestDeliveryV1 {
+    Checked(CheckedManifestV1),
+    CommittedButInvalid(ContractError),
+}
+
 impl PendingManifestCaseRecordV1 {
     pub fn check_restore(&self, pending: &PendingManifestCase) -> Result<(), ContractError> {
         if *self != pending.record() {
@@ -470,6 +478,23 @@ impl PendingManifestCaseRecordV1 {
 }
 
 impl PendingManifestCase {
+    pub fn authenticate_delivery(
+        &self,
+        original: &OriginalCommit,
+        inclusion_daa: u64,
+        bytes: &[u8],
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
+        max_manifest_bytes: u32,
+    ) -> Result<ManifestDeliveryV1, ContractError> {
+        self.check_delivery_context(original, inclusion_daa)?;
+        let authenticated = original.authenticate_manifest(bytes, max_manifest_bytes)?;
+        Ok(match authenticated.decode(original, scope_limits, total_limit) {
+            Ok(manifest) => ManifestDeliveryV1::Checked(manifest),
+            Err(error) => ManifestDeliveryV1::CommittedButInvalid(error),
+        })
+    }
+
     pub fn record(&self) -> PendingManifestCaseRecordV1 {
         PendingManifestCaseRecordV1 {
             id: self.id,
@@ -498,7 +523,14 @@ impl PendingManifestCase {
         original: &OriginalCommit,
         inclusion_daa: u64,
     ) -> Result<(), ContractError> {
-        if manifest.original() != self.original || original.id() != self.original || original.manifest_material_id() != self.material {
+        if manifest.original() != self.original {
+            return Err(ContractError::Scope);
+        }
+        self.check_delivery_context(original, inclusion_daa)
+    }
+
+    fn check_delivery_context(&self, original: &OriginalCommit, inclusion_daa: u64) -> Result<(), ContractError> {
+        if original.id() != self.original || original.manifest_material_id() != self.material {
             return Err(ContractError::Scope);
         }
         if !self.schedule.material_arrival_fits(self.opened_at, inclusion_daa) {
@@ -1077,6 +1109,16 @@ mod tests {
         let altered = PendingManifestCaseRecordV1 { opened_at: restored.opened_at - 1, ..restored };
         assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by()), Ok(()));
+        assert_eq!(
+            pending.authenticate_delivery(&bound_original, schedule.material_ready_by(), &bytes, &rules, 89, max),
+            Ok(ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget))
+        );
+        let mut changed_bytes = bytes.clone();
+        changed_bytes[0] ^= 1;
+        assert_eq!(
+            pending.authenticate_delivery(&bound_original, schedule.material_ready_by(), &changed_bytes, &rules, 90, max),
+            Err(ContractError::Identity)
+        );
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
         assert_eq!(pending.unresolved_at(clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
         let changed = OriginalCommit { trace_root: Digest([8; 64]), ..bound_original };
