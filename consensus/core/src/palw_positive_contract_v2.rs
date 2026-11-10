@@ -170,11 +170,11 @@ fn public_original_capacity_v1(
     rescue: ProtectedRescueDemand,
 ) -> Result<RemainingCapacity, ContractError> {
     let body_bytes = u64::from(ManifestV1::fetch_size(max_manifest_bytes)?);
-    let retained_bytes = body_bytes.checked_add(manifest_payload_bytes).ok_or(ContractError::Budget)?;
+    let material_bytes = body_bytes.checked_add(manifest_payload_bytes).ok_or(ContractError::Budget)?;
     if manifest_payload_bytes < MaterialScope::COUNT as u64
-        || initial_supply.retained_bytes < retained_bytes
-        || rescue.per_drawn_bond.transmitted_bytes < body_bytes
-        || (rescue.max_outsiders != 0 && rescue.per_outsider.transmitted_bytes < body_bytes)
+        || initial_supply.retained_bytes < material_bytes
+        || rescue.per_drawn_bond.transmitted_bytes < material_bytes
+        || (rescue.max_outsiders != 0 && rescue.per_outsider.transmitted_bytes < material_bytes)
     {
         return Err(ContractError::Budget);
     }
@@ -599,7 +599,11 @@ impl PreparedPublicOriginalV1 {
         {
             return Err(ContractError::Scope);
         }
-        if context.manifest_body_bytes_reserved > capacity.transmitted_bytes {
+        if capacity
+            .transmitted_bytes
+            .checked_sub(context.manifest_body_bytes_reserved)
+            .is_none_or(|remaining| remaining < self.manifest_payload_bytes)
+        {
             return Err(ContractError::Budget);
         }
         require_accepted_after_v1(self.carrier.origin, context.origin)?;
@@ -1201,9 +1205,12 @@ fn stored_public_admission_requires_manifest_capacity_for_each_rescue_path() {
     short_retention.initial_supply.retained_bytes = u64::from(ManifestV1::WIRE_BYTES);
     assert_eq!(decode(&short_retention), Err(ContractError::Budget));
 
-    // The smaller allocation still fits the aggregate budget, but the
-    // outsider could no longer obtain even the fixed-size manifest.
-    row.rescue.per_outsider.transmitted_bytes = u64::from(ManifestV1::WIRE_BYTES) - 1;
+    // Each protected allocation must cover the referenced materials even
+    // when the smaller allocation still fits the aggregate budget.
+    let mut short_drawn = row;
+    short_drawn.rescue.per_drawn_bond.transmitted_bytes = u64::from(ManifestV1::WIRE_BYTES);
+    assert_eq!(decode(&short_drawn), Err(ContractError::Budget));
+    row.rescue.per_outsider.transmitted_bytes = u64::from(ManifestV1::WIRE_BYTES);
     assert_eq!(decode(&row), Err(ContractError::Budget));
 }
 

@@ -287,7 +287,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let budget = AggregateBudget {
         rounds: 1,
         unique_source_bytes: body,
-        transmitted_bytes: body * 4,
+        transmitted_bytes: body * 4 + manifest_total_limit * 3,
         additional_work: 4,
         retained_bytes: body * 4 + manifest_total_limit,
         retention_until: 10_100,
@@ -494,6 +494,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         rows::{AcceptedOrigin, AggregateUsage, NativeHash64},
     };
     let supply = RemainingCapacity { transmitted_bytes: body, additional_work: 1, retained_bytes: body };
+    let rescue_supply = RemainingCapacity { transmitted_bytes: body + manifest_total_limit, ..supply };
     let mut reservation = PublicOriginalReservationV1 {
         service_obligation: r.service_contract,
         origin: AcceptedOrigin {
@@ -524,7 +525,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         initial_supply: RemainingCapacity { retained_bytes: body + manifest_total_limit, ..supply },
         rescue: ProtectedRescueDemand {
             max_drawn_bonds: 2,
-            per_drawn_bond: supply,
+            per_drawn_bond: rescue_supply,
             max_outsiders: 0,
             per_outsider: RemainingCapacity { transmitted_bytes: 0, additional_work: 0, retained_bytes: 0 },
             defensive: RemainingCapacity { transmitted_bytes: 0, additional_work: 0, retained_bytes: 0 },
@@ -611,7 +612,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         bad_record.court_verdict_key(&bad_prepared, reserved, terminal + 1, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Range)
     );
-    assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
+    assert_eq!(prepared.capacity.transmitted_bytes, body * 3 + manifest_total_limit * 2);
     use misaka_palw_positive_contract::public_one_honest::{
         FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond, PublicDrawMemberV1,
     };
@@ -650,7 +651,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(approval.full_scope, original.id().full_replay_scope(d(12)));
     let other_plan = prepared.prepare_draw(d(11), draw_point, &members, d(13)).unwrap();
     assert_ne!(approval.full_scope, other_plan.approval_context(bond).unwrap().full_scope);
-    assert_eq!(draw.rescue_capacity(bond), Ok(supply));
+    assert_eq!(draw.rescue_capacity(bond), Ok(rescue_supply));
     use misaka_palw_positive_contract::public_one_honest::{
         Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequest, ManifestRequestContext,
     };
@@ -749,7 +750,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         Err(misaka_palw_positive_contract::ContractError::Budget)
     );
     let outsider_reservation = PublicOriginalReservationV1 {
-        rescue: ProtectedRescueDemand { max_outsiders: 1, per_outsider: supply, ..reservation.rescue },
+        rescue: ProtectedRescueDemand { max_outsiders: 1, per_outsider: rescue_supply, ..reservation.rescue },
         ..reservation
     };
     let with_outsider = admission.prepare(&original, &signed.key, signature.as_ref(), &outsider_reservation).unwrap();
@@ -897,7 +898,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let shifted = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
     assert_eq!(shifted.capacity, prepared.capacity);
     assert_eq!(restored.check_restore(&shifted, d(8)), Err(misaka_palw_positive_contract::ContractError::Scope));
-    let short = AggregateBudget { transmitted_bytes: body * 3 - 1, ..budget };
+    let short = AggregateBudget { transmitted_bytes: prepared.capacity.transmitted_bytes - 1, ..budget };
     reservation.budget = &short;
     assert_eq!(
         admission.prepare(&original, &signed.key, signature.as_ref(), &reservation),
