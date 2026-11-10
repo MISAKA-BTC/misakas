@@ -362,10 +362,41 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let mut checker = signed.preparation(f).begin(record, panel.verification_key.as_ref(), &sig).unwrap();
     let before = builder.meter();
     let mut rejected = false;
+    let step_root = kaspa_consensus_core::palw_tir_court_v1::PublicOriginalStepRootV1 {
+        full_logits_trace_root: capture.run().trace_root(),
+        step_leaf_count: capture.run().leaf_count(),
+    };
     for index in 0..n {
         let progress = checker.progress();
         let before_first = builder.meter();
         let material = builder.material(index as u64, progress.legacy_frontier).unwrap();
+        if let Some(target) = material.target() {
+            use kaspa_consensus_core::palw_tir_court_v1::check_public_original_step_data_v1;
+            let index = target.opening.leaf_index;
+            let max_bytes = target.preimage.values_le.len();
+            check_public_original_step_data_v1(
+                &original,
+                &step_root,
+                index,
+                target.opening,
+                target.preimage,
+                step_root.step_leaf_count,
+                max_bytes,
+            )
+            .unwrap();
+            assert!(
+                check_public_original_step_data_v1(
+                    &original,
+                    &step_root,
+                    index + 1,
+                    target.opening,
+                    target.preimage,
+                    step_root.step_leaf_count,
+                    max_bytes,
+                )
+                .is_err()
+            );
+        }
         assert!(builder.material(index as u64, progress.legacy_frontier).is_err());
         // The existing source/frame owners remain live; additionally own both
         // serialized test exports before allocation. Reused scratch and a

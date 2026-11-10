@@ -3754,6 +3754,39 @@ fn logits_leaf_row(space: &PalwTirStepSpaceV1, ctx: &PalwJobContextV2, leaf: &Pa
     (row < ctx.exact_decode_tokens).then_some((row, u32::try_from(first_element).ok()?))
 }
 
+/// The fixed-size root data needed to authenticate a v2 original's step leaf.
+pub struct PublicOriginalStepRootV1 {
+    pub full_logits_trace_root: Hash64,
+    pub step_leaf_count: u64,
+}
+
+/// Authenticate the bytes of one original step leaf. Interpretation of its
+/// coordinates and execution semantics belongs to the selected court profile.
+pub fn check_public_original_step_data_v1(
+    original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+    root: &PublicOriginalStepRootV1,
+    index: u64,
+    opening: &PalwStepOpeningV1,
+    preimage: &PalwStepTileLeafV1,
+    max_step_leaf_count: u64,
+    max_value_bytes: usize,
+) -> Result<(), PalwStepRefuteError> {
+    if opening.leaf_index != index || preimage.values_le.len() > max_value_bytes {
+        return Err(bad("public original step index or byte cap"));
+    }
+    let step_root =
+        step_opening_root_capped_v1(root.step_leaf_count, opening, max_step_leaf_count).map_err(PalwStepRefuteError::Leg)?;
+    let context = Hash64::from_bytes(original.execution.0);
+    let class = Hash64::from_bytes(original.registered_class.0);
+    if palw_tir_execution_root_v1(&context, &root.full_logits_trace_root, &class, root.step_leaf_count, &step_root).as_bytes()
+        != original.trace_root.0
+        || step_tile_leaf_hash_v1(&context, &class, preimage) != opening.leaf_hash
+    {
+        return Err(bad("public step does not open the original execution"));
+    }
+    Ok(())
+}
+
 /// **Verify a `TirStepLeaf` answer against the claim — by hash arithmetic** (the second IR fence).
 /// `Ok(())` answers the unit; an `Err` is a disclosure that is not an answer. In order: the binding
 /// verifies at `max_step_leaf_count` and names the claim's two roots; `index` is a leaf of it and the
