@@ -1008,6 +1008,26 @@ impl DbPalwStateV2Store {
         })
     }
 
+    /// Transfer an already authenticated, exclusively cached tip to the
+    /// virtual writer. If readers still own it, their leases remain live.
+    pub(crate) fn take_tip_for_transition_v1(
+        &self,
+        params: &PalwStateParamsV2,
+    ) -> StoreResult<Option<(BlockHash, NativeChainStateV1)>> {
+        let _load = self.tip_load.lock();
+        let key = self.tip_key()?;
+        let cached = self.tip_cache.lock().take();
+        if let Some((block, root, state)) = cached
+            && key == Some((block, root))
+        {
+            match Arc::try_unwrap(state) {
+                Ok(state) => return Ok(Some((block, state))),
+                Err(shared) => *self.tip_cache.lock() = Some((block, root, shared)),
+            }
+        }
+        self.load_tip_retained_v1(params)
+    }
+
     /// Small durable identity + an already-authenticated resident Arc only.
     /// Irreversible GC must not turn a cold allocation refusal into an absent claim.
     pub(crate) fn load_tip_resident_v1(&self) -> StoreResult<Option<(BlockHash, Arc<NativeChainStateV1>)>> {
@@ -1387,6 +1407,11 @@ mod tests {
         }
         assert_eq!(cached.tip_bytes_decoded(), per_call, "healthy GC borrows cached native state without decoding/cloning it");
         assert_eq!(uncached.tip_bytes_decoded(), per_call * CALLS, "the uncached path is the per-call cost this test measures");
+        let (block, state) = cached.take_tip_for_transition_v1(&p).unwrap().unwrap();
+        assert_eq!(block, c1.block);
+        assert_eq!(state, child);
+        assert_eq!(cached.tip_bytes_decoded(), per_call, "the writer must reuse the exclusively cached tip");
+        assert!(cached.load_tip_resident_v1().is_err(), "the writer now owns the cached state");
 
         // **And it is keyed on the tip row, not on "we read once".** A second block moves the tip,
         // and the next read materializes the new one.
