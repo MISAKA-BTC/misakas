@@ -37,7 +37,7 @@
 | ExecutionRules | ジョブと元 claim の CU ruleset ID を照合 | 乱数・選択・停止・算術規則を実行 profile の資料として固定する |
 | InitialState | 元 claim と rooted 入力の digest を照合 | 初期状態と先行実行からの読み込みの正規資料を取得・検査する |
 | Dependencies | 元 claim と rooted 入力の digest を照合 | 空集合を含む正規形式、依存 ID の公開・失効経路を接続する |
-| Trace | 初回 capture の固定長索引と局所 step opening を認証する。葉数と wide logits の裁定結果は元 claim ID と証拠 ID の組で参照できる | trace 全体の取得、全関係の局所化、裁定結果から native 状態更新への接続 |
+| Trace | Miner の確定処理は初回 capture のタイルと opening を公開ストアに書く。Panel は公開索引と全タイルを有界取得し、元 claim と独立再実行に照合する。葉数と wide logits の裁定結果は元 claim ID と証拠 ID の組で参照できる | Miner と Panel の daemon への接続、全関係の局所化、裁定結果から native 状態更新への接続 |
 | Output | 公開の生成 token 列を native output root と照合し、wide 再実行と比較する | 停止・生成長・会計を含む End 検査を接続する |
 
 固定長 manifest の取得と、資料供給義務に結び付いた署名済み応答の認証は別経路。前者は元 claim と資料の同一性、後者は当該 case への応答の帰属を確認する。どちらも単独では検査機会を成立させない。

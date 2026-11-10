@@ -288,11 +288,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(capture.run().generated(), EXPECTED);
     use misaka_palw_positive_contract::public_one_honest::tir_trace_material_codec_v1;
     let trace_rules = ManifestScopeRules { codec: tir_trace_material_codec_v1(), max_bytes: 1 << 24, chunk_bytes: 1 << 16 };
-    let trace_material = capture.public_trace_material(trace_rules).unwrap();
-    assert_eq!(trace_material.subject, digest(capture.run().execution_root()));
-    assert!(trace_material.total_bytes > 136);
+    let trace_descriptor = capture.public_trace_material(trace_rules).unwrap();
+    assert_eq!(trace_descriptor.subject, digest(capture.run().execution_root()));
+    assert!(trace_descriptor.total_bytes > 136);
     assert_eq!(
-        capture.public_trace_material(ManifestScopeRules { max_bytes: trace_material.total_bytes - 1, ..trace_rules }),
+        capture.public_trace_material(ManifestScopeRules { max_bytes: trace_descriptor.total_bytes - 1, ..trace_rules }),
         Err(misaka_palw_positive_contract::ContractError::Budget)
     );
     let rows = capture.run().logits_rows();
@@ -427,6 +427,29 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         palw_step_leg::{PalwStepFaultV1, step_merkle_root_v1, step_opening_v1, step_tile_leaf_hash_v1},
         palw_tir_step_v1::palw_tir_execution_root_v1,
     };
+    let mut total = kaspa_consensus_core::palw_tir_court_v1::PublicOriginalTraceIndexV1::WIRE_BYTES as u64;
+    let mut next = 0;
+    capture
+        .visit_public_trace_tiles(trace_len, u64::from(trace_rules.chunk_bytes), &reserver, |opening, tile| {
+            assert_eq!(opening.leaf_index, next);
+            kaspa_consensus_core::palw_tir_court_v1::check_public_original_step_data_v1(
+                &original,
+                &capture.public_step_root(),
+                next,
+                &opening,
+                &tile,
+                trace_len,
+                trace_rules.chunk_bytes as usize,
+            )
+            .unwrap();
+            total += tile.values_le.len() as u64;
+            next += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(total, trace_descriptor.total_bytes);
+    assert_eq!(next, trace_len);
+    assert!(capture.visit_public_trace_tiles(trace_len - 1, u64::MAX, &reserver, |_, _| panic!("visited past cap")).is_err());
     let mut bad_index = capture.public_trace_index();
     let count_evidence = PublicOriginalTraceCountV1 { original: original.id(), trace: bad_index.clone() };
     assert!(matches!(

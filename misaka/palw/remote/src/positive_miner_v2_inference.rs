@@ -231,6 +231,8 @@ pub fn finalize_public_capture_v1(
     total_limit: u64,
     max_manifest_bytes: u32,
     provider_root: &std::path::Path,
+    max_trace_leaves: u64,
+    trace_reserver: &misaka_palw_tir_exec::node::memory::TirMemoryReserverV1,
     key: &[u8; PUBKEY_BYTES],
     sign: impl FnOnce(&[u8], &[u8]) -> Result<[u8; SIGNATURE_BYTES], String>,
 ) -> Result<misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1, MinerErrorV2> {
@@ -272,6 +274,17 @@ pub fn finalize_public_capture_v1(
     manifest.entries[execution_rules] = rules_entry;
     let trace = MaterialScope::Trace as usize;
     manifest.entries[trace] = capture.public_trace_material(scope_limits[trace])?;
+    let trace_count = capture.run().leaf_count();
+    let trace_overhead = crate::public_material::trace_tile_wire_overhead(trace_count);
+    let max_trace_wire = trace_count
+        .checked_mul(trace_overhead as u64)
+        .and_then(|overhead| manifest.entries[trace].total_bytes.checked_add(overhead))
+        .ok_or(ContractError::Budget)?;
+    if trace_count > max_trace_leaves {
+        return Err(ContractError::Budget.into());
+    }
+    let max_trace_value =
+        (manifest.entries[trace].chunk_bytes as usize).min(crate::public_material::MATERIAL_UNIT_MAX_BYTES - trace_overhead);
     let program = MaterialScope::Program as usize;
     let prompt = MaterialScope::Prompt as usize;
     let tokenizer = MaterialScope::Tokenizer as usize;
@@ -302,6 +315,10 @@ pub fn finalize_public_capture_v1(
         return Err(ContractError::Budget.into());
     }
     let bytes = original.bind_manifest(&manifest, scope_limits, total_limit, max_manifest_bytes)?;
+    let retained = replay_material.iter().try_fold(max_trace_wire, |total, (_, body)| total.checked_add(body.len() as u64));
+    if retained.and_then(|total| total.checked_add(bytes.len() as u64)).is_none_or(|total| total > service_budget.retained_bytes) {
+        return Err(ContractError::Budget.into());
+    }
     let digest = original.id().0;
     let signature = sign(&digest.0, ORIGINAL_SIGN_CONTEXT).map_err(MinerErrorV2::Signer)?;
     original.authenticate(key, &signature)?;
@@ -311,6 +328,13 @@ pub fn finalize_public_capture_v1(
         crate::evidence::fs::write_provider_chunk(&provider_root.join(path), bytes)
             .map_err(|error| MinerErrorV2::Journal(format!("public replay material {scope:?}: {error}")))?;
     }
+    capture
+        .visit_public_trace_tiles(max_trace_leaves, max_trace_value as u64, trace_reserver, |opening, tile| {
+            let path = crate::public_material::public_original_trace_tile_path(original.id(), opening.leaf_index);
+            let bytes = borsh::to_vec(&(opening, tile)).map_err(|error| error.to_string())?;
+            crate::evidence::fs::write_provider_chunk(&provider_root.join(path), &bytes).map_err(|error| error.to_string())
+        })
+        .map_err(MinerErrorV2::Journal)?;
     let trace_index_path = crate::public_material::public_original_trace_index_path(original.id());
     let trace_index = borsh::to_vec(&capture.public_trace_index()).map_err(|_| MinerErrorV2::Binding)?;
     crate::evidence::fs::write_provider_chunk(&provider_root.join(trace_index_path), &trace_index)

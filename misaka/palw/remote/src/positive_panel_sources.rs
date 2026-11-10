@@ -9,6 +9,7 @@ use std::{
     path::Path,
 };
 
+use crate::public_material::{TRACE_OPENING_PREFIX, TRACE_TILE_PREFIX, trace_tile_wire_overhead};
 use kaspa_consensus_core::{
     Hash64,
     palw_artifact::verify_artifact_opening_v1,
@@ -114,14 +115,6 @@ pub(crate) fn check_public_replay_trace_v1(
         return Err(PanelSourceErrorR1::Binding);
     }
     Ok(())
-}
-
-const TRACE_OPENING_PREFIX: usize = 8 + 64 + 4;
-const TRACE_TILE_PREFIX: usize = 2 + 16 + 4 + 4;
-
-fn trace_tile_wire_overhead(count: u64) -> usize {
-    let depth = u64::BITS - (count - 1).leading_zeros();
-    TRACE_OPENING_PREFIX + depth as usize * 64 + TRACE_TILE_PREFIX
 }
 
 /// Fetch one opening and tile, rejecting invalid vector lengths before

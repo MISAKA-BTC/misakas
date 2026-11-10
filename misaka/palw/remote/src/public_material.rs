@@ -135,6 +135,17 @@ pub(crate) fn public_original_trace_index_path(original: misaka_palw_positive_co
 }
 
 #[cfg(feature = "positive-panel")]
+pub(crate) const TRACE_OPENING_PREFIX: usize = 8 + 64 + 4;
+#[cfg(feature = "positive-panel")]
+pub(crate) const TRACE_TILE_PREFIX: usize = 2 + 16 + 4 + 4;
+
+#[cfg(feature = "positive-panel")]
+pub(crate) fn trace_tile_wire_overhead(count: u64) -> usize {
+    let depth = u64::BITS - count.saturating_sub(1).leading_zeros();
+    TRACE_OPENING_PREFIX + depth as usize * 64 + TRACE_TILE_PREFIX
+}
+
+#[cfg(feature = "positive-panel")]
 pub(crate) fn public_original_trace_tile_path(
     original: misaka_palw_positive_contract::public_one_honest::OriginalId,
     index: u64,

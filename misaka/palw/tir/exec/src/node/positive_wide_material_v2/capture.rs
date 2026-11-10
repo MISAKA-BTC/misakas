@@ -6,7 +6,9 @@ use crate::node::{
 use crate::{NodeValue, Slice};
 use kaspa_consensus_core::{
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1},
-    palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_opening_from_leaf_source_capped_v1, step_tile_leaf_hash_v1},
+    palw_step_leg::{
+        PalwStepMerkleTreeV1, PalwStepOpeningV1, PalwStepTileLeafV1, step_opening_from_leaf_source_capped_v1, step_tile_leaf_hash_v1,
+    },
     palw_tir_court_v1::{PublicOriginalStepRootV1, PublicOriginalTraceIndexV1},
     palw_tir_step_v1::{palw_tir_execution_root_v1, palw_tir_leaf_values_v2},
 };
@@ -159,6 +161,48 @@ impl WidePanelCaptureV2<'_> {
         let opening = step_opening_from_leaf_source_capped_v1(count, index, max_step_leaf_count, |i| hashes[i as usize])
             .map_err(|error| error.to_string())?;
         Ok((opening, self.preimage(index)?))
+    }
+
+    /// Stream all original tiles with one bounded in-memory opening tree.
+    /// The visitor may serialize one tile within the reserved scratch space.
+    pub fn visit_public_trace_tiles(
+        &self,
+        max_leaves: u64,
+        max_value_bytes: u64,
+        reserver: &TirMemoryReserverV1,
+        mut visit: impl FnMut(PalwStepOpeningV1, PalwStepTileLeafV1) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let hashes = self.run.leaf_hashes();
+        let leaves = self.run.leaf_count();
+        if leaves == 0 || leaves > max_leaves || leaves != hashes.len() as u64 {
+            return Err("wide public trace leaf count cap".into());
+        }
+        self.session.charge(Charge::Visit, leaves)?;
+        let max_body = self.leaves.iter().map(|leaf| leaf.bytes).max().ok_or("wide trace absent")?;
+        if max_body > max_value_bytes || max_body > self.session.limits.max_material_bytes {
+            return Err("wide public trace tile exceeds value cap".into());
+        }
+        // Each level rounds up, so the tree holds at most 2N + 64 hashes.
+        // The fixed allowance covers level vectors, one opening and file IO scratch.
+        let scratch = add(add(mul(leaves, 128)?, 65536)?, mul(max_body, 4)?)?;
+        if add(add(scratch, self.retained_heap)?, self.run.reserved_bytes())? > self.session.limits.max_live_heap_bytes {
+            return Err("wide trace publisher simultaneous heap cap".into());
+        }
+        let _lease = reserver("positive-wide-trace-publish-v1", self.expected.job.shape_profile_id, self.context, scratch)?;
+        self.session.charge(Charge::Visit, mul(leaves, 3)?)?;
+        self.session.charge(Charge::Hash, mul(leaves, 256)?)?;
+        let tree = PalwStepMerkleTreeV1::build_capped_v1(hashes, max_leaves).map_err(|error| error.to_string())?;
+        if tree.root() != self.run.step_merkle_root() {
+            return Err("wide publication tree differs from original run".into());
+        }
+        let depth = u64::from(u64::BITS - (leaves - 1).leading_zeros());
+        for (index, &leaf_hash) in hashes.iter().enumerate() {
+            self.session.charge(Charge::Visit, add(depth, 1)?)?;
+            let siblings = tree.path_v1(index).map_err(|error| error.to_string())?;
+            let leaf_index = index as u64;
+            visit(PalwStepOpeningV1 { leaf_index, leaf_hash, siblings }, self.preimage(leaf_index)?)?;
+        }
+        Ok(())
     }
 
     /// The exact output of the same observed run, as one canonical chunk.
