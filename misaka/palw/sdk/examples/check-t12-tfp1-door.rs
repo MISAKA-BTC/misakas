@@ -11,7 +11,7 @@ use kaspa_consensus_core::{
     palw_court_family_material_v1::prepare_family_table_inventory_v1,
     palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1,
     palw_fp_execution_v3::palw_fp_job_pin_v1,
-    palw_freeprompt_v3::PalwFpWorkerResultV3,
+    palw_freeprompt_v3::{PALW_FP_COMMITMENT_TX_MAX_BYTES, PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3},
     palw_mode_v2::PalwConsensusMode,
     palw_native_resource_v1::{
         NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, native_declared_logical_limits_v1, reserve_native_requests_v1,
@@ -119,7 +119,12 @@ fn parameter_shape(
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let [artifact, tokenizer, result, binding, semantics, daa, custodians, rest @ ..] = args.as_slice() else {
-        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper> [--exact-token-table <file>] [disputed-leaf | --all-roots <max-leaves> <max-edges> <max-coordinates> <max-memberships> <max-native-bytes>]".into());
+        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper> [--original-commitment <file>] [--exact-token-table <file>] [disputed-leaf | --all-roots <max-leaves> <max-edges> <max-coordinates> <max-memberships> <max-native-bytes>]".into());
+    };
+    let (original_file, rest) = match rest {
+        [flag, file, tail @ ..] if flag == "--original-commitment" => (Some(file), tail),
+        [flag] if flag == "--original-commitment" => return Err("--original-commitment needs a Borsh commitment file".into()),
+        _ => (None, rest),
     };
     let (table_file, cover_args) = match rest {
         [flag, file, tail @ ..] if flag == "--exact-token-table" => (Some(file), tail),
@@ -168,7 +173,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let PalwConsensusMode::ConsensusV2(ref bundle) = params.palw_consensus_mode else {
         return Err("the compiled t12 has no PALW V2 bundle".into());
     };
-    let original = result.to_commitment(daa.checked_add(40_000).ok_or("fixture retention DAA overflow")?);
+    let original = if let Some(file) = original_file {
+        let original: PalwFreePromptCommitmentV3 = borsh::from_slice(&read(Path::new(file), PALW_FP_COMMITMENT_TX_MAX_BYTES as u64)?)?;
+        if original != result.to_commitment(original.trace_retention_daa) {
+            return Err("the retained commitment does not match the worker result".into());
+        }
+        original
+    } else {
+        result.to_commitment(daa.checked_add(40_000).ok_or("fixture retention DAA overflow")?)
+    };
     let geometry = PalwStagedClaimGeometryV1 {
         class_id: entry.class_id(),
         producer: PalwBondKeyV2(original.job.executor_bond),
@@ -348,6 +361,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_string_pretty(&json!({
             "params_id":params.consensus_params_id().to_string(),
             "class_id":entry.class_id().to_string(),
+            "claim_id":fp_claim_id_v3(&original).to_string(),
+            "fixture_commitment":original_file.is_none(),
             "daa":daa,
             "fixture_eof":true,
             "custodian_upper":maximum_custodians,
