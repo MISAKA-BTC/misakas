@@ -351,7 +351,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert!(capture.public_trace_tile(trace_len, trace_len, u64::MAX).is_err());
     use kaspa_consensus_core::{
         palw_step_refute::PalwStepRefuteError,
-        palw_tir_court_v1::{PalwTirCourtRulesV1, PublicOriginalTraceTileV1},
+        palw_tir_court_v1::{PalwTirCourtRulesV1, PublicOriginalTraceTileV1, check_public_original_wide_greedy_decode_v1},
     };
     let logits_leaf = space
         .leaves_of_position(&f.job, f.job.declared_prefill_tokens - 1)
@@ -365,15 +365,20 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         prompt_form: PalwPromptIdsFormV1::Flat,
         limits: misaka_palw_tir::demand::DemandLimits::UNLIMITED,
     };
+    let binding = capture.binding().unwrap();
+    let selected = event.generated[0] as usize;
     assert!(matches!(
-        material.check_wide_logits_consistency(
-            &original,
-            &capture.binding().unwrap(),
-            logits_leaf.index,
-            &event,
-            material.tile.values_le.len(),
-            &rules,
-        ),
+        check_public_original_wide_greedy_decode_v1(&original, &binding, &event, &event, selected, &rules),
+        Err(PalwStepRefuteError::NoFaultFound)
+    ));
+    let mut other_output = original.clone();
+    other_output.output = d(99);
+    assert!(matches!(
+        check_public_original_wide_greedy_decode_v1(&other_output, &binding, &event, &event, selected, &rules),
+        Err(PalwStepRefuteError::InputSetNotCanonical("wide decode court output does not bind the original"))
+    ));
+    assert!(matches!(
+        material.check_wide_logits_consistency(&original, &binding, logits_leaf.index, &event, material.tile.values_le.len(), &rules,),
         Err(PalwStepRefuteError::NoFaultFound)
     ));
     use kaspa_consensus_core::{
