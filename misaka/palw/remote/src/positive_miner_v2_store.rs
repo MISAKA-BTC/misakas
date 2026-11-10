@@ -14,7 +14,59 @@ use kaspa_consensus_core::{
     },
     palw_step_leg::PalwStepOpeningV1,
 };
-use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+use misaka_palw_positive_contract::{
+    ContractError,
+    public_one_honest::{ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit},
+};
+use std::{
+    collections::BTreeMap,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+fn public_manifest_path(root: &Path, original: &OriginalCommit) -> PathBuf {
+    let Digest(id) = original.id().0;
+    root.join("public-manifests-v1").join(faster_hex::hex_string(&id))
+}
+
+/// Publish only an authenticated, canonical manifest. The native reservation
+/// owner must arrange retention and account for the bytes independently.
+pub fn store_public_manifest_v1(
+    root: &Path,
+    original: &OriginalCommit,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+    bytes: &[u8],
+) -> Result<(), StoreErrorV2> {
+    let size = ManifestV1::fetch_size(max_manifest_bytes).map_err(|_| StoreErrorV2::Budget)?;
+    original
+        .authenticate_manifest(bytes, size)
+        .and_then(|authenticated| authenticated.decode(original, scope_limits, total_limit))
+        .map_err(|error| match error {
+            ContractError::Budget => StoreErrorV2::Budget,
+            ContractError::Identity => StoreErrorV2::Authentication,
+            _ => StoreErrorV2::NonCanonical,
+        })?;
+    crate::evidence::fs::write_provider_chunk(&public_manifest_path(root, original), bytes).map_err(io)
+}
+
+/// Read the bytes back for serving, authenticating the disk copy again.
+pub fn load_public_manifest_v1(root: &Path, original: &OriginalCommit, max_manifest_bytes: u32) -> Result<Vec<u8>, StoreErrorV2> {
+    use crate::evidence::fs::{BoundedFileError, read_bounded_file};
+
+    let size = ManifestV1::fetch_size(max_manifest_bytes).map_err(|_| StoreErrorV2::Budget)?;
+    let bytes = read_bounded_file(&public_manifest_path(root, original), size as usize).map_err(|error| match error {
+        BoundedFileError::Io(error) => io(error),
+        BoundedFileError::TooLarge(_) => StoreErrorV2::Budget,
+    })?;
+    if bytes.len() != size as usize {
+        return Err(StoreErrorV2::NonCanonical);
+    }
+    original.authenticate_manifest(&bytes, size).map_err(|_| StoreErrorV2::Authentication)?;
+    Ok(bytes)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoredEncodingV2 {

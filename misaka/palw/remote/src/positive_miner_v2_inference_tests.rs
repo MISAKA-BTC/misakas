@@ -53,6 +53,7 @@ fn program_material_is_the_registered_graph_in_one_chunk() {
 #[cfg(feature = "positive-panel")]
 #[test]
 fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
+    use crate::miner::positive_v2::store::{StoreErrorV2, load_public_manifest_v1, store_public_manifest_v1};
     use crate::positive_panel_sources::{
         PanelSourceErrorR1, open_public_input_token_tile_v1, open_public_tir_program_v1, read_public_manifest_v1,
     };
@@ -121,6 +122,19 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     };
     let limit = u64::from(size) + input_rules.max_bytes + (MaterialScope::COUNT - 2) as u64;
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
+    let store = std::env::temp_dir().join(format!("misaka-public-manifest-{}", std::process::id()));
+    std::fs::create_dir(&store).unwrap();
+    let written = store_public_manifest_v1(&store, &original, &rules, limit, 4096, &encoded);
+    let loaded = load_public_manifest_v1(&store, &original, 4096);
+    let mut forged = encoded.clone();
+    forged[0] ^= 1;
+    let refused = store_public_manifest_v1(&store, &original, &rules, limit, 4096, &forged);
+    let unchanged = load_public_manifest_v1(&store, &original, 4096);
+    std::fs::remove_dir_all(&store).unwrap();
+    written.unwrap();
+    assert_eq!(refused, Err(StoreErrorV2::Authentication));
+    assert_eq!(unchanged.unwrap(), encoded);
+    let encoded = loaded.unwrap();
     let len = encoded.len() as u64;
     let checked = read_public_manifest_v1(&original, &rules, limit, 4096, len, encoded.as_slice()).unwrap();
     let mut wrong_frame = encoded.as_slice();
