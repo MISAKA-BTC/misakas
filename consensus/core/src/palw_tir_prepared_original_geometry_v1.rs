@@ -150,7 +150,6 @@ impl PreparedOriginalGeometryV1 {
         >,
         PreparedGeometryErrorV1,
     > {
-        use crate::palw_native_resource_v1::NativeDecodeErrorV1;
         self.prepared.check_preclaim_context_v1(b, ctx)?;
         let book = b.state.court_service_state_v1().ok_or(PreparedGeometryErrorV1::MissingSharedServiceNamespace)?;
         let profile = crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(book.profile_id);
@@ -160,14 +159,8 @@ impl PreparedOriginalGeometryV1 {
             .ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared Batch class absent")))?;
         let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, class)
             .ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared Batch layout absent")))?;
-        let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|error| {
-            PreparedGeometryErrorV1::Native(match error {
-                NativeDecodeErrorV1::Resource(coverage) => NativeDecodeErrorV1::Resource(coverage),
-                NativeDecodeErrorV1::Decode(why) => NativeDecodeErrorV1::Decode(why.to_string()),
-            })
-        })?;
         crate::palw_court_shared_material_intake_v1::batch::native_ranges::numerical_batch_streaming_envelope_v1(
-            frame, &self.source, record, layout, &program, profile, limits, maximum_ranges,
+            frame, &self.source, record, layout, profile, limits, maximum_ranges,
         )
         .map_err(PreparedGeometryErrorV1::Native)
     }

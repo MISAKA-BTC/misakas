@@ -130,3 +130,11 @@ seat 7 の停止中に DB を複製し、旧サービスを再開した。複製
 公開 seat 7 は virtual DAA 21,001 で、資料宣言と family supplier は引き続き未スケジュール。稼働プロセスは対象の 135M artifact を保持リストへ載せておらず、既存の EOF 自動公開 actor が選ぶ canonical class の指定もなかった。SDK の診断は、固定値の EOF 証明書を組み立てる代わりに、保存済みの実 tokenizer をネイティブの Part/Finish で再生するようにした。ローカルの署名欄と包含時刻は fixture。実ファイルは 2,104,556 bytes で、1 byte を変えると Finish で拒否した。ネットワークの EOF 予約条件で最大 35 move、140 DAA、rent 11,929,756 sompi、deposit 35 sompi（carrier 手数料は別）。この EOF を同じ claim の見積もりへ渡すと、出荷設定で必要 8,567,151 DAA 対上限 3,120 DAA、Batch v5 比較では 72,565 対 6,880 DAA。宣言のみで EOF を省いた比較は計画計算前に拒否した。
 
 保存済みの署名 object を復号し、元の宣言 Borsh と一致すること、T12 の署名ドメインと先に公開照会した登録者公開鍵で ML-DSA-87 の portable 検証が通ることを確認した。seat 7 の `/root/palw-class/t12-studio-7a2616b4/` に対象モデルと `tokenizer.json` を配置し、両ファイルの SHA-256 を送信元と照合した。保持リストへの追加、fence 変更、宣言の送信は未実施。
+
+2026-11-11、公開 seat 7 を再照会した。virtual DAA は 21,006、params/schedule ID は前回と一致。同じ候補の quote は DAA 21,005 の状態で `G14_ROUTE_ABSENT (FpTokenizer)`、`quoted=false`、plan なし。今回も TFP1 の署名・送信は行っていない。
+
+Batch の数値資料量の導出を、旧 allocation と署名済み custody frame が成立する前に呼べる `numerical_batch_projection_v1` へ分離した。既存の native Batch envelope と demand 再構成も共通の範囲計算を使用する。投影は claim/source/prompt 形式と位置別 byte 上限だけを保持し、scope・予約・受理権限を持たない。実 frame との再束縛で claim/source/prompt を照合してから、従来の scope ID を算出する。parameter byte 上限に用いる program は、walker が認証する class record から native decoder で取得し、別 program の引数を受け取らない。
+
+既存の funded Batch fixture に、独立した materialized envelope との上限・scope 一致、別 claim・別 prompt 形式・空 profile の拒否検査を追加した。独立エージェントの静的レビューと `git diff --check` は完了。新規回帰テストはビルド待ちで、今回の変更の動作検証は未完了。前回から実行中だった SDK example のテスト 2 件は成功したが、そのビルドは今回の分離前のコードであり、この変更の検証には数えない。
+
+この分離は公開 quote の成功を意味しない。新しい版の quote/admission 共通 planner、実 service book での予約、その結果を署名対象へ束縛する接続は残っている。現在の Batch book は数値と ConstraintStop が対象で、FP の入力テキストから prompt IDs への tokenizer 裁定を代替しない。その検査・供給も同じ期限内に収める必要がある。公開 fence、期限、検証 gate は変更していない。

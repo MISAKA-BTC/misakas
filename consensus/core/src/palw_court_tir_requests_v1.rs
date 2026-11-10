@@ -22,6 +22,38 @@ fn mul(a: u64, b: u64) -> Result<u64, String> {
 fn nodes(n: u64) -> Result<u64, String> {
     (1..=height(n)).try_fold(0, |sum, level| add(sum, width(n, level).ok_or("shared tree geometry")?))
 }
+
+/// Source geometry only: usable before an allocation or shared scope exists.
+/// Ordinals retain the existing request ordering. No request ID, service
+/// reservation, or accepted scope is manufactured by this projection.
+pub(crate) fn visit_source_batch_step_targets_v1(
+    source: &Source,
+    boundaries: &std::collections::BTreeSet<crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1>,
+    max_parts_per_demand: usize,
+    max_demands: usize,
+    mut visit: impl FnMut(
+        crate::palw_court_shared_material_intake_v1::MaterialTargetV1,
+        crate::palw_tir_public_source_v1::PalwTirPublicUnitBoundV1,
+    ) -> Result<(), String>,
+) -> Result<usize, String> {
+    let geometry = Geometry::new(
+        source.leaf_count_v1(),
+        u64::from(source.decode_count_v1()),
+        u64::from(source.vocab_v1()),
+        source.supports_tiled_trace_v1(),
+    )?;
+    source.visit_batch_step_material_cover_v1(boundaries, max_parts_per_demand, max_demands, |request, bound| {
+        let Request::StepRun { first, count } = request else {
+            return Err("Batch material cover produced a foreign request".into());
+        };
+        let ordinal = geometry.step_run_ordinal(first, count)?;
+        if geometry.at(ordinal)? != request {
+            return Err("shared StepRun ordinal roundtrip differs".into());
+        }
+        source.check_request_v1(&request)?;
+        visit(crate::palw_court_shared_material_intake_v1::MaterialTargetV1::Unit { ordinal }, bound)
+    })
+}
 fn node_at(n: u64, mut ordinal: u64) -> Result<(u8, u64), String> {
     for level in 1..=height(n) {
         let count = width(n, level).ok_or("shared tree geometry")?;
@@ -517,6 +549,7 @@ impl<'a> TirSharedRequestSetV1<'a> {
     /// and shared request identity. The caller derives `boundaries` from the
     /// selected original root and accounts the returned native bounds. No
     /// response slot, duty or accepted evidence is created by this projection.
+    #[cfg(test)]
     pub(crate) fn visit_batch_step_targets_v1(
         &self,
         boundaries: &std::collections::BTreeSet<crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1>,
@@ -529,14 +562,8 @@ impl<'a> TirSharedRequestSetV1<'a> {
         ) -> Result<(), String>,
     ) -> Result<usize, String> {
         use crate::palw_court_shared_material_intake_v1::MaterialTargetV1;
-        self.source.visit_batch_step_material_cover_v1(boundaries, max_parts_per_demand, max_demands, |request, bound| {
-            let Request::StepRun { first, count } = request else {
-                return Err("Batch material cover produced a foreign request".into());
-            };
-            let ordinal = self.geometry.step_run_ordinal(first, count)?;
-            if self.request_at(ordinal)? != request {
-                return Err("shared StepRun ordinal roundtrip differs".into());
-            }
+        visit_source_batch_step_targets_v1(self.source, boundaries, max_parts_per_demand, max_demands, |target, bound| {
+            let MaterialTargetV1::Unit { ordinal } = target else { unreachable!("source projection emits only Unit") };
             visit(MaterialTargetV1::Unit { ordinal }, self.request_id(ordinal)?, bound)
         })
     }

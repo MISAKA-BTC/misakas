@@ -283,7 +283,7 @@ fn booked_root_ranges_v1(
         return Err(E::Decode("numerical Batch source differs from its reserved scope".into()));
     }
     let maximum_ranges = maximum_ranges.min(MAX_BOOKED_NUMERICAL_RANGES_V1);
-    selected_root_ranges_v1(frame, source, &set, record, layout, program, streaming, leaf, maximum_ranges)
+    selected_root_ranges_v1(frame, source, record, layout, program, streaming, leaf, maximum_ranges)
 }
 
 fn owned_begin_v1(claim: Hash64, scope: Hash64, owned: &BTreeSet<[u8; 64]>, ordinal: usize, index: usize) -> Result<bool, String> {
@@ -570,7 +570,6 @@ fn booked_group_capacity_v1(
 fn selected_root_ranges_v1(
     frame: &PalwTirPublicClaimV1,
     source: &NativeRetainedV1<PalwTirPublicSourceV1>,
-    set: &TirSharedRequestSetV1<'_>,
     record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
     layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
     program: &TirProgramV1,
@@ -580,7 +579,17 @@ fn selected_root_ranges_v1(
 ) -> Result<RootRanges, E> {
     let mut result = None;
     let walked = PalwTirPublicSourceV1::visit_selected_root_inputs_v1(source, record, layout, streaming, leaf, |params, inputs| {
-        result = Some(root_ranges_v1(frame, source, set, leaf, inputs.iter().copied(), params, program, maximum_ranges, &mut None));
+        result = Some(root_ranges_v1(
+            frame.plan_v1().original_claim,
+            frame.plan_v1().owner_work.rules.prompt_form,
+            source,
+            leaf,
+            inputs.iter().copied(),
+            params,
+            program,
+            maximum_ranges,
+            &mut None,
+        ));
         Ok(())
     });
     walked?;
@@ -643,13 +652,21 @@ pub(crate) fn numerical_batch_streaming_envelope_v1(
     source: &NativeRetainedV1<PalwTirPublicSourceV1>,
     record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
     layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
-    program: &TirProgramV1,
     profile: Hash64,
     streaming: StreamingParameterCoverBudgetV1,
     maximum_ranges: usize,
 ) -> Result<NativeRetainedV1<NumericalBatchEnvelopeV1>, E> {
-    project_numerical_batch_streaming_v1(frame, source, record, layout, program, profile, streaming, maximum_ranges, None)
-        .map(|(envelope, _)| envelope)
+    TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+    let projection = numerical_batch_projection_v1(
+        frame.plan_v1().original_claim,
+        frame.plan_v1().owner_work.rules.prompt_form,
+        source,
+        record,
+        layout,
+        streaming,
+        maximum_ranges,
+    )?;
+    NumericalBatchProjectionV1::bind_v1(projection, frame, source, profile)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -664,10 +681,102 @@ fn project_numerical_batch_streaming_v1(
     maximum_ranges: usize,
     leaf: Option<u64>,
 ) -> Result<(NativeRetainedV1<NumericalBatchEnvelopeV1>, Option<RootRanges>), E> {
-    let set = TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+    // Authenticate the old scope before spending work, but do not make its
+    // existence a prerequisite of the shared geometry calculation below.
+    TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+    let (projection, selected) = project_numerical_batch_geometry_v1(
+        frame.plan_v1().original_claim,
+        frame.plan_v1().owner_work.rules.prompt_form,
+        source,
+        record,
+        layout,
+        program,
+        streaming,
+        maximum_ranges,
+        leaf,
+    )?;
+    Ok((NumericalBatchProjectionV1::bind_v1(projection, frame, source, profile)?, selected))
+}
+
+/// Unbound resource geometry for a prospective original. It deliberately has
+/// no scope, allocation, admission marker or service-book capability. The same
+/// projection is used by accepted demand reconstruction; it cannot be made
+/// into a booked envelope until the actual plan/source/prompt agree.
+pub(crate) struct NumericalBatchProjectionV1 {
+    claim: Hash64,
+    source_id: Hash64,
+    prompt: PalwPromptIdsFormV1,
+    maximums: Vec<u64>,
+}
+
+impl NumericalBatchProjectionV1 {
+    pub(crate) fn maximums_v1(&self) -> &[u64] {
+        &self.maximums
+    }
+
+    pub(crate) fn bind_v1(
+        projection: NativeRetainedV1<Self>,
+        frame: &PalwTirPublicClaimV1,
+        source: &PalwTirPublicSourceV1,
+        profile: Hash64,
+    ) -> Result<NativeRetainedV1<NumericalBatchEnvelopeV1>, E> {
+        let set = TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+        if projection.claim != frame.plan_v1().original_claim
+            || projection.source_id != set.source_id()
+            || projection.prompt != frame.plan_v1().owner_work.rules.prompt_form
+        {
+            return Err(E::Decode("numerical Batch projection substitutes original, source or prompt form".into()));
+        }
+        let scope = set.scope_id().map_err(E::Decode)?;
+        let (projection, lease) = projection.into_parts_v1();
+        Ok(NativeRetainedV1::from_owner_reserved_v1(
+            NumericalBatchEnvelopeV1 { claim: projection.claim, profile, scope, maximums: projection.maximums },
+            lease,
+        ))
+    }
+}
+
+/// Calculate bytes before the legacy allocation/pledge exists. The caller must
+/// supply native authenticated Source and policy; this does not price semantic
+/// branches, verification work, carrier fees or shared service capacity.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn numerical_batch_projection_v1(
+    claim: Hash64,
+    prompt: PalwPromptIdsFormV1,
+    source: &NativeRetainedV1<PalwTirPublicSourceV1>,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    streaming: StreamingParameterCoverBudgetV1,
+    maximum_ranges: usize,
+) -> Result<NativeRetainedV1<NumericalBatchProjectionV1>, E> {
+    // The program used for parameter sizes must be the same authenticated
+    // program whose source/layout the walker verifies. A separate supplied
+    // program could underquote parameter bodies while preserving source_id.
+    let program =
+        crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|error| match error {
+            NativeDecodeErrorV1::Decode(why) => E::Decode(why.to_string()),
+            NativeDecodeErrorV1::Resource(why) => E::Resource(why),
+        })?;
+    project_numerical_batch_geometry_v1(claim, prompt, source, record, layout, &program, streaming, maximum_ranges, None)
+        .map(|(projection, _)| projection)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_numerical_batch_geometry_v1(
+    claim: Hash64,
+    prompt: PalwPromptIdsFormV1,
+    source: &NativeRetainedV1<PalwTirPublicSourceV1>,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    program: &TirProgramV1,
+    streaming: StreamingParameterCoverBudgetV1,
+    maximum_ranges: usize,
+    leaf: Option<u64>,
+) -> Result<(NativeRetainedV1<NumericalBatchProjectionV1>, Option<RootRanges>), E> {
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<u64>(maximum_ranges as u64).map_err(E::Resource)?;
-    q.exact_v1::<NumericalBatchEnvelopeV1>(1).map_err(E::Resource)?;
+    q.add_v1(std::mem::size_of::<NumericalBatchProjectionV1>().max(std::mem::size_of::<NumericalBatchEnvelopeV1>()) as u64)
+        .map_err(E::Resource)?;
     let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
     let mut maximums = Vec::with_capacity(maximum_ranges);
     let mut selected = None;
@@ -676,11 +785,11 @@ fn project_numerical_batch_streaming_v1(
     let summary =
         PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(source, record, layout, streaming, |root, params, inputs| {
             let ranges =
-                root_ranges_v1(frame, source, &set, root, inputs.iter().copied(), params, program, maximum_ranges, &mut ids_bytes)
+                root_ranges_v1(claim, prompt, source, root, inputs.iter().copied(), params, program, maximum_ranges, &mut ids_bytes)
                     .map_err(|error| {
-                        callback_error = Some(error);
-                        "numerical Batch range projection failed".to_string()
-                    })?;
+                    callback_error = Some(error);
+                    "numerical Batch range projection failed".to_string()
+                })?;
             fold_maximums(&mut maximums, ranges.values().map(|(_, bytes)| *bytes), maximum_ranges)?;
             if Some(root) == leaf {
                 selected = Some(ranges);
@@ -694,13 +803,11 @@ fn project_numerical_batch_streaming_v1(
     if maximums.is_empty() {
         return Err(E::Decode("streamed Batch cover contains no numerical ranges".into()));
     }
-    if summary.source_id != set.source_id() {
+    if summary.source_id != source.source_id_v1() {
         return Err(E::Decode("streamed Batch cover differs from the original".into()));
     }
-    let scope = set.scope_id().map_err(E::Decode)?;
-    let claim = frame.plan_v1().original_claim;
-    let envelope = NumericalBatchEnvelopeV1 { claim, profile, scope, maximums };
-    Ok((NativeRetainedV1::from_owner_reserved_v1(envelope, lease), selected))
+    let projection = NumericalBatchProjectionV1 { claim, source_id: summary.source_id, prompt, maximums };
+    Ok((NativeRetainedV1::from_owner_reserved_v1(projection, lease), selected))
 }
 
 fn partition_maximums_v1(mut remaining: &[u64]) -> impl Iterator<Item = &[u64]> {
@@ -773,9 +880,9 @@ pub(crate) fn numerical_batch_envelope_v1(
 
     for (root, params) in roots.iter().zip(&parameters.roots) {
         let ranges = root_ranges_v1(
-            frame,
+            frame.plan_v1().original_claim,
+            frame.plan_v1().owner_work.rules.prompt_form,
             source,
-            &set,
             root.leaf,
             root.inputs.iter().copied(),
             &params.parameters,
@@ -820,9 +927,9 @@ pub(crate) fn numerical_batch_root_demand_v1(
         .filter(|params| params.leaf == leaf)
         .ok_or_else(|| E::Decode("numerical Batch parameter cover differs from the original".into()))?;
     let ranges = root_ranges_v1(
-        frame,
+        frame.plan_v1().original_claim,
+        frame.plan_v1().owner_work.rules.prompt_form,
         source,
-        &set,
         leaf,
         roots[index].inputs.iter().copied(),
         &params.parameters,
@@ -888,9 +995,9 @@ fn root_demand_span_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn root_ranges_v1(
-    frame: &PalwTirPublicClaimV1,
+    claim: Hash64,
+    prompt: PalwPromptIdsFormV1,
     source: &PalwTirPublicSourceV1,
-    set: &TirSharedRequestSetV1<'_>,
     leaf: u64,
     inputs: impl ExactSizeIterator<Item = RootInputBoundaryV1>,
     parameters: &[u32],
@@ -898,9 +1005,7 @@ fn root_ranges_v1(
     maximum_ranges: usize,
     ids_bytes: &mut Option<u64>,
 ) -> Result<NativeRetainedV1<BTreeMap<Hash64, (MaterialTargetV1, u64)>>, E> {
-    let claim = frame.plan_v1().original_claim;
     let count = source.header_v1().job_context.declared_prefill_tokens;
-    let prompt = frame.plan_v1().owner_work.rules.prompt_form;
     let full_ids = |source| {
         crate::palw_tir_public_owned_v1::request_body_bound_v1(source, PalwTirPublicRequestV1::Ids { offset: 0 })
             .map(|(bytes, _)| bytes)
@@ -935,11 +1040,12 @@ fn root_ranges_v1(
         Ok(())
     };
     let boundaries = inputs.chain([CommittedStepLeaf(leaf)]).collect::<BTreeSet<_>>();
-    set.visit_batch_step_targets_v1(
+    crate::palw_court_tir_requests_v1::visit_source_batch_step_targets_v1(
+        source,
         &boundaries,
         crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1,
         maximum_ranges,
-        |target, _, bound| add(target, bound.maximum_response_bytes),
+        |target, bound| add(target, bound.maximum_response_bytes),
     )
     .map_err(E::Decode)?;
     for &leaf in parameters {

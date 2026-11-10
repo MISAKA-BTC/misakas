@@ -277,6 +277,34 @@
                 use crate::palw_court_shared_material_intake_v1::batch::native_ranges::{
                     numerical_batch_root_demand_v1, numerical_batch_streaming_demand_v1,
                 };
+                // Prospective geometry requires no old allocation, custody
+                // pledge or accepted scope. Bind only after the native frame
+                // exists; the legacy scope and positional bounds must agree.
+                {
+                    use crate::palw_court_shared_material_intake_v1::batch::native_ranges::{
+                        numerical_batch_projection_v1, NumericalBatchProjectionV1,
+                    };
+                    let frame = req.frame_v1();
+                    let source = req.geometry.source_v1();
+                    let prompt = frame.plan_v1().owner_work.rules.prompt_form;
+                    let project = |claim, form| numerical_batch_projection_v1(
+                        claim, form, source, b.state.tir_class_v1(&class).unwrap(),
+                        crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, class).unwrap(),
+                        streaming_budget, 4_096,
+                    ).unwrap();
+                    let projected = project(claim, prompt);
+                    assert_eq!(projected.maximums_v1(), envelope.maximums_v1());
+                    let rebound = NumericalBatchProjectionV1::bind_v1(projected, frame, source, profile).unwrap();
+                    assert_eq!(rebound.scope_v1(), envelope.scope_v1());
+                    assert_eq!(rebound.maximums_v1(), envelope.maximums_v1());
+                    assert!(NumericalBatchProjectionV1::bind_v1(project(h(0xBAD), prompt), frame, source, profile).is_err());
+                    let other_prompt = match prompt {
+                        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+                        crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    };
+                    assert!(NumericalBatchProjectionV1::bind_v1(project(claim, other_prompt), frame, source, profile).is_err());
+                    assert!(NumericalBatchProjectionV1::bind_v1(project(claim, prompt), frame, source, Hash64::default()).is_err());
+                }
                 let first_root = req.inputs_v1().roots_v1()[0].leaf;
                 let selected = numerical_batch_root_demand_v1(
                     req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, first_root, 0,
