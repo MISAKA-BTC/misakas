@@ -166,12 +166,14 @@ pub struct PublicOriginalReservationV1<'a> {
 fn public_original_capacity_v1(
     max_manifest_bytes: u32,
     manifest_payload_bytes: u64,
+    max_unique_source_bytes: u64,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
 ) -> Result<RemainingCapacity, ContractError> {
     let body_bytes = u64::from(ManifestV1::fetch_size(max_manifest_bytes)?);
     let material_bytes = body_bytes.checked_add(manifest_payload_bytes).ok_or(ContractError::Budget)?;
     if manifest_payload_bytes < MaterialScope::COUNT as u64
+        || material_bytes > max_unique_source_bytes
         || initial_supply.retained_bytes < material_bytes
         || rescue.per_drawn_bond.transmitted_bytes < material_bytes
         || (rescue.max_outsiders != 0 && rescue.per_outsider.transmitted_bytes < material_bytes)
@@ -728,8 +730,13 @@ impl PublicOriginalAdmissionRecordV1 {
         if key != row.original.0.0.as_slice() {
             return Err(ContractError::Identity);
         }
-        let capacity =
-            public_original_capacity_v1(row.max_manifest_bytes, row.manifest_payload_bytes, row.initial_supply, row.rescue)?;
+        let capacity = public_original_capacity_v1(
+            row.max_manifest_bytes,
+            row.manifest_payload_bytes,
+            row.budget.unique_source_bytes,
+            row.initial_supply,
+            row.rescue,
+        )?;
         let clock = OriginalClock::new(row.carrier.origin.accepted_daa)?;
         let [draw, first_notice, first_request, ready, inspection, localized, filed, terminal] = row.deadlines;
         if draw <= row.carrier.origin.accepted_daa
@@ -1116,6 +1123,7 @@ impl PublicOriginalAdmissionV1<'_> {
         let capacity = public_original_capacity_v1(
             self.max_manifest_bytes,
             manifest_payload_bytes,
+            reservation.budget.unique_source_bytes,
             reservation.initial_supply,
             reservation.rescue,
         )?;
@@ -1200,6 +1208,10 @@ fn stored_public_admission_requires_manifest_capacity_for_each_rescue_path() {
         PublicOriginalAdmissionRecordV1::decode_row(&original.0.0, &borsh::to_vec(row).unwrap())
     };
     assert!(decode(&row).is_ok());
+
+    let mut short_source_budget = row;
+    short_source_budget.budget.unique_source_bytes = u64::from(ManifestV1::WIRE_BYTES);
+    assert_eq!(decode(&short_source_budget), Err(ContractError::Budget));
 
     let mut short_retention = row;
     short_retention.initial_supply.retained_bytes = u64::from(ManifestV1::WIRE_BYTES);

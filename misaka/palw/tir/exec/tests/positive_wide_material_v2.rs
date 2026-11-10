@@ -286,7 +286,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let manifest_total_limit = u64::from(f.job.exact_decode_tokens) * 4 * MaterialScope::COUNT as u64;
     let budget = AggregateBudget {
         rounds: 1,
-        unique_source_bytes: body,
+        unique_source_bytes: body + manifest_total_limit,
         transmitted_bytes: body * 4 + manifest_total_limit * 3,
         additional_work: 4,
         retained_bytes: body * 4 + manifest_total_limit,
