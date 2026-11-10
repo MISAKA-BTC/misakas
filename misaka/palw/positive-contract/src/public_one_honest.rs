@@ -506,10 +506,12 @@ impl PendingManifestCase {
         original: &OriginalCommit,
         inclusion_daa: u64,
         bytes: &[u8],
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
         max_manifest_bytes: u32,
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
-    ) -> Result<(), ContractError> {
+    ) -> Result<ManifestDeliveryV1, ContractError> {
         self.check_delivery_context(original, inclusion_daa)?;
         if response.case != self.id || response.supply_obligation != self.supply_obligation {
             return Err(ContractError::Scope);
@@ -517,23 +519,15 @@ impl PendingManifestCase {
         if response.provider != expected_provider {
             return Err(ContractError::Identity);
         }
-        if manifest_root(original.scope.ruleset, bytes, max_manifest_bytes)? != response.body_root {
+        let body_root = manifest_root(original.scope.ruleset, bytes, max_manifest_bytes)?;
+        if body_root != response.body_root {
             return Err(ContractError::Identity);
         }
-        authenticate_actor(expected_provider, key, signature, response.signing_digest(), MANIFEST_RESPONSE_SIGN_CONTEXT)
-    }
-
-    pub fn authenticate_delivery(
-        &self,
-        original: &OriginalCommit,
-        inclusion_daa: u64,
-        bytes: &[u8],
-        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
-        total_limit: u64,
-        max_manifest_bytes: u32,
-    ) -> Result<ManifestDeliveryV1, ContractError> {
-        self.check_delivery_context(original, inclusion_daa)?;
-        let authenticated = original.authenticate_manifest(bytes, max_manifest_bytes)?;
+        authenticate_actor(expected_provider, key, signature, response.signing_digest(), MANIFEST_RESPONSE_SIGN_CONTEXT)?;
+        if body_root != original.manifest_root {
+            return Err(ContractError::Identity);
+        }
+        let authenticated = AuthenticatedManifest { id: self.material, bytes };
         Ok(match authenticated.decode(original, scope_limits, total_limit) {
             Ok(manifest) => ManifestDeliveryV1::Checked(manifest),
             Err(error) => ManifestDeliveryV1::CommittedButInvalid(error),
@@ -1155,10 +1149,6 @@ mod tests {
         let altered = PendingManifestCaseRecordV1 { opened_at: restored.opened_at - 1, ..restored };
         assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by()), Ok(()));
-        assert_eq!(
-            pending.authenticate_delivery(&bound_original, schedule.material_ready_by(), &bytes, &rules, 89, max),
-            Ok(ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget))
-        );
         let mut changed_bytes = bytes.clone();
         changed_bytes[0] ^= 1;
         let response = SignedManifestResponseV1 {
@@ -1170,25 +1160,24 @@ mod tests {
         let provider_signature =
             libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &response.signing_digest().0, MANIFEST_RESPONSE_SIGN_CONTEXT, [0; 32])
                 .unwrap();
-        let verify = |body: &[u8]| {
+        let verify = |body: &[u8], total_limit| {
             pending.verify_provider_response(
                 &response,
                 principal(key),
                 &bound_original,
                 schedule.material_ready_by(),
                 body,
+                &rules,
+                total_limit,
                 max,
                 key,
                 provider_signature.as_ref(),
             )
         };
-        assert_eq!(verify(&bytes), Ok(()));
-        assert_eq!(verify(&changed_bytes), Err(ContractError::Identity));
-        assert_eq!(
-            pending.authenticate_delivery(&bound_original, schedule.material_ready_by(), &changed_bytes, &rules, 90, max),
-            Err(ContractError::Identity)
-        );
+        assert_eq!(verify(&bytes, 89), Ok(ManifestDeliveryV1::CommittedButInvalid(ContractError::Budget)));
+        assert_eq!(verify(&changed_bytes, 90), Err(ContractError::Identity));
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
+        assert_eq!(verify(&bytes, 90), Ok(ManifestDeliveryV1::Checked(checked)));
         assert_eq!(pending.unresolved_at(clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
         let changed = OriginalCommit { trace_root: Digest([8; 64]), ..bound_original };
         assert_eq!(authenticated.decode(&changed, &rules, 90), Err(ContractError::Scope));
