@@ -314,6 +314,28 @@ pub struct PublicDrawRecordV1 {
     per_bond: RemainingCapacity,
 }
 
+/// A draw prepared from the accepted original and its selected members.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreparedPublicDrawRecordV1(PublicDrawRecordV1);
+
+impl PreparedPublicDrawRecordV1 {
+    pub(crate) fn storage_row(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; 64], &PublicDrawRecordV1)>, ContractError> {
+        let row = &self.0;
+        if row.draw_point != *point {
+            return Err(ContractError::Scope);
+        }
+        state.check_public_draw_record_v1(row)?;
+        if let Some(existing) = state.public_draw_record_v1(row.original)? {
+            return if existing == *row { Ok(None) } else { Err(ContractError::Scope) };
+        }
+        Ok(Some((row.original.0.0, row)))
+    }
+}
+
 impl PublicDrawRecordV1 {
     fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
         let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
@@ -361,6 +383,7 @@ native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, manifest_mate
 wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, MaterialId, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, u64, Digest, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
+native_tuple_struct!(PreparedPublicDrawRecordV1; draw);
 native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, beacon, draw_point, hard, full_scope, ordered_members, per_bond);
 wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, Digest, crate::palw_state_v2::PalwBlockContextV2, u64, Digest, Digest, RemainingCapacity);
 native_struct!(PublicReplayApprovalRecordV1; original, draw, full_scope, ordered_members, bond, origin, approval_digest);
@@ -487,6 +510,11 @@ impl PreparedPublicDrawV1 {
     ) -> Result<PreparedPublicReplayApprovalV1, ContractError> {
         let row = self.verify_replay_approval_bytes(approval_until, origin, bytes)?;
         Ok(PreparedPublicReplayApprovalV1 { row, draw: self.record() })
+    }
+
+    /// Seal the checked draw for the fold. This does not select members.
+    pub fn prepare_storage_record(&self) -> PreparedPublicDrawRecordV1 {
+        PreparedPublicDrawRecordV1(self.record())
     }
 
     pub fn record(&self) -> PublicDrawRecordV1 {
@@ -1079,6 +1107,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
 
     pub(crate) fn decode_public_draw_row_v1(&self, key: &[u8], bytes: &[u8]) -> Result<PublicDrawRecordV1, ContractError> {
         let row = PublicDrawRecordV1::decode_row(key, bytes)?;
+        self.check_public_draw_record_v1(&row)?;
+        Ok(row)
+    }
+
+    fn check_public_draw_record_v1(&self, row: &PublicDrawRecordV1) -> Result<(), ContractError> {
         let admission = self.public_original_admission_record_v1(row.original)?.ok_or(ContractError::Scope)?;
         let point = self.last_point().ok_or(ContractError::Scope)?;
         let clock = OriginalClock::new(admission.carrier.origin.accepted_daa)?;
@@ -1102,7 +1135,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         {
             return Err(ContractError::Scope);
         }
-        Ok(row)
+        Ok(())
     }
 
     pub(crate) fn decode_public_manifest_response_row_v1(

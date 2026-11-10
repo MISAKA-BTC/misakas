@@ -40,8 +40,11 @@ fn ordinary_registration_keeps_routing_profile_without_certification_or_price_in
     assert!(!child.fp_certified_classes.contains_key(&class), "graph identity is not model approval");
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap();
     let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&p, Some(child.state_root())).unwrap();
-    assert_eq!(restored, child, "native snapshot restore retains the registered graph");
+    // Snapshot restore can initialize the dormant, uncommitted cohort census.
+    assert_eq!(restored.state_root(), child.state_root());
     assert_eq!(&*restored.reader_router_profile_v2(class).unwrap().unwrap(), &profile);
+    assert!(restored.fp_work_profile_of(&class).is_none());
+    assert!(!restored.fp_certified_classes.contains_key(&class));
     assert_eq!(apply_delta_v2(&parent, &delta, &p).unwrap(), child);
     assert_eq!(revert_delta_v2(&child, &delta, &p).unwrap(), parent);
 }
@@ -362,7 +365,6 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     assert_eq!(restored.state_root(), child.state_root());
     assert_eq!(restored.last_point(), child.last_point());
     assert_eq!(restored.public_original_admission_record_v1(original), Ok(Some(row)));
-    use crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1;
     use misaka_palw_positive_contract::{
         identity::principal,
         public_one_honest::{FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond, PublicDrawMemberV1, SignedFullReplayApprovalV1},
@@ -376,12 +378,31 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         row.storage_draw_fixture(draw_point, PublicDrawMemberV1 { bond, principal: member, rescue_reservation: Digest([9; 64]) });
     let draw_extras = PalwTransitionExtrasV1 {
         kernel_route: extras.kernel_route.clone(),
-        exec_v2_test_kernel_rows: vec![(PUBLIC_DRAW_TABLE_V1, original.0.0.to_vec(), Some(borsh::to_vec(&draw.record()).unwrap()))],
+        public_draws: vec![draw.prepare_storage_record(), draw.prepare_storage_record()],
         ..Default::default()
     };
-    let (drawn, _) =
+    let (drawn, draw_delta) =
         apply_palw_transition_v2_with_extras(&child, &params, &draw_point, &[], None, false, false, false, false, &draw_extras)
             .unwrap();
+    assert_eq!(drawn.public_draw_record_v1(original), Ok(Some(draw.record())));
+    assert_eq!(apply_delta_v2(&child, &draw_delta, &params).unwrap(), drawn);
+    assert_eq!(revert_delta_v2(&drawn, &draw_delta, &params).unwrap(), child);
+    let incorrect_draw_point = PalwBlockContextV2 { block: h64(9), ..draw_point };
+    assert!(
+        apply_palw_transition_v2_with_extras(
+            &child,
+            &params,
+            &incorrect_draw_point,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &draw_extras,
+        )
+        .is_err()
+    );
     let vote_point = ctx(4, 103, 4);
     let origin = AcceptedOrigin {
         accepting_block: NativeHash64(vote_point.block.as_bytes()),
@@ -421,6 +442,7 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     assert_eq!(apply_delta_v2(&drawn, &votes, &params).unwrap(), voted);
     assert_eq!(revert_delta_v2(&voted, &votes, &params).unwrap(), drawn);
     let restored_vote = PalwStateCarriageV2::from_state(&voted).into_state(&params, Some(voted.state_root())).unwrap();
+    assert_eq!(restored_vote.public_draw_record_v1(original), Ok(Some(draw.record())));
     assert_eq!(restored_vote.public_replay_approval_record_v1(original, bond), Ok(Some(record)));
     let other_point = PalwBlockContextV2 { block: h64(8), ..vote_point };
     assert!(

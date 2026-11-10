@@ -16317,6 +16317,14 @@ fn apply_palw_transition_v7_inner(
     }
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: parent.last_point, new: Some(*ctx) });
     builder.state.last_point = Some(*ctx);
+    for draw in &extras.public_draws {
+        if let Some((key, row)) = draw
+            .storage_row(&builder.state, ctx)
+            .map_err(|error| PalwStateV2Error::CarriageInconsistent(format!("inconsistent accepted public draw: {error:?}")))?
+        {
+            builder.write_kernel_row_encoded_v1(crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1, &key, Some(row))?;
+        }
+    }
     if extras.public_replay_approvals.windows(2).any(|pair| pair[0] != pair[1] && pair[0].accepted_order() >= pair[1].accepted_order())
     {
         return Err(PalwStateV2Error::CarriageInconsistent("public replay approvals are outside accepted order".into()));
@@ -21511,6 +21519,8 @@ pub struct PalwTransitionExtrasV1 {
     /// Raw native actions replayed at exact positions in the accepted object
     /// fold. This is not a vector of prepared or previously accepted rows.
     pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,
+    /// Checked draws for admitted originals, resolved from native history.
+    pub public_draws: Vec<crate::palw_positive_contract_v2::PreparedPublicDrawRecordV1>,
     /// Public replay approvals qualified by native carrier acceptance.
     pub public_replay_approvals: Vec<crate::palw_positive_contract_v2::PreparedPublicReplayApprovalV1>,
     pub positive_decision_histories: Vec<NativePositiveDecisionHistoryV2>,
