@@ -24,7 +24,9 @@ use kaspa_consensus_core::{
         PalwTirInventoryIndexV1,
         parameter_cover::{ParameterCoverBudgetV1, derive_parameter_cover_v1},
     },
-    palw_tir_frame_cost_v1::{PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4, tir_public_owner_queue_wait_v1},
+    palw_tir_frame_cost_v1::{
+        PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5, PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4, tir_public_owner_queue_wait_v1,
+    },
     palw_tir_public_allocation_v1::{
         PalwTirPublicAllocationQuoteV1, PalwTirPublicAllocationRulesV1, derive_tir_public_allocation_family_native_v2,
         derive_tir_public_allocation_native_v2,
@@ -225,6 +227,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PalwTirPublicAllocationQuoteV1::Complete(plan) => json!({"complete":true, "collect_daa":plan.terms.collect_until_daa-daa}),
         PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => json!({"complete":false,"missing":format!("{missing:?}")}),
     };
+    // Compare the existing shared intake clock without treating it as a live
+    // fence or substituting its result for the public quote.
+    let mut batch_rules = rules;
+    batch_rules.clock.version = PALW_TIR_FRAME_CLOCK_BATCH_PUBLIC_V5;
+    batch_rules.clock.maximum_door_daa = kaspa_consensus_core::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+    let batch = match quote(batch_rules, Some(&bound), Some(&inventory))? {
+        PalwTirPublicAllocationQuoteV1::Complete(plan) => json!({"complete":true, "collect_daa":plan.terms.collect_until_daa-daa}),
+        PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => json!({"complete":false,"missing":format!("{missing:?}")}),
+    };
     let exact_table_diagnostic = if let Some(file) = table_file {
         let literal = read(Path::new(file), PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64)?;
         let table = prepare_family_table_inventory_v1(&literal, &bound, record.logits_vocab)
@@ -402,6 +413,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "custodian_upper":maximum_custodians,
             "maximum_door_daa":cost.clock.maximum_door_daa,
             "public_cost_quote":public,
+            "offline_batch_v5_clock_quote":batch,
             "exact_table_diagnostic":exact_table_diagnostic,
             "non_tokenizer_diagnostic":non_tokenizer,
             "disputed_leaf_parameter_cover":parameter_cover,
