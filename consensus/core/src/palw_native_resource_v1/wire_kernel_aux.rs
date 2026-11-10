@@ -352,6 +352,13 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1 => {
             return Err(wire::wire_bad("unallocated public draw key"));
         }
+        crate::palw_positive_contract_v2::PUBLIC_REPLAY_APPROVAL_TABLE_V1 => {
+            use crate::palw_positive_contract_v2::PublicReplayApprovalRecordV1;
+            if k.len() != PublicReplayApprovalRecordV1::KEY_BYTES {
+                return Err(wire::wire_bad("unallocated public replay approval key"));
+            }
+            PublicReplayApprovalRecordV1::scan_native_wire_v1(frame)?
+        }
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,

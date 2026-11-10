@@ -42,6 +42,7 @@ pub(crate) const PUBLIC_ORIGINAL_ADMISSION_TABLE_V1: u8 = 198;
 pub(crate) const PUBLIC_PENDING_MANIFEST_TABLE_V1: u8 = 199;
 pub(crate) const PUBLIC_MANIFEST_RESPONSE_TABLE_V1: u8 = 200;
 pub(crate) const PUBLIC_DRAW_TABLE_V1: u8 = 201;
+pub(crate) const PUBLIC_REPLAY_APPROVAL_TABLE_V1: u8 = 202;
 
 pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
     matches!(
@@ -50,6 +51,7 @@ pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
             | PUBLIC_PENDING_MANIFEST_TABLE_V1
             | PUBLIC_MANIFEST_RESPONSE_TABLE_V1
             | PUBLIC_DRAW_TABLE_V1
+            | PUBLIC_REPLAY_APPROVAL_TABLE_V1
     )
 }
 
@@ -59,6 +61,7 @@ pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u
         PUBLIC_PENDING_MANIFEST_TABLE_V1 => PendingManifestCaseRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => ManifestResponseRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_DRAW_TABLE_V1 => PublicDrawRecordV1::decode_row(key, bytes).map(|_| ()),
+        PUBLIC_REPLAY_APPROVAL_TABLE_V1 => PublicReplayApprovalRecordV1::decode_row(key, bytes).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -255,6 +258,10 @@ impl PublicDrawRecordV1 {
 /// Canonical inclusion identity of an authenticated replay approval.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicReplayApprovalRecordV1 {
+    original: OriginalId,
+    draw: Digest,
+    full_scope: Digest,
+    ordered_members: Digest,
     bond: PanelBond,
     origin: AcceptedOrigin,
     approval_digest: Digest,
@@ -277,8 +284,8 @@ native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reserva
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
 native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
 wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, u64, u64, Digest, Digest, RemainingCapacity);
-native_struct!(PublicReplayApprovalRecordV1; bond, origin, approval_digest);
-wire_struct!(PublicReplayApprovalRecordV1; PanelBond, AcceptedOrigin, Digest);
+native_struct!(PublicReplayApprovalRecordV1; original, draw, full_scope, ordered_members, bond, origin, approval_digest);
+wire_struct!(PublicReplayApprovalRecordV1; OriginalId, Digest, Digest, Digest, PanelBond, AcceptedOrigin, Digest);
 
 // Shared contract records keep their fields private. Read exactly the fixed
 // frame and let Borsh validate it, including the delivery classification tag.
@@ -309,6 +316,24 @@ impl NativeWireScanV1 for ManifestResponseRecordV1 {
 }
 
 impl PublicReplayApprovalRecordV1 {
+    pub(crate) const KEY_BYTES: usize = 2 * 64 + 4;
+
+    fn key(original: OriginalId, bond: PanelBond) -> [u8; Self::KEY_BYTES] {
+        let mut key = [0; Self::KEY_BYTES];
+        key[..64].copy_from_slice(&original.0.0);
+        key[64..128].copy_from_slice(&bond.transaction.0);
+        key[128..].copy_from_slice(&bond.index.to_le_bytes());
+        key
+    }
+
+    fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
+        let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
+        if key != Self::key(row.original, row.bond).as_slice() {
+            return Err(ContractError::Identity);
+        }
+        Ok(row)
+    }
+
     pub fn check_restore(
         &self,
         draw: &PreparedPublicDrawV1,
@@ -369,7 +394,15 @@ impl PreparedPublicDrawV1 {
         }
         let bond = approval.bond;
         approval.authenticate(&self.approval_context(bond)?, key, signature)?;
-        Ok(PublicReplayApprovalRecordV1 { bond, origin, approval_digest: approval.signing_digest() })
+        Ok(PublicReplayApprovalRecordV1 {
+            original: self.original,
+            draw: self.draw,
+            full_scope: self.full_scope,
+            ordered_members: self.ordered_members,
+            bond,
+            origin,
+            approval_digest: approval.signing_digest(),
+        })
     }
 
     /// Check a quorum of included replay assertions. The caller resolves the
@@ -702,6 +735,35 @@ fn check_public_origin_point_v1(
 }
 
 impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Read a recorded approval. Revalidate its signature and draw membership before tallying.
+    pub fn public_replay_approval_record_v1(
+        &self,
+        original: OriginalId,
+        bond: PanelBond,
+    ) -> Result<Option<PublicReplayApprovalRecordV1>, ContractError> {
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
+        let key = (PUBLIC_REPLAY_APPROVAL_TABLE_V1, PublicReplayApprovalRecordV1::key(original, bond).to_vec());
+        route.aux.get(&key).map(|bytes| self.decode_public_replay_approval_row_v1(&key.1, bytes)).transpose()
+    }
+
+    pub(crate) fn decode_public_replay_approval_row_v1(
+        &self,
+        key: &[u8],
+        bytes: &[u8],
+    ) -> Result<PublicReplayApprovalRecordV1, ContractError> {
+        let row = PublicReplayApprovalRecordV1::decode_row(key, bytes)?;
+        check_public_origin_point_v1(row.origin, self.last_point().ok_or(ContractError::Scope)?)?;
+        let draw = self.public_draw_record_v1(row.original)?.ok_or(ContractError::Scope)?;
+        if row.draw != draw.draw
+            || row.full_scope != draw.full_scope
+            || row.ordered_members != draw.ordered_members
+            || !(draw.draw_daa..=draw.hard).contains(&row.origin.accepted_daa)
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(row)
+    }
+
     /// Read the recorded draw. Membership is still re-derived from native history.
     pub fn public_draw_record_v1(&self, original: OriginalId) -> Result<Option<PublicDrawRecordV1>, ContractError> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };

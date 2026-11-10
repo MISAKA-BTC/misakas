@@ -3857,7 +3857,7 @@ impl PalwChainStateV2 {
                 .map_err(|error| PalwStateV2Error::CarriageInconsistent(format!("inconsistent Positive aux rows: {error:?}")))?;
             use crate::palw_positive_contract_v2::{
                 PUBLIC_DRAW_TABLE_V1, PUBLIC_MANIFEST_RESPONSE_TABLE_V1, PUBLIC_ORIGINAL_ADMISSION_TABLE_V1,
-                PUBLIC_PENDING_MANIFEST_TABLE_V1, PublicOriginalAdmissionRecordV1,
+                PUBLIC_PENDING_MANIFEST_TABLE_V1, PUBLIC_REPLAY_APPROVAL_TABLE_V1, PublicOriginalAdmissionRecordV1,
             };
             for ((_, key), bytes) in
                 route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 + 1, Vec::new()))
@@ -3886,6 +3886,13 @@ impl PalwChainStateV2 {
             for ((_, key), bytes) in route.aux.range((PUBLIC_DRAW_TABLE_V1, Vec::new())..(PUBLIC_DRAW_TABLE_V1 + 1, Vec::new())) {
                 self.decode_public_draw_row_v1(key, bytes)
                     .map_err(|error| PalwStateV2Error::CarriageInconsistent(format!("inconsistent public draw row: {error:?}")))?;
+            }
+            for ((_, key), bytes) in
+                route.aux.range((PUBLIC_REPLAY_APPROVAL_TABLE_V1, Vec::new())..(PUBLIC_REPLAY_APPROVAL_TABLE_V1 + 1, Vec::new()))
+            {
+                self.decode_public_replay_approval_row_v1(key, bytes).map_err(|error| {
+                    PalwStateV2Error::CarriageInconsistent(format!("inconsistent public replay approval row: {error:?}"))
+                })?;
             }
         }
         self.assert_vertex_consistency_v1()?;

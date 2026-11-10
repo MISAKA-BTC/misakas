@@ -796,6 +796,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         restored_approvals[0].check_restore(&draw, 102, other_vote, &assertion, &signed.key, signed_approval.as_ref()),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
+    let reordered_draw = prepared.prepare_draw(d(11), 101, &[members[1], members[0]], d(12)).unwrap();
+    assert_eq!(
+        restored_approvals[0].check_restore(&reordered_draw, 102, vote_origin, &assertion, &signed.key, signed_approval.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     assert_eq!(draw.verify_replay_quorum(1, prepared.schedule.hard(), &[signed_assertion]), Ok(restored_approvals));
     assert_ne!(
         draw.verify_replay_quorum(1, 102, &[(at_draw, &assertion, &signed.key, signed_approval.as_ref())]).unwrap(),
