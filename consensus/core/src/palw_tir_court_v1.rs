@@ -3806,6 +3806,44 @@ impl PublicOriginalTraceIndexV1 {
         }
         Ok(())
     }
+
+    /// Adjudicate a leaf-count mismatch using the authenticated index alone.
+    pub fn check_wide_leaf_count(
+        &self,
+        original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+        job: &PalwJobContextV2,
+        class: &crate::palw_tir_class_v1::PalwTirClassV1,
+        max_step_leaf_count: u64,
+    ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+        self.check(original, max_step_leaf_count)?;
+        let expected = public_original_wide_space(original, job, class)?
+            .leaf_count_capped(job, max_step_leaf_count)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        if self.step_leaf_count == expected {
+            return Err(PalwStepRefuteError::NoFaultFound);
+        }
+        Ok(convict(
+            &Hash64::from_bytes(original.trace_root.0),
+            PALW_TIR_EVIDENCE_KIND_BINDING,
+            0,
+            PalwStepFaultV1::StepLeafCountNotCanonical,
+        ))
+    }
+}
+
+fn public_original_wide_space(
+    original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+    job: &PalwJobContextV2,
+    class: &crate::palw_tir_class_v1::PalwTirClassV1,
+) -> Result<crate::palw_tir_step_v1::PalwTirStepSpaceV2, PalwStepRefuteError> {
+    crate::palw_positive_contract_v2::check_public_original_execution_v1(
+        original,
+        job,
+        class,
+        Hash64::from_bytes(original.artifact.0),
+    )
+    .map_err(|_| bad("public trace court job or class mismatch"))?;
+    crate::palw_tir_step_v1::PalwTirStepSpaceV2::new(class).map_err(|_| PalwStepRefuteError::Unadjudicable)
 }
 
 /// Original-side material for a localized court case. Authentication establishes
@@ -3848,16 +3886,9 @@ impl PublicOriginalTraceTileV1 {
         max_step_leaf_count: u64,
         max_value_bytes: usize,
     ) -> Result<PublicWideTileGeometryV1, PalwStepRefuteError> {
-        use crate::palw_tir_step_v1::{PalwTirStepSpaceV2, palw_tir_leaf_values_v2};
+        use crate::palw_tir_step_v1::palw_tir_leaf_values_v2;
         self.authenticate(original, index, max_step_leaf_count, max_value_bytes)?;
-        crate::palw_positive_contract_v2::check_public_original_execution_v1(
-            original,
-            job,
-            class,
-            Hash64::from_bytes(original.artifact.0),
-        )
-        .map_err(|_| bad("public trace court job or class mismatch"))?;
-        let space = PalwTirStepSpaceV2::new(class).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let space = public_original_wide_space(original, job, class)?;
         let expected = space.leaf_count_capped(job, max_step_leaf_count).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         if self.trace.step_leaf_count != expected {
             return Ok(PublicWideTileGeometryV1::MalformedLeafCount { expected });

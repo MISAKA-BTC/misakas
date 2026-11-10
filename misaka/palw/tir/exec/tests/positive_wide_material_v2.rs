@@ -391,6 +391,19 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         palw_step_leg::{PalwStepFaultV1, step_merkle_root_v1, step_opening_v1, step_tile_leaf_hash_v1},
         palw_tir_step_v1::palw_tir_execution_root_v1,
     };
+    let mut bad_index = capture.public_trace_index();
+    assert!(matches!(bad_index.check_wide_leaf_count(&original, &f.job, &f.class, trace_len), Err(PalwStepRefuteError::NoFaultFound)));
+    bad_index.step_leaf_count += 1;
+    let mut wrong_count = original.clone();
+    wrong_count.trace_root = digest(palw_tir_execution_root_v1(
+        &f.job.context_hash(),
+        &bad_index.full_logits_trace_root,
+        &f.job.shape_profile_id,
+        bad_index.step_leaf_count,
+        &bad_index.step_merkle_root,
+    ));
+    let count_verdict = bad_index.check_wide_leaf_count(&wrong_count, &f.job, &f.class, trace_len + 1).unwrap();
+    assert_eq!(count_verdict.fault, PalwStepFaultV1::StepLeafCountNotCanonical);
     // Commit a different step value while preserving the independently
     // committed logits event. The changed tile really opens the changed claim.
     let mut bad = material;
