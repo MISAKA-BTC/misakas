@@ -184,3 +184,6 @@ snapshot / journal 検査で固定 quote・Part 集合・元の割当・終端 /
 本番接続の変更箇所を [チェックリスト](rfc-0051-production-wiring-2026-11-11.md) に記録した。Open 成功時だけ決まる焼却額は、Round の採否や template coinbase の前に、同じ受理順の一時状態から算出して actual fold と照合する必要がある。単に最終段で fee を減らす接続にはしていない。
 
 対象 raw tokenizer をローカルで読み取り、2,104,556 bytes、JSON key events 49,302、model vocab 49,152、33 Part（最終 7,404 bytes）を確認した。[入力形状](../../../evidence/palw/tokenizer-registration-input-geometry-2026-11-11.json) は SHA-256 と測定範囲を記録する。Python での入力確認であり、native parser の測定・登録・公開 quote の証跡ではない。
+
+
+`ad9f9ae2e` として native 登録と SDK 準備 API をコミットした。core の登録関連 15 件、既存 Batch と Output 各 1 件、SDK 1 件の計 **18 件が成功**。[検証記録](../../../evidence/palw/funded-tokenizer-registration-regression-2026-11-11.json) に完全 source commit、実行 filter、profile、binary/log SHA-256、テスト名を保存した。core test build は 19 分 03 秒。SDK は機能検査用に core の opt-level を 0 にした別ビルドで、性能測定には使用していない。公開受付・quote・Final は引き続き未達である。
