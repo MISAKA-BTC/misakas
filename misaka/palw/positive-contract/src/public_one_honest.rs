@@ -114,6 +114,112 @@ impl<'a> AuthenticatedManifest<'a> {
     pub fn bytes(&self) -> &'a [u8] {
         self.bytes
     }
+
+    /// Interpret the fixed-width manifest only against the same original.
+    /// Size limits come from the accepted profile, including the total
+    /// retrieval reservation across all scopes.
+    pub fn decode(
+        &self,
+        original: &OriginalCommit,
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
+    ) -> Result<ManifestV1, ContractError> {
+        if self.id != original.manifest_material_id() {
+            return Err(ContractError::Scope);
+        }
+        let manifest: ManifestV1 = borsh::from_slice(self.bytes).map_err(|_| ContractError::NonCanonical)?;
+        manifest.check(original, scope_limits, total_limit)?;
+        Ok(manifest)
+    }
+}
+
+/// Fixed entry order for this manifest format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(usize)]
+pub enum MaterialScope {
+    Artifact,
+    Program,
+    Prompt,
+    InputTokens,
+    Tokenizer,
+    ExecutionRules,
+    InitialState,
+    Dependencies,
+    Trace,
+    Output,
+}
+
+impl MaterialScope {
+    pub const COUNT: usize = 10;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManifestScopeRules {
+    pub codec: Digest,
+    pub max_bytes: u64,
+    pub chunk_bytes: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ManifestEntryV1 {
+    pub subject: Digest,
+    pub content_root: Digest,
+    pub codec: Digest,
+    pub total_bytes: u64,
+    pub chunk_bytes: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ManifestV1 {
+    pub service_contract: Digest,
+    pub entries: [ManifestEntryV1; MaterialScope::COUNT],
+}
+
+impl ManifestV1 {
+    pub fn entry(&self, scope: MaterialScope) -> &ManifestEntryV1 {
+        &self.entries[scope as usize]
+    }
+
+    fn check(
+        &self,
+        original: &OriginalCommit,
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
+    ) -> Result<(), ContractError> {
+        let subjects = [
+            original.artifact,
+            original.program,
+            original.prompt,
+            original.input_tokens,
+            original.tokenizer,
+            original.execution_rules,
+            original.initial_state,
+            original.dependencies,
+            original.trace_root,
+            original.output,
+        ];
+        if self.service_contract != original.service_contract {
+            return Err(ContractError::Scope);
+        }
+        let mut total = 0u64;
+        for ((entry, subject), limit) in self.entries.iter().zip(subjects).zip(scope_limits) {
+            if entry.subject != subject || entry.codec != limit.codec {
+                return Err(ContractError::Scope);
+            }
+            // Empty collections still carry their canonical encoded body.
+            if entry.chunk_bytes == 0 || entry.chunk_bytes != limit.chunk_bytes || entry.total_bytes == 0 {
+                return Err(ContractError::NonCanonical);
+            }
+            if entry.total_bytes > limit.max_bytes {
+                return Err(ContractError::Budget);
+            }
+            total = total.checked_add(entry.total_bytes).ok_or(ContractError::Budget)?;
+        }
+        if total > total_limit {
+            return Err(ContractError::Budget);
+        }
+        Ok(())
+    }
 }
 
 /// A Panel member's assertion of complete replay under the rules bound by the
@@ -634,6 +740,21 @@ mod tests {
         assert_eq!(shortened.check_inclusion(&context), Err(ContractError::Range));
         context.inclusion_daa += 1;
         assert_eq!(request.check_inclusion(&context), Err(ContractError::Range));
+
+        let rules = [ManifestScopeRules { codec: d, max_bytes: 16, chunk_bytes: 8 }; MaterialScope::COUNT];
+        let manifest = ManifestV1 {
+            service_contract: original.service_contract,
+            entries: [ManifestEntryV1 { subject: d, content_root: d, codec: d, total_bytes: 9, chunk_bytes: 8 }; MaterialScope::COUNT],
+        };
+        let bytes = borsh::to_vec(&manifest).unwrap();
+        let max = u32::try_from(bytes.len()).unwrap();
+        let bound_original = OriginalCommit { manifest_root: manifest_root(d, &bytes, max).unwrap(), ..original.clone() };
+        let authenticated = bound_original.authenticate_manifest(&bytes, max).unwrap();
+        assert_eq!(authenticated.decode(&bound_original, &rules, 90), Ok(manifest));
+        assert_eq!(authenticated.decode(&bound_original, &rules, 89), Err(ContractError::Budget));
+        assert_eq!(authenticated.decode(&original, &rules, 90), Err(ContractError::Scope));
+        let changed = OriginalCommit { trace_root: Digest([8; 64]), ..bound_original };
+        assert_eq!(authenticated.decode(&changed, &rules, 90), Err(ContractError::Scope));
     }
 
     #[test]
