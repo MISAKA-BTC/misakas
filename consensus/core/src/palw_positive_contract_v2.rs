@@ -20,8 +20,8 @@ use misaka_palw_positive_contract::{
     },
     ports::{NodeChecker, require_next},
     public_one_honest::{
-        FirstNoticeDemand, ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, ProtectedRescueDemand,
-        VerificationSchedule,
+        FirstNoticeDemand, ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond,
+        ProtectedRescueDemand, ReplayApprovalContext, VerificationSchedule,
     },
     reservations::RemainingCapacity,
     rows::AggregateUsage,
@@ -84,6 +84,7 @@ pub struct PreparedPublicOriginalV1 {
     pub schedule: VerificationSchedule,
     pub capacity: RemainingCapacity,
     inclusion_daa: u64,
+    draw_ready_by: u64,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
 }
@@ -96,10 +97,40 @@ pub struct PublicOriginalAdmissionRecordV1 {
     reservation: Digest,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
-    deadlines: [u64; 7],
+    deadlines: [u64; 8],
 }
 
 impl PreparedPublicOriginalV1 {
+    /// Resolve one approval against the actual native draw. The caller
+    /// supplies the draw identity and ordered member list from chain state.
+    pub fn approval_context(
+        &self,
+        draw: Digest,
+        draw_daa: u64,
+        members: &[(PanelBond, PrincipalId)],
+        bond: PanelBond,
+        full_scope: Digest,
+    ) -> Result<ReplayApprovalContext, ContractError> {
+        if draw_daa <= self.inclusion_daa || draw_daa > self.draw_ready_by {
+            return Err(ContractError::Range);
+        }
+        if members.is_empty() || members.len() as u64 > self.rescue.max_drawn_bonds {
+            return Err(ContractError::Budget);
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut member = None;
+        for &(candidate, principal) in members {
+            if !seen.insert((candidate.transaction, candidate.index)) {
+                return Err(ContractError::Identity);
+            }
+            if candidate == bond {
+                member = Some(principal);
+            }
+        }
+        let member = member.ok_or(ContractError::Identity)?;
+        Ok(ReplayApprovalContext { original: self.original, draw, bond, member, full_scope })
+    }
+
     pub fn record(&self, reservation: Digest) -> PublicOriginalAdmissionRecordV1 {
         PublicOriginalAdmissionRecordV1 {
             original: self.original,
@@ -108,6 +139,7 @@ impl PreparedPublicOriginalV1 {
             initial_supply: self.initial_supply,
             rescue: self.rescue,
             deadlines: [
+                self.draw_ready_by,
                 self.schedule.first_notice_by(),
                 self.schedule.first_material_request_by(),
                 self.schedule.material_ready_by(),
@@ -159,6 +191,7 @@ impl PublicOriginalAdmissionV1<'_> {
             schedule,
             capacity,
             inclusion_daa: reservation.inclusion_daa,
+            draw_ready_by: reservation.notice.draw_ready_by,
             initial_supply: reservation.initial_supply,
             rescue: reservation.rescue,
         })

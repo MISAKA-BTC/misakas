@@ -382,6 +382,14 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     };
     let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
     assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
+    use misaka_palw_positive_contract::public_one_honest::PanelBond;
+    let bond = PanelBond { transaction: d(10), index: 1 };
+    let members = [(bond, r.miner)];
+    let approval = prepared.approval_context(d(11), 101, &members, bond, d(12)).unwrap();
+    assert_eq!(approval.original, original.id());
+    assert_eq!(approval.member, r.miner);
+    assert!(prepared.approval_context(d(11), 100, &members, bond, d(12)).is_err());
+    assert!(prepared.approval_context(d(11), 101, &[members[0], members[0]], bond, d(12)).is_err());
     let record = prepared.record(d(8));
     let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1>(
         &borsh::to_vec(&record).unwrap(),
