@@ -5,7 +5,10 @@
 
 pub mod record;
 
-use crate::palw_native_resource_v1::{native_struct, native_tuple_struct, wire::wire_struct};
+use crate::palw_native_resource_v1::{
+    NativeCoverageV1, NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, native_struct, native_tuple_struct,
+    native_unit, wire::wire_struct,
+};
 use crate::palw_positive_check_v2::{CheckError, CheckLimits, CheckOutcome, CheckProgress, CoveragePlan, ExactChecker};
 use crate::{
     Hash64, palw_attempt_rules_v1::palw_attempt_output_root_v1, palw_decode_select_v2::PalwDecodeSamplingV2,
@@ -21,9 +24,10 @@ use misaka_palw_positive_contract::{
     },
     ports::{NodeChecker, require_next},
     public_one_honest::{
-        Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestV1, MaterialCaseDemand,
-        OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand,
-        PublicDrawMemberV1, ReplayApprovalContext, VerificationSchedule, public_draw_members_digest_v1,
+        Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
+        ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
+        PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, VerificationSchedule,
+        public_draw_members_digest_v1,
     },
     reservations::RemainingCapacity,
     rows::AggregateUsage,
@@ -238,6 +242,34 @@ native_struct!(PublicDrawRecordV1; original, draw, draw_daa, hard, full_scope, o
 wire_struct!(PublicDrawRecordV1; OriginalId, Digest, u64, u64, Digest, Digest, RemainingCapacity);
 native_struct!(PublicReplayApprovalRecordV1; bond, included_at, approval_digest);
 wire_struct!(PublicReplayApprovalRecordV1; PanelBond, u64, Digest);
+
+// Shared contract records keep their fields private. Read exactly the fixed
+// frame and let Borsh validate it, including the delivery classification tag.
+native_unit!(PendingManifestCaseRecordV1);
+native_unit!(ManifestResponseRecordV1);
+
+fn scan_fixed_manifest_record<T: Copy + borsh::BorshDeserialize, const N: usize>(
+    reader: &mut NativeWireReaderV1<impl std::io::Read>,
+) -> std::io::Result<NativeWireShapeV1> {
+    use std::io::Read;
+    reader.step()?;
+    let mut bytes = [0; N];
+    reader.read_exact(&mut bytes)?;
+    borsh::from_slice::<T>(&bytes)?;
+    Ok(NativeWireShapeV1::default())
+}
+
+impl NativeWireScanV1 for PendingManifestCaseRecordV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        scan_fixed_manifest_record::<Self, { 5 * 64 + 4 * 8 }>(reader)
+    }
+}
+
+impl NativeWireScanV1 for ManifestResponseRecordV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        scan_fixed_manifest_record::<Self, { 3 * 64 + 8 + 1 }>(reader)
+    }
+}
 
 impl PublicReplayApprovalRecordV1 {
     pub fn check_restore(

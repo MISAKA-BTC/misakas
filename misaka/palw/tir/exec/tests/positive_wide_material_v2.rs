@@ -645,7 +645,13 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let accepted =
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
-    let case_record = borsh::from_slice(&borsh::to_vec(&accepted.record()).unwrap()).unwrap();
+    let case_bytes = borsh::to_vec(&accepted.record()).unwrap();
+    preflight_native_value_v1::<misaka_palw_positive_contract::public_one_honest::PendingManifestCaseRecordV1>(
+        case_bytes.as_slice(),
+        case_bytes.len() as u64,
+    )
+    .unwrap();
+    let case_record = borsh::from_slice(&case_bytes).unwrap();
     assert_eq!(
         prepared.restore_drawn_manifest_request(&case_record, &draw, &request, &request_context, &signed.key, request_sig.as_ref()),
         Ok(accepted)
