@@ -395,6 +395,13 @@ impl IbdFlow {
                             );
                             continue;
                         }
+                        if matches!(e, ProtocolError::UnexpectedMessage(..)) {
+                            // An earlier attempt can leave replies on this route. Close
+                            // the connection to discard them, but keep an incomplete
+                            // adopted import held and eligible for a clean retry.
+                            self.ctx.finish_ibd_after_local_resource_failure();
+                            return Err(e);
+                        }
                         let sidecar_shortfall = matches!(e, ProtocolError::PruningSidecarUnavailable(..));
                         if self.ctx.finish_ibd_after_failure_kind(sidecar_shortfall) {
                             warn!(
