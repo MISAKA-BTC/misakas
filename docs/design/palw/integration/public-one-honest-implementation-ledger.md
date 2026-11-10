@@ -72,3 +72,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 再同期の隔離カナリアは 223,472 ヘッダーを取得し、検証済み sidecar を再取得せず同じ pruning point の UTXO 取り込みを再試行した。9 GiB cgroup で native RAM 要求 7,420,392,666 bytes が内部上限 6,764,573,487 bytes を超えた。プロセス起動時に有効容量の 70% を内部上限とするため、同じ隔離 DB を 12 GiB cgroup で再起動した。同期完了は未確認。
 
 2026-11-10 12:57 CET の公開 seat 5 では、他ピアからのブロック受理は継続していた。seat 5 自身の producer は、設定クラス `f1c5635c…f623c8` について court の hard-deadline bucket 0 が 21/21 に達したと報告した。このログは当該クラスのローカル生成停止を示す。Studio TFP1 候補の受付や生成の証跡は未取得。
+
+同日 13:12 CET に隔離カナリアの pruning 取り込みは完了し、RPC は epoch 18、phase `idle`、`pruningImportStable=true` を返した。DAA 5,187 で `isSynced=false`。その後の virtual 更新で native RAM の予約済み 3,124,136,432 bytes に要求 7,721,437,122 bytes が加わり、上限 9,019,431,316 bytes を超えた。受信 lease の寿命修正を別途検証する前に、同じ隔離 DB と同じ旧バイナリを 16 GiB cgroup で起動し、RAM 上限だけを変えて検証する。隔離状態を解除するフラグは付けていない。
