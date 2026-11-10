@@ -42,7 +42,7 @@
 
 I1 のローカル統合テストでは、Miner が wide TIR を一度実行して署名・公開し、Panel は signed original を入口に HTTP で manifest と artifact の行を取得し、登録済み inventory root を検証して別の実行用テープで同じ original を再実行する。artifact の行や公開 trace のタイルが欠けると資料不足で停止し、改変された artifact も拒否する。全ノードを commit するステートレス wide TIR の検査計画について、同じ original と抽選済み bond に束縛した一括承認を再実行後に署名する。統合テストではその承認を native の carrier 検証に渡す。native fold は予約 ID 付き original の受理記録を包含点と照合して保存し、抽選点で draw を保存する。検証済み承認 carrier は包含点と保存済み draw が一致する場合に一 bond 一行で記録する。これらの差分適用、巻き戻し、スナップショット復元をローカルで検証済み。daemon での受付・予約の取得、抽選、必須局所検査、Final、決済は未接続。
 
-I3 の native fold は、抽選された bond の署名済み manifest 要求を、受理済み original、抽選記録、包含点、予約に照合して未解決 case に保存する。テストでは署名済み要求から差分適用・巻き戻し・復元を通し、異議期間後も case が残る限り Final 前の判定が停止することを確認した。部外者枠の割当、daemon の carrier 入力、応答と case 終結は未接続。
+I3 の native fold は、抽選された bond の署名済み manifest 要求を、受理済み original、抽選記録、包含点、予約に照合して未解決 case に保存する。テストでは署名済み要求から差分適用・巻き戻し・復元を通し、異議期間後も case が残る限り Final 前の判定が停止することを確認した。認証済み provider 応答も、同じ case を開いたまま保存し、復元時には実際に受理された carrier を再認証する。部外者枠の割当、daemon の carrier 入力、case 終結は未接続。
 
 固定長 manifest の取得と、資料供給義務に結び付いた署名済み応答の認証は別経路。前者は元 claim と資料の同一性、後者は当該 case への応答の帰属を確認する。どちらも単独では検査機会を成立させない。
 
@@ -70,3 +70,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 登録済み inventory に一致する PALWART3 をローカルで検証した。container root は `bb10e9a486a4d4f0b925907b7579056cb799380aef404218a5d8bd99e54a502b3e370cd041d651df5c471da81094675cb46b2b5e51a7002bfeeadcdffd8da20c`。既知の未提出 TFP1 候補の署名対象には container root が含まれず、タグ 175 の紐付けで候補 ID は変わらない。固定長署名を仮定した紐付け carrier の手数料見積もりは 469,737 sompi。登録後の producer bond は観測時点で下限に 100,000,000 sompi 足りない。紐付けと補充は未送信。
 
 再同期の隔離カナリアは 223,472 ヘッダーを取得し、検証済み sidecar を再取得せず同じ pruning point の UTXO 取り込みを再試行した。9 GiB cgroup で native RAM 要求 7,420,392,666 bytes が内部上限 6,764,573,487 bytes を超えた。プロセス起動時に有効容量の 70% を内部上限とするため、同じ隔離 DB を 12 GiB cgroup で再起動した。同期完了は未確認。
+
+2026-11-10 12:57 CET の公開 seat 5 では、他ピアからのブロック受理は継続していた。seat 5 自身の producer は、設定クラス `f1c5635c…f623c8` について court の hard-deadline bucket 0 が 21/21 に達したと報告した。このログは当該クラスのローカル生成停止を示す。Studio TFP1 候補の受付や生成の証跡は未取得。
