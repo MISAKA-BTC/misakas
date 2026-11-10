@@ -90,3 +90,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 Linux の T12 復旧候補をリリースビルドし、バイナリの SHA-256 `3704030a2d230a2c74c20c4f8777706f08598e89988c2f8eb8cae3253f2d4c11` を転送先で照合した。seat 5 上の隔離カナリア `t12-exact-recovery-canary-151f9ce7` が既存カナリア DB を開き、保存済みの隔離状態を保持して起動した。初回 RPC では pruning import は epoch 18、idle、stable。カナリアは DAA 5,187、公開 seat 5 は同期済みの DAA 20,994。カナリアは protocol 108 のピアと接続し、IBD でヘッダー 56 件を取り込んで不足ブロック本体の検索に進んだ。公開先端への合流と Studio claim の受付はこの確認には含まれない。
 
 同じカナリアは約 133 秒で不足本体 220,694 件を列挙し、最初の 10 秒間に 198 ブロックを処理した。仮想先端を更新する処理では保存済み PALW tip と UTXO walk の起点が異なる旨を記録した後、履歴ブロックの PALW lifecycle の再適用に進んだ。公開 seat 5 の DAA 20,995〜20,996 では同じ Studio 候補の original quote は引き続き `TIR_CLASS_CONTAINER_UNBOUND`。受付、Court、Kernel、lifecycle の記録は取得できなかった。
+
+対象クラスの登録者鍵と公開状態の登録者公開鍵を照合し、検証済みの PALWART3 紐付け object を作成した。上限 469,737 sompi で公開 seat 5 に送信し、txid `2080b9fb04e67eb445d098f3f17325403d30c24bd82887674ce19d9582f1124103b8008a67349625206f2b02090bbaaf489abb6a31bbadab80cdffd577f459fb` の mempool 受理と実手数料 469,737 sompi を確認した。公開 virtual DAA 20,998 の照会時点では選択チェーンの受理一覧にこの tx はなく、同じ TFP1 候補の quote は引き続き `TIR_CLASS_CONTAINER_UNBOUND`。この tx は紐付け用であり、TFP1 carrier は未送信。
