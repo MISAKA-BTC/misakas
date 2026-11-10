@@ -1206,3 +1206,5 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     assert!(expired.staged_court_row_v1(&registered).is_some());
     assert_eq!(revert_delta_v2(&expired, &delta, &params).unwrap().state_root(), state.state_root());
 }
+
+include!("palw_tokenizer_registration_measurement.rs");
