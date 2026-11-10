@@ -256,7 +256,7 @@ impl PreparedPublicOriginalV1 {
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<PendingManifestCase, ContractError> {
-        if draw.original != self.original {
+        if draw.original != self.original || self.original.full_replay_scope(context.inspection_scope) != draw.full_scope {
             return Err(ContractError::Scope);
         }
         if context.inclusion_daa < draw.draw_daa {

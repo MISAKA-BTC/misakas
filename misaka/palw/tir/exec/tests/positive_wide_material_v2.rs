@@ -574,6 +574,10 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let accepted =
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
+    assert_eq!(
+        prepared.verify_drawn_manifest_request(&other_plan, &request, &request_context, &signed.key, request_sig.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     request_context.reservation = d(9);
     assert_eq!(
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()),
