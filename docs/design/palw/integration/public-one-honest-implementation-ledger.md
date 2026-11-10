@@ -206,3 +206,11 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 コミット `d27ddb34261fef09ad88ae307322b135139e969a` に、署名前 Open quote と受理済み Open status の core / node / gRPC / wRPC / CLI 接続を保存した。親の block・root・DAA と見積もり用 virtual clock を分け、応答前に virtual owner と pruning/import context を再照合する。quote は予約・UTXO 支払済みとは扱わず、status は受理された Part、通常・回復 Finish の試行、完了 record を読み戻す。GC/reorg 後の不存在を受付拒否や送信履歴に変換しない。
 
 [回帰22件とビルド記録](../../../evidence/palw/funded-tokenizer-registration-phase4-read-regression-2026-11-11.json)に結果を保存した。node、RPC service、gRPC client/server、wRPC server、CLI の cargo check が成功。初回ビルドの所有権エラーと gRPC テストの型推論エラーを修正して通過した。公開 RPC の利用・登録・有効化は未実施。次は実ブロック受理の試験と署名・送信側の接続を行う。
+
+### 2026-11-11 — RFC-0051 段階5: 実ノードの登録と一回焼却
+
+`4a9bfed6b` の隔離ノード試験で、署名済み Open → Part → Finish → 別 UTXO による同一 Open 再送が成功した。通常の template、実 UTXO 検査、受理 fold、coinbase を通し、新規 Open だけのサービス焼却と支出・釣銭、Complete の読み戻しを検査した。[関連24件の結果](../../../evidence/palw/funded-tokenizer-registration-phase5-node-regression-2026-11-11.json)に source commit、各 binary とログの SHA-256 を保存した。
+
+当初、送出元と受理 block の DAA が必ず一つずつ増えると誤認し、待ち幅を増やす変更を試した。実ノードの reference clock では同一 DAA の送出元と子 block が成立するため、その変更は取り消した。この24件は元の予約規則で成功しており、待ち幅の新しい policy field は採用していない。実装済みの参照 API から Open/Part の受理を読んだ後に、次の control を作る手順を使った。
+
+既存4ホストの読み取り専用[機材観測](../../../evidence/palw/tokenizer-registration-hardware-observation-2026-11-11.json)も保存した。6〜8 vCPU、RAM 約12〜25 GB、root disk 空き約4.9〜37.6 GB は観測値であり、最低要件の採択・最大入力の CPU/RSS/履歴容量測定ではない。再起動・再編・pruned IBD、実 Round の登録、送信用 CLI、mempool/peer work 接続、公開 profile の測定・有効化は残る。公開 TFP1 quote と受付、Final、main push は未達。

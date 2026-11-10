@@ -1,0 +1,57 @@
+{
+  "schema": "palw-tokenizer-registration-hardware-observation-v1",
+  "observedAtUtc": "2026-11-10T22:00:36Z",
+  "scope": "Read-only SSH hardware and current capacity observation for qualification planning, not measured tokenizer performance or an adopted minimum requirement.",
+  "hosts": [
+    {
+      "host": "95.111.236.186",
+      "architecture": "x86_64",
+      "onlineVcpus": 6,
+      "cpuModel": "Intel Core Processor (Broadwell, no TSX, IBRS)",
+      "memoryTotalBytes": 12541452288,
+      "memoryAvailableBytes": 10437128192,
+      "rootFilesystemAvailableBytes": 7792472064,
+      "rawLog": "/tmp/t12-rfc0051-hardware-95.111.236.186.txt",
+      "rawSha256": "9e9fc8a34707537d8aad6e5ff65373f23cc263fa66ea79a1024765d4508100c3",
+      "rawObservation": "x86_64\n6\n               total        used        free      shared  buff/cache   available\nMem:     12541452288  2104324096  7574212608       57344   448507904 10437128192\nSwap:     8589930496  2457268224  6132662272\nFilesystem        1B-blocks         Used  Available Use% Mounted on\n/dev/sda1      206900281344 199091032064 7792472064  97% /\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           46 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  6\nOn-line CPU(s) list:                     0-5\nVendor ID:                               GenuineIntel\nBIOS Vendor ID:                          QEMU\nModel name:                              Intel Core Processor (Broadwell, no TSX, IBRS)\nBIOS Model name:                         pc-i440fx-9.0  CPU @ 2.0GHz\nBIOS CPU family:                         1\nCPU family:                              6\nModel:                                   61\nThread(s) per core:                      1\nCore(s) per socket:                      6\nSocket(s):                               1\nStepping:                                2\nBogoMIPS:                                4399.99\n"
+    },
+    {
+      "host": "5.104.81.23",
+      "architecture": "x86_64",
+      "onlineVcpus": 8,
+      "cpuModel": "AMD EPYC Processor (with IBPB)",
+      "memoryTotalBytes": 25199169536,
+      "memoryAvailableBytes": 19045126144,
+      "rootFilesystemAvailableBytes": 37611098112,
+      "rawLog": "/tmp/t12-rfc0051-hardware-5.104.81.23.txt",
+      "rawSha256": "41abfaaf5207ced7206abfe13ff24f0495af1c1f11cdf5a99b62360c6b238e82",
+      "rawObservation": "x86_64\n8\n               total        used        free      shared  buff/cache   available\nMem:     25199169536  6154043392 11397292032     1159168  5766868992 19045126144\nSwap:    17179865088   172851200 17007013888\nFilesystem        1B-blocks         Used   Available Use% Mounted on\n/dev/sda1      414920466432 377292591104 37611098112  91% /\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  8\nOn-line CPU(s) list:                     0-7\nVendor ID:                               AuthenticAMD\nBIOS Vendor ID:                          QEMU\nModel name:                              AMD EPYC Processor (with IBPB)\nBIOS Model name:                         pc-i440fx-9.0  CPU @ 2.0GHz\nBIOS CPU family:                         1\nCPU family:                              23\nModel:                                   1\nThread(s) per core:                      1\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                2\nBogoMIPS:                                5589.50\n"
+    },
+    {
+      "host": "169.58.232.113",
+      "architecture": "x86_64",
+      "onlineVcpus": 8,
+      "cpuModel": "AMD EPYC Processor (with IBPB)",
+      "memoryTotalBytes": 25199161344,
+      "memoryAvailableBytes": 17054302208,
+      "rootFilesystemAvailableBytes": 13596000256,
+      "rawLog": "/tmp/t12-rfc0051-hardware-169.58.232.113.txt",
+      "rawSha256": "5a687e3d493554e2c993c8cde1a2cc36a7be81a076d758993db5726c340e72a8",
+      "rawObservation": "x86_64\n8\n               total        used        free      shared  buff/cache   available\nMem:     25199161344  8144859136 11239763968   154415104  7193899008 17054302208\nSwap:    17179865088  6135996416 11043868672\nFilesystem        1B-blocks         Used   Available Use% Mounted on\n/dev/sda1      310911414272 297298636800 13596000256  96% /\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           52 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  8\nOn-line CPU(s) list:                     0-7\nVendor ID:                               AuthenticAMD\nBIOS Vendor ID:                          QEMU\nModel name:                              AMD EPYC Processor (with IBPB)\nBIOS Model name:                         pc-i440fx-9.0  CPU @ 2.0GHz\nBIOS CPU family:                         1\nCPU family:                              23\nModel:                                   1\nThread(s) per core:                      1\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                2\nBogoMIPS:                                7089.34\n"
+    },
+    {
+      "host": "misaka-ibm",
+      "architecture": "x86_64",
+      "onlineVcpus": 8,
+      "cpuModel": "AMD EPYC Processor (with IBPB)",
+      "memoryTotalBytes": 25199169536,
+      "memoryAvailableBytes": 16522014720,
+      "rootFilesystemAvailableBytes": 4947881984,
+      "rawLog": "/tmp/t12-rfc0051-hardware-ibm.txt",
+      "rawSha256": "5950b7024e319aa364cb22718f1a32af8c172c3335ac49948d05aca1856b9b7c",
+      "rawObservation": "x86_64\n8\n               total        used        free      shared  buff/cache   available\nMem:     25199169536  8677154816 15904022528  3540705280  8244215808 16522014720\nSwap:    12884897792  9306468352  3578429440\nFilesystem        1B-blocks         Used  Available Use% Mounted on\n/dev/sda1      310911414272 305946755072 4947881984  99% /\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  8\nOn-line CPU(s) list:                     0-7\nVendor ID:                               AuthenticAMD\nBIOS Vendor ID:                          QEMU\nModel name:                              AMD EPYC Processor (with IBPB)\nBIOS Model name:                         pc-i440fx-9.0  CPU @ 2.0GHz\nBIOS CPU family:                         1\nCPU family:                              23\nModel:                                   1\nThread(s) per core:                      1\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                2\nBogoMIPS:                                5599.99\n"
+    }
+  ],
+  "publicChanges": false,
+  "qualification": false
+}

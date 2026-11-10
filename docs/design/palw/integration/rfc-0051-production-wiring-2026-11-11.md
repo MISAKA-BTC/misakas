@@ -5,7 +5,7 @@
 | 段階 | 状態 |
 | --- | --- |
 | TKR1 wire、UTXO fee handoff、予約 book、native fold、journal・snapshot 検査 | core / SDK 実装済み。確定 fold の費用照合を含むローカル回帰を実施 |
-| 設定・新規 Open cutoff・header gate・ノード UTXO handoff と受理順 | 接続コード追加。出荷 preset は未設定。node コンパイル確認のみで本番完了扱いにしない |
+| 設定・新規 Open cutoff・header gate・ノード UTXO handoff と受理順 | 隔離した実ノードで署名済み Open/Part/Finish/重複が通過。出荷 preset は未設定 |
 | coinbase・テンプレート・Round の焼却反映、work scanner 実行境界 | 接続コードと段階3のローカル回帰30件が通過。公開適格性の測定は未完了 |
 | RPC・CLI | unsigned Open quote / accepted status と CLI のビルド・回帰22件通過。送信用 CLI は未接続 |
 | 公開 T12 の有効化、同一 Studio TFP1 の G14 quote・対話・Final・ブロック生成 | 未確認 |
@@ -38,3 +38,5 @@ TKR1 transport が有効になった候補から、通常 PALW object・Batch・
 段階3の機能回帰: registration core 19、Finish cache 1、native ownership 1、既存 Batch 順序 4、Batch 1、Output 1、node 受理順序 1、Round fee 1、SDK 1 の計30件が成功した。core/node は opt-level 0 の機能検査で、Batch は既知のテスト stack 条件として 64 MiB を指定した。実ブロックの template → UTXO → coinbase 受理と reorg/IBD の通し試験は未完了。
 
 段階4の参照 RPC と CLI の形状・番号・状態区分は [読み取り接続記録](rfc-0051-read-rpc-2026-11-11.md) に記載する。公開での成功とは区別する。
+
+段階5の[実ノード試験と関連24件](../../../evidence/palw/funded-tokenizer-registration-phase5-node-regression-2026-11-11.json)が成功した。既存の予約規則で Open/Part/Finish/同一 Open 再送を通常 carrier として処理し、実 UTXO と coinbase に新規 Open の一回焼却を反映した。隔離設定の機能試験であり、再起動・再編・pruned IBD と公開数値 profile の適格性は、この結果に含めない。
