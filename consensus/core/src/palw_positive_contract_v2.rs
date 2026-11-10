@@ -21,8 +21,8 @@ use misaka_palw_positive_contract::{
     ports::{NodeChecker, require_next},
     public_one_honest::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestV1, MaterialCaseDemand,
-        OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase, ProtectedRescueDemand, PublicDrawMemberV1,
-        ReplayApprovalContext, VerificationSchedule, public_draw_members_digest_v1,
+        OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand,
+        PublicDrawMemberV1, ReplayApprovalContext, VerificationSchedule, public_draw_members_digest_v1,
     },
     reservations::RemainingCapacity,
     rows::AggregateUsage,
@@ -363,6 +363,22 @@ impl PreparedPublicOriginalV1 {
             return Err(ContractError::Budget);
         }
         self.verify_manifest_request_with_capacity(draw.per_bond, request, context, key, signature)
+    }
+
+    /// Reauthenticate the request and its booked draw slot before using a
+    /// stored case. The caller resolves the inclusion context from history.
+    pub fn restore_drawn_manifest_request(
+        &self,
+        record: &PendingManifestCaseRecordV1,
+        draw: &PreparedPublicDrawV1,
+        request: &ManifestRequest,
+        context: &ManifestRequestContext<'_>,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<PendingManifestCase, ContractError> {
+        let pending = self.verify_drawn_manifest_request(draw, request, context, key, signature)?;
+        record.check_restore(&pending)?;
+        Ok(pending)
     }
 
     fn verify_manifest_request_with_capacity(

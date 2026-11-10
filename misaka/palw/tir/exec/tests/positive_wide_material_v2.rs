@@ -622,6 +622,22 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let accepted =
         prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
     assert_eq!(accepted.reservation(), request_context.reservation);
+    let case_record = borsh::from_slice(&borsh::to_vec(&accepted.record()).unwrap()).unwrap();
+    assert_eq!(
+        prepared.restore_drawn_manifest_request(&case_record, &draw, &request, &request_context, &signed.key, request_sig.as_ref()),
+        Ok(accepted)
+    );
+    assert_eq!(
+        prepared.restore_drawn_manifest_request(
+            &case_record,
+            &other_plan,
+            &request,
+            &request_context,
+            &signed.key,
+            request_sig.as_ref()
+        ),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     assert_eq!(
         prepared.verify_drawn_manifest_request(&other_plan, &request, &request_context, &signed.key, request_sig.as_ref()),
         Err(misaka_palw_positive_contract::ContractError::Scope)
