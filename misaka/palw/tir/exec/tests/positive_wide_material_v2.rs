@@ -530,6 +530,14 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let bad_prepared = admission.prepare(&bad_original, &signed.key, bad_signature.as_ref(), &reservation).unwrap();
     let bad_record = bad_prepared.record(reserved);
     assert_eq!(bad_record.court_verdict_key(&bad_prepared, reserved, terminal, &verdict), Ok(verdict.key()));
+    let verdict_record = bad_record.court_record(&bad_prepared, reserved, terminal, &verdict).unwrap();
+    let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalCourtRecordV1>(
+        &borsh::to_vec(&verdict_record).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(restored.check_restore(&verdict_record), Ok(()));
+    let different_daa = bad_record.court_record(&bad_prepared, reserved, terminal - 1, &verdict).unwrap();
+    assert_eq!(restored.check_restore(&different_daa), Err(misaka_palw_positive_contract::ContractError::Scope));
     assert_eq!(
         bad_record.court_verdict_key(&bad_prepared, reserved, terminal + 1, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Range)

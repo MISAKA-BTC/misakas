@@ -145,6 +145,24 @@ pub struct PublicOriginalAdmissionRecordV1 {
     deadlines: [u64; 8],
 }
 
+/// Identity of a verdict included under one restored admission.
+/// Revalidation uses the case evidence and the canonical inclusion DAA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PublicOriginalCourtRecordV1 {
+    original: OriginalId,
+    evidence_id: Hash64,
+    inclusion_daa: u64,
+}
+
+impl PublicOriginalCourtRecordV1 {
+    pub fn check_restore(&self, expected: &Self) -> Result<(), ContractError> {
+        if self != expected {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+}
+
 /// Membership and per-bond rescue capacity validated for one original.
 pub struct PreparedPublicDrawV1 {
     original: OriginalId,
@@ -377,6 +395,17 @@ impl PublicOriginalAdmissionRecordV1 {
             return Err(ContractError::Range);
         }
         Ok(key)
+    }
+
+    pub fn court_record(
+        &self,
+        prepared: &PreparedPublicOriginalV1,
+        reservation: Digest,
+        inclusion_daa: u64,
+        verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
+    ) -> Result<PublicOriginalCourtRecordV1, ContractError> {
+        let (original, evidence_id) = self.court_verdict_key(prepared, reservation, inclusion_daa, verdict)?;
+        Ok(PublicOriginalCourtRecordV1 { original, evidence_id, inclusion_daa })
     }
 }
 
