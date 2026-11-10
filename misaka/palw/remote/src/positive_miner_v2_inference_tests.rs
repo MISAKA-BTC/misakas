@@ -49,6 +49,78 @@ fn program_material_is_the_registered_graph_in_one_chunk() {
     assert_eq!(job.public_program_material(ManifestScopeRules { chunk_bytes: size - 1, ..rules }), Err(ContractError::Budget));
     assert_eq!(job.public_program_material(ManifestScopeRules { codec: d(0), ..rules }), Err(ContractError::UnsupportedProfile));
 }
+
+#[cfg(feature = "positive-panel")]
+#[test]
+fn panel_opens_the_program_from_the_miners_bound_manifest() {
+    use crate::positive_panel_sources::{PanelSourceErrorR1, open_public_tir_program_v1};
+    use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, OriginalCommit};
+
+    let fixture = Fixture::new();
+    let result = &fixture.result;
+    let job = TirMinerJobV2 {
+        class: &fixture.class,
+        context: &fixture.context,
+        prompt: &fixture.prompt,
+        prompt_form: PalwPromptIdsFormV1::Flat,
+    };
+    let mut original = OriginalCommit {
+        scope: result.scope,
+        job: result.job,
+        execution: result.execution,
+        miner: result.miner,
+        registered_class: result.registered_class,
+        artifact: result.artifact,
+        program: result.program,
+        prompt: d(1),
+        input_tokens: result.input,
+        tokenizer: result.tokenizer,
+        execution_rules: result.execution_rules,
+        generation_seed: result.generation_seed,
+        initial_state: d(2),
+        dependencies: result.dependencies,
+        prefill: result.prefill,
+        decode: result.decode,
+        max_context: result.max_context,
+        output: result.output,
+        trace_root: d(3),
+        manifest_root: d(0),
+        service_contract: result.service_contract,
+    };
+    let size = u32::try_from(fixture.class.program.len()).unwrap();
+    let program_rules = ManifestScopeRules { codec: tir_program_material_codec_v1(), max_bytes: u64::from(size), chunk_bytes: size };
+    let fixture_rules = ManifestScopeRules { codec: d(9), max_bytes: 1, chunk_bytes: 1 };
+    let mut rules = [fixture_rules; MaterialScope::COUNT];
+    rules[MaterialScope::Program as usize] = program_rules;
+    // Only Program has real material here. The other entries stand in for
+    // unrelated scopes and are never opened by this test.
+    let fixture_entry =
+        |subject| ManifestEntryV1 { subject, content_root: subject, codec: fixture_rules.codec, total_bytes: 1, chunk_bytes: 1 };
+    let manifest = ManifestV1 {
+        service_contract: original.service_contract,
+        entries: [
+            fixture_entry(original.artifact),
+            job.public_program_material(program_rules).unwrap(),
+            fixture_entry(original.prompt),
+            fixture_entry(original.input_tokens),
+            fixture_entry(original.tokenizer),
+            fixture_entry(original.execution_rules),
+            fixture_entry(original.initial_state),
+            fixture_entry(original.dependencies),
+            fixture_entry(original.trace_root),
+            fixture_entry(original.output),
+        ],
+    };
+    let limit = u64::from(size) + (MaterialScope::COUNT - 1) as u64;
+    let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
+    let checked = original.authenticate_manifest(&encoded, 4096).unwrap().decode(&original, &rules, limit).unwrap();
+    let bytes = &fixture.class.program;
+    assert_eq!(open_public_tir_program_v1(&checked, bytes).unwrap(), fixture.plan.program);
+    assert_eq!(open_public_tir_program_v1(&checked, &bytes[..bytes.len() - 1]), Err(PanelSourceErrorR1::Binding));
+    let mut substituted = bytes.clone();
+    substituted[0] ^= 1;
+    assert_eq!(open_public_tir_program_v1(&checked, &substituted), Err(PanelSourceErrorR1::Binding));
+}
 fn model_params(plan: &TirPlan, first: i128) -> TirParams<'static> {
     let mut map = MapParams::default();
     let mut values: Vec<i128> = (1..=16).collect();
