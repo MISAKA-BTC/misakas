@@ -169,6 +169,32 @@ pub struct ManifestEntryV1 {
     pub chunk_bytes: u32,
 }
 
+impl ManifestEntryV1 {
+    /// Canonical half-open byte range for a chunk. The final chunk may be
+    /// shorter. A requester cannot move the boundary or ask for a range past
+    /// the committed end.
+    pub fn chunk_range(&self, index: u64) -> Result<std::ops::Range<u64>, ContractError> {
+        let width = u64::from(self.chunk_bytes);
+        let start = index.checked_mul(width).ok_or(ContractError::Range)?;
+        if width == 0 || start >= self.total_bytes {
+            return Err(ContractError::Range);
+        }
+        let len = width.min(self.total_bytes - start);
+        Ok(start..start + len)
+    }
+
+    /// Content identity for one canonical range. Case IDs, claimant names
+    /// and deadlines do not affect byte sharing. The opening for these bytes
+    /// still has to authenticate against the entry's content root.
+    pub fn chunk_material_id(&self, ruleset: Digest, index: u64) -> Result<MaterialId, ContractError> {
+        let range = self.chunk_range(index)?;
+        Ok(MaterialId(hash(
+            b"misaka/palw/public-material-chunk/v1",
+            &(ruleset, self.codec, self.content_root, self.total_bytes, range.start, range.end),
+        )))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ManifestV1 {
     pub service_contract: Digest,
@@ -564,6 +590,20 @@ impl ProtectedRescueDemand {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_chunk_ranges_have_one_canonical_final_boundary() {
+        let d = Digest([7; 64]);
+        let entry = ManifestEntryV1 { subject: d, content_root: d, codec: d, total_bytes: 17, chunk_bytes: 8 };
+        assert_eq!(entry.chunk_range(0), Ok(0..8));
+        assert_eq!(entry.chunk_range(1), Ok(8..16));
+        assert_eq!(entry.chunk_range(2), Ok(16..17));
+        assert_eq!(entry.chunk_range(3), Err(ContractError::Range));
+        assert_eq!(entry.chunk_range(u64::MAX), Err(ContractError::Range));
+        assert_eq!(ManifestEntryV1 { chunk_bytes: 0, ..entry }.chunk_range(0), Err(ContractError::Range));
+        assert_ne!(entry.chunk_material_id(d, 1), entry.chunk_material_id(d, 2));
+        assert_ne!(entry.chunk_material_id(d, 2), entry.chunk_material_id(Digest([8; 64]), 2));
+    }
 
     #[test]
     fn full_replay_approval_is_bound_to_one_drawn_bond_and_the_full_scope() {
