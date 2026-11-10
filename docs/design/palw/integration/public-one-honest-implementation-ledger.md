@@ -214,3 +214,8 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 当初、送出元と受理 block の DAA が必ず一つずつ増えると誤認し、待ち幅を増やす変更を試した。実ノードの reference clock では同一 DAA の送出元と子 block が成立するため、その変更は取り消した。この24件は元の予約規則で成功しており、待ち幅の新しい policy field は採用していない。実装済みの参照 API から Open/Part の受理を読んだ後に、次の control を作る手順を使った。
 
 既存4ホストの読み取り専用[機材観測](../../../evidence/palw/tokenizer-registration-hardware-observation-2026-11-11.json)も保存した。6〜8 vCPU、RAM 約12〜25 GB、root disk 空き約4.9〜37.6 GB は観測値であり、最低要件の採択・最大入力の CPU/RSS/履歴容量測定ではない。再起動・再編・pruned IBD、実 Round の登録、送信用 CLI、mempool/peer work 接続、公開 profile の測定・有効化は残る。公開 TFP1 quote と受付、Final、main push は未達。
+
+続く `0cc8aa68c` で、復元した予約表の件数・geometry を generic service check の map 再構築より前に検査し、snapshot の session/Part 件数と session policy も上限内かを先に確認するよう修正した。既存の policy と有限 work envelope を使用し、新たな公開数値は導入していない。同じ DB の再起動・別ノードの block replay・Finish 前からの実分岐を追加した[回帰25件](../../../evidence/palw/funded-tokenizer-registration-phase5-recovery-regression-2026-11-11.json)が成功。再起動は root・status・UTXO、replay は root・status の一致を検査し、再編では元の charge ID・Part・予約枠を変えず Pending に戻ることを確認した。pruned IBD の転送と実 Round の登録費用拒否は、引き続き別の未完項目である。
+
+
+`fd68f3f62` に live quote から署名 bundle を作る `tokenizer-registration prepare` を追加した。Open ID・policy・purpose と native quote の一致を確認し、有限長の raw/EOG と登録 opener 鍵を SDK で検査してから署名する。新規ディレクトリへのファイル作成だけで、支払・送信・予約は行わない。[CLI build 記録](../../../evidence/palw/tokenizer-registration-cli-prepare-build-2026-11-11.json)は cargo check 成功と検証範囲を保存する。初回のエラー表示型の不一致は修正済み。公開 endpoint での prepare と支払・送信 CLI の接続は未完了。

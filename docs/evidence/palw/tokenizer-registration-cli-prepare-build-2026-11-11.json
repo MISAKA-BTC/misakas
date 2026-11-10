@@ -1,0 +1,19 @@
+{
+  "schema": "palw-tokenizer-registration-cli-prepare-build-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "fd68f3f62adf86f3f84f3897045ff329651dedc4",
+  "command": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' --config 'profile.dev.package.kaspa-consensus.opt-level=0' check -p misaka-cli -j 2",
+  "result": "PASS",
+  "log": "/tmp/t12-tokenizer-prepare-cli-check-r2.log",
+  "logSha256": "8b1fa234e1a31e068e23616466aca763261f3d8537836a24000ea7a0679c431c",
+  "scope": "CLI prepares signed Open/Part/Finish payload files from live quote, bounded raw/EOG and registered opener key; SDK rederives the tokenizer before signing.",
+  "limitations": [
+    "Compile verification and static review only; command not executed against a public endpoint.",
+    "SDK preparation regression is recorded separately in the phase5 recovery run.",
+    "First compile found CliError lacks Display in write-failure handling; corrected to its public msg field.",
+    "Existing compare dead-code warning remains.",
+    "UTXO funding, submission and service-slot selection are not implemented by prepare."
+  ],
+  "publicSubmission": false,
+  "publicActivation": false
+}

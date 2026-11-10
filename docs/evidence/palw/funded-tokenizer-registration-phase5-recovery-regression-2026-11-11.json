@@ -1,0 +1,95 @@
+{
+  "schema": "palw-funded-tokenizer-registration-recovery-regression-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "0cc8aa68cf940826b3a1abed1e59832a9aad6296",
+  "scope": "Bound restored book geometry and snapshot row counts before full checks. Isolated actual node Open/Part/Finish/duplicate plus same-DB restart, fresh peer replay and selected-branch reorg.",
+  "passedTotal": 25,
+  "testCommand": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' --config 'profile.dev.package.kaspa-consensus.opt-level=0' test -p kaspa-consensus-core -p kaspa-consensus -p misaka-palw-sdk -p kaspa-rpc-core -p kaspa-grpc-core -p kaspa-rpc-service --lib tokenizer_registration -j 2",
+  "log": "/tmp/t12-tokenizer-phase5-recovery-tests.log",
+  "logSha256": "ac72d25b5ae708aee52ca3fe893d5c9937920e144972788e7f89c0234707c37a",
+  "runs": [
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus-dcb4e9c2042a97dd",
+      "binarySha256": "ed52563966da352b1b9eea1362a44691e55e3b0db505da432da99171d7175ac6",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1381 filtered out; finished in 5.74s",
+      "passed": 1,
+      "testNames": [
+        "pipeline::virtual_processor::tests::g14_registration_e2e::tokenizer_registration::signed_tkr1_open_parts_finish_and_duplicate_use_the_actual_node"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-678c91556cfa7225",
+      "binarySha256": "d0510d68d875055a8c7dac6692695cf3ffa8aa6db267c395eb75a7e3c0087d01",
+      "summary": "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 5962 filtered out; finished in 0.45s",
+      "passed": 20,
+      "testNames": [
+        "palw_tokenizer_registration_snapshot_v1::tests::equal_blue_score_requires_the_exact_accepted_point",
+        "palw_tokenizer_registration_carriage_v1::tests::source_partition_bounds_any_legal_mergeset_and_refusal_is_atomic",
+        "palw_tokenizer_registration_carriage_v1::tests::candidate_preflight_meters_physical_finish_copies_and_sweeps_once",
+        "palw_tokenizer_registration_snapshot_v1::tests::tokenizer_journal_binds_session_progress_and_terminal_point",
+        "palw_tokenizer_registration_snapshot_v1::tests::historical_snapshot_needs_no_tokenizer_book",
+        "palw_tokenizer_registration_v1::tests::bookkeeping_bounds_scale_and_reject_underfunded_metadata",
+        "palw_tokenizer_registration_carriage_v1::tests::real_fee_context_and_zero_service_burn_for_parts",
+        "palw_tokenizer_registration_v1::tests::finish_work_rehashes_parent_parts_in_every_pass_but_parses_once",
+        "palw_tokenizer_registration_v1::tests::invalid_tokenizer_input_is_priced_before_a_small_declared_limit_can_refuse_it",
+        "palw_tokenizer_registration_v1::tests::quote_pins_indexed_parts_and_fixed_retention",
+        "palw_tokenizer_registration_v1::tests::finish_reuses_registered_eog_opening_and_rejects_oversized_lists",
+        "palw_tokenizer_registration_carriage_v1::tests::new_open_burns_once_and_duplicate_projection_keeps_ordinary_fee",
+        "palw_tokenizer_registration_state_v1::tests::tokenizer_registration_book_rejects_oversized_restore_before_rebuilding_indices",
+        "palw_tokenizer_registration_state_v1::tests::reservation_rejects_corruption_and_expiry_preserves_other_slots",
+        "config::params::tokenizer_registration_v1::tests::schedule_fingerprint_and_header_gate_preserve_dormant_rules",
+        "palw_tokenizer_registration_snapshot_v1::tests::tokenizer_journal_preserves_surviving_assignments",
+        "palw_tokenizer_registration_v1::tests::signed_open_and_bounded_wire_are_scope_bound",
+        "palw_tokenizer_registration_state_v1::tests::signed_finish_cannot_reuse_an_attempt_consumed_by_a_failed_parse",
+        "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::verified_tokenizer_registration_root_replay_and_carriage_require_native_context",
+        "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::funded_tokenizer_registration_native_open_parts_finish_and_expiry"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_grpc_core-d026cd5db56a7adf",
+      "binarySha256": "6946084df76b0044777c2b4c65a2e07ec8c9909ca3c190cda982830c8424cf88",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s",
+      "passed": 1,
+      "testNames": [
+        "convert::message::tokenizer_registration_rpc_tests::tokenizer_registration_grpc_preserves_quote_status_and_errors"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_rpc_core-d5f4319f6d49ebb9",
+      "binarySha256": "8b886dbb0bf1ed4e9dcf6f1c1aab7b7b176361b555abbbbfba83ab628234f4ad",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 309 filtered out; finished in 0.00s",
+      "passed": 1,
+      "testNames": [
+        "model::message::palw_tokenizer_registration::tests::tokenizer_registration_rpc_roundtrips_and_bounds_before_allocation"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_rpc_service-fab83a60f85522c8",
+      "binarySha256": "a0e2103374ffb582997ab2d573d902578ef8f7e47eda4721c0f46e0a338f8456",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 0.01s",
+      "passed": 1,
+      "testNames": [
+        "tokenizer_registration::tests::tokenizer_registration_rpc_decode_is_exact_and_bounded"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka_palw_sdk-f722d40436ae3bcc",
+      "binarySha256": "f562d1cae8dc5401e39ee243027ee6fb469e24a678f797707623e1feec0ad279",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 188 filtered out; finished in 0.17s",
+      "passed": 1,
+      "testNames": [
+        "tokenizer_registration::tests::builds_signed_indexed_payloads_and_refuses_changed_inputs_before_signing"
+      ]
+    }
+  ],
+  "limitations": [
+    "Functional opt-level 0 test with isolated finite policy and test keys; no public T12 acceptance or activation.",
+    "Node recovery test excludes actual Round fee rejection and pruned IBD transfer.",
+    "No public CPU/RSS/native-history qualification or mempool/peer work integration claim.",
+    "CLI Prepare was edited separately and is not included in these compiled test packages.",
+    "Existing documentation reference and historical integrity failures remain."
+  ],
+  "publicSubmission": false,
+  "publicActivation": false,
+  "mainPush": false
+}

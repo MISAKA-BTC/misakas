@@ -7,7 +7,7 @@
 | TKR1 wire、UTXO fee handoff、予約 book、native fold、journal・snapshot 検査 | core / SDK 実装済み。確定 fold の費用照合を含むローカル回帰を実施 |
 | 設定・新規 Open cutoff・header gate・ノード UTXO handoff と受理順 | 隔離した実ノードで署名済み Open/Part/Finish/重複が通過。出荷 preset は未設定 |
 | coinbase・テンプレート・Round の焼却反映、work scanner 実行境界 | 接続コードと段階3のローカル回帰30件が通過。公開適格性の測定は未完了 |
-| RPC・CLI | unsigned Open quote / accepted status と CLI のビルド・回帰22件通過。送信用 CLI は未接続 |
+| RPC・CLI | unsigned Open quote / accepted status の回帰22件通過。live quote から署名 bundle を作る prepare CLI は build check 通過。支払・送信 CLI は未接続 |
 | 公開 T12 の有効化、同一 Studio TFP1 の G14 quote・対話・Final・ブロック生成 | 未確認 |
 
 - [ ] **設定と入口**。候補ブロックの DAA で TKR1 専用の activation と policy を解決する。未設定のネットワークは既存の挙動と fingerprint を維持する。設定の形状、fence visitor、ruleset と consensus params ID に、設定時だけ値を組み込む。header-context の入口で fence を確認し、前段で候補ブロック内の TKR1 carrier 全件と期限処理の作業量を集計する。未知版・重複・拒否される carrier も作業量に含める。[設定検証](../../../../consensus/core/src/config/params/validation.rs#L271) · [設定 fingerprint](../../../../consensus/core/src/config/params/identity.rs#L1985) · [header-context 検査](../../../../consensus/src/processes/transaction_validator/tx_validation_in_header_context.rs#L73) · [TKR1 scanner](../../../../consensus/core/src/palw_tokenizer_registration_carriage_v1.rs#L244)
@@ -18,7 +18,7 @@
 
 2026-11-11 更新: transport と新規 Open cutoff を分離した。受付停止後も既存契約の Part / Finish と同一 Open の再送を継続できる。TKR1 専用 network domain は TIR allocation の解決と独立させ、受理順はフィルター前の完全な accepted transaction ordinal と照合する。Finish の意味上の拒否でも、実パースに入った試行の消費を仮実行と確定 fold の両方に残す。
 
-候補 scanner は物理 carrier の重複・不完全入力も含めて四次元の費用を checked 加算する。親に book がある場合、または最初の Open が book を作り得る場合に、最大五回の期限処理を覆う費用を一回計上する。予約 book と quote は、その期限処理分を控除した同じ実効 work 容量を使う。段階3で scanner を候補の UTXO 判定前へ接続した。snapshot 側の境界処理は未完了。
+候補 scanner は物理 carrier の重複・不完全入力も含めて四次元の費用を checked 加算する。親に book がある場合、または最初の Open が book を作り得る場合に、最大五回の期限処理を覆う費用を一回計上する。予約 book と quote は、その期限処理分を控除した同じ実効 work 容量を使う。段階3で scanner を候補の UTXO 判定前へ接続した。段階5では snapshot の work envelope、予約表の件数・geometry と session/Part の件数を、map 再構築・row hash・cross-row 検査の前に制限した。外側の bounded import と物理資源の検査は引き続き必要である。
 
 段階3で新規 Open の追加焼却額を UTXO 集計、virtual template と Round 収入判定へ接続した。候補ごとに TKR1 仮状態を一つ保持し、body ごとに journal の開始位置を記録する。Round 拒否時は次の body が読む前に行・派生 index を逆順で復元する。受理時の費用を observed rehearsal と確定 fold に渡して照合する。これはノードでの通し検証完了を意味しない。公開 profile・有効化・同一 Studio claim の quote 成功を、このコードやローカル回帰の結果から主張しない。
 
@@ -40,3 +40,5 @@ TKR1 transport が有効になった候補から、通常 PALW object・Batch・
 段階4の参照 RPC と CLI の形状・番号・状態区分は [読み取り接続記録](rfc-0051-read-rpc-2026-11-11.md) に記載する。公開での成功とは区別する。
 
 段階5の[実ノード試験と関連24件](../../../evidence/palw/funded-tokenizer-registration-phase5-node-regression-2026-11-11.json)が成功した。既存の予約規則で Open/Part/Finish/同一 Open 再送を通常 carrier として処理し、実 UTXO と coinbase に新規 Open の一回焼却を反映した。隔離設定の機能試験であり、再起動・再編・pruned IBD と公開数値 profile の適格性は、この結果に含めない。
+
+追加の[復元回帰25件](../../../evidence/palw/funded-tokenizer-registration-phase5-recovery-regression-2026-11-11.json)では、同じ DB の再起動・別ノードの block replay・Finish 前からの実分岐を確認した。再起動は root/status/UTXO、replay は root/status の一致、再編は Open の charge ID・Part・予約枠を維持した Pending への復帰を検査した。pruned IBD 転送、実 Round の登録費用拒否、公開性能測定は未完了。
