@@ -70,6 +70,18 @@ pub fn fetch_public_trace_index_v1(
     Ok(index)
 }
 
+pub(crate) fn check_public_replay_trace_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    replayed: &PublicOriginalTraceIndexV1,
+) -> Result<(), PanelSourceErrorR1> {
+    let published = fetch_public_trace_index_v1(provider, original)?;
+    if published != *replayed {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(())
+}
+
 /// Fetch one opening and tile, rejecting invalid vector lengths before
 /// deserializing the payload and authenticating it against the original.
 pub fn fetch_public_trace_tile_v1(
@@ -231,7 +243,7 @@ pub fn run_public_wide_replay_v1(
     )
     .map_err(PanelSourceErrorR1::ReplayExecution)?;
     let Err(mismatch) = capture.check_public_original_replay(original, &output) else {
-        return Ok(());
+        return check_public_replay_trace_v1(provider, original, &capture.public_trace_index());
     };
     if let Some(search) = search
         && capture.run().execution_root().as_bytes() != original.trace_root.0

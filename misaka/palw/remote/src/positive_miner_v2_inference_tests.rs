@@ -216,6 +216,13 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     };
     trace_original.trace_root =
         Digest(palw_tir_execution_root_v1(&ctx, &trace.full_logits_trace_root, &class, 1, &trace.step_merkle_root).as_bytes());
+    use crate::positive_panel_sources::check_public_replay_trace_v1;
+    assert_eq!(check_public_replay_trace_v1(&provider, &trace_original, &trace), Err(PanelSourceErrorR1::Incomplete));
+    let index_path = crate::public_material::public_original_trace_index_path(trace_original.id());
+    crate::evidence::fs::write_provider_chunk(&store.join(index_path), &borsh::to_vec(&trace).unwrap()).unwrap();
+    assert_eq!(check_public_replay_trace_v1(&provider, &trace_original, &trace), Ok(()));
+    let replayed = PublicOriginalTraceIndexV1 { step_leaf_count: 2, ..trace.clone() };
+    assert_eq!(check_public_replay_trace_v1(&provider, &trace_original, &replayed), Err(PanelSourceErrorR1::Binding));
     let opening = PalwStepOpeningV1 { leaf_index: 0, leaf_hash, siblings: vec![] };
     let material = (opening, tile);
     let path = crate::public_material::public_original_trace_tile_path(trace_original.id(), 0);
