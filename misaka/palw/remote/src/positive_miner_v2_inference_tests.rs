@@ -52,18 +52,18 @@ fn program_material_is_the_registered_graph_in_one_chunk() {
 
 #[cfg(feature = "positive-panel")]
 #[test]
-fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
+fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     use crate::miner::positive_v2::store::{StoreErrorV2, load_public_manifest_v1, store_public_manifest_v1};
     use crate::positive_panel_sources::{
-        PanelSourceErrorR1, fetch_public_manifest_v1, open_public_input_token_tile_v1, open_public_tir_program_v1,
-        read_public_manifest_v1,
+        PanelSourceErrorR1, fetch_public_manifest_v1, open_public_input_token_tile_v1, open_public_output_tokens_v1,
+        open_public_tir_program_v1, read_public_manifest_v1,
     };
     use crate::{
         evidence::fs::FsProvider,
         public_material::{MaterialProvider, public_original_manifest_path},
     };
     use kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1;
-    use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, OriginalCommit};
+    use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, OriginalCommit, tir_output_material_codec_v1};
 
     let fixture = Fixture::new();
     let result = &fixture.result;
@@ -73,6 +73,8 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     context.declared_prefill_tokens = prompt.len() as u32;
     context.max_context_tokens = context.declared_prefill_tokens + context.exact_decode_tokens;
     context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &prompt).unwrap();
+    let output_ids = vec![2u32; context.exact_decode_tokens as usize];
+    let output_root = Digest(palw_attempt_output_root_v1(&context, &output_ids).as_bytes());
     let job = TirMinerJobV2 { class: &fixture.class, context: &context, prompt: &prompt, prompt_form: form };
     let mut original = OriginalCommit {
         scope: result.scope,
@@ -92,7 +94,7 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
         prefill: context.declared_prefill_tokens,
         decode: result.decode,
         max_context: context.max_context_tokens,
-        output: result.output,
+        output: output_root,
         trace_root: d(3),
         manifest_root: d(0),
         service_contract: result.service_contract,
@@ -108,6 +110,17 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
         chunk_bytes: PALW_PROMPT_IDS_TILE_LEN * 4,
     };
     rules[MaterialScope::InputTokens as usize] = input_rules;
+    let output_bytes = context.exact_decode_tokens * 4;
+    let output_rules =
+        ManifestScopeRules { codec: tir_output_material_codec_v1(), max_bytes: u64::from(output_bytes), chunk_bytes: output_bytes };
+    rules[MaterialScope::Output as usize] = output_rules;
+    let output_entry = |root| ManifestEntryV1 {
+        subject: root,
+        content_root: root,
+        codec: output_rules.codec,
+        total_bytes: output_rules.max_bytes,
+        chunk_bytes: output_rules.chunk_bytes,
+    };
     // The remaining scopes are placeholders and are never opened here.
     let fixture_entry =
         |subject| ManifestEntryV1 { subject, content_root: subject, codec: fixture_rules.codec, total_bytes: 1, chunk_bytes: 1 };
@@ -123,10 +136,10 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
             fixture_entry(original.initial_state),
             fixture_entry(original.dependencies),
             fixture_entry(original.trace_root),
-            fixture_entry(original.output),
+            output_entry(original.output),
         ],
     };
-    let limit = u64::from(size) + input_rules.max_bytes + (MaterialScope::COUNT - 2) as u64;
+    let limit = u64::from(size) + input_rules.max_bytes + output_rules.max_bytes + (MaterialScope::COUNT - 3) as u64;
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
     let store = std::env::temp_dir().join(format!("misaka-public-manifest-{}", std::process::id()));
     std::fs::create_dir(&store).unwrap();
@@ -169,12 +182,17 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     assert_eq!(open_public_input_token_tile_v1(&original, &checked, 0, &tail), Err(PanelSourceErrorR1::Binding));
     tail.tile_ids[0] = 2;
     assert_eq!(open_public_input_token_tile_v1(&original, &checked, 1, &tail), Err(PanelSourceErrorR1::Binding));
+    assert_eq!(open_public_output_tokens_v1(&original, &checked, &output_ids), Ok(()));
+    let mut wrong_output = output_ids.clone();
+    wrong_output[0] ^= 1;
+    assert_eq!(open_public_output_tokens_v1(&original, &checked, &wrong_output), Err(PanelSourceErrorR1::Binding));
 
     use crate::positive_panel_sources::open_public_flat_input_tokens_v1;
     let form = PalwPromptIdsFormV1::Flat;
     context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &prompt).unwrap();
     original.input_tokens = Digest(context.prompt_token_ids_hash.as_bytes());
     original.execution = Digest(context.context_hash().as_bytes());
+    original.output = Digest(palw_attempt_output_root_v1(&context, &output_ids).as_bytes());
     let job = TirMinerJobV2 { class: &fixture.class, context: &context, prompt: &prompt, prompt_form: form };
     let flat_rules = ManifestScopeRules {
         codec: Digest(prompt_ids_form_id_v1(form).as_bytes()),
@@ -184,8 +202,11 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     let mut manifest = manifest;
     rules[MaterialScope::InputTokens as usize] = flat_rules;
     manifest.entries[MaterialScope::InputTokens as usize] = job.public_input_token_material(flat_rules).unwrap();
+    manifest.entries[MaterialScope::Output as usize] = output_entry(original.output);
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
     let flat = read_public_manifest_v1(&original, &rules, limit, 4096, encoded.len() as u64, encoded.as_slice()).unwrap();
+    assert_eq!(open_public_output_tokens_v1(&original, &checked, &output_ids), Err(PanelSourceErrorR1::Binding));
+    assert_eq!(open_public_output_tokens_v1(&original, &flat, &output_ids), Ok(()));
     assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt), Ok(()));
     assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt[..prompt.len() - 1]), Err(PanelSourceErrorR1::Binding));
 }
