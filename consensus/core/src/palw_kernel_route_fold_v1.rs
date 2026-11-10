@@ -290,6 +290,11 @@ impl TransitionBuilder<'_> {
             kernel.ledger_cache.clear();
         }
         let map_key = (table, key.clone());
+        if crate::palw_positive_contract_v2::is_public_verification_table_v1(table)
+            && matches!((kernel.aux.get(&map_key), &new), (Some(old), Some(new)) if old != new)
+        {
+            return Err(PalwStateV2Error::KernelRouteRefused("public verification row is immutable".into()));
+        }
         kernel
             .update_positive_aux_indexes_v2(&map_key, new.as_deref())
             .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid Positive indexed row: {error:?}")))?;

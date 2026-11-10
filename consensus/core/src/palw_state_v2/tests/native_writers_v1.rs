@@ -357,4 +357,21 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, Some(child.state_root())).unwrap();
     assert_eq!(restored, child);
     assert_eq!(restored.public_original_admission_record_v1(original), Ok(Some(row)));
+    let table = PUBLIC_ORIGINAL_ADMISSION_TABLE_V1;
+    let key = original.0.0.to_vec();
+    let old = Some(borsh::to_vec(&row).unwrap());
+    let changed_origin = AcceptedOrigin { accepted_tx_ordinal: 2, ..row.carrier().origin };
+    let replacement = Some(borsh::to_vec(&PublicOriginalAdmissionRecordV1::storage_fixture(original, changed_origin)).unwrap());
+    let mut builder = TransitionBuilder::new(&child, &params, false, false, false, false, &extras);
+    builder.write_kernel_row(table, key.clone(), old.clone()).unwrap();
+    assert!(builder.entries.is_empty());
+    assert!(matches!(builder.write_kernel_row(table, key.clone(), replacement.clone()), Err(PalwStateV2Error::KernelRouteRefused(_))));
+    assert!(builder.entries.is_empty());
+    assert_eq!(builder.state, child);
+    let mut state = child.clone();
+    assert!(matches!(
+        apply_kernel_route_row_v1(&mut state, table, &key, &old, &replacement, false),
+        Err(PalwStateV2Error::DeltaMismatch("public verification row is immutable"))
+    ));
+    assert_eq!(state, child);
 }

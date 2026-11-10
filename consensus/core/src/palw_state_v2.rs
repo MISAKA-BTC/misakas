@@ -23703,6 +23703,11 @@ fn apply_kernel_route_row_v1(
     revert: bool,
 ) -> Result<(), PalwStateV2Error> {
     let (expected, install) = if revert { (new, old) } else { (old, new) };
+    if crate::palw_positive_contract_v2::is_public_verification_table_v1(table)
+        && matches!((expected, install), (Some(old), Some(new)) if old != new)
+    {
+        return Err(PalwStateV2Error::DeltaMismatch("public verification row is immutable"));
+    }
     if let Some(bytes) = install.as_deref() {
         crate::palw_positive_contract_v2::check_public_verification_row_v1(table, key, bytes)
             .map_err(|_| PalwStateV2Error::DeltaMismatch("invalid public verification row in kernel route delta"))?;

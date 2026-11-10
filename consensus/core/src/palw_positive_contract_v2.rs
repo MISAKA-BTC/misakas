@@ -41,6 +41,10 @@ pub(crate) const PUBLIC_ORIGINAL_ADMISSION_TABLE_V1: u8 = 198;
 pub(crate) const PUBLIC_PENDING_MANIFEST_TABLE_V1: u8 = 199;
 pub(crate) const PUBLIC_MANIFEST_RESPONSE_TABLE_V1: u8 = 200;
 
+pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
+    matches!(table, PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 | PUBLIC_PENDING_MANIFEST_TABLE_V1 | PUBLIC_MANIFEST_RESPONSE_TABLE_V1)
+}
+
 pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u8]) -> Result<(), ContractError> {
     match table {
         PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => PublicOriginalAdmissionRecordV1::decode_row(key, bytes).map(|_| ()),
