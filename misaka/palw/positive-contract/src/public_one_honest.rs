@@ -82,6 +82,25 @@ pub struct OriginalCommit {
     pub service_contract: Digest,
 }
 
+/// Fixed-size transport of the original and its detached Miner signature.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedPublicOriginalV1 {
+    pub original: OriginalCommit,
+    pub key: [u8; PUBKEY_BYTES],
+    pub signature: [u8; SIGNATURE_BYTES],
+}
+
+impl SignedPublicOriginalV1 {
+    pub const WIRE_BYTES: usize = 19 * 64 + 32 + 3 * 4 + PUBKEY_BYTES + SIGNATURE_BYTES;
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ContractError> {
+        if bytes.len() != Self::WIRE_BYTES {
+            return Err(ContractError::NonCanonical);
+        }
+        borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)
+    }
+}
+
 impl OriginalCommit {
     /// Validate and encode the manifest before binding its root for signing.
     pub fn bind_manifest(

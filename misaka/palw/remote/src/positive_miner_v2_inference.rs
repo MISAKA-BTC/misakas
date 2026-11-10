@@ -229,7 +229,7 @@ pub fn finalize_public_capture_v1(
     provider_root: &std::path::Path,
     key: &[u8; PUBKEY_BYTES],
     sign: impl FnOnce(&[u8], &[u8]) -> Result<[u8; SIGNATURE_BYTES], String>,
-) -> Result<(OriginalCommit, [u8; SIGNATURE_BYTES]), MinerErrorV2> {
+) -> Result<misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1, MinerErrorV2> {
     if misaka_palw_positive_contract::identity::principal(key) != original.miner {
         return Err(ContractError::Identity.into());
     }
@@ -280,7 +280,7 @@ pub fn finalize_public_capture_v1(
         .map_err(|error| MinerErrorV2::Journal(format!("public trace index: {error}")))?;
     super::store::store_public_manifest_v1(provider_root, &original, scope_limits, total_limit, max_manifest_bytes, &bytes)
         .map_err(|error| MinerErrorV2::Journal(format!("public manifest: {error:?}")))?;
-    Ok((original, signature))
+    Ok(misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1 { original, key: *key, signature })
 }
 
 /// Publish a requested tile directly from the retained original execution.

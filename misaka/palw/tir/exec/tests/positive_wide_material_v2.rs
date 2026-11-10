@@ -517,7 +517,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         usage: &AggregateUsage::default(),
         budget: &budget,
     };
-    let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
+    use misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1;
+    let envelope = SignedPublicOriginalV1 { original: original.clone(), key: signed.key, signature: *signature.as_ref() };
+    let bytes = borsh::to_vec(&envelope).unwrap();
+    assert_eq!(bytes.len(), SignedPublicOriginalV1::WIRE_BYTES);
+    assert!(SignedPublicOriginalV1::decode(&bytes[..bytes.len() - 1]).is_err());
+    let prepared = admission.prepare_signed(&SignedPublicOriginalV1::decode(&bytes).unwrap(), &reservation).unwrap();
     let reserved = d(21);
     let record = prepared.record(reserved);
     let terminal = prepared.schedule.terminal_by();

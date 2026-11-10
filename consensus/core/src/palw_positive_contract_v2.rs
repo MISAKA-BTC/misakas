@@ -468,6 +468,14 @@ impl PublicOriginalAdmissionRecordV1 {
 }
 
 impl PublicOriginalAdmissionV1<'_> {
+    pub fn prepare_signed(
+        &self,
+        signed: &misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1,
+        reservation: &PublicOriginalReservationV1<'_>,
+    ) -> Result<PreparedPublicOriginalV1, ContractError> {
+        self.prepare(&signed.original, &signed.key, &signed.signature, reservation)
+    }
+
     pub fn prepare(
         &self,
         original: &OriginalCommit,
