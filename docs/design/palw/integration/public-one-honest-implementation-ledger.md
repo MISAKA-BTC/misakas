@@ -86,3 +86,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 `positive-panel` を有効にした remote crate のテストを実行し、270 件成功、長時間テスト 1 件は ignored。HTTP 統合テストでは、Miner が署名して公開した同じ original に対して、Panel の取得・不足時の署名済み要求、provider の応答 packet の生成と認証、同じ original の独立再実行まで確認した。試験の accepted origin は fixture。公開 T12 の carrier 受付、予約、Q の終結、Final はこの結果の対象外。
 
 公開 seat 5 を DAA 20,987〜20,988 で再照会した。同期済みの testnet-12 ノードは、同じ未署名候補 `7645bc8b…a3711` の original quote を `TIR_CLASS_CONTAINER_UNBOUND` で拒否した。FreePromptClaim、KernelClaim、ClaimDetail、CourtState、claim-lifecycle はすべて `found=false`。選択ブロック `9ced0332…885be` は DAA 20,987 で取得できたが、候補の受付ブロックは取得できなかった。
+
+Linux の T12 復旧候補をリリースビルドし、バイナリの SHA-256 `3704030a2d230a2c74c20c4f8777706f08598e89988c2f8eb8cae3253f2d4c11` を転送先で照合した。seat 5 上の隔離カナリア `t12-exact-recovery-canary-151f9ce7` が既存カナリア DB を開き、保存済みの隔離状態を保持して起動した。初回 RPC では pruning import は epoch 18、idle、stable。カナリアは DAA 5,187、公開 seat 5 は同期済みの DAA 20,994。カナリアは protocol 108 のピアと接続し、IBD でヘッダー 56 件を取り込んで不足ブロック本体の検索に進んだ。公開先端への合流と Studio claim の受付はこの確認には含まれない。
