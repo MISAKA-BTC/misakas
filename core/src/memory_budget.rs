@@ -243,7 +243,14 @@ fn effective_capacity() -> Option<u64> {
             |path| std::fs::read_to_string(path).ok(),
         )
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let mut system = sysinfo::System::new();
+        system.refresh_memory();
+        let bytes = system.total_memory();
+        (bytes != 0).then_some(bytes)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         None
     }
