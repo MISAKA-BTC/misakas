@@ -135,6 +135,9 @@ pub fn find_public_trace_difference_v1(
         return Err(PanelSourceErrorR1::Budget);
     }
     let hashes = replay.public_replay_leaf_hashes(original, trace.step_leaf_count).map_err(PanelSourceErrorR1::ReplayMismatch)?;
+    if replay.run().step_merkle_root() == trace.step_merkle_root {
+        return Ok(None);
+    }
     for index in range {
         let (opening, tile) = fetch_public_trace_tile_v1(provider, original, trace, index, max_step_leaf_count, max_value_bytes)?;
         if opening.leaf_hash != hashes[index as usize] {
@@ -235,6 +238,10 @@ pub fn run_public_wide_replay_v1(
         && capture.run().execution_root().as_bytes() != original.trace_root.0
     {
         let trace = fetch_public_trace_index_v1(provider, original, search.max_step_leaf_count)?;
+        let expected_leaf_count = capture.run().leaf_count();
+        if trace.step_leaf_count != expected_leaf_count {
+            return Err(PanelSourceErrorR1::TraceLeafCountMismatch { trace: Box::new(trace), expected: expected_leaf_count });
+        }
         let difference = find_public_trace_difference_v1(
             provider,
             original,
@@ -459,6 +466,7 @@ pub enum PanelSourceErrorR1 {
     ReplayExecution(String),
     ReplayMismatch(String),
     LocatedTraceDifference(Box<PublicOriginalTraceTileV1>),
+    TraceLeafCountMismatch { trace: Box<PublicOriginalTraceIndexV1>, expected: u64 },
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {
