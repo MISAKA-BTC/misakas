@@ -24,6 +24,7 @@ use kaspa_consensus_core::{
     palw_tokenizer_rendering_v1::{PalwTokenizerRenderingRuleV1, palw_tokenizer_key_events_v1, palw_tokenizer_raw_commitment_v1},
     palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, PalwTokenizerRenderingStatementV2},
 };
+use kaspa_database::{create_temp_db, prelude::ConnBuilder};
 
 const START: u64 = 46;
 const FEE: u64 = 2_000_000;
@@ -309,7 +310,11 @@ fn signed_tkr1_open_parts_finish_and_duplicate_use_the_actual_node() {
 
 async fn run() {
     let (config, bundle, premine, floats, policy) = isolated_config();
-    let mut env = Env::over((config, bundle, premine, floats));
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, _receiver) = async_channel::unbounded();
+    let node = TestConsensus::with_db(db.clone(), &config, sender);
+    let chain = t12_genesis_chain_on(node, &config, &bundle, &premine, &floats);
+    let mut env = Env::around(chain, (config, bundle, premine, floats));
     warm_to(&mut env, START).await;
     let raw = br#"{"model":{"vocab":{"A":0},"merges":[]},"added_tokens":[]}"#;
     let mut c = case("dense-gqa-2layer");
@@ -470,4 +475,65 @@ async fn run() {
     assert_utxo_accepted(&m.env, &retry_fold, &retry);
     let unchanged = m.env.chain.ctx.consensus.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap().value.unwrap();
     assert_eq!(*unchanged, *complete);
+
+    let (sink, state) = m.env.chain.tip_state();
+    let root = state.state_root();
+    let selected = chain_blocks(&m.env.chain, sink);
+    let fold_roots =
+        [open_fold.header.hash, part_fold.header.hash, finish_fold.header.hash].map(|hash| (hash, root_at(&m.env.chain, hash)));
+    let (simulated_time, nonce) = (m.env.chain.ctx.simulated_time, m.env.chain.nonce_for_reopen());
+    let Env { chain, config, bundle, premine, floats, .. } = m.env;
+    drop(chain);
+
+    let mut resumed = config.clone();
+    resumed.process_genesis = false;
+    let (sender, _restart_receiver) = async_channel::unbounded();
+    let node = TestConsensus::with_db(db.clone(), &resumed, sender);
+    let restarted = t12_reopened_chain(node, &resumed, &bundle, simulated_time, nonce);
+    assert_eq!(restarted.sink(), sink);
+    assert_eq!(restarted.tip_state().1.state_root(), root);
+    let status =
+        |chain: &T12Chain| chain.ctx.consensus.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap().value.unwrap();
+    assert_eq!(*status(&restarted), *complete);
+    for (hash, want) in fold_roots {
+        assert_eq!(root_at(&restarted, hash), want);
+    }
+    for tx in [&open_tx, &part_tx, &finish_tx, &retry] {
+        let node = &restarted.ctx.consensus;
+        assert!(node.get_virtual_utxo_entry(tx.inputs[0].previous_outpoint).is_none());
+        assert_eq!(node.get_virtual_utxo_entry(TransactionOutpoint::new(tx.id(), 0)).unwrap().amount, tx.outputs[0].value);
+    }
+    drop(restarted);
+
+    let replay = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    for block in &selected {
+        arrive(&replay, block.clone(), "selected TKR1 replay block").await;
+    }
+    assert_eq!(replay.sink(), sink);
+    assert_eq!(replay.tip_state().1.state_root(), root);
+    assert_eq!(*status(&replay), *complete);
+    for (hash, want) in fold_roots {
+        assert_eq!(root_at(&replay, hash), want);
+    }
+
+    // Fork after Part but before Finish. The competing branch has the same
+    // paid Open and accepted Part and never consumes the original Finish slot.
+    let mut competing = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let fork = selected.iter().position(|block| block.header.hash == part_fold.header.hash).unwrap();
+    for block in &selected[..=fork] {
+        arrive(&competing, block.clone(), "common TKR1 block").await;
+    }
+    competing.ctx.simulated_time = part_fold.header.timestamp;
+    for _ in 0..(selected.len() - fork + 3) {
+        let miner = MinerData::new(card_payout_spk(RETRY_PAYER), vec![0x54, 0x4b, 0x52]);
+        let block = competing.heartbeat_paying(miner, ttpb, vec![]).await;
+        arrive(&replay, block, "competing branch without Finish").await;
+    }
+    assert_eq!(replay.sink(), competing.sink());
+    assert_eq!(replay.tip_state().1.state_root(), competing.tip_state().1.state_root());
+    let reorged = status(&replay);
+    assert_eq!(*reorged, *part_status);
+    assert_eq!(reorged.status, TokenizerRegistrationStatusV1::Pending);
+    assert!(!reorged.finishes.iter().any(|finish| finish.attempted));
+    assert_eq!(root_at(&replay, finish_fold.header.hash), fold_roots[2].1);
 }

@@ -29,6 +29,25 @@ pub(crate) fn check_tokenizer_registration_snapshot_v1(
         None if sessions().next().is_none() && parts().next().is_none() => return Ok(()),
         None => return Err("tokenizer registration rows have no reservation book".into()),
     };
+    // Enforce the priced envelope before book reconstruction, row hashing or
+    // cross-row checks. In particular, orphan rows must not cause an unbounded
+    // traversal followed only by a count mismatch at the end.
+    book.check_shape_v1()?;
+    if book.policy.bookkeeping_work_v1()?.snapshot > book.policy.service_budget.work {
+        return Err("tokenizer snapshot exceeds its work envelope".into());
+    }
+    let max_sessions = book.policy.max_pending_total as usize;
+    let max_parts_per_session =
+        book.policy.max_raw_bytes.div_ceil(crate::palw_tokenizer_registration_v1::TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64);
+    let max_parts = u64::from(book.policy.max_pending_total)
+        .checked_mul(max_parts_per_session)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or("tokenizer snapshot Part bound overflows")?;
+    if sessions().take(max_sessions.saturating_add(1)).count() > max_sessions
+        || parts().take(max_parts.saturating_add(1)).count() > max_parts
+    {
+        return Err("tokenizer snapshot row count exceeds its work envelope".into());
+    }
     let now = state.last_point().ok_or("tokenizer registration book has no accepted snapshot point")?;
     book.check()?;
     let mut session_count = 0usize;
@@ -38,6 +57,9 @@ pub(crate) fn check_tokenizer_registration_snapshot_v1(
             return Err("tokenizer registration session range has a foreign row".into());
         };
         session_count = session_count.checked_add(1).ok_or("tokenizer snapshot session count overflows")?;
+        if session.policy != book.policy {
+            return Err("tokenizer session substitutes the snapshot work policy".into());
+        }
         session.check(*id)?;
         let open = &session.open.body;
         if !not_after(session.accepted, *now)

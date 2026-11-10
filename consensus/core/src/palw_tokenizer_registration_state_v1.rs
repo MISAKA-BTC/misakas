@@ -411,16 +411,39 @@ impl TokenizerRegistrationBookV1 {
         })
     }
 
-    pub(crate) fn check(&self) -> Result<(), String> {
+    /// Reject oversized restored indices before the generic service checker
+    /// rebuilds maps or constructs any causal graph. These are the same
+    /// cardinalities used by the policy's bookkeeping work envelope.
+    pub(crate) fn check_shape_v1(&self) -> Result<(), String> {
         let budget = self.policy.effective_reservation_budget_v1()?;
-        self.book.check()?;
+        let parts =
+            self.policy.max_raw_bytes.div_ceil(crate::palw_tokenizer_registration_v1::TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64);
+        let packets =
+            u64::from(self.policy.max_pending_total).checked_mul(parts + 2).ok_or("tokenizer reservation packet bound overflows")?;
         if self.book.budget != budget
             || !self.book.supply.is_empty()
             || self.book.last_observed_daa.is_some()
             || self.sessions.len() > self.policy.max_pending_total as usize
+            || [self.book.packets.len(), self.book.assignments.len(), self.book.remaining.len()]
+                .into_iter()
+                .any(|len| len as u64 > packets)
         {
             return Err("invalid tokenizer reservation book policy or scope".into());
         }
+        for reservation in self.sessions.values() {
+            if reservation.quote.geometry.raw_bytes > self.policy.max_raw_bytes
+                || u64::from(reservation.quote.geometry.part_count) > parts
+                || reservation.assigned_slots.len() as u64 > parts + 2
+            {
+                return Err("tokenizer reservation exceeds its policy geometry".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check(&self) -> Result<(), String> {
+        self.check_shape_v1()?;
+        self.book.check()?;
         let mut retained = 0u64;
         let mut owners = BTreeMap::new();
         let mut ids = BTreeSet::new();
@@ -621,6 +644,29 @@ mod tests {
             finish_attempts: BTreeSet::new(),
             status: TokenizerRegistrationStatusV1::Pending,
         }
+    }
+
+    #[test]
+    fn tokenizer_registration_book_rejects_oversized_restore_before_rebuilding_indices() {
+        let row = session();
+        let id = row.id().unwrap();
+        let mut book = TokenizerRegistrationBookV1::new(row.policy).unwrap();
+        book.reserve(&row).unwrap();
+        let max_parts =
+            row.policy.max_raw_bytes.div_ceil(crate::palw_tokenizer_registration_v1::TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64);
+        let mut oversized = book.clone();
+        oversized.sessions.get_mut(&id).unwrap().assigned_slots.resize(max_parts as usize + 3, 0);
+        assert_eq!(oversized.check().unwrap_err(), "tokenizer reservation exceeds its policy geometry");
+        let mut oversized = book.clone();
+        let limit = u64::from(row.policy.max_pending_total) * (max_parts + 2);
+        for n in 0..=limit {
+            oversized.book.remaining.insert(n, book.book.budget);
+        }
+        assert_eq!(oversized.check().unwrap_err(), "invalid tokenizer reservation book policy or scope");
+        let mut oversized = book.clone();
+        oversized.sessions.get_mut(&id).unwrap().quote.geometry.raw_bytes = row.policy.max_raw_bytes + 1;
+        assert_eq!(oversized.check().unwrap_err(), "tokenizer reservation exceeds its policy geometry");
+        book.check().unwrap();
     }
 
     #[test]

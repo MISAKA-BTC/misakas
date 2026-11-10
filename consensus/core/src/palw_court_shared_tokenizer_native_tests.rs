@@ -872,6 +872,26 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     assert!(authoritative.staged_court_row_v1(&session_key).is_some());
     assert_eq!(authoritative.staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
     let accepted_status = palw_tokenizer_registration_status_v1(&authoritative, open_id).unwrap().unwrap();
+    // Hostile snapshot row counts fail before any cross-row/hold traversal.
+    // A counterfeit per-session policy cannot expand the priced book bounds.
+    {
+        let check = |s: &PalwChainStateV2| {
+            crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_snapshot_v1(s, |_, _, _| {
+                panic!("over-budget snapshot must fail before checking holds")
+            })
+        };
+        let original = authoritative.staged_court_row_v1(&session_key).unwrap().clone();
+        let mut excessive = (*authoritative).clone();
+        for index in 0..=policy.max_pending_total {
+            excessive.staged_courts.insert(Key::TokenizerRegistrationSession(h(110_000 + u64::from(index))), original.clone());
+        }
+        assert_eq!(check(&excessive).unwrap_err(), "tokenizer snapshot row count exceeds its work envelope");
+        let mut foreign = (*authoritative).clone();
+        let Row::TokenizerRegistrationSession(mut session) = original else { unreachable!() };
+        session.policy.max_key_events += 1;
+        foreign.staged_courts.insert(session_key, Row::TokenizerRegistrationSession(session));
+        assert_eq!(check(&foreign).unwrap_err(), "tokenizer session substitutes the snapshot work policy");
+    }
     assert_eq!(accepted_status.open, body);
     assert_eq!(accepted_status.accepted, point);
     assert_eq!(accepted_status.charge_id, expected.charge_id.unwrap());
