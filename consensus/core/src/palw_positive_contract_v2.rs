@@ -155,8 +155,16 @@ pub struct PublicOriginalCourtRecordV1 {
 }
 
 impl PublicOriginalCourtRecordV1 {
-    pub fn check_restore(&self, expected: &Self) -> Result<(), ContractError> {
-        if self != expected {
+    pub fn check_restore(
+        &self,
+        admission: &PublicOriginalAdmissionRecordV1,
+        prepared: &PreparedPublicOriginalV1,
+        reservation: Digest,
+        inclusion_daa: u64,
+        verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
+    ) -> Result<(), ContractError> {
+        let expected = admission.court_record(prepared, reservation, inclusion_daa, verdict)?;
+        if *self != expected {
             return Err(ContractError::Scope);
         }
         Ok(())

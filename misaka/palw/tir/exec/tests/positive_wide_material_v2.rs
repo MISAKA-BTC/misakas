@@ -535,9 +535,15 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         &borsh::to_vec(&verdict_record).unwrap(),
     )
     .unwrap();
-    assert_eq!(restored.check_restore(&verdict_record), Ok(()));
-    let different_daa = bad_record.court_record(&bad_prepared, reserved, terminal - 1, &verdict).unwrap();
-    assert_eq!(restored.check_restore(&different_daa), Err(misaka_palw_positive_contract::ContractError::Scope));
+    assert_eq!(restored.check_restore(&bad_record, &bad_prepared, reserved, terminal, &verdict), Ok(()));
+    assert_eq!(
+        restored.check_restore(&bad_record, &bad_prepared, reserved, terminal - 1, &verdict),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
+    assert_eq!(
+        restored.check_restore(&bad_record, &bad_prepared, d(22), terminal, &verdict),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     assert_eq!(
         bad_record.court_verdict_key(&bad_prepared, reserved, terminal + 1, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Range)
