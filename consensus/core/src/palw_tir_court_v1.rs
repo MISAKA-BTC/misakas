@@ -3853,6 +3853,31 @@ impl PublicOriginalTraceTileV1 {
         }
         Ok(PublicWideTileGeometryV1::Canonical { leaf })
     }
+
+    /// Check a localized logits tile against the independent logits
+    /// commitment of the same original using the existing wide court.
+    pub fn check_wide_logits_consistency(
+        &self,
+        original: &misaka_palw_positive_contract::public_one_honest::OriginalCommit,
+        binding: &PalwTirStepBindingV1,
+        index: u64,
+        event: &crate::palw_logits_q24_v2::WideLogitsEventV2,
+        max_value_bytes: usize,
+        rules: &PalwTirCourtRulesV1,
+    ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+        self.authenticate(original, index, rules.max_step_leaf_count, max_value_bytes)?;
+        if binding.committed_execution_root.as_bytes() != original.trace_root.0
+            || binding.job_context.context_hash().as_bytes() != original.execution.0
+            || binding.job_context.shape_profile_id.as_bytes() != original.registered_class.0
+            || binding.artifact_root.as_bytes() != original.artifact.0
+            || binding.full_logits_trace_root != self.trace.full_logits_trace_root
+            || binding.step_leaf_count != self.trace.step_leaf_count
+            || binding.step_merkle_root != self.trace.step_merkle_root
+        {
+            return Err(bad("wide logits court binding names another original execution"));
+        }
+        check_tir_logits_consistency_wide_q24_v2(binding, &self.opening, &self.tile, event, rules)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
