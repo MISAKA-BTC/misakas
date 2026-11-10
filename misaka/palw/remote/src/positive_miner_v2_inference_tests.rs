@@ -55,7 +55,12 @@ fn program_material_is_the_registered_graph_in_one_chunk() {
 fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     use crate::miner::positive_v2::store::{StoreErrorV2, load_public_manifest_v1, store_public_manifest_v1};
     use crate::positive_panel_sources::{
-        PanelSourceErrorR1, open_public_input_token_tile_v1, open_public_tir_program_v1, read_public_manifest_v1,
+        PanelSourceErrorR1, fetch_public_manifest_v1, open_public_input_token_tile_v1, open_public_tir_program_v1,
+        read_public_manifest_v1,
+    };
+    use crate::{
+        evidence::fs::FsProvider,
+        public_material::{MaterialProvider, public_original_manifest_path},
     };
     use kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1;
     use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, OriginalCommit};
@@ -130,13 +135,18 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     forged[0] ^= 1;
     let refused = store_public_manifest_v1(&store, &original, &rules, limit, 4096, &forged);
     let unchanged = load_public_manifest_v1(&store, &original, 4096);
+    let provider = FsProvider::new(&store);
+    let fetched = fetch_public_manifest_v1(&provider, &original, &rules, limit, 4096);
+    let overwrite = provider.put(&public_original_manifest_path(original.id()), &forged);
     std::fs::remove_dir_all(&store).unwrap();
     written.unwrap();
     assert_eq!(refused, Err(StoreErrorV2::Authentication));
     assert_eq!(unchanged.unwrap(), encoded);
+    assert!(overwrite.is_err());
     let encoded = loaded.unwrap();
     let len = encoded.len() as u64;
     let checked = read_public_manifest_v1(&original, &rules, limit, 4096, len, encoded.as_slice()).unwrap();
+    assert_eq!(fetched.unwrap(), checked);
     let mut wrong_frame = encoded.as_slice();
     assert_eq!(
         read_public_manifest_v1(&original, &rules, limit, 4096, len + 1, &mut wrong_frame),

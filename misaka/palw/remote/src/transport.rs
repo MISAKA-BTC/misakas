@@ -1346,6 +1346,8 @@ pub mod server {
         Chunk(Hash64, u32),
         Redemption(String),
         RedemptionIndex,
+        #[cfg(feature = "positive-miner")]
+        PublicOriginalManifest(String),
         /// DA16: a public-material path (`crate::public_material`'s layout, strictly parsed there).
         Material(String),
     }
@@ -1357,6 +1359,12 @@ pub mod server {
     /// Strict: nothing but the two content-addressed shapes ever reaches the filesystem (no `..`, no extra segments, no odd names).
     fn parse_target(path: &str) -> Option<Target> {
         let path = path.split('?').next().unwrap_or("");
+        #[cfg(feature = "positive-miner")]
+        if let Some(rest) = path.strip_prefix('/')
+            && crate::public_material::is_public_original_manifest_path(rest)
+        {
+            return Some(Target::PublicOriginalManifest(rest.to_ascii_lowercase()));
+        }
         if let Some(rest) = path.strip_prefix('/')
             && crate::public_material::is_material_path(rest)
         {
@@ -1446,6 +1454,8 @@ pub mod server {
             Target::Chunk(id, index) => crate::evidence::fs::chunk_path(root, *id, *index),
             Target::Redemption(claim) => redemption_path(root, claim),
             Target::RedemptionIndex => root.join("redemptions"),
+            #[cfg(feature = "positive-miner")]
+            Target::PublicOriginalManifest(path) => root.join(path),
             Target::Material(path) => root.join(path),
         };
         if target == Target::RedemptionIndex {
@@ -1459,6 +1469,8 @@ pub mod server {
             Target::Manifest(_) => MANIFEST_MAX_BYTES,
             Target::Chunk(..) => cfg.limits.max_chunk_bytes as usize,
             Target::Redemption(_) | Target::RedemptionIndex => REDEMPTION_MAX_BYTES,
+            #[cfg(feature = "positive-miner")]
+            Target::PublicOriginalManifest(_) => misaka_palw_positive_contract::public_one_honest::ManifestV1::WIRE_BYTES as usize,
             Target::Material(path) if path.ends_with("manifest") => crate::public_material::MATERIAL_MANIFEST_MAX_BYTES,
             Target::Material(_) => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
         };
@@ -1472,6 +1484,8 @@ pub mod server {
                     Err(_) => respond(&mut stream, 404, b"not found"),
                 }
             }
+            #[cfg(feature = "positive-miner")]
+            "PUT" if matches!(target, Target::PublicOriginalManifest(_)) => respond(&mut stream, 405, b"read only"),
             "PUT" => {
                 if content_length > cap {
                     // Drain (a bounded amount of) what the client is still sending before answering: closing on unread data resets the
@@ -1514,6 +1528,8 @@ pub mod server {
                         Err(why) => respond(&mut stream, 400, why.as_bytes()),
                     },
                     Target::RedemptionIndex => respond(&mut stream, 405, b"GET only"),
+                    #[cfg(feature = "positive-miner")]
+                    Target::PublicOriginalManifest(_) => respond(&mut stream, 405, b"read only"),
                     // DA16: a manifest is stored only if every unit it names is already here and checks (this provider never serves a
                     // manifest it cannot back); units are stored as given and judged by every reader against the chain's roots.
                     Target::Material(ref path) => {

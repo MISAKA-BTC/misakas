@@ -26,8 +26,7 @@ use std::{
 };
 
 fn public_manifest_path(root: &Path, original: &OriginalCommit) -> PathBuf {
-    let Digest(id) = original.id().0;
-    root.join("public-manifests-v1").join(faster_hex::hex_string(&id))
+    root.join(crate::public_material::public_original_manifest_path(original.id()))
 }
 
 /// Publish only an authenticated, canonical manifest. The native reservation

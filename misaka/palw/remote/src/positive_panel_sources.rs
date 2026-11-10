@@ -35,6 +35,23 @@ use misaka_palw_tir_artifact::{
 use misaka_palw_tir_exec::node::TirArtifactV1;
 
 use crate::miner::positive_v2::{CanonicalDataDutyV2, MinerErrorV2, PreparedDataV2, StoredUnitV2};
+use crate::public_material::{MaterialProvider, public_original_manifest_path};
+
+/// Obtain the original manifest from a configured public material provider.
+pub fn fetch_public_manifest_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+) -> Result<CheckedManifestV1, PanelSourceErrorR1> {
+    let size = ManifestV1::fetch_size(max_manifest_bytes)?;
+    let bytes = provider
+        .get(&public_original_manifest_path(original.id()), size as usize)
+        .map_err(|error| PanelSourceErrorR1::ManifestProvider(error.0))?
+        .ok_or(PanelSourceErrorR1::Incomplete)?;
+    read_public_manifest_v1(original, scope_limits, total_limit, max_manifest_bytes, bytes.len() as u64, bytes.as_slice())
+}
 
 /// Read a single length-framed manifest response and authenticate it before
 /// interpreting any entries. The caller provides the frame's body length
@@ -113,6 +130,7 @@ pub enum PanelSourceErrorR1 {
     Budget,
     Incomplete,
     ManifestRead(ErrorKind),
+    ManifestProvider(String),
     Artifact(String),
 }
 impl From<ContractError> for PanelSourceErrorR1 {

@@ -84,6 +84,15 @@ pub fn artifact_kernel_unit_path(artifact_root: &Hash64, kernel_param_root: &Has
 pub fn material_manifest_path(claim: &Hash64) -> String {
     format!("material/{claim}/manifest")
 }
+#[cfg(feature = "positive-miner")]
+pub fn public_original_manifest_path(original: misaka_palw_positive_contract::public_one_honest::OriginalId) -> String {
+    let id = original.0;
+    format!("public-manifests-v1/{}", faster_hex::hex_string(&id.0))
+}
+
+pub(crate) fn is_public_original_manifest_path(path: &str) -> bool {
+    path.strip_prefix("public-manifests-v1/").is_some_and(is_hex128)
+}
 pub fn material_unit_path(claim: &Hash64, stem: &str) -> String {
     format!("material/{claim}/{stem}.unit")
 }
@@ -139,7 +148,7 @@ impl MaterialProvider for crate::evidence::fs::FsProvider {
         self.id.clone()
     }
     fn get(&self, path: &str, max: usize) -> Result<Option<Vec<u8>>, ProviderError> {
-        if !is_material_path(path) {
+        if !is_material_path(path) && !is_public_original_manifest_path(path) {
             return Err(ProviderError(format!("{path:?} is not a material path")));
         }
         use crate::evidence::fs::{BoundedFileError, read_bounded_file};
