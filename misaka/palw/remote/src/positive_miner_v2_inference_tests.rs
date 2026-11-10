@@ -168,6 +168,26 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     let refused = store_public_manifest_v1(&store, &original, &rules, limit, 4096, &forged);
     let unchanged = load_public_manifest_v1(&store, &original, 4096);
     let provider = FsProvider::new(&store);
+    let mut oversized_original = original.clone();
+    let mut oversized_manifest = manifest.clone();
+    let program_index = MaterialScope::Program as usize;
+    let oversized_bytes = misaka_palw_tir::program::MAX_PROGRAM_BYTES as u32 + 1;
+    oversized_manifest.entries[program_index].total_bytes = u64::from(oversized_bytes);
+    oversized_manifest.entries[program_index].chunk_bytes = oversized_bytes;
+    let mut oversized_rules = rules;
+    oversized_rules[program_index].max_bytes = u64::from(oversized_bytes);
+    oversized_rules[program_index].chunk_bytes = oversized_bytes;
+    let oversized_limit = limit + u64::from(oversized_bytes - size);
+    let oversized_body = oversized_original.bind_manifest(&oversized_manifest, &oversized_rules, oversized_limit, 4096).unwrap();
+    let oversized_checked = oversized_original
+        .authenticate_manifest(&oversized_body, 4096)
+        .unwrap()
+        .decode(&oversized_original, &oversized_rules, oversized_limit)
+        .unwrap();
+    assert_eq!(
+        fetch_public_replay_inputs_v1(&provider, &oversized_original, &oversized_checked, form),
+        Err(PanelSourceErrorR1::Budget)
+    );
     let fetched = fetch_public_manifest_v1(&provider, &original, &rules, limit, 4096);
     let overwrite = provider.put(&public_original_manifest_path(original.id()), &forged);
     let replay_manifest = fetched.as_ref().unwrap();

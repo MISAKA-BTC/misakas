@@ -282,7 +282,11 @@ fn fetch_public_replay_material(
     }
     let entry = manifest.entry(scope);
     let size = usize::try_from(entry.total_bytes).map_err(|_| PanelSourceErrorR1::Budget)?;
-    if size > crate::public_material::MATERIAL_UNIT_MAX_BYTES || entry.total_bytes > u64::from(entry.chunk_bytes) {
+    let max = match scope {
+        MaterialScope::Program => misaka_palw_tir::program::MAX_PROGRAM_BYTES,
+        _ => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
+    };
+    if size > max || entry.total_bytes > u64::from(entry.chunk_bytes) {
         return Err(PanelSourceErrorR1::Budget);
     }
     let path = crate::public_material::public_original_replay_path(original.id(), scope).ok_or(ContractError::UnsupportedProfile)?;
