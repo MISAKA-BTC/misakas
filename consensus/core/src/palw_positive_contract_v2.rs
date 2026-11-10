@@ -41,9 +41,16 @@ pub const PART_OVERHEAD: u64 = (EVIDENCE_HEADER_BYTES + EXACT_PART_HEADER_BYTES)
 pub(crate) const PUBLIC_ORIGINAL_ADMISSION_TABLE_V1: u8 = 198;
 pub(crate) const PUBLIC_PENDING_MANIFEST_TABLE_V1: u8 = 199;
 pub(crate) const PUBLIC_MANIFEST_RESPONSE_TABLE_V1: u8 = 200;
+pub(crate) const PUBLIC_DRAW_TABLE_V1: u8 = 201;
 
 pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
-    matches!(table, PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 | PUBLIC_PENDING_MANIFEST_TABLE_V1 | PUBLIC_MANIFEST_RESPONSE_TABLE_V1)
+    matches!(
+        table,
+        PUBLIC_ORIGINAL_ADMISSION_TABLE_V1
+            | PUBLIC_PENDING_MANIFEST_TABLE_V1
+            | PUBLIC_MANIFEST_RESPONSE_TABLE_V1
+            | PUBLIC_DRAW_TABLE_V1
+    )
 }
 
 pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u8]) -> Result<(), ContractError> {
@@ -51,6 +58,7 @@ pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u
         PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => PublicOriginalAdmissionRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_PENDING_MANIFEST_TABLE_V1 => PendingManifestCaseRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => ManifestResponseRecordV1::decode_row(key, bytes).map(|_| ()),
+        PUBLIC_DRAW_TABLE_V1 => PublicDrawRecordV1::decode_row(key, bytes).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -204,6 +212,7 @@ impl PublicOriginalCourtRecordV1 {
 /// Membership and per-bond rescue capacity validated for one original.
 pub struct PreparedPublicDrawV1 {
     original: OriginalId,
+    admission_carrier: AcceptedMaterial,
     draw: Digest,
     draw_daa: u64,
     hard: u64,
@@ -216,6 +225,7 @@ pub struct PreparedPublicDrawV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicDrawRecordV1 {
     original: OriginalId,
+    admission_carrier: AcceptedMaterial,
     draw: Digest,
     draw_daa: u64,
     hard: u64,
@@ -225,6 +235,14 @@ pub struct PublicDrawRecordV1 {
 }
 
 impl PublicDrawRecordV1 {
+    fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
+        let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
+        if key != row.original.0.0.as_slice() {
+            return Err(ContractError::Identity);
+        }
+        Ok(row)
+    }
+
     /// Restore only against a draw re-derived from the native history.
     pub fn check_restore(&self, draw: &PreparedPublicDrawV1) -> Result<(), ContractError> {
         if *self != draw.record() {
@@ -257,8 +275,8 @@ native_struct!(PublicOriginalAdmissionRecordV1; original, carrier, reservation, 
 wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, AcceptedMaterial, Digest, RemainingCapacity, ProtectedRescueDemand, AggregateBudget, u32, [u64; 8]);
 native_struct!(PublicOriginalCourtRecordV1; original, admission_carrier, reservation, evidence_id, origin);
 wire_struct!(PublicOriginalCourtRecordV1; OriginalId, AcceptedMaterial, Digest, Hash64, AcceptedOrigin);
-native_struct!(PublicDrawRecordV1; original, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
-wire_struct!(PublicDrawRecordV1; OriginalId, Digest, u64, u64, Digest, Digest, RemainingCapacity);
+native_struct!(PublicDrawRecordV1; original, admission_carrier, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
+wire_struct!(PublicDrawRecordV1; OriginalId, AcceptedMaterial, Digest, u64, u64, Digest, Digest, RemainingCapacity);
 native_struct!(PublicReplayApprovalRecordV1; bond, origin, approval_digest);
 wire_struct!(PublicReplayApprovalRecordV1; PanelBond, AcceptedOrigin, Digest);
 
@@ -311,6 +329,7 @@ impl PreparedPublicDrawV1 {
     pub fn record(&self) -> PublicDrawRecordV1 {
         PublicDrawRecordV1 {
             original: self.original,
+            admission_carrier: self.admission_carrier,
             draw: self.draw,
             draw_daa: self.draw_daa,
             hard: self.hard,
@@ -440,7 +459,10 @@ impl PreparedPublicOriginalV1 {
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<PendingManifestCase, ContractError> {
-        if draw.original != self.original || self.original.full_replay_scope(context.inspection_scope) != draw.full_scope {
+        if draw.original != self.original
+            || draw.admission_carrier != self.carrier
+            || self.original.full_replay_scope(context.inspection_scope) != draw.full_scope
+        {
             return Err(ContractError::Scope);
         }
         if context.origin.accepted_daa < draw.draw_daa {
@@ -522,6 +544,7 @@ impl PreparedPublicOriginalV1 {
         }
         Ok(PreparedPublicDrawV1 {
             original: self.original,
+            admission_carrier: self.carrier,
             draw,
             draw_daa,
             hard: self.schedule.hard(),
@@ -679,6 +702,29 @@ fn check_public_origin_point_v1(
 }
 
 impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Read the recorded draw. Membership is still re-derived from native history.
+    pub fn public_draw_record_v1(&self, original: OriginalId) -> Result<Option<PublicDrawRecordV1>, ContractError> {
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
+        let key = (PUBLIC_DRAW_TABLE_V1, original.0.0.to_vec());
+        route.aux.get(&key).map(|bytes| self.decode_public_draw_row_v1(&key.1, bytes)).transpose()
+    }
+
+    pub(crate) fn decode_public_draw_row_v1(&self, key: &[u8], bytes: &[u8]) -> Result<PublicDrawRecordV1, ContractError> {
+        let row = PublicDrawRecordV1::decode_row(key, bytes)?;
+        let admission = self.public_original_admission_record_v1(row.original)?.ok_or(ContractError::Scope)?;
+        let point = self.last_point().ok_or(ContractError::Scope)?;
+        let clock = OriginalClock::new(admission.carrier.origin.accepted_daa)?;
+        if row.admission_carrier != admission.carrier
+            || row.draw_daa <= admission.carrier.origin.accepted_daa
+            || row.draw_daa > admission.deadlines[0].min(point.daa_score)
+            || row.hard != clock.hard()
+            || row.per_bond != admission.rescue.per_drawn_bond
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(row)
+    }
+
     pub(crate) fn decode_public_manifest_response_row_v1(
         &self,
         key: &[u8],

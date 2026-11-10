@@ -346,6 +346,12 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             }
             ManifestResponseRecordV1::scan_native_wire_v1(frame)?
         }
+        crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1 if key_bytes == 64 => {
+            crate::palw_positive_contract_v2::PublicDrawRecordV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1 => {
+            return Err(wire::wire_bad("unallocated public draw key"));
+        }
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,

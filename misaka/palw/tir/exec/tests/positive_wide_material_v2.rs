@@ -826,7 +826,12 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [1; 32]).unwrap();
     let alternate = SignedPublicOriginalV1 { signature: *alternate_signature.as_ref(), ..envelope };
     let alternate_bytes = borsh::to_vec(&alternate).unwrap();
-    assert_eq!(admission.prepare_signed_bytes(&alternate_bytes, &reservation).unwrap().original, prepared.original);
+    let alternate_prepared = admission.prepare_signed_bytes(&alternate_bytes, &reservation).unwrap();
+    assert_eq!(alternate_prepared.original, prepared.original);
+    assert!(matches!(
+        alternate_prepared.restore_draw(&draw.record(), d(11), 101, &members, d(12)),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    ));
     assert_eq!(
         admission.restore_signed_bytes(&alternate_bytes, &reservation, &restored, d(8)),
         Err(misaka_palw_positive_contract::ContractError::Scope)
