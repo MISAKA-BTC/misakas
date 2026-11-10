@@ -529,7 +529,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         admission.prepare_signed_bytes(&oversized, &reservation),
         Err(misaka_palw_positive_contract::ContractError::NonCanonical)
     );
-    let mut tampered = bytes;
+    let mut tampered = bytes.clone();
     *tampered.last_mut().unwrap() ^= 1;
     assert_eq!(admission.prepare_signed_bytes(&tampered, &reservation), Err(misaka_palw_positive_contract::ContractError::Signature));
     let reserved = d(21);
@@ -699,6 +699,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     )
     .unwrap();
     assert_eq!(restored.check_restore(&prepared, d(8)), Ok(()));
+    assert_eq!(admission.restore_signed_bytes(&bytes, &reservation, &restored, d(8)).unwrap(), prepared);
+    assert_eq!(
+        admission.restore_signed_bytes(&bytes, &reservation, &restored, d(9)),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     assert_eq!(restored.check_restore(&prepared, d(9)), Err(misaka_palw_positive_contract::ContractError::Scope));
     reservation.initial_supply.additional_work += 2;
     reservation.rescue.per_drawn_bond.additional_work -= 1;

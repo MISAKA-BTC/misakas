@@ -479,6 +479,20 @@ impl PublicOriginalAdmissionV1<'_> {
         self.prepare(&signed.original, &signed.key, &signed.signature, reservation)
     }
 
+    /// Restore an admission only after replaying the signed carrier under the
+    /// original inclusion inputs and matching the stored reservation record.
+    pub fn restore_signed_bytes(
+        &self,
+        bytes: &[u8],
+        inputs: &PublicOriginalReservationV1<'_>,
+        record: &PublicOriginalAdmissionRecordV1,
+        reservation: Digest,
+    ) -> Result<PreparedPublicOriginalV1, ContractError> {
+        let prepared = self.prepare_signed_bytes(bytes, inputs)?;
+        record.check_restore(&prepared, reservation)?;
+        Ok(prepared)
+    }
+
     pub fn prepare(
         &self,
         original: &OriginalCommit,
