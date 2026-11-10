@@ -49,6 +49,14 @@ misaka palw not-adopted                  # 合意が typed-missing で持つ値
 - evidence provider のディレクトリを読ませるときは `--palw-evidence-provider-dir <dir,dir>`(§6)。
 - 告発を優先したい公開 claim は `--palw-public-claim <128hex>`(最大 16)。
 
+### Pruning point の取り込みがメモリ不足で止まる場合
+
+ヘッダー取得が 100% でも、UTXO と sidecar の検証が完了するまでノードは未同期です。`local native capacity unavailable` に続く `RAM bytes` の `outstanding`、`request`、`limit` を確認します。`outstanding + request` が `limit` を超える場合、その実行のメモリ予算が不足しています。
+
+既定の内部予算は、起動時に検出した有効メモリ容量（物理 RAM と cgroup の上限のうち小さい方）の 70% です。`MISAKA_MEMORY_BUDGET_BYTES` はこの予算を引き下げる設定です。ホスト上の他のサービスにも必要な RAM を残せることを確認してから、サービスの cgroup 上限を見直し、既存のデータディレクトリでノードを再起動します。容量は起動時に計算されるため、実行中のプロセスの上限を変更しただけでは内部予算は変わりません。
+
+隔離検証では、9 GiB の cgroup 上限に対する内部予算 6,764,573,487 bytes を、UTXO 検証の要求 7,420,392,666 bytes が超えました。必要容量は状態と同時処理によって変動します。再起動後は RPC の同期状態と pruning import の安定状態を確認します。
+
 ## 2. node を持たない miner(RFC-0009)
 
 binary は `palw-remote-miner`。複数の node から読み、意見が割れたら止まる。
