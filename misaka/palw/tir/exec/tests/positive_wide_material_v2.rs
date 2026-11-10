@@ -517,6 +517,9 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         budget: &budget,
     };
     let prepared = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
+    let reserved = d(21);
+    let record = prepared.record(reserved);
+    assert_eq!(record.court_verdict_key(&prepared, reserved, &verdict), Err(misaka_palw_positive_contract::ContractError::Scope),);
     assert_eq!(prepared.capacity.transmitted_bytes, body * 3);
     use misaka_palw_positive_contract::public_one_honest::{
         FULL_REPLAY_SIGN_CONTEXT, FullReplayApproval, PanelBond, PublicDrawMemberV1,

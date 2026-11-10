@@ -357,6 +357,22 @@ impl PublicOriginalAdmissionRecordV1 {
         }
         Ok(())
     }
+
+    /// Join a computed verdict to a restored admission before the native fold
+    /// applies its case, deadline and economic rules.
+    pub fn court_verdict_key(
+        &self,
+        prepared: &PreparedPublicOriginalV1,
+        reservation: Digest,
+        verdict: &crate::palw_tir_court_v1::PublicOriginalCourtVerdictV1,
+    ) -> Result<(OriginalId, Hash64), ContractError> {
+        self.check_restore(prepared, reservation)?;
+        let key = verdict.key();
+        if key.0 != self.original {
+            return Err(ContractError::Scope);
+        }
+        Ok(key)
+    }
 }
 
 impl PublicOriginalAdmissionV1<'_> {
