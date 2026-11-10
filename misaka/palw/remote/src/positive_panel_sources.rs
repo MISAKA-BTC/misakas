@@ -453,6 +453,37 @@ impl PanelSourceCacheR1 {
     pub fn authenticated_entries(&self) -> impl Iterator<Item = (SourceKind, u64, &StoredUnitV2)> {
         self.entries.iter().map(|(&(kind, index), unit)| (kind, index, unit))
     }
+
+    /// Assemble parameters from authenticated G14 inventory openings before
+    /// replaying an original with the same registered class and artifact.
+    /// The caller owns the reserved temporary container and tape.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_public_wide_replay(
+        &self,
+        provider: &dyn MaterialProvider,
+        original: &OriginalCommit,
+        manifest: &CheckedManifestV1,
+        job: &PalwJobContextV2,
+        container: &Path,
+        run_limits: TirWideRunLimitsV2,
+        work: &WidePanelWorkV2,
+        tape: File,
+        reserver: &TirMemoryReserverV1,
+    ) -> Result<(), PanelSourceErrorR1> {
+        if manifest.original() != original.id()
+            || original.job.0 != job.job_id.as_bytes()
+            || original.registered_class.0 != job.shape_profile_id.as_bytes()
+            || original.registered_class != self.result.registered_class
+            || original.artifact != self.result.artifact
+            || original.program != self.result.program
+        {
+            return Err(PanelSourceErrorR1::Binding);
+        }
+        let space = PalwTirStepSpaceV2::new(&self.class).map_err(|error| PanelSourceErrorR1::ReplayExecution(error.to_string()))?;
+        let artifact = self.assemble_artifact(container)?;
+        run_public_wide_replay_v1(provider, original, manifest, job, &self.class, &artifact, &space, run_limits, work, tape, reserver)
+    }
+
     fn source(&self, kind: SourceKind) -> misaka_palw_positive_contract::identity::Digest {
         match kind {
             SourceKind::ArtifactInventory => self.result.artifact,
