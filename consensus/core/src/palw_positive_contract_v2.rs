@@ -473,10 +473,12 @@ impl PreparedPublicDrawV1 {
             return Err(ContractError::Range);
         }
         let mut checked = std::collections::BTreeMap::new();
+        let mut included_events = std::collections::BTreeSet::new();
         for &(origin, approval, key, signature) in approvals {
             let bond = approval.bond;
             let key_order = (bond.transaction, bond.index);
-            if checked.contains_key(&key_order) {
+            let event = (origin.accepting_block.0, origin.accepted_tx_ordinal, origin.event_ordinal);
+            if checked.contains_key(&key_order) || !included_events.insert(event) {
                 return Err(ContractError::Identity);
             }
             let record = self.verify_replay_approval(approval_until, origin, approval, key, signature)?;
@@ -921,7 +923,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         Ok(())
     }
 
-    /// Read a recorded approval. Revalidate its signature and draw membership before tallying.
+    /// Read the stored approval and check its draw link. Before tallying,
+    /// reauthenticate the accepted carrier and its membership with `check_restore`.
     pub fn public_replay_approval_record_v1(
         &self,
         original: OriginalId,

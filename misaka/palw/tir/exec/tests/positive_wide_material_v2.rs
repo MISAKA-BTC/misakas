@@ -862,6 +862,18 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         draw.verify_replay_quorum(2, 102, &[signed_assertion, signed_assertion]),
         Err(misaka_palw_positive_contract::ContractError::Identity)
     );
+    let second_assertion = FullReplayApproval { bond: second_bond, ..assertion.clone() };
+    let second_signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &second_assertion.signing_digest().0, FULL_REPLAY_SIGN_CONTEXT, [0; 32])
+            .unwrap();
+    let duplicate_event = (vote_origin, &second_assertion, &signed.key, second_signature.as_ref());
+    assert_eq!(
+        draw.verify_replay_quorum(2, 102, &[signed_assertion, duplicate_event]),
+        Err(misaka_palw_positive_contract::ContractError::Identity)
+    );
+    let second_event = AcceptedOrigin { event_ordinal: vote_origin.event_ordinal + 1, ..vote_origin };
+    let included_second = (second_event, &second_assertion, &signed.key, second_signature.as_ref());
+    assert_eq!(draw.verify_replay_quorum(2, 102, &[signed_assertion, included_second]).unwrap().len(), 2);
     let record = prepared.record(d(8));
     let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1>(
         &borsh::to_vec(&record).unwrap(),
