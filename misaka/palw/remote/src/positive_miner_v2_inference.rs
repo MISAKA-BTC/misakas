@@ -212,20 +212,89 @@ impl TirMinerJobV2<'_> {
     }
 }
 
-/// Bind one observed execution, sign its original and durably publish the
-/// manifest before returning it to the caller for native submission.
-/// The caller supplies the remaining material entries and owns their retention.
+/// Execute a rooted public wide TIR job once and publish that same capture.
 #[cfg(feature = "positive-panel")]
 #[allow(clippy::too_many_arguments)]
-pub fn finalize_public_capture_v1(
+pub fn run_and_publish_public_wide_original_v1(
+    params: &AuthenticatedTirParamsV2<'_, '_>,
+    job: &TirMinerJobV2<'_>,
+    prompt_text: &str,
+    tokenizer_json: &[u8],
+    original: OriginalCommit,
+    service_obligation: Digest,
+    service_budget: &misaka_palw_positive_contract::messages::AggregateBudget,
+    scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+    total_limit: u64,
+    max_manifest_bytes: u32,
+    provider_root: &std::path::Path,
+    run_limits: misaka_palw_tir_exec::node::run_wide_q24_v2::TirWideRunLimitsV2,
+    work: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelWorkV2,
+    tape: std::fs::File,
+    reserver: &misaka_palw_tir_exec::node::memory::TirMemoryReserverV1,
+    key: &[u8; PUBKEY_BYTES],
+    sign: impl FnOnce(&[u8], &[u8]) -> Result<[u8; SIGNATURE_BYTES], String>,
+) -> Result<misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1, MinerErrorV2> {
+    use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV2;
+    use misaka_palw_tir_exec::node::{
+        positive_wide_material_v2::{CaptureExpectedV2, capture_one_pass_v2},
+        run_wide_q24_v2::TirClassRunnerWideQ24V2,
+    };
+
+    let artifact = Hash64::from_bytes(params.artifact().0);
+    kaspa_consensus_core::palw_positive_contract_v2::check_public_original_execution_v1(&original, job.context, job.class, artifact)?;
+    if job.prompt_form != PalwPromptIdsFormV1::Flat {
+        return Err(ContractError::UnsupportedProfile.into());
+    }
+    if misaka_palw_positive_contract::identity::principal(key) != original.miner {
+        return Err(ContractError::Identity.into());
+    }
+    if original.service_contract != public_original_service_contract_id_v1(service_obligation, service_budget) {
+        return Err(ContractError::Scope.into());
+    }
+
+    let space = PalwTirStepSpaceV2::new(job.class).map_err(|error| MinerErrorV2::Journal(error.to_string()))?;
+    let runner = TirClassRunnerWideQ24V2::new(&space, &params.plan, params.params, job.context.shape_profile_id)
+        .map_err(MinerErrorV2::Journal)?;
+    let capture = capture_one_pass_v2(
+        CaptureExpectedV2 { class: job.class, artifact, job: job.context, space: &space, prompt: job.prompt },
+        &runner,
+        run_limits,
+        work,
+        tape,
+        reserver,
+    )
+    .map_err(MinerErrorV2::Journal)?;
+    finalize_public_capture_v1(
+        &capture,
+        params,
+        job,
+        prompt_text,
+        tokenizer_json,
+        original,
+        service_budget,
+        scope_limits,
+        total_limit,
+        max_manifest_bytes,
+        provider_root,
+        run_limits.max_step_leaves,
+        reserver,
+        key,
+        sign,
+    )
+}
+
+/// Bind one observed execution, sign its original and durably publish the
+/// manifest before returning it to the caller for native submission.
+/// The caller owns the provider storage and retention reservation.
+#[cfg(feature = "positive-panel")]
+#[allow(clippy::too_many_arguments)]
+fn finalize_public_capture_v1(
     capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
     params: &AuthenticatedTirParamsV2<'_, '_>,
     job: &TirMinerJobV2<'_>,
     prompt_text: &str,
     tokenizer_json: &[u8],
     mut original: OriginalCommit,
-    mut manifest: ManifestV1,
-    service_obligation: Digest,
     service_budget: &misaka_palw_positive_contract::messages::AggregateBudget,
     scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
     total_limit: u64,
@@ -236,71 +305,56 @@ pub fn finalize_public_capture_v1(
     key: &[u8; PUBKEY_BYTES],
     sign: impl FnOnce(&[u8], &[u8]) -> Result<[u8; SIGNATURE_BYTES], String>,
 ) -> Result<misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1, MinerErrorV2> {
-    if misaka_palw_positive_contract::identity::principal(key) != original.miner {
-        return Err(ContractError::Identity.into());
-    }
-    if original.service_contract != public_original_service_contract_id_v1(service_obligation, service_budget) {
-        return Err(ContractError::Scope.into());
-    }
-    // This capture currently uses the native flat commitment.
-    if job.prompt_form != PalwPromptIdsFormV1::Flat {
-        return Err(ContractError::UnsupportedProfile.into());
-    }
     capture.bind_public_original(&mut original).map_err(|_| MinerErrorV2::Binding)?;
-    if params.artifact() != original.artifact {
-        return Err(MinerErrorV2::Binding);
-    }
-    let artifact = MaterialScope::Artifact as usize;
-    manifest.entries[artifact] = tir_inventory_material_v1(params.artifact(), params.bytes_hashed(), scope_limits[artifact])?;
-    let initial = MaterialScope::InitialState as usize;
-    let (initial_entry, initial_bytes) = tir_cold_initial_state_material_v1(&original, scope_limits[initial])?;
-    original.initial_state = initial_entry.subject;
-    manifest.entries[initial] = initial_entry;
-    let dependencies = MaterialScope::Dependencies as usize;
-    let (dependencies_entry, dependencies_bytes) = tir_cold_dependencies_material_v1(&original, scope_limits[dependencies])?;
-    if dependencies_entry.subject != original.dependencies {
+    let rules = |scope: MaterialScope| scope_limits[scope as usize];
+    let artifact = tir_inventory_material_v1(params.artifact(), params.bytes_hashed(), rules(MaterialScope::Artifact))?;
+    let (initial, initial_bytes) = tir_cold_initial_state_material_v1(&original, rules(MaterialScope::InitialState))?;
+    original.initial_state = initial.subject;
+    let (dependencies, dependencies_bytes) = tir_cold_dependencies_material_v1(&original, rules(MaterialScope::Dependencies))?;
+    if dependencies.subject != original.dependencies {
         return Err(ContractError::UnsupportedProfile.into());
     }
-    manifest.entries[dependencies] = dependencies_entry;
-    let execution_rules = MaterialScope::ExecutionRules as usize;
-    let (rules_entry, rules_bytes) = kaspa_consensus_core::palw_positive_contract_v2::public_wide_tir_rules_material_v1(
+    let (execution_rules, rules_bytes) = kaspa_consensus_core::palw_positive_contract_v2::public_wide_tir_rules_material_v1(
         job.context,
         &params.plan.program,
-        scope_limits[execution_rules],
+        rules(MaterialScope::ExecutionRules),
     )?;
-    if original.execution_rules != rules_entry.subject {
+    if original.execution_rules != execution_rules.subject {
         return Err(MinerErrorV2::Binding);
     }
-    manifest.entries[execution_rules] = rules_entry;
-    let trace = MaterialScope::Trace as usize;
-    manifest.entries[trace] = capture.public_trace_material(scope_limits[trace])?;
+    let trace = capture.public_trace_material(rules(MaterialScope::Trace))?;
     let trace_count = capture.run().leaf_count();
     let trace_overhead = crate::public_material::trace_tile_wire_overhead(trace_count);
     let max_trace_wire = trace_count
         .checked_mul(trace_overhead as u64)
-        .and_then(|overhead| manifest.entries[trace].total_bytes.checked_add(overhead))
+        .and_then(|overhead| trace.total_bytes.checked_add(overhead))
         .ok_or(ContractError::Budget)?;
     if trace_count > max_trace_leaves {
         return Err(ContractError::Budget.into());
     }
-    let max_trace_value =
-        (manifest.entries[trace].chunk_bytes as usize).min(crate::public_material::MATERIAL_UNIT_MAX_BYTES - trace_overhead);
-    let program = MaterialScope::Program as usize;
-    let prompt = MaterialScope::Prompt as usize;
-    let tokenizer = MaterialScope::Tokenizer as usize;
-    let input = MaterialScope::InputTokens as usize;
-    let output = MaterialScope::Output as usize;
-    manifest.entries[program] = job.public_program_material(scope_limits[program])?;
-    // The rooted job supplied original.prompt. Manifest validation rejects a
-    // different text before the Miner is asked to sign.
-    manifest.entries[prompt] = prompt_text_material_v1(original.scope.ruleset, prompt_text, scope_limits[prompt])?;
-    manifest.entries[tokenizer] =
-        kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1(tokenizer_json, scope_limits[tokenizer])?;
-    manifest.entries[input] = job.public_input_token_material(scope_limits[input])?;
-    manifest.entries[output] = capture.public_output_material(scope_limits[output])?;
-    if manifest.entries[output].total_bytes > crate::public_material::MATERIAL_UNIT_MAX_BYTES as u64 {
+    let max_trace_value = (trace.chunk_bytes as usize).min(crate::public_material::MATERIAL_UNIT_MAX_BYTES - trace_overhead);
+    let output = capture.public_output_material(rules(MaterialScope::Output))?;
+    if output.total_bytes > crate::public_material::MATERIAL_UNIT_MAX_BYTES as u64 {
         return Err(ContractError::Budget.into());
     }
+    let manifest = ManifestV1 {
+        service_contract: original.service_contract,
+        entries: [
+            artifact,
+            job.public_program_material(rules(MaterialScope::Program))?,
+            prompt_text_material_v1(original.scope.ruleset, prompt_text, rules(MaterialScope::Prompt))?,
+            job.public_input_token_material(rules(MaterialScope::InputTokens))?,
+            kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1(
+                tokenizer_json,
+                rules(MaterialScope::Tokenizer),
+            )?,
+            execution_rules,
+            initial,
+            dependencies,
+            trace,
+            output,
+        ],
+    };
     let output_bytes: Vec<u8> = capture.run().generated().iter().flat_map(|id| id.to_le_bytes()).collect();
     let replay_material = [
         (MaterialScope::Program, job.class.program.as_slice()),
@@ -315,6 +369,18 @@ pub fn finalize_public_capture_v1(
         return Err(ContractError::Budget.into());
     }
     let bytes = original.bind_manifest(&manifest, scope_limits, total_limit, max_manifest_bytes)?;
+    let checked = original.authenticate_manifest(&bytes, max_manifest_bytes)?.decode(&original, scope_limits, total_limit)?;
+    let public_prompt = crate::positive_panel_sources::check_public_prompt_v1(
+        &original,
+        &checked,
+        job.prompt_form,
+        prompt_text.as_bytes(),
+        tokenizer_json,
+    )
+    .map_err(|_| MinerErrorV2::Binding)?;
+    if public_prompt != job.prompt {
+        return Err(MinerErrorV2::Binding);
+    }
     let retained = replay_material.iter().try_fold(max_trace_wire, |total, (_, body)| total.checked_add(body.len() as u64));
     if retained.and_then(|total| total.checked_add(bytes.len() as u64)).is_none_or(|total| total > service_budget.retained_bytes) {
         return Err(ContractError::Budget.into());

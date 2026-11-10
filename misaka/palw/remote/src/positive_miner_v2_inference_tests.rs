@@ -895,3 +895,191 @@ fn local_inference_and_compilation_metadata_budgets_are_enforced() {
         assert_eq!(signs.get(), 0);
     }
 }
+
+#[cfg(feature = "positive-panel")]
+#[test]
+fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
+    use crate::{
+        evidence::fs::FsProvider,
+        positive_panel_sources::{
+            PanelSourceErrorR1, PublicTraceAcquisitionV1, fetch_public_manifest_v1, fetch_public_replay_inputs_v1,
+            fetch_public_replay_output_v1, run_public_wide_replay_v1,
+        },
+    };
+    use misaka_palw_positive_contract::public_one_honest::*;
+    use misaka_palw_tir_exec::node::{
+        positive_wide_material_v2::{WidePanelDiskReserverV2, WidePanelLimitsV2, WidePanelWorkV2},
+        run_wide_q24_v2::TirWideRunLimitsV2,
+    };
+
+    let mut fixture = Fixture::new();
+    let tokenizer = br#"{"model":{"type":"BPE","vocab":{"x":0,"a":1,"b":2,"y":3},"merges":[]},"added_tokens":[]}"#;
+    let rules = [
+        tir_inventory_material_codec_v1(),
+        tir_program_material_codec_v1(),
+        prompt_text_material_codec_v1(),
+        Digest(prompt_ids_form_id_v1(PalwPromptIdsFormV1::Flat).as_bytes()),
+        tokenizer_json_material_codec_v1(),
+        tir_wide_rules_material_codec_v1(),
+        tir_cold_initial_state_codec_v1(),
+        tir_cold_dependencies_codec_v1(),
+        tir_trace_material_codec_v1(),
+        tir_output_material_codec_v1(),
+    ]
+    .map(|codec| ManifestScopeRules { codec, max_bytes: 1 << 16, chunk_bytes: 1 << 16 });
+    let mut program = fixture.plan.program.clone();
+    program.logits_scheme_id = kaspa_consensus_core::palw_logits_q24_v2::scheme_id().as_bytes();
+    program.blocks[program.schedule.post as usize].nodes[program.logits as usize].out.dtype = DType::I64;
+    fixture.plan = TirPlan::compile(&program).unwrap();
+    fixture.class.program = program.encode();
+    let tokenizer_entry = kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1(
+        tokenizer,
+        rules[MaterialScope::Tokenizer as usize],
+    )
+    .unwrap();
+    fixture.class.tokenizer_id = Hash64::from_bytes(tokenizer_entry.subject.0);
+    fixture.context.tokenizer_id = fixture.class.tokenizer_id;
+    fixture.context.trace_scheme_id = kaspa_consensus_core::palw_logits_q24_v2::scheme_id();
+    fixture.context.max_context_tokens = fixture.class.layout.max_context;
+    fixture.refresh_execution_identity();
+
+    let job = TirMinerJobV2 {
+        class: &fixture.class,
+        context: &fixture.context,
+        prompt: &fixture.prompt,
+        prompt_form: PalwPromptIdsFormV1::Flat,
+    };
+    let result = &fixture.result;
+    let prompt = prompt_text_material_v1(result.scope.ruleset, "ab", rules[MaterialScope::Prompt as usize]).unwrap();
+    let mut budget = fixture.contract.budget;
+    budget.retained_bytes = 1 << 20;
+    let obligation = result.service_contract;
+    let service_contract = public_original_service_contract_id_v1(obligation, &budget);
+    let mut original = OriginalCommit {
+        scope: result.scope,
+        job: result.job,
+        execution: result.execution,
+        miner: result.miner,
+        registered_class: result.registered_class,
+        artifact: result.artifact,
+        program: result.program,
+        prompt: prompt.subject,
+        input_tokens: result.input,
+        tokenizer: tokenizer_entry.subject,
+        execution_rules: result.execution_rules,
+        generation_seed: result.generation_seed,
+        initial_state: d(0),
+        dependencies: d(0),
+        prefill: result.prefill,
+        decode: result.decode,
+        max_context: fixture.context.max_context_tokens,
+        output: d(0),
+        trace_root: d(0),
+        manifest_root: d(0),
+        service_contract,
+    };
+    original.dependencies =
+        tir_cold_dependencies_material_v1(&original, rules[MaterialScope::Dependencies as usize]).unwrap().0.subject;
+    let held = AuthenticatedTirParamsV2::authenticate(&fixture.plan, &fixture.params, fixture.artifact, identity_limits()).unwrap();
+    let root = std::env::temp_dir().join(format!("misaka-first-wide-original-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let tape = |name| std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(root.join(name)).unwrap();
+    let disk: WidePanelDiskReserverV2 = Arc::new(|_, _, _| Ok(Box::new(())));
+    let limits = WidePanelLimitsV2 {
+        max_records: 1024,
+        max_step_leaves: 1024,
+        max_tape_bytes: 1 << 20,
+        max_live_heap_bytes: 1 << 35,
+        max_visits: 1 << 30,
+        max_io_bytes: 1 << 24,
+        max_hash_work: 1 << 30,
+        max_proof_attempts: 1,
+        max_provider_bytes: 1 << 20,
+        max_provider_scratch: 1 << 16,
+        max_material_bytes: 1 << 16,
+        max_claim_bytes: 1 << 16,
+        max_trace_frames: 1024,
+        external_retained_bytes: 1 << 16,
+    };
+    let work = || WidePanelWorkV2::new(limits, fixture.context.shape_profile_id, fixture.context.context_hash(), &disk).unwrap();
+    let run_limits = TirWideRunLimitsV2 {
+        max_positions: 64,
+        max_step_leaves: 1024,
+        max_row_lanes: 16,
+        max_work: 1 << 40,
+        max_requested_bytes: 1 << 30,
+    };
+    let reserver: misaka_palw_tir_exec::node::memory::TirMemoryReserverV1 = Arc::new(|_, _, _, _| Ok(Box::new(())));
+    let signs = Cell::new(0);
+    let signed = run_and_publish_public_wide_original_v1(
+        &held,
+        &job,
+        "ab",
+        tokenizer,
+        original,
+        obligation,
+        &budget,
+        &rules,
+        1 << 20,
+        ManifestV1::WIRE_BYTES,
+        &root,
+        run_limits,
+        &work(),
+        tape("miner-tape"),
+        &reserver,
+        &fixture.key,
+        |message, context| {
+            signs.set(signs.get() + 1);
+            assert_eq!(context, ORIGINAL_SIGN_CONTEXT);
+            let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([62; 32]);
+            Ok(*libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, message, context, [0; 32]).unwrap().as_ref())
+        },
+    )
+    .unwrap();
+    assert_eq!(signs.get(), 1);
+    signed.original.authenticate(&signed.key, &signed.signature).unwrap();
+    let provider = FsProvider { id: "miner".into(), root: root.clone() };
+    let manifest = fetch_public_manifest_v1(&provider, &signed.original, &rules, 1 << 20, ManifestV1::WIRE_BYTES).unwrap();
+    assert_eq!(
+        fetch_public_replay_inputs_v1(&provider, &signed.original, &manifest, PalwPromptIdsFormV1::Flat).unwrap(),
+        (program.clone(), fixture.prompt.clone())
+    );
+    assert_eq!(fetch_public_replay_output_v1(&provider, &signed.original, &manifest).unwrap(), vec![3, 3, 3]);
+    let container = root.join("panel-artifact");
+    misaka_palw_tir_artifact::write_container_v1_streamed(
+        &container,
+        &program,
+        borsh::to_vec(&fixture.class.layout).unwrap(),
+        fixture.class.tokenizer_id.as_bytes(),
+        String::new(),
+        &mut |param, layer, writer| {
+            assert_eq!((param, layer), (0, None));
+            writer.write_all(&(1..=16).collect::<Vec<u8>>()).map_err(|error| error.to_string())
+        },
+    )
+    .unwrap();
+    let artifact = misaka_palw_tir_exec::node::TirArtifactV1::open(&container).unwrap();
+    let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV2::new(&fixture.class).unwrap();
+    let replay = |name| {
+        run_public_wide_replay_v1(
+            &provider,
+            &signed.original,
+            &manifest,
+            &fixture.context,
+            &fixture.class,
+            &artifact,
+            &space,
+            run_limits,
+            &work(),
+            tape(name),
+            &reserver,
+            PublicTraceAcquisitionV1 { max_tiles: 1024, max_wire_bytes: 1 << 20 },
+            None,
+        )
+    };
+    replay("panel-tape").unwrap();
+    let tile = crate::public_material::public_original_trace_tile_path(signed.original.id(), 0);
+    std::fs::remove_file(root.join(tile)).unwrap();
+    assert_eq!(replay("incomplete-tape"), Err(PanelSourceErrorR1::Incomplete));
+    std::fs::remove_dir_all(root).unwrap();
+}

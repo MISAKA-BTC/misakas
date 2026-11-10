@@ -40,6 +40,8 @@
 | Trace | Miner の確定処理は初回 capture のタイルと opening を公開ストアに書く。Panel は公開索引と全タイルを有界取得し、元 claim と独立再実行に照合する。葉数と wide logits の裁定結果は元 claim ID と証拠 ID の組で参照できる | Miner と Panel の daemon への接続、全関係の局所化、裁定結果から native 状態更新への接続 |
 | Output | 公開の生成 token 列を native output root と照合し、wide 再実行と比較する | 停止・生成長・会計を含む End 検査を接続する |
 
+I1 のローカル統合テストでは、Miner が wide TIR を一度実行して署名・公開し、Panel が別の実行用テープと組み立て済みの artifact から同じ original を再実行する。公開 trace のタイルを一つ削除すると Panel は資料不足で停止する。daemon 経由の artifact 取得、native の一括承認・Final・決済は未検証。
+
 固定長 manifest の取得と、資料供給義務に結び付いた署名済み応答の認証は別経路。前者は元 claim と資料の同一性、後者は当該 case への応答の帰属を確認する。どちらも単独では検査機会を成立させない。
 
 ## 接続時の判定
