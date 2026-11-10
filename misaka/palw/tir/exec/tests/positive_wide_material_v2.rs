@@ -474,7 +474,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     use misaka_palw_positive_contract::{
         public_one_honest::{FirstNoticeDemand, MaterialCaseDemand, ProtectedRescueDemand},
         reservations::RemainingCapacity,
-        rows::AggregateUsage,
+        rows::{AcceptedOrigin, AggregateUsage, NativeHash64},
     };
     let body = u64::from(ManifestV1::WIRE_BYTES);
     let supply = RemainingCapacity { transmitted_bytes: body, additional_work: 1, retained_bytes: body };
@@ -489,8 +489,15 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         witness_attempts: 1,
     };
     let mut reservation = PublicOriginalReservationV1 {
-        inclusion_block: Hash64::from_bytes([1; 64]),
-        inclusion_daa: 100,
+        origin: AcceptedOrigin {
+            accepting_block: NativeHash64([1; 64]),
+            carrier_block: NativeHash64([5; 64]),
+            carrier_transaction: NativeHash64([6; 64]),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: 100,
+            accepted_blue_score: 100,
+        },
         notice: FirstNoticeDemand {
             draw_ready_by: 101,
             material_ready_by: 101,
@@ -545,13 +552,15 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let bad_prepared = admission.prepare(&bad_original, &signed.key, bad_signature.as_ref(), &reservation).unwrap();
     let bad_record = bad_prepared.record(reserved);
     assert_eq!(bad_record.court_verdict_key(&bad_prepared, reserved, terminal, &verdict), Ok(verdict.key()));
-    let verdict_inclusion = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-        block: Hash64::from_bytes([3; 64]),
-        daa_score: terminal,
-        blue_score: terminal,
-        subsidy: 0,
+    let verdict_inclusion = AcceptedOrigin {
+        accepting_block: NativeHash64([3; 64]),
+        carrier_block: NativeHash64([7; 64]),
+        carrier_transaction: NativeHash64([8; 64]),
+        accepted_daa: terminal,
+        accepted_blue_score: terminal,
+        ..reservation.origin
     };
-    let verdict_record = bad_record.court_record(&bad_prepared, reserved, &verdict_inclusion, &verdict).unwrap();
+    let verdict_record = bad_record.court_record(&bad_prepared, reserved, verdict_inclusion, &verdict).unwrap();
     use kaspa_consensus_core::{
         palw_native_resource_v1::preflight_native_value_v1, palw_positive_contract_v2::PublicOriginalCourtRecordV1,
     };
@@ -565,20 +574,19 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let restored = borsh::from_slice::<PublicOriginalCourtRecordV1>(&verdict_bytes).unwrap();
     verdict_bytes.push(0);
     assert!(preflight_native_value_v1::<PublicOriginalCourtRecordV1>(verdict_bytes.as_slice(), verdict_bytes.len() as u64).is_err());
-    assert_eq!(restored.check_restore(&bad_record, &bad_prepared, reserved, &verdict_inclusion, &verdict), Ok(()));
-    let earlier = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { daa_score: terminal - 1, ..verdict_inclusion };
+    assert_eq!(restored.check_restore(&bad_record, &bad_prepared, reserved, verdict_inclusion, &verdict), Ok(()));
+    let earlier = AcceptedOrigin { accepted_daa: terminal - 1, ..verdict_inclusion };
     assert_eq!(
-        restored.check_restore(&bad_record, &bad_prepared, reserved, &earlier, &verdict),
+        restored.check_restore(&bad_record, &bad_prepared, reserved, earlier, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
-    let competing =
-        kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: Hash64::from_bytes([4; 64]), ..verdict_inclusion };
+    let competing = AcceptedOrigin { accepting_block: NativeHash64([4; 64]), ..verdict_inclusion };
     assert_eq!(
-        restored.check_restore(&bad_record, &bad_prepared, reserved, &competing, &verdict),
+        restored.check_restore(&bad_record, &bad_prepared, reserved, competing, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
     assert_eq!(
-        restored.check_restore(&bad_record, &bad_prepared, d(22), &verdict_inclusion, &verdict),
+        restored.check_restore(&bad_record, &bad_prepared, d(22), verdict_inclusion, &verdict),
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
     assert_eq!(
@@ -780,7 +788,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
     assert_eq!(restored.check_restore(&prepared, d(9)), Err(misaka_palw_positive_contract::ContractError::Scope));
-    let reorg_inputs = PublicOriginalReservationV1 { inclusion_block: Hash64::from_bytes([2; 64]), ..reservation };
+    let different_carrier = AcceptedOrigin { carrier_transaction: NativeHash64([9; 64]), ..reservation.origin };
+    let reorg_inputs = PublicOriginalReservationV1 { origin: different_carrier, ..reservation };
     assert_eq!(
         admission.restore_signed_bytes(&bytes, &reorg_inputs, &restored, d(8)),
         Err(misaka_palw_positive_contract::ContractError::Scope)
