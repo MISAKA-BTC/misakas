@@ -137,6 +137,9 @@ pub struct IbdFlow {
     /// Retry on the existing bounded tick even if the peer's tip did not move.
     /// This is a wakeup hint; every attempt redoes native negotiation/admission.
     native_capacity_retry_v1: Option<Arc<Header>>,
+    // A verified sidecar set already installed by this flow. The durable
+    // session still has to match before another UTXO stream can reuse it.
+    prepared_utxo_import_v1: Option<(std::sync::Weak<dyn kaspa_consensus_core::api::ConsensusApi>, PruningImportSessionV1)>,
 
     // Receives relay blocks from relay flow which are out of orphan resolution range and hence trigger IBD
     relay_receiver: JobReceiver<Block>,
@@ -217,6 +220,7 @@ impl IbdFlow {
             connection_generation: verification_trace::next_connection_generation(),
             native_palw_receive_lease_v1: None,
             native_capacity_retry_v1: None,
+            prepared_utxo_import_v1: None,
             active_recovery_permit: None,
             earned_adoption_permit: Mutex::new(None),
             challenger_receiver,
@@ -402,6 +406,7 @@ impl IbdFlow {
                             );
                             continue;
                         }
+                        self.prepared_utxo_import_v1 = None;
                         if matches!(e, ProtocolError::UnexpectedMessage(..) | ProtocolError::IbdChainLocatorTimeout(_)) {
                             // Close this connection before retrying on a clean route.
                             // An incomplete adopted import must stay held and retryable.
@@ -1646,7 +1651,19 @@ impl IbdFlow {
 
                     // Imports the pruning point's utxoset AND (ADR-0022) its EVM + overlay sidecars
                     // atomically before marking the utxoset stable — see sync_new_utxo_set.
-                    let import_session = self.prepare_pruning_point_sidecars(&session, pruning_point).await?;
+                    let previously_prepared = self.prepared_utxo_import_v1.take();
+                    let import_session = if let Some((instance, prepared)) = previously_prepared
+                        && instance.ptr_eq(&session.weak_consensus_api_v1())
+                        && prepared.point == pruning_point
+                        && session.async_pruning_import_session().await?.active == Some(prepared)
+                    {
+                        // Rotate the epoch before clearing the UTXO stream;
+                        // the authenticated sidecars remain keyed to this point.
+                        info!("Reusing verified sidecars for pruning import at {} after a local resource refusal", pruning_point);
+                        session.async_begin_pruning_point_import(pruning_point).await?
+                    } else {
+                        self.prepare_pruning_point_sidecars(&session, pruning_point).await?
+                    };
                     self.sync_new_utxo_set(&session, import_session).await?;
                 }
                 // Once utxo is valid, simply sync missing headers
@@ -2638,12 +2655,14 @@ impl IbdFlow {
         consensus: &ConsensusProxy,
         import_session: PruningImportSessionV1,
     ) -> Result<(), ProtocolError> {
+        self.prepared_utxo_import_v1 = Some((consensus.weak_consensus_api_v1(), import_session));
         consensus.async_clear_pruning_utxo_set_for_session(import_session).await?;
         self.sync_pruning_point_utxoset(consensus, import_session).await?;
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
         // The target may have changed after virtual/head commit released its pruning
         // guard. Refuse completion unless UTXO and all sidecars share this generation.
         consensus.async_complete_pruning_point_import_for_session(import_session).await?;
+        self.prepared_utxo_import_v1 = None;
         // Once a new utxoset is stored, the utxoindex needs to be resynced as well. This happens through the reset handler mechanism.
         let consensus_manager = self.ctx.consensus_manager.clone();
         spawn_blocking(move || consensus_manager.invoke_consensus_reset_handlers()).await.unwrap();
