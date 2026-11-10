@@ -161,6 +161,21 @@ pub struct PublicOriginalReservationV1<'a> {
     pub budget: &'a AggregateBudget,
 }
 
+fn public_original_capacity_v1(
+    max_manifest_bytes: u32,
+    initial_supply: RemainingCapacity,
+    rescue: ProtectedRescueDemand,
+) -> Result<RemainingCapacity, ContractError> {
+    let body_bytes = u64::from(ManifestV1::fetch_size(max_manifest_bytes)?);
+    if initial_supply.retained_bytes < body_bytes
+        || rescue.per_drawn_bond.transmitted_bytes < body_bytes
+        || (rescue.max_outsiders != 0 && rescue.per_outsider.transmitted_bytes < body_bytes)
+    {
+        return Err(ContractError::Budget);
+    }
+    initial_supply.checked_add(rescue.total()?)
+}
+
 /// Checked inputs for the native fold to book and persist atomically.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PreparedPublicOriginalV1 {
@@ -694,7 +709,7 @@ impl PublicOriginalAdmissionRecordV1 {
         if key != row.original.0.0.as_slice() {
             return Err(ContractError::Identity);
         }
-        ManifestV1::fetch_size(row.max_manifest_bytes)?;
+        let capacity = public_original_capacity_v1(row.max_manifest_bytes, row.initial_supply, row.rescue)?;
         let clock = OriginalClock::new(row.carrier.origin.accepted_daa)?;
         let [draw, first_notice, first_request, ready, inspection, localized, filed, terminal] = row.deadlines;
         if draw <= row.carrier.origin.accepted_daa
@@ -709,7 +724,7 @@ impl PublicOriginalAdmissionRecordV1 {
         if row.budget.retention_until < clock.hard() {
             return Err(ContractError::Budget);
         }
-        row.initial_supply.checked_add(row.rescue.total()?)?.check(&AggregateUsage::default(), &row.budget)?;
+        capacity.check(&AggregateUsage::default(), &row.budget)?;
         Ok(row)
     }
 
@@ -1056,13 +1071,7 @@ impl PublicOriginalAdmissionV1<'_> {
         signature: &[u8; SIGNATURE_BYTES],
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<PreparedPublicOriginalV1, ContractError> {
-        let body_bytes = u64::from(ManifestV1::fetch_size(self.max_manifest_bytes)?);
-        if reservation.initial_supply.retained_bytes < body_bytes
-            || reservation.rescue.per_drawn_bond.transmitted_bytes < body_bytes
-            || (reservation.rescue.max_outsiders != 0 && reservation.rescue.per_outsider.transmitted_bytes < body_bytes)
-        {
-            return Err(ContractError::Budget);
-        }
+        let capacity = public_original_capacity_v1(self.max_manifest_bytes, reservation.initial_supply, reservation.rescue)?;
         let clock = OriginalClock::new(reservation.origin.accepted_daa)?;
         if reservation.notice.draw_ready_by <= reservation.origin.accepted_daa {
             return Err(ContractError::Range);
@@ -1071,7 +1080,6 @@ impl PublicOriginalAdmissionV1<'_> {
             return Err(ContractError::Budget);
         }
         let schedule = VerificationSchedule::new(clock, reservation.notice, reservation.case)?;
-        let capacity = reservation.initial_supply.checked_add(reservation.rescue.total()?)?;
         capacity.check(reservation.usage, reservation.budget)?;
         if original.service_contract != public_original_service_contract_id_v1(reservation.service_obligation, reservation.budget) {
             return Err(ContractError::Scope);
@@ -1117,6 +1125,30 @@ impl PublicOriginalAdmissionV1<'_> {
         original.authenticate(key, signature)?;
         Ok(original.id())
     }
+}
+
+#[test]
+fn stored_public_admission_requires_manifest_capacity_for_each_rescue_path() {
+    use misaka_palw_positive_contract::rows::NativeHash64;
+
+    let original = OriginalId(Digest([1; 64]));
+    let origin = AcceptedOrigin {
+        accepting_block: NativeHash64([1; 64]),
+        carrier_block: NativeHash64([2; 64]),
+        carrier_transaction: NativeHash64([3; 64]),
+        accepted_tx_ordinal: 0,
+        event_ordinal: 0,
+        accepted_daa: 1,
+        accepted_blue_score: 1,
+    };
+    let mut row = PublicOriginalAdmissionRecordV1::storage_fixture(original, origin);
+    let decode = |row| PublicOriginalAdmissionRecordV1::decode_row(&original.0.0, &borsh::to_vec(row).unwrap());
+    assert!(decode(&row).is_ok());
+
+    // The smaller allocation still fits the aggregate budget, but the
+    // outsider could no longer obtain even the fixed-size manifest.
+    row.rescue.per_outsider.transmitted_bytes = u64::from(ManifestV1::WIRE_BYTES) - 1;
+    assert_eq!(decode(&row), Err(ContractError::Budget));
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
