@@ -17,14 +17,14 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     ContractError,
-    identity::{CaseId, ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
+    identity::{ChainScope, Digest, PUBKEY_BYTES, PrincipalId, ResultId, SIGNATURE_BYTES, WitnessId},
     messages::{
         AdmissionContext, AggregateBudget, CheckProfile, ClaimForm, CoverageCursor, CoverageDescriptor, MinerResultCommit,
         PanelWitnessCommit, coverage_plan_id,
     },
     ports::{NodeChecker, require_next},
     public_one_honest::{
-        Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
+        CaseId, Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
         ManifestV1, MaterialCaseDemand, MissingInspectionOutcome, OriginalClock, OriginalCommit, OriginalId, PanelBond,
         PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext,
         SignedPublicOriginalV1, VerificationSchedule, public_draw_id_v1, public_draw_members_digest_v1,
