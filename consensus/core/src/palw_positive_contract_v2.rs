@@ -302,6 +302,21 @@ impl PreparedPublicDrawV1 {
 }
 
 impl PreparedPublicOriginalV1 {
+    /// Restore the draw using the members and inclusion DAA read from native
+    /// history. An archived draw record cannot supply its own inputs.
+    pub fn restore_draw(
+        &self,
+        record: &PublicDrawRecordV1,
+        draw: Digest,
+        draw_daa: u64,
+        members: &[PublicDrawMemberV1],
+        relation_plan: Digest,
+    ) -> Result<PreparedPublicDrawV1, ContractError> {
+        let prepared = self.prepare_draw(draw, draw_daa, members, relation_plan)?;
+        record.check_restore(&prepared)?;
+        Ok(prepared)
+    }
+
     /// Authenticate a request against an outsider slot assigned by the
     /// native eligibility and reservation ledger.
     pub fn verify_outsider_manifest_request(

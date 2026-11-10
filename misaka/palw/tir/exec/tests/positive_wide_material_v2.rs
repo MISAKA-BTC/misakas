@@ -575,9 +575,15 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let draw = prepared.prepare_draw(d(11), 101, &members, d(12)).unwrap();
     let record = borsh::to_vec(&draw.record()).unwrap();
     let restored: kaspa_consensus_core::palw_positive_contract_v2::PublicDrawRecordV1 = borsh::from_slice(&record).unwrap();
-    assert_eq!(restored.check_restore(&draw), Ok(()));
-    let reordered = prepared.prepare_draw(d(11), 101, &[members[1], members[0]], d(12)).unwrap();
-    assert_eq!(restored.check_restore(&reordered), Err(misaka_palw_positive_contract::ContractError::Scope));
+    let draw = prepared.restore_draw(&restored, d(11), 101, &members, d(12)).unwrap();
+    assert!(matches!(
+        prepared.restore_draw(&restored, d(11), 101, &[members[1], members[0]], d(12)),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    ));
+    assert!(matches!(
+        prepared.restore_draw(&restored, d(11), 101, &members, d(13)),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    ));
     let approval = draw.approval_context(bond).unwrap();
     assert_eq!(approval.original, original.id());
     assert_eq!(approval.member, r.miner);
