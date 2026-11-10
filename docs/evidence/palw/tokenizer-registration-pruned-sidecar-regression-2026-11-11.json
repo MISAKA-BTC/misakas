@@ -1,0 +1,46 @@
+{
+  "schema": "palw-tokenizer-registration-pruned-sidecar-regression-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "b036b839e18342120880d1f590ae2241084bb670",
+  "passedTotal": 3,
+  "command": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' --config 'profile.dev.package.kaspa-consensus.opt-level=0' test -p kaspa-consensus -p misaka-cli --lib --bin misaka tokenizer_registration -j 2",
+  "log": "/tmp/t12-tokenizer-pruned-sender-tests-r2.log",
+  "logSha256": "db7b2617a86255ce24ca7e0b66a3cbb111617bd01bfe447da3a34957e6993a73",
+  "runs": [
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus-5d5050182ad43097",
+      "binarySha256": "5701f0929ae03d75acc8252dae9b1de96a302ce93c395b04b9b750969bfea54d",
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1381 filtered out; finished in 21.40s",
+      "passed": 2,
+      "testNames": [
+        "pipeline::virtual_processor::tests::g14_registration_e2e::tokenizer_registration::signed_tkr1_open_parts_finish_and_duplicate_use_the_actual_node",
+        "pipeline::virtual_processor::tests::t12_round_lane_e2e::tokenizer_registration::signed_tokenizer_registration_round_fee_body_boundary_is_atomic"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka-f25c52b5ee0a359d",
+      "binarySha256": "308f405593c395537388fa70c9b6a29d93191445d99ac481f6343e2661aab7d0",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 283 filtered out; finished in 0.01s",
+      "passed": 1,
+      "testNames": [
+        "palw_tokenizer_registration::sender::tests::tokenizer_registration_sender_preserves_slots_and_requires_accepted_parts"
+      ]
+    }
+  ],
+  "checks": [
+    "Authenticated PALW carriage at actual accepted Part point restores exact reservation book, session and raw Part row after deleting importer PALW tip and history through that point.",
+    "Strict status RPC refuses while pruning UTXO completion marker is false.",
+    "Full retained verified UTXO map is unchanged by sidecar import; existing epoch-zero completion marker makes strict RPC return the donor accepted point/root/status.",
+    "Original Finish transaction is actually accepted after import; status is Complete and each replayed block root matches donor.",
+    "Existing restart, fresh block replay, heavier-fork reorganization, Round fee rollback and CLI slot checks remain passing."
+  ],
+  "limitations": [
+    "Authenticated PALW sidecar import with retained verified UTXOs, not full P2P pruning proof handshake or UTXO stream transfer.",
+    "Initial run correctly failed strict RPC because fixture omitted completion marker; production authentication was not relaxed.",
+    "Opt-level 0 functional tests, not CPU/RSS or public profile qualification.",
+    "No public T12 registration, claim admission, Final, activation or live CLI broadcast."
+  ],
+  "publicSubmission": false,
+  "publicActivation": false,
+  "mainPush": false
+}

@@ -1,0 +1,23 @@
+{
+  "schema": "palw-tokenizer-registration-funded-builder-regression-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "abe969c419cacbcaec63d535a7d2ed06461b4b6d",
+  "scope": "Ordinary UTXO funding of already signed TKR1 controls; opener and payer are distinct keys.",
+  "command": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' --config 'profile.dev.package.kaspa-consensus.opt-level=0' test -p kaspa-pq-validator-core --lib tokenizer_registration -j 2",
+  "passed": 1,
+  "log": "/tmp/t12-tokenizer-funded-builder-tests.log",
+  "logSha256": "36c1326b5f693f07a9957d1f5a1201864742df2caa23a05f9e888b8f54cce923",
+  "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_pq_validator_core-c54aa00bdb43f2f8",
+  "binarySha256": "fec6d5979116668900f1d77848a96bacd39738d5d4fa846eb970f18945532094",
+  "testName": "rfc9_sighash_audit::tokenizer_registration_funding_keeps_opener_authority_and_signs_actual_fee",
+  "checks": [
+    "Opener control signature remains under the opener key; payer key cannot replace it.",
+    "Actual TxScriptEngine accepts the payer funding signature.",
+    "Fee, payload and funding input amount changes invalidate the funding signature.",
+    "Funding equal to the requested fee is refused."
+  ],
+  "limitations": [
+    "No native acceptance or public submission is claimed by this funding-only test.",
+    "Caller must obtain the current native Open charge and service slots; builder does not grant native authority."
+  ]
+}

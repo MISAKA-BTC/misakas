@@ -219,3 +219,10 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 
 
 `fd68f3f62` に live quote から署名 bundle を作る `tokenizer-registration prepare` を追加した。Open ID・policy・purpose と native quote の一致を確認し、有限長の raw/EOG と登録 opener 鍵を SDK で検査してから署名する。新規ディレクトリへのファイル作成だけで、支払・送信・予約は行わない。[CLI build 記録](../../../evidence/palw/tokenizer-registration-cli-prepare-build-2026-11-11.json)は cargo check 成功と検証範囲を保存する。初回のエラー表示型の不一致は修正済み。公開 endpoint での prepare と支払・送信 CLI の接続は未完了。
+
+
+`abe969c41` の通常 UTXO funding API は、opener と別の支払者、実 TxScriptEngine、手数料/payload/入力金額の改変拒否を[回帰1件](../../../evidence/palw/tokenizer-registration-funded-builder-regression-2026-11-11.json)で確認した。`3b7bd1dc8` に send CLI と実 Round の費用境界試験を追加し、[ノード2件・CLI1件](../../../evidence/palw/tokenizer-registration-round-sender-regression-2026-11-11.json)が成功した。Round 本文が1 sompi超過すると登録行/UTXO/収入を取り消すが、許可されたヘッダーの permit は既存規則どおり消費する。拒否された本文が同じ Open の料金を先払いしたことにならないことも確認した。Round は非出荷の V2 mechanics fixture を用い、公開 V3 profile の適格性を主張しない。
+
+実 tokenizer の搬送 mass も[出典を固定して再測定](../../../evidence/palw/tokenizer-registration-mass-source-pinned-2026-11-11.json)した。使用した4 library の fingerprint を成功した node test の依存情報と照合し、core/txscript の source tree と binary SHA-256 を保存した。最大 Part は mass 312,004、標準 relay 上限480,000以内。固定テスト UTXO と仮 pins の結果であり、公開登録料・CPU/RSS・履歴保管の資格測定ではない。元の出典未特定の記録は変更せず残す。
+
+[認証済み PALW sidecar の復元試験](../../../evidence/palw/tokenizer-registration-pruned-sidecar-regression-2026-11-11.json)が通過した。Part 受理点の予約 book・session・raw Part を取り込み、同じ Finish 取引の受理と Complete、後続各ブロックの状態 root 一致を確認した。取り込み未完了時には厳格な status RPC が拒否することも検査した。試験は検証済み UTXO を保持し既存の epoch-zero 完了処理を使う構成であり、P2P handshake と UTXO stream 全体の pruned IBD 試験ではない。ノード2件と CLI1件が成功した。

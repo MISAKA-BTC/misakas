@@ -1,0 +1,665 @@
+{
+  "sourceCommit": "3b7bd1dc80b459a3146232651f6cdee2f7d6656a",
+  "coreTree": "c0d013352ceeccc20c07b10d0e94fe540e8b6c3b",
+  "txscriptTree": "4ee192e038b4ea20f7f82d6c528880452d6231ed",
+  "libraries": {
+    "kaspa_consensus_core": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_consensus_core-6c1e46d446af07e1.rlib",
+      "sha256": "13e725d420c9e94e027a0f18b0247b1161af57ee821eaadabdd270ee9a866f5a",
+      "mtimeNs": 1794350756714620290,
+      "nodeDependencyFingerprint": 4585917502805505582,
+      "fingerprintMetadata": {
+        "rustc": 2833068300835136146,
+        "features": "[\"default\", \"pq-only\"]",
+        "declared_features": "[\"default\", \"devnet-prealloc\", \"evm\", \"legacy-secp256k1\", \"pq-only\", \"private-integration-config\", \"wasm32-sdk\"]",
+        "target": 17288799724584307154,
+        "profile": 6873731449254902479,
+        "path": 15246021421766354275,
+        "deps": [
+          [
+            926553766794733348,
+            "misaka_palw_gen",
+            false,
+            2173456210863826403
+          ],
+          [
+            2292387119272699786,
+            "workflow_log",
+            false,
+            4384707512255433416
+          ],
+          [
+            2415996077284290420,
+            "kaspa_merkle",
+            false,
+            5590444111604919490
+          ],
+          [
+            2793849752716609387,
+            "misaka_palw_positive_contract",
+            false,
+            12583932487391549004
+          ],
+          [
+            3317542222502007281,
+            "itertools",
+            false,
+            2018762955222968291
+          ],
+          [
+            3634302844026156566,
+            "misaka_palw_panel",
+            false,
+            7215647274215825745
+          ],
+          [
+            3837320506950552283,
+            "kaspa_core",
+            false,
+            14171549456736079221
+          ],
+          [
+            3942959894279192965,
+            "workflow_wasm",
+            false,
+            13258650431055148276
+          ],
+          [
+            4017631242692163550,
+            "libcrux_ml_dsa",
+            false,
+            4757587738240029034
+          ],
+          [
+            5330460842384404171,
+            "serde_json",
+            false,
+            16841052862218631766
+          ],
+          [
+            5401708565005829220,
+            "misaka_palw_tir",
+            false,
+            11358585035971962292
+          ],
+          [
+            5600820502108938507,
+            "kaspa_math",
+            false,
+            825489794565559042
+          ],
+          [
+            5900683115025467349,
+            "faster_hex",
+            false,
+            3461639277727414685
+          ],
+          [
+            6831611227313043439,
+            "smallvec",
+            false,
+            4677598927364961306
+          ],
+          [
+            6946689283190175495,
+            "wasm_bindgen",
+            false,
+            15248403980383456584
+          ],
+          [
+            7027941290949074570,
+            "kaspa_txscript_errors",
+            false,
+            10844100720794535504
+          ],
+          [
+            7130920128489990223,
+            "misaka_palw_challenge",
+            false,
+            11107209336530973156
+          ],
+          [
+            7535615506242181887,
+            "kaspa_muhash",
+            false,
+            16049275477732529301
+          ],
+          [
+            7670211519503158651,
+            "getrandom",
+            false,
+            633077660849300972
+          ],
+          [
+            7697069912127091441,
+            "kaspa_utils",
+            false,
+            7149845606432616301
+          ],
+          [
+            7779788016726567404,
+            "misaka_palw_kernel",
+            false,
+            8669562853150373224
+          ],
+          [
+            8304026633254494341,
+            "borsh",
+            false,
+            6593488871846003483
+          ],
+          [
+            8460377374586444205,
+            "rand",
+            false,
+            16275494078568828431
+          ],
+          [
+            8786318516197344985,
+            "thiserror",
+            false,
+            9924761892649720030
+          ],
+          [
+            9003359908906038687,
+            "js_sys",
+            false,
+            8422888968882406651
+          ],
+          [
+            10411997081178400487,
+            "cfg_if",
+            false,
+            2069905378673502470
+          ],
+          [
+            10629569228670356391,
+            "futures_util",
+            false,
+            17495269306034855389
+          ],
+          [
+            11017232866922121725,
+            "sha3",
+            false,
+            6168081698887907881
+          ],
+          [
+            11261232116272131900,
+            "serde_wasm_bindgen",
+            false,
+            17377279301411191206
+          ],
+          [
+            11362065594985487041,
+            "kaspa_hashes",
+            false,
+            7776487767016712388
+          ],
+          [
+            11865557049430793590,
+            "build_script_build",
+            false,
+            455792005297658777
+          ],
+          [
+            11998722377393603027,
+            "blake2b_simd",
+            false,
+            782035890411426883
+          ],
+          [
+            12811833362977828482,
+            "kaspa_addresses",
+            false,
+            7889520507307202697
+          ],
+          [
+            12848154260885479101,
+            "bitflags",
+            false,
+            7577550011319199014
+          ],
+          [
+            13548984313718623784,
+            "serde",
+            false,
+            6111315018664102957
+          ],
+          [
+            14156004699915924381,
+            "workflow_serializer",
+            false,
+            7487197946779949829
+          ],
+          [
+            14306042979243042769,
+            "arc_swap",
+            false,
+            15547320436671046183
+          ],
+          [
+            16611674984963787466,
+            "async_trait",
+            false,
+            11835127612312214077
+          ],
+          [
+            16872963613512710305,
+            "workflow_core",
+            false,
+            6810331038822228407
+          ],
+          [
+            18112009879309521262,
+            "argon2",
+            false,
+            17174615991234626922
+          ]
+        ],
+        "local": [
+          {
+            "CheckDepInfo": {
+              "dep_info": "debug/.fingerprint/kaspa-consensus-core-6c1e46d446af07e1/dep-lib-kaspa_consensus_core",
+              "checksum": false
+            }
+          }
+        ],
+        "rustflags": [],
+        "config": 2069994364910194474,
+        "compile_kind": 0
+      }
+    },
+    "kaspa_txscript": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_txscript-e3fac275f5da7297.rlib",
+      "sha256": "a6780fda292432c0558fc355cd88bb0ab3880a1762535de7c0d2671d1bf74c11",
+      "mtimeNs": 1794350658827312277,
+      "nodeDependencyFingerprint": 10255437762427184914,
+      "fingerprintMetadata": {
+        "rustc": 2833068300835136146,
+        "features": "[\"default\", \"pq-only\"]",
+        "declared_features": "[\"default\", \"legacy-secp256k1\", \"pq-only\", \"wasm32-core\", \"wasm32-sdk\"]",
+        "target": 17518852644074548438,
+        "profile": 3529655162674907694,
+        "path": 1711911350892215294,
+        "deps": [
+          [
+            2062481783838671931,
+            "parking_lot",
+            false,
+            7050507923973504297
+          ],
+          [
+            3317542222502007281,
+            "itertools",
+            false,
+            2018762955222968291
+          ],
+          [
+            3942959894279192965,
+            "workflow_wasm",
+            false,
+            13258650431055148276
+          ],
+          [
+            4017631242692163550,
+            "libcrux_ml_dsa",
+            false,
+            4757587738240029034
+          ],
+          [
+            5236433071915784494,
+            "sha2",
+            false,
+            9165097670367905687
+          ],
+          [
+            5330460842384404171,
+            "serde_json",
+            false,
+            16841052862218631766
+          ],
+          [
+            6831611227313043439,
+            "smallvec",
+            false,
+            4677598927364961306
+          ],
+          [
+            6946689283190175495,
+            "wasm_bindgen",
+            false,
+            15248403980383456584
+          ],
+          [
+            7027941290949074570,
+            "kaspa_txscript_errors",
+            false,
+            10844100720794535504
+          ],
+          [
+            7314894124883917868,
+            "log",
+            false,
+            8476963923584648114
+          ],
+          [
+            7697069912127091441,
+            "kaspa_utils",
+            false,
+            7149845606432616301
+          ],
+          [
+            7988260456158184231,
+            "kaspa_wasm_core",
+            false,
+            3726598443283489061
+          ],
+          [
+            8304026633254494341,
+            "borsh",
+            false,
+            6593488871846003483
+          ],
+          [
+            8460377374586444205,
+            "rand",
+            false,
+            16275494078568828431
+          ],
+          [
+            8786318516197344985,
+            "thiserror",
+            false,
+            9924761892649720030
+          ],
+          [
+            8826707145280285270,
+            "indexmap",
+            false,
+            5466863637749637126
+          ],
+          [
+            10411997081178400487,
+            "cfg_if",
+            false,
+            2069905378673502470
+          ],
+          [
+            11261232116272131900,
+            "serde_wasm_bindgen",
+            false,
+            17377279301411191206
+          ],
+          [
+            11362065594985487041,
+            "kaspa_hashes",
+            false,
+            7776487767016712388
+          ],
+          [
+            11865557049430793590,
+            "kaspa_consensus_core",
+            false,
+            4585917502805505582
+          ],
+          [
+            11998722377393603027,
+            "blake2b_simd",
+            false,
+            782035890411426883
+          ],
+          [
+            12811833362977828482,
+            "kaspa_addresses",
+            false,
+            7889520507307202697
+          ],
+          [
+            13301649889205266430,
+            "hexplay",
+            false,
+            11265857818448489062
+          ],
+          [
+            13548984313718623784,
+            "serde",
+            false,
+            6111315018664102957
+          ]
+        ],
+        "local": [
+          {
+            "CheckDepInfo": {
+              "dep_info": "debug/.fingerprint/kaspa-txscript-e3fac275f5da7297/dep-lib-kaspa_txscript",
+              "checksum": false
+            }
+          }
+        ],
+        "rustflags": [],
+        "config": 2069994364910194474,
+        "compile_kind": 0
+      }
+    },
+    "kaspa_hashes": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_hashes-dbda03e74ac484e8.rlib",
+      "sha256": "2d375d7b62636da7d4636ac243e5b33a889daf1f6f45e317c04a90804b54886d",
+      "mtimeNs": 1794350553659809990,
+      "nodeDependencyFingerprint": 7776487767016712388,
+      "fingerprintMetadata": {
+        "rustc": 2833068300835136146,
+        "features": "[\"default\"]",
+        "declared_features": "[\"default\", \"keccak\", \"no-asm\"]",
+        "target": 10714498952412288189,
+        "profile": 3529655162674907694,
+        "path": 12106897199845713956,
+        "deps": [
+          [
+            3942959894279192965,
+            "workflow_wasm",
+            false,
+            13258650431055148276
+          ],
+          [
+            5070769681332304831,
+            "once_cell",
+            false,
+            16333659204390818677
+          ],
+          [
+            5236433071915784494,
+            "sha2",
+            false,
+            9165097670367905687
+          ],
+          [
+            5900683115025467349,
+            "faster_hex",
+            false,
+            3461639277727414685
+          ],
+          [
+            6946689283190175495,
+            "wasm_bindgen",
+            false,
+            15248403980383456584
+          ],
+          [
+            7697069912127091441,
+            "kaspa_utils",
+            false,
+            7149845606432616301
+          ],
+          [
+            8304026633254494341,
+            "borsh",
+            false,
+            6593488871846003483
+          ],
+          [
+            9003359908906038687,
+            "js_sys",
+            false,
+            8422888968882406651
+          ],
+          [
+            11306548876293198846,
+            "keccak",
+            false,
+            11890759119810790577
+          ],
+          [
+            11362065594985487041,
+            "build_script_build",
+            false,
+            8715942486804675094
+          ],
+          [
+            11998722377393603027,
+            "blake2b_simd",
+            false,
+            782035890411426883
+          ],
+          [
+            13548984313718623784,
+            "serde",
+            false,
+            6111315018664102957
+          ]
+        ],
+        "local": [
+          {
+            "CheckDepInfo": {
+              "dep_info": "debug/.fingerprint/kaspa-hashes-dbda03e74ac484e8/dep-lib-kaspa_hashes",
+              "checksum": false
+            }
+          }
+        ],
+        "rustflags": [],
+        "config": 2069994364910194474,
+        "compile_kind": 0
+      }
+    },
+    "libcrux_ml_dsa": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/liblibcrux_ml_dsa-0b2424abe2d920a7.rlib",
+      "sha256": "30dbf1b481286a84d4e251c7b4736a59f2105121ca9de32e565a0beb66aa35d6",
+      "mtimeNs": 1794343959721718559,
+      "nodeDependencyFingerprint": 4757587738240029034,
+      "fingerprintMetadata": {
+        "rustc": 2833068300835136146,
+        "features": "[\"default\", \"mldsa44\", \"mldsa65\", \"mldsa87\", \"std\"]",
+        "declared_features": "[\"acvp\", \"codec\", \"default\", \"mldsa44\", \"mldsa65\", \"mldsa87\", \"simd128\", \"simd256\", \"std\", \"test-utils\"]",
+        "target": 10185559957975415198,
+        "profile": 2877827508720625056,
+        "path": 14981767763761351950,
+        "deps": [
+          [
+            1130923767062559169,
+            "libcrux_macros",
+            false,
+            790354673207002420
+          ],
+          [
+            4017631242692163550,
+            "build_script_build",
+            false,
+            12589232410548410828
+          ],
+          [
+            4780521159407711145,
+            "libcrux_secrets",
+            false,
+            4851033243920047012
+          ],
+          [
+            5481023190318290129,
+            "libcrux_sha3",
+            false,
+            14443089822737695496
+          ],
+          [
+            6996977456835322503,
+            "libcrux_intrinsics",
+            false,
+            13020032566217360460
+          ],
+          [
+            11997547937435638845,
+            "hax_lib",
+            false,
+            4938629829183981649
+          ],
+          [
+            14956358631554621112,
+            "libcrux_platform",
+            false,
+            16206676545456768116
+          ]
+        ],
+        "local": [
+          {
+            "CheckDepInfo": {
+              "dep_info": "debug/.fingerprint/libcrux-ml-dsa-0b2424abe2d920a7/dep-lib-libcrux_ml_dsa",
+              "checksum": false
+            }
+          }
+        ],
+        "rustflags": [],
+        "config": 2069994364910194474,
+        "compile_kind": 0
+      }
+    }
+  },
+  "buildLog": "/tmp/t12-tokenizer-round-sender-tests.log",
+  "buildLogSha256": "36e6cacc7268626f2d4875f1f85c87911ed4dfbb543f0e49a7ead43e2372a98e",
+  "schema": "palw-tokenizer-registration-source-pinned-mass-v1",
+  "date": "2026-11-11",
+  "scope": "Offline carrier mass and actual UTXO signature checks using libraries matched to the passed node test dependency fingerprints.",
+  "nodeTestFingerprint": "/tmp/misaka-public-contract-test.fd7edK/debug/.fingerprint/kaspa-consensus-5d5050182ad43097/test-lib-kaspa_consensus.json",
+  "nodeTestFingerprintSha256": "d7c123132041ca89fd0f40d4cb2fd5dd9ebbf811185b2cc7de68aa94d4b5a38f",
+  "harness": {
+    "source": "docs/evidence/palw/tokenizer-registration-mass-2026-11-11/main.rs",
+    "sha256": "c015198962a1f99dc0ef6ff246b1fe350525e85cd322371e24ce1faadde8c37f",
+    "compileArgv": [
+      "rustc",
+      "--edition",
+      "2024",
+      "-L",
+      "dependency=/tmp/misaka-public-contract-test.fd7edK/debug/deps",
+      "--extern",
+      "kaspa_consensus_core=/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_consensus_core-6c1e46d446af07e1.rlib",
+      "--extern",
+      "kaspa_txscript=/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_txscript-e3fac275f5da7297.rlib",
+      "--extern",
+      "kaspa_hashes=/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_hashes-dbda03e74ac484e8.rlib",
+      "--extern",
+      "libcrux_ml_dsa=/tmp/misaka-public-contract-test.fd7edK/debug/deps/liblibcrux_ml_dsa-0b2424abe2d920a7.rlib",
+      "/tmp/t12-tokenizer-mass-source-pinned/main.rs",
+      "-o",
+      "/tmp/t12-tokenizer-mass-source-pinned/probe"
+    ],
+    "probeSha256": "25bd07656c6112d8a76baff9cd8f1ab1e9caa44fe9ccbf28c8bcd1a16344ab24"
+  },
+  "inputs": [
+    {
+      "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json",
+      "bytes": 2104556,
+      "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+    },
+    {
+      "path": "/tmp/misaka-studio-tfp1-native.k1U16c/studio-token-table.palwttb",
+      "bytes": 578215,
+      "sha256": "f1d8cdbabdccd58e988f689c3d4296de6e66b2d2702736f5629f7633b5559f90"
+    }
+  ],
+  "result": "tokenizer_raw=2104556 parts=33 full_part=65536 last_part=7404 vocab=49152 eog_ids=2 eog_siblings=2 table_root=b1f2391a4f17d5f675c78d5c893c3a38ea2588e90f98537071932b26c0c732755a01834b357c8e00bdc88203b090cdb4f7913eb6d19b43c2d23e0f32509bdb09\nnet=testnet-12 compute_tx_byte=1 compute_spk_byte=10 sig_op_mass=10000 transient_byte=4 storage_parameter=1000000000000 block_cap=500000 relay_cap=480000\ninputs=1 outputs=1 input_sompi=1000000000 output_sompi=999000000 input_coinbase=false spk_bytes=69 input_plurality=2\ncarrier,payload_bytes,unlock_bytes,output_bytes,estimated_tx_bytes,compute,transient,storage,max,relay_margin,block_margin\nOpen,5451,7226,87,12942,23652,51768,4,51768,428232,448232\nPart/max,70510,7226,87,78001,88711,312004,4,312004,167996,187996\nPart/tail,12378,7226,87,19869,30579,79476,4,79476,400524,420524\nFinish,5182,7226,87,12673,23383,50692,4,50692,429308,449308\n",
+  "resultSha256": "2cae1a1e1dccee6cb07559c9428c04f5f189637fe4eb18f74fb3dab3b1cc0974",
+  "rustc": "rustc 1.93.0 (254b59607 2026-01-19)\nbinary: rustc\ncommit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c\ncommit-date: 2026-01-19\nhost: aarch64-apple-darwin\nrelease: 1.93.0\nLLVM version: 21.1.8\n",
+  "limitations": [
+    "Pins and UTXOs are fixed local fixtures. No public registration quote, acceptance or submission.",
+    "Mass formula checks are independent of CPU/RSS and minimum-hardware qualification. Parser and native history were not benchmarked.",
+    "Historical mass evidence remains unchanged; this separate run resolves the earlier unknown library source provenance."
+  ],
+  "publicSubmission": false,
+  "publicActivation": false
+}

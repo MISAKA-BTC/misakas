@@ -1,0 +1,47 @@
+{
+  "schema": "palw-tokenizer-registration-round-sender-regression-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "3b7bd1dc80b459a3146232651f6cdee2f7d6656a",
+  "passedTotal": 3,
+  "command": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' --config 'profile.dev.package.kaspa-consensus.opt-level=0' test -p kaspa-consensus -p misaka-cli --lib --bin misaka tokenizer_registration -j 2",
+  "log": "/tmp/t12-tokenizer-round-sender-tests.log",
+  "logSha256": "36e6cacc7268626f2d4875f1f85c87911ed4dfbb543f0e49a7ead43e2372a98e",
+  "runs": [
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus-5d5050182ad43097",
+      "binarySha256": "b75d3186452daa5a4dd82511af08bc1bf4f4a01d13842e46f3d111d0ef5b5964",
+      "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1381 filtered out; finished in 21.43s",
+      "passed": 2,
+      "testNames": [
+        "pipeline::virtual_processor::tests::g14_registration_e2e::tokenizer_registration::signed_tkr1_open_parts_finish_and_duplicate_use_the_actual_node",
+        "pipeline::virtual_processor::tests::t12_round_lane_e2e::tokenizer_registration::signed_tokenizer_registration_round_fee_body_boundary_is_atomic"
+      ]
+    },
+    {
+      "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka-f25c52b5ee0a359d",
+      "binarySha256": "1fdf2c62536ec4239633069676d5c8ad190bb61d75eae25ceb04e65d08313f33",
+      "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 283 filtered out; finished in 0.01s",
+      "passed": 1,
+      "testNames": [
+        "palw_tokenizer_registration::sender::tests::tokenizer_registration_sender_preserves_slots_and_requires_accepted_parts"
+      ]
+    }
+  ],
+  "checks": [
+    "Actual signed Round accepts Open when collectible fee after native burn fits.",
+    "One-sompi excess body rejected; no TKR row, UTXO spend/change or RoundFee income remains.",
+    "Authorized Round header permit remains consumed, matching existing protocol.",
+    "Retry of same signed Open is not prepaid by rejected body; full native charge is applied.",
+    "Existing linear registration/restart/replay/reorg fixture passes after shared setup refactor.",
+    "CLI unit test rejects missed/repeated Part, requires all accepted Parts for Finish and preserves original normal/recovery slots."
+  ],
+  "limitations": [
+    "Round uses existing unshipped private V2 budget mechanics fixture; public arming requires V3. No public-profile qualification is claimed.",
+    "No public T12 registration, claim admission, Final or activation.",
+    "CLI live RPC and broadcast behavior is compile checked; only its reservation selection logic is unit tested here.",
+    "Opt-level 0 functional test, not hardware performance measurement."
+  ],
+  "publicSubmission": false,
+  "publicActivation": false,
+  "mainPush": false
+}

@@ -7,7 +7,7 @@
 | TKR1 wire、UTXO fee handoff、予約 book、native fold、journal・snapshot 検査 | core / SDK 実装済み。確定 fold の費用照合を含むローカル回帰を実施 |
 | 設定・新規 Open cutoff・header gate・ノード UTXO handoff と受理順 | 隔離した実ノードで署名済み Open/Part/Finish/重複が通過。出荷 preset は未設定 |
 | coinbase・テンプレート・Round の焼却反映、work scanner 実行境界 | 接続コードと段階3のローカル回帰30件が通過。公開適格性の測定は未完了 |
-| RPC・CLI | unsigned Open quote / accepted status の回帰22件通過。live quote から署名 bundle を作る prepare CLI は build check 通過。支払・送信 CLI は未接続 |
+| RPC・CLI | unsigned Open quote / accepted status の回帰22件通過。prepare/send CLI と通常 UTXO funding API 実装済み。予約枠・署名検査通過、live CLI broadcast は未検証 |
 | 公開 T12 の有効化、同一 Studio TFP1 の G14 quote・対話・Final・ブロック生成 | 未確認 |
 
 - [ ] **設定と入口**。候補ブロックの DAA で TKR1 専用の activation と policy を解決する。未設定のネットワークは既存の挙動と fingerprint を維持する。設定の形状、fence visitor、ruleset と consensus params ID に、設定時だけ値を組み込む。header-context の入口で fence を確認し、前段で候補ブロック内の TKR1 carrier 全件と期限処理の作業量を集計する。未知版・重複・拒否される carrier も作業量に含める。[設定検証](../../../../consensus/core/src/config/params/validation.rs#L271) · [設定 fingerprint](../../../../consensus/core/src/config/params/identity.rs#L1985) · [header-context 検査](../../../../consensus/src/processes/transaction_validator/tx_validation_in_header_context.rs#L73) · [TKR1 scanner](../../../../consensus/core/src/palw_tokenizer_registration_carriage_v1.rs#L244)
@@ -42,3 +42,7 @@ TKR1 transport が有効になった候補から、通常 PALW object・Batch・
 段階5の[実ノード試験と関連24件](../../../evidence/palw/funded-tokenizer-registration-phase5-node-regression-2026-11-11.json)が成功した。既存の予約規則で Open/Part/Finish/同一 Open 再送を通常 carrier として処理し、実 UTXO と coinbase に新規 Open の一回焼却を反映した。隔離設定の機能試験であり、再起動・再編・pruned IBD と公開数値 profile の適格性は、この結果に含めない。
 
 追加の[復元回帰25件](../../../evidence/palw/funded-tokenizer-registration-phase5-recovery-regression-2026-11-11.json)では、同じ DB の再起動・別ノードの block replay・Finish 前からの実分岐を確認した。再起動は root/status/UTXO、replay は root/status の一致、再編は Open の charge ID・Part・予約枠を維持した Pending への復帰を検査した。pruned IBD 転送、実 Round の登録費用拒否、公開性能測定は未完了。
+
+[Round の追加試験](../../../evidence/palw/tokenizer-registration-round-sender-regression-2026-11-11.json)では、実署名済み Round 本文の Open を焼却後の collectible fee で判定した。1 sompi 超過時に本文の TKR 行・UTXO・RoundFee income が残らず、ヘッダー permit は既存規則どおり消費され、同じ Open 再試行に全額の burn が発生した。既存のテスト用 V2 budget 上限を使う機能検査であり、公開 arming に必要な V3 profile の検証とは区別する。
+
+[認証済み PALW sidecar の復元試験](../../../evidence/palw/tokenizer-registration-pruned-sidecar-regression-2026-11-11.json)が通過した。Part 受理点の予約 book・session・raw Part を取り込み、同じ Finish 取引の受理と Complete、後続各ブロックの状態 root 一致を確認した。取り込み未完了時には厳格な status RPC が拒否することも検査した。試験は検証済み UTXO を保持し既存の epoch-zero 完了処理を使う構成であり、P2P handshake と UTXO stream 全体の pruned IBD 試験ではない。ノード2件と CLI1件が成功した。
