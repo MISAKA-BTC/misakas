@@ -25,9 +25,10 @@ use misaka_palw_positive_contract::{
     ports::{NodeChecker, require_next},
     public_one_honest::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
-        ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
-        PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1,
-        VerificationSchedule, public_draw_members_digest_v1, public_original_service_contract_id_v1, require_accepted_after_v1,
+        ManifestV1, MaterialCaseDemand, MissingInspectionOutcome, OriginalClock, OriginalCommit, OriginalId, PanelBond,
+        PendingManifestCase, PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext,
+        SignedPublicOriginalV1, VerificationSchedule, public_draw_members_digest_v1, public_original_service_contract_id_v1,
+        require_accepted_after_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -698,6 +699,17 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
         let key = (PUBLIC_PENDING_MANIFEST_TABLE_V1, PendingManifestCaseRecordV1::key(original, case).to_vec());
         route.aux.get(&key).map(|bytes| self.decode_public_pending_manifest_row_v1(&key.1, bytes)).transpose()
+    }
+
+    /// Classify a still-open case at this accepted state point. Receiving a
+    /// response leaves this status unchanged until the case owner resolves it.
+    pub fn public_pending_manifest_outcome_v1(
+        &self,
+        original: OriginalId,
+        case: CaseId,
+    ) -> Result<Option<MissingInspectionOutcome>, ContractError> {
+        let Some(row) = self.public_pending_manifest_record_v1(original, case)? else { return Ok(None) };
+        row.unresolved_at(self.last_point().ok_or(ContractError::Scope)?.daa_score).map(Some)
     }
 
     /// Read the unresolved manifest cases for one admitted original.

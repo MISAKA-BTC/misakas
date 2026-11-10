@@ -710,6 +710,14 @@ impl PendingManifestCaseRecordV1 {
         }
         Ok(())
     }
+
+    /// Classify an unresolved case after its admission link has been checked.
+    pub fn unresolved_at(&self, now: u64) -> Result<MissingInspectionOutcome, ContractError> {
+        if now < self.origin.accepted_daa {
+            return Err(ContractError::Range);
+        }
+        Ok(unresolved_inspection_at(now, self.material_ready_by, self.hard))
+    }
 }
 
 impl PendingManifestCase {
@@ -1003,6 +1011,16 @@ pub enum MissingInspectionOutcome {
     AbortedUnverified,
 }
 
+fn unresolved_inspection_at(now: u64, material_ready_by: u64, hard: u64) -> MissingInspectionOutcome {
+    if now > hard {
+        MissingInspectionOutcome::AbortedUnverified
+    } else if now > material_ready_by {
+        MissingInspectionOutcome::NoSlashHold
+    } else {
+        MissingInspectionOutcome::AwaitingMaterial
+    }
+}
+
 impl VerificationSchedule {
     pub fn new(clock: OriginalClock, notice: FirstNoticeDemand, case: MaterialCaseDemand) -> Result<Self, ContractError> {
         if notice.draw_ready_by < clock.accepted_at
@@ -1089,13 +1107,7 @@ impl VerificationSchedule {
         if !self.clock.accepts_first_notice(opened_at) || now < opened_at {
             return Err(ContractError::Range);
         }
-        Ok(if self.clock.is_past_hard(now) {
-            MissingInspectionOutcome::AbortedUnverified
-        } else if now > self.material_ready_by {
-            MissingInspectionOutcome::NoSlashHold
-        } else {
-            MissingInspectionOutcome::AwaitingMaterial
-        })
+        Ok(unresolved_inspection_at(now, self.material_ready_by, self.clock.hard()))
     }
 }
 
@@ -1421,6 +1433,9 @@ mod tests {
             Err(ContractError::Scope)
         );
         assert_eq!(restored.check_restore(&pending), Ok(()));
+        assert_eq!(restored.unresolved_at(schedule.material_ready_by()), Ok(MissingInspectionOutcome::AwaitingMaterial));
+        assert_eq!(restored.unresolved_at(clock.hard()), Ok(MissingInspectionOutcome::NoSlashHold));
+        assert_eq!(restored.unresolved_at(clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
         let alternate = AcceptedOrigin { accepted_tx_ordinal: restored.origin.accepted_tx_ordinal + 1, ..restored.origin };
         let altered = PendingManifestCaseRecordV1 { origin: alternate, ..restored };
         assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));
