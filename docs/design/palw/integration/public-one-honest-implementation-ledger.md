@@ -88,3 +88,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 公開 seat 5 を DAA 20,987〜20,988 で再照会した。同期済みの testnet-12 ノードは、同じ未署名候補 `7645bc8b…a3711` の original quote を `TIR_CLASS_CONTAINER_UNBOUND` で拒否した。FreePromptClaim、KernelClaim、ClaimDetail、CourtState、claim-lifecycle はすべて `found=false`。選択ブロック `9ced0332…885be` は DAA 20,987 で取得できたが、候補の受付ブロックは取得できなかった。
 
 Linux の T12 復旧候補をリリースビルドし、バイナリの SHA-256 `3704030a2d230a2c74c20c4f8777706f08598e89988c2f8eb8cae3253f2d4c11` を転送先で照合した。seat 5 上の隔離カナリア `t12-exact-recovery-canary-151f9ce7` が既存カナリア DB を開き、保存済みの隔離状態を保持して起動した。初回 RPC では pruning import は epoch 18、idle、stable。カナリアは DAA 5,187、公開 seat 5 は同期済みの DAA 20,994。カナリアは protocol 108 のピアと接続し、IBD でヘッダー 56 件を取り込んで不足ブロック本体の検索に進んだ。公開先端への合流と Studio claim の受付はこの確認には含まれない。
+
+同じカナリアは約 133 秒で不足本体 220,694 件を列挙し、最初の 10 秒間に 198 ブロックを処理した。仮想先端を更新する処理では保存済み PALW tip と UTXO walk の起点が異なる旨を記録した後、履歴ブロックの PALW lifecycle の再適用に進んだ。公開 seat 5 の DAA 20,995〜20,996 では同じ Studio 候補の original quote は引き続き `TIR_CLASS_CONTAINER_UNBOUND`。受付、Court、Kernel、lifecycle の記録は取得できなかった。
