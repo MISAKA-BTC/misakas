@@ -529,23 +529,23 @@ impl PreparedPublicOriginalV1 {
 }
 
 impl PublicOriginalAdmissionRecordV1 {
-    pub(crate) fn decode_row(
-        key: &[u8],
-        bytes: &[u8],
-        point: &crate::palw_state_v2::PalwBlockContextV2,
-    ) -> Result<Self, ContractError> {
+    pub(crate) fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
         let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
         if key != row.original.0.0.as_slice() {
             return Err(ContractError::Identity);
         }
-        let origin = row.carrier.origin;
+        Ok(row)
+    }
+
+    pub(crate) fn check_state_point(&self, point: &crate::palw_state_v2::PalwBlockContextV2) -> Result<(), ContractError> {
+        let origin = self.carrier.origin;
         if origin.accepted_daa > point.daa_score
             || origin.accepted_blue_score > point.blue_score
             || (origin.accepted_blue_score == point.blue_score && origin.accepting_block.0 != point.block.as_bytes())
         {
             return Err(ContractError::Scope);
         }
-        Ok(row)
+        Ok(())
     }
 
     /// Resolve this reference from canonical accepted history on restore.

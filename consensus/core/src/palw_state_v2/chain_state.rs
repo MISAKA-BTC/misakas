@@ -3862,9 +3862,9 @@ impl PalwChainStateV2 {
                 let point = self.last_point.as_ref().ok_or_else(|| {
                     PalwStateV2Error::CarriageInconsistent("public original admission without an accepted point".into())
                 })?;
-                PublicOriginalAdmissionRecordV1::decode_row(key, bytes, point).map_err(|error| {
-                    PalwStateV2Error::CarriageInconsistent(format!("inconsistent public original admission row: {error:?}"))
-                })?;
+                PublicOriginalAdmissionRecordV1::decode_row(key, bytes).and_then(|row| row.check_state_point(point)).map_err(
+                    |error| PalwStateV2Error::CarriageInconsistent(format!("inconsistent public original admission row: {error:?}")),
+                )?;
             }
         }
         self.assert_vertex_consistency_v1()?;

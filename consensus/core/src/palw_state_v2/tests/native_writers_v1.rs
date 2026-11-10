@@ -258,3 +258,22 @@ fn positive_aux_writer_reserves_retained_workspace_only_on_insert() {
     assert_eq!(quote_bytes(KERNEL_AUX_TABLE, false), quote_bytes(ordinary_aux_table, false) + positive_aux_row_memory_bytes_v1());
     assert_eq!(quote_bytes(KERNEL_AUX_TABLE, true), quote_bytes(ordinary_aux_table, true));
 }
+
+#[test]
+fn malformed_public_admission_is_rejected_before_journaling() {
+    use crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1;
+
+    let mut parent = PalwChainStateV2::genesis();
+    parent.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
+        crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
+        None,
+        misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 1, burned: 0 },
+    ));
+    let params = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+    let key = (PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, vec![1; 64]);
+    assert!(matches!(builder.write_kernel_row(key.0, key.1.clone(), Some(vec![2])), Err(PalwStateV2Error::KernelRouteRefused(_))));
+    assert!(!builder.state.kernel_route.as_ref().unwrap().aux.contains_key(&key));
+    assert!(builder.entries.is_empty());
+}

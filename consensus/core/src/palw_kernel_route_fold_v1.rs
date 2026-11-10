@@ -268,6 +268,12 @@ impl TransitionBuilder<'_> {
 
     fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
         if let Some(value) = new.as_deref() {
+            use crate::palw_positive_contract_v2::{PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PublicOriginalAdmissionRecordV1};
+            if table == PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 {
+                PublicOriginalAdmissionRecordV1::decode_row(&key, value).map_err(|error| {
+                    PalwStateV2Error::KernelRouteRefused(format!("invalid public original admission row: {error:?}"))
+                })?;
+            }
             if let Some(claim) = legacy_kernel_claim_alias_v2(table, &key, value) {
                 self.reject_positive_claim_alias_v2(claim)?;
             }
