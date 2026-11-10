@@ -176,6 +176,7 @@ pub struct PreparedPublicDrawV1 {
     original: OriginalId,
     draw: Digest,
     draw_daa: u64,
+    hard: u64,
     full_scope: Digest,
     members: std::collections::BTreeMap<(Digest, u32), PublicDrawMemberV1>,
     ordered_members: Digest,
@@ -187,6 +188,7 @@ pub struct PublicDrawRecordV1 {
     original: OriginalId,
     draw: Digest,
     draw_daa: u64,
+    hard: u64,
     full_scope: Digest,
     ordered_members: Digest,
     per_bond: RemainingCapacity,
@@ -208,6 +210,7 @@ impl PreparedPublicDrawV1 {
             original: self.original,
             draw: self.draw,
             draw_daa: self.draw_daa,
+            hard: self.hard,
             full_scope: self.full_scope,
             ordered_members: self.ordered_members,
             per_bond: self.per_bond,
@@ -239,7 +242,7 @@ impl PreparedPublicDrawV1 {
         approval_until: u64,
         approvals: &[(u64, &FullReplayApproval, &[u8; PUBKEY_BYTES], &[u8; SIGNATURE_BYTES])],
     ) -> Result<(), ContractError> {
-        if required == 0 || approvals.len() < required || approvals.len() > self.members.len() {
+        if approval_until > self.hard || required == 0 || approvals.len() < required || approvals.len() > self.members.len() {
             return Err(ContractError::Range);
         }
         let mut seen = std::collections::BTreeSet::new();
@@ -351,6 +354,7 @@ impl PreparedPublicOriginalV1 {
             original: self.original,
             draw,
             draw_daa,
+            hard: self.schedule.hard(),
             full_scope: self.original.full_replay_scope(relation_plan),
             members: checked,
             ordered_members: public_draw_members_digest_v1(members),

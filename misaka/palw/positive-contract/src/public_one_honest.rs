@@ -905,6 +905,10 @@ impl VerificationSchedule {
         self.terminal_by
     }
 
+    pub fn hard(self) -> u64 {
+        self.clock.hard()
+    }
+
     /// Run only with the profile's authenticated availability observation.
     /// This checks time, leaving authentication and the inclusion opportunity
     /// to the native admission procedure.
