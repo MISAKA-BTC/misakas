@@ -34,8 +34,8 @@ use misaka_palw_positive_contract::{
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
     public_one_honest::{
-        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_inventory_material_v1,
-        tir_output_material_codec_v1, tir_program_material_codec_v1,
+        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_cold_initial_state_material_v1,
+        tir_inventory_material_v1, tir_output_material_codec_v1, tir_program_material_codec_v1,
     },
 };
 use misaka_palw_tir::TirProgramV1;
@@ -217,6 +217,15 @@ pub fn run_public_wide_replay_v1(
 ) -> Result<(), PanelSourceErrorR1> {
     let expected_root = Hash64::from_bytes(original.artifact.0);
     check_public_original_execution_v1(original, job, class, expected_root)?;
+    let initial = manifest.entry(MaterialScope::InitialState);
+    let rules = ManifestScopeRules { codec: initial.codec, max_bytes: initial.total_bytes, chunk_bytes: initial.chunk_bytes };
+    let (expected, bytes) = tir_cold_initial_state_material_v1(original, rules)?;
+    if expected != *initial || expected.subject != original.initial_state {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    if fetch_public_replay_material(provider, original, manifest, MaterialScope::InitialState)?.as_slice() != bytes.as_slice() {
+        return Err(PanelSourceErrorR1::Binding);
+    }
     // The wide capture currently accepts the native Flat input commitment.
     let (program, prompt) = fetch_public_replay_inputs_v1(provider, original, manifest, PalwPromptIdsFormV1::Flat)?;
     if &program != space.program() {

@@ -423,6 +423,30 @@ pub fn tir_program_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-program-v1/native-graph-ir/whole")
 }
 
+/// Position zero, zero-filled Fixed tensors and empty Hist windows. Shapes,
+/// layers and the job seed are determined by the program and execution IDs.
+pub fn tir_cold_initial_state_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tir-cold-initial-state-v1/whole")
+}
+
+pub fn tir_cold_initial_state_material_v1(
+    original: &OriginalCommit,
+    rules: ManifestScopeRules,
+) -> Result<(ManifestEntryV1, [u8; 128]), ContractError> {
+    if rules.codec != tir_cold_initial_state_codec_v1() {
+        return Err(ContractError::UnsupportedProfile);
+    }
+    let mut bytes = [0; 128];
+    bytes[..64].copy_from_slice(&original.program.0);
+    bytes[64..].copy_from_slice(&original.execution.0);
+    let total_bytes = bytes.len() as u64;
+    if total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
+        return Err(ContractError::Budget);
+    }
+    let root = hash(b"misaka/palw/tir-cold-initial-state/v1", &bytes);
+    Ok((ManifestEntryV1 { subject: root, content_root: root, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes }, bytes))
+}
+
 /// Raw parameter bytes authenticated by the native TIR inventory.
 pub fn tir_inventory_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-inventory-v1/raw-parameter-bytes")
@@ -1524,6 +1548,18 @@ mod tests {
             service_contract: d,
         };
         let first = Claimant::DrawnBond(PanelBond { transaction: d, index: 0 });
+        let init_rules = ManifestScopeRules { codec: tir_cold_initial_state_codec_v1(), max_bytes: 128, chunk_bytes: 128 };
+        let (init, init_bytes) = tir_cold_initial_state_material_v1(&original, init_rules).unwrap();
+        assert_eq!(init.total_bytes, 128);
+        assert_eq!(init.subject, init.content_root);
+        assert_eq!(&init_bytes[..64], &original.program.0);
+        assert_eq!(&init_bytes[64..], &original.execution.0);
+        let changed = OriginalCommit { execution: Digest([99; 64]), ..original.clone() };
+        assert_ne!(tir_cold_initial_state_material_v1(&changed, init_rules).unwrap().0.subject, init.subject);
+        assert_eq!(
+            tir_cold_initial_state_material_v1(&original, ManifestScopeRules { max_bytes: 127, ..init_rules }),
+            Err(ContractError::Budget)
+        );
         let second = Claimant::DrawnBond(PanelBond { transaction: d, index: 1 });
         let request = ManifestRequest {
             original: original.id(),

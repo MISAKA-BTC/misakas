@@ -17,7 +17,7 @@ use kaspa_consensus_core::{
 #[cfg(feature = "positive-panel")]
 use misaka_palw_positive_contract::public_one_honest::{
     ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, OriginalCommit, prompt_text_material_v1, public_original_service_contract_id_v1,
-    tir_inventory_material_v1,
+    tir_cold_initial_state_material_v1, tir_inventory_material_v1,
 };
 use misaka_palw_positive_contract::{
     public_one_honest::{ManifestEntryV1, ManifestScopeRules, tir_program_material_codec_v1},
@@ -250,6 +250,10 @@ pub fn finalize_public_capture_v1(
     }
     let artifact = MaterialScope::Artifact as usize;
     manifest.entries[artifact] = tir_inventory_material_v1(params.artifact(), params.bytes_hashed(), scope_limits[artifact])?;
+    let initial = MaterialScope::InitialState as usize;
+    let (initial_entry, initial_bytes) = tir_cold_initial_state_material_v1(&original, scope_limits[initial])?;
+    original.initial_state = initial_entry.subject;
+    manifest.entries[initial] = initial_entry;
     let program = MaterialScope::Program as usize;
     let prompt = MaterialScope::Prompt as usize;
     let tokenizer = MaterialScope::Tokenizer as usize;
@@ -271,6 +275,7 @@ pub fn finalize_public_capture_v1(
         (MaterialScope::Program, job.class.program.as_slice()),
         (MaterialScope::Prompt, prompt_text.as_bytes()),
         (MaterialScope::Tokenizer, tokenizer_json),
+        (MaterialScope::InitialState, initial_bytes.as_slice()),
         (MaterialScope::Output, output_bytes.as_slice()),
     ];
     if replay_material.iter().any(|(_, bytes)| bytes.len() > crate::public_material::MATERIAL_UNIT_MAX_BYTES) {

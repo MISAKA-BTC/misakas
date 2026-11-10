@@ -103,6 +103,7 @@ pub(crate) fn public_original_replay_path(
         MaterialScope::Program => "program",
         MaterialScope::Prompt => "prompt",
         MaterialScope::Tokenizer => "tokenizer",
+        MaterialScope::InitialState => "initial-state",
         MaterialScope::Output => "output",
         _ => return None,
     };
@@ -113,7 +114,7 @@ pub(crate) fn public_original_replay_path(
 pub(crate) fn is_public_original_replay_path(path: &str) -> bool {
     path.strip_prefix("public-replay-v1/").and_then(|rest| rest.split_once('/')).is_some_and(|(id, scope)| {
         is_hex128(id)
-            && (matches!(scope, "program" | "prompt" | "tokenizer" | "output" | "trace-index")
+            && (matches!(scope, "program" | "prompt" | "tokenizer" | "output" | "initial-state" | "trace-index")
                 || scope.strip_prefix("trace-tile-").is_some_and(|index| {
                     !index.is_empty()
                         && index.bytes().all(|byte| byte.is_ascii_digit())
