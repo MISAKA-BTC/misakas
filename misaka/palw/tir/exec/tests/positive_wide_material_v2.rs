@@ -411,7 +411,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         let count_evidence = PublicOriginalTraceCountV1 { original: wrong_count.id(), trace: bad_index.clone() };
         assert!(count_evidence.check_wide_leaf_count(&original, &f.job, &f.class, trace_len).is_err());
         let count_verdict = count_evidence.check_wide_leaf_count(&wrong_count, &f.job, &f.class, trace_len).unwrap();
-        assert_eq!(count_verdict.fault, PalwStepFaultV1::StepLeafCountNotCanonical);
+        assert_eq!(count_verdict.fault(), &PalwStepFaultV1::StepLeafCountNotCanonical);
+        assert_eq!(count_verdict.key().0, wrong_count.id());
     }
     // Commit a different step value while preserving the independently
     // committed logits event. The changed tile really opens the changed claim.
@@ -433,7 +434,8 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let verdict = bad
         .check_wide_logits_consistency(&bad_original, &bad_binding, logits_leaf.index, &event, bad.tile.values_le.len(), &rules)
         .unwrap();
-    assert_eq!(verdict.fault, PalwStepFaultV1::TirLogitsTraceMismatch { value_index: 0 });
+    assert_eq!(verdict.fault(), &PalwStepFaultV1::TirLogitsTraceMismatch { value_index: 0 });
+    assert_eq!(verdict.key().0, bad_original.id());
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
     use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
     let size = original.decode * 4;

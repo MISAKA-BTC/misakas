@@ -3825,6 +3825,23 @@ pub struct PublicOriginalTraceCountV1 {
     pub trace: PublicOriginalTraceIndexV1,
 }
 
+/// A local court result keyed by both original identity and evidence identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicOriginalCourtVerdictV1 {
+    original: misaka_palw_positive_contract::public_one_honest::OriginalId,
+    verdict: PalwStepRefutationVerdictV1,
+}
+
+impl PublicOriginalCourtVerdictV1 {
+    pub fn key(&self) -> (misaka_palw_positive_contract::public_one_honest::OriginalId, Hash64) {
+        (self.original, self.verdict.evidence_id)
+    }
+
+    pub fn fault(&self) -> &PalwStepFaultV1 {
+        &self.verdict.fault
+    }
+}
+
 impl PublicOriginalTraceCountV1 {
     /// Adjudicate a leaf-count mismatch using the authenticated index alone.
     pub fn check_wide_leaf_count(
@@ -3833,7 +3850,7 @@ impl PublicOriginalTraceCountV1 {
         job: &PalwJobContextV2,
         class: &crate::palw_tir_class_v1::PalwTirClassV1,
         max_step_leaf_count: u64,
-    ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    ) -> Result<PublicOriginalCourtVerdictV1, PalwStepRefuteError> {
         if self.original != original.id() {
             return Err(bad("public trace count names another original"));
         }
@@ -3844,12 +3861,13 @@ impl PublicOriginalTraceCountV1 {
         if self.trace.step_leaf_count == expected {
             return Err(PalwStepRefuteError::NoFaultFound);
         }
-        Ok(convict(
+        let verdict = convict(
             &Hash64::from_bytes(original.trace_root.0),
             PALW_TIR_EVIDENCE_KIND_BINDING,
             0,
             PalwStepFaultV1::StepLeafCountNotCanonical,
-        ))
+        );
+        Ok(PublicOriginalCourtVerdictV1 { original: self.original, verdict })
     }
 }
 
@@ -3932,7 +3950,7 @@ impl PublicOriginalTraceTileV1 {
         event: &crate::palw_logits_q24_v2::WideLogitsEventV2,
         max_value_bytes: usize,
         rules: &PalwTirCourtRulesV1,
-    ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    ) -> Result<PublicOriginalCourtVerdictV1, PalwStepRefuteError> {
         self.authenticate(original, index, rules.max_step_leaf_count, max_value_bytes)?;
         check_public_original_court_binding(original, binding)?;
         if binding.full_logits_trace_root != self.trace.full_logits_trace_root
@@ -3941,7 +3959,8 @@ impl PublicOriginalTraceTileV1 {
         {
             return Err(bad("wide logits court binding names another original execution"));
         }
-        check_tir_logits_consistency_wide_q24_v2(binding, &self.opening, &self.tile, event, rules)
+        let verdict = check_tir_logits_consistency_wide_q24_v2(binding, &self.opening, &self.tile, event, rules)?;
+        Ok(PublicOriginalCourtVerdictV1 { original: self.original, verdict })
     }
 }
 
@@ -3970,7 +3989,7 @@ pub fn check_public_original_wide_greedy_decode_v1(
     beat: &crate::palw_logits_q24_v2::WideLogitsEventV2,
     beat_lane: usize,
     rules: &PalwTirCourtRulesV1,
-) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+) -> Result<PublicOriginalCourtVerdictV1, PalwStepRefuteError> {
     check_public_original_court_binding(original, binding)?;
     if committed.generated.len() != original.decode as usize
         || original.decode != binding.job_context.exact_decode_tokens
@@ -3980,14 +3999,15 @@ pub fn check_public_original_wide_greedy_decode_v1(
     {
         return Err(bad("wide decode court output does not bind the original"));
     }
-    check_tir_decode_wide_q24_v2(
+    let verdict = check_tir_decode_wide_q24_v2(
         binding,
         committed,
         beat,
         beat_lane,
         &crate::palw_decode_select_v2::PalwDecodeSamplingV2::GREEDY,
         rules,
-    )
+    )?;
+    Ok(PublicOriginalCourtVerdictV1 { original: original.id(), verdict })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
