@@ -282,6 +282,19 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert!(capture.public_logits_event(0, 0, logit_values - 1).is_err());
     let signed = SignedMiner::new(f, wrong_miner);
     let r = &signed.result;
+    let body = u64::from(ManifestV1::WIRE_BYTES);
+    let budget = AggregateBudget {
+        rounds: 1,
+        unique_source_bytes: body,
+        transmitted_bytes: body * 3,
+        additional_work: 3,
+        retained_bytes: body * 3,
+        retention_until: 10_100,
+        fee: 1,
+        witness_attempts: 1,
+    };
+    let service_contract =
+        misaka_palw_positive_contract::public_one_honest::public_original_service_contract_id_v1(r.service_contract, &budget);
     let mut original = misaka_palw_positive_contract::public_one_honest::OriginalCommit {
         scope: r.scope,
         job: r.job,
@@ -303,7 +316,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         output: d(0),
         trace_root: d(0),
         manifest_root: d(0),
-        service_contract: r.service_contract,
+        service_contract,
     };
     let mut other = original.clone();
     other.execution = d(77);
@@ -464,7 +477,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         prompt: d(1),
         initial_state: d(2),
         dependencies: r.dependencies,
-        service_contract: r.service_contract,
+        service_contract,
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
     };
     let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
@@ -476,19 +489,9 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         reservations::RemainingCapacity,
         rows::{AcceptedOrigin, AggregateUsage, NativeHash64},
     };
-    let body = u64::from(ManifestV1::WIRE_BYTES);
     let supply = RemainingCapacity { transmitted_bytes: body, additional_work: 1, retained_bytes: body };
-    let budget = AggregateBudget {
-        rounds: 1,
-        unique_source_bytes: body,
-        transmitted_bytes: body * 3,
-        additional_work: 3,
-        retained_bytes: body * 3,
-        retention_until: 10_100,
-        fee: 1,
-        witness_attempts: 1,
-    };
     let mut reservation = PublicOriginalReservationV1 {
+        service_obligation: r.service_contract,
         origin: AcceptedOrigin {
             accepting_block: NativeHash64([1; 64]),
             carrier_block: NativeHash64([5; 64]),

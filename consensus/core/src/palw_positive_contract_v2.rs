@@ -27,7 +27,7 @@ use misaka_palw_positive_contract::{
         Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestResponseRecordV1,
         ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase,
         PendingManifestCaseRecordV1, ProtectedRescueDemand, PublicDrawMemberV1, ReplayApprovalContext, SignedPublicOriginalV1,
-        VerificationSchedule, public_draw_members_digest_v1,
+        VerificationSchedule, public_draw_members_digest_v1, public_original_service_contract_id_v1,
     },
     reservations::RemainingCapacity,
     rows::{AcceptedMaterial, AcceptedOrigin, AggregateUsage},
@@ -121,6 +121,7 @@ pub struct PublicOriginalAdmissionV1<'a> {
 /// Native reservation inputs from the accepted profile and current ledger.
 pub struct PublicOriginalReservationV1<'a> {
     pub origin: AcceptedOrigin,
+    pub service_obligation: Digest,
     pub notice: FirstNoticeDemand,
     pub case: MaterialCaseDemand,
     pub initial_supply: RemainingCapacity,
@@ -710,6 +711,9 @@ impl PublicOriginalAdmissionV1<'_> {
         let schedule = VerificationSchedule::new(clock, reservation.notice, reservation.case)?;
         let capacity = reservation.initial_supply.checked_add(reservation.rescue.total()?)?;
         capacity.check(reservation.usage, reservation.budget)?;
+        if original.service_contract != public_original_service_contract_id_v1(reservation.service_obligation, reservation.budget) {
+            return Err(ContractError::Scope);
+        }
         let original_id = self.authenticate(original, key, signature)?;
         Ok(PreparedPublicOriginalV1 {
             original: original_id,

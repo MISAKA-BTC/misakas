@@ -11,6 +11,12 @@ pub const FULL_REPLAY_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-full-replay/v1"
 pub const MANIFEST_REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-request/v1";
 pub const MANIFEST_RESPONSE_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-response/v1";
 
+/// Binds the native supply obligation and its exact limits into the
+/// original's existing signed service-contract field.
+pub fn public_original_service_contract_id_v1(obligation: Digest, budget: &crate::messages::AggregateBudget) -> Digest {
+    hash(b"misaka/palw/public-original-service/v1", &(obligation, budget))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct OriginalId(pub Digest);
 

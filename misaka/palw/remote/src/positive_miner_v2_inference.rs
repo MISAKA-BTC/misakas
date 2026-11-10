@@ -16,7 +16,7 @@ use kaspa_consensus_core::{
 };
 #[cfg(feature = "positive-panel")]
 use misaka_palw_positive_contract::public_one_honest::{
-    ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, OriginalCommit, prompt_text_material_v1,
+    ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, OriginalCommit, prompt_text_material_v1, public_original_service_contract_id_v1,
 };
 use misaka_palw_positive_contract::{
     public_one_honest::{ManifestEntryV1, ManifestScopeRules, tir_program_material_codec_v1},
@@ -223,6 +223,8 @@ pub fn finalize_public_capture_v1(
     tokenizer_json: &[u8],
     mut original: OriginalCommit,
     mut manifest: ManifestV1,
+    service_obligation: Digest,
+    service_budget: &misaka_palw_positive_contract::messages::AggregateBudget,
     scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
     total_limit: u64,
     max_manifest_bytes: u32,
@@ -232,6 +234,9 @@ pub fn finalize_public_capture_v1(
 ) -> Result<misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1, MinerErrorV2> {
     if misaka_palw_positive_contract::identity::principal(key) != original.miner {
         return Err(ContractError::Identity.into());
+    }
+    if original.service_contract != public_original_service_contract_id_v1(service_obligation, service_budget) {
+        return Err(ContractError::Scope.into());
     }
     // This capture currently uses the native flat commitment.
     if job.prompt_form != PalwPromptIdsFormV1::Flat {
