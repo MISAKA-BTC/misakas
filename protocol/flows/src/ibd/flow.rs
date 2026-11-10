@@ -402,10 +402,9 @@ impl IbdFlow {
                             );
                             continue;
                         }
-                        if matches!(e, ProtocolError::UnexpectedMessage(..)) {
-                            // An earlier attempt can leave replies on this route. Close
-                            // the connection to discard them, but keep an incomplete
-                            // adopted import held and eligible for a clean retry.
+                        if matches!(e, ProtocolError::UnexpectedMessage(..) | ProtocolError::IbdChainLocatorTimeout(_)) {
+                            // Close this connection before retrying on a clean route.
+                            // An incomplete adopted import must stay held and retryable.
                             self.ctx.finish_ibd_after_local_resource_failure();
                             return Err(e);
                         }
