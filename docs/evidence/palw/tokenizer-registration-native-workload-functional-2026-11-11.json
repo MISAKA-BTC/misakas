@@ -1,0 +1,123 @@
+{
+  "schema": "palw-tokenizer-registration-native-workload-functional-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "8d6d68b00ac4eb96af97d5e5b920306c4ddeb929",
+  "scope": "Ignored opt0 functional resource fixture, seeded accepted-parent state. Not reference-host release qualification or public T12 acceptance.",
+  "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08",
+  "binarySha256": "e71d7898c4b5dc83f3d8ec31c5469f99098534630b2e92a51a2be98e21a0cb7b",
+  "buildLog": "/tmp/t12-tokenizer-native-workload-build-r2.log",
+  "buildLogSha256": "550409ffd62c3a325a9400828d73d3402d6b7ce10cdbbdd0f30c59755c8fcc77",
+  "runs": [
+    {
+      "log": "/tmp/t12-tokenizer-native-workload-actual-r2.log",
+      "logSha256": "83107ee1d6ed97b92fb16c1f5927c7c7869366c6a346fe02a1c29e91fb44e892",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5984 filtered out; finished in 4.60s",
+      "facts": {
+        "artifactRoot": "98c4d1fb70b92851a05016d638b6328fbc3ed8d3daf8e0470bc2899c1434a12d4da731015d7c3902425c7e766672ea97fb5f27ca5eb9e43aa7298c451bd6b572",
+        "case": "actual",
+        "chargedWork": 201820382,
+        "classId": "d3485134bd8929c0c94510d8fc50b93bb93c6759aa4e3dbd2778217665cbf2c95dff8ad0342b4fffd1523d28f8250cd0a8e7e3a9e0079e6480e88864e612708b",
+        "concurrentOpens": 2,
+        "containerRoot": "a32a53ce0d53a2c948c0179d8fe3dcb5c23dac3f3a8be8dc454ea3aac709b89de8018bce7a6e809e2064527a8f961abc267e52ec1517a704fd4fcb803d9e0647",
+        "inventoryId": "79f3d7973dc0841f9df7665ed07cf2797ff70057aa566e4d1f66787a60a6414ad985ecfed8e4c6f912649b0d5f5eff4568efbb3b82b2381973a4368f3aaec6d0",
+        "metrics": {
+          "fee_base_ns": 187632123,
+          "fee_rollback_ns": 1871206,
+          "finish_cached_fold_ns": 18182875,
+          "finish_cold_fee_rehearsal_ns": 344838458,
+          "handoff_ns": 187019164,
+          "journal_bytes": 5489979,
+          "journal_undo_redo_ns": 384344506,
+          "open_fold_ns": 24150291,
+          "open_part_fee_rehearsal_ns": 660600918,
+          "part_fold_ns": 818356122
+        },
+        "openIds": [
+          "34b1e75f06205119c2f1f3b16b1a0bed7ebe948e6d6d9f835cbe8b05fecbaa2507bb94879d159a0ace032b9d77a77e4f01fc252d5e2c895a80f7470cd3515c5b",
+          "925bf8946036bd4f487a0ed425be4cefe5e4ea9f8d9dc550c79e7a0de9cea4f1b81c7ae818b08ea57dffa31e61c5d43e4e5810207daf0418a5770e5315ebe422"
+        ],
+        "parts": 33,
+        "policyBorshHex": "0100000080000000000000000400000040000000000000100000000080000000000000000080000000008038010000000000000000040000000000000008000000000000020000000000147d69850200000000000008000000000100000000000000010000000000000000e40b54020000000200000002000000000200000000000014000000000000000500000000000000030000000000000065322000000000000100000000000000010000000000000001000000000000000100000000000000010000000000000001000000000000000100000000000000010000000000000001000000000000000100000000000000010000000000000000e8764817000000",
+        "policyId": "1007f512a8068111bebf84474b0bdc26f8c1ee8c543329acafc2c1b61ddc4ea5b2366fdfde787dff6b82de348223e58e9e8b532ed9b8345270c7f682042f94b1",
+        "rawBytes": 2104556,
+        "retainedRawBytes": 4209112,
+        "scope": "seeded native accepted-parent fixture",
+        "semanticsId": "3ad33a2613b1a0e345f40d1b8bade81cea43fcaf0cc1f2466d39e7dc167dd1d05deb03337750db128537dad0aafc728db12e021ed78c543962753dbd0b93e57f",
+        "snapshotBytes": 4601264,
+        "snapshotEncodeNs": 1368459,
+        "snapshotRestoreNs": 35385416,
+        "tableRoot": "b1f2391a4f17d5f675c78d5c893c3a38ea2588e90f98537071932b26c0c732755a01834b357c8e00bdc88203b090cdb4f7913eb6d19b43c2d23e0f32509bdb09",
+        "tokenizerId": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+        "vocab": 49152
+      },
+      "timeReport": "7.68 real         4.58 user         0.07 sys\n           125026304  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                8251  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   1  voluntary context switches\n                  32  involuntary context switches\n         63515730514  instructions retired\n         14934633303  cycles elapsed\n            54624904  peak memory footprint"
+    },
+    {
+      "log": "/tmp/t12-tokenizer-native-workload-max-r2.log",
+      "logSha256": "7d049af5b8568a1abc9014d8cbe0bc2f1f761ce080ecc702adf1bd2bd6fa0f40",
+      "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5984 filtered out; finished in 31.50s",
+      "facts": {
+        "artifactRoot": "7bfe4491758760d042f3752e2a9df49bb7f987156617bdb13198eac3209787929fb8b37ffbd03df4e1a4511ef57c2849cc61c4927ab7d0cf2a7702ef41c0baea",
+        "case": "maximum_raw",
+        "chargedWork": 545420439,
+        "classId": "dab1caa8942fa067c6496a9d12522454466ccd966f4944acf198a43e5cf2c3fdeaa94e46a45f1305ebbaa8d2d75954ae68d88d8bfd7616b38648f96842aa06f2",
+        "concurrentOpens": 2,
+        "containerRoot": "12c617cef87753563e841bcab7edd385d66c51dd387febb8bf26d08b5b70c16afb9b780673caae940447030e85d911dbf34fa9f752add06e872b62d8a31d5719",
+        "inventoryId": "6dfcabb3353f0e6cf8cdf84681b252712cb9625d66154dfcc1ea872c7f136ee0dcfe3086a6d6dda4c12128a119e42f21dac57481a732d233eba594e6b9506567",
+        "metrics": {
+          "fee_base_ns": 2732696587,
+          "fee_rollback_ns": 8332621,
+          "finish_cached_fold_ns": 44145916,
+          "finish_cold_fee_rehearsal_ns": 154710166,
+          "handoff_ns": 2557300294,
+          "journal_bytes": 21705513,
+          "journal_undo_redo_ns": 5728231993,
+          "open_fold_ns": 37949250,
+          "open_part_fee_rehearsal_ns": 2722654207,
+          "part_fold_ns": 5401986879
+        },
+        "openIds": [
+          "22d8d7bef09eed9a7ae0f65fd8440671f496674acb5a765cd5da7361e9a14d89160f694a71e271323041ad8d9bd9abc73698621eec1d40950da1261809883b52",
+          "ebd0a15bbc7bd670d721f73b27934dec9f544ec8694727c6e358dadfffa1b37b5d633d28cbc3de4d24b1a64f84a778912480d4324d8c629b2d442435c238cdd8"
+        ],
+        "parts": 128,
+        "policyBorshHex": "0100000080000000000000000400000040000000000000100000000080000000000000000080000000008038010000000000000000040000000000000008000000000000020000000000147d69850200000000000008000000000100000000000000010000000000000000e40b54020000000200000002000000000200000000000014000000000000000500000000000000030000000000000065322000000000000100000000000000010000000000000001000000000000000100000000000000010000000000000001000000000000000100000000000000010000000000000001000000000000000100000000000000010000000000000000e8764817000000",
+        "policyId": "1007f512a8068111bebf84474b0bdc26f8c1ee8c543329acafc2c1b61ddc4ea5b2366fdfde787dff6b82de348223e58e9e8b532ed9b8345270c7f682042f94b1",
+        "rawBytes": 8388608,
+        "retainedRawBytes": 16777216,
+        "scope": "seeded native accepted-parent fixture",
+        "semanticsId": "33ab197a18d9fe6b133c990d5e5134a012d2cdb9fe11e52511e1551329daea8f44f29563bdd258d9b9405fa66ab85d6e14473fe5bf9067ed1949756b6b01031a",
+        "snapshotBytes": 18188793,
+        "snapshotEncodeNs": 1948416,
+        "snapshotRestoreNs": 126945708,
+        "tableRoot": "ab40df678631268028e9e6248ef10246b61a7ab0330b0853b590914077d288f74659017ce798cd91240217370bb1d999e71a1240e21ebdb7db10177c968f86e6",
+        "tokenizerId": "02ac530806c01ce750e3727efe2195a74d0deff7f450de7739aef06ae820ee8e4d76bb4deddc24dd368056c06a312ee8b1f322817ca8d6ec489e49755391e785",
+        "vocab": 8
+      },
+      "timeReport": "31.53 real        31.47 user         0.05 sys\n           166395904  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               10778  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 198  involuntary context switches\n        422011605024  instructions retired\n        101546735512  cycles elapsed\n            95928992  peak memory footprint"
+    }
+  ],
+  "priorFailure": {
+    "log": "/tmp/t12-tokenizer-native-workload-actual.log",
+    "logSha256": "fce6adaf2bf5b52e79cad4d78c341c90aae5309c668ac5e1dadee3242e8b96ab",
+    "cause": "Fixture iterated Parts in raw index order rather than accepted slot order. Production reservation semantics unchanged; fixture now sorts reserved DAAs and uses original signed indices/offsets."
+  },
+  "checks": [
+    "Class/program/layout/vocabulary/raw tokenizer and table identities match; class semantics recomputed for each class identity.",
+    "Both configured sessions retain every indexed Part before snapshot; original immutable reservations and two real purpose signatures are used.",
+    "Snapshot restore verifies identical state root, second Finish completes, first registration becomes Superseded without consuming its Finish attempts.",
+    "Each carrier exercises funded fee handoff, native fee projection and rollback, authoritative fold, journal undo/redo with exact root parity.",
+    "Finish memo is shared between cold fee rehearsal and authoritative fold."
+  ],
+  "limitations": [
+    "No UTXO script execution, transaction mempool, node or P2P in this seeded fixture; separate node tests cover those parts where stated.",
+    "Test-only policy has two sessions and one source partition, not a proposed public T12 M=780 profile.",
+    "Maximum raw fixture is valid padded 8-token JSON, not the maximum-vocabulary/key-heavy parser case. Parser stress is a separate harness.",
+    "Journal/snapshot sizes are logical Borsh bytes; physical RocksDB SST/WAL/write amplification and pruning are unmeasured.",
+    "macOS time -l reports are preserved as emitted; opt0 time/RSS is not minimum Linux hardware qualification.",
+    "The actual tokenizer is shared with the checked-in SmolLM2 class fixture; that synthetic artifact/class differs from the public target claim. No claim substitution is asserted."
+  ],
+  "publicProfileSelected": false,
+  "publicSubmission": false,
+  "mainPush": false
+}
