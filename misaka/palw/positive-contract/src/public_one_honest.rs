@@ -420,11 +420,50 @@ pub struct PendingManifestCase {
     original: OriginalId,
     material: MaterialId,
     reservation: Digest,
+    request_digest: Digest,
     opened_at: u64,
     schedule: VerificationSchedule,
 }
 
+/// Durable identity for a pending case. Restore must reauthenticate the
+/// signed request against its original canonical reservation and compare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PendingManifestCaseRecordV1 {
+    id: CaseId,
+    original: OriginalId,
+    material: MaterialId,
+    reservation: Digest,
+    request_digest: Digest,
+    opened_at: u64,
+    material_ready_by: u64,
+    filed_by: u64,
+    hard: u64,
+}
+
+impl PendingManifestCaseRecordV1 {
+    pub fn check_restore(&self, pending: &PendingManifestCase) -> Result<(), ContractError> {
+        if *self != pending.record() {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+}
+
 impl PendingManifestCase {
+    pub fn record(&self) -> PendingManifestCaseRecordV1 {
+        PendingManifestCaseRecordV1 {
+            id: self.id,
+            original: self.original,
+            material: self.material,
+            reservation: self.reservation,
+            request_digest: self.request_digest,
+            opened_at: self.opened_at,
+            material_ready_by: self.schedule.material_ready_by(),
+            filed_by: self.schedule.filed_by(),
+            hard: self.schedule.clock.hard(),
+        }
+    }
+
     pub fn id(&self) -> CaseId {
         self.id
     }
@@ -501,6 +540,7 @@ impl ManifestRequest {
             original: self.original,
             material: context.original.manifest_material_id(),
             reservation: context.reservation,
+            request_digest: self.signing_digest(),
             opened_at: context.inclusion_daa,
             schedule: context.schedule,
         })
@@ -1011,6 +1051,11 @@ mod tests {
         let pending = request.verify_for_inclusion(&context, key, signature.as_ref()).unwrap();
         assert_eq!(pending.id(), request.case_id(&bound_original, first).unwrap());
         assert_eq!(pending.reservation(), context.reservation);
+        let stored = borsh::to_vec(&pending.record()).unwrap();
+        let restored: PendingManifestCaseRecordV1 = borsh::from_slice(&stored).unwrap();
+        assert_eq!(restored.check_restore(&pending), Ok(()));
+        let altered = PendingManifestCaseRecordV1 { opened_at: restored.opened_at - 1, ..restored };
+        assert_eq!(altered.check_restore(&pending), Err(ContractError::Scope));
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by()), Ok(()));
         assert_eq!(pending.check_delivery(&checked, &bound_original, schedule.material_ready_by() + 1), Err(ContractError::Range));
         assert_eq!(pending.unresolved_at(clock.hard() + 1), Ok(MissingInspectionOutcome::AbortedUnverified));
