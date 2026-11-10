@@ -71,12 +71,13 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     let prompt = vec![1u32; PALW_PROMPT_IDS_TILE_LEN as usize + 1];
     let mut context = fixture.context.clone();
     context.declared_prefill_tokens = prompt.len() as u32;
+    context.max_context_tokens = context.declared_prefill_tokens + context.exact_decode_tokens;
     context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &prompt).unwrap();
     let job = TirMinerJobV2 { class: &fixture.class, context: &context, prompt: &prompt, prompt_form: form };
     let mut original = OriginalCommit {
         scope: result.scope,
         job: result.job,
-        execution: result.execution,
+        execution: Digest(context.context_hash().as_bytes()),
         miner: result.miner,
         registered_class: result.registered_class,
         artifact: result.artifact,
@@ -90,7 +91,7 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
         dependencies: result.dependencies,
         prefill: context.declared_prefill_tokens,
         decode: result.decode,
-        max_context: result.max_context,
+        max_context: context.max_context_tokens,
         output: result.output,
         trace_root: d(3),
         manifest_root: d(0),
@@ -168,6 +169,25 @@ fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
     assert_eq!(open_public_input_token_tile_v1(&original, &checked, 0, &tail), Err(PanelSourceErrorR1::Binding));
     tail.tile_ids[0] = 2;
     assert_eq!(open_public_input_token_tile_v1(&original, &checked, 1, &tail), Err(PanelSourceErrorR1::Binding));
+
+    use crate::positive_panel_sources::open_public_flat_input_tokens_v1;
+    let form = PalwPromptIdsFormV1::Flat;
+    context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &prompt).unwrap();
+    original.input_tokens = Digest(context.prompt_token_ids_hash.as_bytes());
+    original.execution = Digest(context.context_hash().as_bytes());
+    let job = TirMinerJobV2 { class: &fixture.class, context: &context, prompt: &prompt, prompt_form: form };
+    let flat_rules = ManifestScopeRules {
+        codec: Digest(prompt_ids_form_id_v1(form).as_bytes()),
+        chunk_bytes: input_rules.max_bytes as u32,
+        ..input_rules
+    };
+    let mut manifest = manifest;
+    rules[MaterialScope::InputTokens as usize] = flat_rules;
+    manifest.entries[MaterialScope::InputTokens as usize] = job.public_input_token_material(flat_rules).unwrap();
+    let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
+    let flat = read_public_manifest_v1(&original, &rules, limit, 4096, encoded.len() as u64, encoded.as_slice()).unwrap();
+    assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt), Ok(()));
+    assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt[..prompt.len() - 1]), Err(PanelSourceErrorR1::Binding));
 }
 fn model_params(plan: &TirPlan, first: i128) -> TirParams<'static> {
     let mut map = MapParams::default();

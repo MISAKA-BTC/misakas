@@ -167,12 +167,11 @@ pub struct TirMinerJobV2<'a> {
 }
 
 impl TirMinerJobV2<'_> {
-    /// Describe the native Merkle tiles as ranges of canonical u32 token bytes.
+    /// Describe canonical u32 token bytes using the job's commitment form.
     pub fn public_input_token_material(&self, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {
-        let form = PalwPromptIdsFormV1::MerkleV1;
+        let form = self.prompt_form;
         let codec = Digest(prompt_ids_form_id_v1(form).as_bytes());
-        let chunk_bytes = PALW_PROMPT_IDS_TILE_LEN * 4;
-        if self.prompt_form != form || rules.codec != codec || rules.chunk_bytes != chunk_bytes {
+        if rules.codec != codec || (form == PalwPromptIdsFormV1::MerkleV1 && rules.chunk_bytes != PALW_PROMPT_IDS_TILE_LEN * 4) {
             return Err(ContractError::UnsupportedProfile);
         }
         let count = self.context.declared_prefill_tokens;
@@ -180,14 +179,14 @@ impl TirMinerJobV2<'_> {
         if count == 0 || self.prompt.len() != count as usize {
             return Err(ContractError::Range);
         }
-        if total_bytes > rules.max_bytes {
+        if total_bytes > rules.max_bytes || (form == PalwPromptIdsFormV1::Flat && total_bytes > u64::from(rules.chunk_bytes)) {
             return Err(ContractError::Budget);
         }
         if !prompt_token_ids_match_v1(form, self.prompt, &self.context.prompt_token_ids_hash) {
             return Err(ContractError::Identity);
         }
         let subject = Digest(self.context.prompt_token_ids_hash.as_bytes());
-        Ok(ManifestEntryV1 { subject, content_root: subject, codec, total_bytes, chunk_bytes })
+        Ok(ManifestEntryV1 { subject, content_root: subject, codec, total_bytes, chunk_bytes: rules.chunk_bytes })
     }
 
     /// Describe the same registered program bytes used by the execution.

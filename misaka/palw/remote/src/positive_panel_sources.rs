@@ -89,6 +89,27 @@ pub fn open_public_tir_program_v1(manifest: &CheckedManifestV1, bytes: &[u8]) ->
     TirProgramV1::decode_canonical(bytes).map_err(|_| PanelSourceErrorR1::Binding)
 }
 
+/// Authenticate the complete token sequence for a job using the native flat hash.
+pub fn open_public_flat_input_tokens_v1(
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    ids: &[u32],
+) -> Result<(), PanelSourceErrorR1> {
+    let form = PalwPromptIdsFormV1::Flat;
+    let entry = manifest.entry(MaterialScope::InputTokens);
+    if manifest.original() != original.id()
+        || entry.codec.0 != prompt_ids_form_id_v1(form).as_bytes()
+        || entry.content_root != original.input_tokens
+        || entry.total_bytes != u64::from(original.prefill) * 4
+        || entry.total_bytes > u64::from(entry.chunk_bytes)
+        || ids.len() != original.prefill as usize
+        || !prompt_token_ids_match_v1(form, ids, &Hash64::from_bytes(entry.content_root.0))
+    {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(())
+}
+
 /// Reuse the native token opening at the same index as the manifest range.
 pub fn open_public_input_token_tile_v1<'a>(
     original: &OriginalCommit,
