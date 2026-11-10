@@ -34,8 +34,8 @@ use misaka_palw_positive_contract::{
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
     public_one_honest::{
-        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_cold_initial_state_material_v1,
-        tir_inventory_material_v1, tir_output_material_codec_v1, tir_program_material_codec_v1,
+        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_cold_dependencies_material_v1,
+        tir_cold_initial_state_material_v1, tir_inventory_material_v1, tir_output_material_codec_v1, tir_program_material_codec_v1,
     },
 };
 use misaka_palw_tir::TirProgramV1;
@@ -224,6 +224,18 @@ pub fn run_public_wide_replay_v1(
         return Err(PanelSourceErrorR1::Binding);
     }
     if fetch_public_replay_material(provider, original, manifest, MaterialScope::InitialState)?.as_slice() != bytes.as_slice() {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let dependencies = manifest.entry(MaterialScope::Dependencies);
+    let rules =
+        ManifestScopeRules { codec: dependencies.codec, max_bytes: dependencies.total_bytes, chunk_bytes: dependencies.chunk_bytes };
+    let (expected, bytes) = tir_cold_dependencies_material_v1(original, rules)?;
+    if expected.subject != original.dependencies {
+        return Err(ContractError::UnsupportedProfile.into());
+    }
+    if expected != *dependencies
+        || fetch_public_replay_material(provider, original, manifest, MaterialScope::Dependencies)?.as_slice() != bytes.as_slice()
+    {
         return Err(PanelSourceErrorR1::Binding);
     }
     // The wide capture currently accepts the native Flat input commitment.
