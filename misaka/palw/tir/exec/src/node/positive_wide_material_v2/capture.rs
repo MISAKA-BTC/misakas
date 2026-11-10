@@ -9,7 +9,11 @@ use kaspa_consensus_core::{
     palw_step_leg::{PalwStepTileLeafV1, step_tile_leaf_hash_v1},
     palw_tir_step_v1::{palw_tir_execution_root_v1, palw_tir_leaf_values_v2},
 };
-use misaka_palw_positive_contract::{identity::Digest, public_one_honest::OriginalCommit};
+use misaka_palw_positive_contract::{
+    ContractError,
+    identity::Digest,
+    public_one_honest::{ManifestEntryV1, ManifestScopeRules, OriginalCommit, tir_output_material_codec_v1},
+};
 use misaka_palw_tir::{Prim, demand::history_length_v1};
 use std::{cell::Cell, rc::Rc};
 /// Compare canonical original program bytes without allocating an encoded Vec.
@@ -67,6 +71,19 @@ impl WidePanelCaptureV2<'_> {
     }
     pub fn run(&self) -> &TirJobRunWideQ24V2 {
         &self.run
+    }
+
+    /// The exact output of the same observed run, as one canonical chunk.
+    pub fn public_output_material(&self, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {
+        if rules.codec != tir_output_material_codec_v1() {
+            return Err(ContractError::UnsupportedProfile);
+        }
+        let total_bytes = u64::from(self.expected.job.exact_decode_tokens) * 4;
+        if total_bytes == 0 || total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
+            return Err(ContractError::Budget);
+        }
+        let subject = Digest(self.run.output_root().as_bytes());
+        Ok(ManifestEntryV1 { subject, content_root: subject, codec: rules.codec, total_bytes, chunk_bytes: rules.chunk_bytes })
     }
 
     /// Set the original's trace and output from this single observed run.

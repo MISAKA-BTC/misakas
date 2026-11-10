@@ -316,6 +316,11 @@ pub fn tir_program_material_codec_v1() -> Digest {
     hash(b"misaka/palw/material-codec/v1", &b"tir-program-v1/native-graph-ir/whole")
 }
 
+/// One complete generated token sequence under the native CoreV1 output rule.
+pub fn tir_output_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tir-output/core-v1/u32-le/whole")
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct ManifestChunkV1 {
     pub id: MaterialId,

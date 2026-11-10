@@ -11,6 +11,7 @@ use std::{
 use kaspa_consensus_core::{
     Hash64,
     palw_artifact::verify_artifact_opening_v1,
+    palw_attempt_rules_v1::palw_attempt_rendered_output_v1,
     palw_prompt_ids_v1::{
         PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, prompt_ids_form_id_v1, prompt_ids_tile_count_v1,
         prompt_token_ids_match_v1, verify_prompt_ids_opening_v1,
@@ -18,6 +19,7 @@ use kaspa_consensus_core::{
     palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
     palw_tir_court_v1::PalwTirInventoryIndexV1,
+    palw_v2::output_commitment_v2,
 };
 use misaka_palw_positive_contract::{
     CONTRACT_REVISION, CONTRACT_VERSION, ContractError,
@@ -25,7 +27,8 @@ use misaka_palw_positive_contract::{
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
     public_one_honest::{
-        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_program_material_codec_v1,
+        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_output_material_codec_v1,
+        tir_program_material_codec_v1,
     },
 };
 use misaka_palw_tir::TirProgramV1;
@@ -87,6 +90,27 @@ pub fn open_public_tir_program_v1(manifest: &CheckedManifestV1, bytes: &[u8]) ->
         return Err(PanelSourceErrorR1::Binding);
     }
     TirProgramV1::decode_canonical(bytes).map_err(|_| PanelSourceErrorR1::Binding)
+}
+
+/// Authenticate the published output data under the original execution context.
+pub fn open_public_output_tokens_v1(
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    ids: &[u32],
+) -> Result<(), PanelSourceErrorR1> {
+    let entry = manifest.entry(MaterialScope::Output);
+    if manifest.original() != original.id()
+        || entry.codec != tir_output_material_codec_v1()
+        || entry.content_root != original.output
+        || entry.total_bytes != u64::from(original.decode) * 4
+        || entry.total_bytes > u64::from(entry.chunk_bytes)
+        || ids.len() != original.decode as usize
+        || output_commitment_v2(&Hash64::from_bytes(original.execution.0), ids, &palw_attempt_rendered_output_v1(ids)).as_bytes()
+            != original.output.0
+    {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(())
 }
 
 /// Authenticate the complete token sequence for a job using the native flat hash.

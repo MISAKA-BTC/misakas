@@ -306,6 +306,13 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     capture.bind_public_original(&mut original).unwrap();
     assert_eq!(original.trace_root, digest(capture.run().execution_root()));
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(f.job, EXPECTED)));
+    use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
+    let size = original.decode * 4;
+    let rules = ManifestScopeRules { codec: tir_output_material_codec_v1(), max_bytes: u64::from(size), chunk_bytes: size };
+    let output = capture.public_output_material(rules).unwrap();
+    assert_eq!(output.content_root, original.output);
+    assert_eq!(output.chunk_range(0), Ok(0..u64::from(size)));
+    assert!(capture.public_output_material(ManifestScopeRules { chunk_bytes: size - 1, ..rules }).is_err());
     let result = signed.authenticate();
     let prep = signed.preparation(f);
     let source = TirParamsSourceV1(f.params);
