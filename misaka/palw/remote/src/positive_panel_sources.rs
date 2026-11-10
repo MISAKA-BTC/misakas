@@ -44,7 +44,7 @@ use misaka_palw_tir_artifact::{
 use misaka_palw_tir_exec::node::{
     TirArtifactV1,
     memory::TirMemoryReserverV1,
-    positive_wide_material_v2::{CaptureExpectedV2, WidePanelWorkV2, capture_one_pass_v2},
+    positive_wide_material_v2::{CaptureExpectedV2, WidePanelCaptureV2, WidePanelWorkV2, capture_one_pass_v2},
     run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirWideRunLimitsV2},
 };
 
@@ -114,6 +114,33 @@ pub fn fetch_public_trace_tile_v1(
     check_public_original_step_data_v1(original, &root, index, &opening, &tile, max_step_leaf_count, max_value_bytes)
         .map_err(|_| PanelSourceErrorR1::Binding)?;
     Ok((opening, tile))
+}
+
+/// Find the first authenticated mismatch in a caller-reserved range. Missing
+/// material stops the scan. The returned tile is input to local adjudication.
+#[allow(clippy::too_many_arguments)]
+pub fn find_public_trace_difference_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    trace: &PublicOriginalTraceIndexV1,
+    replay: &WidePanelCaptureV2<'_>,
+    range: std::ops::Range<u64>,
+    max_tiles: u64,
+    max_step_leaf_count: u64,
+    max_value_bytes: usize,
+) -> Result<Option<(PalwStepOpeningV1, PalwStepTileLeafV1)>, PanelSourceErrorR1> {
+    trace.check(original, max_step_leaf_count).map_err(|_| PanelSourceErrorR1::Binding)?;
+    if range.start >= range.end || range.end > trace.step_leaf_count || range.end - range.start > max_tiles {
+        return Err(PanelSourceErrorR1::Budget);
+    }
+    let hashes = replay.public_replay_leaf_hashes(original, trace.step_leaf_count).map_err(PanelSourceErrorR1::ReplayMismatch)?;
+    for index in range {
+        let (opening, tile) = fetch_public_trace_tile_v1(provider, original, trace, index, max_step_leaf_count, max_value_bytes)?;
+        if opening.leaf_hash != hashes[index as usize] {
+            return Ok(Some((opening, tile)));
+        }
+    }
+    Ok(None)
 }
 
 /// Fetch the program and prompt inputs for one checked original. Each payload

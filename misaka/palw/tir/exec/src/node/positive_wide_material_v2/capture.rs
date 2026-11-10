@@ -177,6 +177,17 @@ impl WidePanelCaptureV2<'_> {
         }
         Ok(())
     }
+
+    /// Borrow the independent run's ordered leaf hashes after binding it to the
+    /// same execution inputs and geometry as the authenticated original index.
+    pub fn public_replay_leaf_hashes(&self, original: &OriginalCommit, leaf_count: u64) -> Result<&[Hash64], Error> {
+        self.check_public_original_job(original)?;
+        let hashes = self.run.leaf_hashes();
+        if leaf_count != self.run.leaf_count() || leaf_count != hashes.len() as u64 {
+            return Err("public original and replay leaf counts differ".into());
+        }
+        Ok(hashes)
+    }
     /// Owned metadata export. The caller MUST acquire an independent export
     /// guard before this call, additive to all earlier copies, and retain it
     /// until the returned binding/copies are dropped, even after capture Drop.
