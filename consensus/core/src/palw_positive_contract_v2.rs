@@ -404,6 +404,17 @@ impl PublicReplayApprovalRecordV1 {
 }
 
 impl PreparedPublicDrawV1 {
+    /// Verify the literal carrier at an inclusion point resolved from native history.
+    pub fn verify_replay_approval_bytes(
+        &self,
+        approval_until: u64,
+        origin: AcceptedOrigin,
+        bytes: &[u8],
+    ) -> Result<PublicReplayApprovalRecordV1, ContractError> {
+        let signed = misaka_palw_positive_contract::public_one_honest::SignedFullReplayApprovalV1::decode(bytes)?;
+        self.verify_replay_approval(approval_until, origin, &signed.approval, &signed.key, &signed.signature)
+    }
+
     pub fn record(&self) -> PublicDrawRecordV1 {
         PublicDrawRecordV1 {
             original: self.original,

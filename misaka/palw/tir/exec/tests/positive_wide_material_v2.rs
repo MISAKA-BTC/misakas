@@ -821,6 +821,18 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let signed_assertion = (vote_origin, &assertion, &signed.key, signed_approval.as_ref());
     let approval_records = draw.verify_replay_quorum(1, 102, &[signed_assertion]).unwrap();
     assert_eq!(approval_records.len(), 1);
+    use misaka_palw_positive_contract::public_one_honest::SignedFullReplayApprovalV1;
+    let approval_wire = borsh::to_vec(&SignedFullReplayApprovalV1 {
+        approval: assertion.clone(),
+        key: signed.key,
+        signature: *signed_approval.as_ref(),
+    })
+    .unwrap();
+    assert_eq!(draw.verify_replay_approval_bytes(102, vote_origin, &approval_wire).unwrap(), approval_records[0]);
+    assert_eq!(
+        draw.verify_replay_approval_bytes(102, vote_origin, &approval_wire[..approval_wire.len() - 1]),
+        Err(misaka_palw_positive_contract::ContractError::NonCanonical)
+    );
     let restored_approvals = borsh::from_slice::<Vec<kaspa_consensus_core::palw_positive_contract_v2::PublicReplayApprovalRecordV1>>(
         &borsh::to_vec(&approval_records).unwrap(),
     )

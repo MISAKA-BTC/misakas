@@ -470,6 +470,25 @@ pub struct FullReplayApproval {
     pub full_scope: Digest,
 }
 
+/// Fixed-size carrier for one bond's signed approval of the entire replay.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SignedFullReplayApprovalV1 {
+    pub approval: FullReplayApproval,
+    pub key: [u8; PUBKEY_BYTES],
+    pub signature: [u8; SIGNATURE_BYTES],
+}
+
+impl SignedFullReplayApprovalV1 {
+    pub const WIRE_BYTES: usize = 5 * 64 + 4 + PUBKEY_BYTES + SIGNATURE_BYTES;
+
+    pub fn decode(bytes: &[u8]) -> Result<Self, ContractError> {
+        if bytes.len() != Self::WIRE_BYTES {
+            return Err(ContractError::NonCanonical);
+        }
+        borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)
+    }
+}
+
 /// Expected values from the original's native draw and execution profile.
 /// One signer may own multiple bonds, so the bond is checked independently.
 pub struct ReplayApprovalContext {
@@ -1351,6 +1370,13 @@ mod tests {
             full_scope: context.full_scope,
         };
         assert_eq!(approval.check_subject(&context), Ok(()));
+        let carrier =
+            SignedFullReplayApprovalV1 { approval: approval.clone(), key: [0; PUBKEY_BYTES], signature: [0; SIGNATURE_BYTES] };
+        let mut wire = borsh::to_vec(&carrier).unwrap();
+        assert_eq!(wire.len(), SignedFullReplayApprovalV1::WIRE_BYTES);
+        assert_eq!(SignedFullReplayApprovalV1::decode(&wire), Ok(carrier));
+        wire.push(0);
+        assert_eq!(SignedFullReplayApprovalV1::decode(&wire), Err(ContractError::NonCanonical));
 
         let another_bond = FullReplayApproval { bond: PanelBond { index: 1, ..bond }, ..approval.clone() };
         assert_eq!(another_bond.check_subject(&context), Err(ContractError::Identity));
