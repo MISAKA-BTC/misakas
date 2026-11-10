@@ -52,18 +52,19 @@ fn program_material_is_the_registered_graph_in_one_chunk() {
 
 #[cfg(feature = "positive-panel")]
 #[test]
-fn panel_opens_the_program_from_the_miners_bound_manifest() {
-    use crate::positive_panel_sources::{PanelSourceErrorR1, open_public_tir_program_v1};
+fn panel_opens_program_and_input_tiles_from_the_miners_bound_manifest() {
+    use crate::positive_panel_sources::{PanelSourceErrorR1, open_public_input_token_tile_v1, open_public_tir_program_v1};
+    use kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1;
     use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, OriginalCommit};
 
     let fixture = Fixture::new();
     let result = &fixture.result;
-    let job = TirMinerJobV2 {
-        class: &fixture.class,
-        context: &fixture.context,
-        prompt: &fixture.prompt,
-        prompt_form: PalwPromptIdsFormV1::Flat,
-    };
+    let form = PalwPromptIdsFormV1::MerkleV1;
+    let prompt = vec![1u32; PALW_PROMPT_IDS_TILE_LEN as usize + 1];
+    let mut context = fixture.context.clone();
+    context.declared_prefill_tokens = prompt.len() as u32;
+    context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &prompt).unwrap();
+    let job = TirMinerJobV2 { class: &fixture.class, context: &context, prompt: &prompt, prompt_form: form };
     let mut original = OriginalCommit {
         scope: result.scope,
         job: result.job,
@@ -73,13 +74,13 @@ fn panel_opens_the_program_from_the_miners_bound_manifest() {
         artifact: result.artifact,
         program: result.program,
         prompt: d(1),
-        input_tokens: result.input,
+        input_tokens: Digest(context.prompt_token_ids_hash.as_bytes()),
         tokenizer: result.tokenizer,
         execution_rules: result.execution_rules,
         generation_seed: result.generation_seed,
         initial_state: d(2),
         dependencies: result.dependencies,
-        prefill: result.prefill,
+        prefill: context.declared_prefill_tokens,
         decode: result.decode,
         max_context: result.max_context,
         output: result.output,
@@ -92,8 +93,13 @@ fn panel_opens_the_program_from_the_miners_bound_manifest() {
     let fixture_rules = ManifestScopeRules { codec: d(9), max_bytes: 1, chunk_bytes: 1 };
     let mut rules = [fixture_rules; MaterialScope::COUNT];
     rules[MaterialScope::Program as usize] = program_rules;
-    // Only Program has real material here. The other entries stand in for
-    // unrelated scopes and are never opened by this test.
+    let input_rules = ManifestScopeRules {
+        codec: Digest(prompt_ids_form_id_v1(form).as_bytes()),
+        max_bytes: u64::from(original.prefill) * 4,
+        chunk_bytes: PALW_PROMPT_IDS_TILE_LEN * 4,
+    };
+    rules[MaterialScope::InputTokens as usize] = input_rules;
+    // The remaining scopes are placeholders and are never opened here.
     let fixture_entry =
         |subject| ManifestEntryV1 { subject, content_root: subject, codec: fixture_rules.codec, total_bytes: 1, chunk_bytes: 1 };
     let manifest = ManifestV1 {
@@ -102,7 +108,7 @@ fn panel_opens_the_program_from_the_miners_bound_manifest() {
             fixture_entry(original.artifact),
             job.public_program_material(program_rules).unwrap(),
             fixture_entry(original.prompt),
-            fixture_entry(original.input_tokens),
+            job.public_input_token_material(input_rules).unwrap(),
             fixture_entry(original.tokenizer),
             fixture_entry(original.execution_rules),
             fixture_entry(original.initial_state),
@@ -111,7 +117,7 @@ fn panel_opens_the_program_from_the_miners_bound_manifest() {
             fixture_entry(original.output),
         ],
     };
-    let limit = u64::from(size) + (MaterialScope::COUNT - 1) as u64;
+    let limit = u64::from(size) + input_rules.max_bytes + (MaterialScope::COUNT - 2) as u64;
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
     let checked = original.authenticate_manifest(&encoded, 4096).unwrap().decode(&original, &rules, limit).unwrap();
     let bytes = &fixture.class.program;
@@ -120,6 +126,11 @@ fn panel_opens_the_program_from_the_miners_bound_manifest() {
     let mut substituted = bytes.clone();
     substituted[0] ^= 1;
     assert_eq!(open_public_tir_program_v1(&checked, &substituted), Err(PanelSourceErrorR1::Binding));
+    let mut tail = prompt_ids_opening_v1(&prompt, PALW_PROMPT_IDS_TILE_LEN).unwrap();
+    assert_eq!(open_public_input_token_tile_v1(&original, &checked, 1, &tail).unwrap(), &[1]);
+    assert_eq!(open_public_input_token_tile_v1(&original, &checked, 0, &tail), Err(PanelSourceErrorR1::Binding));
+    tail.tile_ids[0] = 2;
+    assert_eq!(open_public_input_token_tile_v1(&original, &checked, 1, &tail), Err(PanelSourceErrorR1::Binding));
 }
 fn model_params(plan: &TirPlan, first: i128) -> TirParams<'static> {
     let mut map = MapParams::default();

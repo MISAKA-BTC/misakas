@@ -8,8 +8,8 @@ use kaspa_consensus_core::{
     Hash64,
     palw_artifact::verify_artifact_opening_v1,
     palw_prompt_ids_v1::{
-        PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, prompt_ids_tile_count_v1, prompt_token_ids_match_v1,
-        verify_prompt_ids_opening_v1,
+        PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, prompt_ids_form_id_v1, prompt_ids_tile_count_v1,
+        prompt_token_ids_match_v1, verify_prompt_ids_opening_v1,
     },
     palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
@@ -20,7 +20,7 @@ use misaka_palw_positive_contract::{
     identity::{PUBKEY_BYTES, SIGNATURE_BYTES},
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
-    public_one_honest::{CheckedManifestV1, MaterialScope, tir_program_material_codec_v1},
+    public_one_honest::{CheckedManifestV1, MaterialScope, OriginalCommit, tir_program_material_codec_v1},
 };
 use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir_artifact::{
@@ -44,6 +44,30 @@ pub fn open_public_tir_program_v1(manifest: &CheckedManifestV1, bytes: &[u8]) ->
         return Err(PanelSourceErrorR1::Binding);
     }
     TirProgramV1::decode_canonical(bytes).map_err(|_| PanelSourceErrorR1::Binding)
+}
+
+/// Reuse the native token opening at the same index as the manifest range.
+pub fn open_public_input_token_tile_v1<'a>(
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    index: u32,
+    opening: &'a PalwPromptIdsOpeningV1,
+) -> Result<&'a [u32], PanelSourceErrorR1> {
+    let entry = manifest.entry(MaterialScope::InputTokens);
+    let range = entry.chunk_range(u64::from(index))?;
+    if manifest.original() != original.id()
+        || entry.codec.0 != prompt_ids_form_id_v1(PalwPromptIdsFormV1::MerkleV1).as_bytes()
+        || entry.content_root != original.input_tokens
+        || entry.total_bytes != u64::from(original.prefill) * 4
+        || entry.chunk_bytes != PALW_PROMPT_IDS_TILE_LEN * 4
+        || opening.tile_index != index
+        || opening.tile_ids.len() as u64 != (range.end - range.start) / 4
+        || opening.opening.siblings.len() > 32
+        || verify_prompt_ids_opening_v1(&Hash64::from_bytes(entry.content_root.0), original.prefill, opening).is_err()
+    {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(&opening.tile_ids)
 }
 
 #[derive(Clone, Copy, Debug)]

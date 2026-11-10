@@ -2,7 +2,10 @@
 //! Registration data and the admission context come from the caller's rooted
 //! job state. Parameter authentication below establishes DATA IDENTITY only.
 use super::*;
-use kaspa_consensus_core::{Hash64, palw_prompt_ids_v1::prompt_token_ids_match_v1};
+use kaspa_consensus_core::{
+    Hash64,
+    palw_prompt_ids_v1::{PALW_PROMPT_IDS_TILE_LEN, prompt_ids_form_id_v1, prompt_token_ids_match_v1},
+};
 use kaspa_consensus_core::{
     palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1},
     palw_attempt_rules_v1::palw_attempt_output_root_v1,
@@ -164,6 +167,29 @@ pub struct TirMinerJobV2<'a> {
 }
 
 impl TirMinerJobV2<'_> {
+    /// Describe the native Merkle tiles as ranges of canonical u32 token bytes.
+    pub fn public_input_token_material(&self, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let codec = Digest(prompt_ids_form_id_v1(form).as_bytes());
+        let chunk_bytes = PALW_PROMPT_IDS_TILE_LEN * 4;
+        if self.prompt_form != form || rules.codec != codec || rules.chunk_bytes != chunk_bytes {
+            return Err(ContractError::UnsupportedProfile);
+        }
+        let count = self.context.declared_prefill_tokens;
+        let total_bytes = u64::from(count) * 4;
+        if count == 0 || self.prompt.len() != count as usize {
+            return Err(ContractError::Range);
+        }
+        if total_bytes > rules.max_bytes {
+            return Err(ContractError::Budget);
+        }
+        if !prompt_token_ids_match_v1(form, self.prompt, &self.context.prompt_token_ids_hash) {
+            return Err(ContractError::Identity);
+        }
+        let subject = Digest(self.context.prompt_token_ids_hash.as_bytes());
+        Ok(ManifestEntryV1 { subject, content_root: subject, codec, total_bytes, chunk_bytes })
+    }
+
     /// Describe the same registered program bytes used by the execution.
     pub fn public_program_material(&self, rules: ManifestScopeRules) -> Result<ManifestEntryV1, ContractError> {
         let total_bytes = self.class.program.len() as u64;
