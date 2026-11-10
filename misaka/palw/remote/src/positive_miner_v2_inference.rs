@@ -283,6 +283,28 @@ pub fn finalize_public_capture_v1(
     Ok((original, signature))
 }
 
+/// Publish a requested tile directly from the retained original execution.
+#[cfg(feature = "positive-panel")]
+pub fn publish_public_trace_tile_v1(
+    capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
+    original: &OriginalCommit,
+    provider_root: &std::path::Path,
+    index: u64,
+    max_step_leaf_count: u64,
+    max_value_bytes: usize,
+) -> Result<(), MinerErrorV2> {
+    capture.public_trace_index().check(original, max_step_leaf_count).map_err(|_| MinerErrorV2::Binding)?;
+    let cap = max_value_bytes.min(crate::public_material::MATERIAL_UNIT_MAX_BYTES);
+    let material = capture.public_trace_tile(index, max_step_leaf_count, cap as u64).map_err(MinerErrorV2::Journal)?;
+    let bytes = borsh::to_vec(&material).map_err(|_| MinerErrorV2::Binding)?;
+    if bytes.len() > crate::public_material::MATERIAL_UNIT_MAX_BYTES {
+        return Err(MinerErrorV2::Budget);
+    }
+    let path = crate::public_material::public_original_trace_tile_path(original.id(), index);
+    crate::evidence::fs::write_provider_chunk(&provider_root.join(path), &bytes)
+        .map_err(|error| MinerErrorV2::Journal(format!("public trace tile: {error}")))
+}
+
 /// The concrete A2 inference→result path. Every job/class/input/selector field
 /// is checked before execution, and the output field is derived from the run.
 /// It signs only the Miner result; Panel witness generation is never called.

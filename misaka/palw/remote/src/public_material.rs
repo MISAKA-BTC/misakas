@@ -111,15 +111,31 @@ pub(crate) fn public_original_replay_path(
 }
 
 pub(crate) fn is_public_original_replay_path(path: &str) -> bool {
-    path.strip_prefix("public-replay-v1/")
-        .and_then(|rest| rest.split_once('/'))
-        .is_some_and(|(id, scope)| is_hex128(id) && matches!(scope, "program" | "prompt" | "tokenizer" | "output" | "trace-index"))
+    path.strip_prefix("public-replay-v1/").and_then(|rest| rest.split_once('/')).is_some_and(|(id, scope)| {
+        is_hex128(id)
+            && (matches!(scope, "program" | "prompt" | "tokenizer" | "output" | "trace-index")
+                || scope.strip_prefix("trace-tile-").is_some_and(|index| {
+                    !index.is_empty()
+                        && index.bytes().all(|byte| byte.is_ascii_digit())
+                        && (index == "0" || !index.starts_with('0'))
+                        && index.parse::<u64>().is_ok()
+                }))
+    })
 }
 
 #[cfg(feature = "positive-panel")]
 pub(crate) fn public_original_trace_index_path(original: misaka_palw_positive_contract::public_one_honest::OriginalId) -> String {
     let id = original.0;
     format!("public-replay-v1/{}/trace-index", faster_hex::hex_string(&id.0))
+}
+
+#[cfg(feature = "positive-panel")]
+pub(crate) fn public_original_trace_tile_path(
+    original: misaka_palw_positive_contract::public_one_honest::OriginalId,
+    index: u64,
+) -> String {
+    let id = original.0;
+    format!("public-replay-v1/{}/trace-tile-{index}", faster_hex::hex_string(&id.0))
 }
 
 pub fn material_unit_path(claim: &Hash64, stem: &str) -> String {

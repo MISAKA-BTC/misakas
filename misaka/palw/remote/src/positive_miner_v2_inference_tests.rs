@@ -193,6 +193,39 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     let path = public_original_replay_path(original.id(), MaterialScope::Prompt).unwrap();
     std::fs::write(store.join(path), "b".repeat(prompt_text.len())).unwrap();
     let altered = fetch_public_replay_inputs_v1(&provider, &original, replay_manifest, form);
+    use kaspa_consensus_core::{
+        palw_step::PalwStepCoordinateV1,
+        palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1, step_merkle_leaf_v1, step_tile_leaf_hash_v1},
+        palw_tir_court_v1::PublicOriginalTraceIndexV1,
+        palw_tir_step_v1::palw_tir_execution_root_v1,
+    };
+    let mut trace_original = original.clone();
+    let ctx = Hash64::from_bytes(original.execution.0);
+    let class = Hash64::from_bytes(original.registered_class.0);
+    let tile = PalwStepTileLeafV1 {
+        version: 1,
+        coord: PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 0, tile_index: 0 },
+        value_count: 1,
+        values_le: 7u32.to_le_bytes().to_vec(),
+    };
+    let leaf_hash = step_tile_leaf_hash_v1(&ctx, &class, &tile);
+    let trace = PublicOriginalTraceIndexV1 {
+        full_logits_trace_root: Hash64::from_bytes([3; 64]),
+        step_leaf_count: 1,
+        step_merkle_root: step_merkle_leaf_v1(0, &leaf_hash),
+    };
+    trace_original.trace_root =
+        Digest(palw_tir_execution_root_v1(&ctx, &trace.full_logits_trace_root, &class, 1, &trace.step_merkle_root).as_bytes());
+    let opening = PalwStepOpeningV1 { leaf_index: 0, leaf_hash, siblings: vec![] };
+    let material = (opening, tile);
+    let path = crate::public_material::public_original_trace_tile_path(trace_original.id(), 0);
+    let mut bytes = borsh::to_vec(&material).unwrap();
+    crate::evidence::fs::write_provider_chunk(&store.join(&path), &bytes).unwrap();
+    let fetch = || crate::positive_panel_sources::fetch_public_trace_tile_v1(&provider, &trace_original, &trace, 0, 1, 4);
+    assert_eq!(fetch(), Ok(material));
+    *bytes.last_mut().unwrap() ^= 1;
+    std::fs::write(store.join(path), bytes).unwrap();
+    assert_eq!(fetch(), Err(PanelSourceErrorR1::Binding));
     std::fs::remove_dir_all(&store).unwrap();
     assert!(matches!(missing, Err(PanelSourceErrorR1::Incomplete)));
     assert_eq!(replay.unwrap(), (fixture.plan.program.clone(), prompt.clone()));

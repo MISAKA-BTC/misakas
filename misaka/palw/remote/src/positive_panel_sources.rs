@@ -18,9 +18,12 @@ use kaspa_consensus_core::{
         PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, PalwPromptIdsOpeningV1, prompt_ids_form_id_v1, prompt_ids_tile_count_v1,
         prompt_token_ids_match_v1, verify_prompt_ids_opening_v1,
     },
+    palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1},
     palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
-    palw_tir_court_v1::{PalwTirInventoryIndexV1, PublicOriginalTraceIndexV1},
+    palw_tir_court_v1::{
+        PalwTirInventoryIndexV1, PublicOriginalStepRootV1, PublicOriginalTraceIndexV1, check_public_original_step_data_v1,
+    },
     palw_tir_step_v1::PalwTirStepSpaceV2,
     palw_v2::{PalwJobContextV2, output_commitment_v2},
 };
@@ -65,6 +68,52 @@ pub fn fetch_public_trace_index_v1(
     let index: PublicOriginalTraceIndexV1 = borsh::from_slice(&bytes).map_err(|_| PanelSourceErrorR1::Binding)?;
     index.check(original, max_step_leaf_count).map_err(|_| PanelSourceErrorR1::Binding)?;
     Ok(index)
+}
+
+/// Fetch one opening and tile, rejecting invalid vector lengths before
+/// deserializing the payload and authenticating it against the original.
+pub fn fetch_public_trace_tile_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    trace: &PublicOriginalTraceIndexV1,
+    index: u64,
+    max_step_leaf_count: u64,
+    max_value_bytes: usize,
+) -> Result<(PalwStepOpeningV1, PalwStepTileLeafV1), PanelSourceErrorR1> {
+    trace.check(original, max_step_leaf_count).map_err(|_| PanelSourceErrorR1::Binding)?;
+    if index >= trace.step_leaf_count {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    // Borsh opening prefix, at most 64 siblings, then tile prefix.
+    const OPENING_PREFIX: usize = 8 + 64 + 4;
+    const TILE_PREFIX: usize = 2 + 16 + 4 + 4;
+    let depth = u64::BITS - (trace.step_leaf_count - 1).leading_zeros();
+    let cap = (OPENING_PREFIX + depth as usize * 64 + TILE_PREFIX)
+        .saturating_add(max_value_bytes)
+        .min(crate::public_material::MATERIAL_UNIT_MAX_BYTES);
+    let path = crate::public_material::public_original_trace_tile_path(original.id(), index);
+    let bytes = provider
+        .get(&path, cap)
+        .map_err(|error| PanelSourceErrorR1::ReplayProvider(error.0))?
+        .ok_or(PanelSourceErrorR1::Incomplete)?;
+    let read_u32 = |offset| {
+        bytes.get(offset..offset + 4).and_then(|raw| raw.try_into().ok()).map(u32::from_le_bytes).ok_or(PanelSourceErrorR1::Binding)
+    };
+    let siblings = read_u32(OPENING_PREFIX - 4)?;
+    if siblings > depth || bytes.len() > cap {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let header = OPENING_PREFIX + siblings as usize * 64 + TILE_PREFIX;
+    let values = read_u32(header - 4)? as usize;
+    if values > max_value_bytes || bytes.len() - header != values {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let (opening, tile) = borsh::from_slice(&bytes).map_err(|_| PanelSourceErrorR1::Binding)?;
+    let root =
+        PublicOriginalStepRootV1 { full_logits_trace_root: trace.full_logits_trace_root, step_leaf_count: trace.step_leaf_count };
+    check_public_original_step_data_v1(original, &root, index, &opening, &tile, max_step_leaf_count, max_value_bytes)
+        .map_err(|_| PanelSourceErrorR1::Binding)?;
+    Ok((opening, tile))
 }
 
 /// Fetch the program and prompt inputs for one checked original. Each payload
