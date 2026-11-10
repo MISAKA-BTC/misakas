@@ -43,6 +43,7 @@ pub(crate) const PUBLIC_PENDING_MANIFEST_TABLE_V1: u8 = 199;
 pub(crate) const PUBLIC_MANIFEST_RESPONSE_TABLE_V1: u8 = 200;
 pub(crate) const PUBLIC_DRAW_TABLE_V1: u8 = 201;
 pub(crate) const PUBLIC_REPLAY_APPROVAL_TABLE_V1: u8 = 202;
+pub(crate) const PUBLIC_COURT_RECORD_TABLE_V1: u8 = 203;
 
 pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
     matches!(
@@ -52,6 +53,7 @@ pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
             | PUBLIC_MANIFEST_RESPONSE_TABLE_V1
             | PUBLIC_DRAW_TABLE_V1
             | PUBLIC_REPLAY_APPROVAL_TABLE_V1
+            | PUBLIC_COURT_RECORD_TABLE_V1
     )
 }
 
@@ -62,6 +64,7 @@ pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u
         PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => ManifestResponseRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_DRAW_TABLE_V1 => PublicDrawRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_REPLAY_APPROVAL_TABLE_V1 => PublicReplayApprovalRecordV1::decode_row(key, bytes).map(|_| ()),
+        PUBLIC_COURT_RECORD_TABLE_V1 => PublicOriginalCourtRecordV1::decode_row(key, bytes).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -196,6 +199,23 @@ pub struct PublicOriginalCourtRecordV1 {
 }
 
 impl PublicOriginalCourtRecordV1 {
+    pub(crate) const KEY_BYTES: usize = 2 * 64;
+
+    fn key(original: OriginalId, evidence_id: Hash64) -> [u8; Self::KEY_BYTES] {
+        let mut key = [0; Self::KEY_BYTES];
+        key[..64].copy_from_slice(&original.0.0);
+        key[64..].copy_from_slice(&evidence_id.as_bytes());
+        key
+    }
+
+    fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
+        let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
+        if key != Self::key(row.original, row.evidence_id).as_slice() {
+            return Err(ContractError::Identity);
+        }
+        Ok(row)
+    }
+
     pub fn check_restore(
         &self,
         admission: &PublicOriginalAdmissionRecordV1,
@@ -735,6 +755,54 @@ fn check_public_origin_point_v1(
 }
 
 impl crate::palw_state_v2::PalwChainStateV2 {
+    /// Read an archived court identity. Restore still reruns the local adjudicator.
+    pub fn public_original_court_record_v1(
+        &self,
+        original: OriginalId,
+        evidence: Hash64,
+    ) -> Result<Option<PublicOriginalCourtRecordV1>, ContractError> {
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
+        let key = (PUBLIC_COURT_RECORD_TABLE_V1, PublicOriginalCourtRecordV1::key(original, evidence).to_vec());
+        route.aux.get(&key).map(|bytes| self.decode_public_court_row_v1(&key.1, bytes)).transpose()
+    }
+
+    fn decode_public_court_row_v1(&self, key: &[u8], bytes: &[u8]) -> Result<PublicOriginalCourtRecordV1, ContractError> {
+        let row = PublicOriginalCourtRecordV1::decode_row(key, bytes)?;
+        check_public_origin_point_v1(row.origin, self.last_point().ok_or(ContractError::Scope)?)?;
+        let admission = self.public_original_admission_record_v1(row.original)?.ok_or(ContractError::Scope)?;
+        require_accepted_after_v1(admission.carrier.origin, row.origin)?;
+        if row.admission_carrier != admission.carrier
+            || row.reservation != admission.reservation
+            || row.origin.accepted_daa > admission.deadlines[7]
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(row)
+    }
+
+    pub(crate) fn validate_public_verification_rows_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error;
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
+        for ((table, key), bytes) in
+            route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_COURT_RECORD_TABLE_V1 + 1, Vec::new()))
+        {
+            let result = match *table {
+                PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => PublicOriginalAdmissionRecordV1::decode_row(key, bytes)
+                    .and_then(|row| row.check_state_point(self.last_point().ok_or(ContractError::Scope)?)),
+                PUBLIC_PENDING_MANIFEST_TABLE_V1 => self.decode_public_pending_manifest_row_v1(key, bytes).map(|_| ()),
+                PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => self.decode_public_manifest_response_row_v1(key, bytes).map(|_| ()),
+                PUBLIC_DRAW_TABLE_V1 => self.decode_public_draw_row_v1(key, bytes).map(|_| ()),
+                PUBLIC_REPLAY_APPROVAL_TABLE_V1 => self.decode_public_replay_approval_row_v1(key, bytes).map(|_| ()),
+                PUBLIC_COURT_RECORD_TABLE_V1 => self.decode_public_court_row_v1(key, bytes).map(|_| ()),
+                _ => Err(ContractError::NonCanonical),
+            };
+            result.map_err(|error| {
+                PalwStateV2Error::CarriageInconsistent(format!("inconsistent public verification row in table {table}: {error:?}"))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Read a recorded approval. Revalidate its signature and draw membership before tallying.
     pub fn public_replay_approval_record_v1(
         &self,

@@ -359,6 +359,13 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             }
             PublicReplayApprovalRecordV1::scan_native_wire_v1(frame)?
         }
+        crate::palw_positive_contract_v2::PUBLIC_COURT_RECORD_TABLE_V1 => {
+            use crate::palw_positive_contract_v2::PublicOriginalCourtRecordV1;
+            if k.len() != PublicOriginalCourtRecordV1::KEY_BYTES {
+                return Err(wire::wire_bad("unallocated public court record key"));
+            }
+            PublicOriginalCourtRecordV1::scan_native_wire_v1(frame)?
+        }
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,
