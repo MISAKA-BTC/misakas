@@ -685,15 +685,34 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<ManifestResponseRecordV1, ContractError> {
         let row = ManifestResponseRecordV1::decode_row(key, bytes)?;
         check_public_origin_point_v1(row.origin(), self.last_point().ok_or(ContractError::Scope)?)?;
-        let pending = self.public_pending_manifest_record_v1(row.case())?.ok_or(ContractError::Scope)?;
+        let pending = self.public_pending_manifest_record_v1(row.original(), row.case())?.ok_or(ContractError::Scope)?;
         row.check_case(&pending)?;
         Ok(row)
     }
 
-    pub fn public_pending_manifest_record_v1(&self, case: CaseId) -> Result<Option<PendingManifestCaseRecordV1>, ContractError> {
+    pub fn public_pending_manifest_record_v1(
+        &self,
+        original: OriginalId,
+        case: CaseId,
+    ) -> Result<Option<PendingManifestCaseRecordV1>, ContractError> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
-        let key = (PUBLIC_PENDING_MANIFEST_TABLE_V1, case.0.0.to_vec());
+        let key = (PUBLIC_PENDING_MANIFEST_TABLE_V1, PendingManifestCaseRecordV1::key(original, case).to_vec());
         route.aux.get(&key).map(|bytes| self.decode_public_pending_manifest_row_v1(&key.1, bytes)).transpose()
+    }
+
+    /// Read the unresolved manifest cases for one admitted original.
+    pub fn has_public_pending_manifest_v1(&self, original: OriginalId) -> Result<bool, ContractError> {
+        self.public_original_admission_record_v1(original)?.ok_or(ContractError::Scope)?;
+        let route = self.kernel_route_state_v1().ok_or(ContractError::Scope)?;
+        let first_key = (PUBLIC_PENDING_MANIFEST_TABLE_V1, original.0.0.to_vec());
+        if let Some(((table, key), value)) = route.aux.range(first_key..).next()
+            && *table == PUBLIC_PENDING_MANIFEST_TABLE_V1
+            && key.starts_with(&original.0.0)
+        {
+            self.decode_public_pending_manifest_row_v1(key, value)?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     pub(crate) fn decode_public_pending_manifest_row_v1(

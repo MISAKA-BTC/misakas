@@ -560,6 +560,7 @@ pub enum ManifestDeliveryV1 {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ManifestResponseRecordV1 {
+    original: OriginalId,
     case: CaseId,
     response_digest: Digest,
     origin: AcceptedOrigin,
@@ -591,7 +592,7 @@ impl VerifiedManifestDeliveryV1 {
 }
 
 impl ManifestResponseRecordV1 {
-    pub const WIRE_BYTES: usize = 3 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 1;
+    pub const WIRE_BYTES: usize = 4 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 1;
     pub const KEY_BYTES: usize = 2 * 64;
 
     pub fn key(&self) -> [u8; Self::KEY_BYTES] {
@@ -613,12 +614,19 @@ impl ManifestResponseRecordV1 {
         self.case
     }
 
+    pub fn original(&self) -> OriginalId {
+        self.original
+    }
+
     pub fn origin(&self) -> AcceptedOrigin {
         self.origin
     }
 
     pub fn check_case(&self, pending: &PendingManifestCaseRecordV1) -> Result<(), ContractError> {
-        if self.case != pending.id || !(pending.origin.accepted_daa..=pending.material_ready_by).contains(&self.origin.accepted_daa) {
+        if self.original != pending.original
+            || self.case != pending.id
+            || !(pending.origin.accepted_daa..=pending.material_ready_by).contains(&self.origin.accepted_daa)
+        {
             return Err(ContractError::Scope);
         }
         require_accepted_after_v1(pending.origin, self.origin)
@@ -649,10 +657,18 @@ pub fn require_accepted_after_v1(prior: AcceptedOrigin, later: AcceptedOrigin) -
 
 impl PendingManifestCaseRecordV1 {
     pub const WIRE_BYTES: usize = 5 * 64 + ACCEPTED_ORIGIN_WIRE_BYTES + 3 * 8 + 4;
+    pub const KEY_BYTES: usize = 2 * 64;
+
+    pub fn key(original: OriginalId, case: CaseId) -> [u8; Self::KEY_BYTES] {
+        let mut key = [0; Self::KEY_BYTES];
+        key[..64].copy_from_slice(&original.0.0);
+        key[64..].copy_from_slice(&case.0.0);
+        key
+    }
 
     pub fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {
         let row: Self = borsh::from_slice(bytes).map_err(|_| ContractError::NonCanonical)?;
-        if key != row.id.0.0.as_slice() {
+        if key != Self::key(row.original, row.id).as_slice() {
             return Err(ContractError::Identity);
         }
         ManifestV1::fetch_size(row.max_manifest_bytes)?;
@@ -742,7 +758,14 @@ impl PendingManifestCase {
         };
         let limits = hash(b"misaka/palw/public-manifest-limits/v1", &(*scope_limits, total_limit, self.max_manifest_bytes));
         Ok(VerifiedManifestDeliveryV1 {
-            record: ManifestResponseRecordV1 { case: self.id, response_digest, origin, limits, classification },
+            record: ManifestResponseRecordV1 {
+                original: self.original,
+                case: self.id,
+                response_digest,
+                origin,
+                limits,
+                classification,
+            },
             outcome,
         })
     }
@@ -1384,7 +1407,10 @@ mod tests {
         assert_eq!(pending.reservation(), context.reservation);
         let stored = borsh::to_vec(&pending.record()).unwrap();
         assert_eq!(stored.len(), PendingManifestCaseRecordV1::WIRE_BYTES);
-        let restored = PendingManifestCaseRecordV1::decode_row(&pending.id().0.0, &stored).unwrap();
+        let case_key = PendingManifestCaseRecordV1::key(bound_original.id(), pending.id());
+        let restored = PendingManifestCaseRecordV1::decode_row(&case_key, &stored).unwrap();
+        let wrong_original = PendingManifestCaseRecordV1::key(OriginalId(Digest([0; 64])), pending.id());
+        assert_eq!(PendingManifestCaseRecordV1::decode_row(&wrong_original, &stored), Err(ContractError::Identity));
         assert_eq!(PendingManifestCaseRecordV1::decode_row(&[], &stored), Err(ContractError::Identity));
         assert_eq!(
             restored.check_admission(100, clock.notice_until(), max, schedule.material_ready_by(), schedule.filed_by()),

@@ -351,6 +351,8 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let (child, delta) =
         apply_palw_transition_v2_with_extras(&parent, &params, &point, &[], None, false, false, false, false, &extras).unwrap();
     assert_eq!(child.public_original_admission_record_v1(original), Ok(Some(row)));
+    assert_eq!(child.has_public_pending_manifest_v1(original), Ok(false));
+    assert_eq!(parent.has_public_pending_manifest_v1(original), Err(misaka_palw_positive_contract::ContractError::Scope));
     assert_eq!(apply_delta_v2(&parent, &delta, &params).unwrap(), child);
     assert_eq!(revert_delta_v2(&child, &delta, &params).unwrap(), parent);
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap();
