@@ -113,6 +113,7 @@ pub struct PublicOriginalAdmissionV1<'a> {
 
 /// Native reservation inputs from the accepted profile and current ledger.
 pub struct PublicOriginalReservationV1<'a> {
+    pub inclusion_block: Hash64,
     pub inclusion_daa: u64,
     pub notice: FirstNoticeDemand,
     pub case: MaterialCaseDemand,
@@ -128,6 +129,7 @@ pub struct PreparedPublicOriginalV1 {
     pub original: OriginalId,
     pub schedule: VerificationSchedule,
     pub capacity: RemainingCapacity,
+    inclusion_block: Hash64,
     inclusion_daa: u64,
     draw_ready_by: u64,
     initial_supply: RemainingCapacity,
@@ -138,6 +140,7 @@ pub struct PreparedPublicOriginalV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PublicOriginalAdmissionRecordV1 {
     original: OriginalId,
+    inclusion_block: Hash64,
     inclusion_daa: u64,
     reservation: Digest,
     initial_supply: RemainingCapacity,
@@ -453,6 +456,7 @@ impl PreparedPublicOriginalV1 {
     pub fn record(&self, reservation: Digest) -> PublicOriginalAdmissionRecordV1 {
         PublicOriginalAdmissionRecordV1 {
             original: self.original,
+            inclusion_block: self.inclusion_block,
             inclusion_daa: self.inclusion_daa,
             reservation,
             initial_supply: self.initial_supply,
@@ -569,6 +573,7 @@ impl PublicOriginalAdmissionV1<'_> {
             original,
             schedule,
             capacity,
+            inclusion_block: reservation.inclusion_block,
             inclusion_daa: reservation.inclusion_daa,
             draw_ready_by: reservation.notice.draw_ready_by,
             initial_supply: reservation.initial_supply,

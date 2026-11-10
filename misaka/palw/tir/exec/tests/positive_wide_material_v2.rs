@@ -489,6 +489,7 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         witness_attempts: 1,
     };
     let mut reservation = PublicOriginalReservationV1 {
+        inclusion_block: Hash64::from_bytes([1; 64]),
         inclusion_daa: 100,
         notice: FirstNoticeDemand {
             draw_ready_by: 101,
@@ -751,6 +752,11 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         Err(misaka_palw_positive_contract::ContractError::Scope)
     );
     assert_eq!(restored.check_restore(&prepared, d(9)), Err(misaka_palw_positive_contract::ContractError::Scope));
+    let reorg_inputs = PublicOriginalReservationV1 { inclusion_block: Hash64::from_bytes([2; 64]), ..reservation };
+    assert_eq!(
+        admission.restore_signed_bytes(&bytes, &reorg_inputs, &restored, d(8)),
+        Err(misaka_palw_positive_contract::ContractError::Scope)
+    );
     reservation.initial_supply.additional_work += 2;
     reservation.rescue.per_drawn_bond.additional_work -= 1;
     let shifted = admission.prepare(&original, &signed.key, signature.as_ref(), &reservation).unwrap();
