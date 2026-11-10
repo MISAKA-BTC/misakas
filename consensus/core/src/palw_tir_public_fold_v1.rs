@@ -669,10 +669,8 @@ pub fn palw_tir_public_original_quote_with_diagnostics_v1(
     }
     let (plan, _, _, geometry) = quoted?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
-    let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
-    // Mirrors `prepare_original_v1`: a semantic stage is framed only where its staged court can open (G-18).
-    let openable = plan.semantic.is_none() || params.legacy_public_filer_active_at(now_daa);
-    Ok((tiled && judged && openable).then_some(plan))
+    let refusal = original_frame_route_refusal_v1(params, extras, now_daa, original, header, &plan, tiled)?;
+    Ok(refusal.is_none().then_some(plan))
 }
 
 /// **G14 R4 (semantic stages): the staged-court contract an ORIGINAL frame with a registered semantic stage carries beside
@@ -934,6 +932,88 @@ pub fn palw_tir_public_staged_conviction_preflight_v2(
     apply_conviction_v1(&mut builder, &ctx, frame, filer, evidence)
 }
 
+/// Quote and admission classify the same derived original and its courts.
+/// An unsupported route has no quote. A malformed supported tail is invalid.
+#[allow(clippy::too_many_arguments)]
+fn original_frame_route_refusal_v1(
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    plan: &crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
+    tiled: bool,
+) -> Result<Option<&'static str>, PalwStateV2Error> {
+    // **G14 R4: every violation class an admitted original covers must have a native conviction door.** The ORIGINAL frame's
+    // door judges arithmetic/logits, output identity, DA, and selection and stop under the job's OWN rule (greedy, seeded
+    // Decision 11 sampling, or the V4 pipeline: `PalwTirSelectionRuleV1`, `original_stop_rule_fault_v1`); a registered semantic
+    // stage (constraint, tokenizer, prefix state) is judged by the staged semantic courts on the ClaimBundle contract the frame
+    // installs beside itself (`frame_semantic_bundle_v1`, checked below and written by `install_original_v1`). Still refused
+    // rather than admitted with an unprosecutable layer: a job tail (evaluation/generation) and a FLAT-scheme class (its
+    // decode-token pin carries whole rows, which no bounded control holds without split witness carriage, R7).
+    let bounded_family = params.family_supplier_active_at(now_daa)
+        && extras.family_supplier_active
+        && extras.staged_tir_route_active
+        && params.legacy_public_filer_active_at(now_daa)
+        && extras.staged_public_court.is_some();
+    let bounded_family_prefix = original.job.is_prefix_state()
+        && bounded_family
+        && plan.semantic.as_ref().is_some_and(|semantic| {
+            semantic.stages.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::PublicPrefix)
+        });
+    let bounded_family_constraint = original.job.is_constraint()
+        && bounded_family
+        && plan.semantic.as_ref().is_some_and(|semantic| {
+            semantic.stages.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
+        });
+    if (original.job.tail.is_some() && !bounded_family_prefix && !bounded_family_constraint) || !tiled {
+        return Ok(Some("TIR original carries a job tail or a flat logits scheme no bounded frame door judges yet"));
+    }
+    if bounded_family_constraint {
+        // Only the existing canonical constrained-job tail is covered by the
+        // derived Constraint stage. This is preparation, not a supplier/funding
+        // permit: admission still requires the complete authenticated TFO2
+        // contracts and reserves their material branches through the coordinator.
+        crate::palw_fp_constraint_job_v1::palw_fp_constraint_shape_v1(&original.job).map_err(|e| refused(e.to_string()))?;
+    }
+    if bounded_family_prefix {
+        // This plan was derived above from the registered native program,
+        // header, exact Prefix shape and bounded PublicPrefix stream geometry;
+        // it is not a caller-supplied promise that a court will exist. The
+        // ordinary native frame constructor and signed semantic history pledge
+        // are still checked below. Preparation also serves prospective quotes:
+        // it creates NO admission/reservation capability. admit_original_v1
+        // requires the actual TFO2 pairing, then the funded coordinator verifies
+        // all independent supplier signatures/targets and atomically reserves
+        // every branch before installing any new claim. TFP1-only/unsigned
+        // Prefix, Eval/Gen tails, flat schemes and missing semantic doors remain
+        // refused at their original admission gates.
+        let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e| refused(e.to_string()))?;
+        if named.class_id != original.job.class_id
+            || named.prefix_tokens == 0
+            || named.prefix_tokens > header.job_context.declared_prefill_tokens
+        {
+            return Err(refused("TIR original Prefix differs from its bounded native semantic geometry"));
+        }
+    }
+    // A constrained job's selection is its constraint's mask: the staged Constraint court judges it, so the frame must carry
+    // the semantic contract (its plan always has the Constraint family when the job is constrained).
+    if crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_none() && plan.semantic.is_none() {
+        return Ok(Some("TIR constrained original has no staged semantic contract to judge its selection"));
+    }
+    // **G14 from DAA 0 (no legacy dependency): a semantic stage is admitted only where its court can actually open.** The staged
+    // semantic courts (prefix state, constraint, raw tokenizer) open a seed or a bundle only through the opener's own live legacy
+    // reservation (tag 154, `palw_legacy_public_filer_v1`; audit G-18). Where that fence is not in force the stage would be admitted
+    // with no conviction door, so the original is refused instead (and, with G-03, not taken at all). The frame's own doors —
+    // arithmetic, selection, output/stop and DA — need no reservation and convict at any fence height, DAA 0 included.
+    if plan.semantic.is_some() && !params.legacy_public_filer_active_at(now_daa) {
+        return Ok(Some(
+            "TIR original's semantic stage has no openable court here (staged courts need palw_legacy_public_filer_v1, G-18)",
+        ));
+    }
+    Ok(None)
+}
+
 /// All inputs are transaction-local original material or resolved native state.
 /// The ordinary FP signature/price/admission path must also accept that SAME
 /// original object. No row is written by this preparation step.
@@ -970,72 +1050,9 @@ pub(super) fn prepare_original_v1(
         .ok_or_else(|| refused("TIR original layout is not registered"))?;
     let semantics = b.state.class_semantics.get(&geometry.class_id);
     let inventory = semantics.and_then(|s| b.state.staged_tokenizer_inventory_v1(s.tokenizer_id));
-    // **G14 R4: every violation class an admitted original covers must have a native conviction door.** The ORIGINAL frame's
-    // door judges arithmetic/logits, output identity, DA, and selection and stop under the job's OWN rule (greedy, seeded
-    // Decision 11 sampling, or the V4 pipeline: `PalwTirSelectionRuleV1`, `original_stop_rule_fault_v1`); a registered semantic
-    // stage (constraint, tokenizer, prefix state) is judged by the staged semantic courts on the ClaimBundle contract the frame
-    // installs beside itself (`frame_semantic_bundle_v1`, checked below and written by `install_original_v1`). Still refused
-    // rather than admitted with an unprosecutable layer: a job tail (evaluation/generation) and a FLAT-scheme class (its
-    // decode-token pin carries whole rows, which no bounded control holds without split witness carriage, R7).
-    let bounded_family = b.params.family_supplier_active_at(ctx.daa_score)
-        && b.extras.family_supplier_active
-        && b.extras.staged_tir_route_active
-        && b.params.legacy_public_filer_active_at(ctx.daa_score)
-        && b.extras.staged_public_court.is_some();
-    let bounded_family_prefix = original.job.is_prefix_state()
-        && bounded_family
-        && plan.semantic.as_ref().is_some_and(|semantic| {
-            semantic.stages.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::PublicPrefix)
-        });
-    let bounded_family_constraint = original.job.is_constraint()
-        && bounded_family
-        && plan.semantic.as_ref().is_some_and(|semantic| {
-            semantic.stages.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
-        });
-    if (original.job.tail.is_some() && !bounded_family_prefix && !bounded_family_constraint) || !record.facts.tiled {
-        return Err(refused("TIR original carries a job tail or a flat logits scheme no bounded frame door judges yet"));
-    }
-    if bounded_family_constraint {
-        // Only the existing canonical constrained-job tail is covered by the
-        // derived Constraint stage. This is preparation, not a supplier/funding
-        // permit: admission still requires the complete authenticated TFO2
-        // contracts and reserves their material branches through the coordinator.
-        crate::palw_fp_constraint_job_v1::palw_fp_constraint_shape_v1(&original.job).map_err(|e| refused(e.to_string()))?;
-    }
-    if bounded_family_prefix {
-        // This plan was derived above from the registered native program,
-        // header, exact Prefix shape and bounded PublicPrefix stream geometry;
-        // it is not a caller-supplied promise that a court will exist. The
-        // ordinary native frame constructor and signed semantic history pledge
-        // are still checked below. Preparation also serves prospective quotes:
-        // it creates NO admission/reservation capability. admit_original_v1
-        // requires the actual TFO2 pairing, then the funded coordinator verifies
-        // all independent supplier signatures/targets and atomically reserves
-        // every branch before installing any new claim. TFP1-only/unsigned
-        // Prefix, Eval/Gen tails, flat schemes and missing semantic doors remain
-        // refused at their original admission gates.
-        let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e| refused(e.to_string()))?;
-        if named.class_id != geometry.class_id
-            || named.prefix_tokens == 0
-            || named.prefix_tokens > header.job_context.declared_prefill_tokens
-        {
-            return Err(refused("TIR original Prefix differs from its bounded native semantic geometry"));
-        }
-    }
-    // A constrained job's selection is its constraint's mask: the staged Constraint court judges it, so the frame must carry
-    // the semantic contract (its plan always has the Constraint family when the job is constrained).
-    if crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_none() && plan.semantic.is_none() {
-        return Err(refused("TIR constrained original has no staged semantic contract to judge its selection"));
-    }
-    // **G14 from DAA 0 (no legacy dependency): a semantic stage is admitted only where its court can actually open.** The staged
-    // semantic courts (prefix state, constraint, raw tokenizer) open a seed or a bundle only through the opener's own live legacy
-    // reservation (tag 154, `palw_legacy_public_filer_v1`; audit G-18). Where that fence is not in force the stage would be admitted
-    // with no conviction door, so the original is refused instead (and, with G-03, not taken at all). The frame's own doors —
-    // arithmetic, selection, output/stop and DA — need no reservation and convict at any fence height, DAA 0 included.
-    if plan.semantic.is_some() && !b.params.legacy_public_filer_active_at(ctx.daa_score) {
-        return Err(refused(
-            "TIR original's semantic stage has no openable court here (staged courts need palw_legacy_public_filer_v1, G-18)",
-        ));
+    if let Some(why) = original_frame_route_refusal_v1(b.params, b.extras, ctx.daa_score, original, header, &plan, record.facts.tiled)?
+    {
+        return Err(refused(why));
     }
     #[cfg(test)]
     crate::palw_tir_public_claim_v1::note_preparation_source_stage_v2(0);
@@ -1929,7 +1946,7 @@ fn apply_conviction_v1(
     evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_tir_objective_v1::{
-        PalwTirObjectiveOutcomeV1 as Arith, PalwTirOutputFaultV1 as OutFault, PalwTirOutputOutcomeV1 as Out,
+        PalwTirObjectiveOutcomeV1 as Arith, PalwTirOutputStopVerdictV1 as Out, adjudicate_original_output_stop_v1,
     };
     use crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1 as E;
     let claim_id = frame.plan_v1().original_claim;
@@ -2025,35 +2042,13 @@ fn apply_conviction_v1(
             // The original Source owner remains live through IDs, grading and stop.
             let original_source = output_source_owned_v2::source_v2(&b.state, frame)?;
             let authenticated = authenticated_original_ids_v1(&original_source, *rows_root, ids)?;
-            match crate::palw_tir_objective_v1::adjudicate_original_output_v1(
-                &b.state,
-                claim_id,
-                frame.original_v1().output_root,
-                &original_source,
-                &authenticated,
-            )
-            .map_err(refused)?
-            {
-                Out::Fault(found) => match found.fault_v1() {
-                    OutFault::OutputRootMismatch => None,
-                    OutFault::IdOutsideVocabulary { .. } => Some(claim.execution_root),
-                },
-                // G14 R4 (the stop rule): the authenticated answer matches the claim, but it does not END where the job's own
-                // decoder ends it (past a completed stop sequence, short of the budget with no stop, or a banned id). The committed
-                // trace itself carries the over-long or short answer, so the execution is false (forfeit by root).
-                Out::OutputHolds { .. } => {
-                    match crate::palw_tir_objective_v1::original_stop_rule_fault_v1(
-                        &frame.original_v1().job,
-                        original_source.vocab_v1(),
-                        authenticated.ids_v1(),
-                    ) {
-                        Some(_) => Some(claim.execution_root),
-                        None => {
-                            return Err(refused(
-                                "TIR original output identity and stop rule hold: no conviction, and no finding of claim honesty",
-                            ));
-                        }
-                    }
+            match adjudicate_original_output_stop_v1(&b.state, frame, &original_source, &authenticated).map_err(refused)? {
+                Out::OutputRootFault => None,
+                Out::ExecutionFault => Some(claim.execution_root),
+                Out::Holds => {
+                    return Err(refused(
+                        "TIR original output identity and stop rule hold: no conviction, and no finding of claim honesty",
+                    ));
                 }
             }
         }
@@ -2099,6 +2094,39 @@ fn apply_conviction_v1(
     // 3. An execution-proving fault forfeits by ROOT (siblings sharing the convicted execution).
     if let Some(root) = by_root {
         b.forfeit_minted_round_rights(&root)?;
+    }
+    Ok(())
+}
+
+/// Settlement adapter for the V2 plain Output terminal. Only a future
+/// adopted-profile writer that resolved the rooted receipt may invoke it.
+#[allow(dead_code)]
+pub(super) fn apply_batch_plain_output_terminal_v2(
+    b: &mut TransitionBuilder<'_>,
+    receipt: &crate::palw_court_shared_material_intake_v1::batch::plain_output::BatchPlainOutputReceiptV2,
+    control_rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+    terminal_rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+    receipt_digest: Hash64,
+    control_cost: crate::palw_court_service_v1::ServiceCost,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_resource_v1::NativeHeapV1;
+    let evidence = receipt
+        .recheck_terminal_v2(&b.state, b.params, control_rules, terminal_rules, receipt_digest, control_cost)
+        .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?
+        .ok_or_else(|| refused("plain Batch Output receipt contains no fault"))?;
+    let (claim, filer) = receipt.claim_and_filer_v2();
+    let frame = palw_tir_public_claim_v1(&b.state, claim).ok_or_else(|| refused("plain Batch Output lost its original frame"))?;
+    let memory = frame.native_heap_v1("plain Batch Output terminal frame");
+    let mut requests = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+    requests.exact_v1::<Frame>(1).map_err(PalwStateV2Error::NativeResource)?;
+    requests.add_v1(memory.bytes().ok_or(PalwStateV2Error::NativeResource(memory))?).map_err(PalwStateV2Error::NativeResource)?;
+    let _frame_lease =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+    let frame = frame.clone();
+    let saved = b.try_checkpoint()?;
+    if let Err(error) = apply_conviction_v1(b, &terminal_rules.at, &frame, filer, &evidence) {
+        b.restore(saved);
+        return Err(error);
     }
     Ok(())
 }

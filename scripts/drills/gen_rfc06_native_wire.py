@@ -13,6 +13,10 @@ GENERATED_OUTPUTS = set(G['GENERATED_OUTPUTS'])
 GENERATED_OUTPUTS.add(OUT)
 manual={'crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1','crate::palw_court_shared_tir_state_v1::SharedTirQueryV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','crate::palw_freeprompt_v3::PalwFreePromptJobV3','crate::palw_fp_job_v5::PalwFreePromptJobV5','misaka_palw_kernel::merkle3::LeafOpeningV3','crate::palw_onboarding_tile_v3::ArtifactTileOpeningV3','misaka_palw_kernel::spec::WeightsRootV1','misaka_palw_kernel::spec::composite::CompositeRootV1','misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateRecordV7','misaka_palw_kernel::flat_candidate9::FlatCandidateRecordV9','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_bond_budget_v1::PalwBondBudgetStateV1','crate::palw_model_market_v1::PalwModelMarketV1','misaka_palw_panel::PanelCandidatesV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_kernel_route_v1::PalwKernelRouteStateV1'}
 
+# PublicOneHonest stores have explicit owner codecs; Prepared* types are
+# process-local capabilities and must never gain a generated wire adapter.
+manual.update(path for path in G['OWNER_NATIVE_HEAP'] if path.startswith('crate::palw_positive_contract_v2::'))
+
 # RFC42 owner-local codecs already supply these visitors, including the draft
 # reserved-memory predecode. Never regenerate duplicate/weaker generic visitors.
 manual.update({
@@ -466,6 +470,51 @@ if code.count(native_budget_marker) != 1:
  raise ValueError('native budget binding requires the explicit Panel lifetime insertion seam')
 native_budget_arms = '// Exact native budget primary/index rows (same canonical body). The\n// producer key is 0x02 || Borsh(TransactionOutpoint:64+4) || budget id64.\n197 if (key_bytes==65 && prefix==1)||(key_bytes==133 && prefix==2)=>crate::palw_native_budget_binding_v1::NativeBudgetBindingV1::scan_native_wire_v1(frame)?,\n197=>return Err(wire::wire_bad("unallocated native budget binding key")),\n'
 code=code.replace(native_budget_marker,native_budget_arms+native_budget_marker,1)
+# PublicOneHonest aux tables have exact owner-local codecs and key lengths.
+# Keep these registered when rebuilding unrelated native row visitors.
+public_one_honest_arms = '''        crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 if key_bytes == 64 => {
+            crate::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1 => {
+            return Err(wire::wire_bad("unallocated public original admission key"));
+        }
+        crate::palw_positive_contract_v2::PUBLIC_PENDING_MANIFEST_TABLE_V1 => {
+            use misaka_palw_positive_contract::public_one_honest::PendingManifestCaseRecordV1;
+            if k.len() != PendingManifestCaseRecordV1::KEY_BYTES {
+                return Err(wire::wire_bad("unallocated public pending manifest key"));
+            }
+            PendingManifestCaseRecordV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_MANIFEST_RESPONSE_TABLE_V1 => {
+            use misaka_palw_positive_contract::public_one_honest::ManifestResponseRecordV1;
+            if k.len() != ManifestResponseRecordV1::KEY_BYTES {
+                return Err(wire::wire_bad("unallocated public manifest response key"));
+            }
+            ManifestResponseRecordV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1 if key_bytes == 64 => {
+            crate::palw_positive_contract_v2::PublicDrawRecordV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1 => {
+            return Err(wire::wire_bad("unallocated public draw key"));
+        }
+        crate::palw_positive_contract_v2::PUBLIC_REPLAY_APPROVAL_TABLE_V1 => {
+            use crate::palw_positive_contract_v2::PublicReplayApprovalRecordV1;
+            if k.len() != PublicReplayApprovalRecordV1::KEY_BYTES {
+                return Err(wire::wire_bad("unallocated public replay approval key"));
+            }
+            PublicReplayApprovalRecordV1::scan_native_wire_v1(frame)?
+        }
+        crate::palw_positive_contract_v2::PUBLIC_COURT_RECORD_TABLE_V1 => {
+            use crate::palw_positive_contract_v2::PublicOriginalCourtRecordV1;
+            if k.len() != PublicOriginalCourtRecordV1::KEY_BYTES {
+                return Err(wire::wire_bad("unallocated public court record key"));
+            }
+            PublicOriginalCourtRecordV1::scan_native_wire_v1(frame)?
+        }
+'''
+code=code.replace(native_budget_marker,public_one_honest_arms+native_budget_marker,1)
+
 checkpoint_arm = '137 if key_bytes==69 && prefix==0xA2=>crate::palw_material_challenge_checkpoint_v4::PalwMaterialChallengeCheckpointV4::scan_native_wire_v1(frame)?,\n'
 checkpoint_arm += '137 if key_bytes==69 && prefix==0xA3=>crate::palw_material_challenge_history_v4::PalwMaterialChallengeHistoryV4::scan_native_wire_v1(frame)?,\n'
 checkpoint_marker = '137=>return Err('

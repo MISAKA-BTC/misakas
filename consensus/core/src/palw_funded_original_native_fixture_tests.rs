@@ -389,6 +389,18 @@
         let builder = TransitionBuilder::try_new(&state, &params, false, false, false, false, &extras).unwrap();
         let (plan, _, _, _) = original_plan_v1(&builder, ctx.daa_score, &fp.commitment, fx.frame.header_v1()).unwrap();
         drop(builder);
+        if production && (prefix || constraint) && source_history.is_none() {
+            // The native allocation is available in both cases. A public
+            // quote must still refuse when the matching tail court is closed.
+            let quote_params = params.clone().with_g14_route_required_v1(None);
+            let quote = |extras: &PalwTransitionExtrasV1| {
+                palw_tir_public_original_quote_v1(&state, &quote_params, extras, ctx.daa_score, &fp.commitment, fx.frame.header_v1())
+            };
+            assert_eq!(quote(&extras).unwrap().unwrap().resource_plan_id, plan.resource_plan_id);
+            let mut closed = extras.clone();
+            closed.staged_tir_route_active = false;
+            assert!(quote(&closed).unwrap().is_none());
+        }
         let mut pledge = fx.frame.custody_v1().pledge_v1().clone();
         pledge.claim = claim;
         pledge.job_identity = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&fp.commitment);

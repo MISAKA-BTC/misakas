@@ -94,6 +94,65 @@ pub enum BatchCourtWireV1 {
     ConvictNumerical(BatchNumericalTerminalV1),
 }
 
+/// Separate carriage for the V2 plain Output controls. BCT1 keeps its wire
+/// tags and never accepts these controls. Decoding alone grants no authority.
+pub(crate) const BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2: &[u8; 4] = b"BCT2";
+pub(crate) const BATCH_PLAIN_OUTPUT_WIRE_HEADER_BYTES_V2: u64 = 5;
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[allow(dead_code)]
+pub(crate) enum BatchPlainOutputWireV2 {
+    Verify(crate::palw_court_shared_material_intake_v1::batch::plain_output::SignedBatchPlainOutputV2),
+    Terminal(BatchPlainOutputTerminalV2),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub(crate) struct BatchPlainOutputTerminalV2 {
+    pub claim: Hash64,
+    pub receipt_digest: Hash64,
+}
+
+impl BatchPlainOutputWireV2 {
+    /// The accepting dispatcher calls this after framing and before either
+    /// control may invoke native replay or write a receipt.
+    #[allow(dead_code)]
+    pub(crate) fn check_context_v2(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), String> {
+        let claim = match self {
+            Self::Verify(control) => control.claim,
+            Self::Terminal(control) => control.claim,
+        };
+        crate::palw_court_shared_material_intake_v1::batch::plain_output::plain_output_context_v2(state, claim).map(|_| ())
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn decode_batch_plain_output_payload_v2(payload: &[u8]) -> io::Result<Option<BatchPlainOutputWireV2>> {
+    use crate::palw_court_shared_material_intake_v1::batch::plain_output::SignedBatchPlainOutputV2;
+    let Some(body) = payload.strip_prefix(BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2) else {
+        return Ok(None);
+    };
+    let refused = |why| io::Error::new(io::ErrorKind::InvalidData, why);
+    let length = match body.first() {
+        Some(0) => 1 + SignedBatchPlainOutputV2::BYTES,
+        Some(1) => 1 + 2 * 64,
+        _ => return Err(refused("unknown BCT2 plain Output control")),
+    };
+    if body.len() as u64 != length {
+        return Err(refused("invalid BCT2 plain Output control length"));
+    }
+    let wire = borsh::from_slice(body)?;
+    match &wire {
+        BatchPlainOutputWireV2::Verify(control) if control.version != 2 => {
+            return Err(refused("invalid BCT2 plain Output signature version"));
+        }
+        BatchPlainOutputWireV2::Terminal(control) if [control.claim, control.receipt_digest].contains(&Hash64::default()) => {
+            return Err(refused("invalid BCT2 plain Output terminal identity"));
+        }
+        _ => {}
+    }
+    Ok(Some(wire))
+}
+
 pub(crate) const BATCH_VERIFY_NUMERICAL_TAG_V1: u8 = 3;
 pub(crate) const BATCH_CONVICT_NUMERICAL_TAG_V1: u8 = 4;
 

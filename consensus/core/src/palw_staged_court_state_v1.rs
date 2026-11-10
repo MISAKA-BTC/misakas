@@ -118,6 +118,8 @@ pub enum PalwStagedCourtKeyV1 {
     CourtBatchStopReceipt(Hash64),
     /// Verified numerical leaf, appended key 34.
     CourtBatchNumericalReceipt(Hash64),
+    /// Verified plain output result, appended key 35.
+    CourtBatchPlainOutputReceiptV2(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -186,6 +188,8 @@ pub enum PalwStagedCourtRowV1 {
     CourtBatchStopReceipt(Box<crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1>),
     /// Verified numerical leaf, appended row 41.
     CourtBatchNumericalReceipt(Box<crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1>),
+    /// Verified plain output result, appended row 42.
+    CourtBatchPlainOutputReceiptV2(Box<crate::palw_batch_plain_output_receipt_v2::RootedBatchPlainOutputReceiptV2>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -226,7 +230,8 @@ impl PalwStagedCourtRowV1 {
             | Self::VerifiedTokenizerRegistration(_)
             | Self::CourtBatchDemand(_)
             | Self::CourtBatchStopReceipt(_)
-            | Self::CourtBatchNumericalReceipt(_) => None,
+            | Self::CourtBatchNumericalReceipt(_)
+            | Self::CourtBatchPlainOutputReceiptV2(_) => None,
             _ => Some(self),
         }
     }
@@ -268,7 +273,8 @@ impl PalwStagedCourtRowV1 {
             | Self::VerifiedTokenizerRegistration(_)
             | Self::CourtBatchDemand(_)
             | Self::CourtBatchStopReceipt(_)
-            | Self::CourtBatchNumericalReceipt(_) => None,
+            | Self::CourtBatchNumericalReceipt(_)
+            | Self::CourtBatchPlainOutputReceiptV2(_) => None,
             _ => Some(self),
         }
     }
@@ -419,6 +425,7 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::CourtBatchDemand(..), Self::CourtBatchDemand(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtBatchStopReceipt(_), Self::CourtBatchStopReceipt(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtBatchNumericalReceipt(_), Self::CourtBatchNumericalReceipt(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtBatchPlainOutputReceiptV2(_), Self::CourtBatchPlainOutputReceiptV2(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

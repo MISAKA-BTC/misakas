@@ -1,5 +1,8 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
 use super::numerical_verification::NumericalBatchReplayBudgetV1;
+use super::plain_output::{
+    BATCH_PLAIN_OUTPUT_ORDINAL_V2, BatchPlainOutputReceiptV2, PlainBatchOutputV2, batch_plain_output_control_id_v2,
+};
 use super::{BatchResponsePositionV1, MaterialIntakeScheduleV1, PART, Stage};
 use super::{constraint_stop::ConstraintStopBatchOperandsV1, native_ranges::NumericalBatchEnvelopeV1};
 use crate::{
@@ -258,6 +261,20 @@ pub(crate) fn reserve_native_batch_delivery_shape_v1(
     CompiledBatchAdmissionV1::reserve_v1(compiled, book)
 }
 
+/// Compile the plain FullIds branch alongside numerical delivery. The caller
+/// must recompile under the accepted scope and reserve in the actual book.
+/// There is no V1 runtime consumer for these packets.
+#[allow(dead_code)]
+pub(crate) fn compile_native_batch_plain_output_v2(
+    shape: NativeBatchDeliveryShapeV1<'_>,
+    output: &PlainBatchOutputV2,
+    costs: NativeBatchDeliveryCostsV1,
+    storage: MaterialIntakeScheduleV1,
+    cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
+    compile_native_batch_delivery_with_output_v2(shape, None, Some(output), costs, storage, cost)
+}
+
 /// Compile the relative graph without trying a provisional packet namespace
 /// against capacity. The final scope can then be derived from this graph ID.
 /// Only a subsequent reservation using those final IDs can produce a quote.
@@ -268,11 +285,23 @@ pub(crate) fn compile_native_batch_delivery_shape_v1(
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
+    compile_native_batch_delivery_with_output_v2(shape, stop, None, costs, storage, cost)
+}
+
+fn compile_native_batch_delivery_with_output_v2(
+    shape: NativeBatchDeliveryShapeV1<'_>,
+    stop: Option<(&ConstraintStopBatchOperandsV1, ServiceCost, ServiceCost)>,
+    output: Option<&PlainBatchOutputV2>,
+    costs: NativeBatchDeliveryCostsV1,
+    storage: MaterialIntakeScheduleV1,
+    cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
     use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, LocalResource, Window};
     let (claim, scope) = (shape.claim, shape.scope);
     if claim == Hash64::default()
         || scope == Hash64::default()
         || stop.is_some_and(|(operands, _, _)| !operands.matches_original_v1(claim, scope))
+        || output.is_some_and(|operands| operands.claim != claim || stop.is_some())
         || shape.maximums.is_empty()
         || shape.maximums.len() > costs.maximum_packets
         || shape.maximums.iter().any(|&bytes| !(1..=super::MATERIAL_PIPELINED_MAX_BYTES).contains(&bytes))
@@ -321,32 +350,35 @@ pub(crate) fn compile_native_batch_delivery_shape_v1(
     let retained_numerical_fault_byte_daa = retained_numerical_fault_bytes.checked_mul(retention_daa).ok_or(DeliveryCost)?;
     let numerical_fault_storage_rent_sompi = storage.rent_for_bytes_v1(retained_numerical_fault_bytes).map_err(|_| DeliveryCost)?;
     let stop_window = stop.map(|_| take_service_window_v1(&mut cursor, timing.stop_daa, before)).transpose()?;
+    let output_window = output.map(|output| take_service_window_v1(&mut cursor, output.control_daa, before)).transpose()?;
     let terminal_window = take_service_window_v1(&mut cursor, timing.terminal_daa, before)?;
     let packet = |id, cost, window: &Range<u64>| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
     let demand_count = super::native_ranges::partition_maximums_v1(shape.maximums).count();
-    let demand_capacity = demand_count.checked_add(usize::from(stop.is_some())).ok_or(CaseGraph)?;
+    let extra_branches = usize::from(stop.is_some() || output.is_some());
+    let demand_capacity = demand_count.checked_add(extra_branches).ok_or(CaseGraph)?;
+    let control_nodes = 2 + 2 * usize::from(stop.is_some()) + usize::from(output.is_some());
     if demand_count == 0 || demand_capacity > costs.maximum_packets {
         return Err(CaseGraph);
     }
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<MaximumBatchDemandV1>(demand_capacity as u64).map_err(LocalResource)?;
-    q.vec_v1::<CausalServicePacketV1>(if stop.is_some() { 4 } else { 2 }).map_err(LocalResource)?;
+    q.vec_v1::<CausalServicePacketV1>(control_nodes as u64).map_err(LocalResource)?;
     q.vec_v1::<[u8; 64]>(2).map_err(LocalResource)?;
     let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(LocalResource)?;
     let mut demands = Vec::with_capacity(demand_capacity);
     demands.extend(super::native_ranges::partition_maximums_v1(shape.maximums).enumerate().map(|(ordinal, range_maximums)| {
         MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification }
     }));
-    let mut graph = Vec::with_capacity(if stop.is_some() { 4 } else { 2 });
+    let mut graph = Vec::with_capacity(control_nodes);
     graph.push(CausalServicePacketV1 {
         packet: packet(verification, numerical_verification, &verification_window),
         predecessors: vec![],
     });
     graph.push(CausalServicePacketV1 {
         packet: packet(terminal, costs.terminal, &terminal_window),
-        predecessors: Vec::with_capacity(usize::from(stop.is_some())),
+        predecessors: Vec::with_capacity(extra_branches),
     });
-    let retained = if let Some(((operands, verify, file), stop_window)) = stop.zip(stop_window) {
+    let mut retained = if let Some(((operands, verify, file), stop_window)) = stop.zip(stop_window) {
         let (demand, mut nodes, retained) = operands.graph_v1(first..before, verify, file).map_err(|_| DeliveryCost)?;
         nodes[0].packet = packet(nodes[0].packet.id, verify, &verification_window);
         nodes[1].packet = packet(nodes[1].packet.id, file, &stop_window);
@@ -357,6 +389,18 @@ pub(crate) fn compile_native_batch_delivery_shape_v1(
     } else {
         None
     };
+    if let Some((output, window)) = output.zip(output_window) {
+        let control = batch_plain_output_control_id_v2(claim, scope)?;
+        demands.push(MaximumBatchDemandV1 {
+            ordinal: BATCH_PLAIN_OUTPUT_ORDINAL_V2,
+            range_maximums: &output.full_ids_range,
+            predecessors: &[],
+            verification: control,
+        });
+        graph.push(CausalServicePacketV1 { packet: packet(control, output.control_cost, &window), predecessors: vec![] });
+        graph[1].predecessors.push(control);
+        retained = Some(BatchRetainedControlV1 { packet: control, payload_bytes: BatchPlainOutputReceiptV2::ROOTED_MAX_BYTES });
+    }
     let plan = BatchAdmissionV1 {
         claim,
         scope,

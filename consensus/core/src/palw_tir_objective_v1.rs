@@ -429,6 +429,38 @@ pub fn original_stop_rule_fault_v1(
     }
 }
 
+/// The same objective terminal applies to a directly carried ID response
+/// and to source-authenticated FullIds recovered from the court material store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub(crate) enum PalwTirOutputStopVerdictV1 {
+    Holds,
+    OutputRootFault,
+    ExecutionFault,
+}
+
+pub(crate) fn adjudicate_original_output_stop_v1(
+    state: &PalwChainStateV2,
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
+    ids: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
+) -> Result<PalwTirOutputStopVerdictV1, String> {
+    use PalwTirOutputStopVerdictV1::{ExecutionFault, Holds, OutputRootFault};
+    let original = frame.original_v1();
+    let verdict = adjudicate_original_output_v1(state, frame.plan_v1().original_claim, original.output_root, source, ids)?;
+    Ok(match verdict {
+        PalwTirOutputOutcomeV1::Fault(found) => match found.fault_v1() {
+            PalwTirOutputFaultV1::OutputRootMismatch => OutputRootFault,
+            PalwTirOutputFaultV1::IdOutsideVocabulary { .. } => ExecutionFault,
+        },
+        PalwTirOutputOutcomeV1::OutputHolds { .. }
+            if original_stop_rule_fault_v1(&original.job, source.vocab_v1(), ids.ids_v1()).is_some() =>
+        {
+            ExecutionFault
+        }
+        PalwTirOutputOutcomeV1::OutputHolds { .. } => Holds,
+    })
+}
+
 fn adjudicate_target_v1(
     target: PalwOffenceTargetV1,
     record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,

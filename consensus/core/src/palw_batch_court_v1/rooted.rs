@@ -457,11 +457,12 @@ fn check_notice_route_v1(
     ordinal: u64,
     ranges: &[BatchRangeV1],
 ) -> Result<(), String> {
+    use crate::palw_court_shared_material_intake_v1::batch::plain_output::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
     use crate::palw_court_shared_material_intake_v1::{BATCH_STOP_ORDINAL_V1, batch_stop_full_ids_range_v1};
     use shared::BatchNoticeTargetV1::{Numerical, StopFullIds};
     match target {
         None => Ok(()),
-        Some(Numerical { .. }) if ordinal != BATCH_STOP_ORDINAL_V1 => Ok(()),
+        Some(Numerical { .. }) if !matches!(ordinal, BATCH_STOP_ORDINAL_V1 | BATCH_PLAIN_OUTPUT_ORDINAL_V2) => Ok(()),
         Some(StopFullIds) if ordinal == BATCH_STOP_ORDINAL_V1 => {
             let frame =
                 crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;

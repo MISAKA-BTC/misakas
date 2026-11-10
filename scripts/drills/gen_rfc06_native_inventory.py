@@ -387,6 +387,31 @@ OWNER_NATIVE_HEAP.update({
     'crate::tx::UtxoEntry',
     'crate::tx::script_public_key::ScriptPublicKey',
 })
+# PublicOneHonest codecs are handwritten beside their private owners.
+# Regeneration must preserve those implementations and imported type identities.
+OWNER_NATIVE_HEAP.update({
+    'crate::palw_positive_contract_v2::OriginalId',
+    'crate::palw_positive_contract_v2::RemainingCapacity',
+    'crate::palw_positive_contract_v2::ProtectedRescueDemand',
+    'crate::palw_positive_contract_v2::PanelBond',
+    'crate::palw_positive_contract_v2::MaterialId',
+    'crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1',
+    'crate::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1',
+    'crate::palw_positive_contract_v2::PreparedPublicCourtRecordV1',
+    'crate::palw_positive_contract_v2::PublicOriginalCourtRecordV1',
+    'crate::palw_positive_contract_v2::PreparedPublicDrawRecordV1',
+    'crate::palw_positive_contract_v2::PublicDrawRecordV1',
+    'crate::palw_positive_contract_v2::PublicReplayApprovalRecordV1',
+    'crate::palw_positive_contract_v2::PreparedPublicReplayApprovalV1',
+    'crate::palw_positive_contract_v2::PendingManifestCaseRecordV1',
+    'crate::palw_positive_contract_v2::ManifestResponseRecordV1',
+    'crate::palw_positive_contract_v2::CaseId',
+    'crate::palw_positive_contract_v2::PreparedDrawnPublicManifestCaseV1',
+    'crate::palw_positive_contract_v2::PreparedPublicManifestResponseV1',
+    'crate::palw_positive_contract_v2::AcceptedMaterial',
+    'crate::palw_positive_contract_v2::AcceptedOrigin',
+    'crate::palw_positive_contract_v2::AggregateBudget',
+})
 manual.update(OWNER_NATIVE_HEAP)
 private={}; public=[]
 for item,code,is_private in generated:

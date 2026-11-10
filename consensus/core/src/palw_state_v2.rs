@@ -23665,7 +23665,23 @@ pub(crate) fn replay_delta_owned_v1(
     // including when unrelated writes occur before it in this journal.
     let mut tokenizer_registration_changed = false;
     let mut batch_numerical_receipt_changed = false;
+    let mut batch_plain_output_receipt_changed = false;
     for entry in &delta.entries {
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
+            && (matches!(key, CourtKey::CourtBatchPlainOutputReceiptV2(_))
+                || matches!(old, Some(CourtRow::CourtBatchPlainOutputReceiptV2(_)))
+                || matches!(new, Some(CourtRow::CourtBatchPlainOutputReceiptV2(_))))
+        {
+            let row = match (old, new) {
+                (None, Some(CourtRow::CourtBatchPlainOutputReceiptV2(row))) if row.receipt.at == delta.point => row,
+                (Some(CourtRow::CourtBatchPlainOutputReceiptV2(row)), None) if delta.point.daa_score >= row.material_until_daa => row,
+                _ => {
+                    return Err(PalwStateV2Error::DeltaMismatch("plain Batch Output receipt changes its accepting point or retention"));
+                }
+            };
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            batch_plain_output_receipt_changed = true;
+        }
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
             && (matches!(key, CourtKey::CourtBatchNumericalReceipt(_))
                 || matches!(old, Some(CourtRow::CourtBatchNumericalReceipt(_)))
@@ -23740,6 +23756,17 @@ pub(crate) fn replay_delta_owned_v1(
             if let PalwDeltaEntryV2::StagedCourtSeed { new: Some(CourtRow::VerifiedTokenizerRegistration(row)), .. } = entry {
                 if revert { row.check_adoption(&state, &delta.point) } else { row.check_child(&state, &delta.point) }
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+    }
+    if batch_plain_output_receipt_changed {
+        let point = state.last_point().ok_or(PalwStateV2Error::DeltaMismatch("plain Batch Output receipt has no snapshot point"))?;
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::StagedCourtSeed { key: key @ CourtKey::CourtBatchPlainOutputReceiptV2(_), .. } = entry
+                && let Some(CourtRow::CourtBatchPlainOutputReceiptV2(row)) = state.staged_court_row_v1(key)
+                && point.daa_score < row.material_until_daa
+            {
+                row.check_context(&state).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
     }

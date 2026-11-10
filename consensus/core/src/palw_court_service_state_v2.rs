@@ -392,7 +392,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             | Key::CourtMaterialLedger(claim, _)
             | Key::CourtBatchDemand(claim, _)
             | Key::CourtBatchStopReceipt(claim)
-            | Key::CourtBatchNumericalReceipt(claim) => Some(*claim),
+            | Key::CourtBatchNumericalReceipt(claim)
+            | Key::CourtBatchPlainOutputReceiptV2(claim) => Some(*claim),
             Key::CourtSharedStream(_) | Key::CourtSharedChunk(..) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtSharedStream(s)) => Some(s.claim),
                 Some(Row::CourtSharedChunk(c)) => Some(c.claim),

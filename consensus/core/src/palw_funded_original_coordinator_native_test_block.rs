@@ -404,6 +404,55 @@
                 let (projected_quote, projected_graph) = reserve_native_batch_delivery_shape_v1(
                     &mut projected_book, shape(streamed_envelope.scope_v1()), None, costs, storage, |_, bytes| Ok(cost(bytes)),
                 ).unwrap();
+                {
+                    use crate::palw_court_shared_material_intake_v1::batch::admission::{
+                        CompiledBatchAdmissionV1, compile_native_batch_plain_output_v2,
+                    };
+                    use crate::palw_court_shared_material_intake_v1::batch::plain_output::{
+                        BATCH_PLAIN_OUTPUT_ORDINAL_V2, PlainBatchOutputV2,
+                    };
+                    use crate::palw_batch_court_v1::rooted::batch_open_packet_v1;
+                    let scope = streamed_envelope.scope_v1();
+                    let output = PlainBatchOutputV2::derive_v2(
+                        req.frame_v1().original_v1(), req.geometry.source_v1(), cost(8_192), 16,
+                    ).unwrap();
+                    assert!(PlainBatchOutputV2::derive_v2(
+                        req.frame_v1().original_v1(), req.geometry.source_v1(), cost(1), 16,
+                    ).is_err());
+                    let rooted = crate::palw_court_shared_material_intake_v1::batch::plain_output::rooted_receipt_fixture_v2(
+                        crate::palw_court_shared_material_intake_v1::batch::plain_output::SignedBatchPlainOutputV2 {
+                            version: 2, claim, scope, source: req.geometry.source_v1().source_id_v1(),
+                            notice: h(21), policy: h(22), material: h(23),
+                            filer: req.frame_v1().custody_v1().pledge_v1().producer,
+                            signature: [0; crate::palw_court_shared_material_intake_v1::batch::plain_output::PLAIN_OUTPUT_SIGNATURE_BYTES_V2],
+                        },
+                    );
+                    let key = Key::CourtBatchPlainOutputReceiptV2(claim);
+                    let mut generic = TransitionBuilder::try_new(&served, &params, false, false, false, false, &ok).unwrap();
+                    assert!(matches!(
+                        generic.write_staged_row_v1(key, Some(Row::CourtBatchPlainOutputReceiptV2(Box::new(rooted)))),
+                        Err(PalwStateV2Error::CarriageInconsistent(why)) if why.contains("requires native adjudication")
+                    ));
+                    assert!(generic.state.staged_court_row_v1(&key).is_none());
+                    let mut foreign_shape = shape(scope);
+                    foreign_shape.claim = h(0xB47E);
+                    assert!(compile_native_batch_plain_output_v2(
+                        foreign_shape, &output, costs, storage, |_, bytes| Ok(cost(bytes)),
+                    ).is_err());
+                    let compile = |scope| compile_native_batch_plain_output_v2(
+                        shape(scope), &output, costs, storage, |_, bytes| Ok(cost(bytes)),
+                    ).unwrap();
+                    assert_eq!(compile(h(0xB47D)).relative_graph_id_v1(), compile(scope).relative_graph_id_v1());
+                    let mut book = base_book.state.book.clone();
+                    let (output_quote, graph) = CompiledBatchAdmissionV1::reserve_v1(compile(scope), &mut book).unwrap();
+                    assert_ne!(output_quote.relative_graph_id, projected_quote.relative_graph_id);
+                    let output_open = batch_open_packet_v1(claim, scope, BATCH_PLAIN_OUTPUT_ORDINAL_V2).unwrap().as_bytes();
+                    let output_open_at = book.assigned_daa(&output_open).unwrap();
+                    let terminal_at = book.assigned_daa(&terminal).unwrap();
+                    assert!(output_open_at < terminal_at);
+                    assert!(graph.iter().find(|node| node.packet.id == terminal).unwrap().predecessors.len() == 2);
+                    assert!(base_book.state.book.assigned_daa(&output_open).is_none());
+                }
                 let (quote, batch_book) = reserve_native_batch_delivery_v1(
                     base_book, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
                 ).unwrap();

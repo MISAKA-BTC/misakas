@@ -34,7 +34,8 @@ pub(super) fn staged_legacy_alias_subject_v2(key: PalwStagedCourtKeyV1) -> Optio
         | CourtMaterialLedger(id, _)
         | CourtBatchDemand(id, _)
         | CourtBatchStopReceipt(id)
-        | CourtBatchNumericalReceipt(id) => Some(id),
+        | CourtBatchNumericalReceipt(id)
+        | CourtBatchPlainOutputReceiptV2(id) => Some(id),
         TirOwnerSchedule(id) => Some(id),
         TirLayout(_) | TirContainer(_) | VerifiedTokenizerRegistration(..) | CourtService | CourtMaterialPart(..) => None,
     }
@@ -1468,6 +1469,82 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
+    /// V2 caller must have resolved the adopted profile's control cost. The
+    /// verifier also compares it with the actual reserved service packet.
+    /// Current V1 contexts cannot enter this writer.
+    pub(super) fn install_batch_plain_output_receipt_v2(
+        &mut self,
+        at: &PalwBlockContextV2,
+        signed: crate::palw_court_shared_material_intake_v1::batch::plain_output::SignedBatchPlainOutputV2,
+        carrier_bytes: u64,
+        control_cost: crate::palw_court_service_v1::ServiceCost,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_batch_plain_output_receipt_v2::RootedBatchPlainOutputReceiptV2;
+        use crate::palw_court_shared_material_intake_v1::batch::plain_output::BatchPlainOutputReceiptV2;
+        let refused = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
+        let context = crate::palw_court_shared_tir_state_v1::context(&self.state, signed.claim)
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        if !self.extras.batch_court_active_v1 || context.version != 3 {
+            return Err(refused("plain Batch Output requires an adopted V2 original context"));
+        }
+        let material_until_daa = context.material_until_daa;
+        let rules = self
+            .extras
+            .native_court_rules_v1
+            .filter(|rules| &rules.at == at && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain))
+            .ok_or_else(|| refused("plain Batch Output requires native rules at the accepting point"))?;
+        let key = PalwStagedCourtKeyV1::CourtBatchPlainOutputReceiptV2(signed.claim);
+        if let Some(old) = self.state.staged_court_row_v1(&key) {
+            return match old {
+                PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(row)
+                    if row.receipt.signed == signed
+                        && row.receipt.control_rules == rules
+                        && row.receipt.control_cost == control_cost
+                        && row.receipt.carrier_bytes == carrier_bytes =>
+                {
+                    Ok(())
+                }
+                _ => Err(refused("accepted plain Batch Output receipt is immutable")),
+            };
+        }
+        let receipt = BatchPlainOutputReceiptV2::verify_v2(&self.state, self.params, &rules, signed, carrier_bytes, control_cost)
+            .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
+        let row = RootedBatchPlainOutputReceiptV2 { receipt, material_until_daa };
+        row.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("plain Batch Output receipt row");
+        quote.exact::<RootedBatchPlainOutputReceiptV2>(1)?;
+        self.admit_native_write_v1(quote)?;
+        let new = Some(PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(Box::new(row)));
+        self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "native plain Batch Output receipt writer")?;
+        self.reserve_staged_indices_v1(&key, &new)?;
+        let row = new.as_ref().expect("verified plain Batch Output receipt");
+        self.state.staged_courts.insert(key, row.clone());
+        update_indices(&mut self.state, key, None, Some(row));
+        self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new });
+        Ok(())
+    }
+
+    /// Only the expiry sweep may remove this immutable accepted ruling.
+    fn expire_batch_plain_output_receipt_v2(
+        &mut self,
+        key: PalwStagedCourtKeyV1,
+        at: &PalwBlockContextV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(row)) = self.state.staged_court_row_v1(&key) else {
+            return Err(PalwStateV2Error::CarriageInconsistent("plain Batch Output expiry has no retained ruling".into()));
+        };
+        row.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        if at.daa_score < row.material_until_daa || self.state.court_service_holds_material_v1(&key) {
+            return Err(PalwStateV2Error::CarriageInconsistent("plain Batch Output ruling is still retained".into()));
+        }
+        self.reserve_map_row_v1(&key, &None, |state| &state.staged_courts, false, "native plain Batch Output expiry")?;
+        self.reserve_staged_indices_v1(&key, &None)?;
+        let old = self.state.staged_courts.remove(&key);
+        update_indices(&mut self.state, key, old.as_ref(), None);
+        self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old, new: None });
+        Ok(())
+    }
+
     fn install_batch_stop_receipt_v1(&mut self, at: &PalwBlockContextV2, operands: &[u8]) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::{carriage::BatchStopControlV1, rooted::RootedBatchStopReceiptV1};
         use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{batch_payload, verify_rooted_batch_stop_v1};
@@ -1663,6 +1740,11 @@ impl TransitionBuilder<'_> {
             || matches!(&new, Some(PalwStagedCourtRowV1::VerifiedTokenizerRegistration(_)))
         {
             return Err(PalwStateV2Error::ImmutableModelUpdate("verified tokenizer registration requires native operand replay"));
+        }
+        if matches!(key, PalwStagedCourtKeyV1::CourtBatchPlainOutputReceiptV2(_))
+            || matches!(&new, Some(PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(_)))
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("plain Batch Output receipt requires native adjudication".into()));
         }
         self.check_archive_progress_write_v1(&key, new.as_ref())?;
         self.check_material_intake_write_v1(&key, new.as_ref())?;
@@ -4371,6 +4453,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtBatchDemand(row) => (row.material_until(), Vec::new()),
         PalwStagedCourtRowV1::CourtBatchStopReceipt(row) => (row.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::CourtBatchNumericalReceipt(row) => (row.material_until_daa, Vec::new()),
+        PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(row) => (row.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -4767,11 +4850,16 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtBatchDemand(row) => Some(row.material_until()),
             PalwStagedCourtRowV1::CourtBatchStopReceipt(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtBatchNumericalReceipt(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(row) => Some(row.material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {
             if ctx.daa_score >= until {
-                b.write_staged_row_v1(key, None)?;
+                if matches!(key, PalwStagedCourtKeyV1::CourtBatchPlainOutputReceiptV2(_)) {
+                    b.expire_batch_plain_output_receipt_v2(key, ctx)?;
+                } else {
+                    b.write_staged_row_v1(key, None)?;
+                }
                 if let PalwStagedCourtRowV1::TirClaim(frame) = &saved
                     && b.state.claim(&frame.plan_v1().original_claim).is_some_and(|row| row.phase.is_terminal())
                 {

@@ -152,3 +152,11 @@ tokenizer の範囲について記述を訂正した。既存 FpTokenizer termin
 commitment を native Borsh decoder で読み、executor bond が `550c7e88…70bb:0` であることを確認した。DAA 21,012 の公開 bond は Active、担保 1,299,900,000,000 sompi、producer floor の不足 100,000,000 sompi（1 BILI）。この不足は別の登録者についての推測ではなく、対象候補自身の executor に対する `getPalwProducerFacts` の結果である。`FreePromptCommitted` の受理処理も `palw_bond_producer_floor_shortfall_v1` を呼び、同条件で拒否するため、tokenizer 経路だけを直しても受付は成立しない。
 
 現行の bond 登録は同じ outpoint・公開鍵・operator の重複を拒否し、担保への任意の追加送金を反映する native object は見つからなかった。既存コードが案内する復帰方法は新しい鍵と operator による再登録であり、executor bond の変更は別 claim ID になる。ActivationPool の top-up はこの担保の補充ではない。今回は追加支払・再登録・候補の置換は行っていない。既存候補の不足と、新候補を使う場合の別追跡を混同しない。
+
+通常 TFP1 の Output/Stop 用に、FullIds 配信・署名済み裁定 control・共通 terminal の Batch 予約と BCT2 codec を追加した。受付時の native rules と service cost を含めた receipt は最大 5,454 bytes、保持期限付きの保存行は最大 5,462 bytes。署名は network、claim、scope、source、notice、policy、資料、filer と両 service packet を束縛する。terminal では同じ FullIds と裁定を再検査し、既存の Output evidence から claim 単位／execution-root 単位の失効規則を使う。
+
+保存行は staged key 35、row 42 として末尾に追加した。専用の native verifier writer 以外の挿入を拒否し、受理点での一回の挿入と保持期限後の削除だけを journal で認める。期限・service hold を検査する専用 expiry writer、GC、retirement hold、snapshot の context 検査を接続した。新しい context version 3 は現行の constructor/check では発行・受理できず、既存の V1 数値経路も新版専用 ordinal を拒否する。BCT2 の公開 dispatch、新 profile の authority、修復処理、quote/admission planner への接続は未完了であり、公開受付を有効化した変更ではない。
+
+native schema の再生成が PublicOneHonest の手動 codec と既存 aux table の読み取り分岐を失わせる問題を修正した。生成元に owner-local codec と process-local 型の区別を登録し、既存の aux table 分岐を再生成後も保存する。生成処理を二回実行した出力は同一。今回のコードを含む `cargo check -j 2 -p kaspa-consensus-core --lib` は成功した。新規回帰テストの実行は未完了。先行ビルド（`15ab590b0` 時点）の `g14_native_funded_batch_candidate_v1` と `maximum_graph_with_latest_notice_and_recovery_is_atomic_at_10000` は各 1 件成功したが、新版 Output 差分の検証とは分ける。
+
+tokenizer 登録の接続も再監査した。`install_verified_tokenizer_registration_v1` の呼出しはテスト内だけで、公開の funded carrier から raw 資料を再生して登録行を作る入口は未接続。この行の存在を前提とする opening 計算だけでは公開 quote は成功しない。新入口の費用・配信・再生と、新 allocation の意味を保つ実装が必要である。

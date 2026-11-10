@@ -18,6 +18,7 @@ pub(crate) mod admission;
 pub(crate) mod constraint_stop;
 pub(crate) mod native_ranges;
 pub(crate) mod numerical_verification;
+pub(crate) mod plain_output;
 
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
 
