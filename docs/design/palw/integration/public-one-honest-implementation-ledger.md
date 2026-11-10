@@ -68,3 +68,5 @@ I3 の native fold は、抽選された bond の署名済み manifest 要求を
 同じ登録 tx の搭載ブロックは DAA 20,945 の `6a067b8fbcd7cdb9db13ecf66829b5d3175df1bf253e48a7cb59d94f2b12339c2f676d0fc8dab180203ed99a33c5078c4bd509893a69815f4e00634bd16b7156`。次の受理ブロック `60766c89bcb72a1c462b8b1363a8caf61a1cf4f9308ecb406b331369a5100dcc11d9f8d012717d8d1bd12f744797f88eb979956354ab58ae416aa88a80caeeab` の受理 tx 一覧を seat 5 と Explorer で確認した。DAA 20,946 の登録状態は `ADMISSION_OK`、`Candidate`。同じ未提出 TFP1 候補の見積もりは `TIR_CLASS_CONTAINER_UNBOUND`。
 
 登録済み inventory に一致する PALWART3 をローカルで検証した。container root は `bb10e9a486a4d4f0b925907b7579056cb799380aef404218a5d8bd99e54a502b3e370cd041d651df5c471da81094675cb46b2b5e51a7002bfeeadcdffd8da20c`。既知の未提出 TFP1 候補の署名対象には container root が含まれず、タグ 175 の紐付けで候補 ID は変わらない。固定長署名を仮定した紐付け carrier の手数料見積もりは 469,737 sompi。登録後の producer bond は観測時点で下限に 100,000,000 sompi 足りない。紐付けと補充は未送信。
+
+再同期の隔離カナリアは 223,472 ヘッダーを取得し、検証済み sidecar を再取得せず同じ pruning point の UTXO 取り込みを再試行した。9 GiB cgroup で native RAM 要求 7,420,392,666 bytes が内部上限 6,764,573,487 bytes を超えた。プロセス起動時に有効容量の 70% を内部上限とするため、同じ隔離 DB を 12 GiB cgroup で再起動した。同期完了は未確認。
