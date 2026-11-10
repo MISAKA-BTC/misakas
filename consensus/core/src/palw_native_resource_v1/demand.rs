@@ -119,7 +119,10 @@ impl NativeDemandCheckerV1 {
         if next_memory > self.limits.memory_bytes || next_database > self.limits.database_bytes {
             return Err(NativeCoverageV1::unsupported::<Self>(
                 "logical native capacity",
-                "trusted typed requests plus outstanding operations exceed declared logical capacity",
+                &format!(
+                    "typed requests exceed logical capacity (RAM bytes: outstanding {}, request {}, limit {}; DB bytes: outstanding {}, request {}, limit {})",
+                    state.memory, memory, self.limits.memory_bytes, state.database, database, self.limits.database_bytes,
+                ),
             ));
         }
         let process = if pending {
