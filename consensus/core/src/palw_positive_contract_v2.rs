@@ -5,6 +5,7 @@
 
 pub mod record;
 
+use crate::palw_native_resource_v1::{native_struct, native_tuple_struct, wire::wire_struct};
 use crate::palw_positive_check_v2::{CheckError, CheckLimits, CheckOutcome, CheckProgress, CoveragePlan, ExactChecker};
 use crate::{
     Hash64, palw_attempt_rules_v1::palw_attempt_output_root_v1, palw_decode_select_v2::PalwDecodeSamplingV2,
@@ -217,6 +218,26 @@ pub struct PublicReplayApprovalRecordV1 {
     included_at: u64,
     approval_digest: Digest,
 }
+
+// The native restore preflight visits the same fixed fields as the Borsh
+// records. The owning fold still has to revalidate each record's provenance.
+native_tuple_struct!(OriginalId; id);
+wire_struct!(OriginalId; Digest);
+native_struct!(RemainingCapacity; transmitted_bytes, additional_work, retained_bytes);
+wire_struct!(RemainingCapacity; u64, u64, u64);
+native_struct!(ProtectedRescueDemand; max_drawn_bonds, per_drawn_bond, max_outsiders, per_outsider, defensive);
+wire_struct!(ProtectedRescueDemand; u64, RemainingCapacity, u64, RemainingCapacity, RemainingCapacity);
+native_struct!(PanelBond; transaction, index);
+wire_struct!(PanelBond; Digest, u32);
+
+native_struct!(PublicOriginalAdmissionRecordV1; original, inclusion_block, inclusion_daa, reservation, initial_supply, rescue, deadlines);
+wire_struct!(PublicOriginalAdmissionRecordV1; OriginalId, Hash64, u64, Digest, RemainingCapacity, ProtectedRescueDemand, [u64; 8]);
+native_struct!(PublicOriginalCourtRecordV1; original, admission_block, reservation, evidence_id, inclusion_block, inclusion_daa);
+wire_struct!(PublicOriginalCourtRecordV1; OriginalId, Hash64, Digest, Hash64, Hash64, u64);
+native_struct!(PublicDrawRecordV1; original, draw, draw_daa, hard, full_scope, ordered_members, per_bond);
+wire_struct!(PublicDrawRecordV1; OriginalId, Digest, u64, u64, Digest, Digest, RemainingCapacity);
+native_struct!(PublicReplayApprovalRecordV1; bond, included_at, approval_digest);
+wire_struct!(PublicReplayApprovalRecordV1; PanelBond, u64, Digest);
 
 impl PublicReplayApprovalRecordV1 {
     pub fn check_restore(

@@ -552,10 +552,19 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         subsidy: 0,
     };
     let verdict_record = bad_record.court_record(&bad_prepared, reserved, &verdict_inclusion, &verdict).unwrap();
-    let restored = borsh::from_slice::<kaspa_consensus_core::palw_positive_contract_v2::PublicOriginalCourtRecordV1>(
-        &borsh::to_vec(&verdict_record).unwrap(),
-    )
-    .unwrap();
+    use kaspa_consensus_core::{
+        palw_native_resource_v1::preflight_native_value_v1, palw_positive_contract_v2::PublicOriginalCourtRecordV1,
+    };
+    let mut verdict_bytes = borsh::to_vec(&verdict_record).unwrap();
+    let canonical_len = verdict_bytes.len();
+    preflight_native_value_v1::<PublicOriginalCourtRecordV1>(verdict_bytes.as_slice(), canonical_len as u64).unwrap();
+    assert!(
+        preflight_native_value_v1::<PublicOriginalCourtRecordV1>(&verdict_bytes[..canonical_len - 1], (canonical_len - 1) as u64)
+            .is_err()
+    );
+    let restored = borsh::from_slice::<PublicOriginalCourtRecordV1>(&verdict_bytes).unwrap();
+    verdict_bytes.push(0);
+    assert!(preflight_native_value_v1::<PublicOriginalCourtRecordV1>(verdict_bytes.as_slice(), verdict_bytes.len() as u64).is_err());
     assert_eq!(restored.check_restore(&bad_record, &bad_prepared, reserved, &verdict_inclusion, &verdict), Ok(()));
     let earlier = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { daa_score: terminal - 1, ..verdict_inclusion };
     assert_eq!(
