@@ -391,6 +391,42 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert_eq!(approval.original, original.id());
     assert_eq!(approval.member, r.miner);
     assert_eq!(draw.rescue_capacity(bond), Ok(supply));
+    use misaka_palw_positive_contract::public_one_honest::{
+        Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequest, ManifestRequestContext,
+    };
+    let mut request_context = ManifestRequestContext {
+        original: &original,
+        claimant: Claimant::DrawnBond(bond),
+        signer: r.miner,
+        inspection_scope: d(12),
+        supply_obligation: d(13),
+        reservation: d(8),
+        max_manifest_bytes: ManifestV1::WIRE_BYTES,
+        manifest_body_bytes_reserved: body,
+        schedule: prepared.schedule,
+        inclusion_daa: 101,
+    };
+    let request = ManifestRequest {
+        original: original.id(),
+        manifest_root: original.manifest_root,
+        claimant: request_context.claimant,
+        signer: request_context.signer,
+        inspection_scope: request_context.inspection_scope,
+        supply_obligation: request_context.supply_obligation,
+        collect_until: prepared.schedule.filed_by(),
+        reservation: request_context.reservation,
+    };
+    let request_sig =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [0; 32])
+            .unwrap();
+    let accepted =
+        prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()).unwrap();
+    assert_eq!(accepted.reservation(), request_context.reservation);
+    request_context.manifest_body_bytes_reserved += 1;
+    assert_eq!(
+        prepared.verify_drawn_manifest_request(&draw, &request, &request_context, &signed.key, request_sig.as_ref()),
+        Err(misaka_palw_positive_contract::ContractError::Budget)
+    );
     assert!(draw.rescue_capacity(PanelBond { index: 2, ..bond }).is_err());
     assert!(prepared.prepare_draw(d(11), 100, &members, d(12)).is_err());
     assert!(prepared.prepare_draw(d(11), 101, &[members[0], members[0]], d(12)).is_err());

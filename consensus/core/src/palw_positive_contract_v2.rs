@@ -20,8 +20,9 @@ use misaka_palw_positive_contract::{
     },
     ports::{NodeChecker, require_next},
     public_one_honest::{
-        FirstNoticeDemand, FullReplayApproval, ManifestV1, MaterialCaseDemand, OriginalClock, OriginalCommit, OriginalId, PanelBond,
-        ProtectedRescueDemand, ReplayApprovalContext, VerificationSchedule,
+        Claimant, FirstNoticeDemand, FullReplayApproval, ManifestRequest, ManifestRequestContext, ManifestV1, MaterialCaseDemand,
+        OriginalClock, OriginalCommit, OriginalId, PanelBond, PendingManifestCase, ProtectedRescueDemand, ReplayApprovalContext,
+        VerificationSchedule,
     },
     reservations::RemainingCapacity,
     rows::AggregateUsage,
@@ -104,6 +105,7 @@ pub struct PublicOriginalAdmissionRecordV1 {
 pub struct PreparedPublicDrawV1 {
     original: OriginalId,
     draw: Digest,
+    draw_daa: u64,
     full_scope: Digest,
     members: std::collections::BTreeMap<(Digest, u32), PrincipalId>,
     per_bond: RemainingCapacity,
@@ -143,6 +145,34 @@ impl PreparedPublicDrawV1 {
 }
 
 impl PreparedPublicOriginalV1 {
+    /// Check the protected draw slot before authenticating a manifest request.
+    /// The ledger supplies the reservation identity and remaining body bytes.
+    pub fn verify_drawn_manifest_request(
+        &self,
+        draw: &PreparedPublicDrawV1,
+        request: &ManifestRequest,
+        context: &ManifestRequestContext<'_>,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<PendingManifestCase, ContractError> {
+        if draw.original != self.original || context.original.id() != self.original || context.schedule != self.schedule {
+            return Err(ContractError::Scope);
+        }
+        if context.inclusion_daa < draw.draw_daa {
+            return Err(ContractError::Range);
+        }
+        let Claimant::DrawnBond(bond) = context.claimant else {
+            return Err(ContractError::Identity);
+        };
+        if context.signer != draw.approval_context(bond)?.member {
+            return Err(ContractError::Identity);
+        }
+        if context.manifest_body_bytes_reserved > draw.per_bond.transmitted_bytes {
+            return Err(ContractError::Budget);
+        }
+        request.verify_for_inclusion(context, key, signature)
+    }
+
     /// Validate membership against the original's reservation. The caller
     /// supplies the draw identity and ordered member list from chain state.
     pub fn prepare_draw(
@@ -164,7 +194,14 @@ impl PreparedPublicOriginalV1 {
                 return Err(ContractError::Identity);
             }
         }
-        Ok(PreparedPublicDrawV1 { original: self.original, draw, full_scope, members: checked, per_bond: self.rescue.per_drawn_bond })
+        Ok(PreparedPublicDrawV1 {
+            original: self.original,
+            draw,
+            draw_daa,
+            full_scope,
+            members: checked,
+            per_bond: self.rescue.per_drawn_bond,
+        })
     }
 
     pub fn record(&self, reservation: Digest) -> PublicOriginalAdmissionRecordV1 {
