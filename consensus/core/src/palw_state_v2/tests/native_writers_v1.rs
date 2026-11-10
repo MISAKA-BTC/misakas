@@ -313,7 +313,6 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     use crate::palw_positive_contract_v2::{PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PublicOriginalAdmissionRecordV1};
     use misaka_palw_positive_contract::{
         identity::Digest,
-        public_one_honest::OriginalId,
         rows::{AcceptedOrigin, NativeHash64},
     };
 
@@ -325,9 +324,37 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 100, burned: 0 },
     ));
     let point = ctx(2, 101, 2);
-    let original = OriginalId(Digest([3; 64]));
-    let row = PublicOriginalAdmissionRecordV1::storage_fixture(
-        original,
+    use misaka_palw_positive_contract::{
+        identity::{ChainScope, PrincipalId},
+        public_one_honest::OriginalCommit,
+    };
+    let digest = Digest([3; 64]);
+    let commit = OriginalCommit {
+        scope: ChainScope { network: digest, ruleset: digest, branch: digest },
+        job: digest,
+        execution: digest,
+        miner: PrincipalId(digest),
+        registered_class: digest,
+        artifact: digest,
+        program: digest,
+        prompt: digest,
+        input_tokens: digest,
+        tokenizer: digest,
+        execution_rules: digest,
+        generation_seed: [0; 32],
+        initial_state: digest,
+        dependencies: digest,
+        prefill: 1,
+        decode: 1,
+        max_context: 2,
+        output: digest,
+        trace_root: digest,
+        manifest_root: digest,
+        service_contract: digest,
+    };
+    let original = commit.id();
+    let (row, prepared) = PublicOriginalAdmissionRecordV1::storage_fixture_with_manifest(
+        &commit,
         AcceptedOrigin {
             accepting_block: NativeHash64(point.block.as_bytes()),
             carrier_block: NativeHash64(h64(3).as_bytes()),
@@ -507,6 +534,55 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         after_notice.public_final_replay_prerequisite_v1(&draw, 104, |_| Some(bytes)),
         Ok(PublicFinalReplayPrerequisiteV1::ReadyForRemainingChecks)
     );
+    use misaka_palw_positive_contract::public_one_honest::{
+        Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequest, ManifestRequestContext, ManifestV1, SignedManifestRequestV1,
+    };
+    let request_context = ManifestRequestContext {
+        original: &commit,
+        claimant: Claimant::DrawnBond(bond),
+        signer: member,
+        inspection_scope: Digest([6; 64]),
+        supply_obligation: Digest([11; 64]),
+        reservation: Digest([9; 64]),
+        max_manifest_bytes: ManifestV1::WIRE_BYTES,
+        manifest_limits: Digest([3; 64]),
+        manifest_body_bytes_reserved: u64::from(ManifestV1::WIRE_BYTES),
+        schedule: prepared.schedule,
+        origin,
+    };
+    let request = ManifestRequest {
+        original,
+        manifest_root: commit.manifest_root,
+        claimant: request_context.claimant,
+        signer: member,
+        inspection_scope: request_context.inspection_scope,
+        supply_obligation: request_context.supply_obligation,
+        collect_until: prepared.schedule.filed_by(),
+        reservation: request_context.reservation,
+    };
+    let case = request.case_id(&commit, request_context.claimant).unwrap();
+    let signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [2; 32])
+            .unwrap();
+    let wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
+    let pending = prepared.prepare_drawn_manifest_storage_record(Digest([2; 64]), &draw, &wire, &request_context).unwrap();
+    let case_extras = PalwTransitionExtrasV1 {
+        kernel_route: extras.kernel_route.clone(),
+        public_drawn_manifest_cases: vec![pending.clone(), pending],
+        ..Default::default()
+    };
+    let (with_case, case_delta) =
+        apply_palw_transition_v2_with_extras(&drawn, &params, &vote_point, &[], None, false, false, false, false, &case_extras)
+            .unwrap();
+    assert!(with_case.public_pending_manifest_record_v1(original, case).unwrap().is_some());
+    assert_eq!(apply_delta_v2(&drawn, &case_delta, &params).unwrap(), with_case);
+    assert_eq!(revert_delta_v2(&with_case, &case_delta, &params).unwrap(), drawn);
+    let restored_case = PalwStateCarriageV2::from_state(&with_case).into_state(&params, Some(with_case.state_root())).unwrap();
+    assert_eq!(
+        fold_at(&restored_case, 6, clock.notice_until() + 1).public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("case open")),
+        Ok(PublicFinalReplayPrerequisiteV1::ManifestCasePending)
+    );
+
     let absent_vote = fold_at(&drawn, 6, clock.notice_until() + 1);
     assert_eq!(
         absent_vote.public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("no approval to look up")),

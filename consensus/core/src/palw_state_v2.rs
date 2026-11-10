@@ -16337,6 +16337,17 @@ fn apply_palw_transition_v7_inner(
             builder.write_kernel_row_encoded_v1(crate::palw_positive_contract_v2::PUBLIC_DRAW_TABLE_V1, &key, Some(row))?;
         }
     }
+    for request in &extras.public_drawn_manifest_cases {
+        if let Some((key, row)) = request.storage_row(&builder.state, ctx).map_err(|error| {
+            PalwStateV2Error::CarriageInconsistent(format!("inconsistent accepted public manifest request: {error:?}"))
+        })? {
+            builder.write_kernel_row_encoded_v1(
+                crate::palw_positive_contract_v2::PUBLIC_PENDING_MANIFEST_TABLE_V1,
+                &key,
+                Some(row),
+            )?;
+        }
+    }
     for verdict in &extras.public_court_records {
         if let Some((key, row)) = verdict
             .storage_row(&builder.state, ctx)
@@ -21543,6 +21554,8 @@ pub struct PalwTransitionExtrasV1 {
     pub public_original_admissions: Vec<crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1>,
     /// Checked draws for admitted originals, resolved from native history.
     pub public_draws: Vec<crate::palw_positive_contract_v2::PreparedPublicDrawRecordV1>,
+    /// Signed first manifest requests from selected bonds, with native reservations.
+    pub public_drawn_manifest_cases: Vec<crate::palw_positive_contract_v2::PreparedDrawnPublicManifestCaseV1>,
     /// Locally adjudicated refutations qualified by native carrier acceptance.
     pub public_court_records: Vec<crate::palw_positive_contract_v2::PreparedPublicCourtRecordV1>,
     /// Public replay approvals qualified by native carrier acceptance.

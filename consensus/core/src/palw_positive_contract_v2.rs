@@ -642,6 +642,41 @@ impl PreparedPublicDrawV1 {
     }
 }
 
+/// A signed first manifest request verified against one selected bond's
+/// reserved inspection opportunity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedDrawnPublicManifestCaseV1 {
+    case: CaseId,
+    row: PendingManifestCaseRecordV1,
+    admission: PublicOriginalAdmissionRecordV1,
+    draw: PublicDrawRecordV1,
+}
+
+native_tuple_struct!(CaseId; id);
+native_struct!(PreparedDrawnPublicManifestCaseV1; case, row, admission, draw);
+
+impl PreparedDrawnPublicManifestCaseV1 {
+    pub(crate) fn storage_row(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; PendingManifestCaseRecordV1::KEY_BYTES], &PendingManifestCaseRecordV1)>, ContractError> {
+        let row = &self.row;
+        let original = row.original();
+        require_current_public_origin_v1(row.origin(), point)?;
+        if state.public_original_admission_record_v1(original)? != Some(self.admission)
+            || state.public_draw_record_v1(original)? != Some(self.draw)
+        {
+            return Err(ContractError::Scope);
+        }
+        state.check_public_pending_manifest_record_v1(row)?;
+        if let Some(existing) = state.public_pending_manifest_record_v1(original, self.case)? {
+            return if existing == *row { Ok(None) } else { Err(ContractError::Scope) };
+        }
+        Ok(Some((PendingManifestCaseRecordV1::key(original, self.case), row)))
+    }
+}
+
 pub enum PublicManifestClaimantAuthorityV1<'a> {
     Drawn(&'a PreparedPublicDrawV1),
     Outsider(u64),
@@ -665,6 +700,24 @@ impl PreparedPublicOriginalV1 {
                 self.verify_outsider_manifest_request(slot, &signed.request, context, &signed.key, &signed.signature)
             }
         }
+    }
+
+    /// Qualify a drawn member's first request for the native fold. The
+    /// admission reservation and the per-bond rescue reservation are distinct.
+    pub fn prepare_drawn_manifest_storage_record(
+        &self,
+        admission_reservation: Digest,
+        draw: &PreparedPublicDrawV1,
+        bytes: &[u8],
+        context: &ManifestRequestContext<'_>,
+    ) -> Result<PreparedDrawnPublicManifestCaseV1, ContractError> {
+        let pending = self.verify_manifest_request_bytes(PublicManifestClaimantAuthorityV1::Drawn(draw), bytes, context)?;
+        Ok(PreparedDrawnPublicManifestCaseV1 {
+            case: pending.id(),
+            row: pending.record(),
+            admission: self.record(admission_reservation),
+            draw: draw.record(),
+        })
     }
 
     /// Restore against the literal packet and the authority resolved at its
@@ -891,6 +944,51 @@ impl PublicOriginalAdmissionRecordV1 {
             manifest_limits: Digest([3; 64]),
             deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn storage_fixture_with_manifest(
+        original: &OriginalCommit,
+        origin: AcceptedOrigin,
+    ) -> (Self, PreparedPublicOriginalV1) {
+        let mut row = Self::storage_fixture(original.id(), origin);
+        row.manifest_material = original.manifest_material_id();
+        let draw_by = row.deadlines[0];
+        let schedule = VerificationSchedule::new(
+            OriginalClock::new(origin.accepted_daa).unwrap(),
+            FirstNoticeDemand {
+                draw_ready_by: draw_by,
+                material_ready_by: draw_by,
+                cold_acquisition_daa: 1,
+                full_inspection_daa: 1,
+                notice_inclusion_daa: 1,
+                missing_material_detected_by: draw_by,
+                material_request_inclusion_daa: 1,
+            },
+            MaterialCaseDemand {
+                material_delivery_daa: 1,
+                full_inspection_daa: 1,
+                localization_daa: 1,
+                filing_daa: 1,
+                adjudication_and_recovery_daa: 1,
+            },
+        )
+        .unwrap();
+        let prepared = PreparedPublicOriginalV1 {
+            original: row.original,
+            schedule,
+            capacity: row.initial_supply.checked_add(row.rescue.total().unwrap()).unwrap(),
+            carrier: row.carrier,
+            manifest_material: row.manifest_material,
+            draw_ready_by: draw_by,
+            initial_supply: row.initial_supply,
+            rescue: row.rescue,
+            budget: row.budget,
+            max_manifest_bytes: row.max_manifest_bytes,
+            manifest_payload_bytes: row.manifest_payload_bytes,
+            manifest_limits: row.manifest_limits,
+        };
+        (prepared.record(row.reservation), prepared)
     }
 
     #[cfg(test)]
@@ -1392,6 +1490,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         bytes: &[u8],
     ) -> Result<PendingManifestCaseRecordV1, ContractError> {
         let row = PendingManifestCaseRecordV1::decode_row(key, bytes)?;
+        self.check_public_pending_manifest_record_v1(&row)?;
+        Ok(row)
+    }
+
+    fn check_public_pending_manifest_record_v1(&self, row: &PendingManifestCaseRecordV1) -> Result<(), ContractError> {
         let admission = self.public_original_admission_record_v1(row.original())?.ok_or(ContractError::Scope)?;
         let point = self.last_point().ok_or(ContractError::Scope)?;
         if row.material() != admission.manifest_material {
@@ -1422,7 +1525,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             ready,
             filed,
         )?;
-        Ok(row)
+        Ok(())
     }
 
     /// Read the record from this state point. Callers must still resolve its
