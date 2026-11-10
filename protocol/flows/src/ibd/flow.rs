@@ -3006,9 +3006,13 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     ) -> Result<(), ProtocolError> {
         let pruning_point = import_session.point;
         let complete = self.router.properties().protocol_version >= crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED;
+        let receive_lease = self.native_palw_receive_lease_v1.take();
         consensus
             .clone()
             .spawn_blocking(move |c| {
+                // Keep the decoded snapshot charged while the blocking importer owns it,
+                // including when its async waiter is cancelled.
+                let _receive_lease = receive_lease;
                 c.import_pruning_point_palw_snapshot_for_session(import_session, carriage, declarations, complete)
             })
             .await?;
