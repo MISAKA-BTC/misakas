@@ -56,3 +56,5 @@
 2026-11-10 の公開 T12 では、同期済み seat 7 の受付見積もりが DAA 20,850 で対象の Studio claim をクラス未登録として拒否した。復旧後の seat 5 の作業ブロックは別の claim を含む。Studio の登録見積もりは取得済みで、登録の署名、受付、対話、Final、ブロック生成の記録は未取得。
 
 同日 DAA 20,860 の seat 5 でも、同じ Studio データで登録事前検査は通り、claim の見積もりはクラス未登録として拒否された。新 profile の original 受け入れ記録は合意状態の行、差分適用・巻き戻し、スナップショット復元に接続済みで、これらの回帰テストは未実行。公開 RPC で受理された署名付き original から、同じ状態遷移で供給・保持を予約して記録を書く処理は未接続。
+
+隔離 Linux ノードの旧ビルド `fa449130a` は同日 DAA 5,057 で、公開 Explorer の DAA 20,868 と pruning point は一致したが同期未完了。IBD は `unsupported native cold tip capacity` を繰り返し、一部の再試行では `IbdChainBlockLocator`／`BlockBody` の待受に別の応答が到着した。公開側は同期済み。新ビルド `244b69d93` で確認する対象は、この隔離環境での IBD 完了と公開側の sink への合流であり、Studio claim の実証とは分けて記録する。
