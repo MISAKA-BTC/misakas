@@ -1255,6 +1255,29 @@ impl ValidatorKey {
         Ok(tx)
     }
 
+    /// Fund an already purpose-signed TKR1 control using an ordinary UTXO.
+    /// The payer may differ from the control's opener. `fee` is the complete
+    /// input/output difference: a new Open's quoted service charge plus the
+    /// ordinary transaction fee. Native acceptance remains responsible for
+    /// opener authority, policy, parent pins, slots and the one-time burn.
+    pub fn build_palw_tokenizer_registration_tx(
+        &self,
+        wire: &kaspa_consensus_core::palw_tokenizer_registration_v1::TokenizerRegistrationWireV1,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let payload = kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::encode_tokenizer_registration_payload_v1(wire)?;
+        self.build_funded_overlay_tx(
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            payload,
+            funding_outpoint,
+            funding,
+            fee,
+            false,
+        )
+    }
+
     /// MISAKA PALW Stage-0 chain carriage (ADR-0029 §5): a fee-funded, signed
     /// **native-subnetwork** transaction carrying an opaque payload — the
     /// `"MPALW2" ‖ kind ‖ borsh` envelope built by `kaspa_consensus_core::palw_carriage`.
@@ -4603,6 +4626,68 @@ mod rfc9_sighash_audit {
         let tx =
             k.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![7u8; 300], op, &entry, 1_234, false).expect("builds");
         (tx, entry, k)
+    }
+
+    #[test]
+    fn tokenizer_registration_funding_keeps_opener_authority_and_signs_actual_fee() {
+        use kaspa_consensus_core::{
+            hashing::sighash::SigHashReusedValuesUnsync,
+            palw_state_v2::PalwBondKeyV2,
+            palw_tokenizer_registration_v1::{
+                TOKENIZER_REGISTRATION_PART_CONTEXT_V1, TokenizerRegistrationPartBodyV1, TokenizerRegistrationPartV1,
+                TokenizerRegistrationWireV1,
+            },
+        };
+        use kaspa_txscript::{TxScriptEngine, caches::Cache};
+        let payer = key();
+        let opener = ValidatorKey::from_seed([0x78; VALIDATOR_SEED_LEN]);
+        let h = Hash64::from_u64_word;
+        let bytes = b"tokenizer part".to_vec();
+        let mut part = TokenizerRegistrationPartV1 {
+            body: TokenizerRegistrationPartBodyV1 {
+                version: 1,
+                network: h(1),
+                policy: h(2),
+                open_id: h(3),
+                opener: PalwBondKeyV2(TransactionOutpoint::new(h(4), 0)),
+                index: 0,
+                offset: 0,
+                payload_digest: TokenizerRegistrationPartV1::payload_digest_v1(&bytes).unwrap(),
+            },
+            signature: [0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            bytes,
+        };
+        part.signature =
+            opener.sign_with_context(part.signing_message_v1().unwrap().as_byte_slice(), TOKENIZER_REGISTRATION_PART_CONTEXT_V1);
+        part.verify_signature_v1(opener.public_key()).unwrap();
+        assert!(part.verify_signature_v1(payer.public_key()).is_err());
+        let wire = TokenizerRegistrationWireV1::Part(part);
+        let (outpoint, entry) = funding(&payer);
+        let fee = 123_456;
+        let tx = payer.build_palw_tokenizer_registration_tx(&wire, outpoint, &entry, fee).unwrap();
+        assert_eq!(tx.subnetwork_id, kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE);
+        assert_eq!(entry.amount - tx.outputs.iter().map(|o| o.value).sum::<u64>(), fee);
+        assert_eq!(
+            tx.payload,
+            kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::encode_tokenizer_registration_payload_v1(&wire).unwrap()
+        );
+        let valid = |tx: &Transaction, funding: &UtxoEntry| {
+            let populated = PopulatedTransaction::new(tx, vec![funding.clone()]);
+            let cache = Cache::new(0);
+            let reused = SigHashReusedValuesUnsync::new();
+            TxScriptEngine::from_transaction_input(&populated, &tx.inputs[0], 0, funding, &reused, &cache).execute().is_ok()
+        };
+        assert!(valid(&tx, &entry));
+        let mut changed = tx.clone();
+        changed.outputs[0].value -= 1;
+        assert!(!valid(&changed, &entry));
+        let mut changed = tx.clone();
+        *changed.payload.last_mut().unwrap() ^= 1;
+        assert!(!valid(&changed, &entry));
+        let mut changed_entry = entry.clone();
+        changed_entry.amount += 1;
+        assert!(!valid(&tx, &changed_entry));
+        assert!(payer.build_palw_tokenizer_registration_tx(&wire, outpoint, &entry, entry.amount).is_err());
     }
 
     #[test]
