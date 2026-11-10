@@ -123,13 +123,13 @@ impl<'a> AuthenticatedManifest<'a> {
         original: &OriginalCommit,
         scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
         total_limit: u64,
-    ) -> Result<ManifestV1, ContractError> {
+    ) -> Result<CheckedManifestV1, ContractError> {
         if self.id != original.manifest_material_id() {
             return Err(ContractError::Scope);
         }
         let manifest: ManifestV1 = borsh::from_slice(self.bytes).map_err(|_| ContractError::NonCanonical)?;
         manifest.check(original, scope_limits, total_limit)?;
-        Ok(manifest)
+        Ok(CheckedManifestV1 { original: original.id(), ruleset: original.scope.ruleset, manifest })
     }
 }
 
@@ -246,6 +246,39 @@ impl ManifestV1 {
         }
         Ok(())
     }
+}
+
+/// Descriptors whose subjects and budgets were checked against one original.
+/// A chunk's opening must still be verified by its codec before use.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CheckedManifestV1 {
+    original: OriginalId,
+    ruleset: Digest,
+    manifest: ManifestV1,
+}
+
+impl CheckedManifestV1 {
+    pub fn original(&self) -> OriginalId {
+        self.original
+    }
+
+    pub fn chunk(&self, scope: MaterialScope, index: u64) -> Result<ManifestChunkV1, ContractError> {
+        let entry = self.manifest.entry(scope);
+        Ok(ManifestChunkV1 {
+            id: entry.chunk_material_id(self.ruleset, index)?,
+            content_root: entry.content_root,
+            codec: entry.codec,
+            range: entry.chunk_range(index)?,
+        })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ManifestChunkV1 {
+    pub id: MaterialId,
+    pub content_root: Digest,
+    pub codec: Digest,
+    pub range: std::ops::Range<u64>,
 }
 
 /// A Panel member's assertion of complete replay under the rules bound by the
@@ -790,7 +823,14 @@ mod tests {
         let max = u32::try_from(bytes.len()).unwrap();
         let bound_original = OriginalCommit { manifest_root: manifest_root(d, &bytes, max).unwrap(), ..original.clone() };
         let authenticated = bound_original.authenticate_manifest(&bytes, max).unwrap();
-        assert_eq!(authenticated.decode(&bound_original, &rules, 90), Ok(manifest));
+        let checked = authenticated.decode(&bound_original, &rules, 90).unwrap();
+        assert_eq!(checked.original(), bound_original.id());
+        let chunk = checked.chunk(MaterialScope::Trace, 1).unwrap();
+        assert_eq!(chunk.range, 8..9);
+        assert_eq!(chunk.content_root, d);
+        assert_eq!(chunk.codec, d);
+        assert_eq!(chunk.id, manifest.entry(MaterialScope::Trace).chunk_material_id(d, 1).unwrap());
+        assert_eq!(checked.chunk(MaterialScope::Trace, 2), Err(ContractError::Range));
         assert_eq!(authenticated.decode(&bound_original, &rules, 89), Err(ContractError::Budget));
         assert_eq!(authenticated.decode(&original, &rules, 90), Err(ContractError::Scope));
         let changed = OriginalCommit { trace_root: Digest([8; 64]), ..bound_original };
