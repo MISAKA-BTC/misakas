@@ -19,11 +19,17 @@ pub struct MaterialId(pub Digest);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CaseId(pub Digest);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PanelBond {
+    pub transaction: Digest,
+    pub index: u32,
+}
+
 /// The canonical identity native admission must resolve from the draw or
 /// from admitted outsider eligibility before using a request's case ID.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Claimant {
-    DrawnBond { transaction: Digest, index: u32 },
+    DrawnBond(PanelBond),
     Outsider(PrincipalId),
 }
 
@@ -77,7 +83,19 @@ impl OriginalCommit {
 pub struct FullReplayApproval {
     pub original: OriginalId,
     pub draw: Digest,
+    pub bond: PanelBond,
     pub member: PrincipalId,
+    pub full_scope: Digest,
+}
+
+/// Expected values from the original's native draw and execution profile.
+/// One signer may own multiple bonds, so the bond is checked independently.
+pub struct ReplayApprovalContext {
+    pub original: OriginalId,
+    pub draw: Digest,
+    pub bond: PanelBond,
+    pub member: PrincipalId,
+    pub full_scope: Digest,
 }
 
 impl FullReplayApproval {
@@ -85,8 +103,24 @@ impl FullReplayApproval {
         hash(b"misaka/palw/public-full-replay-id/v1", self)
     }
 
-    pub fn authenticate(&self, key: &[u8; PUBKEY_BYTES], signature: &[u8; SIGNATURE_BYTES]) -> Result<(), ContractError> {
-        authenticate_actor(self.member, key, signature, self.signing_digest(), FULL_REPLAY_SIGN_CONTEXT)
+    pub fn authenticate(
+        &self,
+        context: &ReplayApprovalContext,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<(), ContractError> {
+        self.check_subject(context)?;
+        authenticate_actor(context.member, key, signature, self.signing_digest(), FULL_REPLAY_SIGN_CONTEXT)
+    }
+
+    fn check_subject(&self, context: &ReplayApprovalContext) -> Result<(), ContractError> {
+        if self.original != context.original || self.draw != context.draw || self.full_scope != context.full_scope {
+            return Err(ContractError::Scope);
+        }
+        if self.bond != context.bond || self.member != context.member {
+            return Err(ContractError::Identity);
+        }
+        Ok(())
     }
 }
 
@@ -386,6 +420,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn full_replay_approval_is_bound_to_one_drawn_bond_and_the_full_scope() {
+        let d = Digest([7; 64]);
+        let bond = PanelBond { transaction: d, index: 0 };
+        let context = ReplayApprovalContext { original: OriginalId(d), draw: d, bond, member: PrincipalId(d), full_scope: d };
+        let approval = FullReplayApproval {
+            original: context.original,
+            draw: context.draw,
+            bond,
+            member: context.member,
+            full_scope: context.full_scope,
+        };
+        assert_eq!(approval.check_subject(&context), Ok(()));
+
+        let another_bond = FullReplayApproval { bond: PanelBond { index: 1, ..bond }, ..approval.clone() };
+        assert_eq!(another_bond.check_subject(&context), Err(ContractError::Identity));
+        assert_ne!(another_bond.signing_digest(), approval.signing_digest());
+        let another_draw = FullReplayApproval { draw: Digest([8; 64]), ..approval.clone() };
+        assert_eq!(another_draw.check_subject(&context), Err(ContractError::Scope));
+        let partial_scope = FullReplayApproval { full_scope: Digest([9; 64]), ..approval };
+        assert_eq!(partial_scope.check_subject(&context), Err(ContractError::Scope));
+    }
+
+    #[test]
     fn rescue_demand_includes_every_drawn_bond_and_independent_response_capacity() {
         let demand = ProtectedRescueDemand {
             max_drawn_bonds: 3,
@@ -477,8 +534,8 @@ mod tests {
             manifest_root: d,
             service_contract: d,
         };
-        let first = Claimant::DrawnBond { transaction: d, index: 0 };
-        let second = Claimant::DrawnBond { transaction: d, index: 1 };
+        let first = Claimant::DrawnBond(PanelBond { transaction: d, index: 0 });
+        let second = Claimant::DrawnBond(PanelBond { transaction: d, index: 1 });
         let request = ManifestRequest {
             original: original.id(),
             manifest_root: d,
