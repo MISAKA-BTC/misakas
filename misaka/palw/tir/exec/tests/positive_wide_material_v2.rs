@@ -349,6 +349,33 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     assert!(trace_material.authenticate(&other_original, 0, trace_len, cap).is_err());
     assert!(capture.public_trace_tile(0, trace_len, 0).is_err());
     assert!(capture.public_trace_tile(trace_len, trace_len, u64::MAX).is_err());
+    use kaspa_consensus_core::{
+        palw_step_refute::PalwStepRefuteError,
+        palw_tir_court_v1::{PalwTirCourtRulesV1, PublicOriginalTraceTileV1},
+    };
+    let logits_leaf = space
+        .leaves_of_position(&f.job, f.job.declared_prefill_tokens - 1)
+        .into_iter()
+        .find(|leaf| leaf.dtype == misaka_palw_tir::DType::I64)
+        .unwrap();
+    let (opening, tile) = capture.public_trace_tile(logits_leaf.index, trace_len, u64::MAX).unwrap();
+    let material = PublicOriginalTraceTileV1 { original: original.id(), trace: capture.public_trace_index(), opening, tile };
+    let rules = PalwTirCourtRulesV1 {
+        max_step_leaf_count: trace_len,
+        prompt_form: PalwPromptIdsFormV1::Flat,
+        limits: misaka_palw_tir::demand::DemandLimits::UNLIMITED,
+    };
+    assert!(matches!(
+        material.check_wide_logits_consistency(
+            &original,
+            &capture.binding().unwrap(),
+            logits_leaf.index,
+            &event,
+            material.tile.values_le.len(),
+            &rules,
+        ),
+        Err(PalwStepRefuteError::NoFaultFound)
+    ));
     assert_eq!(original.output, digest(palw_attempt_output_root_v1(&f.job, EXPECTED)));
     use misaka_palw_positive_contract::public_one_honest::{ManifestScopeRules, tir_output_material_codec_v1};
     let size = original.decode * 4;

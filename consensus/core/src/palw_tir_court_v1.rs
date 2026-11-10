@@ -602,6 +602,20 @@ enum BindingOutcome {
 /// the job's canonical one ([`PalwStepFaultV1::StepLeafCountNotCanonical`], counted with the claim's
 /// own count as the cap, so an honest count above the ladder is never "not canonical").
 fn check_binding(binding: &PalwTirStepBindingV1) -> Result<BindingOutcome, PalwStepRefuteError> {
+    check_binding_with_geometry(binding, PalwTirStepSpaceV1::new)
+}
+
+fn check_wide_binding(binding: &PalwTirStepBindingV1) -> Result<BindingOutcome, PalwStepRefuteError> {
+    use crate::palw_tir_step_v1::PalwTirStepSpaceV2;
+    check_binding_with_geometry(binding, |class| PalwTirStepSpaceV2::new(class).map(PalwTirStepSpaceV2::into_court_geometry))
+}
+
+fn check_binding_with_geometry(
+    binding: &PalwTirStepBindingV1,
+    geometry: impl FnOnce(
+        &crate::palw_tir_class_v1::PalwTirClassV1,
+    ) -> Result<PalwTirStepSpaceV1, crate::palw_tir_step_v1::PalwTirStepError>,
+) -> Result<BindingOutcome, PalwStepRefuteError> {
     if binding.version != PALW_TIR_STEP_BINDING_VERSION_V1 {
         return Err(bad("unsupported IR binding version"));
     }
@@ -622,7 +636,7 @@ fn check_binding(binding: &PalwTirStepBindingV1) -> Result<BindingOutcome, PalwS
     if root != binding.committed_execution_root {
         return Err(bad("the binding's parts do not produce its execution root"));
     }
-    let space = PalwTirStepSpaceV1::new(&binding.class).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    let space = geometry(&binding.class).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
     let committed = &binding.committed_execution_root;
     let job = match space.job_shape(&binding.job_context) {
         Ok(job) => job,
@@ -5088,7 +5102,7 @@ pub fn check_tir_decode_wide_q24_v2(
     sampling: &crate::palw_decode_select_v2::PalwDecodeSamplingV2,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    let v = match check_binding(binding)? {
+    let v = match check_wide_binding(binding)? {
         BindingOutcome::Convicted(x) => return Ok(x),
         BindingOutcome::Verified(x) => x,
     };
@@ -5130,7 +5144,7 @@ pub fn check_tir_logits_consistency_wide_q24_v2(
     event: &crate::palw_logits_q24_v2::WideLogitsEventV2,
     rules: &PalwTirCourtRulesV1,
 ) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
-    let v = match check_binding(binding)? {
+    let v = match check_wide_binding(binding)? {
         BindingOutcome::Convicted(x) => return Ok(x),
         BindingOutcome::Verified(x) => x,
     };

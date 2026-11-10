@@ -44,6 +44,11 @@ fn check_context(ctx: &PalwJobContextV2) -> Result<(), PalwTirStepError> {
 }
 
 impl PalwTirStepSpaceV2 {
+    /// Share geometry with the court after strict wide-profile validation.
+    pub(crate) fn into_court_geometry(self) -> PalwTirStepSpaceV1 {
+        self.inner
+    }
+
     /// Decode and validate the actual strict-wide program, then check its original layout.
     pub fn new(class: &PalwTirClassV1) -> Result<Self, PalwTirStepError> {
         if class.version != PALW_TIR_CLASS_VERSION_V1 {
