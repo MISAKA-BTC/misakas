@@ -532,6 +532,8 @@ impl PublicOriginalAdmissionRecordV1 {
     #[cfg(test)]
     pub(crate) fn storage_fixture(original: OriginalId, origin: AcceptedOrigin) -> Self {
         let supply = RemainingCapacity { transmitted_bytes: 4096, additional_work: 16, retained_bytes: 4096 };
+        let draw = origin.accepted_daa + 1;
+        let notice = OriginalClock::new(origin.accepted_daa).unwrap().notice_until();
         Self {
             original,
             carrier: AcceptedMaterial { origin, digest: Digest([1; 64]) },
@@ -544,7 +546,7 @@ impl PublicOriginalAdmissionRecordV1 {
                 per_outsider: supply,
                 defensive: supply,
             },
-            deadlines: [102, 103, 103, 104, 105, 106, 107, 108],
+            deadlines: [draw, draw + 1, draw + 1, notice + 1, notice + 2, notice + 3, notice + 4, notice + 5],
         }
     }
 
@@ -553,6 +555,18 @@ impl PublicOriginalAdmissionRecordV1 {
         if key != row.original.0.0.as_slice() {
             return Err(ContractError::Identity);
         }
+        let clock = OriginalClock::new(row.carrier.origin.accepted_daa)?;
+        let [draw, first_notice, first_request, ready, inspection, localized, filed, terminal] = row.deadlines;
+        if draw <= row.carrier.origin.accepted_daa
+            || draw > first_notice.min(first_request)
+            || first_notice.max(first_request) > clock.notice_until()
+            || ready < clock.notice_until()
+            || [ready, inspection, localized, filed, terminal].windows(2).any(|pair| pair[0] > pair[1])
+            || terminal > clock.hard()
+        {
+            return Err(ContractError::Range);
+        }
+        row.initial_supply.checked_add(row.rescue.total()?)?;
         Ok(row)
     }
 
