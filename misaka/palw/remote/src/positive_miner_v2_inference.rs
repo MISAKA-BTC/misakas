@@ -15,7 +15,9 @@ use kaspa_consensus_core::{
     palw_v2::PalwJobContextV2,
 };
 #[cfg(feature = "positive-panel")]
-use misaka_palw_positive_contract::public_one_honest::{ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, OriginalCommit};
+use misaka_palw_positive_contract::public_one_honest::{
+    ManifestV1, MaterialScope, ORIGINAL_SIGN_CONTEXT, OriginalCommit, prompt_text_material_v1,
+};
 use misaka_palw_positive_contract::{
     public_one_honest::{ManifestEntryV1, ManifestScopeRules, tir_program_material_codec_v1},
     tir::greedy_selector_id,
@@ -217,6 +219,7 @@ impl TirMinerJobV2<'_> {
 pub fn finalize_public_capture_v1(
     capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
     job: &TirMinerJobV2<'_>,
+    prompt_text: &str,
     mut original: OriginalCommit,
     mut manifest: ManifestV1,
     scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
@@ -235,9 +238,13 @@ pub fn finalize_public_capture_v1(
     }
     capture.bind_public_original(&mut original).map_err(|_| MinerErrorV2::Binding)?;
     let program = MaterialScope::Program as usize;
+    let prompt = MaterialScope::Prompt as usize;
     let input = MaterialScope::InputTokens as usize;
     let output = MaterialScope::Output as usize;
     manifest.entries[program] = job.public_program_material(scope_limits[program])?;
+    // The rooted job supplied original.prompt. Manifest validation rejects a
+    // different text before the Miner is asked to sign.
+    manifest.entries[prompt] = prompt_text_material_v1(original.scope.ruleset, prompt_text, scope_limits[prompt])?;
     manifest.entries[input] = job.public_input_token_material(scope_limits[input])?;
     manifest.entries[output] = capture.public_output_material(scope_limits[output])?;
     let bytes = original.bind_manifest(&manifest, scope_limits, total_limit, max_manifest_bytes)?;
