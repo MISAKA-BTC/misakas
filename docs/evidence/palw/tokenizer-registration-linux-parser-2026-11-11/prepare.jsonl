@@ -1,0 +1,8 @@
+{"case":"actual","eogIds":2,"expectedError":null,"rawBytes":2104556,"vocab":49152}
+{"case":"maximum_dense","eogIds":4096,"expectedError":null,"rawBytes":8388608,"vocab":262144}
+{"case":"last_leaf_mismatch","eogIds":4096,"expectedError":"the prefix is not the committed one: the accused's path disagrees with it at level 18","rawBytes":8388608,"vocab":262144}
+{"case":"giant_string","eogIds":1,"expectedError":null,"rawBytes":8388608,"vocab":1}
+{"case":"sparse_legal","eogIds":1,"expectedError":null,"rawBytes":62,"vocab":262144}
+{"case":"sparse_out_of_range","eogIds":1,"expectedError":"tokenizer names a token outside the registered vocabulary","rawBytes":48,"vocab":262144}
+{"case":"duplicate_key_last","eogIds":1,"expectedError":"malformed JSON or duplicate object key","rawBytes":8388608,"vocab":1}
+{"case":"many_keys","eogIds":1,"expectedError":null,"rawBytes":8388608,"vocab":1}

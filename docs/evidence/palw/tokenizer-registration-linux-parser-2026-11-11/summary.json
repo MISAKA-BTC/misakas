@@ -1,0 +1,113 @@
+{
+  "schema": "palw-tokenizer-registration-linux-parser-summary-v1",
+  "sourceCommit": "8a69231393ee636cc311f7ddaaca29afae185c43",
+  "sourceArchiveSha256": "ec014dcb91b9d8fdc71ce7ebf75c9001a613faf718774acd9ff4a6d338272a8b",
+  "buildHost": "5.104.81.23",
+  "measurementHost": "95.111.236.186",
+  "buildCommand": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/root/t12-tokenizer-probe-8a6923139/target cargo build --locked --release -p misaka-tokenizer-registration-probe -j 1 --message-format=json",
+  "rustc": "1.93.0 (254b59607 2026-01-19)",
+  "binarySha256": "3b293fda31104781e894cd8ae20a4afad907d605b73d4bf76c5c24940a6ba870",
+  "buildLogSha256": "9a1cd90c7dc86fa67ba5ebafb5d49788de042f1992ab9c5707fe8ea7de5cacea",
+  "buildArtifactsLocalFile": "/tmp/t12-tokenizer-linux-parser-8a6923139/build-artifacts.jsonl",
+  "buildArtifactsSha256": "bd80f3dbd3341b54ce98b3026055cda206fffb2b5af6f04cd0ef4693aa0a73a6",
+  "measurementSha256": "fcd16e796a8a1096a53cb689be1e0cba184fd70fb8a2c7f50da9055c8b2c9515",
+  "observations": [
+    {
+      "case": "actual",
+      "samples": 5,
+      "expectedSuccess": true,
+      "rawBytes": 2104556,
+      "vocab": 49152,
+      "firstMs": 222.377092,
+      "minMs": 201.810629,
+      "maxMs": 250.158103,
+      "peakRssKiB": 19380
+    },
+    {
+      "case": "maximum_dense",
+      "samples": 5,
+      "expectedSuccess": true,
+      "rawBytes": 8388608,
+      "vocab": 262144,
+      "firstMs": 1165.110341,
+      "minMs": 813.999113,
+      "maxMs": 1165.110341,
+      "peakRssKiB": 72992
+    },
+    {
+      "case": "last_leaf_mismatch",
+      "samples": 5,
+      "expectedSuccess": false,
+      "rawBytes": 8388608,
+      "vocab": 262144,
+      "firstMs": 953.151359,
+      "minMs": 764.280556,
+      "maxMs": 953.151359,
+      "peakRssKiB": 72856
+    },
+    {
+      "case": "giant_string",
+      "samples": 5,
+      "expectedSuccess": true,
+      "rawBytes": 8388608,
+      "vocab": 1,
+      "firstMs": 105.0938,
+      "minMs": 85.471843,
+      "maxMs": 105.0938,
+      "peakRssKiB": 43148
+    },
+    {
+      "case": "sparse_legal",
+      "samples": 5,
+      "expectedSuccess": true,
+      "rawBytes": 62,
+      "vocab": 262144,
+      "firstMs": 382.382952,
+      "minMs": 337.226192,
+      "maxMs": 382.382952,
+      "peakRssKiB": 2304
+    },
+    {
+      "case": "sparse_out_of_range",
+      "samples": 5,
+      "expectedSuccess": false,
+      "rawBytes": 48,
+      "vocab": 262144,
+      "firstMs": 0.060433,
+      "minMs": 0.006267,
+      "maxMs": 0.060433,
+      "peakRssKiB": 2304
+    },
+    {
+      "case": "duplicate_key_last",
+      "samples": 5,
+      "expectedSuccess": false,
+      "rawBytes": 8388608,
+      "vocab": 1,
+      "firstMs": 55.983055,
+      "minMs": 53.040481,
+      "maxMs": 56.604471,
+      "peakRssKiB": 26760
+    },
+    {
+      "case": "many_keys",
+      "samples": 5,
+      "expectedSuccess": true,
+      "rawBytes": 8388608,
+      "vocab": 1,
+      "firstMs": 660.161245,
+      "minMs": 610.342919,
+      "maxMs": 702.468546,
+      "peakRssKiB": 92140
+    }
+  ],
+  "limitations": [
+    "Parser-only release measurements; no native admission, signature verification, reservation, journal, snapshot, database or maximum-mergeset cost.",
+    "Reference host was shared with a running node. Five samples per case are observations, not p99 or worst-case wall-time guarantees.",
+    "Observed machine is 6 vCPU Broadwell with 12,247,512 KiB RAM; no formal minimum-hardware or public-profile adoption occurred.",
+    "Peak RSS includes input loading and all five iterations in one process; fixture generation ran separately. Conservative scratch reservation is not RSS.",
+    "No public T12 transaction, activation, quote success, claim admission, Final or main push."
+  ],
+  "publicProfileSelected": false,
+  "publicActivation": false
+}

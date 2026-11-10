@@ -1,0 +1,5 @@
+{"case":"actual","conservativeScratchBytes":269399560,"elapsedNs":222377092,"eogIds":2,"error":null,"iteration":0,"keyEvents":98471,"maximumRenderingBytes":81,"ok":true,"rawBytes":2104556,"totalRenderingBytes":332367,"vocab":49152}
+{"case":"actual","conservativeScratchBytes":269399560,"elapsedNs":208561118,"eogIds":2,"error":null,"iteration":1,"keyEvents":98471,"maximumRenderingBytes":81,"ok":true,"rawBytes":2104556,"totalRenderingBytes":332367,"vocab":49152}
+{"case":"actual","conservativeScratchBytes":269399560,"elapsedNs":201810629,"eogIds":2,"error":null,"iteration":2,"keyEvents":98471,"maximumRenderingBytes":81,"ok":true,"rawBytes":2104556,"totalRenderingBytes":332367,"vocab":49152}
+{"case":"actual","conservativeScratchBytes":269399560,"elapsedNs":202564251,"eogIds":2,"error":null,"iteration":3,"keyEvents":98471,"maximumRenderingBytes":81,"ok":true,"rawBytes":2104556,"totalRenderingBytes":332367,"vocab":49152}
+{"case":"actual","conservativeScratchBytes":269399560,"elapsedNs":250158103,"eogIds":2,"error":null,"iteration":4,"keyEvents":98471,"maximumRenderingBytes":81,"ok":true,"rawBytes":2104556,"totalRenderingBytes":332367,"vocab":49152}

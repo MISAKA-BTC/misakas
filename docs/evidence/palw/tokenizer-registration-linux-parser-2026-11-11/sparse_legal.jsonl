@@ -1,0 +1,5 @@
+{"case":"sparse_legal","conservativeScratchBytes":24324,"elapsedNs":382382952,"eogIds":1,"error":null,"iteration":0,"keyEvents":6,"maximumRenderingBytes":1,"ok":true,"rawBytes":62,"totalRenderingBytes":1,"vocab":262144}
+{"case":"sparse_legal","conservativeScratchBytes":24324,"elapsedNs":366592502,"eogIds":1,"error":null,"iteration":1,"keyEvents":6,"maximumRenderingBytes":1,"ok":true,"rawBytes":62,"totalRenderingBytes":1,"vocab":262144}
+{"case":"sparse_legal","conservativeScratchBytes":24324,"elapsedNs":339920691,"eogIds":1,"error":null,"iteration":2,"keyEvents":6,"maximumRenderingBytes":1,"ok":true,"rawBytes":62,"totalRenderingBytes":1,"vocab":262144}
+{"case":"sparse_legal","conservativeScratchBytes":24324,"elapsedNs":337226192,"eogIds":1,"error":null,"iteration":3,"keyEvents":6,"maximumRenderingBytes":1,"ok":true,"rawBytes":62,"totalRenderingBytes":1,"vocab":262144}
+{"case":"sparse_legal","conservativeScratchBytes":24324,"elapsedNs":344558794,"eogIds":1,"error":null,"iteration":4,"keyEvents":6,"maximumRenderingBytes":1,"ok":true,"rawBytes":62,"totalRenderingBytes":1,"vocab":262144}
