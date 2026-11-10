@@ -1215,6 +1215,12 @@ pub enum PublicReplayApprovalLookupErrorV1 {
     CarrierUnavailable(AcceptedOrigin),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicManifestResponseLookupErrorV1 {
+    Contract(ContractError),
+    CarrierUnavailable(AcceptedOrigin),
+}
+
 /// Outcome of the persisted public-verification checks before Final.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PublicFinalReplayPrerequisiteV1 {
@@ -1480,6 +1486,33 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
         let key = (PUBLIC_MANIFEST_RESPONSE_TABLE_V1, key.to_vec());
         route.aux.get(&key).map(|bytes| self.decode_public_manifest_response_row_v1(&key.1, bytes)).transpose()
+    }
+
+    /// Recover a delivery at its exact accepted carrier. The caller resolves
+    /// the provider and limits from the native supply obligation, and restores
+    /// the pending request before calling this method.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reauthenticate_public_manifest_response_v1(
+        &self,
+        key: &[u8; ManifestResponseRecordV1::KEY_BYTES],
+        pending: &PendingManifestCase,
+        original: &OriginalCommit,
+        provider: PrincipalId,
+        scope_limits: &[ManifestScopeRules; MaterialScope::COUNT],
+        total_limit: u64,
+        read_carrier: impl FnOnce(AcceptedOrigin) -> Option<Vec<u8>>,
+    ) -> Result<Option<VerifiedManifestDeliveryV1>, PublicManifestResponseLookupErrorV1> {
+        use PublicManifestResponseLookupErrorV1::{CarrierUnavailable, Contract};
+        let Some(row) = self.public_manifest_response_record_v1(key).map_err(Contract)? else { return Ok(None) };
+        if self.public_pending_manifest_record_v1(row.original(), row.case()).map_err(Contract)? != Some(pending.record()) {
+            return Err(Contract(ContractError::Scope));
+        }
+        let origin = row.origin();
+        let packet = read_carrier(origin).ok_or(CarrierUnavailable(origin))?;
+        pending
+            .restore_provider_response_bytes(&row, &packet, provider, original, origin, scope_limits, total_limit)
+            .map(Some)
+            .map_err(Contract)
     }
 
     pub(crate) fn decode_public_manifest_response_row_v1(

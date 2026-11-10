@@ -636,6 +636,34 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     assert_eq!(revert_delta_v2(&delivered, &delivery_delta, &params).unwrap(), with_case);
     let restored_delivery = PalwStateCarriageV2::from_state(&delivered).into_state(&params, Some(delivered.state_root())).unwrap();
     assert_eq!(restored_delivery.public_manifest_response_record_v1(&delivery_row.key()), Ok(Some(delivery_row)));
+    use crate::palw_positive_contract_v2::PublicManifestResponseLookupErrorV1;
+    let lookup = |packet: Option<Vec<u8>>| {
+        restored_delivery.reauthenticate_public_manifest_response_v1(
+            &delivery_row.key(),
+            &pending,
+            &commit,
+            member,
+            &scope_limits,
+            total_limit,
+            |accepted| {
+                assert_eq!(accepted, delivery_origin);
+                packet
+            },
+        )
+    };
+    assert_eq!(lookup(None), Err(PublicManifestResponseLookupErrorV1::CarrierUnavailable(delivery_origin)));
+    let mut altered_packet = packet.clone();
+    *altered_packet.last_mut().unwrap() ^= 1;
+    assert_eq!(
+        lookup(Some(altered_packet)),
+        Err(PublicManifestResponseLookupErrorV1::Contract(misaka_palw_positive_contract::ContractError::Identity))
+    );
+    assert_eq!(lookup(Some(packet)), Ok(Some(delivery)));
+    assert_eq!(
+        fold_at(&restored_delivery, 6, clock.notice_until() + 1)
+            .public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("a response did not close the case")),
+        Ok(PublicFinalReplayPrerequisiteV1::ManifestCasePending)
+    );
 
     let absent_vote = fold_at(&drawn, 6, clock.notice_until() + 1);
     assert_eq!(
