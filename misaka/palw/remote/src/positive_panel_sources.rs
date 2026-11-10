@@ -4,6 +4,7 @@
 
 use std::{
     collections::BTreeMap,
+    fs::File,
     io::{ErrorKind, Read},
     path::Path,
 };
@@ -20,7 +21,8 @@ use kaspa_consensus_core::{
     palw_tir_artifact_v1::palw_tir_graph_ir_root_v1,
     palw_tir_class_v1::PalwTirClassV1,
     palw_tir_court_v1::PalwTirInventoryIndexV1,
-    palw_v2::output_commitment_v2,
+    palw_tir_step_v1::PalwTirStepSpaceV2,
+    palw_v2::{PalwJobContextV2, output_commitment_v2},
 };
 use misaka_palw_positive_contract::{
     CONTRACT_REVISION, CONTRACT_VERSION, ContractError,
@@ -36,7 +38,12 @@ use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir_artifact::{
     PalwTirContainerHeaderV1, PalwTirTensorEntryV1, param_instances_v1, tensor_bytes_v1, write_container_v1_streamed,
 };
-use misaka_palw_tir_exec::node::TirArtifactV1;
+use misaka_palw_tir_exec::node::{
+    TirArtifactV1,
+    memory::TirMemoryReserverV1,
+    positive_wide_material_v2::{CaptureExpectedV2, WidePanelWorkV2, capture_one_pass_v2},
+    run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirWideRunLimitsV2},
+};
 
 use crate::miner::positive_v2::{CanonicalDataDutyV2, MinerErrorV2, PreparedDataV2, StoredUnitV2};
 use crate::public_material::{MaterialProvider, public_original_manifest_path};
@@ -72,15 +79,43 @@ pub fn fetch_public_replay_output_v1(
     Ok(ids)
 }
 
-/// Compare an independently captured Panel run with the original's
-/// authenticated output and execution root.
-pub fn check_public_replay_v1(
+/// Acquire the public inputs and compare an independent wide TIR run with the
+/// original. The caller supplies rooted job/class metadata, authenticated
+/// model parameters via the runner, and reserves acquisition memory and work.
+#[allow(clippy::too_many_arguments)]
+pub fn run_public_wide_replay_v1(
     provider: &dyn MaterialProvider,
     original: &OriginalCommit,
     manifest: &CheckedManifestV1,
-    capture: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelCaptureV2<'_>,
+    job: &PalwJobContextV2,
+    class: &PalwTirClassV1,
+    artifact: Hash64,
+    space: &PalwTirStepSpaceV2,
+    runner: &TirClassRunnerWideQ24V2<'_>,
+    run_limits: TirWideRunLimitsV2,
+    work: &WidePanelWorkV2,
+    tape: File,
+    reserver: &TirMemoryReserverV1,
 ) -> Result<(), PanelSourceErrorR1> {
+    if original.job.0 != job.job_id.as_bytes() || original.artifact.0 != artifact.as_bytes() {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    // The wide capture currently accepts the native Flat input commitment.
+    let (program, prompt) = fetch_public_replay_inputs_v1(provider, original, manifest, PalwPromptIdsFormV1::Flat)?;
+    if &program != space.program() {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    drop(program);
     let output = fetch_public_replay_output_v1(provider, original, manifest)?;
+    let capture = capture_one_pass_v2(
+        CaptureExpectedV2 { class, artifact, job, space, prompt: &prompt },
+        runner,
+        run_limits,
+        work,
+        tape,
+        reserver,
+    )
+    .map_err(PanelSourceErrorR1::ReplayExecution)?;
     capture.check_public_original_replay(original, &output).map_err(PanelSourceErrorR1::ReplayMismatch)
 }
 
@@ -288,6 +323,7 @@ pub enum PanelSourceErrorR1 {
     ManifestRead(ErrorKind),
     ManifestProvider(String),
     ReplayProvider(String),
+    ReplayExecution(String),
     ReplayMismatch(String),
     Artifact(String),
 }
