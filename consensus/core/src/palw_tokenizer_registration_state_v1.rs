@@ -369,18 +369,18 @@ impl TokenizerRegistrationReservationV1 {
 
 impl TokenizerRegistrationBookV1 {
     pub(crate) fn new(policy: TokenizerRegistrationPolicyV1) -> Result<Self, String> {
-        policy.check_v1()?;
+        let budget = policy.effective_reservation_budget_v1()?;
         Ok(Self {
             policy,
-            book: ServiceReservations::new(policy.service_budget).map_err(|e| format!("tokenizer service: {e:?}"))?,
+            book: ServiceReservations::new(budget).map_err(|e| format!("tokenizer service: {e:?}"))?,
             sessions: BTreeMap::new(),
         })
     }
 
     pub(crate) fn check(&self) -> Result<(), String> {
-        self.policy.check_v1()?;
+        let budget = self.policy.effective_reservation_budget_v1()?;
         self.book.check()?;
-        if self.book.budget != self.policy.service_budget
+        if self.book.budget != budget
             || !self.book.supply.is_empty()
             || self.book.last_observed_daa.is_some()
             || self.sessions.len() > self.policy.max_pending_total as usize
@@ -578,6 +578,10 @@ mod tests {
         let first_id = first.id().unwrap();
         let later_id = later.id().unwrap();
         let mut book = TokenizerRegistrationBookV1::new(first.policy).unwrap();
+        assert_eq!(book.book.budget.work + first.policy.bookkeeping_work_v1().unwrap().sweep, first.policy.service_budget.work);
+        let mut corrupt = book.clone();
+        corrupt.book.budget = first.policy.service_budget;
+        assert!(corrupt.check().is_err());
         book.reserve(&first).unwrap();
         book.reserve(&later).unwrap();
         book.check_session(&later).unwrap();

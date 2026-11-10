@@ -38,6 +38,10 @@ manual.add('crate::palw_tir_owner_schedule_rooted_v2::TirOwnerScheduleRowV2')
 # These process-local fold inputs are heap-visited but have no wire codec.
 manual.update({
     'crate::palw_state_v2::PalwTransitionExtrasV1',
+    'crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1',
+    'crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationCarrierContextV1',
+    'crate::palw_tokenizer_registration_carriage_v1::ValidatedTokenizerRegistrationCarrierV1',
+    'crate::palw_court_carrier_fee_v1::CarrierFeeBudgetV1',
     'crate::palw_state_v2::positive_assignment_raw::PositiveAssignmentScheduledActionV2',
     'crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2',
     'crate::palw_state_v2::positive_assignment_case::source::QualifiedCaseSourceSpendV2',

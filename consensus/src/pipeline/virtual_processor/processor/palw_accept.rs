@@ -1,10 +1,24 @@
 //! **`VirtualStateProcessor`: palw accept methods** — moved out of `processor.rs` (2026-10-13, a behaviour-preserving split: the methods are the same; each keeps the reach it had).
 
 use super::*;
-use kaspa_consensus_core::palw_batch_court_v1::fold_order::{AcceptedCourtItemV1, in_accepted_order_v1, index_batch_carriers_v1};
+use kaspa_consensus_core::palw_batch_court_v1::fold_order::{
+    AcceptedNativeCourtItemV1, in_accepted_native_order_v1, index_batch_carriers_v1,
+};
 
 pub(super) type BatchHandoffV1 = kaspa_consensus_core::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1;
 pub(super) type IndexedBatchHandoffsV1 = Vec<(usize, BatchHandoffV1)>;
+pub(super) type TokenizerHandoffV1 =
+    kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::SharedValidatedTokenizerRegistrationCarrierV1;
+pub(super) type IndexedTokenizerHandoffsV1 = Vec<(usize, TokenizerHandoffV1)>;
+#[derive(Default)]
+pub(super) struct TokenizerRegistrationAcceptanceV1 {
+    pub(super) candidates: IndexedTokenizerHandoffsV1,
+    pub(super) accepted: IndexedTokenizerHandoffsV1,
+    pub(super) fees: std::collections::BTreeMap<
+        TransactionId,
+        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1,
+    >,
+}
 
 /// Immutable output of the existing production resolver at one block. The legacy
 /// extras remain readable for the existing fold APIs, but cannot be mutated through
@@ -435,6 +449,7 @@ impl VirtualStateProcessor {
             None,
             &[],
             &mut Vec::new(),
+            &mut TokenizerRegistrationAcceptanceV1::default(),
         )
         .map(|(objects, ..)| objects.len())
     }
@@ -461,8 +476,16 @@ impl VirtualStateProcessor {
         PalwLocalTransitionFaultV1,
     > {
         let params = self.palw_state_params_v2.as_ref().expect("PALW V2 test network");
-        let (carried, batch) =
-            self.palw_v2_objects_of_block(acceptance, state, point.block, point.daa_score, raw_fees, rent_fees, &Default::default())?;
+        let (carried, batch, _) = self.palw_v2_objects_of_block(
+            acceptance,
+            state,
+            point.block,
+            point.daa_score,
+            raw_fees,
+            rent_fees,
+            &Default::default(),
+            &Default::default(),
+        )?;
         let (objects, folded, _, _, funded, _, _, _) = self.palw_v2_accepted_objects_and_originals(
             (state, params, point),
             carried,
@@ -472,6 +495,7 @@ impl VirtualStateProcessor {
             &[],
             &batch,
             &mut Vec::new(),
+            &mut TokenizerRegistrationAcceptanceV1::default(),
         )?;
         Ok((objects, folded, funded.len()))
     }
@@ -622,6 +646,7 @@ impl VirtualStateProcessor {
             escrow_settlements,
             &[],
             &mut Vec::new(),
+            &mut TokenizerRegistrationAcceptanceV1::default(),
         )?;
         Ok((accepted, folded, refunds))
     }
@@ -644,6 +669,7 @@ impl VirtualStateProcessor {
         escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
         batch_candidates: &[(usize, BatchHandoffV1)],
         accepted_batch: &mut IndexedBatchHandoffsV1,
+        tokenizer: &mut TokenizerRegistrationAcceptanceV1,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -674,6 +700,7 @@ impl VirtualStateProcessor {
                 None,
                 batch_candidates,
                 accepted_batch,
+                tokenizer,
             )
         })
     }
@@ -719,7 +746,7 @@ impl VirtualStateProcessor {
     ) -> Result<Option<NativeRelayFeePlanV2>, PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
-        let (objects, batch_candidates) = self.palw_v2_objects_of_block(
+        let (objects, batch_candidates, tokenizer_candidates) = self.palw_v2_objects_of_block(
             &ctx.mergeset_acceptance_data,
             state,
             point.block,
@@ -727,6 +754,7 @@ impl VirtualStateProcessor {
             &ctx.palw_v2_accepted_tx_fees,
             &ctx.palw_v2_rent_available_fees,
             &ctx.palw_batch_handoffs_v1,
+            &ctx.palw_tokenizer_handoffs_v1,
         )?;
         // The producer can attach its own attempt after template construction.
         // Mixed object application can depend on that attempt's class.
@@ -759,6 +787,7 @@ impl VirtualStateProcessor {
             template_bits.map_or(NativeAssignmentRehearsalModeV2::CandidateFees, NativeAssignmentRehearsalModeV2::TemplateFees),
             &batch_candidates,
             &mut Vec::new(),
+            &mut TokenizerRegistrationAcceptanceV1 { candidates: tokenizer_candidates, ..Default::default() },
         )?
         else {
             return Err(fault("ordered preview returned an observed schedule").into());
@@ -788,6 +817,7 @@ impl VirtualStateProcessor {
         mode: NativeAssignmentRehearsalModeV2,
         batch_candidates: &[(usize, BatchHandoffV1)],
         accepted_batch: &mut IndexedBatchHandoffsV1,
+        tokenizer: &mut TokenizerRegistrationAcceptanceV1,
     ) -> Result<(PalwAcceptedObjectsAndOriginalsV2, NativeAssignmentRehearsalResultV2), PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::{blockhash::ORIGIN, palw_native_resource_v1::NativeCoverageV1};
         if matches!(mode, NativeAssignmentRehearsalModeV2::TemplateFees(_)) != (point.block == ORIGIN) {
@@ -809,6 +839,7 @@ impl VirtualStateProcessor {
                         None,
                         batch_candidates,
                         accepted_batch,
+                        tokenizer,
                     )
                 })?,
                 NativeAssignmentRehearsalResultV2::Observed(Vec::new()),
@@ -829,6 +860,7 @@ impl VirtualStateProcessor {
                 Some(&mut raw),
                 batch_candidates,
                 accepted_batch,
+                tokenizer,
             )
         })?;
         Ok((legacy, raw.result))
@@ -880,6 +912,7 @@ impl VirtualStateProcessor {
                 None,
                 &[],
                 &mut accepted_batch,
+                &mut TokenizerRegistrationAcceptanceV1::default(),
             )
         })
     }
@@ -903,6 +936,7 @@ impl VirtualStateProcessor {
         assignment_actions: Option<&mut NativeAssignmentRehearsalV2<'_>>,
         batch_candidates: &[(usize, BatchHandoffV1)],
         accepted_batch: &mut IndexedBatchHandoffsV1,
+        tokenizer: &mut TokenizerRegistrationAcceptanceV1,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -935,6 +969,7 @@ impl VirtualStateProcessor {
             assignment_actions,
             batch_candidates,
             accepted_batch,
+            tokenizer,
         )
     }
 
@@ -956,6 +991,7 @@ impl VirtualStateProcessor {
         mut assignment_actions: Option<&mut NativeAssignmentRehearsalV2<'_>>,
         batch_candidates: &[(usize, BatchHandoffV1)],
         accepted_batch: &mut IndexedBatchHandoffsV1,
+        tokenizer: &mut TokenizerRegistrationAcceptanceV1,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -1194,7 +1230,15 @@ impl VirtualStateProcessor {
         // Armed only (see the accounting below): the fault vectors this block has already asked
         // the grader to walk, refused or accepted. Dormant it is never read and never written.
         let mut vectors_graded = 0usize;
-        let ordered = in_accepted_order_v1(objects.into_iter(), batch_candidates).ok_or_else(|| {
+        let tokenizer_parent_root = (!tokenizer.candidates.is_empty()).then(|| state.state_root());
+        let ordered = in_accepted_native_order_v1(
+            objects.into_iter(),
+            batch_candidates,
+            &tokenizer.candidates,
+            |handoff| handoff.accepted_ordinal_v1(),
+            |handoff| handoff.accepted_ordinal_v1(),
+        )
+        .ok_or_else(|| {
             kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<IndexedBatchHandoffsV1>(
                 "Batch carrier indexing",
                 "Batch candidate lifecycle order is inconsistent",
@@ -1203,10 +1247,21 @@ impl VirtualStateProcessor {
         for item in ordered {
             if let Some(raw) = assignment_actions.as_deref_mut() {
                 match &item {
-                    AcceptedCourtItemV1::Ordinary(carried) => {
+                    AcceptedNativeCourtItemV1::Ordinary(carried) => {
                         raw.before(self, state_params, point, carried.native_carrier, accepted.len(), &mut folded, &fee_extras)?;
                     }
-                    AcceptedCourtItemV1::Batch(handoff) => {
+                    AcceptedNativeCourtItemV1::Tokenizer(handoff) => {
+                        raw.through(
+                            self,
+                            state_params,
+                            point,
+                            handoff.accepted_ordinal_v1(),
+                            accepted.len(),
+                            &mut folded,
+                            &fee_extras,
+                        )?;
+                    }
+                    AcceptedNativeCourtItemV1::Batch(handoff) => {
                         raw.through(
                             self,
                             state_params,
@@ -1228,8 +1283,53 @@ impl VirtualStateProcessor {
                 block,
             );
             let carried = match item {
-                AcceptedCourtItemV1::Ordinary(carried) => carried,
-                AcceptedCourtItemV1::Batch(handoff) => {
+                AcceptedNativeCourtItemV1::Ordinary(carried) => carried,
+                AcceptedNativeCourtItemV1::Tokenizer(handoff) => {
+                    let extras = self.palw_transition_extras_for_rehearsal_v1(point, &[], &fee_extras);
+                    let (next, fee, refused) =
+                        kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_tokenizer_registration_retained_v1(
+                            &folded,
+                            state,
+                            tokenizer_parent_root.expect("tokenizer candidate has parent root"),
+                            state_params,
+                            point,
+                            handoff,
+                            self.palw_unavailable_abstains_at(point.daa_score),
+                            self.palw_capability_bound_at(point.daa_score),
+                            self.palw_uncertified_weightless_at(point.daa_score),
+                            self.palw_da_court_at(point.daa_score),
+                            &extras,
+                        )
+                        .map_err(|why| match why {
+                            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => {
+                                PalwLocalTransitionFaultV1::Resource(why)
+                            }
+                            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why) => {
+                                PalwLocalTransitionFaultV1::Context(why)
+                            }
+                            why => kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "tokenizer rehearsal",
+                                &why.to_string(),
+                            )
+                            .into(),
+                        })?;
+                    // Failed parsing can consume the assigned attempt. Preserve
+                    // that state and its zero-burn projection through final fold.
+                    folded = next;
+                    tokenizer.accepted.push((accepted.len(), handoff.clone()));
+                    if tokenizer.fees.insert(handoff.carrier_v1(), fee).is_some() {
+                        return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                            "tokenizer rehearsal",
+                            "duplicate literal carrier fee projection",
+                        )
+                        .into());
+                    }
+                    if let Some(why) = refused {
+                        debug!("[palw-tokenizer] carrier {} refused: {why}", handoff.carrier_v1());
+                    }
+                    continue;
+                }
+                AcceptedNativeCourtItemV1::Batch(handoff) => {
                     let extras = self.palw_transition_extras_for_rehearsal_v1(point, &[], &fee_extras);
                     match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
                         &folded,
@@ -2717,6 +2817,16 @@ impl VirtualStateProcessor {
             // Accepted carriers are attached later, on this same extras value.
             batch_numerical_profile_v1: self.palw_batch_replay_profile_v1(daa_score),
             batch_court_carriers_v1: Vec::new(),
+            tokenizer_registration_policy_v1: self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(daa_score).copied(),
+            tokenizer_registration_network_domain_v1: self
+                .palw_lifecycle_kind_fences
+                .tokenizer_registration_v1_at(daa_score)
+                .map(|_| self.palw_network_domain_v2()),
+            tokenizer_registration_open_cutoff_daa_v1: self
+                .palw_lifecycle_kind_fences
+                .tokenizer_registration_open_cutoff_daa_v1_at(daa_score),
+            tokenizer_registration_carriers_v1: Vec::new(),
+            tokenizer_registration_expected_fees_v1: Default::default(),
             // Filled below only after every native dependency (including Panel and shard inputs)
             // has been resolved at this block. Neither field is a carrier-provided limit/domain.
             tir_public_allocation_rules_v1: None,
@@ -3165,9 +3275,10 @@ impl VirtualStateProcessor {
         raw_carrier_fees: &std::collections::HashMap<TransactionId, u64>,
         rent_available_fees: &std::collections::HashMap<TransactionId, u64>,
         batch_handoffs: &std::collections::BTreeMap<TransactionId, BatchHandoffV1>,
-    ) -> Result<(Vec<PalwCarriedObjectV1>, IndexedBatchHandoffsV1), PalwLocalTransitionFaultV1> {
+        tokenizer_handoffs: &std::collections::BTreeMap<TransactionId, TokenizerHandoffV1>,
+    ) -> Result<(Vec<PalwCarriedObjectV1>, IndexedBatchHandoffsV1, IndexedTokenizerHandoffsV1), PalwLocalTransitionFaultV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok((Vec::new(), Vec::new(), Vec::new()));
         };
         let mut txs = self.accepted_txs_from_acceptance_data(acceptance);
         // New Positive bodies are opaque below their own fence: reject the raw tag before any body, source, funding or resource preparation.
@@ -3591,7 +3702,7 @@ impl VirtualStateProcessor {
             block_daa,
         );
         for (carrier, reason) in &lifecycle.skipped {
-            if batch_handoffs.contains_key(carrier) {
+            if batch_handoffs.contains_key(carrier) || tokenizer_handoffs.contains_key(carrier) {
                 continue;
             }
             info!("[palw-lifecycle] carrier {carrier} produced no object: {reason}");
@@ -3634,6 +3745,20 @@ impl VirtualStateProcessor {
                 .into());
             }
             indexed
+        };
+        let mut tokenizer = if tokenizer_handoffs.is_empty() {
+            Vec::new()
+        } else {
+            index_batch_carriers_v1(txs.iter().map(Transaction::id), lifecycle_objects.iter().map(|carried| carried.carrier), |id| {
+                tokenizer_handoffs.get(id).cloned()
+            })
+            .filter(|indexed| indexed.len() == tokenizer_handoffs.len())
+            .ok_or_else(|| {
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<IndexedTokenizerHandoffsV1>(
+                    "tokenizer carrier indexing",
+                    "handoff does not follow accepted transaction order",
+                )
+            })?
         };
         // The derived bindings go FIRST: a claim bound by this block may then be licensed by an
         // object the same block carries, which is the order a chain that is catching up needs.
@@ -3761,7 +3886,27 @@ impl VirtualStateProcessor {
             .palw_positive_assignment_params_v2
             .as_ref()
             .is_some_and(|params| params.palw_positive_assignment_v2_at(block_daa).is_some())
+            || !tokenizer.is_empty()
         {
+            // With TKR1, ordinals refer to the complete accepted transaction
+            // stream, including entries removed from decoder views above.
+            let ordinal = |id: TransactionId| {
+                if tokenizer_handoffs.is_empty() {
+                    txs.iter().position(|tx| tx.id() == id)
+                } else {
+                    acceptance.iter().flat_map(|block| &block.accepted_transactions).position(|entry| entry.transaction_id == id)
+                }
+            };
+            if !tokenizer_handoffs.is_empty()
+                && (tokenizer.iter().any(|(_, h)| ordinal(h.carrier_v1()) != Some(h.accepted_ordinal_v1()))
+                    || batch_handoffs.iter().any(|(id, h)| ordinal(*id) != Some(h.accepted_ordinal_v1())))
+            {
+                return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                    "native accepted order",
+                    "carrier handoff differs from the complete accepted transaction ordinal",
+                )
+                .into());
+            }
             // The stable sort may allocate at most one full element buffer.
             // Reserve that actual typed scratch before the sort, not afterward.
             let sort_bytes =
@@ -3777,24 +3922,23 @@ impl VirtualStateProcessor {
                         "actual native capacity lease is not armed",
                     )
                 })?;
-            carried.sort_by_key(|object| {
-                object.native_carrier.map_or(0, |id| txs.iter().position(|tx| tx.id() == id).map_or(usize::MAX, |n| n + 1))
-            });
-            for (before, handoff) in &mut batch {
-                let position = handoff.accepted_ordinal_v1();
+            carried.sort_by_key(|object| object.native_carrier.map_or(0, |id| ordinal(id).map_or(usize::MAX, |n| n + 1)));
+            for (before, position) in batch
+                .iter_mut()
+                .map(|(before, handoff)| (before, handoff.accepted_ordinal_v1()))
+                .chain(tokenizer.iter_mut().map(|(before, handoff)| (before, handoff.accepted_ordinal_v1())))
+            {
                 *before = carried.partition_point(|object| {
-                    object
-                        .native_carrier
-                        .is_none_or(|id| txs.iter().position(|tx| tx.id() == id).is_some_and(|index| index < position))
+                    object.native_carrier.is_none_or(|id| ordinal(id).is_some_and(|index| index < position))
                 });
             }
         } else {
             let non_lifecycle_prefix = carried.len() - lifecycle_count;
-            for (before, _) in &mut batch {
+            for before in batch.iter_mut().map(|(before, _)| before).chain(tokenizer.iter_mut().map(|(before, _)| before)) {
                 *before += non_lifecycle_prefix;
             }
         }
-        Ok((carried, batch))
+        Ok((carried, batch, tokenizer))
     }
 
     /// **RFC-0009 stage D: the proof of one PALW collection against the header of `block`.**

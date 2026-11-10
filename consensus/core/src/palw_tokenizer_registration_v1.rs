@@ -322,6 +322,7 @@ pub struct TokenizerRegistrationPolicyV1 {
     pub max_carrier_bytes: u64,
     pub max_retained_bytes: u64,
     pub max_retained_total_bytes: u64,
+    /// Candidate-block total, including the once-per-block registration sweep.
     pub service_budget: crate::palw_court_service_v1::ServiceCost,
     pub max_work: u64,
     pub max_pending_per_opener: u32,
@@ -388,7 +389,14 @@ fn mul(a: u64, b: u64) -> Result<u64, &'static str> {
 impl TokenizerRegistrationPolicyV1 {
     pub fn id_v1(&self) -> Result<Hash64, String> {
         self.check_v1()?;
+        Ok(self.fingerprint_v1())
+    }
+
+    /// Encode even an invalid configuration for identity/debugging. Native
+    /// admission uses id_v1(), which checks shape first.
+    pub(crate) fn fingerprint_v1(&self) -> Hash64 {
         stream_digest(b"misaka-palw/tokenizer-registration/policy/v1", self)
+            .expect("fixed-size tokenizer registration policy serialization")
     }
 
     pub fn check_v1(&self) -> Result<(), &'static str> {
@@ -511,6 +519,17 @@ impl TokenizerRegistrationPolicyV1 {
         })
     }
 
+    /// Leave room for the accepted-parent sweep in every service slot.
+    pub fn effective_reservation_budget_v1(&self) -> Result<ServiceCost, &'static str> {
+        let work = self
+            .service_budget
+            .work
+            .checked_sub(self.bookkeeping_work_v1()?.sweep)
+            .filter(|work| *work != 0)
+            .ok_or("tokenizer registration sweep leaves no work for reservations")?;
+        Ok(ServiceCost { work, ..self.service_budget })
+    }
+
     pub(crate) fn open_work_v1(&self, carrier_bytes: u64) -> Result<u64, &'static str> {
         add(add(self.work_rates[5], mul(carrier_bytes, self.work_rates[6])?)?, self.bookkeeping_work_v1()?.open)
     }
@@ -600,7 +619,7 @@ impl TokenizerRegistrationPolicyV1 {
         // The actual book reserves the full part profile at every part slot,
         // including the short tail. Billing work uses the same upper bound.
         let work = add(add(open_work, mul(count, maximum_part_work)?)?, mul(attempts, finish_work)?)?;
-        let budget = self.service_budget;
+        let budget = self.effective_reservation_budget_v1()?;
         if [open_cost, part_cost, finish_cost]
             .iter()
             .any(|cost| cost.bytes > budget.bytes || cost.work > budget.work || cost.io > budget.io || cost.controls > budget.controls)
@@ -658,7 +677,8 @@ pub(crate) mod tests {
             max_carrier_bytes: 80_000,
             max_retained_bytes: 1_000_000,
             max_retained_total_bytes: 8_000_000,
-            service_budget: ServiceCost { bytes: 100_000, work: 10_000_000, io: 1_000_000, controls: 2 },
+            // Covers the conservative full-book sweep and one maximal Finish.
+            service_budget: ServiceCost { bytes: 100_000, work: 12_000_000, io: 1_000_000, controls: 2 },
             max_work: 10_000_000,
             max_pending_per_opener: 2,
             max_pending_total: 8,
@@ -751,7 +771,7 @@ pub(crate) mod tests {
             raw * policy.work_rates[0] + raw * policy.work_rates[1] + (raw + policy.max_rendering_bytes) * policy.work_rates[4];
         assert!(quote.finish_cost.work >= work_floor);
         assert!(quote.work >= TOKENIZER_REGISTRATION_FINISH_ATTEMPTS_V1 * work_floor);
-        policy.service_budget.work = quote.finish_cost.work - 1;
+        policy.service_budget.work = policy.bookkeeping_work_v1().unwrap().sweep + quote.finish_cost.work - 1;
         body.policy = policy.id_v1().unwrap();
         assert!(policy.quote_v1(&body, 20, 1).is_err());
     }

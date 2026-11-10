@@ -1912,6 +1912,7 @@ pub struct PalwLifecycleKindFencesV1 {
     )>,
     funding_relay_frame_cap_v2: Option<(crate::config::params::ForkActivation, u64)>,
     batch_court_v1: Option<crate::config::params::ForkActivation>,
+    tokenizer_registration_v1: Option<crate::config::params::TokenizerRegistrationFenceV1>,
 }
 
 impl PalwLifecycleKindFencesV1 {
@@ -1990,6 +1991,22 @@ impl PalwLifecycleKindFencesV1 {
             .map(|split| split.collectible_fee)
     }
 
+    pub fn tokenizer_registration_v1_at(
+        &self,
+        daa: u64,
+    ) -> Option<&crate::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1> {
+        self.tokenizer_registration_v1.as_ref().filter(|f| f.active_at(daa)).map(|f| &f.policy)
+    }
+
+    /// The Open cutoff never closes the transaction shape gate.
+    pub fn tokenizer_registration_open_cutoff_daa_v1_at(&self, daa: u64) -> Option<u64> {
+        self.tokenizer_registration_v1
+            .as_ref()
+            .filter(|f| f.active_at(daa))
+            .and_then(|f| f.open_cutoff_v1())
+            .map(|f| f.daa_score())
+    }
+
     fn validate_batch_court_shape_v1(&self, payload: &[u8], daa: u64) -> Result<bool, PalwLifecycleTxError> {
         if !self.batch_court_in_force_at(daa) {
             return Ok(false);
@@ -2018,7 +2035,11 @@ impl crate::config::params::Params {
         let mut fences = PalwLifecycleKindFenceV1::ALL
             .into_iter()
             .fold(
-                PalwLifecycleKindFencesV1 { batch_court_v1: self.palw_batch_court_v1_fence(), ..Default::default() },
+                PalwLifecycleKindFencesV1 {
+                    batch_court_v1: self.palw_batch_court_v1_fence(),
+                    tokenizer_registration_v1: self.palw_tokenizer_registration_v1_fence().copied(),
+                    ..Default::default()
+                },
                 |fences, fence| {
                     fences.with(
                         fence,
@@ -2151,6 +2172,12 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
     fences: &PalwLifecycleKindFencesV1,
     ctx_daa_score: u64,
 ) -> Result<(), PalwLifecycleTxError> {
+    if let Some(policy) = fences.tokenizer_registration_v1_at(ctx_daa_score)
+        && crate::palw_tokenizer_registration_carriage_v1::tokenizer_registration_payload_shape_v1(payload, policy)
+            .map_err(|_| PalwLifecycleTxError::Undecodable)?
+    {
+        return Ok(());
+    }
     if fences.validate_batch_court_shape_v1(payload, ctx_daa_score)? {
         return Ok(());
     }

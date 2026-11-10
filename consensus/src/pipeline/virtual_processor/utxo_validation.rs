@@ -213,6 +213,16 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Real accepting point and BCT1 facts retained only for the candidate
     /// block's Court walk. The virtual template needs fee projection only.
     pub palw_batch_accepting_point_v1: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    /// TKR1 authority is derived once from the authenticated selected parent.
+    /// The actual ordinal is filled only while validated UTXO entries are live.
+    pub palw_tokenizer_context_v1: Option<(
+        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationCarrierContextV1,
+        kaspa_consensus_core::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1,
+    )>,
+    pub palw_tokenizer_handoffs_v1: std::collections::BTreeMap<
+        TransactionId,
+        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::SharedValidatedTokenizerRegistrationCarrierV1,
+    >,
     pub palw_batch_handoffs_v1: std::collections::BTreeMap<
         TransactionId,
         kaspa_consensus_core::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1,
@@ -440,6 +450,8 @@ impl<'a> UtxoProcessingContext<'a> {
         self.reserve_accrual = 0;
         self.palw_v2_accepted_tx_fees.clear();
         self.palw_v2_rent_available_fees.clear();
+        self.palw_batch_handoffs_v1.clear();
+        self.palw_tokenizer_handoffs_v1.clear();
         self.palw_round_fee_incomes.clear();
         self.palw_escrow_locks.provisional.clear();
         self.palw_escrow_settlements.clear();
@@ -476,6 +488,8 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_accepted_tx_fees: Default::default(),
             palw_v2_rent_available_fees: Default::default(),
             palw_batch_accepting_point_v1: None,
+            palw_tokenizer_context_v1: None,
+            palw_tokenizer_handoffs_v1: Default::default(),
             palw_batch_handoffs_v1: Default::default(),
             palw_round_verdicts: None,
             palw_round_fee_incomes: Vec::new(),
@@ -1430,6 +1444,26 @@ impl VirtualStateProcessor {
                         Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)) => return Err(why),
                         Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) => {
                             kaspa_core::debug!("[palw-batch] carrier {} did not yield a UTXO handoff: {why}", validated_tx.id());
+                        }
+                    }
+                }
+                if let Some((mut context, policy)) = ctx.palw_tokenizer_context_v1
+                    && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && validated_tx.tx.payload.starts_with(
+                        kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1,
+                    )
+                {
+                    context.accepted_ordinal = accepted_ordinal;
+                    let remaining =
+                        self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
+                    match kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::ValidatedTokenizerRegistrationCarrierV1::prepare_shared_v1(
+                        validated_tx, context, &policy, validated_tx.calculated_fee - remaining,
+                    ) {
+                        Ok(Some(handoff)) => { ctx.palw_tokenizer_handoffs_v1.insert(validated_tx.id(), handoff); }
+                        Ok(None) => {}
+                        Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)) => return Err(why),
+                        Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) => {
+                            kaspa_core::debug!("[palw-tokenizer] carrier {} did not yield a UTXO handoff: {why}", validated_tx.id());
                         }
                     }
                 }

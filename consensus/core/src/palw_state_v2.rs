@@ -14909,6 +14909,63 @@ pub fn palw_v2_apply_one_batch_carrier_retained_v1(
     )
 }
 
+/// Rehearse TKR1 from an accepted prefix with the original parent retained
+/// separately. A refused Finish may consume an attempt: keep the returned state.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_tokenizer_registration_retained_v1(
+    base: &PalwChainStateV2,
+    accepted_parent: &PalwChainStateV2,
+    accepted_parent_root: Hash64,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    carrier: &crate::palw_tokenizer_registration_carriage_v1::ValidatedTokenizerRegistrationCarrierV1,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1,
+        Option<String>,
+    ),
+    PalwStateV2Error,
+> {
+    let policy = extras
+        .tokenizer_registration_policy_v1
+        .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("tokenizer registration is dormant".into()))?;
+    let context = carrier.context_v1();
+    if context.at != *ctx || Some(context.network) != extras.tokenizer_registration_network_domain_v1 {
+        return Err(PalwStateV2Error::CarriageInconsistent("tokenizer handoff changes native accepting point or network".into()));
+    }
+    let mut result = None;
+    let state = rehearse_palw_object_retained_v1(
+        base,
+        params,
+        ctx,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+        None,
+        |builder| {
+            result = Some(builder.apply_tokenizer_registration_carrier_v1(
+                accepted_parent,
+                accepted_parent_root,
+                context,
+                policy,
+                carrier.carrier_v1(),
+                carrier,
+            )?);
+            Ok(())
+        },
+    )?;
+    let (fee, refusal) = result.ok_or(PalwStateV2Error::DeltaMismatch("tokenizer rehearsal returned no fee projection"))?;
+    Ok((state, fee, refusal))
+}
+
 /// Read-only block-template filter for reserved Batch Court slots.
 /// This is a selection hint. The accepting fold verifies signatures, fees,
 /// delivery, the actual accepting point and all state changes independently.
@@ -15709,24 +15766,59 @@ fn apply_palw_transition_v7_inner(
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    use crate::palw_batch_court_v1::fold_order::{AcceptedCourtItemV1, in_accepted_order_v1};
-    let ordered = in_accepted_order_v1(accepted_objects.iter(), &extras.batch_court_carriers_v1)
-        .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("Batch carriers do not follow accepted lifecycle order".into()))?;
+    use crate::palw_batch_court_v1::fold_order::{AcceptedNativeCourtItemV1, in_accepted_native_order_v1};
+    let ordered = in_accepted_native_order_v1(
+        accepted_objects.iter(),
+        &extras.batch_court_carriers_v1,
+        &extras.tokenizer_registration_carriers_v1,
+        |carrier| carrier.accepted_ordinal_v1(),
+        |carrier| carrier.accepted_ordinal_v1(),
+    )
+    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("native carriers do not follow accepted lifecycle order".into()))?;
+    if extras.tokenizer_registration_expected_fees_v1.len() != extras.tokenizer_registration_carriers_v1.len() {
+        return Err(PalwStateV2Error::CarriageInconsistent("tokenizer fee projection and carrier counts differ".into()));
+    }
+    let tokenizer_parent_root = (!extras.tokenizer_registration_carriers_v1.is_empty()).then(|| parent.state_root());
     let mut raw_cursor = 0;
     let mut previous_raw_ordinal = None;
     let mut index = 0;
     for item in ordered {
         let before = match &item {
-            AcceptedCourtItemV1::Ordinary(_) => None,
-            AcceptedCourtItemV1::Batch(carrier) => Some(carrier.accepted_ordinal_v1()),
+            AcceptedNativeCourtItemV1::Ordinary(_) => None,
+            AcceptedNativeCourtItemV1::Batch(carrier) => Some(carrier.accepted_ordinal_v1()),
+            AcceptedNativeCourtItemV1::Tokenizer(carrier) => Some(carrier.accepted_ordinal_v1()),
         };
         positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal)?;
         match item {
-            AcceptedCourtItemV1::Ordinary(object) => {
+            AcceptedNativeCourtItemV1::Ordinary(object) => {
                 apply_object(&mut builder, ctx, object)?;
                 index += 1;
             }
-            AcceptedCourtItemV1::Batch(carrier) => builder.apply_batch_court_carrier_v1(ctx, carrier)?,
+            AcceptedNativeCourtItemV1::Batch(carrier) => builder.apply_batch_court_carrier_v1(ctx, carrier)?,
+            AcceptedNativeCourtItemV1::Tokenizer(carrier) => {
+                let policy = extras
+                    .tokenizer_registration_policy_v1
+                    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("tokenizer registration is dormant".into()))?;
+                let context = carrier.context_v1();
+                if context.at != *ctx || Some(context.network) != extras.tokenizer_registration_network_domain_v1 {
+                    return Err(PalwStateV2Error::CarriageInconsistent(
+                        "tokenizer handoff changes native accepting point or network".into(),
+                    ));
+                }
+                let (fee, _refusal) = builder.apply_tokenizer_registration_carrier_v1(
+                    parent,
+                    tokenizer_parent_root.expect("carrier requires parent root"),
+                    context,
+                    policy,
+                    carrier.carrier_v1(),
+                    carrier,
+                )?;
+                if extras.tokenizer_registration_expected_fees_v1.get(&carrier.carrier_v1()) != Some(&fee) {
+                    return Err(PalwStateV2Error::CarriageInconsistent(
+                        "tokenizer fee projection differs on actual accepted prefix".into(),
+                    ));
+                }
+            }
         }
     }
     positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal)?;
@@ -21637,6 +21729,19 @@ pub struct PalwTransitionExtrasV1 {
     /// The accepted UTXO facts, in accepted carrier order. The index is the
     /// count of already accepted ordinary objects immediately before the carrier.
     pub batch_court_carriers_v1: Vec<(usize, crate::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1)>,
+    /// RFC-0051 policy resolved at this block; absent on shipped presets.
+    pub tokenizer_registration_policy_v1: Option<crate::palw_tokenizer_registration_v1::TokenizerRegistrationPolicyV1>,
+    /// Native network domain for TKR1, independent of original allocation rules.
+    pub tokenizer_registration_network_domain_v1: Option<Hash64>,
+    /// First DAA refusing a new Open. Existing contracts keep their policy.
+    pub tokenizer_registration_open_cutoff_daa_v1: Option<u64>,
+    /// Includes refused Finish carriers whose parser attempts must survive replay.
+    pub tokenizer_registration_carriers_v1:
+        Vec<(usize, crate::palw_tokenizer_registration_carriage_v1::SharedValidatedTokenizerRegistrationCarrierV1)>,
+    /// Exact native prefix fee effects, independently checked by actual replay.
+    pub tokenizer_registration_expected_fees_v1:
+        BTreeMap<Hash64, crate::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationFeeV1>,
+
     /// Native-resolved original TIR rules, never limits deserialized from a carrier.
     /// None keeps the new original-allocation route dormant.
     pub tir_public_allocation_rules_v1: Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1>,
@@ -23671,7 +23776,13 @@ pub(crate) fn replay_delta_owned_v1(
     let mut batch_plain_output_receipt_changed = false;
     for entry in &delta.entries {
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry {
-            tokenizer_intake_changed |= crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_delta_entry_v1(key, old, new, &delta.point).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            tokenizer_intake_changed |= crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_delta_entry_v1(
+                key,
+                old,
+                new,
+                &delta.point,
+            )
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
         }
 
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
@@ -23683,7 +23794,9 @@ pub(crate) fn replay_delta_owned_v1(
                 (None, Some(CourtRow::CourtBatchPlainOutputReceiptV2(row))) if row.receipt.at == delta.point => row,
                 (Some(CourtRow::CourtBatchPlainOutputReceiptV2(row)), None) if delta.point.daa_score >= row.material_until_daa => row,
                 _ => {
-                    return Err(PalwStateV2Error::DeltaMismatch("plain Batch Output receipt changes its accepting point or retention"));
+                    return Err(PalwStateV2Error::DeltaMismatch(
+                        "plain Batch Output receipt changes its accepting point or retention",
+                    ));
                 }
             };
             row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
@@ -23759,9 +23872,10 @@ pub(crate) fn replay_delta_owned_v1(
     palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, revert, params)?;
     palw_claim_local_context_gc_v3::settle_state_v3(&mut state).map_err(palw_claim_local_paid_archive_v2::state_error)?;
     if tokenizer_intake_changed {
-        crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_snapshot_v1(
-            &state, |bond, until, key| state.staged_holds.contains(&(bond, until, key)),
-        ).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        crate::palw_tokenizer_registration_snapshot_v1::check_tokenizer_registration_snapshot_v1(&state, |bond, until, key| {
+            state.staged_holds.contains(&(bond, until, key))
+        })
+        .map_err(PalwStateV2Error::CarriageInconsistent)?;
     }
     if tokenizer_registration_changed {
         for entry in &delta.entries {

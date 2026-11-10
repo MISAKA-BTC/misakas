@@ -1,4 +1,4 @@
-//! Merge native Batch handoffs into the existing accepted lifecycle order.
+//! Merge native court handoffs into the existing accepted lifecycle order.
 //! The indices are internal counts of accepted ordinary objects, never wire data.
 
 pub enum AcceptedCourtItemV1<T, B> {
@@ -23,6 +23,71 @@ pub fn in_accepted_order_v1<T, B>(
         index += 1;
         Some(AcceptedCourtItemV1::Ordinary(object))
     }))
+}
+
+pub enum AcceptedNativeCourtItemV1<T, B, R> {
+    Ordinary(T),
+    Batch(B),
+    Tokenizer(R),
+}
+
+/// Merge native carriers around ordinary objects. Each position counts
+/// ordinary objects before the carrier. At a shared position, the original
+/// accepted transaction ordinal determines the order across both kinds.
+/// The caller must derive positions and ordinals from the accepted stream.
+pub fn in_accepted_native_order_v1<'a, T, B, R>(
+    mut ordinary: impl ExactSizeIterator<Item = T>,
+    mut batch: &'a [(usize, B)],
+    mut tokenizer: &'a [(usize, R)],
+    batch_ordinal: impl Fn(&B) -> usize,
+    tokenizer_ordinal: impl Fn(&R) -> usize,
+) -> Option<impl Iterator<Item = AcceptedNativeCourtItemV1<T, &'a B, &'a R>>> {
+    let mut validate_batch = batch;
+    let mut validate_tokenizer = tokenizer;
+    let mut previous = None;
+    while let Some((position, ordinal, _)) =
+        next_native_v1::<T, _, _>(&mut validate_batch, &mut validate_tokenizer, &batch_ordinal, &tokenizer_ordinal)
+    {
+        if position > ordinary.len()
+            || previous.is_some_and(|(prior_position, prior_ordinal)| position < prior_position || ordinal <= prior_ordinal)
+        {
+            return None;
+        }
+        previous = Some((position, ordinal));
+    }
+
+    let mut index = 0;
+    let mut pending = next_native_v1(&mut batch, &mut tokenizer, &batch_ordinal, &tokenizer_ordinal);
+    Some(std::iter::from_fn(move || {
+        if pending.as_ref().is_some_and(|(position, _, _)| *position == index) {
+            let (_, _, item) = pending.take()?;
+            pending = next_native_v1(&mut batch, &mut tokenizer, &batch_ordinal, &tokenizer_ordinal);
+            return Some(item);
+        }
+        let object = ordinary.next()?;
+        index += 1;
+        Some(AcceptedNativeCourtItemV1::Ordinary(object))
+    }))
+}
+
+fn next_native_v1<'a, T, B, R>(
+    batch: &mut &'a [(usize, B)],
+    tokenizer: &mut &'a [(usize, R)],
+    batch_ordinal: &impl Fn(&B) -> usize,
+    tokenizer_ordinal: &impl Fn(&R) -> usize,
+) -> Option<(usize, usize, AcceptedNativeCourtItemV1<T, &'a B, &'a R>)> {
+    let batch_key = batch.first().map(|(position, handoff)| (*position, batch_ordinal(handoff)));
+    let tokenizer_key = tokenizer.first().map(|(position, handoff)| (*position, tokenizer_ordinal(handoff)));
+    if let Some((position, ordinal)) = batch_key.filter(|key| tokenizer_key.is_none_or(|other| *key <= other)) {
+        let ((_, handoff), rest) = batch.split_first()?;
+        *batch = rest;
+        Some((position, ordinal, AcceptedNativeCourtItemV1::Batch(handoff)))
+    } else {
+        let (position, ordinal) = tokenizer_key?;
+        let ((_, handoff), rest) = tokenizer.split_first()?;
+        *tokenizer = rest;
+        Some((position, ordinal, AcceptedNativeCourtItemV1::Tokenizer(handoff)))
+    }
 }
 
 /// Locate native handoffs relative to the ordinary objects extracted from
@@ -65,6 +130,37 @@ mod tests {
         assert!(in_accepted_order_v1(ordinary.iter(), &[(4, "invalid")]).is_none());
         assert_eq!(in_accepted_order_v1(ordinary[..0].iter(), &[(0, "one")]).unwrap().count(), 1);
         assert_eq!(in_accepted_order_v1(ordinary.iter(), &[] as &[(usize, &str)]).unwrap().count(), ordinary.len());
+    }
+
+    #[test]
+    fn native_handoffs_merge_by_accepted_ordinal_at_same_position() {
+        let ordinary = ["setup", "close"];
+        let batch = [(0, (1, "prior batch")), (1, (5, "batch")), (2, (12, "final batch"))];
+        let tokenizer = [(1, (4, "open")), (1, (7, "part")), (2, (9, "finish"))];
+        let ordinal = |handoff: &(usize, &str)| handoff.0;
+        let accepted: Vec<_> = in_accepted_native_order_v1(ordinary.into_iter(), &batch, &tokenizer, ordinal, ordinal)
+            .unwrap()
+            .map(|item| match item {
+                AcceptedNativeCourtItemV1::Ordinary(label) => label,
+                AcceptedNativeCourtItemV1::Batch((_, label)) | AcceptedNativeCourtItemV1::Tokenizer((_, label)) => *label,
+            })
+            .collect();
+        assert_eq!(accepted, ["prior batch", "setup", "open", "batch", "part", "close", "finish", "final batch"]);
+    }
+
+    #[test]
+    fn native_handoffs_refuse_invalid_positions_and_ordinals() {
+        let rejects = |batch: &[(usize, usize)], tokenizer: &[(usize, usize)]| {
+            in_accepted_native_order_v1([(), ()].into_iter(), batch, tokenizer, |n| *n, |n| *n).is_none()
+        };
+        assert!(rejects(&[(0, 3)], &[(0, 3)]));
+        assert!(rejects(&[(0, 4)], &[(1, 3)]));
+        assert!(rejects(&[(1, 3), (0, 4)], &[]));
+        assert!(rejects(&[], &[(1, 4), (1, 3)]));
+        assert!(rejects(&[], &[(0, 3), (1, 3)]));
+        assert!(rejects(&[(3, 5)], &[]));
+        assert!(rejects(&[], &[(3, 5)]));
+        assert_eq!(in_accepted_native_order_v1([()].into_iter(), &[], &[(1, 5)], |n: &usize| *n, |n| *n).unwrap().count(), 2);
     }
 
     #[test]

@@ -2734,6 +2734,25 @@ impl VirtualStateProcessor {
                     if self.palw_lifecycle_kind_fences.batch_court_in_force_at(pov_daa_score) {
                         ctx.palw_batch_accepting_point_v1 = Some(positive_point);
                     }
+                    if let (Some(state), Some(policy)) =
+                        (palw_state.as_deref(), self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(pov_daa_score))
+                    {
+                        ctx.palw_tokenizer_context_v1 = Some((
+                            kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationCarrierContextV1 {
+                                parent_root: state.state_root(),
+                                at: positive_point,
+                                accepted_ordinal: 0,
+                                network: self.palw_network_domain_v2(),
+                                policy: policy.id_v1().map_err(|why| {
+                                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                        "tokenizer registration policy",
+                                        &why,
+                                    )
+                                })?,
+                            },
+                            *policy,
+                        ));
+                    }
                     self.calculate_utxo_state(
                         &mut ctx,
                         &selected_parent_utxo_view,
@@ -2902,7 +2921,7 @@ impl VirtualStateProcessor {
                                 // produced rather than from the store — the store row is written
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
-                                let (objects, batch_candidates) = self.palw_v2_objects_of_block(
+                                let (objects, batch_candidates, tokenizer_candidates) = self.palw_v2_objects_of_block(
                                     &ctx.mergeset_acceptance_data,
                                     state,
                                     current,
@@ -2912,6 +2931,7 @@ impl VirtualStateProcessor {
                                     &ctx.palw_v2_accepted_tx_fees,
                                     &ctx.palw_v2_rent_available_fees,
                                     &ctx.palw_batch_handoffs_v1,
+                                    &ctx.palw_tokenizer_handoffs_v1,
                                 )?;
                                 let history_custody_pledges = objects
                                     .iter()
@@ -3008,6 +3028,10 @@ impl VirtualStateProcessor {
                                     None
                                 };
                                 let mut accepted_batch = Vec::new();
+                                let mut tokenizer = palw_accept::TokenizerRegistrationAcceptanceV1 {
+                                    candidates: tokenizer_candidates,
+                                    ..Default::default()
+                                };
                                 let (
                                     (
                                         objects,
@@ -3035,6 +3059,7 @@ impl VirtualStateProcessor {
                                     palw_accept::NativeAssignmentRehearsalModeV2::Observed,
                                     &batch_candidates,
                                     &mut accepted_batch,
+                                    &mut tokenizer,
                                 )?;
                                 let palw_accept::NativeAssignmentRehearsalResultV2::Observed(assignment_raw_schedule) =
                                     assignment_rehearsal
@@ -3276,6 +3301,8 @@ impl VirtualStateProcessor {
                                     extras.tir_public_originals = tir_public_originals;
                                     extras.tir_funded_originals = tir_funded_originals;
                                     extras.batch_court_carriers_v1 = accepted_batch;
+                                    extras.tokenizer_registration_carriers_v1 = tokenizer.accepted;
+                                    extras.tokenizer_registration_expected_fees_v1 = tokenizer.fees;
                                     extras.carrier_input_spends = carrier_input_spends;
                                     extras.public_original_bindings = public_original_bindings;
                                     extras.producer_custody_delegations = producer_custody_delegations;

@@ -634,7 +634,10 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
 
 #[test]
 fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
-    use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2};
+    use crate::palw_state_v2::{
+        PalwBlockWorkV3, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateV2Error, apply_delta_v2, apply_palw_transition_retained_v7,
+        palw_v2_apply_one_tokenizer_registration_retained_v1, palw_v2_pre_object_base_retained_v1, revert_delta_v2,
+    };
     use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
     use crate::palw_tokenizer_registration_carriage_v1::*;
     use crate::palw_tokenizer_registration_state_v1::{TokenizerRegistrationStatusV1, packet_id};
@@ -662,7 +665,8 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
         inventory_id: eof.inventory_id,
     };
     let (policy, mut body) = crate::palw_tokenizer_registration_v1::tests::fixture();
-    let point = at(&fx.frame, 1);
+    // The shared world has a synthetic licensed claim at offset 3.
+    let point = at(&fx.frame, 5);
     body.pins = pins;
     body.artifact_root = semantics.artifact_root;
     body.statement = PalwTokenizerRenderingStatementV2 {
@@ -675,12 +679,19 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     let eog = table.eog_opening().unwrap();
     body.eog_digest = TokenizerRegistrationFinishV1::eog_digest_v1(&eog).unwrap();
     body.opener = outsider();
+    extras.tokenizer_registration_policy_v1 = Some(policy);
+    extras.tokenizer_registration_open_cutoff_daa_v1 = Some(point.daa_score + 1);
+    extras.tokenizer_registration_network_domain_v1 = Some(body.network);
     body.accept_until_daa = point.daa_score + 5;
     body.finish_until_daa = point.daa_score + 40;
     body.material_until_daa = body.finish_until_daa + policy.retention_daa;
     let quote = policy.quote_v1(&body, point.daa_score, semantics.tokenizer_key_events.unwrap()).unwrap();
     let open_id = body.id_v1().unwrap();
-    base.last_point = Some(at(&fx.frame, 0));
+    base.last_point = Some(at(&fx.frame, 4));
+    // The shared fixture seeds primary claim rows for direct fold tests.
+    // A full transition requires the corresponding parent deadline index.
+    crate::palw_state_v2::rebuild_deadline_index_v2(&mut base, &params).unwrap();
+    base.assert_deadline_consistency(&params).unwrap();
     base.class_semantics.insert(class, semantics);
     let mut prerequisite = TransitionBuilder::new(&base, &params, false, false, false, false, &extras);
     prerequisite.write_staged_row_v1(Key::Inventory(eof.artifact_hash), Some(Row::ArtifactInventory(eof))).unwrap();
@@ -698,7 +709,7 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
         .unwrap()
         .as_ref(),
     );
-    let apply = |state: &PalwChainStateV2, point: PalwBlockContextV2, wire: &TokenizerRegistrationWireV1, paid: u64| {
+    let prepare = |state: &PalwChainStateV2, point: PalwBlockContextV2, wire: &TokenizerRegistrationWireV1, paid: u64| {
         let prevout = TransactionOutpoint::new(h(point.blue_score + 80_000), 0);
         let tx = Transaction::new(
             0,
@@ -718,9 +729,53 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
             network: body.network,
             policy: body.policy,
         };
-        let carrier = ValidatedTokenizerRegistrationCarrierV1::prepare_v1(&validated, context, &policy, 0).unwrap().unwrap();
+        ValidatedTokenizerRegistrationCarrierV1::prepare_shared_v1(&validated, context, &policy, 0).unwrap().unwrap()
+    };
+    let rehearse = |parent: &PalwChainStateV2, carrier: &ValidatedTokenizerRegistrationCarrierV1| {
+        let context = carrier.context_v1();
+        let prefix = palw_v2_pre_object_base_retained_v1(parent, &params, &context.at, false, false, false, false, &extras).unwrap();
+        palw_v2_apply_one_tokenizer_registration_retained_v1(
+            &prefix,
+            parent,
+            context.parent_root,
+            &params,
+            &context.at,
+            carrier,
+            false,
+            false,
+            false,
+            false,
+            &extras,
+        )
+        .unwrap()
+    };
+    let actual = |parent: &PalwChainStateV2, carrier: &SharedValidatedTokenizerRegistrationCarrierV1, expected| {
+        let mut authoritative = extras.clone();
+        authoritative.tokenizer_registration_carriers_v1.push((0, carrier.clone()));
+        authoritative.tokenizer_registration_expected_fees_v1.insert(carrier.carrier_v1(), expected);
+        apply_palw_transition_retained_v7(
+            parent,
+            &params,
+            None,
+            &carrier.context_v1().at,
+            &[],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &authoritative,
+        )
+    };
+    let apply = |state: &PalwChainStateV2, point: PalwBlockContextV2, wire: &TokenizerRegistrationWireV1, paid: u64| {
+        let carrier = prepare(state, point, wire, paid);
+        let context = carrier.context_v1();
         let mut b = TransitionBuilder::new(state, &params, false, false, false, false, &extras);
-        let result = b.apply_tokenizer_registration_carrier_v1(state, context.parent_root, context, policy, tx.id(), carrier).unwrap();
+        let result = b
+            .apply_tokenizer_registration_carrier_v1(state, context.parent_root, context, policy, carrier.carrier_v1(), &carrier)
+            .unwrap();
         b.state.last_point = Some(point);
         b.entries.push(PalwDeltaEntryV2::LastPoint { old: state.last_point().copied(), new: Some(point) });
         let delta = PalwStateDeltaV2 { point, entries: b.entries };
@@ -741,15 +796,62 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     let (next, (fee, reason)) = apply(&state, point, &wire, quote.charge + 7);
     assert_eq!(reason, None);
     assert_eq!((fee.registration_burn, fee.collectible_fee), (quote.charge, 7));
+    let handoff = prepare(&state, point, &wire, quote.charge + 7);
+    let mut wrong_domain = extras.clone();
+    wrong_domain.tokenizer_registration_network_domain_v1 = Some(h(98_999));
+    wrong_domain.tir_public_network_domain_v1 = Some(body.network);
+    assert!(matches!(
+        palw_v2_apply_one_tokenizer_registration_retained_v1(
+            &state, &state, handoff.context_v1().parent_root, &params, &point, &handoff,
+            false, false, false, false, &wrong_domain,
+        ),
+        Err(PalwStateV2Error::CarriageInconsistent(reason)) if reason == "tokenizer handoff changes native accepting point or network"
+    ));
+    let (rehearsed, expected, refused) = rehearse(&state, &handoff);
+    assert_eq!(refused, None);
+    assert_eq!(expected, fee);
+    let (authoritative, _, _) = actual(&state, &handoff, expected).unwrap();
+    let session_key = Key::TokenizerRegistrationSession(open_id);
+    assert!(authoritative.staged_court_row_v1(&session_key).is_some());
+    assert_eq!(authoritative.staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
+    let wrong_fee = TokenizerRegistrationFeeV1 { collectible_fee: expected.collectible_fee + 1, ..expected };
+    assert!(matches!(
+        actual(&state, &handoff, wrong_fee),
+        Err(PalwStateV2Error::CarriageInconsistent(reason)) if reason == "tokenizer fee projection differs on actual accepted prefix"
+    ));
     state = next;
-    let repeated = PalwBlockContextV2 { block: h(99_001), blue_score: point.blue_score + 1, ..point };
+    let repeated = PalwBlockContextV2 { block: h(99_001), daa_score: point.daa_score + 1, blue_score: point.blue_score + 1, ..point };
     let (next, (fee, reason)) = apply(&state, repeated, &wire, quote.charge + 7);
     assert_eq!(reason, None);
-    assert_eq!(fee.registration_burn, 0);
+    assert_eq!((fee.registration_burn, fee.collectible_fee), (0, quote.charge + 7));
+    assert_eq!(state.staged_court_row_v1(&session_key), next.staged_court_row_v1(&session_key));
+    assert_eq!(state.staged_court_row_v1(&Key::TokenizerRegistrationBook), next.staged_court_row_v1(&Key::TokenizerRegistrationBook));
+    let TokenizerRegistrationWireV1::Open(mut late_open) = wire.clone() else { panic!() };
+    late_open.body.nonce = h(99_002);
+    let late_id = late_open.body.id_v1().unwrap();
+    let late_message = late_open.signing_message_v1().unwrap();
+    late_open.signature.copy_from_slice(
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &keypair.signing_key,
+            late_message.as_byte_slice(),
+            TOKENIZER_REGISTRATION_OPEN_CONTEXT_V1,
+            [170; 32],
+        )
+        .unwrap()
+        .as_ref(),
+    );
+    let late_handoff = prepare(&state, repeated, &TokenizerRegistrationWireV1::Open(late_open), quote.charge + 7);
+    let (rehearsed, fee, refused) = rehearse(&state, &late_handoff);
+    assert_eq!(refused.as_deref(), Some("tokenizer registration is closed for new Open carriers"));
+    assert_eq!((fee.registration_burn, fee.collectible_fee), (0, quote.charge + 7));
+    assert!(rehearsed.staged_court_row_v1(&Key::TokenizerRegistrationSession(late_id)).is_none());
+    let (authoritative, _, _) = actual(&state, &late_handoff, fee).unwrap();
+    assert!(authoritative.staged_court_row_v1(&Key::TokenizerRegistrationSession(late_id)).is_none());
     state = next;
     let mut indices: Vec<_> = (0..quote.geometry.part_count).collect();
     let Some(Row::TokenizerRegistrationBook(schedule)) = state.staged_court_row_v1(&Key::TokenizerRegistrationBook) else { panic!() };
     indices.sort_by_key(|index| schedule.assigned_slot(open_id, 0, *index));
+    let mut invalid_raw_branch = state.clone();
     for index in indices {
         let Some(Row::TokenizerRegistrationBook(book)) = state.staged_court_row_v1(&Key::TokenizerRegistrationBook) else { panic!() };
         let daa = book.book.assigned_daa(&packet_id(open_id, 0, index).unwrap()).unwrap();
@@ -769,23 +871,35 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
             signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
             bytes,
         };
-        let part_message = part.signing_message_v1().unwrap();
-        part.signature.copy_from_slice(
-            libcrux_ml_dsa::ml_dsa_87::sign(
-                &keypair.signing_key,
-                part_message.as_byte_slice(),
-                TOKENIZER_REGISTRATION_PART_CONTEXT_V1,
-                [168; 32],
-            )
-            .unwrap()
-            .as_ref(),
-        );
+        let sign_part = |part: &mut TokenizerRegistrationPartV1| {
+            let part_message = part.signing_message_v1().unwrap();
+            part.signature.copy_from_slice(
+                libcrux_ml_dsa::ml_dsa_87::sign(
+                    &keypair.signing_key,
+                    part_message.as_byte_slice(),
+                    TOKENIZER_REGISTRATION_PART_CONTEXT_V1,
+                    [168; 32],
+                )
+                .unwrap()
+                .as_ref(),
+            );
+        };
+        sign_part(&mut part);
+        let mut invalid = part.clone();
+        if index == 0 {
+            invalid.bytes[0] ^= 1;
+            invalid.body.payload_digest = TokenizerRegistrationPartV1::payload_digest_v1(&invalid.bytes).unwrap();
+            sign_part(&mut invalid);
+        }
         let point = PalwBlockContextV2 {
             block: h(100_000 + index as u64),
             daa_score: daa,
             blue_score: state.last_point().unwrap().blue_score + 1,
             subsidy: 0,
         };
+        let (invalid_next, (_, refusal)) = apply(&invalid_raw_branch, point, &TokenizerRegistrationWireV1::Part(invalid), 7);
+        assert_eq!(refusal, None);
+        invalid_raw_branch = invalid_next;
         let (next, (fee, reason)) = apply(&state, point, &TokenizerRegistrationWireV1::Part(part), 7);
         assert_eq!(reason, None);
         assert_eq!(fee.registration_burn, 0);
@@ -819,7 +933,19 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
         .unwrap()
         .as_ref(),
     );
-    let (next, (fee, reason)) = apply(&state, point, &TokenizerRegistrationWireV1::Finish(finish), 7);
+    let finish_wire = TokenizerRegistrationWireV1::Finish(finish);
+    let rejected_finish = prepare(&invalid_raw_branch, point, &finish_wire, 7);
+    let (rehearsed, fee, refusal) = rehearse(&invalid_raw_branch, &rejected_finish);
+    assert!(refusal.is_some());
+    assert_eq!((fee.registration_burn, fee.collectible_fee), (0, 7));
+    let Some(Row::TokenizerRegistrationSession(session)) = rehearsed.staged_court_row_v1(&session_key) else { panic!() };
+    assert_eq!(session.status, TokenizerRegistrationStatusV1::Pending);
+    assert_eq!(session.finish_attempts, std::collections::BTreeSet::from([0]));
+    assert!(rehearsed.staged_court_row_v1(&Key::VerifiedTokenizerRegistration(class, pins.semantics_id)).is_none());
+    let (authoritative, _, _) = actual(&invalid_raw_branch, &rejected_finish, fee).unwrap();
+    assert_eq!(authoritative.staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
+
+    let (next, (fee, reason)) = apply(&state, point, &finish_wire, 7);
     assert_eq!(reason, None);
     assert_eq!(fee.registration_burn, 0);
     state = next;

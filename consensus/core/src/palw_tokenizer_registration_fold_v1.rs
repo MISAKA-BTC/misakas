@@ -28,7 +28,7 @@ fn rendering_error(why: PalwVerifiedTokenizerRegistrationErrorV1) -> PalwStateV2
 
 impl TransitionBuilder<'_> {
     /// Context and fee authority originate in the native UTXO validator. This
-    /// consumes the handoff, and produces a fee effect only after the insertion.
+    /// shares the immutable handoff, and projects a fee only after the insertion.
     /// Semantic refusal is an ordinary paid carrier with zero registration burn.
     pub(super) fn apply_tokenizer_registration_carrier_v1(
         &mut self,
@@ -37,7 +37,7 @@ impl TransitionBuilder<'_> {
         context: TokenizerRegistrationCarrierContextV1,
         policy: TokenizerRegistrationPolicyV1,
         txid: crate::tx::TransactionId,
-        handoff: crate::palw_native_resource_v1::NativeRetainedV1<ValidatedTokenizerRegistrationCarrierV1>,
+        handoff: &ValidatedTokenizerRegistrationCarrierV1,
     ) -> Result<(TokenizerRegistrationFeeV1, Option<String>), PalwStateV2Error> {
         if self.state.last_point() != parent.last_point()
             || context.parent_root != parent_root
@@ -46,7 +46,7 @@ impl TransitionBuilder<'_> {
             return Err(refusal("tokenizer carrier changes its native accepted parent or policy".into()));
         }
         let wire = handoff.wire_at_v1(&context, txid).map_err(refusal)?;
-        let result = self.fold_tokenizer_registration_v1(parent, &context, policy, txid, &handoff, wire);
+        let result = self.fold_tokenizer_registration_v1(parent, &context, policy, txid, handoff, wire);
         let (inserted, rejected) = match result {
             Ok(id) => (id, None),
             Err(error @ PalwStateV2Error::NativeResource(_)) => return Err(error),
@@ -60,7 +60,7 @@ impl TransitionBuilder<'_> {
             },
             None => None,
         };
-        let fee = ValidatedTokenizerRegistrationCarrierV1::settle_after_fold_v1(handoff, &context, txid, session).map_err(refusal)?;
+        let fee = handoff.project_after_fold_v1(&context, txid, session).map_err(refusal)?;
         Ok((fee, rejected))
     }
 
@@ -81,6 +81,9 @@ impl TransitionBuilder<'_> {
                 let key = Key::TokenizerRegistrationSession(id);
                 if self.state.staged_court_row_v1(&key).is_some() {
                     return Ok(None);
+                }
+                if self.extras.tokenizer_registration_open_cutoff_daa_v1.is_some_and(|cutoff| at.daa_score >= cutoff) {
+                    return Err(refusal("tokenizer registration is closed for new Open carriers".into()));
                 }
                 let pins = open.body.pins;
                 if self.state.staged_court_row_v1(&Key::VerifiedTokenizerRegistration(pins.class_id, pins.semantics_id)).is_some() {

@@ -4,8 +4,9 @@
 
 | 段階 | 状態 |
 | --- | --- |
-| TKR1 wire、UTXO fee handoff、予約 book、native fold、journal・snapshot 検査 | コード上の入口を確認 |
-| ノードの受理順、coinbase・テンプレート・Round の焼却反映、設定・RPC・CLI | 本番経路への接続は未実装 |
+| TKR1 wire、UTXO fee handoff、予約 book、native fold、journal・snapshot 検査 | core / SDK 実装済み。確定 fold の費用照合を含むローカル回帰を実施 |
+| 設定・新規 Open cutoff・header gate・ノード UTXO handoff と受理順 | 接続コード追加。出荷 preset は未設定。node コンパイル確認のみで本番完了扱いにしない |
+| coinbase・テンプレート・Round の焼却反映、work scanner 実行境界、RPC・CLI | 未接続 |
 | 公開 T12 の有効化、同一 Studio TFP1 の G14 quote・対話・Final・ブロック生成 | 未確認 |
 
 - [ ] **設定と入口**。候補ブロックの DAA で TKR1 専用の activation と policy を解決する。未設定のネットワークは既存の挙動と fingerprint を維持する。設定の形状、fence visitor、ruleset と consensus params ID に、設定時だけ値を組み込む。header-context の入口で fence を確認し、前段で候補ブロック内の TKR1 carrier 全件と期限処理の作業量を集計する。未知版・重複・拒否される carrier も作業量に含める。[設定検証](../../../../consensus/core/src/config/params/validation.rs#L271) · [設定 fingerprint](../../../../consensus/core/src/config/params/identity.rs#L1985) · [header-context 検査](../../../../consensus/src/processes/transaction_validator/tx_validation_in_header_context.rs#L73) · [TKR1 scanner](../../../../consensus/core/src/palw_tokenizer_registration_carriage_v1.rs#L244)
@@ -14,4 +15,8 @@
 - [ ] **テンプレート・Round・復元**。virtual template の fee preview と coinbase に同じ fee plan を渡す。Round の予算判定では、各候補 body を直前の受理済み prefix から UTXO と native の一時状態で処理する。焼却後の collectible fee で予算判定し、受理時は両方を反映し、拒否時は両方を破棄する。既存の全体 replay は受理順の変化を拒否するため、Round の採否が変わる場合も検証する。期限処理と snapshot 検査の作業上限をそれぞれの入口で適用する。[virtual preview](../../../../consensus/src/pipeline/virtual_processor/processor.rs#L4439) · [template coinbase](../../../../consensus/src/pipeline/virtual_processor/processor/template.rs#L981) · [Round 予算判定](../../../../consensus/src/pipeline/virtual_processor/utxo_validation.rs#L1156) · [Round template 見積もり](../../../../consensus/src/pipeline/virtual_processor/processor/evm.rs#L608) · [snapshot 検査](../../../../consensus/core/src/palw_state_v2/chain_state.rs#L4475)
 - [ ] **RPC・CLI と通し検証**。参照系 RPC で認証済み親に基づく Open 見積もりと、受理後に確定した Part・Finish の枠および進捗を区別して返す。送信は既存の transaction RPC を使う。テンプレートから実ブロック受理まで、Open の一回焼却、拒否された Finish の試行消費、Part の標準 mass、再編・復元を検証する。公開 T12 では元の Studio claim ID と同じ ID で G14 quote 以降を照合する。[既存 RPC の例](../../../../rpc/service/src/service.rs#L4194) · [CLI の例](../../../../misaka/palw/gateway/src/bin/rail.rs#L1818)
 
-このチェックリストはコードの読み取りで確認した接続箇所を記録する。記載した本番経路の実装、テスト実行、公開ネットワークでの操作はこの調査では行っていない。
+2026-11-11 更新: transport と新規 Open cutoff を分離した。受付停止後も既存契約の Part / Finish と同一 Open の再送を継続できる。TKR1 専用 network domain は TIR allocation の解決と独立させ、受理順はフィルター前の完全な accepted transaction ordinal と照合する。Finish の意味上の拒否でも、実パースに入った試行の消費を仮実行と確定 fold の両方に残す。
+
+候補 scanner は物理 carrier の重複・不完全入力も含めて四次元の費用を checked 加算する。親に book がある場合、または最初の Open が book を作り得る場合に期限処理分を一回確保する。予約 book と quote は、その期限処理分を控除した同じ実効 work 容量を使う。この scanner のノード実行境界への適用と snapshot 側の境界処理は未完了。
+
+ノード handoff と accepted filter の接続だけでは公開運用できない。新規 Open の追加焼却額は現在まだ coinbase / template / Round の収入に反映していない。公開 profile・有効化・同一 Studio claim の quote 成功を、このコードやローカル回帰の結果から主張しない。

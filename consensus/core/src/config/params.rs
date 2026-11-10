@@ -3067,6 +3067,8 @@ pub struct Params {
     pub palw_native_mining_v39: Option<crate::palw_native_mining_v39::PalwNativeMiningFenceV39>,
     /// RFC-0044 native Positive Court. Private finite profile; no public activation is assigned.
     pub palw_positive_court_v2: Option<PositiveCourtFenceV2>,
+    /// RFC-0051 funded tokenizer-registration transport. No shipped preset enables it.
+    pub palw_tokenizer_registration_v1: Option<TokenizerRegistrationFenceV1>,
     /// RFC-0045 result-free canonical assignments. No public activation is assigned.
     pub palw_positive_assignment_v2: Option<PositiveAssignmentFenceV2>,
     /// RFC-0046 limited funding-relay metadata intake. Dormant on every preset.
@@ -4351,6 +4353,9 @@ pub fn palw_v2_bond_withdrawal_delay_at_v1(
 mod activation;
 mod full_activation_v1;
 mod identity;
+mod tokenizer_registration_v1;
+pub use tokenizer_registration_v1::TokenizerRegistrationFenceV1;
+
 mod positive_court_v2;
 pub use positive_court_v2::{PositiveCourtFenceV2, PositiveCourtPolicyV2};
 mod positive_assignment_v2;
@@ -6345,6 +6350,7 @@ impl Params {
             palw_native_execution_v39: self.palw_native_execution_v39.clone(),
             palw_native_mining_v39: self.palw_native_mining_v39.clone(),
             palw_positive_court_v2: self.palw_positive_court_v2.clone(),
+            palw_tokenizer_registration_v1: self.palw_tokenizer_registration_v1,
             palw_positive_assignment_v2: self.palw_positive_assignment_v2.clone(),
             palw_positive_funding_relay_v2: self.palw_positive_funding_relay_v2.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
@@ -7532,6 +7538,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
+    palw_tokenizer_registration_v1: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
@@ -7915,6 +7922,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
+    palw_tokenizer_registration_v1: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
@@ -8280,6 +8288,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
+    palw_tokenizer_registration_v1: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
@@ -13892,6 +13901,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
     palw_positive_court_v2: None,
+    palw_tokenizer_registration_v1: None,
     palw_positive_assignment_v2: None,
     palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,

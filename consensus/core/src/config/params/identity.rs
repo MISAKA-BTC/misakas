@@ -545,6 +545,9 @@ impl Params {
         if self.palw_native_mining_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_mining_v39 = None;
         }
+        if self.palw_tokenizer_registration_v1.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_tokenizer_registration_v1 = None;
+        }
         if self.palw_positive_court_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_positive_court_v2 = None;
         }
@@ -1253,6 +1256,7 @@ impl Params {
             palw_native_execution_v39,
             palw_native_mining_v39,
             palw_positive_court_v2,
+            palw_tokenizer_registration_v1,
             palw_positive_assignment_v2,
             palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
@@ -1606,6 +1610,11 @@ impl Params {
             ("palw_native_execution_v39", palw_native_execution_v39.as_ref().map(|f| f.activation)),
             ("palw_native_mining_v39", palw_native_mining_v39.as_ref().map(|f| f.activation)),
             ("palw_positive_court_v2", palw_positive_court_v2.as_ref().map(|f| f.activation)),
+            ("palw_tokenizer_registration_v1", palw_tokenizer_registration_v1.as_ref().map(|f| f.activation)),
+            (
+                "palw_tokenizer_registration_open_cutoff_v1",
+                palw_tokenizer_registration_v1.as_ref().filter(|f| f.activation != ForkActivation::never()).and_then(|f| f.open_cutoff_v1()),
+            ),
             ("palw_positive_assignment_v2", palw_positive_assignment_v2.as_ref().map(|f| f.activation)),
             ("palw_positive_funding_relay_v2", palw_positive_funding_relay_v2.as_ref().map(|f| f.activation)),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
@@ -1981,6 +1990,15 @@ impl Params {
             h.write(b"palw_native_mining_v39");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.root());
+        }
+        if let Some(fence) = self.palw_tokenizer_registration_v1_fence() {
+            h.write(b"palw_tokenizer_registration_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.fingerprint_v1().as_byte_slice());
+            if let Some(cutoff) = fence.open_cutoff_v1() {
+                h.write(b"palw_tokenizer_registration_open_cutoff_v1");
+                h.write(cutoff.daa_score().to_le_bytes());
+            }
         }
         if let Some(fence) = &self.palw_positive_court_v2 {
             h.write(b"palw_positive_court_v2");
@@ -3114,6 +3132,7 @@ impl Params {
             palw_native_execution_v39,
             palw_native_mining_v39,
             palw_positive_court_v2,
+            palw_tokenizer_registration_v1,
             palw_positive_assignment_v2,
             palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
@@ -3984,6 +4003,12 @@ impl Params {
         if let Some(fence) = palw_native_mining_v39.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_tokenizer_registration_v1.as_mut().filter(|f| f.activation != ForkActivation::never()) {
+            fork(&mut fence.activation, visit);
+            if let Some(cutoff) = fence.open_cutoff.as_mut().filter(|f| **f != ForkActivation::never()) {
+                fork(cutoff, visit);
+            }
+        }
         if let Some(fence) = palw_positive_court_v2.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -4751,6 +4776,7 @@ impl Params {
             palw_native_execution_v39,
             palw_native_mining_v39,
             palw_positive_court_v2,
+            palw_tokenizer_registration_v1,
             palw_positive_assignment_v2,
             palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
@@ -5739,6 +5765,15 @@ impl Params {
             h.write(b"palw_native_mining_v39");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.root());
+        }
+        if let Some(fence) = palw_tokenizer_registration_v1.as_ref().filter(|f| f.activation != ForkActivation::never()) {
+            h.write(b"palw_tokenizer_registration_v1");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.fingerprint_v1().as_byte_slice());
+            if let Some(cutoff) = fence.open_cutoff_v1() {
+                h.write(b"palw_tokenizer_registration_open_cutoff_v1");
+                h.write(cutoff.daa_score().to_le_bytes());
+            }
         }
         if let Some(fence) = palw_positive_court_v2 {
             h.write(b"palw_positive_court_v2");
