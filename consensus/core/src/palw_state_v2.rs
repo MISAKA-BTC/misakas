@@ -255,7 +255,9 @@ mod palw_staged_court_fold_v1;
 #[path = "palw_tokenizer_registration_fold_v1.rs"]
 mod palw_tokenizer_registration_fold_v1;
 pub use palw_tokenizer_registration_fold_v1::{
-    TokenizerRegistrationFeeWorkingStateV1, palw_v2_apply_one_tokenizer_registration_fee_retained_v1,
+    TokenizerRegistrationFeeWorkingStateV1, TokenizerRegistrationFinishReadV1, TokenizerRegistrationOpenQuoteReadV1,
+    TokenizerRegistrationPartReadV1, TokenizerRegistrationStatusReadV1, palw_tokenizer_registration_open_quote_v1,
+    palw_tokenizer_registration_status_v1, palw_v2_apply_one_tokenizer_registration_fee_retained_v1,
     palw_v2_pre_tokenizer_registration_base_retained_v1,
 };
 // G14 lane r5-f02-wire: RFC-0026 F02 default during the RFC08 post-Final liability hold (text29 / funded v11), dormant.

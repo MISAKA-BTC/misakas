@@ -77,6 +77,13 @@ impl NativeWriteQuoteV1 {
     ) -> Result<(), PalwStateV2Error> {
         super::native_mutation::reserve_mutation_sequence_v1(reservation, entries, self.q.bytes_v1(), self.slots)
     }
+    /// Reserve the typed construction envelope for a disposable read
+    /// without creating a transition or journal.
+    pub(super) fn reserve_scratch_v1(self) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, PalwStateV2Error> {
+        debug_assert_eq!(self.slots, 0);
+        crate::palw_native_resource_v1::reserve_native_pending_requests_v1(self.q.bytes_v1()).map_err(native_err_v1)
+    }
+
     /// One deep copy of an actual typed value (a map clone, a journal clone, a scratch copy).
     pub(super) fn copy<T: NativeHeapV1 + ?Sized>(&mut self, value: &T) -> Result<&mut Self, PalwStateV2Error> {
         let heap = value.native_heap_v1(self.path);

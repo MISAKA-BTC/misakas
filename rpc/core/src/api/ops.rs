@@ -294,6 +294,11 @@ pub enum RpcApiOps {
     /// snapshot, certified-beacon state, assignment, retries and terminal reason — and the engine's overview, as one versioned
     /// JSON observation. Read-only: no rule reads it. Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwPanelV3Status = 220,
+    /// RFC-0051 coordinator carve-out from unused C2 range, checked against main/pre/C2.
+    /// Read-only unsigned Open quote; no reservation or payment.
+    GetPalwTokenizerRegistrationQuote = 221,
+    /// RFC-0051 accepted Open/Part/Finish progress from one authenticated parent.
+    GetPalwTokenizerRegistrationStatus = 222,
     /// G14 lane D (kernel route; ops 210-219 are this lane's): one claim of the probabilistic-constraint route, everything public about
     /// it — its lifecycle, the public record a fresh verifier is built from, the positions served on chain, the open demands, the
     /// interim assignment — with the roots that anchor it. Appended at the tail: a node built before it drops the WebSocket on it.

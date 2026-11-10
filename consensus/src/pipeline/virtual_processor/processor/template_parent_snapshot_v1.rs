@@ -19,6 +19,15 @@ pub(in crate::pipeline::virtual_processor) struct PreparedTemplateParentV1 {
     pub(super) checked: Result<(), PalwWeighFaultV2>,
 }
 
+impl PreparedTemplateParentV1 {
+    /// Root already checked against this owner by the strict loader. Missing
+    /// compact identities require an outside-lock root computation by readers.
+    pub(super) fn authenticated_root_v1(&self) -> Option<kaspa_consensus_core::Hash64> {
+        self.checked.as_ref().ok()?;
+        self.key.and_then(|key| key.root)
+    }
+}
+
 #[derive(Default)]
 pub(in crate::pipeline::virtual_processor) struct TemplateParentSnapshotCacheV1 {
     // A single retained owner, per processor instance. No wall-clock TTL: a

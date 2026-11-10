@@ -4130,6 +4130,38 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_tir_public_read_v1_impl(read)
     }
 
+    fn palw_tokenizer_registration_open_quote_v1(
+        &self,
+        open: kaspa_consensus_core::palw_tokenizer_registration_v1::TokenizerRegistrationOpenBodyV1,
+    ) -> Result<
+        Option<
+            kaspa_consensus_core::api::TokenizerRegistrationReadSnapshotV1<
+                Result<kaspa_consensus_core::palw_state_v2::TokenizerRegistrationOpenQuoteReadV1, String>,
+            >,
+        >,
+        String,
+    > {
+        self.virtual_processor.tokenizer_registration_open_quote_read_v1(open)
+    }
+
+    fn palw_tokenizer_registration_status_v1(
+        &self,
+        open_id: kaspa_consensus_core::Hash64,
+    ) -> Result<
+        Option<
+            kaspa_consensus_core::api::TokenizerRegistrationReadSnapshotV1<
+                Option<
+                    kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+                        kaspa_consensus_core::palw_state_v2::TokenizerRegistrationStatusReadV1,
+                    >,
+                >,
+            >,
+        >,
+        String,
+    > {
+        self.virtual_processor.tokenizer_registration_status_read_v1(open_id)
+    }
+
     fn palw_tir_public_original_quote_v1(
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,

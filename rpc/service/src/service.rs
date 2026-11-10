@@ -4237,6 +4237,73 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_tokenizer_registration_quote_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwTokenizerRegistrationQuoteRequest,
+    ) -> RpcResult<GetPalwTokenizerRegistrationQuoteResponse> {
+        use crate::tokenizer_registration as view;
+        use kaspa_consensus_core::palw_tokenizer_registration_v1::{
+            TOKENIZER_REGISTRATION_OPEN_BODY_BYTES_V1, TOKENIZER_REGISTRATION_OPEN_CONTEXT_V1, TokenizerRegistrationOpenBodyV1,
+        };
+        let bytes = view::decode_exact_hex(&request.open_body_hex, TOKENIZER_REGISTRATION_OPEN_BODY_BYTES_V1)?;
+        let open: TokenizerRegistrationOpenBodyV1 = borsh::from_slice(&bytes).map_err(|e| RpcError::General(e.to_string()))?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer =
+            session.spawn_blocking(move |c| c.palw_tokenizer_registration_open_quote_v1(open)).await.map_err(RpcError::General)?;
+        let Some(read) = answer else { return Ok(GetPalwTokenizerRegistrationQuoteResponse::default()) };
+        let mut observation = view::snapshot(&read);
+        let (quoted, refusal) = match &read.value {
+            Ok(q) => {
+                observation["quote"] = view::quote(&q.quote)?;
+                observation["openId"] = serde_json::json!(q.open_id.to_string());
+                observation["policyId"] = serde_json::json!(open.policy.to_string());
+                observation["policyHex"] = serde_json::json!(view::borsh_hex(&q.policy)?);
+                observation["declaredKeyEvents"] = serde_json::json!(q.declared_key_events);
+                observation["signingDigest"] = serde_json::json!(q.open_id.to_string());
+                observation["signingContextHex"] = serde_json::json!(faster_hex::hex_string(TOKENIZER_REGISTRATION_OPEN_CONTEXT_V1));
+                observation["slotsReserved"] = serde_json::json!(false);
+                observation["fundingVerified"] = serde_json::json!(false);
+                (true, String::new())
+            }
+            Err(refusal) => (false, refusal.clone()),
+        };
+        Ok(GetPalwTokenizerRegistrationQuoteResponse {
+            available: true,
+            quoted,
+            refusal,
+            observation_json: view::encode(observation)?,
+        })
+    }
+
+    async fn get_palw_tokenizer_registration_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwTokenizerRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwTokenizerRegistrationStatusResponse> {
+        use crate::tokenizer_registration as view;
+        let bytes = view::decode_exact_hex(&request.open_id, 64)?;
+        let open_id = kaspa_consensus_core::Hash64::from_bytes(bytes.try_into().expect("exact 64-byte decode"));
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer =
+            session.spawn_blocking(move |c| c.palw_tokenizer_registration_status_v1(open_id)).await.map_err(RpcError::General)?;
+        let Some(read) = answer else { return Ok(GetPalwTokenizerRegistrationStatusResponse::default()) };
+        let mut observation = view::snapshot(&read);
+        observation["openId"] = serde_json::json!(open_id.to_string());
+        observation["registration"] = match &read.value {
+            Some(status) => view::status(status)?,
+            None => serde_json::Value::Null,
+        };
+        if read.value.is_none() {
+            observation["absence"] = serde_json::json!("unknown-or-not-retained-at-this-parent");
+        }
+        Ok(GetPalwTokenizerRegistrationStatusResponse {
+            available: true,
+            found: read.value.is_some(),
+            observation_json: view::encode(observation)?,
+        })
+    }
+
     async fn get_palw_tir_original_quote_call(
         &self,
         _connection: Option<&DynRpcConnection>,

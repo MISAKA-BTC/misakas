@@ -22,6 +22,8 @@ pub const TOKENIZER_REGISTRATION_OPEN_CONTEXT_V1: &[u8] = b"misaka-palw/tokenize
 pub const TOKENIZER_REGISTRATION_PART_CONTEXT_V1: &[u8] = b"misaka-palw/tokenizer-registration/part/v1/mldsa87";
 pub const TOKENIZER_REGISTRATION_FINISH_CONTEXT_V1: &[u8] = b"misaka-palw/tokenizer-registration/finish/v1/mldsa87";
 pub const TOKENIZER_REGISTRATION_FINISH_ATTEMPTS_V1: u64 = 2;
+/// Canonical Borsh length of the unsigned, fixed-field Open body.
+pub const TOKENIZER_REGISTRATION_OPEN_BODY_BYTES_V1: usize = 2 + 11 * 64 + (64 + 4) + 5 * 8 + 4 + 1;
 
 // Isolated UTXO projection, optional Positive fee-plan rehearsal and UTXO
 // replay, observed rehearsal, and authoritative fold. Only the two UTXO
@@ -467,7 +469,7 @@ impl TokenizerRegistrationPolicyV1 {
         const SIG: u64 = MLDSA87_SIGNATURE_LEN as u64;
         // Open body, signed Open, duplicated policy and quote, accepted/key
         // context, vector prefixes, and worst Complete status.
-        const OPEN: u64 = 2 + 11 * HASH + BOND + 5 * 8 + 4 + 1 + SIG;
+        const OPEN: u64 = TOKENIZER_REGISTRATION_OPEN_BODY_BYTES_V1 as u64 + SIG;
         const POLICY: u64 = 2 + 4 * 4 + 30 * 8;
         const QUOTE: u64 = 8 + 4 + 25 * 8;
         const SESSION: u64 = OPEN + POLICY + QUOTE + POINT + HASH + 8 + 4 + 4 + 2 + 1 + POINT + HASH;
@@ -623,7 +625,7 @@ impl TokenizerRegistrationPolicyV1 {
     pub(crate) fn check_source_budget_v1(&self) -> Result<(), &'static str> {
         let framing = add(self.carrier_overhead_bytes, 1)?;
         let sig = MLDSA87_SIGNATURE_LEN as u64;
-        let open_bytes = add(framing, 2 + 11 * 64 + 68 + 5 * 8 + 4 + 1 + sig)?;
+        let open_bytes = add(framing, TOKENIZER_REGISTRATION_OPEN_BODY_BYTES_V1 as u64 + sig)?;
         let raw = self.max_raw_bytes.min(TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64);
         let part_bytes = add(add(framing, 2 + 4 * 64 + 68 + 4 + 8 + sig + 4)?, raw)?;
         let open = ServiceCost { bytes: open_bytes, work: self.open_work_v1(open_bytes)?, io: self.metadata_bytes, controls: 1 };

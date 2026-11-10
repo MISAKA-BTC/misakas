@@ -143,6 +143,8 @@ impl Factory {
                 GetPalwAcceptanceReads,
                 GetPalwRfc0016Report,
                 GetPalwTirOriginalQuote,
+                GetPalwTokenizerRegistrationQuote,
+                GetPalwTokenizerRegistrationStatus,
                 GetPalwClaimDetail,
                 GetPalwCourtState,
                 GetPalwFenceSchedule,

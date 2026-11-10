@@ -41,6 +41,9 @@ use crate::BlockHash;
 
 pub use self::stats::{BlockCount, ConsensusStats};
 
+mod tokenizer_registration_v1;
+pub use tokenizer_registration_v1::*;
+
 /// Bounded RFC12 observations from one locked virtual state. Missing historical
 /// balances and spent/unknown outpoints are explicit; storage failures are errors.
 #[derive(Clone, Debug)]
@@ -1811,6 +1814,35 @@ pub trait ConsensusApi: Send + Sync {
         _evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
     ) -> Result<Option<Result<(), String>>, String> {
         Err("TIR staged conviction preflight unavailable".into())
+    }
+
+    /// RFC-0051 unsigned quote, pinned to one authenticated selected parent.
+    /// Local state/capacity failures are outer errors; semantic refusal retains
+    /// its snapshot in the returned observation. No service is purchased.
+    fn palw_tokenizer_registration_open_quote_v1(
+        &self,
+        _open: crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenBodyV1,
+    ) -> Result<
+        Option<TokenizerRegistrationReadSnapshotV1<Result<crate::palw_state_v2::TokenizerRegistrationOpenQuoteReadV1, String>>>,
+        String,
+    > {
+        Err("tokenizer registration quote unavailable".into())
+    }
+
+    /// Accepted Open progress only. Missing after GC/reorg means unknown in
+    /// this snapshot; no tombstone, carrier txid or payment is invented.
+    fn palw_tokenizer_registration_status_v1(
+        &self,
+        _open_id: Hash64,
+    ) -> Result<
+        Option<
+            TokenizerRegistrationReadSnapshotV1<
+                Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_state_v2::TokenizerRegistrationStatusReadV1>>,
+            >,
+        >,
+        String,
+    > {
+        Err("tokenizer registration status unavailable".into())
     }
 
     /// G14 R1/R2: the producer's pre-signing quote of an ORIGINAL TIR frame on the accepted snapshot — `(snapshot DAA, plan)`;

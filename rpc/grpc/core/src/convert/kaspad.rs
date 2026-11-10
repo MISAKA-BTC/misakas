@@ -120,6 +120,8 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwAcceptanceReads);
     impl_into_kaspad_request!(GetPalwRfc0016Report);
     impl_into_kaspad_request!(GetPalwTirOriginalQuote);
+    impl_into_kaspad_request!(GetPalwTokenizerRegistrationQuote);
+    impl_into_kaspad_request!(GetPalwTokenizerRegistrationStatus);
     impl_into_kaspad_request!(GetPalwClaimDetail);
     impl_into_kaspad_request!(GetPalwCourtState);
     impl_into_kaspad_request!(GetPalwFenceSchedule);
@@ -335,6 +337,8 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwAcceptanceReads);
     impl_into_kaspad_response!(GetPalwRfc0016Report);
     impl_into_kaspad_response!(GetPalwTirOriginalQuote);
+    impl_into_kaspad_response!(GetPalwTokenizerRegistrationQuote);
+    impl_into_kaspad_response!(GetPalwTokenizerRegistrationStatus);
     impl_into_kaspad_response!(GetPalwClaimDetail);
     impl_into_kaspad_response!(GetPalwCourtState);
     impl_into_kaspad_response!(GetPalwFenceSchedule);

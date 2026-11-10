@@ -6619,3 +6619,113 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Response>, p
 try_from!(item: &protowire::GetPalwMemoryRoutingOutcomeV1ResponseMessage, RpcResult<kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Response>, {
     Self { available: item.available, observation_json: item.observation_json.clone(), reason: item.reason.clone() }
 });
+
+from!(item: &kaspa_rpc_core::GetPalwTokenizerRegistrationQuoteRequest, protowire::GetPalwTokenizerRegistrationQuoteRequestMessage, {
+    Self {
+        open_body_hex: item.open_body_hex.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwTokenizerRegistrationQuoteRequestMessage, kaspa_rpc_core::GetPalwTokenizerRegistrationQuoteRequest, {
+    kaspa_rpc_core::check_tokenizer_registration_hex_v1(&item.open_body_hex, kaspa_rpc_core::TOKENIZER_REGISTRATION_OPEN_HEX_BYTES_V1)?;
+    Self {
+        open_body_hex: item.open_body_hex.clone(),
+    }
+});
+
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwTokenizerRegistrationQuoteResponse>, protowire::GetPalwTokenizerRegistrationQuoteResponseMessage, {
+    Self {
+        available: item.available,
+        quoted: item.quoted,
+        refusal: item.refusal.clone(),
+        observation_json: item.observation_json.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwTokenizerRegistrationQuoteResponseMessage, RpcResult<kaspa_rpc_core::GetPalwTokenizerRegistrationQuoteResponse>, {
+    kaspa_rpc_core::check_tokenizer_registration_text_bound_v1(&item.observation_json, kaspa_rpc_core::TOKENIZER_REGISTRATION_OBSERVATION_MAX_BYTES_V1)?;
+    kaspa_rpc_core::check_tokenizer_registration_text_bound_v1(&item.refusal, kaspa_rpc_core::TOKENIZER_REGISTRATION_REFUSAL_MAX_BYTES_V1)?;
+    Self {
+        available: item.available,
+        quoted: item.quoted,
+        refusal: item.refusal.clone(),
+        observation_json: item.observation_json.clone(),
+    }
+});
+
+from!(item: &kaspa_rpc_core::GetPalwTokenizerRegistrationStatusRequest, protowire::GetPalwTokenizerRegistrationStatusRequestMessage, {
+    Self {
+        open_id: item.open_id.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwTokenizerRegistrationStatusRequestMessage, kaspa_rpc_core::GetPalwTokenizerRegistrationStatusRequest, {
+    kaspa_rpc_core::check_tokenizer_registration_hex_v1(&item.open_id, kaspa_rpc_core::TOKENIZER_REGISTRATION_ID_HEX_BYTES_V1)?;
+    Self {
+        open_id: item.open_id.clone(),
+    }
+});
+
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwTokenizerRegistrationStatusResponse>, protowire::GetPalwTokenizerRegistrationStatusResponseMessage, {
+    Self {
+        available: item.available,
+        found: item.found,
+        observation_json: item.observation_json.clone(),
+        error: None,
+    }
+});
+try_from!(item: &protowire::GetPalwTokenizerRegistrationStatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwTokenizerRegistrationStatusResponse>, {
+    kaspa_rpc_core::check_tokenizer_registration_text_bound_v1(&item.observation_json, kaspa_rpc_core::TOKENIZER_REGISTRATION_OBSERVATION_MAX_BYTES_V1)?;
+    Self {
+        available: item.available,
+        found: item.found,
+        observation_json: item.observation_json.clone(),
+    }
+});
+
+#[cfg(test)]
+mod tokenizer_registration_rpc_tests {
+    use super::*;
+    #[test]
+    fn tokenizer_registration_grpc_preserves_quote_status_and_errors() {
+        use kaspa_rpc_core::*;
+        let request = GetPalwTokenizerRegistrationQuoteRequest { open_body_hex: "ab".repeat(819) };
+        let wire = protowire::GetPalwTokenizerRegistrationQuoteRequestMessage::from(&request);
+        assert_eq!(GetPalwTokenizerRegistrationQuoteRequest::try_from(&wire).unwrap(), request);
+        let request = GetPalwTokenizerRegistrationStatusRequest { open_id: "cd".repeat(64) };
+        let wire = protowire::GetPalwTokenizerRegistrationStatusRequestMessage::from(&request);
+        assert_eq!(GetPalwTokenizerRegistrationStatusRequest::try_from(&wire).unwrap(), request);
+        let reply = GetPalwTokenizerRegistrationQuoteResponse {
+            available: true,
+            quoted: false,
+            refusal: "capacity full".into(),
+            observation_json: "{\"schema\":1}".into(),
+        };
+        let wire = protowire::GetPalwTokenizerRegistrationQuoteResponseMessage::from(Ok(&reply));
+        let back: RpcResult<GetPalwTokenizerRegistrationQuoteResponse> = (&wire).try_into();
+        assert_eq!(back.unwrap(), reply);
+        let reply = GetPalwTokenizerRegistrationStatusResponse {
+            available: true,
+            found: false,
+            observation_json: "{\"absence\":\"unknown-or-not-retained-at-this-parent\"}".into(),
+        };
+        let wire = protowire::GetPalwTokenizerRegistrationStatusResponseMessage::from(Ok(&reply));
+        let back: RpcResult<GetPalwTokenizerRegistrationStatusResponse> = (&wire).try_into();
+        assert_eq!(back.unwrap(), reply);
+        let wire =
+            protowire::GetPalwTokenizerRegistrationQuoteResponseMessage::from(Err::<&GetPalwTokenizerRegistrationQuoteResponse, _>(
+                RpcError::General("state changed".into()),
+            ));
+        let back: RpcResult<GetPalwTokenizerRegistrationQuoteResponse> = (&wire).try_into();
+        assert!(back.unwrap_err().to_string().contains("state changed"));
+        let oversized = protowire::GetPalwTokenizerRegistrationQuoteRequestMessage { open_body_hex: "a".repeat(1639) };
+        assert!(GetPalwTokenizerRegistrationQuoteRequest::try_from(&oversized).is_err());
+        let oversized = protowire::GetPalwTokenizerRegistrationStatusRequestMessage { open_id: "a".repeat(129) };
+        assert!(GetPalwTokenizerRegistrationStatusRequest::try_from(&oversized).is_err());
+        let oversized = protowire::GetPalwTokenizerRegistrationStatusResponseMessage {
+            available: true,
+            found: true,
+            observation_json: "a".repeat(TOKENIZER_REGISTRATION_OBSERVATION_MAX_BYTES_V1 + 1),
+            error: None,
+        };
+        assert!(GetPalwTokenizerRegistrationStatusResponse::try_from(&oversized).is_err());
+    }
+}

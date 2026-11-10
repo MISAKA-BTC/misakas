@@ -2,6 +2,8 @@
 use super::*;
 #[path = "palw_tokenizer_registration_fold_v1/fee_working_state.rs"]
 mod fee_working_state;
+#[path = "palw_tokenizer_registration_fold_v1/read.rs"]
+mod read;
 use crate::{
     palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row},
     palw_tokenizer_registration_carriage_v1::{
@@ -10,14 +12,59 @@ use crate::{
     palw_tokenizer_registration_state_v1::{
         TokenizerRegistrationBookV1, TokenizerRegistrationSessionV1, TokenizerRegistrationStatusV1 as Status,
     },
-    palw_tokenizer_registration_v1::{TokenizerRegistrationPolicyV1, TokenizerRegistrationWireV1 as Wire},
+    palw_tokenizer_registration_v1::{
+        TokenizerRegistrationOpenBodyV1, TokenizerRegistrationPolicyV1, TokenizerRegistrationWireV1 as Wire,
+    },
     palw_tokenizer_rendering_v2::PalwVerifiedTokenizerRegistrationErrorV1,
 };
 pub use fee_working_state::TokenizerRegistrationFeeWorkingStateV1;
+pub use read::{
+    TokenizerRegistrationFinishReadV1, TokenizerRegistrationOpenQuoteReadV1, TokenizerRegistrationPartReadV1,
+    TokenizerRegistrationStatusReadV1, palw_tokenizer_registration_open_quote_v1, palw_tokenizer_registration_status_v1,
+};
 
 fn refusal(why: String) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(why)
 }
+fn check_new_tokenizer_open_v1(
+    state: &PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    at: &PalwBlockContextV2,
+    open: &TokenizerRegistrationOpenBodyV1,
+) -> Result<(), PalwStateV2Error> {
+    if extras.tokenizer_registration_open_cutoff_daa_v1.is_some_and(|cutoff| at.daa_score >= cutoff) {
+        return Err(refusal("tokenizer registration is closed for new Open carriers".into()));
+    }
+    let pins = open.pins;
+    if state.staged_court_row_v1(&Key::VerifiedTokenizerRegistration(pins.class_id, pins.semantics_id)).is_some() {
+        return Err(refusal("tokenizer class/semantics is already registered".into()));
+    }
+    Ok(())
+}
+
+enum BookDeadlineActionV1 {
+    Keep,
+    ExpireMaterial,
+    ReleaseService,
+}
+
+fn advance_tokenizer_book_session_v1(
+    book: &mut TokenizerRegistrationBookV1,
+    id: Hash64,
+    session: &TokenizerRegistrationSessionV1,
+    at: &PalwBlockContextV2,
+) -> Result<BookDeadlineActionV1, PalwStateV2Error> {
+    if at.daa_score >= session.open.body.material_until_daa {
+        book.expire(id, at.daa_score).map_err(refusal)?;
+        Ok(BookDeadlineActionV1::ExpireMaterial)
+    } else if matches!(session.status, Status::Pending) && at.daa_score >= session.open.body.finish_until_daa {
+        book.release(id, *at).map_err(refusal)?;
+        Ok(BookDeadlineActionV1::ReleaseService)
+    } else {
+        Ok(BookDeadlineActionV1::Keep)
+    }
+}
+
 fn rendering_error(why: PalwVerifiedTokenizerRegistrationErrorV1) -> PalwStateV2Error {
     match why {
         PalwVerifiedTokenizerRegistrationErrorV1::Capacity(capacity) => {
@@ -147,13 +194,7 @@ impl TransitionBuilder<'_> {
                 if self.state.staged_court_row_v1(&key).is_some() {
                     return Ok(None);
                 }
-                if self.extras.tokenizer_registration_open_cutoff_daa_v1.is_some_and(|cutoff| at.daa_score >= cutoff) {
-                    return Err(refusal("tokenizer registration is closed for new Open carriers".into()));
-                }
-                let pins = open.body.pins;
-                if self.state.staged_court_row_v1(&Key::VerifiedTokenizerRegistration(pins.class_id, pins.semantics_id)).is_some() {
-                    return Err(refusal("tokenizer class/semantics is already registered".into()));
-                }
+                check_new_tokenizer_open_v1(&self.state, self.extras, &at, &open.body)?;
                 let session = TokenizerRegistrationSessionV1::prepare(
                     parent,
                     self.params,
@@ -356,22 +397,24 @@ impl TransitionBuilder<'_> {
             let (Key::TokenizerRegistrationSession(id), Row::TokenizerRegistrationSession(session)) = (key, row) else {
                 return Err(refusal("tokenizer expiry found a foreign session".into()));
             };
-            if at.daa_score >= session.open.body.material_until_daa {
-                book.expire(*id, at.daa_score).map_err(refusal)?;
-                book_changed = true;
-                for (part_key, _) in self
-                    .state
-                    .staged_court_range_v1(&Key::TokenizerRegistrationPart(*id, 0), &Key::TokenizerRegistrationPart(*id, u32::MAX))
-                {
-                    changes.push((*part_key, None));
+            match advance_tokenizer_book_session_v1(&mut book, *id, session, at)? {
+                BookDeadlineActionV1::Keep => {}
+                BookDeadlineActionV1::ExpireMaterial => {
+                    for (part_key, _) in self
+                        .state
+                        .staged_court_range_v1(&Key::TokenizerRegistrationPart(*id, 0), &Key::TokenizerRegistrationPart(*id, u32::MAX))
+                    {
+                        changes.push((*part_key, None));
+                    }
+                    changes.push((*key, None));
+                    book_changed = true;
                 }
-                changes.push((*key, None));
-            } else if matches!(session.status, Status::Pending) && at.daa_score >= session.open.body.finish_until_daa {
-                let mut session = session.as_ref().clone();
-                session.status = Status::Expired { point: *at };
-                book.release(*id, *at).map_err(refusal)?;
-                book_changed = true;
-                changes.push((*key, Some(Row::TokenizerRegistrationSession(Box::new(session)))));
+                BookDeadlineActionV1::ReleaseService => {
+                    let mut session = session.as_ref().clone();
+                    session.status = Status::Expired { point: *at };
+                    changes.push((*key, Some(Row::TokenizerRegistrationSession(Box::new(session)))));
+                    book_changed = true;
+                }
             }
         }
         if book_changed {
@@ -393,59 +436,67 @@ impl TransitionBuilder<'_> {
         policy: TokenizerRegistrationPolicyV1,
         wire: Option<&Wire>,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
-        use crate::palw_tokenizer_registration_state_v1::{TokenizerRegistrationPartRowV1, TokenizerRegistrationReservationV1};
-        let overflow = || refusal("tokenizer construction geometry overflow".into());
-        let n = policy
-            .max_raw_bytes
-            .div_ceil(crate::palw_tokenizer_registration_v1::TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64)
-            .checked_add(2)
-            .ok_or_else(overflow)?;
-        let sessions = u64::from(policy.max_pending_total).checked_add(1).ok_or_else(overflow)?;
-        let packets = sessions.checked_mul(n).ok_or_else(overflow)?;
-        let mut q = native_writers::NativeWriteQuoteV1::new("tokenizer construction peak ownership");
-        if let Some(wire) = wire {
-            q.copy(wire)?.copy(wire)?;
-        }
-        if let Some(Row::TokenizerRegistrationBook(book)) = self.state.staged_court_row_v1(&Key::TokenizerRegistrationBook) {
-            // Outer fold, transactional Book candidate, causal candidate;
-            // each can coexist with its validation/release candidate.
-            for _ in 0..6 {
-                q.copy(book.as_ref())?;
-            }
-        }
-        for (_, row) in self.state.staged_court_range_v1(
-            &Key::TokenizerRegistrationSession(Hash64::default()),
-            &Key::TokenizerRegistrationSession(Hash64::from_bytes([255; 64])),
-        ) {
-            q.copy(row)?.copy(row)?;
-        }
-        // New packet growth in the outer/candidate/causal book, plus rebuilt
-        // remaining quota during validation. Existing nodes are above.
-        for _ in 0..3 {
-            q.member::<[u8; 64], ServicePacket>(n)?.member::<[u8; 64], u64>(n)?.member::<u64, ServiceCost>(n)?;
-            q.member::<Hash64, TokenizerRegistrationReservationV1>(1)?.grown::<u64>(n)?;
-        }
-        q.member::<u64, ServiceCost>(packets)?;
-        // One outer graph, one Book validation graph, one causal verification
-        // graph and one release/expiry graph may coexist. Each has at most two
-        // Part predecessor lists and one Finish-to-recovery edge.
-        for _ in 0..4 {
-            q.grown::<CausalServicePacketV1>(n)?.grown::<[u8; 64]>(n)?;
-            q.grown::<[u8; 64]>(n)?.grown::<[u8; 64]>(n)?;
-        }
-        // Causal scheduler nodes/pending/children/ready, per-node duplicate
-        // predecessor set, validation graph membership, and whole-book IDs.
-        q.member::<[u8; 64], &CausalServicePacketV1>(n)?.member::<[u8; 64], usize>(n)?;
-        q.member::<[u8; 64], Vec<[u8; 64]>>(n)?.grown::<[u8; 64]>(n.checked_mul(4).ok_or_else(overflow)?)?;
-        q.member::<(u64, [u8; 64]), ()>(n)?.member::<[u8; 64], ()>(n.checked_mul(2).ok_or_else(overflow)?)?;
-        q.member::<[u8; 64], ()>(packets)?.member::<PalwBondKeyV2, u32>(sessions)?;
-        // New session, received/attempt memberships, ordered Part references,
-        // superseded session changes, and all deletions in a bounded GC pass.
-        q.exact::<TokenizerRegistrationSessionV1>(1)?.member::<u32, ()>(n)?.member::<u8, ()>(2)?;
-        q.grown::<&TokenizerRegistrationPartRowV1>(n)?;
-        q.grown::<(Key, Option<Row>)>(packets.checked_add(sessions).and_then(|n| n.checked_add(2)).ok_or_else(overflow)?)?;
-        q.exact::<u8>(1024)?; // fixed ID tuple's Borsh hashing scratch
-        self.admit_native_write_v1(q)
+        self.admit_native_write_v1(tokenizer_construction_quote_v1(&self.state, policy, wire)?)
     }
+}
+
+fn tokenizer_construction_quote_v1(
+    state: &PalwChainStateV2,
+    policy: TokenizerRegistrationPolicyV1,
+    wire: Option<&Wire>,
+) -> Result<native_writers::NativeWriteQuoteV1, PalwStateV2Error> {
+    use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
+    use crate::palw_tokenizer_registration_state_v1::{TokenizerRegistrationPartRowV1, TokenizerRegistrationReservationV1};
+    let overflow = || refusal("tokenizer construction geometry overflow".into());
+    let n = policy
+        .max_raw_bytes
+        .div_ceil(crate::palw_tokenizer_registration_v1::TOKENIZER_REGISTRATION_PART_BYTES_V1 as u64)
+        .checked_add(2)
+        .ok_or_else(overflow)?;
+    let sessions = u64::from(policy.max_pending_total).checked_add(1).ok_or_else(overflow)?;
+    let packets = sessions.checked_mul(n).ok_or_else(overflow)?;
+    let mut q = native_writers::NativeWriteQuoteV1::new("tokenizer construction peak ownership");
+    if let Some(wire) = wire {
+        q.copy(wire)?.copy(wire)?;
+    }
+    if let Some(Row::TokenizerRegistrationBook(book)) = state.staged_court_row_v1(&Key::TokenizerRegistrationBook) {
+        // Outer fold, transactional Book candidate, causal candidate;
+        // each can coexist with its validation/release candidate.
+        for _ in 0..6 {
+            q.copy(book.as_ref())?;
+        }
+    }
+    for (_, row) in state.staged_court_range_v1(
+        &Key::TokenizerRegistrationSession(Hash64::default()),
+        &Key::TokenizerRegistrationSession(Hash64::from_bytes([255; 64])),
+    ) {
+        q.copy(row)?.copy(row)?;
+    }
+    // New packet growth in the outer/candidate/causal book, plus rebuilt
+    // remaining quota during validation. Existing nodes are above.
+    for _ in 0..3 {
+        q.member::<[u8; 64], ServicePacket>(n)?.member::<[u8; 64], u64>(n)?.member::<u64, ServiceCost>(n)?;
+        q.member::<Hash64, TokenizerRegistrationReservationV1>(1)?.grown::<u64>(n)?;
+    }
+    q.member::<u64, ServiceCost>(packets)?;
+    // One outer graph, one Book validation graph, one causal verification
+    // graph and one release/expiry graph may coexist. Each has at most two
+    // Part predecessor lists and one Finish-to-recovery edge.
+    for _ in 0..4 {
+        q.grown::<CausalServicePacketV1>(n)?.grown::<[u8; 64]>(n)?;
+        q.grown::<[u8; 64]>(n)?.grown::<[u8; 64]>(n)?;
+    }
+    // Causal scheduler nodes/pending/children/ready, per-node duplicate
+    // predecessor set, validation graph membership, and whole-book IDs.
+    q.member::<[u8; 64], &CausalServicePacketV1>(n)?.member::<[u8; 64], usize>(n)?;
+    q.member::<[u8; 64], Vec<[u8; 64]>>(n)?.grown::<[u8; 64]>(n.checked_mul(4).ok_or_else(overflow)?)?;
+    q.member::<(u64, [u8; 64]), ()>(n)?.member::<[u8; 64], ()>(n.checked_mul(2).ok_or_else(overflow)?)?;
+    q.member::<[u8; 64], ()>(packets)?.member::<PalwBondKeyV2, u32>(sessions)?;
+    // New session, received/attempt memberships, ordered Part references,
+    // superseded session changes, and all deletions in a bounded GC pass.
+    q.exact::<TokenizerRegistrationSessionV1>(1)?.member::<u32, ()>(n)?.member::<u8, ()>(2)?;
+    q.grown::<&TokenizerRegistrationPartRowV1>(n)?;
+    q.grown::<(Key, Option<Row>)>(packets.checked_add(sessions).and_then(|n| n.checked_add(2)).ok_or_else(overflow)?)?;
+    q.exact::<u8>(1024)?; // fixed ID tuple's Borsh hashing scratch
+    Ok(q)
 }

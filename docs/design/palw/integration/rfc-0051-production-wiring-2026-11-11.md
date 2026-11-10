@@ -7,7 +7,7 @@
 | TKR1 wire、UTXO fee handoff、予約 book、native fold、journal・snapshot 検査 | core / SDK 実装済み。確定 fold の費用照合を含むローカル回帰を実施 |
 | 設定・新規 Open cutoff・header gate・ノード UTXO handoff と受理順 | 接続コード追加。出荷 preset は未設定。node コンパイル確認のみで本番完了扱いにしない |
 | coinbase・テンプレート・Round の焼却反映、work scanner 実行境界 | 接続コードと段階3のローカル回帰30件が通過。公開適格性の測定は未完了 |
-| RPC・CLI | 未接続 |
+| RPC・CLI | unsigned Open quote / accepted status と CLI のビルド・回帰22件通過。送信用 CLI は未接続 |
 | 公開 T12 の有効化、同一 Studio TFP1 の G14 quote・対話・Final・ブロック生成 | 未確認 |
 
 - [ ] **設定と入口**。候補ブロックの DAA で TKR1 専用の activation と policy を解決する。未設定のネットワークは既存の挙動と fingerprint を維持する。設定の形状、fence visitor、ruleset と consensus params ID に、設定時だけ値を組み込む。header-context の入口で fence を確認し、前段で候補ブロック内の TKR1 carrier 全件と期限処理の作業量を集計する。未知版・重複・拒否される carrier も作業量に含める。[設定検証](../../../../consensus/core/src/config/params/validation.rs#L271) · [設定 fingerprint](../../../../consensus/core/src/config/params/identity.rs#L1985) · [header-context 検査](../../../../consensus/src/processes/transaction_validator/tx_validation_in_header_context.rs#L73) · [TKR1 scanner](../../../../consensus/core/src/palw_tokenizer_registration_carriage_v1.rs#L244)
@@ -36,3 +36,5 @@ TKR1 transport が有効になった候補から、通常 PALW object・Batch・
 同じ候補には isolated fee projection、任意の Positive fee-plan rehearsal、任意の isolated replay、observed rehearsal、確定 fold の最大五回がある。source scanner と Open quote はこの共通上限を使い、bookkeeping は最大二回の body 逆適用も計上する。Finish の raw assembly / deterministic parser だけは候補内 cache で一回とし、署名・EOG・保存 Part の再ハッシュは各回の費用に残す。5 / 2 / 1 の係数を policy fingerprint に含め、経路を増やす変更では同時に見直す。ここで公開機材・単価・activation の採択は行っていない。
 
 段階3の機能回帰: registration core 19、Finish cache 1、native ownership 1、既存 Batch 順序 4、Batch 1、Output 1、node 受理順序 1、Round fee 1、SDK 1 の計30件が成功した。core/node は opt-level 0 の機能検査で、Batch は既知のテスト stack 条件として 64 MiB を指定した。実ブロックの template → UTXO → coinbase 受理と reorg/IBD の通し試験は未完了。
+
+段階4の参照 RPC と CLI の形状・番号・状態区分は [読み取り接続記録](rfc-0051-read-rpc-2026-11-11.md) に記載する。公開での成功とは区別する。

@@ -1119,6 +1119,36 @@ pub trait RpcApi: Sync + Send + AnySync {
     }
 
     /// G14 op 248: the ORIGINAL TIR frame quote (`TFP1`). Read-only.
+    async fn get_palw_tokenizer_registration_quote(
+        &self,
+        request: GetPalwTokenizerRegistrationQuoteRequest,
+    ) -> RpcResult<GetPalwTokenizerRegistrationQuoteResponse> {
+        self.get_palw_tokenizer_registration_quote_call(None, request).await
+    }
+    async fn get_palw_tokenizer_registration_quote_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwTokenizerRegistrationQuoteRequest,
+    ) -> RpcResult<GetPalwTokenizerRegistrationQuoteResponse> {
+        let _ = (connection, request);
+        Err(RpcError::General("tokenizer registration RPC unavailable".into()))
+    }
+
+    async fn get_palw_tokenizer_registration_status(
+        &self,
+        request: GetPalwTokenizerRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwTokenizerRegistrationStatusResponse> {
+        self.get_palw_tokenizer_registration_status_call(None, request).await
+    }
+    async fn get_palw_tokenizer_registration_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwTokenizerRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwTokenizerRegistrationStatusResponse> {
+        let _ = (connection, request);
+        Err(RpcError::General("tokenizer registration RPC unavailable".into()))
+    }
+
     async fn get_palw_tir_original_quote(
         &self,
         request: GetPalwTirOriginalQuoteRequest,

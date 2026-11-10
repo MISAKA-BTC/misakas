@@ -636,9 +636,10 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
 fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     use crate::palw_state_v2::{
         PalwBlockWorkV3, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateV2Error, TokenizerRegistrationFeeWorkingStateV1, apply_delta_v2,
-        apply_palw_transition_retained_v7, palw_v2_apply_one_tokenizer_registration_fee_retained_v1,
-        palw_v2_apply_one_tokenizer_registration_owned_v1, palw_v2_apply_one_tokenizer_registration_retained_v1,
-        palw_v2_pre_object_base_retained_v1, palw_v2_pre_tokenizer_registration_base_retained_v1, revert_delta_v2,
+        apply_palw_transition_retained_v7, palw_tokenizer_registration_open_quote_v1, palw_tokenizer_registration_status_v1,
+        palw_v2_apply_one_tokenizer_registration_fee_retained_v1, palw_v2_apply_one_tokenizer_registration_owned_v1,
+        palw_v2_apply_one_tokenizer_registration_retained_v1, palw_v2_pre_object_base_retained_v1,
+        palw_v2_pre_tokenizer_registration_base_retained_v1, revert_delta_v2,
     };
     use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
     use crate::palw_tokenizer_registration_carriage_v1::*;
@@ -699,6 +700,28 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     prerequisite.write_staged_row_v1(Key::Inventory(eof.artifact_hash), Some(Row::ArtifactInventory(eof))).unwrap();
     prerequisite.write_staged_row_v1(Key::TirContainer(class), Some(Row::TirContainer(Box::new(container)))).unwrap();
     let mut state = prerequisite.state;
+    assert_eq!(borsh::object_length(&body).unwrap(), TOKENIZER_REGISTRATION_OPEN_BODY_BYTES_V1);
+    let root_before_quote = state.state_root();
+    let quoted = palw_tokenizer_registration_open_quote_v1(&state, &params, &point, &extras, &body).unwrap().unwrap();
+    assert_eq!((quoted.open_id, quoted.policy, quoted.quote), (open_id, policy, quote));
+    assert_eq!(state.state_root(), root_before_quote);
+    assert!(palw_tokenizer_registration_status_v1(&state, open_id).unwrap().is_none());
+    let mut dormant = extras.clone();
+    dormant.tokenizer_registration_policy_v1 = None;
+    assert!(palw_tokenizer_registration_open_quote_v1(&state, &params, &point, &dormant, &body).unwrap().is_none());
+    // This body can be priced but there is insufficient time to reserve its
+    // Part, normal Finish and recovery Finish at strictly increasing DAAs.
+    let short_open = TokenizerRegistrationOpenBodyV1 {
+        accept_until_daa: point.daa_score + 1,
+        finish_until_daa: point.daa_score + 3,
+        material_until_daa: point.daa_score + 3 + policy.retention_daa,
+        ..body
+    };
+    assert!(policy.quote_v1(&short_open, point.daa_score, quoted.declared_key_events).is_ok());
+    assert!(matches!(
+        palw_tokenizer_registration_open_quote_v1(&state, &params, &point, &extras, &short_open),
+        Err(PalwStateV2Error::CarriageInconsistent(reason)) if reason.contains("capacity")
+    ));
     let mut open = TokenizerRegistrationOpenV1 { body, signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN] };
     let open_message = open.signing_message_v1().unwrap();
     open.signature.copy_from_slice(
@@ -848,6 +871,20 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     let session_key = Key::TokenizerRegistrationSession(open_id);
     assert!(authoritative.staged_court_row_v1(&session_key).is_some());
     assert_eq!(authoritative.staged_court_row_v1(&session_key), rehearsed.staged_court_row_v1(&session_key));
+    let accepted_status = palw_tokenizer_registration_status_v1(&authoritative, open_id).unwrap().unwrap();
+    assert_eq!(accepted_status.open, body);
+    assert_eq!(accepted_status.accepted, point);
+    assert_eq!(accepted_status.charge_id, expected.charge_id.unwrap());
+    assert_eq!(accepted_status.quote, quote);
+    assert_eq!(accepted_status.status, TokenizerRegistrationStatusV1::Pending);
+    assert!(accepted_status.released_at.is_none());
+    assert!(accepted_status.parts.iter().all(|part| part.accepted.is_none() && part.slot_daa > point.daa_score));
+    assert!(accepted_status.finishes.iter().all(|finish| !finish.attempted));
+    let duplicate_point = PalwBlockContextV2 { block: h(98_999), blue_score: point.blue_score + 1, ..point };
+    assert!(matches!(
+        palw_tokenizer_registration_open_quote_v1(&authoritative, &params, &duplicate_point, &extras, &body),
+        Err(PalwStateV2Error::CarriageInconsistent(reason)) if reason.contains("already retained")
+    ));
     let (isolated, isolated_fee, refusal) = rehearse_fee(&state, &handoff);
     assert_eq!((isolated_fee, refusal), (expected, None));
     for key in [session_key, Key::TokenizerRegistrationBook] {
@@ -995,6 +1032,12 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
         let (next, (fee, reason)) = apply(&state, point, &TokenizerRegistrationWireV1::Part(part), 7);
         assert_eq!(reason, None);
         assert_eq!(fee.registration_burn, 0);
+        let status = palw_tokenizer_registration_status_v1(&next, open_id).unwrap().unwrap();
+        let delivered = &status.parts[index as usize];
+        assert_eq!(
+            (delivered.index, delivered.offset, delivered.bytes, delivered.slot_daa, delivered.accepted),
+            (index, offset, len as u32, daa, Some(point))
+        );
         state = next;
     }
     let Some(Row::TokenizerRegistrationBook(book)) = state.staged_court_row_v1(&Key::TokenizerRegistrationBook) else { panic!() };
@@ -1095,6 +1138,13 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     assert!(matches!(session.status, TokenizerRegistrationStatusV1::Complete { .. }));
     assert!(session.finish_attempts.contains(&0));
     assert!(state.staged_court_row_v1(&registered).is_some());
+    let completed = palw_tokenizer_registration_status_v1(&state, open_id).unwrap().unwrap();
+    assert_eq!(completed.status, session.status);
+    assert_eq!(completed.released_at, Some(point));
+    assert_eq!(completed.finishes[0].slot_daa, point.daa_score);
+    assert!(completed.finishes[0].attempted);
+    assert!(!completed.finishes[1].attempted);
+    assert!(completed.parts.iter().all(|part| part.accepted.is_some()));
     let gc_point = PalwBlockContextV2 {
         block: h(102_000),
         daa_score: body.material_until_daa,
@@ -1132,6 +1182,7 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     let expired = apply_delta_v2(&state, &delta, &params).unwrap();
     assert!(expired.staged_court_row_v1(&Key::TokenizerRegistrationSession(open_id)).is_none());
     assert!(expired.staged_court_row_v1(&Key::TokenizerRegistrationBook).is_none());
+    assert!(palw_tokenizer_registration_status_v1(&expired, open_id).unwrap().is_none());
     assert!(expired.staged_court_row_v1(&registered).is_some());
     assert_eq!(revert_delta_v2(&expired, &delta, &params).unwrap().state_root(), state.state_root());
 }

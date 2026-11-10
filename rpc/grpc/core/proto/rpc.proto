@@ -3744,3 +3744,26 @@ message GetPalwMemoryRoutingOutcomeV1ResponseMessage {
   string reason = 3;
   RPCError error = 1000;
 }
+
+message GetPalwTokenizerRegistrationQuoteRequestMessage {
+  string open_body_hex = 1;
+}
+
+message GetPalwTokenizerRegistrationQuoteResponseMessage {
+  bool available = 1;
+  bool quoted = 2;
+  string refusal = 3;
+  string observation_json = 4;
+  RPCError error = 1000;
+}
+
+message GetPalwTokenizerRegistrationStatusRequestMessage {
+  string open_id = 1;
+}
+
+message GetPalwTokenizerRegistrationStatusResponseMessage {
+  bool available = 1;
+  bool found = 2;
+  string observation_json = 3;
+  RPCError error = 1000;
+}

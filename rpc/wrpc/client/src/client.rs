@@ -722,6 +722,8 @@ impl RpcApi for KaspaRpcClient {
             GetPalwAcceptanceReads,
             GetPalwRfc0016Report,
             GetPalwTirOriginalQuote,
+            GetPalwTokenizerRegistrationQuote,
+            GetPalwTokenizerRegistrationStatus,
             GetPalwClaimDetail,
             GetPalwCourtState,
             GetPalwFenceSchedule,

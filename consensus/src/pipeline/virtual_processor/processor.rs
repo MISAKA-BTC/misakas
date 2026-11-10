@@ -1441,6 +1441,7 @@ mod positive_source_read;
 mod template;
 mod template_parent_snapshot_v1;
 mod tokenizer_registration_admission_v1;
+mod tokenizer_registration_read_v1;
 pub(super) mod tokenizer_registration_v1;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;

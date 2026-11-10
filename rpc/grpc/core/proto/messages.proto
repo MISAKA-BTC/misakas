@@ -138,6 +138,8 @@ message KaspadRequest {
     GetPalwAcceptanceReadsRequestMessage getPalwAcceptanceReadsRequest = 1310;
     GetPalwRfc0016ReportRequestMessage getPalwRfc0016ReportRequest = 1330;
     GetPalwTirOriginalQuoteRequestMessage getPalwTirOriginalQuoteRequest = 1332;
+    GetPalwTokenizerRegistrationStatusRequestMessage getPalwTokenizerRegistrationStatusRequest = 1336;
+    GetPalwTokenizerRegistrationQuoteRequestMessage getPalwTokenizerRegistrationQuoteRequest = 1334;
     GetPalwClaimDetailRequestMessage getPalwClaimDetailRequest = 1264;
     GetPalwCourtStateRequestMessage getPalwCourtStateRequest = 1266;
     GetPalwFenceScheduleRequestMessage getPalwFenceScheduleRequest = 1268;
@@ -285,6 +287,8 @@ message KaspadResponse {
     GetPalwAcceptanceReadsResponseMessage getPalwAcceptanceReadsResponse = 1311;
     GetPalwRfc0016ReportResponseMessage getPalwRfc0016ReportResponse = 1331;
     GetPalwTirOriginalQuoteResponseMessage getPalwTirOriginalQuoteResponse = 1333;
+    GetPalwTokenizerRegistrationStatusResponseMessage getPalwTokenizerRegistrationStatusResponse = 1337;
+    GetPalwTokenizerRegistrationQuoteResponseMessage getPalwTokenizerRegistrationQuoteResponse = 1335;
     GetPalwClaimDetailResponseMessage getPalwClaimDetailResponse = 1265;
     GetPalwCourtStateResponseMessage getPalwCourtStateResponse = 1267;
     GetPalwFenceScheduleResponseMessage getPalwFenceScheduleResponse = 1269;

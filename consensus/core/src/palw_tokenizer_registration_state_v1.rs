@@ -91,14 +91,7 @@ impl TokenizerRegistrationSessionV1 {
         policy: TokenizerRegistrationPolicyV1,
         open: TokenizerRegistrationOpenV1,
     ) -> Result<Self, String> {
-        if !parent.last_point().is_some_and(|prior| follows(*prior, at)) || open.body.network != network {
-            return Err("tokenizer Open changes its native network or accepted parent".into());
-        }
-        let b = &open.body;
-        let declared_key_events =
-            tokenizer_registration_parent_v1(parent, extras, at.daa_score, &b.pins, b.artifact_root, b.statement)?;
-        let quote = policy.quote_v1(b, at.daa_score, declared_key_events)?;
-        let key = eligible_key(parent, params, b.opener)?;
+        let (key, declared_key_events, quote) = Self::prepare_unsigned_v1(parent, params, extras, at, network, policy, &open.body)?;
         open.verify_signature_v1(key)?;
         let row = Self {
             open,
@@ -113,6 +106,27 @@ impl TokenizerRegistrationSessionV1 {
         };
         row.check(row.id()?)?;
         Ok(row)
+    }
+
+    /// Common parent authority and quote preparation. Signature verification
+    /// and a retained session are required only by the accepting writer.
+    pub(crate) fn prepare_unsigned_v1<'a>(
+        parent: &'a PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+        at: PalwBlockContextV2,
+        network: Hash64,
+        policy: TokenizerRegistrationPolicyV1,
+        open: &crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenBodyV1,
+    ) -> Result<(&'a [u8], u64, TokenizerRegistrationQuoteV1), String> {
+        if !parent.last_point().is_some_and(|prior| follows(*prior, at)) || open.network != network {
+            return Err("tokenizer Open changes its native network or accepted parent".into());
+        }
+        let declared_key_events =
+            tokenizer_registration_parent_v1(parent, extras, at.daa_score, &open.pins, open.artifact_root, open.statement)?;
+        let quote = policy.quote_v1(open, at.daa_score, declared_key_events)?;
+        let key = eligible_key(parent, params, open.opener)?;
+        Ok((key, declared_key_events, quote))
     }
 
     pub(crate) fn id(&self) -> Result<Hash64, String> {
@@ -446,18 +460,31 @@ impl TokenizerRegistrationBookV1 {
     }
 
     pub(crate) fn reserve(&mut self, row: &TokenizerRegistrationSessionV1) -> Result<(), String> {
-        self.check()?;
         let id = row.id()?;
         row.check(id)?;
-        if row.policy != self.policy || self.sessions.contains_key(&id) {
+        self.reserve_open_v1(id, &row.open.body, row.accepted.daa_score, row.policy, row.quote)
+    }
+
+    /// Run the same capacity, clock and quota checks for a native Open and a
+    /// disposable unsigned preview. Callers derive the quote on the parent.
+    pub(crate) fn reserve_open_v1(
+        &mut self,
+        id: Hash64,
+        open: &crate::palw_tokenizer_registration_v1::TokenizerRegistrationOpenBodyV1,
+        accepted_daa: u64,
+        policy: TokenizerRegistrationPolicyV1,
+        quote: TokenizerRegistrationQuoteV1,
+    ) -> Result<(), String> {
+        self.check()?;
+        if policy != self.policy || self.sessions.contains_key(&id) {
             return Err("tokenizer Open changes policy or repeats a live reservation".into());
         }
         let mut reservation = TokenizerRegistrationReservationV1 {
-            opener: row.open.body.opener,
-            accepted_daa: row.accepted.daa_score,
-            finish_until_daa: row.open.body.finish_until_daa,
-            material_until_daa: row.open.body.material_until_daa,
-            quote: row.quote,
+            opener: open.opener,
+            accepted_daa,
+            finish_until_daa: open.finish_until_daa,
+            material_until_daa: open.material_until_daa,
+            quote,
             assigned_slots: Vec::new(),
             released_at: None,
         };
@@ -536,11 +563,21 @@ impl TokenizerRegistrationBookV1 {
     }
 
     pub(crate) fn check_session(&self, row: &TokenizerRegistrationSessionV1) -> Result<(), String> {
-        let id = row.id()?;
+        let r = self.session_reservation_v1(row.id()?, row)?;
+        if r.released_at.is_some() {
+            return Err("tokenizer reservation differs from accepted Open".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn session_reservation_v1(
+        &self,
+        id: Hash64,
+        row: &TokenizerRegistrationSessionV1,
+    ) -> Result<&TokenizerRegistrationReservationV1, String> {
         row.check(id)?;
         let r = self.sessions.get(&id).ok_or("tokenizer session has no native reservation")?;
-        if r.released_at.is_some()
-            || self.policy != row.policy
+        if self.policy != row.policy
             || r.opener != row.open.body.opener
             || r.accepted_daa != row.accepted.daa_score
             || r.finish_until_daa != row.open.body.finish_until_daa
@@ -549,7 +586,7 @@ impl TokenizerRegistrationBookV1 {
         {
             return Err("tokenizer reservation differs from accepted Open".into());
         }
-        Ok(())
+        Ok(r)
     }
 
     fn check_slot(&self, open: Hash64, kind: u8, index: u32, daa: u64) -> Result<(), String> {

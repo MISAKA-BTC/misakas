@@ -159,6 +159,8 @@ pub enum KaspadPayloadOps {
     GetPalwAcceptanceReads,
     GetPalwRfc0016Report,
     GetPalwTirOriginalQuote,
+                GetPalwTokenizerRegistrationQuote,
+                GetPalwTokenizerRegistrationStatus,
     GetPalwClaimDetail,
     GetPalwCourtState,
     GetPalwFenceSchedule,

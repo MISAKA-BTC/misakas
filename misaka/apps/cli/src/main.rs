@@ -66,6 +66,7 @@ mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
 mod palw_status;
+mod palw_tokenizer_registration;
 mod palw_user;
 mod palw_verify_context;
 /// ADR-0152 P2-11: `palw vesting` — where a vested reward stands (op 199).
@@ -1353,6 +1354,9 @@ enum PalwPanelReadinessCmd {
 
 #[derive(Subcommand, Debug)]
 enum PalwCmd {
+    /// RFC-0051 unsigned Open quote and accepted Open/Part/Finish status.
+    #[command(subcommand)]
+    TokenizerRegistration(palw_tokenizer_registration::TokenizerRegistrationCmd),
     /// ADR-0108: verify, preflight, submit and receipt an extension manifest.
     #[command(subcommand)]
     Extension(ExtensionCmd),
@@ -3746,6 +3750,9 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::BondDetail { bond, json }) => Box::pin(async move { palw_user::bond_detail(ctx, &bond, json).await }),
         Command::Palw(PalwCmd::Fences { armed_only, list, json }) => {
             Box::pin(async move { palw_user::fences(ctx, armed_only, list.as_deref(), json).await })
+        }
+        Command::Palw(PalwCmd::TokenizerRegistration(command)) => {
+            Box::pin(async move { palw_tokenizer_registration::run(ctx, command).await })
         }
         Command::Palw(PalwCmd::Status { bond, json }) => Box::pin(async move { palw_user::status(ctx, bond.as_deref(), json).await }),
         Command::Palw(PalwCmd::NotAdopted { json }) => Box::pin(async move { palw_user::not_adopted(ctx, json) }),
