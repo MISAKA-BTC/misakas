@@ -6426,6 +6426,7 @@ dependencies = [
  "libc",
  "libcrux-ml-dsa",
  "misaka-endpoints",
+ "misaka-palw-base0",
  "misaka-palw-challenge",
  "misaka-palw-kernel",
  "misaka-palw-positive-contract",

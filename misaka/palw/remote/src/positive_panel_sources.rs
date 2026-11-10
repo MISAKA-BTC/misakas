@@ -103,6 +103,25 @@ pub fn check_public_tokenizer_v1(manifest: &CheckedManifestV1, bytes: &[u8]) -> 
     Ok(())
 }
 
+/// Replay plain text with the native byte-level tokenizer, without allowing
+/// text to introduce special tokens. Run inside the Panel's reserved work.
+pub fn check_public_flat_prompt_v1(
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    prompt: &[u8],
+    tokenizer: &[u8],
+) -> Result<Vec<u32>, PanelSourceErrorR1> {
+    if manifest.original() != original.id() {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    let text = manifest.open_prompt_text(prompt)?;
+    check_public_tokenizer_v1(manifest, tokenizer)?;
+    let tokenizer = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(tokenizer).map_err(|_| PanelSourceErrorR1::Binding)?;
+    let ids = tokenizer.encode_without_specials(text).map_err(|_| PanelSourceErrorR1::Binding)?;
+    open_public_flat_input_tokens_v1(original, manifest, &ids)?;
+    Ok(ids)
+}
+
 /// Authenticate the published output data under the original execution context.
 pub fn open_public_output_tokens_v1(
     original: &OriginalCommit,

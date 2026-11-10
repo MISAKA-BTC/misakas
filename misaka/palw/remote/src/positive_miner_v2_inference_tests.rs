@@ -69,7 +69,18 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     let result = &fixture.result;
     let form = PalwPromptIdsFormV1::MerkleV1;
     let prompt = vec![1u32; PALW_PROMPT_IDS_TILE_LEN as usize + 1];
+    let prompt_text = "a".repeat(prompt.len());
+    let tokenizer_json = br#"{"model":{"type":"BPE","vocab":{"b":0,"a":1},"merges":[]},"added_tokens":[]}"#;
+    use kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1;
+    use misaka_palw_positive_contract::public_one_honest::{
+        prompt_text_material_codec_v1, prompt_text_material_v1, tokenizer_json_material_codec_v1,
+    };
+    let prompt_rules = ManifestScopeRules { codec: prompt_text_material_codec_v1(), max_bytes: 64, chunk_bytes: 64 };
+    let tokenizer_rules = ManifestScopeRules { codec: tokenizer_json_material_codec_v1(), max_bytes: 256, chunk_bytes: 256 };
+    let prompt_entry = prompt_text_material_v1(result.scope.ruleset, &prompt_text, prompt_rules).unwrap();
+    let tokenizer_entry = public_tokenizer_material_v1(tokenizer_json, tokenizer_rules).unwrap();
     let mut context = fixture.context.clone();
+    context.tokenizer_id = Hash64::from_bytes(tokenizer_entry.subject.0);
     context.declared_prefill_tokens = prompt.len() as u32;
     context.max_context_tokens = context.declared_prefill_tokens + context.exact_decode_tokens;
     context.prompt_token_ids_hash = prompt_token_ids_commitment_v1(form, &prompt).unwrap();
@@ -84,9 +95,9 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
         registered_class: result.registered_class,
         artifact: result.artifact,
         program: result.program,
-        prompt: d(1),
+        prompt: prompt_entry.subject,
         input_tokens: Digest(context.prompt_token_ids_hash.as_bytes()),
-        tokenizer: result.tokenizer,
+        tokenizer: tokenizer_entry.subject,
         execution_rules: result.execution_rules,
         generation_seed: result.generation_seed,
         initial_state: d(2),
@@ -104,6 +115,8 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     let fixture_rules = ManifestScopeRules { codec: d(9), max_bytes: 1, chunk_bytes: 1 };
     let mut rules = [fixture_rules; MaterialScope::COUNT];
     rules[MaterialScope::Program as usize] = program_rules;
+    rules[MaterialScope::Prompt as usize] = prompt_rules;
+    rules[MaterialScope::Tokenizer as usize] = tokenizer_rules;
     let input_rules = ManifestScopeRules {
         codec: Digest(prompt_ids_form_id_v1(form).as_bytes()),
         max_bytes: u64::from(original.prefill) * 4,
@@ -129,9 +142,9 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
         entries: [
             fixture_entry(original.artifact),
             job.public_program_material(program_rules).unwrap(),
-            fixture_entry(original.prompt),
+            prompt_entry,
             job.public_input_token_material(input_rules).unwrap(),
-            fixture_entry(original.tokenizer),
+            tokenizer_entry,
             fixture_entry(original.execution_rules),
             fixture_entry(original.initial_state),
             fixture_entry(original.dependencies),
@@ -139,7 +152,12 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
             output_entry(original.output),
         ],
     };
-    let limit = u64::from(size) + input_rules.max_bytes + output_rules.max_bytes + (MaterialScope::COUNT - 3) as u64;
+    let limit = u64::from(size)
+        + input_rules.max_bytes
+        + output_rules.max_bytes
+        + prompt_entry.total_bytes
+        + tokenizer_entry.total_bytes
+        + (MaterialScope::COUNT - 5) as u64;
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
     let store = std::env::temp_dir().join(format!("misaka-public-manifest-{}", std::process::id()));
     std::fs::create_dir(&store).unwrap();
@@ -205,6 +223,9 @@ fn panel_opens_program_inputs_and_output_from_the_miners_bound_manifest() {
     manifest.entries[MaterialScope::Output as usize] = output_entry(original.output);
     let encoded = original.bind_manifest(&manifest, &rules, limit, 4096).unwrap();
     let flat = read_public_manifest_v1(&original, &rules, limit, 4096, encoded.len() as u64, encoded.as_slice()).unwrap();
+    use crate::positive_panel_sources::check_public_flat_prompt_v1;
+    assert_eq!(check_public_flat_prompt_v1(&original, &flat, prompt_text.as_bytes(), tokenizer_json), Ok(prompt.clone()));
+    assert!(check_public_flat_prompt_v1(&original, &flat, prompt_text.as_bytes(), b"{}").is_err());
     assert_eq!(open_public_output_tokens_v1(&original, &checked, &output_ids), Err(PanelSourceErrorR1::Binding));
     assert_eq!(open_public_output_tokens_v1(&original, &flat, &output_ids), Ok(()));
     assert_eq!(open_public_flat_input_tokens_v1(&original, &flat, &prompt), Ok(()));
