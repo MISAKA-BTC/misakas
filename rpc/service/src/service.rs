@@ -4284,7 +4284,35 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             },
             // Below the fence (the node's quote is `None` there) or an original the frame route does not admit.
             Ok(None) => GetPalwTirOriginalQuoteResponse::default(),
-            Err(refusal) => GetPalwTirOriginalQuoteResponse { available: true, refusal, door_diagnostics, ..Default::default() },
+            Err(mut refusal) => {
+                // Studio's rail uses Borsh RPC, which does not carry the
+                // optional JSON diagnostics. Keep the signed plan and RPC
+                // encodings intact while reporting the same quoted limits.
+                if let Some(door) = &door_diagnostics {
+                    use std::fmt::Write as _;
+                    let _ = write!(
+                        refusal,
+                        " (quote DAA {}; door {} DAA, limit {} DAA; preparation {}, open {}, owner queue {}, acquisition {}, semantic {}, filing {}, collection {} DAA)",
+                        door.accepted_daa,
+                        door.total_daa,
+                        door.limit_daa,
+                        door.preparation_daa,
+                        door.open_window_daa,
+                        door.owner_queue_wait_daa,
+                        door.acquisition_daa,
+                        door.semantic_daa,
+                        door.filing_daa,
+                        door.collection_daa,
+                    );
+                }
+                GetPalwTirOriginalQuoteResponse {
+                    available: true,
+                    refusal,
+                    quote_daa: door_diagnostics.as_ref().map_or(0, |door| door.accepted_daa),
+                    door_diagnostics,
+                    ..Default::default()
+                }
+            }
         })
     }
 
