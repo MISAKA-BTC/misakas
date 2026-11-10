@@ -686,6 +686,10 @@ fn legacy_fp_selection_and_constraint_jobs_are_refused_until_their_route_is_arme
     for c in [public_v4(), constraint_v6(), prefix_v11()] {
         assert_eq!(tok(all, at, &c, true), None, "version {}: registered tokenizer material", c.job.version);
         assert_eq!(tok(all, at, &c, false), Some(PALW_G14_ROUTE_ABSENT_CODE_V1), "version {}: none registered", c.job.version);
+        let (_, missing_material) = palw_g14_route_fp_refusal_v1(&route_sp(&p, at, all), at, Some(&c), true, false).unwrap();
+        assert!(missing_material.contains("the class has no accepted raw tokenizer byte and key-event bounds"));
+        let (_, unarmed_route) = palw_g14_route_fp_refusal_v1(&route_sp(&p, at, unbound), at, Some(&c), true, false).unwrap();
+        assert!(!unarmed_route.contains("the class has no accepted raw tokenizer byte and key-event bounds"));
         // Below the fence, and while the tokenizer route is unarmed, the flag changes nothing.
         assert_eq!(tok(all, at + 1, &c, false), None, "version {}: below the fence", c.job.version);
         assert_eq!(tok(all, at + 1, &c, false), tok(all, at + 1, &c, true));

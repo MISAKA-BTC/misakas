@@ -1164,13 +1164,20 @@ pub fn palw_g14_route_fp_refusal_v1(
     if missing.is_empty() {
         return None;
     }
+    let tokenizer_detail = if missing.contains(&PalwG14RouteFamilyV1::FpTokenizer)
+        && mirror.route_armed(PalwG14RouteFamilyV1::FpTokenizer, accepted_daa, framed)
+    {
+        "; the class has no accepted raw tokenizer byte and key-event bounds"
+    } else {
+        ""
+    };
     let g05 = missing.iter().any(|f| matches!(f, PalwG14RouteFamilyV1::FpConstraint | PalwG14RouteFamilyV1::FpPrefix));
     let code = if g05 { PALW_G14_JOB_UNJUDGEABLE_CODE_V1 } else { PALW_G14_ROUTE_ABSENT_CODE_V1 };
     Some((
         code,
         format!(
             "palw_g14_route_required_v1: FP job version {} needs G14 routes {missing:?} that are not armed at DAA {accepted_daa} \
-             (framed: {framed}): refused at admission, no reward, weight or consensus credit",
+             (framed: {framed}{tokenizer_detail}): refused at admission, no reward, weight or consensus credit",
             commitment.job.version
         ),
     ))
