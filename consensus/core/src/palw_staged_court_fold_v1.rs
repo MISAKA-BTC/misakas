@@ -590,7 +590,19 @@ impl PalwChainStateV2 {
             .is_some_and(|frame| now < frame.plan_v1().terms.collect_until_daa)
     }
     pub fn staged_tir_source_until_v1(&self, claim: Hash64) -> Option<u64> {
-        self.staged_tir_by_claim.get(&claim).and_then(|rows| rows.last().map(|(until, _)| *until))
+        let legacy = self.staged_tir_by_claim.get(&claim).and_then(|rows| rows.last().map(|(until, _)| *until));
+        // Protected TFP1 has no legacy acquisition/preparation row. Its own
+        // immutable frame carries the retained claim-material horizon. Read
+        // that fixed pin directly: this hot retirement/prefix query must not
+        // serialize the FP or rebuild its Source. Write/load validation checks
+        // the full frame and its paired admission/history separately.
+        let protected = match self.staged_courts.get(&PalwStagedCourtKeyV1::PublicTfp1FrameV1(claim)) {
+            Some(PalwStagedCourtRowV1::PublicTfp1FrameV1(frame)) if frame.claim_v1() == claim => Some(frame.material_until_daa_v1()),
+            // A corrupt unvalidated candidate cannot release source capital.
+            Some(_) => Some(u64::MAX),
+            None => None,
+        };
+        legacy.into_iter().chain(protected).max()
     }
     pub fn staged_tir_preparation_v1(
         &self,

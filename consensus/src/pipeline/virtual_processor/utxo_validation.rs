@@ -271,6 +271,9 @@ pub(crate) struct PalwEscrowSpendLocksV1 {
     pub rows: std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
     /// TFO1 carriers' OWN funding outputs accepted earlier in this mergeset: not spendable for the rest of it.
     pub provisional: std::collections::HashSet<TransactionOutpoint>,
+    /// Rooted protected TFP1 funds await their own terminal/settlement owner.
+    /// A legacy payer-return or fee schedule cannot spend these outpoints.
+    pub protected_outpoints: std::collections::HashSet<TransactionOutpoint>,
     /// RFC-0045 purpose-separated rooted locks. Missing native entitlement is
     /// a denial, never permission to treat this P2PKH as ordinary free value.
     pub assignment: std::collections::HashMap<
@@ -293,6 +296,7 @@ impl PalwEscrowSpendLocksV1 {
     fn is_empty(&self) -> bool {
         self.rows.is_empty()
             && self.provisional.is_empty()
+            && self.protected_outpoints.is_empty()
             && self.assignment.is_empty()
             && self.positive_case.is_empty()
             && self.assignment_prover.is_empty()
@@ -345,7 +349,7 @@ impl PalwEscrowSpendLocksV1 {
         let mut first_rooted = None;
         let mut locked_count = 0usize;
         for outpoint in tx.inputs.iter().map(|input| input.previous_outpoint) {
-            if self.provisional.contains(&outpoint) {
+            if self.provisional.contains(&outpoint) || self.protected_outpoints.contains(&outpoint) {
                 return Some(outpoint);
             }
             let case_locked = self.positive_case.contains_key(&outpoint);
@@ -669,6 +673,7 @@ impl<'a> BondSpendFilter<'a> {
         let legacy = tx
             .inputs
             .iter()
+            .filter(|input| !locks.protected_outpoints.contains(&input.previous_outpoint))
             .filter_map(|input| locks.rows.get(&input.previous_outpoint))
             .filter_map(|row| {
                 kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(
@@ -4781,6 +4786,7 @@ mod tests {
             let rooted = PalwEscrowSpendLocksV1 {
                 rows: [(escrow_op, row)].into_iter().collect(),
                 provisional: Default::default(),
+                protected_outpoints: Default::default(),
                 assignment: Default::default(),
                 assignment_invalid: false,
                 positive_case: Default::default(),
@@ -4817,6 +4823,7 @@ mod tests {
             let provisional = PalwEscrowSpendLocksV1 {
                 rows: Default::default(),
                 provisional: [escrow_op].into_iter().collect(),
+                protected_outpoints: Default::default(),
                 assignment: Default::default(),
                 assignment_invalid: false,
                 positive_case: Default::default(),
@@ -4905,6 +4912,7 @@ mod tests {
             let locks = PalwEscrowSpendLocksV1 {
                 rows: [(a_op, row(1, a_op)), (b_op, row(21, b_op))].into_iter().collect(),
                 provisional: Default::default(),
+                protected_outpoints: Default::default(),
                 assignment: Default::default(),
                 assignment_invalid: false,
                 positive_case: Default::default(),
@@ -4967,6 +4975,7 @@ mod tests {
             let locks = PalwEscrowSpendLocksV1 {
                 rows: [(escrow_op, row)].into_iter().collect(),
                 provisional: Default::default(),
+                protected_outpoints: Default::default(),
                 assignment: Default::default(),
                 assignment_invalid: false,
                 positive_case: Default::default(),
@@ -5009,7 +5018,52 @@ mod tests {
                 let mempool = locks.refusal(&tx, entries.iter().map(|e| e.amount), DAA);
                 assert_eq!(mempool, expected);
                 assert_eq!(filter.escrow_refusal(&tx, &entries), mempool, "mempool and block filter answer alike");
+                let mut protected = locks.clone();
+                protected.protected_outpoints.insert(escrow_op);
+                assert_eq!(protected.refusal(&tx, entries.iter().map(|e| e.amount), DAA), Some(escrow_op));
+                let protected_filter = BondSpendFilter { escrow: Some(&protected), ..filter };
+                assert_eq!(protected_filter.escrow_refusal(&tx, &entries), Some(escrow_op));
+                assert_eq!(protected_filter.escrow_burned(&tx, &entries), 0, "refused legacy spend earns no fee credit");
+                protected.rows.clear(); // Independent of the old profile's row projection.
+                assert_eq!(protected.refusal(&tx, entries.iter().map(|e| e.amount), DAA), Some(escrow_op));
             }
+            // Use a positive native fee burn as a control: without the
+            // protected filter this exact same transaction must count it.
+            let priced = PalwFundedEscrowRowV1 {
+                fee_sompi: row.amount_sompi,
+                seat_payee: Hash64::from_u64_word(91),
+                relay_payee: Hash64::from_u64_word(92),
+                ..row
+            };
+            let [seat, relay, burned] = kaspa_consensus_core::palw_g14_values_v1::palw_g14_escrow_split_v1(priced.fee_sompi);
+            assert!(burned > 0);
+            let outputs = [(priced.seat_payee, seat), (priced.relay_payee, relay)]
+                .into_iter()
+                .filter(|(_, amount)| *amount > 0)
+                .map(|(payee, amount)| {
+                    TransactionOutput::new(amount, kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payee.as_bytes()))
+                })
+                .collect();
+            let paid = Transaction::new(
+                0,
+                vec![TransactionInput::new(escrow_op, vec![], 0, 0)],
+                outputs,
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            );
+            let fee_entries = vec![entries[0].clone()];
+            let mut priced_locks = locks.clone();
+            priced_locks.rows.insert(escrow_op, priced);
+            let priced_filter = BondSpendFilter { escrow: Some(&priced_locks), ..filter };
+            assert_eq!(priced_filter.escrow_refusal(&paid, &fee_entries), None);
+            assert_eq!(priced_filter.escrow_burned(&paid, &fee_entries), burned);
+            priced_locks.protected_outpoints.insert(escrow_op);
+            let protected_filter = BondSpendFilter { escrow: Some(&priced_locks), ..filter };
+            assert_eq!(protected_filter.escrow_refusal(&paid, &fee_entries), Some(escrow_op));
+            assert_eq!(protected_filter.escrow_burned(&paid, &fee_entries), 0);
+
             assert_eq!(
                 PalwEscrowSpendLocksV1::default().refusal(
                     &spend(TransactionOutput::new(1, ScriptPublicKey::default()), vec![]),

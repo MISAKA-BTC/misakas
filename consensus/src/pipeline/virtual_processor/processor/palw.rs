@@ -574,6 +574,7 @@ impl VirtualStateProcessor {
             escrow: super::super::utxo_validation::PalwEscrowSpendLocksV1 {
                 rows: self.palw_escrow_locked_rows_v1(&state, now_daa),
                 provisional: Default::default(),
+                protected_outpoints: self.palw_protected_escrow_outpoints_v1(&state),
                 assignment: assignment.unwrap_or_default(),
                 assignment_invalid,
                 positive_case: positive_case.unwrap_or_default(),
@@ -5524,6 +5525,22 @@ impl VirtualStateProcessor {
             return Default::default();
         }
         kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_rows_by_outpoint_v1(state.funded_escrows_v1())
+    }
+
+    /// The same selected-parent classification for block, virtual and mempool.
+    /// No model availability check or legacy fee schedule supplies authority.
+    pub(in crate::pipeline::virtual_processor) fn palw_protected_escrow_outpoints_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    ) -> std::collections::HashSet<TransactionOutpoint> {
+        // A rooted dedicated frame is enough to protect its funds. Do not
+        // depend on the legacy model-custody route's activation fence.
+        state
+            .funded_escrows_v1()
+            .values()
+            .filter(|row| row.settled_by.is_none() && state.public_tfp1_escrow_requires_native_settlement_v1(row.claim))
+            .map(|row| row.funding_outpoint)
+            .collect()
     }
 
     pub(in crate::pipeline::virtual_processor) fn palw_v2_bond_burn_obligations(

@@ -922,6 +922,7 @@ pub(crate) fn exercise_public_tfp1_frame_writer_v1(
     parent.kernel_route.as_mut().unwrap().aux.remove(&(PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, original.0.0.to_vec())).unwrap();
     parent.claims.get_mut(&claim).unwrap().trace_retention_daa = material_until;
     let key = Key::PublicTfp1FrameV1(claim);
+    assert!(!parent.public_tfp1_escrow_requires_native_settlement_v1(claim));
     let extras = PalwTransitionExtrasV1::default();
     let (frame, _, _) = make(&parent);
     let encoded = borsh::to_vec(&Row::PublicTfp1FrameV1(Box::new((*frame).clone()).into())).unwrap();
@@ -987,12 +988,28 @@ pub(crate) fn exercise_public_tfp1_frame_writer_v1(
     assert!(builder.state.public_tfp1_original_link_v1(claim).unwrap().unwrap().uses_public_frame_v1());
     assert!(builder.state.court_service_holds_material_v1(&key));
     builder.state.validate_public_verification_rows_v1().unwrap();
+    assert_eq!(builder.state.staged_tir_source_until_v1(claim), Some(material_until));
+    super::super::funded_escrow::tests::exercise_protected_funded_liability_v1(&builder.state, params, claim);
     let delta = PalwStateDeltaV2 { point, entries: builder.entries.clone() };
     let replayed = apply_delta_v2(&parent, &delta, params).unwrap();
     assert_eq!(replayed.state_root(), builder.state.state_root());
     let reverted = revert_delta_v2(&replayed, &delta, params).unwrap();
     assert_eq!(reverted.state_root(), parent.state_root());
     assert!(reverted.public_tfp1_frame_v1(claim).unwrap().is_none());
+    assert_eq!(reverted.staged_tir_source_until_v1(claim), parent.staged_tir_source_until_v1(claim));
+    assert_eq!(replayed.staged_tir_source_until_v1(claim), Some(material_until));
+    assert!(replayed.public_tfp1_escrow_requires_native_settlement_v1(claim));
+    assert!(!reverted.public_tfp1_escrow_requires_native_settlement_v1(claim));
+    // Retirement observes the same retained horizon even without an old
+    // TIR frame. Phase changes below are reader-only fixtures, not Final.
+    let mut terminal = replayed.clone();
+    terminal.claims.get_mut(&claim).unwrap().phase = PalwClaimPhaseV2::Final { final_daa: point.daa_score + 1 };
+    assert_eq!(terminal.staged_retirement_floor_v1(&claim, material_until - 1), material_until);
+    assert_eq!(terminal.staged_retirement_floor_v1(&claim, material_until + 1), material_until + 1);
+    let mut malformed_source = replayed.clone();
+    malformed_source.staged_courts.insert(key, old.clone());
+    assert_eq!(malformed_source.staged_tir_source_until_v1(claim), Some(u64::MAX), "wrong row kind cannot release source capital");
+
     let route_less = PalwChainStateV2::genesis();
     route_less.validate_public_verification_delta_v1(&delta.entries, true).unwrap();
     let mut own_frame_prefix = delta.entries.clone();
@@ -1052,6 +1069,8 @@ pub(crate) fn exercise_public_tfp1_frame_writer_v1(
     let restored =
         borsh::from_slice::<PalwStateCarriageV2>(&encoded).unwrap().into_state(params, Some(replayed.state_root())).unwrap();
     assert_eq!(restored.public_tfp1_frame_v1(claim).unwrap(), replayed.public_tfp1_frame_v1(claim).unwrap());
+    assert_eq!(restored.staged_tir_source_until_v1(claim), Some(material_until));
+    assert!(restored.public_tfp1_escrow_requires_native_settlement_v1(claim));
     restored
 }
 

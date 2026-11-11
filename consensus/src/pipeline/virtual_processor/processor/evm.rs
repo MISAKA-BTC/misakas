@@ -709,6 +709,7 @@ impl VirtualStateProcessor {
                 let outpoint = &input.previous_outpoint;
                 if gate.locked.contains(outpoint)
                     || gate.escrow.rows.contains_key(outpoint)
+                    || gate.escrow.protected_outpoints.contains(outpoint)
                     || gate.escrow.assignment.contains_key(outpoint)
                     || gate.escrow.positive_case.contains_key(outpoint)
                     || gate.escrow.assignment_prover.contains_key(outpoint)

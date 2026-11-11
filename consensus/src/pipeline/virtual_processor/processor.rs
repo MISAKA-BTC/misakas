@@ -2675,6 +2675,8 @@ impl VirtualStateProcessor {
                     // G14 lane escrow-rfc08 (RFC-0035 A): and which funded-escrow outpoints are locked, from the same parent state.
                     ctx.palw_escrow_locks.rows =
                         palw_state.as_ref().map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score)).unwrap_or_default();
+                    ctx.palw_escrow_locks.protected_outpoints =
+                        palw_state.as_ref().map(|s| self.palw_protected_escrow_outpoints_v1(s)).unwrap_or_default();
                     ctx.palw_escrow_locks.assignment = palw_state
                         .as_ref()
                         .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
@@ -4472,6 +4474,8 @@ impl VirtualStateProcessor {
         // G14 lane escrow-rfc08: virtual locks the funded-escrow rows exactly as the chain walk does.
         ctx.palw_escrow_locks.rows =
             virtual_palw_state.as_ref().map(|state| self.palw_escrow_locked_rows_v1(state, daa)).unwrap_or_default();
+        ctx.palw_escrow_locks.protected_outpoints =
+            virtual_palw_state.as_ref().map(|state| self.palw_protected_escrow_outpoints_v1(state)).unwrap_or_default();
         ctx.palw_escrow_locks.assignment = virtual_palw_state
             .as_ref()
             .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))

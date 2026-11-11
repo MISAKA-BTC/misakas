@@ -476,7 +476,7 @@ mod tests {
             transmitted_bytes: 3 * supply.transmitted_bytes,
             additional_work: 3 * supply.additional_work,
             retained_bytes: 3 * supply.retained_bytes,
-            retention_until: 10_100,
+            retention_until: 10_110, // Claim material remains retained after the hard court deadline.
             fee: 1,
             witness_attempts: 1,
         };

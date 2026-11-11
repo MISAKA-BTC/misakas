@@ -21,6 +21,13 @@ fn refused(why: impl std::fmt::Debug) -> PalwStateV2Error {
 }
 
 impl PalwChainStateV2 {
+    /// Route classification for the rooted escrow lock. It confers no spend
+    /// authority, and a malformed row at the dedicated key stays protected.
+    pub fn public_tfp1_escrow_requires_native_settlement_v1(&self, claim: Hash64) -> bool {
+        use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
+        self.staged_court_row_v1(&PalwStagedCourtKeyV1::PublicTfp1FrameV1(claim)).is_some()
+    }
+
     pub(super) fn has_funded_escrow_for_claim_v1(&self, claim: Hash64) -> bool {
         let first = (claim, Hash64::from_bytes([0; 64]));
         let last = (claim, Hash64::from_bytes([u8::MAX; 64]));
@@ -116,6 +123,14 @@ impl TransitionBuilder<'_> {
             Ok(false) => {}
             Ok(true) | Err(_) => return false,
         }
+        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        match self.state.staged_court_row_v1(&Key::PublicTfp1FrameV1(row.claim)) {
+            Some(Row::PublicTfp1FrameV1(frame)) => {
+                return self.protected_funded_liability_resolution_v1(row, frame, daa).is_ok();
+            }
+            Some(_) => return false,
+            None => {}
+        }
         let material_until_daa = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, row.claim)
             .map(|frame| frame.plan_v1().terms.material_until_daa);
         let clocks = self
@@ -137,6 +152,73 @@ impl TransitionBuilder<'_> {
         })
     }
 
+    fn protected_funded_liability_resolution_v1(
+        &self,
+        row: &PalwFundedEscrowRowV1,
+        frame: &crate::palw_positive_contract_v2::PublicTfp1FrameV1,
+        now: u64,
+    ) -> Result<(), &'static str> {
+        if !self.protected_funded_service_resolved_v1(row, frame, now) {
+            return Err("protected service or material retention is unresolved");
+        }
+        match self.state.has_public_pending_manifest_v1(frame.original_id_v1()) {
+            Ok(false) => {}
+            Ok(true) => return Err("protected manifest case is pending"),
+            Err(_) => return Err("protected manifest case state is unavailable"),
+        }
+        if self.state.open_courts_of(&row.claim) != 0
+            || self
+                .state
+                .court_duty_clocks_for_claim_v1(row.claim)
+                .iter()
+                .any(|clock| now < clock.response_deadline_daa || now < clock.material_until_daa)
+        {
+            return Err("protected court duty is unresolved");
+        }
+        if self.state.claim(&row.claim).is_none_or(|claim| !claim.phase.is_terminal()) {
+            return Err("protected claim has no terminal disposition");
+        }
+        // The public court row is an archived refutation locator. A generic
+        // Final/Voided claim and a passed deadline supply no paired public
+        // disposition and settlement authority. Keep this route closed until
+        // the native terminal writer can authenticate and discharge it.
+        Err("protected settlement authority is unavailable")
+    }
+
+    fn protected_funded_service_resolved_v1(
+        &self,
+        row: &PalwFundedEscrowRowV1,
+        frame: &crate::palw_positive_contract_v2::PublicTfp1FrameV1,
+        now: u64,
+    ) -> bool {
+        use crate::palw_court_service_release_v1::{CourtServiceRowV3, ServiceBindingScopeV1};
+        if frame.claim_v1() != row.claim
+            || frame.origin_v1().accepted_daa != row.accepted_daa
+            || row.accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) != Some(row.hard_deadline_daa)
+            || now < row.hard_deadline_daa.max(frame.material_until_daa_v1())
+        {
+            return false;
+        }
+        // Frame and book rows have already passed native write/import checks.
+        // An absent binding is not a discharge: compaction leaves a scoped
+        // release record, while every live obligation must be decided.
+        let Some(service) = self.state.court_service_row_v3_v1() else { return false };
+        let scope = ServiceBindingScopeV1 {
+            claim: row.claim,
+            allocation_id: frame.identity_v1(),
+            source_id: frame.source_v1(),
+            original_accepted_daa: row.accepted_daa,
+            hard_deadline_daa: row.hard_deadline_daa,
+        };
+        if service.scope_v1(&row.claim) != Some(scope) {
+            return false;
+        }
+        match service.state.claims.get(&row.claim) {
+            Some(binding) => !binding.packet_ids.is_empty() && CourtServiceRowV3::binding_decided_v1(&service.state, &row.claim),
+            None => service.resolved.get(&row.claim).is_some_and(|resolved| resolved.released_daa <= now),
+        }
+    }
+
     /// **Settle (or continue) a row from a qualified spend the processor accepted.** The fact's `old` must be exactly the rooted
     /// row (the processor read the same parent state); anything else is a refusal, never a re-derivation from the processor's word.
     /// G14 r5: `new` is either the settled row or, after a partial settlement, the continued row on the change-back outpoint —
@@ -145,6 +227,7 @@ impl TransitionBuilder<'_> {
         if self.state.funded_escrows.get(&fact.contract_id) != Some(&fact.old) {
             return Err(refused("a settlement fact whose row is not the rooted row"));
         }
+        self.require_legacy_escrow_settlement_v1(fact.old.claim)?;
         // audit A-2 (defence in depth behind the one-escrow-per-transaction rule): a continued row never re-locks on an outpoint
         // another unsettled row already holds — one change-back outpoint backs exactly one row.
         if fact.new.settled_by.is_none()
@@ -183,6 +266,7 @@ impl TransitionBuilder<'_> {
         if !row.liability_open || row.settled_by.is_some() {
             return Err(refused("only an unsettled row with an open liability clears"));
         }
+        self.require_legacy_escrow_settlement_v1(row.claim)?;
         if super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, &row)? {
             return Err(refused("original archive capital still has a native retention owner"));
         }
@@ -197,6 +281,13 @@ impl TransitionBuilder<'_> {
             .is_some_and(|reservation| reservation.open);
         if reservation_open {
             self.bond_budget_close_v1(&row.claim, now)?;
+        }
+        Ok(())
+    }
+
+    fn require_legacy_escrow_settlement_v1(&self, claim: Hash64) -> Result<(), PalwStateV2Error> {
+        if self.state.public_tfp1_escrow_requires_native_settlement_v1(claim) {
+            return Err(refused("protected TFP1 escrow requires its native settlement authority"));
         }
         Ok(())
     }
@@ -243,7 +334,7 @@ impl TransitionBuilder<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::palw_funded_escrow_v1::{palw_escrow_qualified_spend_v1, palw_escrow_rows_by_outpoint_v1};
     use crate::tx::{Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
@@ -266,6 +357,128 @@ mod tests {
             point: PalwBlockContextV2 { block: BlockHash::from_u64_word(1), daa_score: 10_200, blue_score: 1, subsidy: 0 },
             entries,
         }
+    }
+
+    /// Called with the actual dedicated frame installed by the paired-writer
+    /// fixture. The one service packet below isolates the liability reader.
+    pub(crate) fn exercise_protected_funded_liability_v1(parent: &PalwChainStateV2, params: &PalwStateParamsV2, claim: Hash64) {
+        use crate::{
+            palw_court_service_release_v1::CourtServiceRowV3,
+            palw_court_service_state_v2::{CourtServiceStateV2, ServiceClaimBinding, court_service_profile_id_v2},
+            palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations},
+            palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row},
+        };
+        let frame = parent.public_tfp1_frame_v1(claim).unwrap().unwrap();
+        let row = *parent.funded_escrows_v1().values().find(|row| row.claim == claim).unwrap();
+        let hard = row.hard_deadline_daa;
+        let material_until = frame.material_until_daa_v1();
+        assert!(material_until > hard + 1, "fixture must expose a post-hard retention tail");
+        let extras = PalwTransitionExtrasV1::default();
+        let mut builder = TransitionBuilder::new(parent, params, false, false, false, false, &extras);
+        assert!(row.liability_open);
+        assert!(!builder.funded_liability_strictly_resolved_v1(&row, material_until), "missing book holds");
+
+        let id = h(501).as_bytes();
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve(&[ServicePacket { id, release_daa: row.accepted_daa + 1, service_before: hard, cost }], hard).unwrap();
+        let source_profile_id = h(502);
+        let mut service = CourtServiceRowV3::from_v2(&CourtServiceStateV2 {
+            version: 2,
+            profile_id: court_service_profile_id_v2(source_profile_id),
+            source_profile_id,
+            book,
+            claims: BTreeMap::from([(
+                claim,
+                ServiceClaimBinding {
+                    claim,
+                    allocation_id: frame.identity_v1(),
+                    source_id: frame.source_v1(),
+                    original_accepted_daa: row.accepted_daa,
+                    hard_deadline_daa: hard,
+                    packet_ids: BTreeSet::from([id]),
+                },
+            )]),
+        });
+        let install_fixture = |builder: &mut TransitionBuilder<'_>, service: &CourtServiceRowV3| {
+            builder.state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service.clone()).into()));
+        };
+        service.check().unwrap();
+        service.state.check_context(&builder.state).unwrap();
+        install_fixture(&mut builder, &service);
+        assert!(!builder.funded_liability_strictly_resolved_v1(&row, material_until), "pending packet holds");
+
+        service.state.book.observe_block(row.accepted_daa + 1, h(503).as_bytes(), ServiceCost::default()).unwrap();
+        service.state.book.observe_block(hard, h(504).as_bytes(), ServiceCost::default()).unwrap();
+        install_fixture(&mut builder, &service);
+        builder.close_resolved_funded_liabilities_v1(hard + 1).unwrap();
+        assert!(builder.state.funded_escrows_v1()[&row.contract_id].liability_open, "past hard, live binding still owes retention");
+        assert!(builder.protected_funded_service_resolved_v1(&row, frame, material_until));
+
+        service.release_v1(&BTreeSet::from([claim]), hard).unwrap();
+        install_fixture(&mut builder, &service);
+        assert!(!builder.protected_funded_service_resolved_v1(&row, frame, hard + 1), "release does not shorten retention");
+        assert!(builder.protected_funded_service_resolved_v1(&row, frame, material_until));
+        let mut foreign = service.clone();
+        foreign.resolved.get_mut(&claim).unwrap().allocation_id = h(505);
+        install_fixture(&mut builder, &foreign);
+        assert!(!builder.protected_funded_service_resolved_v1(&row, frame, material_until), "foreign release cannot discharge");
+
+        install_fixture(&mut builder, &service);
+        builder.state.claims.get_mut(&claim).unwrap().phase = PalwClaimPhaseV2::Provisional;
+        assert_eq!(
+            builder.protected_funded_liability_resolution_v1(&row, frame, material_until),
+            Err("protected claim has no terminal disposition")
+        );
+        builder.state.claims.get_mut(&claim).unwrap().phase = PalwClaimPhaseV2::Final { final_daa: hard };
+        // A damaged pending-case record must also hold the escrow. This is a
+        // negative storage fixture, not a successful case insertion.
+        let pending_key = (
+            crate::palw_positive_contract_v2::PUBLIC_PENDING_MANIFEST_TABLE_V1,
+            [frame.original_id_v1().0.0, h(506).as_bytes()].concat(),
+        );
+        builder.state.kernel_route.as_mut().unwrap().aux.insert(pending_key.clone(), vec![0]);
+        assert_eq!(
+            builder.protected_funded_liability_resolution_v1(&row, frame, material_until),
+            Err("protected manifest case state is unavailable")
+        );
+        builder.state.kernel_route.as_mut().unwrap().aux.remove(&pending_key);
+        assert_eq!(
+            builder.protected_funded_liability_resolution_v1(&row, frame, material_until),
+            Err("protected settlement authority is unavailable")
+        );
+        builder.close_resolved_funded_liabilities_v1(material_until).unwrap();
+        builder.sweep_funded_escrows_v1(material_until).unwrap();
+        assert!(builder.state.funded_escrows_v1()[&row.contract_id].liability_open);
+        assert!(builder.entries.is_empty());
+
+        use crate::palw_funded_escrow_v1::{PalwEscrowDueKindV1, PalwEscrowDueV1, PalwEscrowFeeScheduleV1};
+        let amount = row.unreleased_v1().unwrap();
+        let legacy_schedule = PalwEscrowFeeScheduleV1::new_v1(
+            row.contract_id,
+            vec![PalwEscrowDueV1 { kind: PalwEscrowDueKindV1::Burn, payee: None, amount_sompi: amount }],
+            1,
+        )
+        .unwrap();
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(row.funding_outpoint, vec![], 0, 0)],
+            vec![],
+            0,
+            crate::subnets::SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        let plan = palw_escrow_qualified_spend_v1(&row, &tx, &[amount], material_until, Some(&legacy_schedule)).unwrap();
+        assert!(!plan.new.liability_open && plan.new.settled_by.is_some());
+        let fact = PalwEscrowSettlementFactV1 { contract_id: row.contract_id, old: plan.old, new: plan.new };
+        let before = builder.state.clone();
+        assert!(matches!(
+            builder.settle_funded_escrow_v1(&fact),
+            Err(PalwStateV2Error::CarriageInconsistent(reason)) if reason.contains("protected TFP1 escrow requires its native settlement authority")
+        ));
+        assert_eq!(builder.state, before);
+        assert!(builder.entries.is_empty());
     }
 
     /// **Reorg/undo restores the row and with it the lock**: install, then settle; reverting the settlement's delta brings the
