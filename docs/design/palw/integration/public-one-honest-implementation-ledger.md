@@ -289,3 +289,6 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 
 
 2026-11-11 の [TFO3 literal carrier・prompt・Source照合](../../../evidence/palw/tfo3-native-pairing-2026-11-11/README.md): `8d3eb0a6e` で既存上限内に元TFO1/TFO2、UTF-8原文、署名PublicOriginalを同梱し、実txid・claim・実header Source・payer Source・native ruleset prompt hashを照合した。core/RPC build・Node checkと16件が成功。完全profile未設定では新形式を拒否し、旧FPへ剥がして受理しない。対象Studio claimを実worker frameから再導出し、Hello→[19556]、登録tokenizer一致、MerkleV1 prompt・legacy tiled traceを確認。wide-Q24別claimへの変更はせず既存native legacy runnerへ接続する。受理前の全保護計画、同一checkpointでの保存、公開quote・受付・Final・activation・main pushは未完。
+
+
+2026-11-11 の [ordinary TFP1 公開資料のnative再実行adapter](../../../evidence/palw/legacy-tfp1-public-replay-2026-11-11/README.md): `22ad8228c` でexact claim/companion/Sourceと原文・tokenizer・出力・全Trace tileを、既存G14のlegacy tiled再実行と照合した。共存token列・2ページのhash vectorをreplay RAMへ加算し、共用OwnStepSourceのexact capacityを明示。新ordinary fixtureと既存wide回帰2件が成功。実Studio資料のbounded metadata照合でregistered programのtiled logitsとgeneric job-context trace schemeを区別し、同一claimのSource/5,154 leavesを確認した。全モデル再実行・公開取得の証拠ではない。native paired reader、実publisher、legacy relation/ExecutionRules/full FP retentionと承認・Final、全保護予算、公開quote/受付は未完。

@@ -1,0 +1,11 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/remote)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.48s
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka_palw_remote-20b14c407f46dddc)
+
+running 1 test
+test miner::positive_v2::inference::tests::ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trace_tile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 271 filtered out; finished in 0.25s
+

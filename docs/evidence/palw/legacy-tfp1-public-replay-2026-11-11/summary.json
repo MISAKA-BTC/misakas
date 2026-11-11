@@ -1,0 +1,46 @@
+{
+  "source_commit": "22ad8228c",
+  "source_files": {
+    "misaka/palw/remote/src/positive_panel_sources.rs": "c40a702c7681c2d188a11e6b35b780ff15f415937d6d897d7246fbb8ed7b35b5",
+    "misaka/palw/remote/src/positive_panel_sources/legacy_tfp1_replay.rs": "b4400f581d886f0d3dc8105815c7e62ee379d56fe0d9d466f4ec4fe376fdb9a5",
+    "misaka/palw/remote/src/positive_miner_v2_inference_tests.rs": "55e5e79d0912665f3f2edd4cfbb370915ad42e9f182115f484ef0139def07c39",
+    "misaka/palw/tir/exec/src/node/own_source.rs": "8dbfdd3971a062d186798f4bb1921397eba5204634c8763f87f41b1e14d6423a"
+  },
+  "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka_palw_remote-20b14c407f46dddc",
+  "binary_sha256": "bdae496da1dce4e639a4d0d8bcee49b7425fe392a1202e6bdc76e44ea42f5add",
+  "tests_passed": 2,
+  "tests": [
+    "ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trace_tile",
+    "panel_replays_the_same_original_the_miner_executes_signs_and_publishes"
+  ],
+  "public_quote_or_admission": false,
+  "activation": false,
+  "main_push": false,
+  "complete_relation_approval": false,
+  "artifacts_sha256": {
+    "studio-source-evidence.json": "ddc15c4799a91faabdf941225e4662a6baa10b24a27feb2afaad8f28cb3332bc",
+    "initial-failure.log": "d038bd1885f1e137e78f5b33b2456a327cf1e344f26b831149d509fa015e3b0d",
+    "wide-regression.log": "0156f6f49cbb87ceffe20783fadbbcf8a7cd8c91da5a7cbea22018fcd4e31639",
+    "build-and-test.log": "e63cdd3e9a9d7ed5b6091ca54f2c1e45dd2891853e8a6fd75b2744676f13fc89",
+    "studio-source-probe.log": "216279d4f208a0892baffa2f9a143ed2f7114c09d518ca4a4516bdeb36c22d8e",
+    "studio-source-probe.rs": "0ca172ed3bd2a1d0cecaedf5558a0783a5b983066a54076017816d14ddf06078",
+    "intermediate-tests.log": "6d9c71d191fad617c3000e1d8e0e6b1526857f6bd6b1e95e745fbbecc457a280",
+    "studio-source-probe.sh": "7738fb25eea27e6870d2e23dfe6b7de86266430fb9fd6040c566e5ae020541fd",
+    "source-snapshot.sha256": "f7275ea178803af432b1ba0ef4d7e21818033cf22aaac856e9515ef6d8e96b30",
+    "remaining-connections.md": "d08f9cdcc5e7b35844b415429eade4763bdaa40541b80fca94cecc90fe2ba701",
+    "docs-check.log": "6c163e2869a5022a742c98fc018c140087fea2ff663f8eaa56bac9804feab95d",
+    "rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd"
+  },
+  "documentation_checks": {
+    "passed": false,
+    "existing_issue_counter_unchanged": true,
+    "current_issue_counter_sha256": "f47503d7ffeb46801258b72a5535bb2e0dbf74f62b5776057ca1cd3e8873e577",
+    "new_evidence_link_issues": 0,
+    "issue_occurrences_relative_to_existing_baseline": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  }
+}

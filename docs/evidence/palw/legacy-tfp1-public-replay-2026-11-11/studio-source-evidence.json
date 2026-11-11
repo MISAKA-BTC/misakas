@@ -1,0 +1,110 @@
+{
+  "scope": "Offline bounded PALWTIR1 header and saved TFP1 artifacts. Inventory root is an input from the earlier checked class/binding record. Tensor payload was not read or rehashed, no inference, no public read and no new admission evidence.",
+  "artifact_metadata": {
+    "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+    "file_bytes": 180336320,
+    "hashed_prefix_and_header_bytes": 49728,
+    "prefix_and_header_sha256": "72ed3c1c69e8003008ec82bbf0ed1b2ed75e6bfa8b549910100c2dfdba4d83ca"
+  },
+  "prior_inventory_identity": {
+    "path": "/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/docs/evidence/palw/public-t12-studio-binding-quote-2026-11-11.json",
+    "bytes": 6027,
+    "sha256": "e2a8981dd4abddb7a21f44c46e6a03846a6b964ff34f3ff7325a69a0615b25c3"
+  },
+  "artifacts": {
+    "saved_capture": {
+      "path": "/tmp/misaka-studio-tfp1-native.k1U16c/traces/23d6e48c54bc369c1876f24e4c0fca3975b59a6afef9d277244d458faccbf73f3a51535bff050f315a7ba4542188f72fbd078d222e34f138cfe83cef1d806cde/material.bin",
+      "bytes": 1837078,
+      "sha256": "1f4c3e43d8ccc64f3e1b01ff14510592669190cab1ca7ffaec710214f1a28908"
+    },
+    "request_frame": {
+      "path": "/tmp/misaka-studio-tfp1-native.k1U16c/job.frame",
+      "bytes": 3342,
+      "sha256": "68dc6a0d70aef7835e5f28f9c0b676b4c169298487ff9824909505f1a6a69abb"
+    },
+    "result_frame": {
+      "path": "/tmp/misaka-studio-tfp1-native.k1U16c/worker-result.frame",
+      "bytes": 3588,
+      "sha256": "e2577967c1c08517ef98a788c075a5a618346d76c25171ff53ab9d67a3b953d8"
+    },
+    "exact_commitment": {
+      "path": "/tmp/misaka-studio-t12-registration-live.iRmft4/candidate-commitment.borsh",
+      "bytes": 3485,
+      "sha256": "8b5e1d44a665ffda350c2ce58498b9523d3603e5c47ff5d66b498af345a726f9"
+    },
+    "probe_source": {
+      "path": "/tmp/t12-studio-program-source-probe-20261111.rs",
+      "bytes": 4557,
+      "sha256": "0ca172ed3bd2a1d0cecaedf5558a0783a5b983066a54076017816d14ddf06078"
+    },
+    "probe_command": {
+      "path": "/tmp/t12-studio-program-source-probe-20261111.sh",
+      "bytes": 1252,
+      "sha256": "7738fb25eea27e6870d2e23dfe6b7de86266430fb9fd6040c566e5ae020541fd"
+    },
+    "probe_binary": {
+      "path": "/tmp/t12-studio-program-source-probe-20261111",
+      "bytes": 2495056,
+      "sha256": "ae13b346466213171729e039ff08e111e2bd2b66a887ddc58d956ecefe823612"
+    },
+    "probe_log": {
+      "path": "/tmp/t12-studio-program-source-probe-20261111.log",
+      "bytes": 1867,
+      "sha256": "216279d4f208a0892baffa2f9a143ed2f7114c09d518ca4a4516bdeb36c22d8e"
+    },
+    "initial_rlib_selection_error": {
+      "path": "/tmp/t12-studio-program-source-probe-rlib-selection-initial-20261111.log",
+      "bytes": 6148,
+      "sha256": "8f01ea40aa581bed9c2fdffc9942d8b41994e749637d2a6a068eaddf94369353"
+    },
+    "borsh": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libborsh-7cfec46d29ea91a2.rlib",
+      "bytes": 720760,
+      "sha256": "0f2c78f5da046a09f7fd657367abca6a6d764daee5f89fb1a8ce8c9b731e539e"
+    },
+    "core": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_consensus_core-3cb0f3a40ba7fcd8.rlib",
+      "bytes": 1021414928,
+      "sha256": "6e4439861c5e6f3ad559a280d287f14b79ba68a3020945e9ffd3bc0ab43fe226"
+    },
+    "tir_artifact": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libmisaka_palw_tir_artifact-de7e0c5458af30f0.rlib",
+      "bytes": 10663144,
+      "sha256": "fc246bed0fcc277bdde9057f742136e1c1259efdacf7c023a16f60607f59d0dd"
+    },
+    "tir_exec": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libmisaka_palw_tir_exec-5b46fcfa659f157e.rlib",
+      "bytes": 152101552,
+      "sha256": "bd3d738eb4b60f4e5a96b90190895eac863a550de5bcf9ff6699cc7b925ec8d3"
+    }
+  },
+  "facts": {
+    "claim_id": "7645bc8bbba0e00a35ccbac77ecb0e28d489688161bd0130649f3575919a83df225e509936a52c4b0e30a415e71d50da1f38dd87a1f02ce4267bc145fc6a3711",
+    "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "graph_ir_root": "203f9c0a8c6744d2cb5a533e1399f7ceca6719257165235612e1aa4c0ee5ce66e50f169c0a9be7c1b1255a47e82292e84b16f0bcb60bdb02ef2dab243a3fce41",
+    "known_inventory_root": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+    "source_id": "1e9ef75bdba035ba0e974860d28d6672ec8e77c17e004dad023741868f18dab6ad7130f22b4a283f5d19993e95ff95da1074c8526af87b5290ecb5b27ff8127a",
+    "source_leaves": "5154",
+    "registered_program_logits_scheme": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1",
+    "header_job_context_trace_scheme": "4da708dd27250e3dec500056cf3f1b26684477a5740e14e95591b43316aced60bee1bd76a24b78c9de2b5e57142f016478215ec6d2a5b3ecd34e22d9243ad791",
+    "worker_request_trace_scheme": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1",
+    "tiled_source": "true",
+    "flat": "false",
+    "wide_q24": "false",
+    "artifact_file_bytes": "180336320",
+    "program_bytes": "13776",
+    "context_hash": "97eb6ed5000cd4d8014d1d8c86fed64db38aa6ad15234db0929c66c0a1550a060d9cfbb2ea6a4f3252ab0dae670de7573e6a3d51dd160ddbaeb814f75295fe9d",
+    "step_root": "58f4344280be333e2ee23d6933b2f25f3d96f6e930f821ffdc14e3c666bdd1f59f18e8a4bee09ca8552af75220a77c711379777f639cb693b3c37cd4a43c2c7c",
+    "logits_root": "c0ee4ffd0b19e9c09e0916c30c0a3294086561ac98f1c22c82b63d186484b63b50ffeea9474ab0efabe5b314fa1568371c6abecdfdb7f3d81dbff3002b21445f",
+    "execution_root": "ff44b4469aa861dcacff8149b98e7612f9eaf40075db7f7b214c6fc4d44b2c27e25ed2d8edb8abbd9de64daf38799edf57e45dc915310cc5ec3a4fa51440c6e8"
+  },
+  "rustc": [
+    "rustc 1.93.0 (254b59607 2026-01-19)",
+    "binary: rustc",
+    "commit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c",
+    "commit-date: 2026-01-19",
+    "host: aarch64-apple-darwin",
+    "release: 1.93.0",
+    "LLVM version: 21.1.8"
+  ]
+}
