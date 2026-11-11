@@ -1,0 +1,32 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+error[E0277]: the trait bound `palw_state_v2::PalwStateCarriageV2: palw_native_resource_v1::wire::NativeWireScanV1` is not satisfied
+     --> consensus/core/src/palw_state_v2/tests/native_writers_v1.rs:913:65
+      |
+  913 |     crate::palw_native_resource_v1::preflight_native_value_v1::<PalwStateCarriageV2>(&encoded[..], encoded.len() as u64).unwrap();
+      |                                                                 ^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+      |
+help: the trait `palw_native_resource_v1::wire::NativeWireScanV1` is not implemented for `palw_state_v2::PalwStateCarriageV2`
+     --> consensus/core/src/palw_state_v2.rs:24886:1
+      |
+24886 | pub struct PalwStateCarriageV2 {
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      = help: the following other types implement trait `palw_native_resource_v1::wire::NativeWireScanV1`:
+                ()
+                (A, B)
+                (A, B, C)
+                (A, B, C, D)
+                (A, B, C, D, E)
+                (A, B, C, D, E, F)
+                (A, B, C, D, E, F, G)
+                (A,)
+              and 1712 others
+note: required by a bound in `palw_native_resource_v1::wire::preflight_native_value_v1`
+     --> consensus/core/src/palw_native_resource_v1/wire.rs:490:37
+      |
+  490 | pub fn preflight_native_value_v1<T: NativeWireScanV1>(reader: impl Read, bytes: u64) -> io::Result<NativeWireValuePreflightV1> {
+      |                                     ^^^^^^^^^^^^^^^^ required by this bound in `preflight_native_value_v1`
+      = note: the full name for the type has been written to '/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08.long-type-3673833791199780204.txt'
+      = note: consider using `--verbose` to print the full type name to the console
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `kaspa-consensus-core` (lib test) due to 1 previous error

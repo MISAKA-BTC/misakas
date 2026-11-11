@@ -1,0 +1,17 @@
+{
+  "code_commit": "1c6b34697efef7c059e4e002608e882a71230e30",
+  "tests": {
+    "targeted": 1,
+    "native_writers_regressions": 13,
+    "failed": 0
+  },
+  "aux_table": 204,
+  "row_wire_bytes": 1050,
+  "scope": "native storage on seeded frame/admission/escrow with real signed TFO3 pairing",
+  "public_activation": false,
+  "public_claim_admission": false,
+  "production_coordinator_wired": false,
+  "bounded_release_archive_complete": false,
+  "main_push": false,
+  "initial_build": "Failed: fixture incorrectly used generic value preflight; fixed to native carriage preflight. Final source passed."
+}

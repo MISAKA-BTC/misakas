@@ -1,0 +1,18 @@
+
+running 13 tests
+test palw_state_v2::tests::native_writers_v1::lenient_consumers_drop_semantic_refusals_but_never_local_capacity ... ok
+test palw_state_v2::tests::native_writers_v1::a_bond_budget_op_with_tracking_off_is_the_historical_op_byte_for_byte ... ok
+test palw_state_v2::tests::native_writers_v1::malformed_public_admission_is_rejected_before_journaling ... ok
+test palw_state_v2::tests::native_writers_v1::positive_aux_writer_reserves_retained_workspace_only_on_insert ... ok
+test palw_state_v2::tests::native_writers_v1::encoded_row_writers_refuse_before_the_typed_clone_and_canonical_buffers ... ok
+test palw_state_v2::tests::native_writers_v1::a_bond_budget_op_is_refused_locally_before_the_engine_runs ... ok
+test palw_state_v2::tests::native_writers_v1::reader_router_consumer_propagates_late_writer_capacity_refusal ... ok
+test palw_state_v2::tests::native_writers_v1::remaining_writers_refuse_locally_before_state_or_journal_change ... ok
+test palw_state_v2::tests::native_writers_v1::malformed_public_admission_delta_cannot_install_on_replay_or_revert ... ok
+test palw_state_v2::tests::native_writers_v1::admitted_writer_requests_live_until_the_construction_owner_drops ... ok
+test palw_state_v2::tests::native_writers_v1::remaining_writers_flags_off_journal_is_byte_identical ... ok
+test palw_state_v2::tests::native_writers_v1::ordinary_registration_keeps_routing_profile_without_certification_or_price_index_changes ... ok
+test palw_state_v2::tests::native_writers_v1::public_admission_row_round_trips_through_delta_and_snapshot ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6002 filtered out; finished in 0.29s
+
