@@ -334,3 +334,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[TFO3実UTXO handoff](../../../evidence/palw/tfp1-native-utxo-handoff-2026-11-11/README.md)は **実装中・Rust検証未実行**。実UTXO loopからtxid/入力digest/feeと包含originを固定し、既存pairing経路へ接続した。全順序foldでだけ作れるprivate prefix tokenを追加し、raw位置/feeを履歴factoryへ渡すAPIを置換した。完全profile拒否より後でのみcaptureする。rehearsal/actualのglobal journal整合、完全coordinatorからの二行install、料金/保持・draw復元・PMR以後の本番接続は残る。公開受付・Final・当選時権利消費・対応blockは未証明。
 
 2026-11-11 の[全prefix再演](../../../evidence/palw/tfp1-ordered-prefix-replay-2026-11-11/README.md)は **実装中・Rust検証未実行**。actual foldと同じ初期化・ordered loopで候補全体のstate/journal/資源予約を保持するread-only入口を追加し、本適用も共通化した。失敗時全破棄、候補変更時全再演、仮想点拒否、telemetry分離と回帰コードを追加。node候補filterの接続・拒否位置/累積work上限・完全TFO3 planner/一括install・PMR以後は残る。公開同一claimの受付・Final・当選時権利消費・対応blockは未証明。
+
+2026-11-11 の[全prefix再演の失敗位置と制限](../../../evidence/palw/tfp1-ordered-replay-budget-2026-11-11/README.md)は **実装中・Rust検証未実行**。親/params/包含点に固定したnon-Clone budgetを必須化し、失敗を含むpass数・全native/raw候補訪問数を初期化前に累積計上する。失敗位置をordinary配列indexと実native ordinalで区別し、local/context/order不整合を候補除外にしない。これは各courtのCPU/IO上限の代替ではない。node filter・完全profile・原子的intake・公開受付/Final/当選時権利消費/対応blockは未完。

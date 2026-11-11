@@ -22,30 +22,142 @@ impl PalwOrderedPrefixV1<'_> {
     }
 }
 
-/// Uses the actual fold's complete input basis; never supplies synthetic
-/// accepted origins or reconstructs global positions from singleton deltas.
-/// Errors discard the whole candidate. The caller owns bounded candidate
-/// selection/retry and must not reuse this result after changing the inputs.
-#[allow(clippy::too_many_arguments)]
-pub fn palw_v2_replay_accepted_prefix_v1<'a>(
+/// Local retry envelope, not a consensus tariff or a bound on the work of
+/// one court operation. Existing per-operation work/IO/heap limits still apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwOrderedReplayLimitsV1 {
+    pub passes: u64,
+    /// Sum of ordinary objects, native handoffs and raw actions over all
+    /// attempted lists, including refused passes. Charged before preparation.
+    pub candidate_visits: u64,
+}
+
+/// Resolve these switches once from the canonical accepting point. Per-pass
+/// extras still require the same canonical policy and rebuilt candidate facts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwOrderedReplayRulesV1 {
+    pub unavailable_abstains: bool,
+    pub capability_bound: bool,
+    pub uncertified_weightless: bool,
+    pub da_court: bool,
+}
+
+/// One owner across retries, pinned to an immutable parent, rules and point.
+/// Not Clone: a failed pass does not refund its amplification allowance.
+pub struct PalwOrderedReplayBudgetV1<'a> {
     parent: &'a PalwChainStateV2,
     params: &'a PalwStateParamsV2,
-    ctx: &PalwBlockContextV2,
+    point: PalwBlockContextV2,
+    remaining: PalwOrderedReplayLimitsV1,
+    rules: PalwOrderedReplayRulesV1,
+}
+impl<'a> PalwOrderedReplayBudgetV1<'a> {
+    pub fn new_v1(
+        parent: &'a PalwChainStateV2,
+        params: &'a PalwStateParamsV2,
+        point: PalwBlockContextV2,
+        rules: PalwOrderedReplayRulesV1,
+        limits: PalwOrderedReplayLimitsV1,
+    ) -> Result<Self, PalwStateV2Error> {
+        if point.block == crate::blockhash::ORIGIN || point.block == Hash64::default() {
+            return Err(PalwStateV2Error::CarriageInconsistent("ordered history replay requires a concrete accepting block".into()));
+        }
+        if limits.passes == 0 {
+            return Err(replay_capacity_v1("no replay pass admitted"));
+        }
+        Ok(Self { parent, params, point, remaining: limits, rules })
+    }
+    pub fn remaining_v1(&self) -> PalwOrderedReplayLimitsV1 {
+        self.remaining
+    }
+    fn begin_v1(&mut self, objects: usize, extras: &PalwTransitionExtrasV1) -> Result<(), PalwStateV2Error> {
+        let counts = [
+            objects,
+            extras.batch_court_carriers_v1.len(),
+            extras.tokenizer_registration_carriers_v1.len(),
+            extras.positive_assignment_actions.len(),
+        ];
+        let visits = counts
+            .into_iter()
+            .try_fold(0u64, |sum, n| u64::try_from(n).ok().and_then(|n| sum.checked_add(n)))
+            .ok_or_else(|| replay_capacity_v1("candidate visit count overflow"))?;
+        let passes = self.remaining.passes.checked_sub(1).ok_or_else(|| replay_capacity_v1("replay pass allowance exhausted"))?;
+        let candidate_visits = self
+            .remaining
+            .candidate_visits
+            .checked_sub(visits)
+            .ok_or_else(|| replay_capacity_v1("cumulative candidate visit allowance exhausted"))?;
+        self.remaining = PalwOrderedReplayLimitsV1 { passes, candidate_visits };
+        Ok(())
+    }
+}
+fn replay_capacity_v1(detail: &str) -> PalwStateV2Error {
+    PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwOrderedReplayLimitsV1>(
+        "ordered prefix replay",
+        detail,
+    ))
+}
+
+/// Position in the exact input list supplied for this pass, never a wire
+/// ordinal invented from a filtered ordinary-object index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwOrderedReplayLocationV1 {
+    Budget,
+    Preparation,
+    Order,
+    Ordinary { object_index: usize },
+    Batch { accepted_tx_ordinal: usize },
+    Tokenizer { accepted_tx_ordinal: usize },
+    RawAssignment { action_index: usize, accepted_tx_ordinal: Option<u32> },
+}
+#[derive(Debug)]
+pub struct PalwOrderedReplayFailureV1 {
+    pub location: PalwOrderedReplayLocationV1,
+    pub error: PalwStateV2Error,
+}
+impl PalwOrderedReplayFailureV1 {
+    /// Explicit duplicate refusals may be considered for filtering. Unknown
+    /// or new errors stay hard by default, including arithmetic/state faults.
+    /// Active TFO3 semantic admission refusals need their own typed category;
+    /// a generic carriage error must never be reinterpreted as peer-invalid.
+    pub fn ordinary_refusal_index_v1(&self) -> Option<usize> {
+        if !matches!(
+            self.error,
+            PalwStateV2Error::DuplicateClass(_)
+                | PalwStateV2Error::DuplicateBond(_)
+                | PalwStateV2Error::DuplicateBondKey(_)
+                | PalwStateV2Error::DuplicateClaim(_)
+                | PalwStateV2Error::DuplicateExecution(_)
+                | PalwStateV2Error::DuplicateSession(_)
+        ) {
+            return None;
+        }
+        match self.location {
+            PalwOrderedReplayLocationV1::Ordinary { object_index } => Some(object_index),
+            _ => None,
+        }
+    }
+}
+
+/// Uses the actual fold's complete input basis. No unmetered production
+/// entrypoint exists: all retries share one budget, charged before any fold
+/// initialization. This bounds repeated visits, not each operation's CPU work.
+/// Errors discard the whole candidate. Rebuild all input/position maps after
+/// filtering; never concatenate singleton journals or reuse stale extras.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_replay_accepted_prefix_v1<'a>(
+    budget: &mut PalwOrderedReplayBudgetV1<'a>,
     accepted_objects: &[PalwConsensusObjectV2],
     block_work: PalwBlockWorkV3<'_>,
     merged_work: &[PalwMergedWorkV1<'_>],
     own_execution_key: Hash64,
-    unavailable_abstains: bool,
-    capability_bound: bool,
-    uncertified_weightless: bool,
-    da_court: bool,
     extras: &'a PalwTransitionExtrasV1,
-) -> Result<PalwOrderedPrefixV1<'a>, PalwStateV2Error> {
-    if ctx.block == crate::blockhash::ORIGIN || ctx.block == Hash64::default() {
-        return Err(PalwStateV2Error::CarriageInconsistent("ordered history replay requires a concrete accepting block".into()));
-    }
-    // Rehearsal must not publish observations into an enclosing authoritative
-    // capture, including on error. Dropping this nested guard discards them.
+) -> Result<PalwOrderedPrefixV1<'a>, PalwOrderedReplayFailureV1> {
+    use PalwOrderedReplayLocationV1 as At;
+    budget.begin_v1(accepted_objects.len(), extras).map_err(|error| PalwOrderedReplayFailureV1 { location: At::Budget, error })?;
+    let parent = budget.parent;
+    let params = budget.params;
+    let ctx = &budget.point;
     let _observations = crate::palw_court_observation_v1::CourtObservationGuardV1::enter(ctx.block);
     crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
         let mut prefix = prepare_ordered_prefix_v1(
@@ -56,13 +168,16 @@ pub fn palw_v2_replay_accepted_prefix_v1<'a>(
             block_work,
             merged_work,
             own_execution_key,
-            unavailable_abstains,
-            capability_bound,
-            uncertified_weightless,
-            da_court,
+            budget.rules.unavailable_abstains,
+            budget.rules.capability_bound,
+            budget.rules.uncertified_weightless,
+            budget.rules.da_court,
             extras,
-        )?;
-        apply_ordered_prefix_v1(&mut prefix.builder, parent, ctx, accepted_objects)?;
+        )
+        .map_err(|error| PalwOrderedReplayFailureV1 { location: At::Preparation, error })?;
+        let mut location = At::Order;
+        apply_ordered_prefix_located_v1(&mut prefix.builder, parent, ctx, accepted_objects, &mut location)
+            .map_err(|error| PalwOrderedReplayFailureV1 { location, error })?;
         Ok(prefix)
     })
 }
@@ -263,7 +378,19 @@ pub(super) fn apply_ordered_prefix_v1(
     ctx: &PalwBlockContextV2,
     accepted_objects: &[PalwConsensusObjectV2],
 ) -> Result<(), PalwStateV2Error> {
+    apply_ordered_prefix_located_v1(builder, parent, ctx, accepted_objects, &mut PalwOrderedReplayLocationV1::Order)
+}
+
+fn apply_ordered_prefix_located_v1(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    location: &mut PalwOrderedReplayLocationV1,
+) -> Result<(), PalwStateV2Error> {
     let extras = builder.extras;
+    use PalwOrderedReplayLocationV1 as At;
+    *location = At::Order;
     use crate::palw_batch_court_v1::fold_order::{AcceptedNativeCourtItemV1, in_accepted_native_order_v1};
     // Only this whole ordered fold can name positions in its persistent delta.
     // Single-object rehearsal builders deliberately keep this scope absent.
@@ -289,20 +416,26 @@ pub(super) fn apply_ordered_prefix_v1(
             AcceptedNativeCourtItemV1::Batch(carrier) => Some(carrier.accepted_ordinal_v1()),
             AcceptedNativeCourtItemV1::Tokenizer(carrier) => Some(carrier.accepted_ordinal_v1()),
         };
-        positive_assignment::apply_raw_before_object_v2(builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal)?;
+        apply_raw_located_v1(builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal, location)?;
         match item {
             AcceptedNativeCourtItemV1::Ordinary(object) => {
+                *location = At::Ordinary { object_index: index };
                 apply_object(builder, ctx, object)?;
                 index += 1;
             }
-            AcceptedNativeCourtItemV1::Batch(carrier) => builder.apply_batch_court_carrier_v1(ctx, carrier)?,
+            AcceptedNativeCourtItemV1::Batch(carrier) => {
+                *location = At::Batch { accepted_tx_ordinal: carrier.accepted_ordinal_v1() };
+                builder.apply_batch_court_carrier_v1(ctx, carrier)?;
+            }
             AcceptedNativeCourtItemV1::Tokenizer(carrier) => {
+                *location = At::Tokenizer { accepted_tx_ordinal: carrier.accepted_ordinal_v1() };
                 let (fee, _refusal) = builder.apply_tokenizer_registration_at_v1(
                     parent,
                     tokenizer_parent_root.expect("carrier requires parent root"),
                     ctx,
                     carrier,
                 )?;
+                *location = At::Order;
                 if extras.tokenizer_registration_expected_fees_v1.get(&carrier.carrier_v1()) != Some(&fee) {
                     return Err(PalwStateV2Error::CarriageInconsistent(
                         "tokenizer fee projection differs on actual accepted prefix".into(),
@@ -311,10 +444,34 @@ pub(super) fn apply_ordered_prefix_v1(
             }
         }
     }
-    positive_assignment::apply_raw_before_object_v2(builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal)?;
+    apply_raw_located_v1(builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal, location)?;
     builder.tfp1_history_journal_parent = None;
+    *location = At::Order;
     if raw_cursor != extras.positive_assignment_actions.len() {
         return Err(PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix"));
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_raw_located_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    index: usize,
+    before: Option<usize>,
+    cursor: &mut usize,
+    previous: &mut Option<u32>,
+    location: &mut PalwOrderedReplayLocationV1,
+) -> Result<(), PalwStateV2Error> {
+    positive_assignment::apply_raw_before_object_v2(builder, ctx, index, before, cursor, previous).map_err(|error| {
+        *location = PalwOrderedReplayLocationV1::RawAssignment {
+            action_index: *cursor,
+            accepted_tx_ordinal: builder
+                .extras
+                .positive_assignment_actions
+                .get(*cursor)
+                .map(|scheduled| scheduled.action.origin().accepted_tx_ordinal),
+        };
+        error
+    })
 }
