@@ -5,7 +5,9 @@
 
 pub(crate) mod protected_batch_case;
 pub mod record;
+mod tfp1_hf_artifact;
 mod tfp1_material;
+pub use tfp1_hf_artifact::PublicTfp1HfArtifactV1;
 pub(crate) mod tfp1_original;
 
 pub use tfp1_material::{PublicTfp1ColdMaterialV1, public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1};

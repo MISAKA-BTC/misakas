@@ -11,7 +11,9 @@ use std::{
 
 mod legacy_tfp1_replay;
 mod legacy_tfp1_trace_publish;
-pub use legacy_tfp1_replay::{LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, check_legacy_tfp1_public_replay_v1};
+pub use legacy_tfp1_replay::{
+    LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, check_legacy_tfp1_public_replay_v1, publish_legacy_tfp1_hf_artifact_v1,
+};
 pub use legacy_tfp1_trace_publish::{
     LegacyTfp1TraceExportV1, LegacyTfp1TracePublishAdmissionV1, LegacyTfp1TracePublishLimitsV1, LegacyTfp1TracePublishScopeV1,
     LegacyTfp1TracePublisherV1,
@@ -640,6 +642,12 @@ fn fetch_public_replay_material(
     let entry = manifest.entry(scope);
     let size = usize::try_from(entry.total_bytes).map_err(|_| PanelSourceErrorR1::Budget)?;
     let max = match scope {
+        MaterialScope::Artifact => {
+            if entry.codec != misaka_palw_positive_contract::public_one_honest::hf_artifact_material_codec_v1() {
+                return Err(ContractError::UnsupportedProfile.into());
+            }
+            misaka_palw_positive_contract::public_one_honest::HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1
+        }
         MaterialScope::Program => misaka_palw_tir::program::MAX_PROGRAM_BYTES,
         _ => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
     };

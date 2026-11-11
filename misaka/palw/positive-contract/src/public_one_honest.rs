@@ -7,6 +7,11 @@ use crate::reservations::RemainingCapacity;
 use crate::rows::AcceptedOrigin;
 use borsh::{BorshDeserialize, BorshSerialize};
 
+mod hf_artifact;
+pub use hf_artifact::{
+    HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1, HfArtifactDescriptorV1, HfArtifactNativePinsV1, hf_artifact_material_codec_v1,
+};
+
 pub const ORIGINAL_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-original/v1";
 pub const FULL_REPLAY_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-full-replay/v1";
 pub const MANIFEST_REQUEST_SIGN_CONTEXT: &[u8] = b"misaka/palw/public-manifest-request/v1";

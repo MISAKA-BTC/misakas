@@ -1265,13 +1265,18 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
 #[test]
 fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original() {
     use crate::{
-        evidence::fs::{FsProvider, write_provider_chunk},
+        evidence::{
+            ProviderError,
+            fs::{FsProvider, write_provider_chunk},
+        },
         positive_panel_sources::{
             LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, LegacyTfp1TraceExportV1, LegacyTfp1TracePublishAdmissionV1,
             LegacyTfp1TracePublishLimitsV1, LegacyTfp1TracePublishScopeV1, LegacyTfp1TracePublisherV1, PanelSourceErrorR1,
-            PublicTraceAcquisitionV1, check_legacy_tfp1_public_replay_v1,
+            PublicTraceAcquisitionV1, check_legacy_tfp1_public_replay_v1, publish_legacy_tfp1_hf_artifact_v1,
         },
-        public_material::{public_original_replay_path, public_original_trace_index_path, public_original_trace_tile_path},
+        public_material::{
+            MaterialProvider, public_original_replay_path, public_original_trace_index_path, public_original_trace_tile_path,
+        },
     };
     use kaspa_consensus_core::{
         palw_backend::{PalwExecutionBackendV1, PalwOriginalCaptureReaderV1, PalwTirPublicCaptureNeedV1, PalwTirPublicCaptureSliceV1},
@@ -1279,9 +1284,19 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
         palw_freeprompt_v3::{
             PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_claim_id_v3,
         },
-        palw_positive_contract_v2::{public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1},
+        palw_positive_contract_v2::{PublicTfp1HfArtifactV1, public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1},
         palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+        palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1},
+        palw_state_v2::{
+            PalwBlockContextV2, PalwChainStateV2, PalwClassStateV2, PalwClassStatusV2, PalwPwuRuleV2, PalwStateCarriageV2,
+            PalwStateParamsV2,
+        },
         palw_tir_attempt_v1::palw_tir_canonical_context_v1,
+        palw_tir_container_v1::{
+            PALW_TIR_CONTAINER_BINDING_VERSION_V1, PALWART_INNER_TIR_INVENTORY_ROOT_V3, PALWART_PROGRAM_TIR_V1_V3,
+            PALWART_SECTION_TIR_INVENTORY_V3, PALWART_VERSION_V3, PalwArtRootOpeningV1, PalwArtSectionOpeningV1,
+            PalwTirContainerBindingV1, check_tir_container_binding_v1,
+        },
         palw_tir_court_v1::PublicOriginalTraceIndexV1,
         palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicSourceV1, PalwTirPublicUnitBoundV1},
         tx::{TransactionId, TransactionOutpoint},
@@ -1298,6 +1313,18 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
             let start = usize::try_from(offset).map_err(|e| e.to_string())?;
             let end = start.checked_add(length as usize).ok_or("capture range overflow")?;
             self.0.get(start..end).map(<[u8]>::to_vec).ok_or_else(|| "capture range out of bounds".into())
+        }
+    }
+    struct NoProviderIo;
+    impl MaterialProvider for NoProviderIo {
+        fn material_id(&self) -> String {
+            "no fixture provider access".into()
+        }
+        fn get(&self, _path: &str, _max: usize) -> Result<Option<Vec<u8>>, ProviderError> {
+            panic!("unresolved HF context reached provider read")
+        }
+        fn put(&self, _path: &str, _bytes: &[u8]) -> Result<(), ProviderError> {
+            panic!("unresolved HF context reached provider write")
         }
     }
     #[derive(Default)]
@@ -1519,6 +1546,7 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
             entry(MaterialScope::Output, original.output, output.len() as u64),
         ],
     };
+    let mut hf_manifest = manifest.clone();
     let encoded = original.bind_manifest(&manifest, &rules, 1 << 20, ManifestV1::WIRE_BYTES).unwrap();
     let manifest =
         original.authenticate_manifest(&encoded, ManifestV1::WIRE_BYTES).unwrap().decode(&original, &rules, 1 << 20).unwrap();
@@ -1527,7 +1555,7 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
     let signed = SignedPublicOriginalV1 { original, key, signature };
     let id = signed.original.id();
     let provider = FsProvider { id: "local".into(), root: directory.join("published") };
-    for (scope, bytes) in [
+    let replay_bodies = [
         (MaterialScope::Program, class.program.as_slice()),
         (MaterialScope::Prompt, prompt.as_slice()),
         (MaterialScope::Tokenizer, raw.as_slice()),
@@ -1535,7 +1563,8 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
         (MaterialScope::ExecutionRules, rules_body.as_slice()),
         (MaterialScope::InitialState, initial_body.as_slice()),
         (MaterialScope::Dependencies, deps_body.as_slice()),
-    ] {
+    ];
+    for (scope, bytes) in replay_bodies {
         write_provider_chunk(&provider.root.join(public_original_replay_path(id, scope).unwrap()), bytes).unwrap();
     }
     let context = LegacyTfp1ReplayContextV1 {
@@ -1547,6 +1576,7 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
         fp: &fp,
         prompt_form: form,
         literal_prompt: prompt,
+        hf_artifact: None,
     };
     let mut admission = Admission::default();
     let limits = LegacyTfp1TracePublishLimitsV1 {
@@ -1654,6 +1684,7 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
                 fp: &fp,
                 prompt_form: expected_form,
                 literal_prompt,
+                hf_artifact: None,
             },
             &signed,
             &manifest,
@@ -1681,6 +1712,217 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
     assert_eq!(requested.get(), 0);
     assert_eq!(verify(form, prompt, source_id), Ok(()));
     assert_eq!(requested.get(), 1);
+    {
+        // Only accepted metadata is seeded for this local fixture. The
+        // backend and claim execution above are real local computations.
+        let opening = PalwArtRootOpeningV1 {
+            version: PALWART_VERSION_V3,
+            manifest_digest: PalwArtRootOpeningV1::manifest_digest_of_v1(b"local HF consumer fixture"),
+            program_kind: PALWART_PROGRAM_TIR_V1_V3,
+            kernel_id: record.graph_ir_root,
+            program: class.program.clone(),
+            kernel_version: 0,
+            tokenizer_id: record.tokenizer_id,
+            sections: vec![PalwArtSectionOpeningV1 {
+                kind: PALWART_SECTION_TIR_INVENTORY_V3,
+                family: 1,
+                name: "tir-inventory".into(),
+                inner_root_scheme: PALWART_INNER_TIR_INVENTORY_ROOT_V3,
+                inner_root: root,
+                inner_leaf_count: 1,
+                entries_root: h(100),
+            }],
+        };
+        let binding = PalwTirContainerBindingV1 {
+            version: PALW_TIR_CONTAINER_BINDING_VERSION_V1,
+            class_id,
+            container_root: opening.root_v1(),
+            opening,
+        };
+        let bound = check_tir_container_binding_v1(&binding, &class_id, &root, &record, 2).unwrap();
+        let pins = HfArtifactNativePinsV1 {
+            class: Digest(class_id.as_bytes()),
+            program: Digest(record.graph_ir_root.as_bytes()),
+            tokenizer: Digest(record.tokenizer_id.as_bytes()),
+            inventory: Digest(root.as_bytes()),
+            container: Digest(bound.container_root.as_bytes()),
+            binding_manifest: Digest(bound.manifest_digest.as_bytes()),
+        };
+        let descriptor = HfArtifactDescriptorV1::new_v1(pins, "HuggingFaceTB/SmolLM2-135M", [1; 20], d(101), d(102)).unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 600).unwrap();
+        let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        carriage.last_point = Some(PalwBlockContextV2 { block: h(2), daa_score: 2, blue_score: 2, subsidy: 0 });
+        carriage.classes.insert(
+            class_id,
+            PalwClassStateV2 {
+                artifact_root: root,
+                slash_value_per_pwu: 1,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
+                status: PalwClassStatusV2::Active,
+                registered_daa: 1,
+                registrant_bond: None,
+                fused_attention: false,
+            },
+        );
+        carriage.class_shares.insert(class_id, 1000);
+        carriage.tir_classes.insert(class_id, record.clone());
+        carriage
+            .staged_courts
+            .insert(PalwStagedCourtKeyV1::TirLayout(class_id), PalwStagedCourtRowV1::TirLayout(Box::new(class.layout.clone())));
+        carriage
+            .staged_courts
+            .insert(PalwStagedCourtKeyV1::TirContainer(class_id), PalwStagedCourtRowV1::TirContainer(Box::new(bound)));
+        let parent = carriage.into_state(&params, None).unwrap();
+        let mut hf_rules = rules;
+        hf_rules[MaterialScope::Artifact as usize] = ManifestScopeRules {
+            codec: hf_artifact_material_codec_v1(),
+            max_bytes: HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1 as u64,
+            chunk_bytes: HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1 as u32,
+        };
+        let material =
+            PublicTfp1HfArtifactV1::resolve_v1(&parent, &fp, &source, descriptor.clone(), hf_rules[MaterialScope::Artifact as usize])
+                .unwrap();
+        let mut hf_original = signed.original.clone();
+        material.set_manifest_entry_v1(&hf_original, &mut hf_manifest).unwrap();
+        let wire = hf_original.bind_manifest(&hf_manifest, &hf_rules, 1 << 20, ManifestV1::WIRE_BYTES).unwrap();
+        let hf_manifest = hf_original
+            .authenticate_manifest(&wire, ManifestV1::WIRE_BYTES)
+            .unwrap()
+            .decode(&hf_original, &hf_rules, 1 << 20)
+            .unwrap();
+        let signature = *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &hf_original.id().0.0, ORIGINAL_SIGN_CONTEXT, [1; 32])
+            .unwrap()
+            .as_ref();
+        let hf_signed = SignedPublicOriginalV1 { original: hf_original, key, signature };
+        let hf_id = hf_signed.original.id();
+        let unresolved = LegacyTfp1ReplayContextV1 {
+            original: hf_id,
+            companion_carrier: SignedPublicOriginalV1::carrier_digest(&hf_signed.original, &hf_signed.key, &hf_signed.signature),
+            ..context
+        };
+        let resolved = LegacyTfp1ReplayContextV1 { hf_artifact: Some(&material), ..unresolved };
+        let replay_limits = LegacyTfp1ReplayLimitsV1 {
+            max_input_output_bytes: 1 << 20,
+            trace: PublicTraceAcquisitionV1 { max_tiles: maximum_leaves, max_wire_bytes: 1 << 20 },
+        };
+        let artifact_path = provider.root.join(public_original_replay_path(hf_id, MaterialScope::Artifact).unwrap());
+        assert_eq!(
+            publish_legacy_tfp1_hf_artifact_v1::<()>(context, &signed, &manifest, &backend, &provider.root, 1 << 20, |_, _| panic!(
+                "legacy context acquired HF descriptor write lease"
+            ),),
+            Err(PanelSourceErrorR1::Binding)
+        );
+        assert_eq!(
+            check_legacy_tfp1_public_replay_v1::<()>(
+                &NoProviderIo,
+                unresolved,
+                &hf_signed,
+                &hf_manifest,
+                &backend,
+                &directory,
+                replay_limits,
+                |_| panic!("unresolved HF context acquired replay lease"),
+            ),
+            Err(PanelSourceErrorR1::Binding)
+        );
+        assert_eq!(
+            publish_legacy_tfp1_hf_artifact_v1::<()>(
+                unresolved,
+                &hf_signed,
+                &hf_manifest,
+                &backend,
+                &provider.root,
+                1 << 20,
+                |_, _| panic!("unresolved HF context acquired write lease"),
+            ),
+            Err(PanelSourceErrorR1::Binding)
+        );
+        assert!(!artifact_path.exists());
+        let descriptor_wire = descriptor.encode_v1().unwrap();
+        assert_eq!(
+            publish_legacy_tfp1_hf_artifact_v1::<()>(
+                resolved,
+                &hf_signed,
+                &hf_manifest,
+                &backend,
+                &provider.root,
+                descriptor_wire.len() as u64 - 1,
+                |_, _| panic!("over-budget descriptor acquired write lease"),
+            ),
+            Err(PanelSourceErrorR1::Budget)
+        );
+        assert!(!artifact_path.exists());
+        let expected_body_bytes =
+            replay_bodies.iter().map(|(_, bytes)| bytes.len() as u64).sum::<u64>() + descriptor_wire.len() as u64;
+        assert_eq!(
+            check_legacy_tfp1_public_replay_v1::<()>(
+                &NoProviderIo,
+                resolved,
+                &hf_signed,
+                &hf_manifest,
+                &backend,
+                &directory,
+                LegacyTfp1ReplayLimitsV1 { max_input_output_bytes: expected_body_bytes - 1, ..replay_limits },
+                |_| panic!("over-budget HF bodies acquired replay lease"),
+            ),
+            Err(PanelSourceErrorR1::Budget)
+        );
+        publish_legacy_tfp1_hf_artifact_v1(
+            resolved,
+            &hf_signed,
+            &hf_manifest,
+            &backend,
+            &provider.root,
+            descriptor_wire.len() as u64,
+            |owner, size| {
+                assert_eq!(owner, hf_id);
+                assert_eq!(size, descriptor_wire.len() as u64);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(std::fs::read(&artifact_path).unwrap(), descriptor_wire);
+        for (scope, bytes) in replay_bodies {
+            write_provider_chunk(&provider.root.join(public_original_replay_path(hf_id, scope).unwrap()), bytes).unwrap();
+        }
+        for (index, tile) in tiles.iter().enumerate() {
+            write_provider_chunk(
+                &provider.root.join(public_original_trace_tile_path(hf_id, index as u64)),
+                &borsh::to_vec(tile).unwrap(),
+            )
+            .unwrap();
+        }
+        write_provider_chunk(&provider.root.join(public_original_trace_index_path(hf_id)), &borsh::to_vec(&trace).unwrap()).unwrap();
+        assert_eq!(
+            check_legacy_tfp1_public_replay_v1(
+                &provider,
+                resolved,
+                &hf_signed,
+                &hf_manifest,
+                &backend,
+                &directory,
+                replay_limits,
+                |_| Ok(()),
+            ),
+            Ok(())
+        );
+        let mut swapped_descriptor = descriptor_wire;
+        *swapped_descriptor.last_mut().unwrap() ^= 1;
+        write_provider_chunk(&artifact_path, &swapped_descriptor).unwrap();
+        assert_eq!(
+            check_legacy_tfp1_public_replay_v1::<()>(
+                &provider,
+                resolved,
+                &hf_signed,
+                &hf_manifest,
+                &backend,
+                &directory,
+                replay_limits,
+                |_| panic!("changed HF descriptor acquired replay lease"),
+            ),
+            Err(PanelSourceErrorR1::Binding)
+        );
+    }
     {
         let own = backend.open_tir_own_step_source_v1(&header, &job, &ids, &directory).unwrap();
         let count = u32::try_from(trace.step_leaf_count).unwrap();

@@ -106,6 +106,7 @@ pub(crate) fn public_original_replay_path(
 ) -> Option<String> {
     use misaka_palw_positive_contract::public_one_honest::MaterialScope;
     let name = match scope {
+        MaterialScope::Artifact => "hf-artifact",
         MaterialScope::Program => "program",
         MaterialScope::Prompt => "prompt",
         MaterialScope::Tokenizer => "tokenizer",
@@ -124,7 +125,15 @@ pub(crate) fn is_public_original_replay_path(path: &str) -> bool {
         is_hex128(id)
             && (matches!(
                 scope,
-                "program" | "prompt" | "tokenizer" | "output" | "initial-state" | "dependencies" | "execution-rules" | "trace-index"
+                "hf-artifact"
+                    | "program"
+                    | "prompt"
+                    | "tokenizer"
+                    | "output"
+                    | "initial-state"
+                    | "dependencies"
+                    | "execution-rules"
+                    | "trace-index"
             ) || scope.strip_prefix("trace-tile-").is_some_and(|index| {
                 !index.is_empty()
                     && index.bytes().all(|byte| byte.is_ascii_digit())
@@ -976,6 +985,22 @@ pub(crate) fn server_accepts_material_while_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "positive-miner")]
+    #[test]
+    fn hf_descriptor_transport_has_a_separate_bounded_body_path() {
+        use misaka_palw_positive_contract::{
+            identity::Digest,
+            public_one_honest::{MaterialScope, OriginalId},
+        };
+        let id = OriginalId(Digest([7; 64]));
+        let path = public_original_replay_path(id, MaterialScope::Artifact).unwrap();
+        assert!(path.ends_with("/hf-artifact"));
+        assert!(is_public_original_replay_path(&path));
+        for invalid in [format!("{path}/weights"), format!("{path}/../program"), path.replace("hf-artifact", "artifact")] {
+            assert!(!is_public_original_replay_path(&invalid));
+        }
+        assert!(!is_material_path(&path));
+    }
     use kaspa_consensus_core::palw_public_material_v1::{
         answer_artifact_unit_v1, differing_instances_v1, differing_rows_v1, row_refutation_v1,
     };

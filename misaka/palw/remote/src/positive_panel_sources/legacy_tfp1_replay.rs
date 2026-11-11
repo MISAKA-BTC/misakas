@@ -14,7 +14,8 @@ use kaspa_consensus_core::{
     palw_fp_execution_v3::{palw_fp_job_pin_of_context_v1, palw_fp_job_pin_v1},
     palw_freeprompt_v3::{PALW_FP_V3_VERSION, PALW_FP_V4_VERSION, PalwFpStopReasonV3, PalwFreePromptCommitmentV3, fp_claim_id_v3},
     palw_positive_contract_v2::{
-        check_public_original_execution_v1, public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1,
+        PublicTfp1HfArtifactV1, check_public_original_execution_v1, public_ordinary_tfp1_rules_material_v1,
+        public_tfp1_cold_material_v1,
     },
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
     palw_step_refute::tiled_logits_scheme_id_v1,
@@ -27,6 +28,7 @@ use misaka_palw_positive_contract::{
     identity::Digest,
     public_one_honest::{
         CheckedManifestV1, ManifestEntryV1, ManifestScopeRules, MaterialScope, OriginalCommit, OriginalId, SignedPublicOriginalV1,
+        hf_artifact_material_codec_v1,
     },
 };
 use misaka_palw_tir_exec::node::TirBackendV1;
@@ -46,6 +48,9 @@ pub struct LegacyTfp1ReplayContextV1<'a> {
     pub fp: &'a PalwFreePromptCommitmentV3,
     pub prompt_form: PalwPromptIdsFormV1,
     pub literal_prompt: &'a [u8],
+    /// Required for the HF descriptor codec, absent for the historical
+    /// inventory codec. Resolved against the caller's authenticated parent.
+    pub hf_artifact: Option<&'a PublicTfp1HfArtifactV1>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,12 +96,20 @@ pub fn check_legacy_tfp1_public_replay_v1<ReplayLease>(
         MaterialScope::InitialState,
         MaterialScope::Dependencies,
     ];
-    let total = scopes.into_iter().try_fold(0u64, |total, scope| total.checked_add(manifest.entry(scope).total_bytes));
+    let descriptor_bytes = context.hf_artifact.map_or(0, |material| material.entry_v1().total_bytes);
+    let total = scopes.into_iter().try_fold(descriptor_bytes, |total, scope| total.checked_add(manifest.entry(scope).total_bytes));
     if total.is_none_or(|total| total > limits.max_input_output_bytes) {
         return Err(PanelSourceErrorR1::Budget);
     }
     let trace = checked_public_trace_entry_v1(original, manifest)?;
     check_public_replay_trace_budget_v1(source.leaf_count_v1(), trace.total_bytes, limits.trace)?;
+
+    if let Some(material) = context.hf_artifact {
+        // The Artifact body is only a bounded reference, never full weights.
+        // Exact canonical bytes authenticate every recipe/reference field.
+        let bytes = material.descriptor_v1().encode_v1()?;
+        check_replay_material_body_v1(provider, original, manifest, MaterialScope::Artifact, &material.entry_v1(), &bytes)?;
+    }
 
     backend.artifact().check_weights_unmodified().map_err(PanelSourceErrorR1::Artifact)?;
     let (inventory_root, _) = backend.artifact().inventory_root().map_err(PanelSourceErrorR1::Artifact)?;
@@ -208,6 +221,34 @@ fn material_rules_v1(manifest: &CheckedManifestV1, scope: MaterialScope) -> Mani
     ManifestScopeRules { codec: entry.codec, max_bytes: entry.total_bytes, chunk_bytes: entry.chunk_bytes }
 }
 
+/// Publish only the signed HF reference, not checkpoint weights. The caller
+/// must reserve bounded I/O and retained storage through the claim horizon
+/// before encoding/writing; retention must outlive this temporary I/O lease.
+/// A successful local write is neither native acceptance nor HF availability.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_legacy_tfp1_hf_artifact_v1<WriteLease>(
+    context: LegacyTfp1ReplayContextV1<'_>,
+    signed: &SignedPublicOriginalV1,
+    manifest: &CheckedManifestV1,
+    backend: &TirBackendV1,
+    provider_root: &Path,
+    max_bytes: u64,
+    reserve_write: impl FnOnce(OriginalId, u64) -> Result<WriteLease, String>,
+) -> Result<(), PanelSourceErrorR1> {
+    check_legacy_tfp1_pairing_v1(context, signed, manifest, backend)?;
+    let material = context.hf_artifact.ok_or(PanelSourceErrorR1::Binding)?;
+    let size = material.entry_v1().total_bytes;
+    if size > max_bytes {
+        return Err(PanelSourceErrorR1::Budget);
+    }
+    let _lease = reserve_write(context.original, size).map_err(PanelSourceErrorR1::ReplayProvider)?;
+    let bytes = material.descriptor_v1().encode_v1()?;
+    let path = crate::public_material::public_original_replay_path(context.original, MaterialScope::Artifact)
+        .ok_or(ContractError::UnsupportedProfile)?;
+    crate::evidence::fs::write_provider_chunk(&provider_root.join(path), &bytes)
+        .map_err(|error| PanelSourceErrorR1::ReplayProvider(error.to_string()))
+}
+
 fn check_replay_material_body_v1(
     provider: &dyn MaterialProvider,
     original: &OriginalCommit,
@@ -268,6 +309,17 @@ pub(super) fn check_legacy_tfp1_pairing_v1(
     }
     original.authenticate(&signed.key, &signed.signature)?;
     check_public_original_execution_v1(original, job, backend.class(), header.artifact_root)?;
+    let artifact = manifest.entry(MaterialScope::Artifact);
+    match (artifact.codec == hf_artifact_material_codec_v1(), context.hf_artifact) {
+        (true, Some(material)) => {
+            material.check_context_v1(fp, source, backend.class())?;
+            if *artifact != material.entry_v1() {
+                return Err(PanelSourceErrorR1::Binding);
+            }
+        }
+        (false, None) => {}
+        _ => return Err(PanelSourceErrorR1::Binding),
+    }
     check_public_input_token_entry_v1(original, manifest, context.prompt_form)?;
     manifest.open_prompt_text(context.literal_prompt).map_err(|_| PanelSourceErrorR1::Binding)?;
     Ok(())
