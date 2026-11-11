@@ -1,7 +1,7 @@
 //! Opt-in storage measurement over two actual node databases. The control
 //! replays the shared prerequisites, then produces the same clock steps and
 //! block count with empty bodies while the workload folds TKR1.
-//! This whitespace-padded payload is deliberately compressible. Directory
+//! The default whitespace-padded payload is deliberately compressible. Directory
 //! scans are sequential observations while RocksDB background work may run.
 //! The measurement exercises retention and GC, not a disk capacity bound.
 use super::*;
@@ -165,7 +165,7 @@ async fn fold_at_slot(
     )
 }
 
-fn history(chain: &T12Chain, db: &DB, sources: &[Block], folds: &[Block], open_id: Hash64) -> Value {
+fn history(chain: &T12Chain, db: &DB, sources: &[Block], folds: &[Block], open_id: Hash64, parts: usize) -> Value {
     let vp = chain.vp();
     let store = vp.palw_state_v2_store.read();
     let delta_bytes: Vec<_> = folds
@@ -189,13 +189,45 @@ fn history(chain: &T12Chain, db: &DB, sources: &[Block], folds: &[Block], open_i
     json!({
         "sourceBodyStoreBytes": body_bytes, "foldDeltaBorshBytes": delta_bytes,
         "sessionBorshBytes": row_size(PalwStagedCourtKeyV1::TokenizerRegistrationSession(open_id)),
-        "partBorshBytes": row_size(PalwStagedCourtKeyV1::TokenizerRegistrationPart(open_id, 0)),
+        "partBorshBytes": (0..parts).map(|index| row_size(PalwStagedCourtKeyV1::TokenizerRegistrationPart(open_id, index as u32))).collect::<Vec<_>>(),
         "bookBorshBytes": row_size(PalwStagedCourtKeyV1::TokenizerRegistrationBook),
     })
 }
 
 async fn run(root: PathBuf) {
-    let (config, bundle, premine, floats, policy) = isolated_config();
+    let (mut config, bundle, premine, floats, mut policy) = isolated_config();
+    let workload_case = std::env::var("TKR_DB_MEASUREMENT_CASE").unwrap_or_else(|_| "synthetic".into());
+    let actual = match workload_case.as_str() {
+        "synthetic" => None,
+        "actual" => {
+            let read = |name| std::fs::read(std::env::var_os(name).unwrap_or_else(|| panic!("set {name}"))).unwrap();
+            let raw = read("TKR_MEASUREMENT_RAW");
+            let table =
+                kaspa_consensus_core::palw_fp_constraint_job_v1::palw_token_table_file_decode_v1(&read("TKR_MEASUREMENT_TABLE"))
+                    .unwrap();
+            assert_eq!(raw.len(), 2_104_556);
+            assert_eq!(table.vocab(), 49_152);
+            let class = real_cases_in("shipped").into_iter().find(|c| c.name == "real:smollm2-1.7b").unwrap();
+            assert_eq!(class.class.tokenizer_id, table.tokenizer_id);
+            policy.max_raw_bytes = raw.len() as u64;
+            policy.max_vocab = table.vocab();
+            policy.max_key_events = (raw.len() as u64 / 2).max(1);
+            policy.max_eog_ids = u32::try_from(table.eog_token_ids.len()).unwrap();
+            policy.max_rendering_bytes = table.entries.iter().flatten().map(|entry| entry.len() as u64).sum();
+            policy.max_parser_scratch_bytes = 512 * 1024 * 1024;
+            policy.max_retained_bytes = 16 * 1024 * 1024;
+            policy.max_retained_total_bytes = 4 * policy.max_retained_bytes;
+            policy.metadata_bytes = policy.metadata_floor_v1().unwrap();
+            policy.max_work = 10_000_000_000;
+            policy.max_registration_charge = 10_000_000_000;
+            policy.service_budget.io = policy.max_retained_total_bytes * policy.maximum_source_blocks;
+            policy.service_budget.work = policy.bookkeeping_work_v1().unwrap().sweep + policy.max_work * policy.maximum_source_blocks;
+            config.params.palw_tokenizer_registration_v1.as_mut().unwrap().policy = policy;
+            config.params.validate_palw_v2().unwrap();
+            Some((class, raw, table))
+        }
+        _ => panic!("unknown TKR_DB_MEASUREMENT_CASE {workload_case}"),
+    };
     let workload_path = root.join("workload");
     let control_path = root.join("control");
     let db = open_db(&workload_path, true);
@@ -205,9 +237,16 @@ async fn run(root: PathBuf) {
     let chain = t12_genesis_chain_on(node, &config, &bundle, &premine, &floats);
     let mut env = Env::around(chain, (config.clone(), bundle.clone(), premine.clone(), floats.clone()));
     warm_to(&mut env, START).await;
-    let mut raw = br#"{"model":{"vocab":{"A":0},"merges":[]},"added_tokens":[]}"#.to_vec();
-    raw.resize(PART_SIZE, b' ');
-    let (mut m, body, eog) = prepare_class_for_raw(env, policy, &raw).await;
+    let (mut m, body, eog, raw) = if let Some((class, raw, table)) = actual {
+        let (m, body, eog) = prepare_class_from_fixture(env, policy, &raw, class, Some(table)).await;
+        (m, body, eog, raw)
+    } else {
+        let mut raw = br#"{"model":{"vocab":{"A":0},"merges":[]},"added_tokens":[]}"#.to_vec();
+        raw.resize(PART_SIZE, b' ');
+        let (m, body, eog) = prepare_class_for_raw(env, policy, &raw).await;
+        (m, body, eog, raw)
+    };
+    let parts = raw.len().div_ceil(PART_SIZE);
     let (sender, _control_receiver) = async_channel::unbounded();
     let node = TestConsensus::with_db(control_db.clone(), &config, sender);
     let mut control = t12_genesis_chain_on(node, &config, &bundle, &premine, &floats);
@@ -223,7 +262,7 @@ async fn run(root: PathBuf) {
         (&m.env.chain, &db),
         (&control, &control_db),
         Some(json!({
-            "flushNs":start, "rawBytes":raw.len(), "rawShape":"synthetic JSON with trailing whitespace",
+            "flushNs":start, "rawBytes":raw.len(), "case":workload_case, "parts":parts,
             "policyId":body.policy.to_string(), "classId":body.pins.class_id.to_string(), "tokenizerId":body.statement.tokenizer_id.to_string(),
             "openId":body.id_v1().unwrap().to_string(),
         })),
@@ -241,7 +280,7 @@ async fn run(root: PathBuf) {
     let read = |chain: &T12Chain| chain.ctx.consensus.palw_tokenizer_registration_status_v1(open_id).unwrap().unwrap().value;
     let status = read(&m.env.chain).unwrap();
     assert_eq!(status.accepted.block, open_fold.header.hash);
-    assert_eq!(status.parts.len(), 1);
+    assert_eq!(status.parts.len(), parts);
     assert!(read(&control).is_none());
     sample(
         "open_accepted",
@@ -253,27 +292,46 @@ async fn run(root: PathBuf) {
         })),
     );
 
-    let mut part = TokenizerRegistrationPartV1 {
-        body: TokenizerRegistrationPartBodyV1 {
-            version: body.version,
-            network: body.network,
-            policy: body.policy,
-            open_id,
-            opener: body.opener,
-            index: 0,
-            offset: 0,
-            payload_digest: TokenizerRegistrationPartV1::payload_digest_v1(&raw).unwrap(),
-        },
-        signature: [0; MLDSA87_SIGNATURE_LEN],
-        bytes: raw,
-    };
-    part.signature = signed_bytes(OPENER, part.signing_message_v1().unwrap().as_byte_slice(), TOKENIZER_REGISTRATION_PART_CONTEXT_V1);
-    let part_tx = tkr_carrier(&m.env, &TokenizerRegistrationWireV1::Part(part), PART_PAYER, FEE);
-    let (part_source, part_fold, part_timing) =
-        fold_at_slot(&mut m.env.chain, &mut control, interval, status.parts[0].slot_daa, part_tx).await;
+    let mut slots = status.parts.clone();
+    slots.sort_unstable_by_key(|part| part.slot_daa);
+    let mut sources = vec![open_source];
+    let mut folds = vec![open_fold];
+    let mut funding = m.env.floats[PART_PAYER].clone();
+    for planned in slots {
+        let offset = usize::try_from(planned.offset).unwrap();
+        let bytes = raw[offset..offset + planned.bytes as usize].to_vec();
+        let mut part = TokenizerRegistrationPartV1 {
+            body: TokenizerRegistrationPartBodyV1 {
+                version: body.version,
+                network: body.network,
+                policy: body.policy,
+                open_id,
+                opener: body.opener,
+                index: planned.index,
+                offset: planned.offset,
+                payload_digest: TokenizerRegistrationPartV1::payload_digest_v1(&bytes).unwrap(),
+            },
+            signature: [0; MLDSA87_SIGNATURE_LEN],
+            bytes,
+        };
+        part.signature =
+            signed_bytes(OPENER, part.signing_message_v1().unwrap().as_byte_slice(), TOKENIZER_REGISTRATION_PART_CONTEXT_V1);
+        let part_tx = tkr_carrier_from(&m.env, &TokenizerRegistrationWireV1::Part(part), PART_PAYER, FEE, funding);
+        let (source, fold, timing) = fold_at_slot(&mut m.env.chain, &mut control, interval, planned.slot_daa, part_tx.clone()).await;
+        funding = native_funding(&m.env, &part_tx);
+        let progress = read(&m.env.chain).unwrap();
+        assert_eq!(progress.parts[planned.index as usize].accepted.unwrap().block, fold.header.hash);
+        sources.push(source);
+        folds.push(fold);
+        sample(
+            "part_accepted",
+            (&m.env.chain, &db),
+            (&control, &control_db),
+            Some(json!({"index":planned.index,"partBytes":planned.bytes,"timing":timing})),
+        );
+    }
     let status = read(&m.env.chain).unwrap();
-    assert_eq!(status.parts[0].accepted.unwrap().block, part_fold.header.hash);
-    sample("part_accepted", (&m.env.chain, &db), (&control, &control_db), Some(part_timing));
+    assert!(status.parts.iter().all(|part| part.accepted.is_some()));
 
     let mut finish = TokenizerRegistrationFinishV1 {
         body: TokenizerRegistrationFinishBodyV1 {
@@ -294,10 +352,10 @@ async fn run(root: PathBuf) {
     let (finish_source, finish_fold, finish_timing) =
         fold_at_slot(&mut m.env.chain, &mut control, interval, status.finishes[0].slot_daa, finish_tx).await;
     assert!(matches!(read(&m.env.chain).unwrap().status, TokenizerRegistrationStatusV1::Complete { .. }));
-    let sources = [open_source, part_source, finish_source];
-    let folds = [open_fold, part_fold, finish_fold];
-    let before = history(&m.env.chain, &db, &sources, &folds, open_id);
-    assert!(before["partBorshBytes"].as_u64().unwrap() > PART_SIZE as u64);
+    sources.push(finish_source);
+    folds.push(finish_fold);
+    let before = history(&m.env.chain, &db, &sources, &folds, open_id, parts);
+    assert!(before["partBorshBytes"].as_array().unwrap().iter().map(|size| size.as_u64().unwrap()).sum::<u64>() > raw.len() as u64);
     sample("finish_accepted", (&m.env.chain, &db), (&control, &control_db), Some(json!({"timing":finish_timing,"history":before})));
     let flush = [flush_memtable(&db), flush_memtable(&control_db)];
     sample("finish_flushed", (&m.env.chain, &db), (&control, &control_db), Some(json!({"flushNs":flush})));
@@ -309,10 +367,11 @@ async fn run(root: PathBuf) {
     let (gc, work_ns, control_ns) = gc.unwrap();
     assert_eq!(gc.header.daa_score, body.material_until_daa);
     assert!(read(&m.env.chain).is_none());
-    let after = history(&m.env.chain, &db, &sources, &folds, open_id);
-    for key in ["sessionBorshBytes", "partBorshBytes", "bookBorshBytes"] {
+    let after = history(&m.env.chain, &db, &sources, &folds, open_id, parts);
+    for key in ["sessionBorshBytes", "bookBorshBytes"] {
         assert!(after[key].is_null());
     }
+    assert!(after["partBorshBytes"].as_array().unwrap().iter().all(Value::is_null));
     for key in ["sourceBodyStoreBytes", "foldDeltaBorshBytes"] {
         assert_eq!(after[key], before[key], "native GC keeps ordinary block and journal history");
     }
@@ -366,7 +425,7 @@ async fn run(root: PathBuf) {
     let (work, db, reopen_ns) = reopen(&workload_path, workload_closed);
     let (control, control_db, control_reopen_ns) = reopen(&control_path, control_closed);
     assert!(read(&work).is_none());
-    assert_eq!(history(&work, &db, &sources, &folds, open_id), after);
+    assert_eq!(history(&work, &db, &sources, &folds, open_id, parts), after);
     sample(
         "database_reopen",
         (&work, &db),

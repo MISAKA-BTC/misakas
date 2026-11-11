@@ -240,19 +240,22 @@ async fn prerequisites(m: &mut Mined, raw: &[u8], table: &PalwTokenTableV1) -> P
     )
     .await;
     let opened = m.env.chain.tip_state().1.staged_tokenizer_inventory_open_v1(table.tokenizer_id, offer.opener).unwrap().opened_daa;
-    let funding = publish(
-        &mut m.env,
-        movement(
-            opened,
-            PalwConstraintStreamActionV1::ArtifactInventoryMove(PalwTokenizerArtifactInventoryActionV1::Part {
-                offset: 0,
-                bytes: raw.to_vec(),
-            }),
-        ),
-        EOF_OWNER,
-        funding,
-    )
-    .await;
+    let mut funding = funding;
+    for (index, bytes) in raw.chunks(PALW_ARTIFACT_INVENTORY_PART_BYTES_V1).enumerate() {
+        funding = publish(
+            &mut m.env,
+            movement(
+                opened,
+                PalwConstraintStreamActionV1::ArtifactInventoryMove(PalwTokenizerArtifactInventoryActionV1::Part {
+                    offset: (index * PALW_ARTIFACT_INVENTORY_PART_BYTES_V1) as u64,
+                    bytes: bytes.to_vec(),
+                }),
+            ),
+            EOF_OWNER,
+            funding,
+        )
+        .await;
+    }
     publish(
         &mut m.env,
         movement(opened, PalwConstraintStreamActionV1::ArtifactInventoryMove(PalwTokenizerArtifactInventoryActionV1::Finish)),
@@ -270,7 +273,16 @@ async fn prerequisites(m: &mut Mined, raw: &[u8], table: &PalwTokenTableV1) -> P
 }
 
 fn tkr_carrier(env: &Env, wire: &TokenizerRegistrationWireV1, card: usize, fee: u64) -> Transaction {
-    let (outpoint, entry) = env.floats[card].clone();
+    tkr_carrier_from(env, wire, card, fee, env.floats[card].clone())
+}
+
+fn tkr_carrier_from(
+    env: &Env,
+    wire: &TokenizerRegistrationWireV1,
+    card: usize,
+    fee: u64,
+    (outpoint, entry): (TransactionOutpoint, UtxoEntry),
+) -> Transaction {
     let mut tx = Transaction::new(
         crate::constants::TX_VERSION,
         vec![TransactionInput::new(outpoint, Vec::new(), 0, 1)],
@@ -366,13 +378,28 @@ async fn prepare_class_for_raw(
 ) -> (Mined, TokenizerRegistrationOpenBodyV1, kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1) {
     let mut c = case("dense-gqa-2layer");
     c.class.tokenizer_id = palw_tokenizer_raw_commitment_v1(raw);
+    prepare_class_from_fixture(env, policy, raw, c, None).await
+}
+
+async fn prepare_class_from_fixture(
+    env: Env,
+    policy: TokenizerRegistrationPolicyV1,
+    raw: &[u8],
+    c: Case,
+    table: Option<PalwTokenTableV1>,
+) -> (Mined, TokenizerRegistrationOpenBodyV1, kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1) {
+    assert_eq!(c.class.tokenizer_id, palw_tokenizer_raw_commitment_v1(raw));
     let mut m = mine_registration_on(env, &c, REGISTRANT).await;
-    let mut entries = vec![None; m.record.logits_vocab as usize];
-    entries[0] = Some(b"A".to_vec());
-    let table = PalwTokenTableV1 { entries, eog_token_ids: vec![0], tokenizer_id: c.class.tokenizer_id };
+    let table = table.unwrap_or_else(|| {
+        let mut entries = vec![None; m.record.logits_vocab as usize];
+        entries[0] = Some(b"A".to_vec());
+        PalwTokenTableV1 { entries, eog_token_ids: vec![0], tokenizer_id: c.class.tokenizer_id }
+    });
+    assert_eq!((table.tokenizer_id, table.vocab()), (m.record.tokenizer_id, m.record.logits_vocab));
     let pins = prerequisites(&mut m, raw, &table).await;
     let eog = table.eog_opening().unwrap();
     let now = m.env.chain.daa_of(m.env.chain.sink());
+    let finish_window = if raw.len() > TOKENIZER_REGISTRATION_PART_BYTES_V1 { 80 } else { 40 };
     let body = TokenizerRegistrationOpenBodyV1 {
         version: TOKENIZER_REGISTRATION_VERSION_V1,
         network: m.env.domain,
@@ -390,8 +417,8 @@ async fn prepare_class_for_raw(
         opener: m.env.chain.bonds[OPENER],
         nonce: Hash64::from_u64_word(0x544b5231),
         accept_until_daa: now + 20,
-        finish_until_daa: now + 40,
-        material_until_daa: now + 40 + policy.retention_daa,
+        finish_until_daa: now + finish_window,
+        material_until_daa: now + finish_window + policy.retention_daa,
         max_registration_charge: policy.max_registration_charge,
     };
     (m, body, eog)
