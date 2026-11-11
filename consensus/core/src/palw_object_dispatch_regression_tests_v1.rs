@@ -116,7 +116,37 @@ fn paired_fp_late_original_deposit_failure_restores_the_entire_checkpoint() {
     drop(limited_ordinary);
     extras.tir_public_conviction_active = true;
     extras.tir_public_originals.insert(claim, envelope);
+
+    // Seed the observer branch with an unrelated service binding built by
+    // the existing court fixture. The late failure below runs the actual
+    // paired object writer; this is not a service admission fixture.
+    let unrelated = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2);
+    let (unrelated_state, unrelated_params, unrelated_extras) = world(&unrelated, &unrelated.frame);
+    let service_state = bind_clock_service(&unrelated_state, &unrelated.frame, &unrelated_params, &unrelated_extras);
+    assert_ne!(unrelated.frame.plan_v1().original_claim, claim);
+    state.staged_courts.insert(Key::CourtService, service_state.staged_courts[&Key::CourtService].clone());
+    assert!(state.court_service_state_v1().is_some_and(|service| !service.claims.is_empty()));
+
+    use crate::palw_native_resource_v1::{
+        NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1, native_typed_value_requests_v1,
+    };
+    let required = native_typed_value_requests_v1(&state).unwrap();
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: required - 1, database_bytes: 0 });
+    let mut short = TransitionBuilder::try_new(&state, &params, false, false, false, false, &extras).unwrap();
+    short.prepare_sweep_court_end_cause_v1(&ctx).unwrap();
+    let short_evidence = short.court_end_evidence.clone().unwrap();
+    short.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(apply_object(&mut short, &ctx, &object), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(short.entries.is_empty());
+    assert_eq!(short.state, state);
+    assert!(std::ptr::eq(short.court_end_evidence.as_deref().unwrap(), short_evidence.as_ref()));
+    assert!(short.tfp1_original_prefix.is_none());
+    drop(short);
+    assert_eq!(checker.outstanding(), (0, 0));
+
     let mut paired = TransitionBuilder::try_new(&state, &params, false, false, false, false, &extras).unwrap();
+    paired.prepare_sweep_court_end_cause_v1(&ctx).unwrap();
+    let prior_evidence = paired.court_end_evidence.clone().unwrap();
     let root_before = paired.state.state_root();
     let carriage_before = borsh::to_vec(&PalwStateCarriageV2::from_state(&paired.state)).unwrap();
     let journal_before = borsh::to_vec(&paired.entries).unwrap();
@@ -136,6 +166,8 @@ fn paired_fp_late_original_deposit_failure_restores_the_entire_checkpoint() {
     assert_eq!(paired.state.reserved_exposure, reservations_before);
     assert_eq!(paired.state.work_ids, work_ids_before);
     assert!(paired.state.claim(&claim).is_none());
+    assert!(std::ptr::eq(paired.court_end_evidence.as_deref().unwrap(), prior_evidence.as_ref()));
+    assert!(paired.tfp1_original_prefix.is_none());
     // Native resource spent-work counters are deliberately NOT monetary
     // reservations and must not be refunded by this checkpoint assertion.
 }

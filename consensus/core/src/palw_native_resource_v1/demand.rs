@@ -41,6 +41,11 @@ impl NativeDemandLeaseV1 {
     pub(crate) fn memory_v1(&self) -> u64 {
         self.memory
     }
+    /// Reserve a temporary copy against the same checker without enlarging
+    /// the persistent owner's ticket.
+    pub(super) fn reserve_pending_copy_v1(&self, memory: u64) -> Result<Self, NativeCoverageV1> {
+        self.checker.reserve_requests_phase_v1(memory, 0, true)
+    }
     /// Extend an existing owner before its next allocation. Reuse the same
     /// ticket so tracking an unbounded walk does not itself allocate a second
     /// collection whose ownership would need another reservation.

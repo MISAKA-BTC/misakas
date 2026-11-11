@@ -2,7 +2,7 @@
 //
 // **G14 item 1 / RFC-0035 A §3, §7, §9.1: the funded-original coordinator.**
 //
-// Seam: `apply_object_with_pair_v1`'s paired checkpoint → `apply_object_inner` → the FreePromptCommitted arm, right after
+// Seam: `apply_object_observed_v2`'s paired checkpoint → `apply_object_inner` → the FreePromptCommitted arm, right after
 // `prepare_paired_original_v1` and BEFORE the first `reserve_for_claim`. Everything is derived from the native preparation that
 // already succeeded there (`PreparedOriginalFrameV1` → geometry → requirements → actor catalog → source graph), from the rooted
 // state at THIS point of the block (not a parent snapshot), and from the actual carrier transaction (`PalwFundedOriginalPairingV1`).

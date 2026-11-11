@@ -32,9 +32,7 @@ impl NativeTransitionReservationV1 {
     /// BCT2 needs the existing typed prefix bound even when optional
     /// logical snapshot quotas are off. Carry the pending lease with the
     /// state so an owned terminal can price its checkpoint without a walk.
-    pub(crate) fn copy_parent_for_plain_output_v2(
-        parent: &PalwChainStateV2,
-    ) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
+    pub(crate) fn copy_parent_for_plain_output_v2(parent: &PalwChainStateV2) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
         let requests = typed_value_requests_v1(parent)?;
         let lease = super::reserve_native_pending_requests_v1(requests)?;
         let state = parent.clone();
@@ -59,6 +57,20 @@ impl NativeTransitionReservationV1 {
 
     pub(crate) fn requests_v1(&self) -> u64 {
         self.requests
+    }
+
+    /// Own only the temporary coexistence of the old and copied state. The
+    /// caller drops the saved copy, or restores it under the original state
+    /// envelope, before releasing this ticket. Never add it to writer growth.
+    pub(crate) fn reserve_checkpoint_copy_v1(
+        &self,
+        state: &PalwChainStateV2,
+    ) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+        let memory = typed_value_requests_v1(state)?;
+        match &self.lease {
+            Some(lease) => lease.reserve_pending_copy_v1(memory).map(Some),
+            None => super::reserve_native_pending_requests_v1(memory),
+        }
     }
 
     /// Release discarded scratch only after its values have been dropped or
@@ -194,6 +206,29 @@ impl NativeTransitionReservationV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn checkpoint_copy_shares_capacity_and_releases_without_accumulating_writer_growth() {
+        let state = PalwChainStateV2::genesis();
+        let bytes = typed_value_requests_v1(&state).unwrap();
+        assert!(bytes > 0);
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: bytes * 2, database_bytes: 0 });
+        let construction =
+            NativeTransitionReservationV1 { lease: Some(checker.reserve_requests_v1(bytes, 0).unwrap()), requests: bytes };
+        for _ in 0..3 {
+            let ticket = construction.reserve_checkpoint_copy_v1(&state).unwrap().unwrap();
+            let saved = state.clone();
+            ticket.materialized_v1();
+            assert_eq!(checker.outstanding(), (bytes * 2, 0));
+            assert!(construction.reserve_checkpoint_copy_v1(&state).is_err(), "a simultaneous second copy exceeds the same bank");
+            assert_eq!(construction.requests_v1(), bytes);
+            drop(saved);
+            drop(ticket);
+            assert_eq!(checker.outstanding(), (bytes, 0));
+        }
+        drop(construction);
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+
     #[test]
     fn transition_output_split_keeps_each_payloads_ownership_and_never_reserves_afterwards() {
         let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 64, database_bytes: 0 });

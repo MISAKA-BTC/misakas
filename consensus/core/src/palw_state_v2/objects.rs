@@ -74,49 +74,68 @@ fn apply_object_observed_v2(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
-    if builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty()) {
-        let saved = builder.try_checkpoint()?;
-        let previous = builder.court_end_evidence.clone();
-        let result = (|| {
-            builder.prepare_native_court_end_cause_v1(ctx, object)?;
-            apply_object_with_pair_v1(builder, ctx, object)
-        })();
-        builder.court_end_evidence = previous;
-        if result.is_err() {
-            builder.restore(saved);
+    let observes_court = builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty());
+    let (has_frame, paired) = match object {
+        PalwConsensusObjectV2::FreePromptCommitted { claim, .. } => {
+            let has_frame = builder.extras.tir_public_originals.contains_key(claim);
+            let paired = has_frame
+                || builder.extras.prefix_dependencies_v1.contains_key(claim)
+                || builder.extras.tir_funded_originals.contains_key(claim);
+            (has_frame, paired)
         }
-        return result;
-    }
-    apply_object_with_pair_v1(builder, ctx, object)
-}
-fn apply_object_with_pair_v1(
-    builder: &mut TransitionBuilder<'_>,
-    ctx: &PalwBlockContextV2,
-    object: &PalwConsensusObjectV2,
-) -> Result<(), PalwStateV2Error> {
-    // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` every court operation is charged its deterministic cost
-    // against the block's court budget before its arm runs. A no-op below the fence.
-    palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
-    let paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
-        if builder.extras.tir_public_originals.contains_key(claim));
-    let prefix_paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
-        if builder.extras.prefix_dependencies_v1.contains_key(claim));
-    if !paired && !prefix_paired {
-        return apply_object_inner(builder, ctx, object);
-    }
-    // A prospective original is ONE native object. Failure after the ordinary
-    // FP reservation/budget writes cannot leave an accepted unprotected claim.
-    // `checkpoint()` is test-only on the integration line; production rollback goes through the native resource reservation.
-    let saved = builder.try_checkpoint()?;
-    let previous_prefix = builder.tfp1_original_prefix.take();
-    let result = (|| {
-        if paired {
+        _ => (false, false),
+    };
+    let apply = |builder: &mut TransitionBuilder<'_>| {
+        if observes_court {
+            builder.prepare_native_court_end_cause_v1(ctx, object)?;
+        }
+        // Court capacity follows its existing attempt/application rules. It
+        // is deliberately outside the state/journal checkpoint's rollback.
+        palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
+        if has_frame {
             palw_tir_public_fold_v1::check_paired_original_v1(builder, object)?;
         }
         apply_object_inner(builder, ctx, object)
-    })();
-    builder.tfp1_original_prefix = previous_prefix;
+    };
+    if !observes_court && !paired {
+        return apply(builder);
+    }
+
+    // A paired original has one checkpoint even when live court service
+    // requires evidence. Nested dispatch still owns its own checkpoint.
+    let copy_owner = if paired {
+        builder.native_reservation.reserve_checkpoint_copy_v1(&builder.state).map_err(PalwStateV2Error::NativeResource)?
+    } else {
+        None
+    };
+    let saved = if paired {
+        let saved = (
+            builder.state.clone(),
+            builder.entries.len(),
+            crate::palw_court_observation_v1::checkpoint_v1(),
+            palw_claim_local_object_spans_v2::checkpoint(builder),
+        );
+        if let Some(owner) = &copy_owner {
+            owner.materialized_v1();
+        }
+        saved
+    } else {
+        builder.try_checkpoint()?
+    };
+    let previous_evidence = if observes_court { builder.court_end_evidence.clone() } else { None };
+    let previous_prefix = if paired { builder.tfp1_original_prefix.take() } else { None };
+    let result = apply(builder);
+    if observes_court {
+        builder.court_end_evidence = previous_evidence;
+    }
+    if paired {
+        builder.tfp1_original_prefix = previous_prefix;
+    }
     if result.is_err() {
+        // The saved state replaces the failed current state. A tracked
+        // builder's original envelope covers it again before the temporary
+        // coexistence ticket drops. A legacy raw builder returns to its
+        // pre-operation state footprint.
         builder.restore(saved);
     }
     result

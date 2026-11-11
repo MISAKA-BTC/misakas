@@ -1,7 +1,7 @@
 //! **G14 item 1 / RFC-0035 A §3, §7, §9.1: the funded-original coordinator's public inputs** (DORMANT).
 //!
 //! The coordinator itself lives in the native fold (`palw_state_v2::palw_tir_public_fold_v1`, file
-//! `palw_funded_original_coordinator_fold_v1.rs`), at the one pre-write seam: inside `apply_object_with_pair_v1`'s paired
+//! `palw_funded_original_coordinator_fold_v1.rs`), at the one pre-write seam: inside `apply_object_observed_v2`'s paired
 //! checkpoint, after `prepare_paired_original_v1`, before the first `reserve_for_claim`. This module holds only what crosses a crate
 //! boundary or a test seam:
 //!
