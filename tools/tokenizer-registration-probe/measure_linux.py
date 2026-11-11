@@ -41,8 +41,8 @@ def main():
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--core-source-commit", help="Core revision when reusing an identified release library")
     parser.add_argument("--mode", choices=("parser", "native", "native-multipass", "scanner"), default="parser")
-    parser.add_argument("--source-count", type=int, default=780, choices=range(1, 781))
-    parser.add_argument("--repetitions", type=int, default=5, choices=range(1, 101))
+    parser.add_argument("--source-count", type=int, default=780, choices=range(1, 781), metavar="N", help="Scanner sources, 1..780")
+    parser.add_argument("--repetitions", type=int, default=5, choices=range(1, 101), metavar="N", help="Repetitions, 1..100")
     args = parser.parse_args()
     binary, cases, output = args.binary.resolve(), args.cases.resolve(), args.output.resolve()
     output.mkdir()  # Existing evidence is never overwritten.
