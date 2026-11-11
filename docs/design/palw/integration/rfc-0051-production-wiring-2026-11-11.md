@@ -63,3 +63,6 @@ TKR1 transport が有効になった候補から、通常 PALW object・Batch・
 
 
 `db9db6bec` の[実 RocksDB 保存・GC 試験](../../../evidence/palw/tokenizer-registration-physical-db-functional-2026-11-11.json)が成功した。共有する前提チェーンから、TKR1 を登録する DB と同じ時刻・ブロック数の空取引 DB を進めた。DAA 136 の raw GC 後に Part/session/book は消え、検査済み登録行と元の body/journal は保持された。強制 flush・compaction・DB close/reopen 後も同じ結果で、最大観測 WAL は登録側15,853,876 bytes、比較側6,891,785 bytes、compaction 後の全ファイル長は3,022,325 / 2,729,517 bytesだった。これは圧縮しやすい空白で埋めた64 KiB入力、macOS opt-level 0の保存機能観測であり、実 tokenizer の保存上限や Linux 性能・公開単価には外挿しない。通常の履歴を raw GC の副作用で削除していない。
+
+
+`9d9f88348` の[実 tokenizer を使う RocksDB 試験](../../../evidence/palw/tokenizer-registration-physical-db-actual-2026-11-11/README.md)では、2,104,556 bytes・33 Partを予約 DAA 順に実署名・UTXOで受理した。Finish後の flush 済み全ファイル長は登録側22,695,446 bytes / 同じブロック数の空取引側5,418,212 bytes。raw GC・compaction後は14,074,322 / 6,388,433 bytesとなり、DBを閉じて再度開いても検査済み登録と元の35 source body・35 journalが残った。macOS opt-level 0の機能・保存観測で、試験全体43.88秒。公開料金、最大 mergeset、Linux whole-node 性能は別の未完項目である。
