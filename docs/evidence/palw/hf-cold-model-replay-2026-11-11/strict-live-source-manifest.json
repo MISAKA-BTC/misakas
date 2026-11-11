@@ -1,0 +1,72 @@
+{
+  "schema": "misaka.hf-checkpoint-source.v1",
+  "repository": "HuggingFaceTB/SmolLM2-135M",
+  "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+  "api": "https://huggingface.co/api/models/HuggingFaceTB/SmolLM2-135M/revision/93efa2f097d58c2a74874c7e644dbc9b0cee75a2?blobs=true",
+  "complete": true,
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 6340,
+      "lfs_sha256": null,
+      "git_blob_sha1": "4049f762cb41ec6f526936c9af80ae216048bc74",
+      "sha256": "d1ba68cae64a89b6b434b11526e6e2271ee5ffd2c914ec35ed515f9d84c6085c"
+    },
+    {
+      "path": "config.json",
+      "bytes": 704,
+      "lfs_sha256": null,
+      "git_blob_sha1": "ccf3dac2f33905d152adbdf3886b5e38a4eb7579",
+      "sha256": "1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843"
+    },
+    {
+      "path": "generation_config.json",
+      "bytes": 111,
+      "lfs_sha256": null,
+      "git_blob_sha1": "0fce861c328ff24830f3037d91ce773254447bf7",
+      "sha256": "2056c988e990b0d13670f63f2f3b87b3b6d07edaf7a3416998ba27dab2d8a059"
+    },
+    {
+      "path": "merges.txt",
+      "bytes": 466391,
+      "lfs_sha256": null,
+      "git_blob_sha1": "69503b13f727ba3812b6803e97442a6de05ef5eb",
+      "sha256": "0b54e8aa4e53d5383e2e4bc635a56b43f9647f7b13832d5d9ecd8f82dac4f510"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "bytes": 831,
+      "lfs_sha256": null,
+      "git_blob_sha1": "f6652f246cb895ca1edfb16d10b57917b266e335",
+      "sha256": "e786b595b9a23148bf1630df78d9037a048ea671e48bfd3549a1e3c233742bb3"
+    },
+    {
+      "path": "tokenizer.json",
+      "bytes": 2104556,
+      "lfs_sha256": null,
+      "git_blob_sha1": "f922b1797f0c88e71addc8393787831f2477a4bd",
+      "sha256": "9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "bytes": 3658,
+      "lfs_sha256": null,
+      "git_blob_sha1": "d45192775d58298087a1fedf5967fe5b63b091ab",
+      "sha256": "4bb9af56a342753d39374f4016a16574cab299fe088e896f425ce3c433f61424"
+    },
+    {
+      "path": "vocab.json",
+      "bytes": 800662,
+      "lfs_sha256": null,
+      "git_blob_sha1": "0ad5ecc2035b7031b88afb544ee95e2d49baa484",
+      "sha256": "82b84012e3add4d01d12ba14442026e49b8cbbaead1f79ecf3d919784f82dc79"
+    },
+    {
+      "path": "model.safetensors",
+      "bytes": 269060552,
+      "lfs_sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1",
+      "git_blob_sha1": "ed736e4e5f39dd99c5d435bf84c0d8c222839b1b",
+      "sha256": "80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1"
+    }
+  ]
+}

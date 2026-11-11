@@ -1,0 +1,10 @@
+{
+  "issue_counter_sha256": "f47503d7ffeb46801258b72a5535bb2e0dbf74f62b5776057ca1cd3e8873e577",
+  "unchanged_from_prior_record": true,
+  "missing_occurrences": 973,
+  "rfc_errors": 7,
+  "adr_errors": 87,
+  "prior_adr_errors": 89,
+  "new_adr_error_messages": [],
+  "baseline_updated": false
+}

@@ -1,0 +1,10 @@
+   Compiling misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/positive-accounting)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3m 04s
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08)
+
+running 1 test
+test palw_positive_contract_v2::tfp1_original::tests::tfp1_public_original_pairs_exact_native_identity_before_and_after_signing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6007 filtered out; finished in 0.43s
+

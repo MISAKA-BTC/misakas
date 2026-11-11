@@ -965,6 +965,36 @@
       "kind": "adr",
       "id": "ADR-0218",
       "path": "docs/adr/0218-public-materials-and-one-honest-panel.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0051",
+      "path": "docs/rfc/0051-funded-preclaim-tokenizer-registration.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0219",
+      "path": "docs/adr/0219-funded-preclaim-tokenizer-registration.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0052",
+      "path": "docs/rfc/0052-hugging-face-model-acquisition-and-claim-materials.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0220",
+      "path": "docs/adr/0220-hugging-face-model-acquisition-and-claim-materials.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0053",
+      "path": "docs/rfc/0053-additional-model-burn-pause.md"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0221",
+      "path": "docs/adr/0221-additional-model-burn-pause.md"
     }
   ],
   "current_revision": {

@@ -292,3 +292,13 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 
 
 2026-11-11 の [ordinary TFP1 公開資料のnative再実行adapter](../../../evidence/palw/legacy-tfp1-public-replay-2026-11-11/README.md): `22ad8228c` でexact claim/companion/Sourceと原文・tokenizer・出力・全Trace tileを、既存G14のlegacy tiled再実行と照合した。共存token列・2ページのhash vectorをreplay RAMへ加算し、共用OwnStepSourceのexact capacityを明示。新ordinary fixtureと既存wide回帰2件が成功。実Studio資料のbounded metadata照合でregistered programのtiled logitsとgeneric job-context trace schemeを区別し、同一claimのSource/5,154 leavesを確認した。全モデル再実行・公開取得の証拠ではない。native paired reader、実publisher、legacy relation/ExecutionRules/full FP retentionと承認・Final、全保護予算、公開quote/受付は未完。
+
+2026-11-11 の [claim固有Trace配信とnative metadata](../../../evidence/palw/ordinary-tfp1-trace-publication-2026-11-11/README.md): `f888eae3a` で元captureの有界readerからSource認証付き全tileを既存providerへ書き出す経路、通常TFP1 ExecutionRulesとcold状態/依存の独立導出を接続。remote2件・native1件が成功。公開配信権限・完全profile・公開受付とは区別する。
+
+2026-11-11 ユーザーの追加方針を[RFC-0052](../../../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](../../../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)として採択。HFを新profileの必須モデル公開元にし、独自重み全量配信を必須経路から外す。元計画は原文保持し、[cold Panel追補](hugging-face-cold-panel-2026-11-11.md)を適用する。HF公開契約の独立登録検査・定期期限と、claim固有資料・取得case・成功停止は必要。設計採択を公開有効化としない。
+
+2026-11-11 の[HF匿名取得・native変換・同一Studio候補の再計算](../../../evidence/palw/hf-cold-model-replay-2026-11-11/README.md): 新規directoryへ固定commitの9 filesを取得し、元manifestと全size/hash一致、変換後のclass/inventoryと独立再計算のexecution/output/header一致を確認。hostには以前のモデルも別directoryに存在し、未保有遠隔Panelでの実行とは区別する。`0c41b0307`でaccepted TFP1のbackend missを既存root-fetchへ接続、`55a9a7ffd`でstrict public/ungatedと期待manifestを実装。daemon check・回帰5件・Python15件成功。HF公開契約・有効期限・case終結・公開TFP1 quote/受理/Finalは未完。
+
+2026-11-11 の後続ユーザー指示を[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../../../adr/0221-additional-model-burn-pause.md)として採択。先行段落のHF公開契約・定期有効期限・取得不能裁定は廃止し、以後の残件から削除する。追加モデルだけを誰でもburnで停止、登録者burnで解除し、genesis・年次fork指定を除外する。[実装追補](additional-model-burn-pause-2026-11-11.md)に未署名plannerとnative署名/支払/保存/全Final・reward gateの境界を記録する。モデルのtier・既存責任・原期限は維持する。
+
+`6511a880e`の[burn停止planner回帰2件](../../../evidence/palw/model-burn-pause-planner-2026-11-11/README.md)が成功した。登録者不在をgenesisとみなす旧便宜関数に頼らず、実genesis objectのexact class/rootと明示catalogに基づいて対象外を判定する。未知owner、古いsequence、誤scope/rootを拒否し、年次指定後のpause無効化を確認した。実署名・支払・state保存と公開停止には未接続。

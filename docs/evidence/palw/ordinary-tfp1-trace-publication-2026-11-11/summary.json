@@ -1,0 +1,30 @@
+{
+  "source_commit": "f888eae3a",
+  "tests_passed": 3,
+  "remote_tests": 2,
+  "native_pairing_tests": 1,
+  "source_snapshot": "source-snapshot.sha256",
+  "binaries": {
+    "remote": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka_palw_remote-20b14c407f46dddc",
+      "sha256": "bfd738835da2247f3197fbed77bc3b71c3e92bac04412990a2235cab5275bb22"
+    },
+    "core": {
+      "path": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08",
+      "sha256": "0e8055f5f7353277def6a83aeecf8f4cc948eff8a6df349f31c2d3aae1a13385"
+    }
+  },
+  "public_quote_or_admission": false,
+  "activation": false,
+  "main_push": false,
+  "full_model_replay": false,
+  "artifacts_sha256": {
+    "remote-build-and-test.log": "deefba29ea08ed7d50726332af93e355bcb95b4a55f677792c81fcd39998f007",
+    "wide-regression.log": "1c1fa3d30dc216397b8f5f466c53671b510833ff3975dab97b3090eaa56c088f",
+    "native-pairing-test.log": "82419071b0cddd3d1dc6a19ca47251c21d69c19607c72cdb8129514e222de9ff",
+    "source-snapshot.sha256": "2ba35b988f90bd87ccbc07a5a766ab5a82a68653c96ebc5b9d661969e4815a56",
+    "publisher-initial.log": "2da8bc3a4f025151ca8fb7fdc88c58bbe7766f63289c6d0d1490f95620c6a594",
+    "publisher-r2.log": "c6fb7151565f6a1157284838452a04d692d6beee207b19fc77ce147bfba6f478",
+    "publisher-r2-source.sha256": "606e6fd5b5d345ff8863bdbd7d5784ab56fd6fee2d3a186a399fa4c5c68920b4"
+  }
+}

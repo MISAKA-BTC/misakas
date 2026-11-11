@@ -116,5 +116,27 @@
       "adoption_date": "2026-11-09",
       "note": "Explicit current user instruction for public materials, cold-panel verification and one-honest completion. Allocation checked in supplied and inherited files only. Runtime and activation unchanged."
     }
+  ],
+  "subsequent_local_allocations": [
+    {
+      "date": "2026-11-11",
+      "rfc": "0052",
+      "rfc_path": "docs/rfc/0052-hugging-face-model-acquisition-and-claim-materials.md",
+      "adr": "0220",
+      "adr_path": "docs/adr/0220-hugging-face-model-acquisition-and-claim-materials.md",
+      "adopted_by": "user",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "Current checkout and git log --all path audit found no previous 0052/0220. Unfetched remote branches not audited."
+    },
+    {
+      "date": "2026-11-11",
+      "rfc": "0053",
+      "rfc_path": "docs/rfc/0053-additional-model-burn-pause.md",
+      "adr": "0221",
+      "adr_path": "docs/adr/0221-additional-model-burn-pause.md",
+      "adopted_by": "user",
+      "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
+      "audit": "Current checkout and git log --all path audit found no previous RFC0053/ADR0221; unfetched refs not audited."
+    }
   ]
 }

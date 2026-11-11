@@ -118,3 +118,7 @@ runtimeの完成、未測定の性能、稼働ネットワークの安全性を�
 新profileの署名形式・native接続・抽選policy・資源割当・cold資料取得・最悪時のnegative・
 reorg・決済の検証が揃ってから、既存手順でactivationを判断する。
 以後の通常追記は20冊の担当先へ集約し、設計凍結の例外手続きが必要な変更は新規RFC＋ADRと明示採択で扱う。
+
+2026-11-11追加採択: [RFC-0052](../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)。HFを新profileの必須モデル公開元にし、claim固有資料の供給と分離する。登録・定期取得検査と期限、資料不足の成功停止を維持する。通常の20 RFC／50 ADRと過去snapshotは維持し、公開activationは未完。
+
+2026-11-11の後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)がHF取得可否の認定をburn停止・解除へ置換する。追加登録モデルだけを対象に、誰でもburnでPAUSED、登録者だけがburnでACTIVEへ戻す。genesis・年次fork指定は対象外。第三者取得証明・定期可用性認定・取得不能の多数決を要求しない。HF固定版/hash照合はoff-chainの実行資料同一性確認として残す。claim固有資料、再実行承認、不正反証と責任・原期限は維持する。PAUSEDは新規受付・成功Final・新規報酬確定を止める。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。

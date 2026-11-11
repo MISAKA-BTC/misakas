@@ -1,0 +1,10 @@
+fetch README.md (6340 bytes)
+fetch config.json (704 bytes)
+fetch generation_config.json (111 bytes)
+fetch merges.txt (466391 bytes)
+fetch special_tokens_map.json (831 bytes)
+fetch tokenizer.json (2104556 bytes)
+fetch tokenizer_config.json (3658 bytes)
+fetch vocab.json (800662 bytes)
+fetch model.safetensors (269060552 bytes)
+verified 9 files at HuggingFaceTB/SmolLM2-135M@93efa2f097d58c2a74874c7e644dbc9b0cee75a2

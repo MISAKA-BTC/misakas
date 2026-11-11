@@ -1,0 +1,12 @@
+LlamaForCausalLM — TIR program v1: 3 blocks, 30 layers, 308 nodes, 67 params, 11 consts (3428 B), 2 states, 13776 bytes encoded
+frontend: built-in data file `llama` (72f42bf13844d406) (level B), spec c4627be563b79642
+text-generation: token ids → next-token logits; nothing left out
+calibration statistics from /Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/stats.json (pinned; the 3 sequences / 48 positions they were measured on give the calibrated context)
+calibration statistics 574 sites, digest a02172d3c9d0e5341e05a6c40e01d74475155c9b89563438c70055cf58b513f8 (from "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/stats.json")
+converting
+  materialise 8/32
+  materialise 16/32
+  materialise 24/32
+  materialise 32/32
+/tmp/t12-hf-cold-panel-20261111.F935pZ/lowered.palwtir: 1662 tensors, 171.9 MiB in the tensors, 172.0 MiB file; 1675 chunks (1470 distinct); file digest 28851a1b2fc493b62f3e241beabb2c554126e67aad740d40097b2b1a9784ad018867c785d6d82f2de256837e6179071c0a083ab1368f42d330277c4833de3049
+conversion_elapsed_seconds=12.377

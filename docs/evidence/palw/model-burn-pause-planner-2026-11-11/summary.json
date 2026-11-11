@@ -1,0 +1,25 @@
+{
+  "schema": "misaka.model-burn-pause-planner.v1",
+  "commit": "6511a880e1d6f844eae7094f5730d70efc0e3e13",
+  "tests_passed": 2,
+  "test_seconds": 0.05,
+  "build_seconds": 179,
+  "scope": "Unsigned pure transition and eligibility planning only",
+  "native_signature_verified": false,
+  "burn_spent": false,
+  "native_state_written": false,
+  "public_gate_connected": false,
+  "public_activation": false,
+  "economic_values_adopted": false,
+  "expected_previous_operation_signature_bound": false,
+  "evidence_sha256": {
+    "docs-check.log": "cc7b5014d64b4ce56ad18d04f2285246fe0cf0875136d28613d06e5034124a24",
+    "rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "binary.sha256": "19dca76ece8b04e46bc4ac48989ec20db327c874140b0ff64f0a39a2e0ece05c",
+    "README.md": "92e546e441acb3e717117db9511e9ec992018f5de46ea5cc400d136f7bc6ed3a",
+    "tests.log": "3835c5506c47be70a6eaea7ba16df8568b188f270d54a158f5ae626241bf74eb",
+    "adr-check.log": "1d8e54fee02f78e6de26c3ddb8f6a1de1b87fdc1ffcd11be3022f5f7917e6cfc",
+    "docs-validation.json": "d7d61a8c166c6d9697f2c7ecaae530217cf52384ebc74a34d29a51c55444ab3e",
+    "sources.sha256": "3f8f6dcd3b17ec819cea090868f5800f7df549adf0c879cbd72273377753667e"
+  }
+}

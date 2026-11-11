@@ -1,5 +1,7 @@
 # RFC-v2-0012 — 認証State・保存・Pruning・IBD
 
+2026-11-11の後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)がHF取得可否の認定をburn停止・解除へ置換する。追加登録モデルだけを対象に、誰でもburnでPAUSED、登録者だけがburnでACTIVEへ戻す。genesis・年次fork指定は対象外。第三者取得証明・定期可用性認定・取得不能の多数決を要求しない。HF固定版/hash照合はoff-chainの実行資料同一性確認として残す。claim固有資料、再実行承認、不正反証と責任・原期限は維持する。PAUSEDは新規受付・成功Final・新規報酬確定を止める。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
 ## 2026-11-09公開資料・一人保証の追加境界
 
 **適用順:** 本節と公開profileについての追加条項は、先行採択の同じ論点を更新する。公開profileの成功条件・atomic batchの規範はRFC20を正本とし、後段の2026-11-08／実行整合性改訂の説明は、矛盾しない資源・保存条件として継承する。旧署名・歴史付録の適用条件は変更しない。

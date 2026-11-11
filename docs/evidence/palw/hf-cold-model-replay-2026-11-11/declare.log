@@ -1,0 +1,5 @@
+wrote /tmp/t12-hf-cold-panel-20261111.F935pZ/declared.palwtir (file digest 6f625d6386acc3b8e4d20a7cad484b25378b7a750ed4be67d8f98818c10ea9655087dc605f4f99ae374dd1fbf1bf45b213b381209bb06ded38af5b6ac5674346)
+  layout          max_context 8192, checkpoint interval 65536, h_tile 64, 17 commit tiles ({64, 512} distinct), 2 state tiles
+  class id        7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625
+  inventory root  8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4
+  ADMISSIBLE      admission v10 at DAA 18640 (every fence this network schedules in force, palw_tir_v1 among them)

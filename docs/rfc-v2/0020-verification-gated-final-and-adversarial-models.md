@@ -1,5 +1,7 @@
 # RFC-v2-0020 — 公開資料・モデル未保有Panel・一人の反証と検証先行Final
 
+2026-11-11の後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)がHF取得可否の認定をburn停止・解除へ置換する。追加登録モデルだけを対象に、誰でもburnでPAUSED、登録者だけがburnでACTIVEへ戻す。genesis・年次fork指定は対象外。第三者取得証明・定期可用性認定・取得不能の多数決を要求しない。HF固定版/hash照合はoff-chainの実行資料同一性確認として残す。claim固有資料、再実行承認、不正反証と責任・原期限は維持する。PAUSEDは新規受付・成功Final・新規報酬確定を止める。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
 採択日: 2026-11-08 / 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
 追加採択: 2026-11-09。[RFC-0049](../rfc/0049-palw-execution-integrity-and-unilateral-refutation.md)／[ADR-0217](../adr/0217-palw-execution-integrity-and-unilateral-refutation.md)。本改訂は、固定されたLLM実行の局所反証可能性と、一人の適格申立人による反証の優先を新profileの必須契約にする。本人の実行行為の証明、全員共謀時の無条件保証、実装・実測・activation完了を意味しない。

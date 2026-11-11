@@ -22,3 +22,7 @@ RFC-0003 の画像・動画経路と RFC-0004 のモデル改善は mainnet 後�
 今回の入力基準の保全検査は maintenance/revisions/2026-11-08-exec-1bps/check_revision.py を使う。
 以前の2026-11-08改訂フォルダはその時点の検査・採択記録としてbytesを保持する。
 新profileの1 BPSを実測・決済保証・DAA換算へ昇格させない。
+
+2026-11-11のユーザー明示指示により、[RFC-0052](rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](adr/0220-hugging-face-model-acquisition-and-claim-materials.md)のHF必須profileを採択した。モデル静的資料はHF固定版の匿名取得・全file/native root照合、登録時独立検査・定期検査・有効期限を持つ別の公開契約とする。独自モデル重み全量配信は必須にせず、claim固有資料供給・取得case・成功停止を維持する。モデルclassの無審査登録と1.0/0.3は変更しない。設計採択と公開有効化を区別する。
+
+後続のユーザー指示による[RFC-0053](rfc/0053-additional-model-burn-pause.md)／[ADR-0221](adr/0221-additional-model-burn-pause.md)が優先する。先行HF公開契約の取得検査・定期認定は廃止し、追加モデルだけをburnで停止・登録者burnで解除する。genesis・年次fork指定は対象外。旧取得証明制度の実装を継続しない。

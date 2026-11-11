@@ -1,5 +1,7 @@
 # 公開裁定の方針 v0.4 — 公開資料とモデル未保有の一人検証
 
+後続採択: [RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../../../adr/0221-additional-model-burn-pause.md)によりHF取得可否認定を廃止し、追加モデルだけをburn停止・解除の対象とする。genesis・年次fork指定は対象外。claim固有資料・TKR1・不正反証・原期限は維持する。
+
 採択日: 2026-11-09 / 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
 [RFC-0050](../../../rfc/0050-public-materials-and-one-honest-panel.md)と[ADR-0218](../../../adr/0218-public-materials-and-one-honest-panel.md)の新claim/profileに適用する。通常の規範所有者は[RFC-v2-0016〜0020](../../../rfc-v2/README.md)。[v0.3](public-adjudication-policy-v0.3.md)までの採択記録・旧署名・過去証拠を保存し、今回の資料公開・一人前提・正常完了条件についてだけ補完する。
@@ -9,6 +11,8 @@
 各claim、または固定後抽選の有限batch全体を能動的に完全検証する正直な選出者が少なくとも一人いることを前提とする。モデルの事前保有を選出資格にせず、Minerの推薦や資料取得に成功した者だけへの母集団変更を認めない。能力・通信・費用・期限内の実行可能性は別に必要であり、Nodeが誰を正直と識別できるという前提は置かない。
 
 ## 2. 公開する資料と有限な供給
+
+2026-11-11の[HF必須profile改定](../../../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)では、モデル静的資料は匿名取得できる固定HF版と全file/native root照合、独立登録検査・定期検査・有効期限で扱う。モデル重みのMISAKA独自全量配信を必須としない。Minerのclaim固有trace等の供給、適格な取得異議、原期限・成功停止は維持する。取得記録は将来可用性や本人到達性を証明せず、Nodeは外部HTTPを合意判定しない。
 
 Minerは元claimへ認証できる重み・program・promptとtoken化・数値規則・seed・依存状態・初回trace・出力等を供給する。provider・cache・第三者が同じ認証済みchunkを再配布でき、所有者の個別許可や独占席へ取得を依存させない。全Nodeへ全量配布しない。
 

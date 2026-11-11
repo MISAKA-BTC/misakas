@@ -104,3 +104,7 @@ Courtの共通契約は[RFC-v2-0014](../rfc-v2/0014-court-master-contract.md)、
 並行作業で追加された [ADR-0210](../adr/0210-all-model-g14-panel-one.md) / [RFC-0042](../rfc/0042-all-model-g14-panel-one.md) は、入力snapshotの204 ADR／41 RFCに含まれない追加文書として保持する。統合時の50 ADR／15 RFCへ原文を混ぜず、採択・実装・有効化の状態は各文書の記録を参照する。`registry.json` の `post_consolidation_documents` からもたどれる。旧番号の意味は変えない。
 
 2026-10-31に採択された学習済みLLMの出力表現の追加は [RFC-0043](../rfc/0043-wide-q24-llm-output.md) / [ADR-0211](../adr/0211-wide-q24-llm-output.md)。旧i32 Q24・既存schemeを保持し、別のi64 Q24 profileを追加する。公開有効化は別判断。入力原本へ混ぜず、post-consolidation文書として読む。
+
+2026-11-11追加採択: [RFC-0052](../rfc/0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)。HFを新profileの必須モデル公開元にし、claim固有資料の供給と分離する。登録・定期取得検査と期限、資料不足の成功停止を維持する。通常の20 RFC／50 ADRと過去snapshotは維持し、公開activationは未完。
+
+2026-11-11の後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)がHF取得可否の認定をburn停止・解除へ置換する。追加登録モデルだけを対象に、誰でもburnでPAUSED、登録者だけがburnでACTIVEへ戻す。genesis・年次fork指定は対象外。第三者取得証明・定期可用性認定・取得不能の多数決を要求しない。HF固定版/hash照合はoff-chainの実行資料同一性確認として残す。claim固有資料、再実行承認、不正反証と責任・原期限は維持する。PAUSEDは新規受付・成功Final・新規報酬確定を止める。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。

@@ -1,5 +1,7 @@
 # RFC-v2-0018 — 対話型 negative court・公開異議・提供義務違反
 
+2026-11-11の後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)がHF取得可否の認定をburn停止・解除へ置換する。追加登録モデルだけを対象に、誰でもburnでPAUSED、登録者だけがburnでACTIVEへ戻す。genesis・年次fork指定は対象外。第三者取得証明・定期可用性認定・取得不能の多数決を要求しない。HF固定版/hash照合はoff-chainの実行資料同一性確認として残す。claim固有資料、再実行承認、不正反証と責任・原期限は維持する。PAUSEDは新規受付・成功Final・新規報酬確定を止める。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。
+
 採択日: 2026-11-08 / 単独反証と状態遷移の改訂: 2026-11-09 / 状態: **ADOPTED_DESIGN_NOT_ACTIVATED**。
 
 [20本の索引](README.md) · [採択記録 ADR-0215](../adr/0215-model-free-node-noninteractive-positive-and-adversarial-availability.md) · [上位原則](../PRINCIPLES.md)

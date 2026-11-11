@@ -74,3 +74,7 @@ reinterpret legacy terminology as permission to violate this decision.
 - 係数は配分重みに一度だけ(`A_m = c_m · S̄_m^1.5`)。登録モデル全体の発行上限で多数登録の迂回を防ぐ。
 - **claim 単位の検証(court、Gate C / `SecurityCertified`、claim ごとの抽選検証者認証)は全モデルで維持する。** 未認証 claim はどの階層でも fork choice・決済を進めない。
 - 詳細は `docs/PRINCIPLES.md` §9。これは凍結した前提で、エージェントは再審・代替案の提案をしない。
+
+## 2026-11-11 ユーザーの後続限定改定
+
+[PRINCIPLES §9](docs/PRINCIPLES.md)と[RFC-0053](docs/rfc/0053-additional-model-burn-pause.md)／[ADR-0221](docs/adr/0221-additional-model-burn-pause.md)を適用する。追加登録モデルだけに、誰でもburnで停止、登録者だけがburnで解除する制度を採択。genesis・年次fork指定モデルは対象外。取得可否証明・第三者検査・多数決・定期可用性認定は廃止し、旧一般規則はこの可逆な稼働停止に限り明示改定する。モデル品質審査、class取消、tier変更は行わない。claimの反証・責任・原期限を維持し、設計採択を公開有効化としない。

@@ -1,5 +1,9 @@
 # RFC-0051 — 受付前 tokenizer 資料の有料搬送と native 登録
 
+後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)によりHF取得可否認定を廃止し、追加モデルだけをburn停止・解除の対象とする。genesis・年次fork指定は対象外。claim固有資料・TKR1・不正反証・原期限は維持する。
+
+2026-11-11 HF方式の適用境界: [RFC-0052](./0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)は新HF profileのモデル重み内部配信を必須経路から外す。本RFC-0051が定義するのはtokenizer rawの有料native事前登録であり、モデル全重みの内部DAではない。HFで取得した同一tokenizerを入力に使えるが、native rendering/EOG検査、受理済み登録row、費用・予約・署名・GCを省略しない。`G14_ROUTE_ABSENT(FpTokenizer)`修復は巨大なモデル内部DAの完成を待たず進める。
+
 Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-11  
 Decision: [ADR-0219](../adr/0219-funded-preclaim-tokenizer-registration.md)

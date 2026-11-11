@@ -1,0 +1,92 @@
+{
+  "schema": "misaka.hf-cold-replay-evidence.v1",
+  "source_head": "55a9a7ffdba70c46caf172b8bd81b09dade210c7",
+  "claim_id": "7645bc8bbba0e00a35ccbac77ecb0e28d489688161bd0130649f3575919a83df225e509936a52c4b0e30a415e71d50da1f38dd87a1f02ce4267bc145fc6a3711",
+  "repository": "HuggingFaceTB/SmolLM2-135M",
+  "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+  "file_count": 9,
+  "download_bytes": 272443805,
+  "public_ungated_observed": true,
+  "fresh_directory": "/tmp/t12-hf-cold-panel-20261111.F935pZ",
+  "host_had_prior_model_elsewhere": true,
+  "source_manifest_exact_match": true,
+  "native_class_and_inventory_match": true,
+  "execution_header_and_output_match": true,
+  "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+  "inventory_root": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+  "replay_seconds": 1.348,
+  "replay_need": {
+    "resident_ram_bytes": 2480262208,
+    "disk_bytes": 660288,
+    "leaves": 5154
+  },
+  "probe_allowance": {
+    "ram_bytes": 3221225472,
+    "disk_bytes": 134217728,
+    "consensus_budget_changed": false
+  },
+  "conversion_seconds": 12.377,
+  "replay_script_max_rss_bytes": 981499904,
+  "legacy_container_byte_identical": false,
+  "legacy_metadata_difference": {
+    "logits_scale": {
+      "original": "5.960464477539064e-08",
+      "fresh": "5.960464477539063e-08"
+    }
+  },
+  "native_header_excluding_legacy_meta_identical": true,
+  "palwart3_repack_verified": false,
+  "public_admission": false,
+  "selected_panel_approval": false,
+  "remote_claim_provider_acquisition": false,
+  "hf_registration_record": false,
+  "periodic_availability_record": false,
+  "public_final": false,
+  "strict_fetch_flags_used_during_live_download": true,
+  "strict_fetch_flags_note": "Initial live download preceded strict flags. A second live fresh download ran both flags against the independent original manifest and succeeded; all nine files were rehashed. Replay used the first download, whose manifest is identical.",
+  "build_provenance": "Standalone probes linked existing local rlibs listed by SHA-256; conversion library/tool are previously built artifacts, not a fresh full-node build of source_head.",
+  "input_sha256": {
+    "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/stats.json": "a32bcc21e43cee4164c84745a306e69ab277928bf151cc3884537948613a2c16",
+    "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/calib-tokens.json": "0776e65b604659663315317de8b8bdacb67a3d3b4aec49fbecabf6570732c2ab",
+    "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/pack/pack.json": "80f1de7dc9ee6e72e85b87f56a5808f6e9d2c35073272376f6116e62893408f5",
+    "/tmp/t12-hf-cold-panel-20261111.F935pZ/declared.palwtir": "9c354017544946e84e891acecbe2aa7e25decee7685a071b1bfbf0fbe4324d92",
+    "/tmp/misaka-studio-t12-registration-live.iRmft4/candidate-commitment.borsh": "8b5e1d44a665ffda350c2ce58498b9523d3603e5c47ff5d66b498af345a726f9",
+    "/tmp/misaka-studio-tfp1-native.k1U16c/job.frame": "68dc6a0d70aef7835e5f28f9c0b676b4c169298487ff9824909505f1a6a69abb",
+    "/tmp/misaka-studio-tfp1-native.k1U16c/worker-result.frame": "e2577967c1c08517ef98a788c075a5a618346d76c25171ff53ab9d67a3b953d8"
+  },
+  "tool_sha256": {
+    "/tmp/t12-hf-cold-convert-20261111": "13ed549c79ce13b0a6097a87eec9e43049bd73b1b5ae39597a1948342ee4c2c6",
+    "/tmp/t12-hf-cold-replay-20261111": "b59c96de0bb66f5c8e53a27dab1489594f8b6e1e0fa23a718f59a36d70ad56e5",
+    "/tmp/misaka-public-contract-test.fd7edK/debug/palw-class": "8f0c94114c8ee89b6d76e2d03fd852f98c2d372bd0df464eeaf88182a7831f30"
+  },
+  "linked_rlib_sha256": {
+    "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libmisaka_palw_tir_lower-eb45f982df095da9.rlib": "b3925a2f87aff13bc2d88a79a4fde7badf37cafd19ff7243cc5bff39d0e69c9a",
+    "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libmisaka_palw_positive_contract-4e67433a4d5fdb1c.rlib": "30b7fc676e682d04c1fadfac63811f35e9787936f1e8024796ab21705ec5a2bf",
+    "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libborsh-7cfec46d29ea91a2.rlib": "0f2c78f5da046a09f7fd657367abca6a6d764daee5f89fb1a8ce8c9b731e539e",
+    "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_consensus_core-3cb0f3a40ba7fcd8.rlib": "0a22a4d58e20bfe2a3568deaeb9466268d3a562d965328cc61fb974a3428bb3c",
+    "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libmisaka_palw_tir_artifact-de7e0c5458af30f0.rlib": "fc246bed0fcc277bdde9057f742136e1c1259efdacf7c023a16f60607f59d0dd",
+    "/tmp/misaka-public-contract-test.fd7edK/debug/deps/libmisaka_palw_tir_exec-5b46fcfa659f157e.rlib": "6c726a7126d3504f92d5f30d6ee50fb61e90376b3fc817a0b62082e4311d55b2"
+  },
+  "evidence_sha256": {
+    "fetch.log": "fd4acd6d46420f291e7e5afed7089c79d8cc91d449aeb855699b70b882594498",
+    "convert.log": "21dfcc1f2122ecdbdb79d486d8b39c2a74cd6ec9bde84863570f0583ba0245bf",
+    "declare.log": "5fc2ff44271101a39b049960f60b6daea13547a6d58b4e279ea5ac8a10f54ab4",
+    "replay-first-resource-refusal.log": "686a397bd7ba81a3ba02ad15fa05afd3fdf04dbe82c15bb997b0c565d2ebe24d",
+    "replay-resource-quote.log": "fab51807b3044b1faf37474fb53c4d14bc5b9cb9c3027a828ea38317590c5c7b",
+    "replay.log": "62efd8626d1b1639c946700fe7fd18643262983ec789d860cb25b79d4845e905",
+    "convert-probe.rs": "a3125a9daae8c95147502068ec20bfce022a7366745b2c5a8e338c07b9f232bf",
+    "replay-probe.rs": "0413ef5aff34b94f76ecade6ab45bec789744d0faebe65eab986a4c824575b29",
+    "replay-probe.sh": "38edfdcd5ce8d7169eaf7823a085e4d0a9495b480eb3040d4cd925f752f67063",
+    "strict-fetch-tests.log": "e3d6e50bc78a5fa6be8e01bfb32bf071402aae9c8359b58279b259f363acb187",
+    "node-check.log": "87610f4bf839f8cf4ad9618923a03edd56e0572de6734a4fc0d09c377902ad9f",
+    "node-regressions.log": "03b2ccacb39df25dab5fc28adc0beb552f0af0739ac645fcffc1a274b24956e6",
+    "node-sources.sha256": "2c067d505aedbbf32e9f005249edd9b157c6141e46c7d9e8bb74f73eb9b2de44",
+    "source-manifest.json": "77b1649f2fbfb01468386b7c6b08b1ed996a870352918fdd643ee9892b3296ea",
+    "hub-info.json": "5723e8402ec214362a339af130d1426d44c593c24e3e8005d198001c6417444d",
+    "original-source-manifest.json": "77b1649f2fbfb01468386b7c6b08b1ed996a870352918fdd643ee9892b3296ea",
+    "strict-live-fetch.log": "fd4acd6d46420f291e7e5afed7089c79d8cc91d449aeb855699b70b882594498",
+    "strict-live-source-manifest.json": "77b1649f2fbfb01468386b7c6b08b1ed996a870352918fdd643ee9892b3296ea",
+    "strict-live-hub-info.json": "c97eceff5a4e013975d77777b189a255a63b291e38696789a03849e43cee01b2"
+  },
+  "strict_live_directory": "/tmp/t12-hf-strict-cold-20261111.anhb7582/checkpoint"
+}

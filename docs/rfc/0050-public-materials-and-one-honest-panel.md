@@ -1,5 +1,7 @@
 # RFC-0050 — 公開資料とモデル未保有の一人検証
 
+後続採択: [RFC-0053](../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../adr/0221-additional-model-burn-pause.md)によりHF取得可否認定を廃止し、追加モデルだけをburn停止・解除の対象とする。genesis・年次fork指定は対象外。claim固有資料・TKR1・不正反証・原期限は維持する。
+
 Status: **Accepted design / ADOPTED_DESIGN_NOT_ACTIVATED**
 Date: 2026-11-09
 Decision: [ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)
@@ -22,6 +24,8 @@ Nodeは誰が正直かを署名から識別できない。Panelの一部だけ�
 誤claimは一人の有効なnative反証で無効化する。必要資料を得られない適格caseは成功を止め、算術反証の有無にかかわらず、規定期限までに検証条件が成立しなければ未検証終了とする。正常claimは、Minerの供給・応答、唯一正直な選出者の完全検証、最大合法な虚偽caseの有限終結、予約された実サービスと包含が成立する条件の下で、他者の不署名によって停止しない。
 
 ## 3. 公開検証パッケージと供給義務
+
+2026-11-11限定置換: 新HF profileのモデル静的資料は[RFC-0052](./0052-hugging-face-model-acquisition-and-claim-materials.md)／[ADR-0220](../adr/0220-hugging-face-model-acquisition-and-claim-materials.md)の必須HF公開契約・固定版匿名取得・全file/native root照合を用いる。本節をモデル重みのMISAKA独自全量再配布の必須要件として解釈しない。claim固有資料、取得case、有限保持と元時計は維持する。旧profileは遡及変更しない。
 
 公開対象はpromptだけでなく、重み・構造・program、tokenizer／前処理／canonical token列、数値型・量子化・丸め・overflow・演算順序、seed／乱数規則、必要な初期KV・依存状態、Miner初回traceとopening、出力・停止・長さ・仕事会計である。[16](../rfc-v2/0016-miner-execution-commit-and-material-supply.md)がcanonicalな内容と範囲を所有する。
 

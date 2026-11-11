@@ -1,0 +1,10 @@
+
+running 5 tests
+test tests::the_command_line_carries_the_class_the_root_and_only_what_is_declared ... ok
+test tests::the_hook_fires_for_an_unheld_in_force_root_and_a_candidate_and_for_nothing_else ... ok
+test tests::a_scan_for_readiness_does_not_hide_an_exact_bundle_from_later_accepted_replay ... ok
+test tests::a_failed_start_is_an_event_and_never_more_and_a_good_run_then_ingest_makes_the_root_dutiable ... ok
+test tests::accepted_tfp1_fetch_is_single_flight_and_completion_preserves_the_original_want ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+

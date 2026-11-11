@@ -1,0 +1,10 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 59s
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08)
+
+running 2 tests
+test palw_model_pause_v1::tests::model_pause_v1_derives_distinct_authorization_and_blocks_stale_replay ... ok
+test palw_model_pause_v1::tests::model_pause_v1_checks_exact_scope_and_exempts_catalog_designations ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6008 filtered out; finished in 0.05s
+

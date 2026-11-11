@@ -60,3 +60,5 @@
 | RFC-0049 | [PALW実行整合性と一人による反証の完結契約](0049-palw-execution-integrity-and-unilateral-refutation.md) | Accepted design / PALW実行整合性・単独反証、未有効化 |
 | RFC-0050 | [公開資料とモデル未保有の一人検証](0050-public-materials-and-one-honest-panel.md) | Accepted design / 公開資料・モデル未保有の一人検証、未有効化 |
 | RFC-0051 | [受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md) | Accepted design / 有料 tokenizer 登録、未有効化 |
+| RFC-0052 | [Hugging Face固定モデル取得とclaim固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md) | 取得認定はRFC-0053で置換、資料分離は維持／未有効化 |
+| RFC-0053 | [追加モデルのburn停止・解除](0053-additional-model-burn-pause.md) | Accepted design / 未有効化 |
