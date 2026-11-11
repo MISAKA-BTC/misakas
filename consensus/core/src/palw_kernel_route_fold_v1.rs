@@ -301,34 +301,63 @@ impl TransitionBuilder<'_> {
         self.apply_kernel_row_authorized_v1(table, key.to_vec(), bytes)
     }
 
-    /// Link and history locator are one write unit inside the full original
-    /// checkpoint. Never attach a new locator to a previously rooted link.
-    pub(super) fn install_public_tfp1_history_link_v1(
+    /// Install the companion admission, paired link and replay locator as one
+    /// write unit. The ordinary claim, frame and fresh escrow must already
+    /// exist in the accepting object's enclosing checkpoint.
+    pub(super) fn install_public_tfp1_original_v1(
         &mut self,
         point: &PalwBlockContextV2,
         prepared: &crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1OriginalHistoryLinkV1,
     ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_contract_v2::{PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PUBLIC_TFP1_LINK_TABLE_V1};
         use crate::palw_tfp1_original_history_v1::{PUBLIC_TFP1_HISTORY_TABLE_V1, Tfp1OriginalHistoryBoundaryV1};
         let history = prepared.boundary_v1();
         let key = history.claim.as_bytes();
         history.check_insert_at_v1(point).map_err(|_| refused("TFP1 history has another accepting point"))?;
-        let link = prepared.link_v1().storage_row(&self.state, point).map_err(|_| refused("TFP1 history lacks its prepared link"))?;
-        let previous = self.state.kernel_route_state_v1().and_then(|r| r.aux.get(&(PUBLIC_TFP1_HISTORY_TABLE_V1, key.to_vec())));
-        match (link.is_some(), previous) {
-            (false, Some(bytes)) if Tfp1OriginalHistoryBoundaryV1::decode_row(&key, bytes).ok().as_ref() == Some(history) => {
-                return history.check_state_at_v1(&self.state, point).map_err(|_| refused("TFP1 history replay mismatch"));
+        // The fixed-width status key and one nested typed-row lookup can
+        // coexist. Encoded map/journal buffers are admitted by each writer.
+        let lookup_owner = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(2 * key.len() as u64)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let admission = prepared.link_v1().admission_record_v1();
+        let new_admission = admission.storage_row(&self.state, point).map_err(|_| refused("TFP1 companion admission mismatch"))?;
+        {
+            let route = self.state.kernel_route_state_v1().ok_or_else(|| refused("TFP1 original requires its native kernel route"))?;
+            let mut lookup = (PUBLIC_TFP1_LINK_TABLE_V1, key.to_vec());
+            if let Some(owner) = &lookup_owner {
+                owner.materialized_v1();
             }
-            (true, None) => {}
-            _ => return Err(refused("TFP1 link/history must be installed together")),
+            let has_link = route.aux.contains_key(&lookup);
+            lookup.0 = PUBLIC_TFP1_HISTORY_TABLE_V1;
+            let previous_history = route.aux.get(&lookup);
+            match (new_admission.is_some(), has_link, previous_history) {
+                (false, true, Some(bytes))
+                    if Tfp1OriginalHistoryBoundaryV1::decode_row(&key, bytes).ok().as_ref() == Some(history) =>
+                {
+                    if !matches!(prepared.link_v1().storage_row(&self.state, point), Ok(None)) {
+                        return Err(refused("TFP1 link replay mismatch"));
+                    }
+                    return history.check_state_at_v1(&self.state, point).map_err(|_| refused("TFP1 history replay mismatch"));
+                }
+                (true, false, None) => {}
+                _ => return Err(refused("TFP1 admission, link and history must be installed together")),
+            }
         }
-        let mut quote = crate::palw_state_v2::native_writers::NativeWriteQuoteV1::new("paired TFP1 replay history");
-        quote.exact::<u8>(key.len() as u64)?.encoded(history)?.slots(2)?;
-        self.admit_native_write_v1(quote)?;
-        let bytes = Some(borsh::to_vec(history).expect("fixed TFP1 history serialization"));
-        self.reserve_kernel_row_write_v1(PUBLIC_TFP1_HISTORY_TABLE_V1, &key, &bytes, false)?;
-        // Temporary whole-state rollback is explicitly charged even when the
-        // compatibility native-value estimator is disabled. The production
-        // profile still needs bounded local undo before activation.
+        let (admission_key, admission_row) = new_admission.expect("absent original requires its companion admission");
+        let live_prefix = self.tfp1_original_prefix.ok_or_else(|| refused("TFP1 original lacks the live accepting prefix"))?;
+        if self.tfp1_history_journal_parent != Some(live_prefix.parent_v1())
+            || live_prefix.claim_v1() != history.claim
+            || live_prefix.carrier_v1().as_bytes() != history.origin.carrier_transaction.0
+            || live_prefix.parent_v1().as_bytes() != history.selected_parent.0
+            || live_prefix.point_v1() != *point
+            || live_prefix.root_v1().as_bytes() != history.pre_event_root.0
+            || usize::try_from(history.before_delta_end).ok() != Some(live_prefix.end_v1())
+            || live_prefix.end_v1() > self.entries.len()
+        {
+            return Err(refused("TFP1 original substitutes the live accepting prefix"));
+        }
+
+        // Keep the typed rollback copy alive across all three writes. The
+        // production profile still needs bounded local undo before activation.
         let checkpoint_bytes =
             crate::palw_native_resource_v1::native_typed_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
         let _checkpoint_owner = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(checkpoint_bytes)
@@ -343,8 +372,15 @@ impl TransitionBuilder<'_> {
             owner.materialized_v1();
         }
         let result = (|| {
+            self.write_kernel_row_encoded_v1(PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, &admission_key, Some(admission_row))?;
             self.install_public_tfp1_link_v1(point, prepared.link_v1())?;
             history.check_state_at_v1(&self.state, point).map_err(|_| refused("TFP1 history/link mismatch"))?;
+
+            let mut quote = crate::palw_state_v2::native_writers::NativeWriteQuoteV1::new("paired TFP1 replay history");
+            quote.exact::<u8>(key.len() as u64)?.encoded(history)?;
+            self.admit_native_write_v1(quote)?;
+            let bytes = Some(borsh::to_vec(history).expect("fixed TFP1 history serialization"));
+            self.reserve_kernel_row_write_v1(PUBLIC_TFP1_HISTORY_TABLE_V1, &key, &bytes, false)?;
             self.apply_kernel_row_authorized_v1(PUBLIC_TFP1_HISTORY_TABLE_V1, key.to_vec(), bytes)
         })();
         if result.is_err() {

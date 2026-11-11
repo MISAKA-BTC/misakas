@@ -7,8 +7,8 @@ use crate::{
     Hash64,
     palw_native_resource_v1::{typed::native_struct, wire::wire_struct},
     palw_positive_contract_v2::{
-        AcceptedMaterial, PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PUBLIC_TFP1_LINK_TABLE_V1, PublicOriginalAdmissionRecordV1,
-        PublicOriginalAdmissionV1, PublicOriginalReservationV1, require_current_public_origin_v1,
+        AcceptedMaterial, PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PUBLIC_TFP1_LINK_TABLE_V1, PreparedPublicOriginalRecordV1,
+        PublicOriginalAdmissionRecordV1, PublicOriginalAdmissionV1, PublicOriginalReservationV1, require_current_public_origin_v1,
     },
     palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimSourceV2},
     palw_tir_public_claim_v1::{PalwTirPublicClaimV1, palw_tir_public_claim_v1},
@@ -58,6 +58,28 @@ pub(crate) struct PreparedTfp1OriginalHistoryLinkV1 {
     pub(super) link: PreparedTfp1PublicOriginalLinkV1,
     boundary: crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1,
 }
+
+/// Authenticated before the original checkpoint writes any state. Own the
+/// exact companion and history inputs across frame/book/escrow installation;
+/// do not re-read mutable caller inputs or authenticate a new carrier later.
+/// Booking and its reservation identity remain the native planner's duty.
+pub(crate) struct PreparedTfp1OriginalHistoryV1 {
+    prepared: PreparedTfp1PublicOriginalV1,
+    boundary: crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1,
+    reservation: Digest,
+}
+
+impl PreparedTfp1OriginalHistoryV1 {
+    pub(crate) fn finalize_v1(
+        self,
+        state: &PalwChainStateV2,
+        point: &PalwBlockContextV2,
+    ) -> Result<PreparedTfp1OriginalHistoryLinkV1, ContractError> {
+        self.boundary.check_insert_at_v1(point)?;
+        let link = self.prepared.prepare_native_link_v1(state, point, self.reservation)?;
+        Ok(PreparedTfp1OriginalHistoryLinkV1 { link, boundary: self.boundary })
+    }
+}
 impl PreparedTfp1OriginalHistoryLinkV1 {
     pub(crate) fn link_v1(&self) -> &PreparedTfp1PublicOriginalLinkV1 {
         &self.link
@@ -81,6 +103,25 @@ impl PublicOriginalAdmissionV1<'_> {
         reservation: Digest,
         prefix: &crate::palw_state_v2::Tfp1OriginalPrefixV1,
     ) -> Result<PreparedTfp1OriginalHistoryLinkV1, ContractError> {
+        self.prepare_tfp1_history_v1(point, pairing, obligation, inputs, reservation, prefix)?.finalize_v1(state, point)
+    }
+
+    /// Authenticate and bind the immutable inputs before the first write.
+    /// Finalization requires the same accepting point and installed native
+    /// claim/frame/escrow. Neither stage activates or replaces full admission.
+    pub(crate) fn prepare_tfp1_history_v1(
+        &self,
+        point: &PalwBlockContextV2,
+        pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        obligation: super::Tfp1PublicOriginalObligationV1,
+        inputs: &PublicOriginalReservationV1<'_>,
+        reservation: Digest,
+        prefix: &crate::palw_state_v2::Tfp1OriginalPrefixV1,
+    ) -> Result<PreparedTfp1OriginalHistoryV1, ContractError> {
+        if reservation == Digest([0; 64]) {
+            return Err(ContractError::Scope);
+        }
+        require_current_public_origin_v1(inputs.origin, point)?;
         let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, inputs)?;
         let boundary = crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1::from_actual_data_v1(
             obligation.facts.claim,
@@ -92,8 +133,7 @@ impl PublicOriginalAdmissionV1<'_> {
             self,
             inputs,
         )?;
-        let link = prepared.prepare_native_link_v1(state, point, reservation)?;
-        Ok(PreparedTfp1OriginalHistoryLinkV1 { link, boundary })
+        Ok(PreparedTfp1OriginalHistoryV1 { prepared, boundary, reservation })
     }
 
     /// Restore a paired original from its literal accepted transaction and
@@ -271,6 +311,10 @@ impl RootedTfp1DrawnBatchCaseV1 {
 }
 
 impl PreparedTfp1PublicOriginalLinkV1 {
+    pub(crate) fn admission_record_v1(&self) -> PreparedPublicOriginalRecordV1 {
+        PreparedPublicOriginalRecordV1(self.admission)
+    }
+
     pub(crate) fn storage_row(
         &self,
         state: &PalwChainStateV2,

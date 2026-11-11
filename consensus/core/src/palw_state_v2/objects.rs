@@ -35,7 +35,7 @@ impl Tfp1OriginalPrefixV1 {
 }
 
 pub(super) fn capture_tfp1_prefix_v1(
-    builder: &TransitionBuilder<'_>,
+    builder: &mut TransitionBuilder<'_>,
     point: &PalwBlockContextV2,
     claim: Hash64,
 ) -> Result<Tfp1OriginalPrefixV1, PalwStateV2Error> {
@@ -47,14 +47,9 @@ pub(super) fn capture_tfp1_prefix_v1(
         return Err(refuse());
     }
     crate::palw_positive_contract_v2::require_current_public_origin_v1(inputs.origin_v1(), point).map_err(|_| refuse())?;
-    Ok(Tfp1OriginalPrefixV1 {
-        claim,
-        carrier: pairing.carrier().id(),
-        parent,
-        point: *point,
-        root: builder.state.state_root(),
-        end: builder.entries.len(),
-    })
+    let carrier = pairing.carrier().id();
+    let root = builder.native_reservation.state_root_v2(&builder.state).map_err(PalwStateV2Error::NativeResource)?;
+    Ok(Tfp1OriginalPrefixV1 { claim, carrier, parent, point: *point, root, end: builder.entries.len() })
 }
 
 pub(super) fn apply_object(

@@ -261,7 +261,15 @@ impl PreparedPublicOriginalRecordV1 {
         if row.reservation == Digest([0; 64]) || state.kernel_route_state_v1().is_none() {
             return Err(ContractError::Scope);
         }
-        if let Some(existing) = state.public_original_admission_record_v1(row.original)? {
+        // Admission can be installed inside the ordinary object checkpoint,
+        // before LastPoint advances. Validate at the explicit accepting point
+        // rather than using the reader for a completed state snapshot.
+        let key = row.original.0.0;
+        let previous =
+            state.kernel_route_state_v1().and_then(|route| route.aux.get(&(PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, key.to_vec())));
+        if let Some(bytes) = previous {
+            let existing = PublicOriginalAdmissionRecordV1::decode_row(&key, bytes)?;
+            existing.check_state_point(point)?;
             return if existing == *row { Ok(None) } else { Err(ContractError::Scope) };
         }
         Ok(Some((row.original.0.0, row)))
@@ -1293,6 +1301,41 @@ impl From<ContractError> for PublicReplayApprovalLookupErrorV1 {
     }
 }
 
+/// Cross-row identity check for the dedicated writer's indivisible journal.
+/// This authenticates neither an arbitrary delta nor a reservation; normal
+/// native delta/root validation and admission remain mandatory.
+fn check_tfp1_admission_journal_v1(
+    entries: &[crate::palw_state_v2::PalwDeltaEntryV2],
+    first: usize,
+) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+    use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateV2Error};
+    let mismatch = || PalwStateV2Error::DeltaMismatch("TFP1 admission/link/history are not one insertion unit");
+    let read = |index: usize, expected: u8| match entries.get(index) {
+        Some(PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(bytes) }) if *table == expected => {
+            Ok((key.as_slice(), bytes.as_slice()))
+        }
+        _ => Err(mismatch()),
+    };
+    let (key, bytes) = read(0, PUBLIC_ORIGINAL_ADMISSION_TABLE_V1)?;
+    let admission = PublicOriginalAdmissionRecordV1::decode_row(key, bytes).map_err(|_| mismatch())?;
+    let (key, bytes) = read(1, PUBLIC_TFP1_LINK_TABLE_V1)?;
+    let link = tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes).map_err(|_| mismatch())?;
+    let (key, bytes) = read(2, PUBLIC_TFP1_HISTORY_TABLE_V1)?;
+    let history = Tfp1OriginalHistoryBoundaryV1::decode_row(key, bytes).map_err(|_| mismatch())?;
+    if admission.original != link.original_v1()
+        || admission.original != history.original
+        || admission.carrier != link.carrier_v1()
+        || admission.carrier.origin != history.origin
+        || admission.reservation != link.reservation_v1()
+        || link.claim_v1() != history.claim
+        || link.source_v1() != history.source
+        || usize::try_from(history.before_delta_end).ok().is_none_or(|end| end > first)
+    {
+        return Err(mismatch());
+    }
+    Ok(())
+}
+
 impl crate::palw_state_v2::PalwChainStateV2 {
     /// Read an archived court identity. Restore still reruns the local adjudicator.
     pub fn public_original_court_record_v1(
@@ -1377,12 +1420,26 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateV2Error};
         use tfp1_original::manifest_paid::PaidManifestRequestRowV1;
-        let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
+        let route = self.kernel_route_state_v1();
         let mut check_all = false;
-        for entry in entries {
+        for (index, entry) in entries.iter().enumerate() {
             let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else { continue };
             if !is_public_verification_table_v1(*table) {
                 continue;
+            }
+            if matches!(*table, PUBLIC_TFP1_LINK_TABLE_V1 | PUBLIC_TFP1_HISTORY_TABLE_V1) {
+                // The private writer emits one adjacent 198/204/206 unit.
+                // Check the journal in both directions: after undo, an orphan
+                // 198 alone is otherwise indistinguishable from a legacy row.
+                let offset = if *table == PUBLIC_TFP1_LINK_TABLE_V1 { 1 } else { 2 };
+                let first = index.checked_sub(offset).ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 admission journal"))?;
+                check_tfp1_admission_journal_v1(
+                    entries
+                        .get(first..)
+                        .and_then(|tail| tail.get(..3))
+                        .ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 admission journal"))?,
+                    first,
+                )?;
             }
             if *table == PUBLIC_MANIFEST_PAID_TABLE_V1 && !revert {
                 let bytes = new.as_deref().ok_or(PalwStateV2Error::DeltaMismatch("paid ManifestRequest journal is insert-only"))?;
@@ -1403,7 +1460,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 // A removed row could leave surviving records without a parent.
                 check_all = true;
             }
-            if !check_all && let Some(bytes) = route.aux.get(&(*table, key.clone())) {
+            // Reverting the creation of the route can remove the header too.
+            // The insertion journal must still pass the structural checks above.
+            if !check_all && let Some(bytes) = route.and_then(|route| route.aux.get(&(*table, key.clone()))) {
                 self.validate_public_verification_row_v1(*table, key, bytes)?;
             }
         }

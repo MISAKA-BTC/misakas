@@ -896,18 +896,78 @@ pub(crate) fn prepare_tfp1_link_writer_fixture_v1(
 }
 
 pub(crate) fn exercise_tfp1_link_writer_v1(
-    state: PalwChainStateV2,
+    mut state: PalwChainStateV2,
     point: PalwBlockContextV2,
     prepared: crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1OriginalHistoryLinkV1,
+    prefix: super::super::objects::Tfp1OriginalPrefixV1,
+    foreign_prefix: super::super::objects::Tfp1OriginalPrefixV1,
     params: &PalwStateParamsV2,
 ) -> PalwChainStateV2 {
-    use crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1;
+    use crate::palw_positive_contract_v2::{PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PUBLIC_TFP1_LINK_TABLE_V1};
     use crate::palw_tfp1_original_history_v1::{PUBLIC_TFP1_HISTORY_TABLE_V1, rooted_tfp1_original_history_v1};
     let (key, row) = prepared.link_v1().storage_row(&state, &point).unwrap().unwrap();
     let row = *row;
     let bytes = borsh::to_vec(&row).unwrap();
     let extras = PalwTransitionExtrasV1::default();
-    let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let pin_prefix = |builder: &mut TransitionBuilder<'_>| {
+        builder.tfp1_history_journal_parent = Some(prefix.parent_v1());
+        builder.tfp1_original_prefix = Some(prefix);
+    };
+    let mut partial = TransitionBuilder::new(&state, params, false, false, false, false, &extras);
+    pin_prefix(&mut partial);
+    assert!(partial.install_public_tfp1_original_v1(&point, &prepared).is_err(), "preexisting 198 is not repaired");
+    assert!(partial.entries.is_empty());
+    assert_eq!(partial.state, state);
+    drop(partial);
+
+    let admission_key = row.original_v1().0.0.to_vec();
+    assert!(state.kernel_route.as_mut().unwrap().aux.remove(&(PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, admission_key)).is_some());
+
+    let mut without_prefix = TransitionBuilder::new(&state, params, false, false, false, false, &extras);
+    assert!(matches!(
+        without_prefix.install_public_tfp1_original_v1(&point, &prepared),
+        Err(PalwStateV2Error::KernelRouteRefused(reason)) if reason.contains("lacks the live accepting prefix")
+    ));
+    assert!(without_prefix.entries.is_empty());
+    assert_eq!(without_prefix.state, state);
+    pin_prefix(&mut without_prefix);
+    without_prefix.tfp1_original_prefix = Some(foreign_prefix);
+    assert_ne!(prefix.root_v1(), foreign_prefix.root_v1());
+    assert!(matches!(
+        without_prefix.install_public_tfp1_original_v1(&point, &prepared),
+        Err(PalwStateV2Error::KernelRouteRefused(reason)) if reason.contains("substitutes the live accepting prefix")
+    ));
+    assert!(without_prefix.entries.is_empty());
+    assert_eq!(without_prefix.state, state);
+    drop(without_prefix);
+
+    let mut missing_escrow = TransitionBuilder::new(&state, params, false, false, false, false, &extras);
+    pin_prefix(&mut missing_escrow);
+    missing_escrow.state.funded_escrows.values_mut().find(|escrow| escrow.claim == row.claim_v1()).unwrap().liability_open = false;
+    let failed_state = missing_escrow.state.clone();
+    assert!(matches!(
+        missing_escrow.install_public_tfp1_original_v1(&point, &prepared),
+        Err(PalwStateV2Error::KernelRouteRefused(reason)) if reason.contains("invalid paired TFP1 link")
+    ));
+    assert!(missing_escrow.entries.is_empty(), "late link failure must rewind the earlier admission journal");
+    assert_eq!(missing_escrow.state, failed_state);
+    drop(missing_escrow);
+
+    let mut previous_state = state.clone();
+    let previous_point = PalwBlockContextV2 { block: h64(998), blue_score: point.blue_score - 1, ..point };
+    previous_state.last_point = Some(previous_point);
+    let mut before_last_point = TransitionBuilder::new(&previous_state, params, false, false, false, false, &extras);
+    pin_prefix(&mut before_last_point);
+    before_last_point.install_public_tfp1_original_v1(&point, &prepared).unwrap();
+    before_last_point.tfp1_original_prefix = None;
+    before_last_point.tfp1_history_journal_parent = None;
+    before_last_point.install_public_tfp1_original_v1(&point, &prepared).unwrap();
+    assert_eq!(before_last_point.entries.len(), 3);
+    assert_eq!(before_last_point.state.last_point(), Some(&previous_point));
+    drop(before_last_point);
+
+    let mut builder = TransitionBuilder::new(&state, params, false, false, false, false, &extras);
+    pin_prefix(&mut builder);
     assert!(builder.write_kernel_row(PUBLIC_TFP1_LINK_TABLE_V1, key.to_vec(), Some(bytes.clone())).is_err());
     assert!(builder.write_kernel_row_encoded_v1(PUBLIC_TFP1_LINK_TABLE_V1, &key, Some(&row)).is_err());
     assert!(builder.entries.is_empty());
@@ -915,12 +975,20 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     let history_bytes = borsh::to_vec(prepared.boundary_v1()).unwrap();
     assert_eq!(history_bytes.len(), crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1::WIRE_BYTES);
     assert!(builder.write_kernel_row(PUBLIC_TFP1_HISTORY_TABLE_V1, key.to_vec(), Some(history_bytes)).is_err());
-    builder.install_public_tfp1_history_link_v1(&point, &prepared).unwrap();
-    assert_eq!(builder.entries.len(), 2);
+    builder.install_public_tfp1_original_v1(&point, &prepared).unwrap();
+    let tables: Vec<_> = builder
+        .entries
+        .iter()
+        .map(|entry| match entry {
+            PalwDeltaEntryV2::KernelRouteRow { table, old: None, new: Some(_), .. } => *table,
+            other => panic!("unexpected TFO3 writer entry: {other:?}"),
+        })
+        .collect();
+    assert_eq!(tables, [PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PUBLIC_TFP1_LINK_TABLE_V1, PUBLIC_TFP1_HISTORY_TABLE_V1]);
     assert_eq!(builder.state.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), Some(row));
     assert_eq!(rooted_tfp1_original_history_v1(&builder.state, row.claim_v1()).unwrap().as_ref(), Some(prepared.boundary_v1()));
-    builder.install_public_tfp1_history_link_v1(&point, &prepared).unwrap();
-    assert_eq!(builder.entries.len(), 2, "exact replay does not append more journal writes");
+    builder.install_public_tfp1_original_v1(&point, &prepared).unwrap();
+    assert_eq!(builder.entries.len(), 3, "exact replay does not append more journal writes");
     builder.state.validate_public_verification_rows_v1().unwrap();
     assert!(builder.state.court_service_holds_claim_v1(&row.claim_v1()));
     assert!(
@@ -937,6 +1005,32 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
         assert!(apply_delta_v2(&state, &partial, &params).is_err(), "forward journal lost one paired row");
         assert!(revert_delta_v2(&replayed, &partial, &params).is_err(), "inverse journal lost one paired row");
     }
+    let mut no_admission = delta.clone();
+    no_admission
+        .entries
+        .retain(|entry| !matches!(entry, PalwDeltaEntryV2::KernelRouteRow { table: PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, .. }));
+    assert!(apply_delta_v2(&state, &no_admission, &params).is_err(), "forward journal lost the paired companion admission");
+    assert!(revert_delta_v2(&replayed, &no_admission, &params).is_err(), "inverse journal lost the paired companion admission");
+
+    // Exercise the journal structure validator directly on a route-less
+    // post-state, as can occur after undo removes the kernel route header.
+    let route_less = PalwChainStateV2::genesis();
+    assert!(route_less.kernel_route_state_v1().is_none());
+    route_less.validate_public_verification_delta_v1(&delta.entries, true).unwrap();
+    let mut reordered = delta.entries.clone();
+    reordered.swap(1, 2);
+    assert!(matches!(route_less.validate_public_verification_delta_v1(&reordered, true), Err(PalwStateV2Error::DeltaMismatch(_))));
+
+    let mut wrong_cut = delta.entries.clone();
+    let PalwDeltaEntryV2::KernelRouteRow { table: PUBLIC_TFP1_HISTORY_TABLE_V1, new: Some(bytes), .. } = &mut wrong_cut[2] else {
+        panic!("expected TFO3 history as the third entry");
+    };
+    let mut history = *prepared.boundary_v1();
+    assert_eq!(history.before_delta_end, 0, "the admission is the first entry in this journal");
+    history.before_delta_end = 1;
+    *bytes = borsh::to_vec(&history).unwrap();
+    assert!(matches!(route_less.validate_public_verification_delta_v1(&wrong_cut, true), Err(PalwStateV2Error::DeltaMismatch(_))));
+
     let reverted = revert_delta_v2(&replayed, &delta, &params).unwrap();
     assert_eq!(reverted.state_root(), state.state_root());
     assert_eq!(reverted.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), None);
@@ -956,9 +1050,10 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     let mut erase = replayed.clone();
     assert!(apply_kernel_route_row_v1(&mut erase, PUBLIC_TFP1_LINK_TABLE_V1, &key, &Some(bytes), &None, false).is_err());
     assert_eq!(erase.state_root(), replayed.state_root());
-    let mut no_capacity = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let mut no_capacity = TransitionBuilder::new(&state, params, false, false, false, false, &extras);
+    pin_prefix(&mut no_capacity);
     let _checker = zero_capacity(&mut no_capacity);
-    assert!(matches!(no_capacity.install_public_tfp1_history_link_v1(&point, &prepared), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(no_capacity.install_public_tfp1_original_v1(&point, &prepared), Err(PalwStateV2Error::NativeResource(_))));
     assert!(no_capacity.entries.is_empty());
     assert_eq!(no_capacity.state, state);
     restored
@@ -975,15 +1070,24 @@ pub(crate) fn tfp1_history_prefix_fixture_v1(
     let mut extras = PalwTransitionExtrasV1::default();
     extras.tir_funded_originals.insert(pairing.claim(), pairing.clone());
     let mut builder = TransitionBuilder::new(state, params, false, false, false, false, &extras);
-    assert!(super::super::objects::capture_tfp1_prefix_v1(&builder, point, pairing.claim()).is_err());
+    assert!(super::super::objects::capture_tfp1_prefix_v1(&mut builder, point, pairing.claim()).is_err());
     builder.tfp1_history_journal_parent = Some(pairing.history_inputs_v1().unwrap().parent_v1());
-    let prefix = super::super::objects::capture_tfp1_prefix_v1(&builder, point, pairing.claim()).unwrap();
+    let prefix = super::super::objects::capture_tfp1_prefix_v1(&mut builder, point, pairing.claim()).unwrap();
     assert_eq!(prefix.root_v1(), state.state_root());
     assert_eq!(prefix.end_v1(), 0);
     let wrong_point = PalwBlockContextV2 { block: h64(999), ..*point };
-    assert!(super::super::objects::capture_tfp1_prefix_v1(&builder, &wrong_point, pairing.claim()).is_err());
+    assert!(super::super::objects::capture_tfp1_prefix_v1(&mut builder, &wrong_point, pairing.claim()).is_err());
     builder.tfp1_history_journal_parent = Some(h64(998));
-    assert!(super::super::objects::capture_tfp1_prefix_v1(&builder, point, pairing.claim()).is_err());
+    assert!(super::super::objects::capture_tfp1_prefix_v1(&mut builder, point, pairing.claim()).is_err());
+
+    builder.tfp1_history_journal_parent = Some(pairing.history_inputs_v1().unwrap().parent_v1());
+    let _checker = zero_capacity(&mut builder);
+    assert!(matches!(
+        super::super::objects::capture_tfp1_prefix_v1(&mut builder, point, pairing.claim()),
+        Err(PalwStateV2Error::NativeResource(_))
+    ));
+    assert!(builder.entries.is_empty());
+    assert_eq!(&builder.state, state);
     prefix
 }
 

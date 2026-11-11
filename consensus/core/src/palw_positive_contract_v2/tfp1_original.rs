@@ -683,12 +683,44 @@ mod tests {
             &link_point,
             &pairing,
         );
-        let history = admission
+        // Authenticate before the native writes, then consume that same
+        // immutable owner after frame/escrow installation. No post-write
+        // caller can replace the companion, budget or accepting point.
+        assert!(matches!(
+            admission.prepare_tfp1_history_v1(&wrong_point, &pairing, obligation, &reservation, admission_reservation, &prefix),
+            Err(ContractError::Scope)
+        ));
+        assert!(matches!(
+            admission.prepare_tfp1_history_v1(&link_point, &pairing, obligation, &reservation, Digest([0; 64]), &prefix),
+            Err(ContractError::Scope)
+        ));
+        let before_writes = || {
+            admission.prepare_tfp1_history_v1(&link_point, &pairing, obligation, &reservation, admission_reservation, &prefix).unwrap()
+        };
+        assert!(matches!(
+            before_writes().finalize_v1(&crate::palw_state_v2::PalwChainStateV2::genesis(), &link_point),
+            Err(ContractError::Scope)
+        ));
+        assert!(matches!(before_writes().finalize_v1(&link_state, &wrong_point), Err(ContractError::Scope)));
+        let history = before_writes().finalize_v1(&link_state, &link_point).unwrap();
+        let one_call = admission
             .prepare_tfp1_history_link_v1(&link_state, &link_point, &pairing, obligation, &reservation, admission_reservation, &prefix)
             .unwrap();
+        assert_eq!(history.link_v1(), one_call.link_v1());
+        assert_eq!(history.boundary_v1(), one_call.boundary_v1());
         assert!(history.boundary_v1().check_populated_data(pairing.carrier(), &history_inputs, history_fee).is_ok());
         assert!(history.boundary_v1().check_populated_data(pairing.carrier(), &history_inputs, history_fee + 1).is_err());
-        let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, history, &link_params);
+        let mut foreign_carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(&link_state);
+        foreign_carriage.last_point.as_mut().unwrap().subsidy += 1;
+        let foreign_state = foreign_carriage.into_state(&link_params, None).unwrap();
+        let foreign_prefix = crate::palw_state_v2::tests::native_writers_v1::tfp1_history_prefix_fixture_v1(
+            &foreign_state,
+            &link_params,
+            &link_point,
+            &pairing,
+        );
+        assert_ne!(prefix.root_v1(), foreign_prefix.root_v1());
+        let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, history, prefix, foreign_prefix, &link_params);
         let paired = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
         assert_eq!(admission.restore_tfp1_pairing_v1(&linked, &pairing, &reservation).unwrap(), paired);
         assert!(admission.restore_tfp1_pairing_v1(&link_state, &pairing, &reservation).is_err());
