@@ -173,7 +173,7 @@ impl PreparedProtectedServiceBookingV1 {
     }
 }
 
-fn book_extends_v1(before: &ServiceReservations, next: &ServiceReservations, added: usize) -> bool {
+pub(super) fn book_extends_v1(before: &ServiceReservations, next: &ServiceReservations, added: usize) -> bool {
     before.budget == next.budget
         && before.last_observed_daa == next.last_observed_daa
         && before.supply == next.supply
@@ -210,7 +210,7 @@ fn metadata_requests_v1(
     Ok(requests.bytes_v1())
 }
 
-fn validation_requests_v1(packets: usize) -> Result<u64, NativeCoverageV1> {
+pub(super) fn validation_requests_v1(packets: usize) -> Result<u64, NativeCoverageV1> {
     // Row::check rebuilds the residual slot map, live membership/owner
     // maps and retained released membership. Each is bounded by all packets.
     let bytes_per_packet = (btree_node_envelope_bytes_v1::<u64, ServiceCost>()

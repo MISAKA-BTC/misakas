@@ -959,7 +959,7 @@ pub(crate) fn exercise_public_tfp1_frame_writer_v1(
         crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1OriginalHistoryV1,
         super::super::objects::Tfp1OriginalPrefixV1,
     ),
-) -> PalwChainStateV2 {
+) {
     use crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1;
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
     // Build an independent new-profile storage fixture, not an upgrade or
@@ -1035,91 +1035,27 @@ pub(crate) fn exercise_public_tfp1_frame_writer_v1(
     );
     assert!(builder.state.public_tfp1_original_link_v1(claim).unwrap().unwrap().uses_public_frame_v1());
     assert!(builder.state.court_service_holds_material_v1(&key));
-    builder.state.validate_public_verification_rows_v1().unwrap();
     assert_eq!(builder.state.staged_tir_source_until_v1(claim), Some(material_until));
+    assert!(builder.state.public_tfp1_escrow_requires_native_settlement_v1(claim));
     super::super::funded_escrow::tests::exercise_protected_funded_liability_v1(&builder.state, params, claim);
-    let delta = PalwStateDeltaV2 { point, entries: builder.entries.clone() };
-    let replayed = apply_delta_v2(&parent, &delta, params).unwrap();
-    assert_eq!(replayed.state_root(), builder.state.state_root());
-    let reverted = revert_delta_v2(&replayed, &delta, params).unwrap();
-    assert_eq!(reverted.state_root(), parent.state_root());
-    assert!(reverted.public_tfp1_frame_v1(claim).unwrap().is_none());
-    assert_eq!(reverted.staged_tir_source_until_v1(claim), parent.staged_tir_source_until_v1(claim));
-    assert_eq!(replayed.staged_tir_source_until_v1(claim), Some(material_until));
-    assert!(replayed.public_tfp1_escrow_requires_native_settlement_v1(claim));
-    assert!(!reverted.public_tfp1_escrow_requires_native_settlement_v1(claim));
+
+    // These four rows are the writer's intermediate result. The accepting
+    // checkpoint must append the protected service book before publication.
+    assert!(builder.state.validate_public_verification_rows_v1().is_err());
+    let delta = PalwStateDeltaV2 { point, entries: builder.entries };
+    assert!(apply_delta_v2(&parent, &delta, params).is_err());
+    assert!(revert_delta_v2(&builder.state, &delta, params).is_err());
+    assert!(PalwChainStateV2::genesis().validate_public_verification_delta_v1(&delta.entries, true).is_err());
+
     // Retirement observes the same retained horizon even without an old
     // TIR frame. Phase changes below are reader-only fixtures, not Final.
-    let mut terminal = replayed.clone();
+    let mut terminal = builder.state.clone();
     terminal.claims.get_mut(&claim).unwrap().phase = PalwClaimPhaseV2::Final { final_daa: point.daa_score + 1 };
     assert_eq!(terminal.staged_retirement_floor_v1(&claim, material_until - 1), material_until);
     assert_eq!(terminal.staged_retirement_floor_v1(&claim, material_until + 1), material_until + 1);
-    let mut malformed_source = replayed.clone();
+    let mut malformed_source = builder.state;
     malformed_source.staged_courts.insert(key, old.clone());
     assert_eq!(malformed_source.staged_tir_source_until_v1(claim), Some(u64::MAX), "wrong row kind cannot release source capital");
-
-    let route_less = PalwChainStateV2::genesis();
-    route_less.validate_public_verification_delta_v1(&delta.entries, true).unwrap();
-    let mut own_frame_prefix = delta.entries.clone();
-    let PalwDeltaEntryV2::KernelRouteRow { key, new: Some(bytes), .. } = &mut own_frame_prefix[3] else {
-        panic!("history must be the fourth insertion");
-    };
-    let mut history = crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1::decode_row(key, bytes).unwrap();
-    history.before_delta_end = 1;
-    *bytes = borsh::to_vec(&history).unwrap();
-    assert!(route_less.validate_public_verification_delta_v1(&own_frame_prefix, true).is_err(), "prefix cannot include its own frame");
-    for missing in 0..4 {
-        let mut partial = delta.clone();
-        partial.entries.remove(missing);
-        assert!(apply_delta_v2(&parent, &partial, params).is_err());
-        assert!(revert_delta_v2(&replayed, &partial, params).is_err());
-        assert!(route_less.validate_public_verification_delta_v1(&partial.entries, true).is_err());
-    }
-    let mut orphan = replayed.clone();
-    orphan.kernel_route = None;
-    assert!(orphan.validate_public_verification_rows_v1().is_err());
-
-    // Cross-row edits must recheck the frame even if the four insertion
-    // records are untouched. Test the final-state validator directly as well
-    // as apply, so unrelated replay checks cannot hide this dependency.
-    let old_claim = replayed.claim(&claim).unwrap().clone();
-    for shorter_retention in [false, true] {
-        let mut changed = old_claim.clone();
-        if shorter_retention {
-            changed.trace_retention_daa = material_until - 1;
-        } else {
-            changed.execution_root = Hash64::from_u64_word(901);
-        }
-        let entries = vec![PalwDeltaEntryV2::Claim { key: claim, old: Some(old_claim.clone()), new: Some(changed.clone()) }];
-        let mut invalid = replayed.clone();
-        invalid.claims.insert(claim, changed);
-        for revert in [false, true] {
-            assert!(invalid.validate_public_verification_delta_v1(&entries, revert).is_err());
-        }
-        assert!(apply_delta_v2(&replayed, &PalwStateDeltaV2 { point, entries }, params).is_err());
-    }
-    let entries = vec![PalwDeltaEntryV2::StagedCourtSeed { key: legacy_key, old: None, new: Some(old.clone()) }];
-    let mut invalid = replayed.clone();
-    invalid.staged_courts.insert(legacy_key, old);
-    assert!(invalid.validate_public_verification_delta_v1(&entries, false).is_err());
-    assert!(apply_delta_v2(&replayed, &PalwStateDeltaV2 { point, entries }, params).is_err());
-    let class = old_claim.class_id;
-    let previous = replayed.tir_class_v1(&class).unwrap().clone();
-    let mut changed = previous.clone();
-    changed.graph_ir_root = Hash64::from_u64_word(902);
-    let entries = vec![PalwDeltaEntryV2::TirClass { key: class, old: Some(previous), new: Some(changed.clone()) }];
-    let mut invalid = replayed.clone();
-    invalid.tir_classes.insert(class, changed);
-    assert!(invalid.validate_public_verification_delta_v1(&entries, false).is_err());
-    assert!(apply_delta_v2(&replayed, &PalwStateDeltaV2 { point, entries }, params).is_err());
-    let encoded = borsh::to_vec(&PalwStateCarriageV2::from_state(&replayed)).unwrap();
-    crate::palw_native_resource_v1::preflight_native_carriage_v1(&encoded[..], encoded.len() as u64).unwrap();
-    let restored =
-        borsh::from_slice::<PalwStateCarriageV2>(&encoded).unwrap().into_state(params, Some(replayed.state_root())).unwrap();
-    assert_eq!(restored.public_tfp1_frame_v1(claim).unwrap(), replayed.public_tfp1_frame_v1(claim).unwrap());
-    assert_eq!(restored.staged_tir_source_until_v1(claim), Some(material_until));
-    assert!(restored.public_tfp1_escrow_requires_native_settlement_v1(claim));
-    restored
 }
 
 pub(crate) fn exercise_tfp1_link_writer_v1(

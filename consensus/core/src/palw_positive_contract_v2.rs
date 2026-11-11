@@ -1303,8 +1303,8 @@ impl From<ContractError> for PublicReplayApprovalLookupErrorV1 {
 }
 
 /// Cross-row identity check for the dedicated writer's indivisible journal.
-/// This authenticates neither an arbitrary delta nor a reservation; normal
-/// native delta/root validation and admission remain mandatory.
+/// The new frame requires a scoped service append. Full reservation graph
+/// authentication remains a separate admission requirement.
 fn check_tfp1_admission_journal_v1(
     entries: &[crate::palw_state_v2::PalwDeltaEntryV2],
     first: usize,
@@ -1324,7 +1324,7 @@ fn check_tfp1_admission_journal_v1(
     let link = tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes).map_err(|_| mismatch())?;
     let (key, bytes) = read(2, PUBLIC_TFP1_HISTORY_TABLE_V1)?;
     let history = Tfp1OriginalHistoryBoundaryV1::decode_row(key, bytes).map_err(|_| mismatch())?;
-    if link.uses_public_frame_v1() {
+    let protected_service = if link.uses_public_frame_v1() {
         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
         let Some(PalwDeltaEntryV2::StagedCourtSeed {
             key: Key::PublicTfp1FrameV1(claim),
@@ -1338,15 +1338,24 @@ fn check_tfp1_admission_journal_v1(
             return Err(mismatch());
         }
         link.check_public_frame_record_v1(frame).map_err(|_| mismatch())?;
-    } else if matches!(
-        preceding,
-        Some(PalwDeltaEntryV2::StagedCourtSeed {
-            key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(_),
-            ..
-        })
-    ) {
-        return Err(mismatch());
-    }
+        let Some(PalwDeltaEntryV2::StagedCourtSeed { key: Key::CourtService, old, new: Some(service @ Row::CourtServiceV3(_)) }) =
+            entries.get(3)
+        else {
+            return Err(PalwStateV2Error::DeltaMismatch("public TFP1 frame journal lacks its adjacent service append"));
+        };
+        Some((frame, old.as_ref(), service))
+    } else {
+        if matches!(
+            preceding,
+            Some(PalwDeltaEntryV2::StagedCourtSeed {
+                key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(_),
+                ..
+            })
+        ) {
+            return Err(mismatch());
+        }
+        None
+    };
     let before_first_write = if link.uses_public_frame_v1() { first.checked_sub(1).ok_or_else(mismatch)? } else { first };
     if admission.original != link.original_v1()
         || admission.original != history.original
@@ -1358,6 +1367,9 @@ fn check_tfp1_admission_journal_v1(
         || usize::try_from(history.before_delta_end).ok().is_none_or(|end| end > before_first_write)
     {
         return Err(mismatch());
+    }
+    if let Some((frame, old, service)) = protected_service {
+        tfp1_original::service_invariants::check_protected_service_insert_v1(frame, old, service)?;
     }
     Ok(())
 }
@@ -1431,25 +1443,25 @@ impl crate::palw_state_v2::PalwChainStateV2 {
 
     fn validate_public_tfp1_frame_link_v1(&self, claim: Hash64) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
-        if self
+        let Some(frame) = self
             .public_tfp1_frame_v1(claim)
             .map_err(|_| PalwStateV2Error::CarriageInconsistent("invalid public TFP1 frame".into()))?
-            .is_none()
-        {
+        else {
             return Ok(());
-        }
+        };
         let link = self
             .public_tfp1_original_link_v1(claim)
             .map_err(|_| PalwStateV2Error::CarriageInconsistent("invalid public TFP1 frame link".into()))?;
         if !link.is_some_and(|link| link.uses_public_frame_v1()) {
             return Err(PalwStateV2Error::CarriageInconsistent("orphan public TFP1 frame".into()));
         }
-        Ok(())
+        tfp1_original::service_invariants::check_protected_service_state_v1(self, frame)
     }
 
     fn validate_public_tfp1_frames_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
-        // A frame without the paired link/history is not a valid final
-        // state, including snapshots that omit the entire kernel route.
+        // Validate the frame's reverse links to the kernel and service book,
+        // including snapshots that omit either of those stores.
+        tfp1_original::service_invariants::check_protected_service_book_v1(self)?;
         for (claim, _) in self.public_tfp1_frame_rows_v1() {
             self.validate_public_tfp1_frame_link_v1(claim)?;
         }
@@ -1477,6 +1489,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let route = self.kernel_route_state_v1();
         let mut check_all = false;
         let mut check_frames = false;
+        let mut checked_tfp1_admission_first = None;
         for (index, entry) in entries.iter().enumerate() {
             use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
             match entry {
@@ -1487,6 +1500,10 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 _ => {}
             }
             if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry {
+                // A service-only edit can affect any dedicated frame.
+                if *key == Key::CourtService && old != new {
+                    check_frames = true;
+                }
                 if let Key::TirClaim(claim) = key {
                     self.validate_public_tfp1_frame_link_v1(*claim)?;
                 }
@@ -1495,17 +1512,15 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     || matches!(new, Some(Row::PublicTfp1FrameV1(_)))
                 {
                     // New immutable frames have no standalone update/delete.
-                    // The forward journal is one frame + 198/204/206 unit;
+                    // The forward journal includes the adjacent service append;
                     // rollback validates that same unit before removing it.
                     let first = index.checked_add(1).ok_or(PalwStateV2Error::DeltaMismatch("TFP1 frame journal index"))?;
                     check_tfp1_admission_journal_v1(
-                        entries
-                            .get(first..)
-                            .and_then(|tail| tail.get(..3))
-                            .ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 frame journal"))?,
+                        entries.get(first..).ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 frame journal"))?,
                         first,
                         Some(entry),
                     )?;
+                    checked_tfp1_admission_first = Some(first);
                     let (Key::PublicTfp1FrameV1(claim), None, Some(Row::PublicTfp1FrameV1(frame))) = (key, old, new) else {
                         return Err(PalwStateV2Error::DeltaMismatch("public TFP1 frame journal is insert-only"));
                     };
@@ -1529,19 +1544,18 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 continue;
             }
             if matches!(*table, PUBLIC_TFP1_LINK_TABLE_V1 | PUBLIC_TFP1_HISTORY_TABLE_V1) {
-                // The private writer emits one adjacent 198/204/206 unit.
-                // Check the journal in both directions: after undo, an orphan
-                // 198 alone is otherwise indistinguishable from a legacy row.
+                // Catch orphaned kernel records in either direction, even if
+                // the frame or a preceding entry was removed from the delta.
                 let offset = if *table == PUBLIC_TFP1_LINK_TABLE_V1 { 1 } else { 2 };
                 let first = index.checked_sub(offset).ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 admission journal"))?;
-                check_tfp1_admission_journal_v1(
-                    entries
-                        .get(first..)
-                        .and_then(|tail| tail.get(..3))
-                        .ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 admission journal"))?,
-                    first,
-                    first.checked_sub(1).and_then(|index| entries.get(index)),
-                )?;
+                if checked_tfp1_admission_first != Some(first) {
+                    check_tfp1_admission_journal_v1(
+                        entries.get(first..).ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 admission journal"))?,
+                        first,
+                        first.checked_sub(1).and_then(|index| entries.get(index)),
+                    )?;
+                    checked_tfp1_admission_first = Some(first);
+                }
             }
             if *table == PUBLIC_MANIFEST_PAID_TABLE_V1 && !revert {
                 let bytes = new.as_deref().ok_or(PalwStateV2Error::DeltaMismatch("paid ManifestRequest journal is insert-only"))?;

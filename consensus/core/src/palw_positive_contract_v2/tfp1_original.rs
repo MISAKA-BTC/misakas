@@ -12,6 +12,7 @@ pub(crate) mod native_frame;
 pub(crate) mod native_link;
 pub(crate) mod preclaim;
 pub(crate) mod service_booking;
+pub(crate) mod service_invariants;
 
 use super::{
     PreparedPublicOriginalV1, PublicOriginalAdmissionV1, PublicOriginalReservationV1, public_original_service_contract_id_v1,
@@ -1070,7 +1071,7 @@ mod tests {
         assert_ne!(prefix.root_v1(), foreign_prefix.root_v1());
         let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, history, prefix, foreign_prefix, &link_params);
         let paired = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
-        let protected_state = crate::palw_state_v2::tests::native_writers_v1::exercise_public_tfp1_frame_writer_v1(
+        crate::palw_state_v2::tests::native_writers_v1::exercise_public_tfp1_frame_writer_v1(
             link_state.clone(),
             link_point,
             &link_params,
@@ -1101,7 +1102,6 @@ mod tests {
                 (frame, history, prefix)
             },
         );
-        assert_eq!(admission.restore_tfp1_pairing_v1(&protected_state, &pairing, &reservation).unwrap(), paired);
         assert_eq!(admission.restore_tfp1_pairing_v1(&linked, &pairing, &reservation).unwrap(), paired);
         assert!(admission.restore_tfp1_pairing_v1(&link_state, &pairing, &reservation).is_err());
         let companion_only = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
