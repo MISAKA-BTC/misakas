@@ -85,8 +85,9 @@ impl PublicTfp1FrameV1 {
         Self::prepare_inner(prepared, fp, source, class, point, reservation, material_until_daa, maximum_leaves, None)
     }
 
-    /// Pin the immutable service packet graph from the same checked booking.
-    /// Delivery and settlement remain the responsibility of their own writers.
+    /// Compatibility fixtures may provide an explicit reservation identity.
+    /// Native admission derives it from the actual carrier and booking below.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_with_service_v2(
         prepared: &PreparedTfp1PublicOriginalV1,
@@ -110,6 +111,59 @@ impl PublicTfp1FrameV1 {
         }
         let graph = booking.service_graph_identity_v1().map_err(Decode)?;
         Self::prepare_inner(prepared, fp, source, class, point, reservation, material_until_daa, maximum_leaves, Some(graph))
+    }
+
+    /// Derive the native reservation identity after actual carrier and payer
+    /// checks. Neither a quote nor a caller-supplied digest can name this
+    /// allocation. This is an identity, not evidence of service delivery.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_with_native_service_v3(
+        prepared: &PreparedTfp1PublicOriginalV1,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        class: &PalwTirClassRecordV1,
+        point: &PalwBlockContextV2,
+        maximum_leaves: u64,
+        booking: &ProtectedBatchBookingV1,
+    ) -> Result<NativeRetainedV1<Self>, NativeDecodeErrorV1<ContractError>> {
+        use NativeDecodeErrorV1::Decode;
+        let companion = prepared.companion_v1();
+        let origin = companion.carrier.origin;
+        let paired = prepared.pairing.ok_or(Decode(ContractError::Scope))?;
+        require_current_public_origin_v1(origin, point).map_err(Decode)?;
+        if booking.original_v1() != companion.original
+            || booking.obligation_v1() != prepared.obligation_v1()
+            || !booking.matches_acceptance_v1(point.daa_score, point.blue_score)
+        {
+            return Err(Decode(ContractError::Scope));
+        }
+        let graph = booking.service_graph_identity_v1().map_err(Decode)?;
+        let reservation = stream_digest(
+            b"misaka-palw/tfp1-native-service-reservation/v1",
+            &(
+                companion.original,
+                origin,
+                prepared.obligation_v1().obligation_v1(),
+                graph,
+                paired.literal_fp,
+                paired.funding_contract,
+                paired.funding_outpoint,
+                paired.funding_amount,
+                companion.budget.retention_until,
+            ),
+        )
+        .map_err(|_| Decode(ContractError::NonCanonical))?;
+        Self::prepare_inner(
+            prepared,
+            fp,
+            source,
+            class,
+            point,
+            Digest(reservation.as_bytes()),
+            companion.budget.retention_until,
+            maximum_leaves,
+            Some(graph),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]

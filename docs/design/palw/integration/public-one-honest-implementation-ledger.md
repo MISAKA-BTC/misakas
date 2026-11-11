@@ -13,12 +13,22 @@
 | 公開quote | [RPC request](../../../../rpc/core/src/model/message/palw_tir_original_quote.rs)、[RPC handler](../../../../rpc/service/src/service.rs) | 旧commitment/bindingだけを受け取る。新版のprompt・manifest・HF参照・companionを扱う版付き入口と、実受付と共通の計算が未接続。旧`planHex`の意味を変更しない |
 | 共通条件 | [core quote](../../../../consensus/core/src/palw_tir_public_fold_v1.rs)、[FreePrompt受付](../../../../consensus/core/src/palw_state_v2/objects.rs) | quoteと実受付の双方にFpTokenizer gateがある。TFO3はさらにprofile未設定で拒否される。完成済みtokenizer登録の読取りと全工程plannerを接続する |
 | 資金・予約 | [実UTXO前処理](../../../../consensus/src/pipeline/virtual_processor/processor/palw_accept.rs)、[保護予約と実資金の照合](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/funding/admission.rs) | 実payer/outputの照合と候補bookは存在するが、本番policy resolverと呼出しが未接続。前処理の最低rentも同じ計算へ接続し、二重課金を防ぐ |
-| 原子的保存 | [受付coordinator](../../../../consensus/core/src/palw_funded_original_coordinator_fold_v1.rs) | 共通installに専用frame/history/service/escrowの分岐を追加。保持・退役consumerも接続。現時点の生成callerはfixtureであり、本番受付入口から到達したとは扱わない |
+| 原子的保存 | [受付coordinator](../../../../consensus/core/src/palw_funded_original_coordinator_fold_v1.rs)、[native候補の組立て](../../../../consensus/core/src/palw_protected_original_coordinator_v2.rs) | 共通installに専用frame/history/service/escrowの分岐を追加。資料・資金から保存準備を組むnative関数も接続。本番profile分岐からはまだ呼ばれず、受付到達の動作証拠はない |
 | 受付結果 | 公開T12の同一claim・carrier・包含点・保存行 | 未取得。ローカルfixture、送信受付、別claim、恒久拒否を代用しない |
 
 Panel人数・全工程の物理容量・料金・署名branchの本番設定には、[パラメーター台帳](../../../governance/parameter-register.md)に残る未確定事項がある。旧T12の数値やtest fixtureを暗黙に採用せず、具体的な設定とその根拠を受付接続の作業内で解決する。共通installの追加だけでは、この不足や公開quote/受付を解消しない。
 
 今回のコード変更は **実装済み・Rust検証未実行**。方針書§1に従い通し接続後にbuild/testを実行する。公開配備・署名送信は行っていない。取得可否証明やMinerのモデル重み配信義務は追加しない。同一claimのPanel/Final・当選権利消費・対応ブロック生成は引き続き未達。
+
+### 実受付候補から保存準備への接続（2026-11-12、未検証）
+
+[新coordinator](../../../../consensus/core/src/palw_protected_original_coordinator_v2.rs)を追加した。nativeに所有されたoriginal parentと実UTXO handoffを照合し、現在のordered prefixの予約表を複製して、前項までのmaterial/funding入口→専用frame→service保存候補→history/escrowを持つ`OriginalAdmissionV1::Protected`へ接続する。quoteの候補bookやcallerが選んだ予約IDは受け取らない。返すのは保存準備であり、関数内でclaimや残高を保存しない。
+
+[専用frame](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/native_frame.rs)のnative constructorは予約IDを実origin・companion・義務・graph・literal FP・funding contract/outpoint/額・保持期限から導出する。明示domain付きの固定フィールドBorsh hashであり、取得や計算の成功証明ではない。予約IDを外から渡す旧constructorは互換fixture限定とし、既存frameのcodec/ID検査は変更しない。新規公開profileの有効化や採択済み署名scopeの変更は行わない。
+
+[保存準備](../../../../consensus/core/src/palw_funded_original_coordinator_fold_v1.rs)は、同claimのpaired checkpointで資料・実資金・frame/serviceの準備が終わった後に実prefixを一度取得する。準備失敗ではprefix metadataを戻す。[FreePrompt本経路](../../../../consensus/core/src/palw_state_v2/objects.rs)の最初のwriter直前は、そのprefixがclaim・受理点・journal位置・parentと一致することを検査し、従来の後段での取り直しを除去した。companionがあるのにProtected準備がない場合の拒否は維持する。
+
+回帰コードに、同じclaimでも異なる実carrierは異なる予約IDになること、誤origin・二重prefix取得・準備後のwriteを拒否すること、読み取りの予算確認後に同じprefixで保存へ進むことを追加した。Cargo/build/testは方針書§1によりまだ実行していない。新coordinatorを選ぶ本番policy resolver/G14分岐は**未接続**で、現在の公開profile拒否を解除していない。RPC/Studio新版・全工程graph・有限精算・独立Panel/Final・当選権利消費・対応block受理は残る。保存準備までの関数接続を、公開T12での受付成功と数えない。
 
 ### 資料照合・候補予約・資金計算の共通入口（2026-11-12、未検証）
 

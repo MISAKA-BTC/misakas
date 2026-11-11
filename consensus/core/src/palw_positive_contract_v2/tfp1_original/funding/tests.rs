@@ -222,14 +222,12 @@ pub(crate) fn exercise_funding_v1(
                     assert_eq!(&*book, &*unsigned_book, "signed payer checks must book the same graph as the unsigned quote");
                     assert_eq!(funded.actual().outpoint(), pairing.outpoint());
                     assert_ne!(&*book, empty_book);
-                    let native_frame = super::super::native_frame::PublicTfp1FrameV1::prepare_with_service_v2(
+                    let native_frame = super::super::native_frame::PublicTfp1FrameV1::prepare_with_native_service_v3(
                         prepared,
                         fp,
                         source,
                         &fixture.record,
                         &at,
-                        misaka_palw_positive_contract::identity::Digest([0x51; 64]),
-                        reservation.budget.retention_until,
                         fixture.rules.maximum_leaves,
                         &accepted_booking,
                     )
@@ -274,6 +272,30 @@ pub(crate) fn exercise_funding_v1(
         };
     let (pairing, prepared) = make(sign_funding(funding_terms.clone()), true);
     atomic(&pairing, &prepared, None);
+    // Identical semantic work and booking may be carried by distinct real
+    // transactions. Their persistent reservation IDs must remain distinct.
+    let native_frame = |prepared: &PreparedTfp1PublicOriginalV1, point: &PalwBlockContextV2| {
+        super::super::native_frame::PublicTfp1FrameV1::prepare_with_native_service_v3(
+            prepared,
+            fp,
+            source,
+            &fixture.record,
+            point,
+            fixture.rules.maximum_leaves,
+            booking,
+        )
+    };
+    let first_frame = native_frame(&prepared, &at).unwrap();
+    assert_eq!(first_frame.reservation_v1(), native_frame(&prepared, &at).unwrap().reservation_v1());
+    let mut other_terms = funding_terms.clone();
+    other_terms.nonce = Hash64::from_u64_word(933);
+    let (other_pairing, other_prepared) = make(sign_funding(other_terms), true);
+    assert_ne!(other_pairing.carrier().id(), pairing.carrier().id());
+    let other_frame = native_frame(&other_prepared, &at).unwrap();
+    assert_eq!(first_frame.claim_v1(), other_frame.claim_v1());
+    assert_eq!(first_frame.original_id_v1(), other_frame.original_id_v1());
+    assert_ne!(first_frame.reservation_v1(), other_frame.reservation_v1());
+    assert!(native_frame(&prepared, &PalwBlockContextV2 { block: Hash64::from_u64_word(934), ..at }).is_err());
     let funded = required.prepare_pairing_v1(&prepared, &pairing, &at).unwrap();
     assert_eq!(funded.actual().outpoint(), pairing.outpoint());
     assert_eq!(funded.actual().output().value, expected.required_amount_sompi);

@@ -129,36 +129,54 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
 
         let mut reached_install = false;
         let result = super::super::objects::apply_with_native_checkpoint_v1(&mut builder, Some(claim_id), false, |builder| {
-            let prefix = super::super::objects::capture_tfp1_prefix_v1(builder, at, claim_id)?;
+            let prepare = |builder: &mut TransitionBuilder<'_>, reservation: &PublicOriginalReservationV1<'_>| {
+                let frame = PublicTfp1FrameV1::prepare_with_service_v2(
+                    prepared,
+                    fixture.frame.original_v1(),
+                    source,
+                    &fixture.record,
+                    at,
+                    reservation_id,
+                    reservation.budget.retention_until,
+                    fixture.rules.maximum_leaves,
+                    booking,
+                )
+                .unwrap();
+                let service =
+                    PreparedProtectedServiceBookingV1::prepare_v1(&builder.state, &frame, booking, after_book.try_clone_v1().unwrap())
+                        .unwrap();
+                PreparedProtectedOriginalInstallationV1::prepare_in_checkpoint_v2(
+                    builder,
+                    at,
+                    frame,
+                    service,
+                    funded,
+                    pairing,
+                    admission,
+                    reservation,
+                )
+            };
+            let wrong_origin = PublicOriginalReservationV1 {
+                origin: misaka_palw_positive_contract::rows::AcceptedOrigin {
+                    accepted_blue_score: prior.blue_score,
+                    ..reservation.origin
+                },
+                ..reservation
+            };
+            assert!(matches!(prepare(builder, &wrong_origin), Err(PalwStateV2Error::CarriageInconsistent(_))));
+            assert!(builder.tfp1_original_prefix.is_none());
+            assert!(builder.entries.is_empty());
+            assert_eq!(builder.state, parent);
+
+            let original = OriginalAdmissionV1::Protected(prepare(builder, &reservation)?);
+            let prefix = builder.tfp1_original_prefix.unwrap();
             assert_eq!(prefix.root_v1(), parent_root);
             assert_eq!(prefix.end_v1(), 0);
-            builder.tfp1_original_prefix = Some(prefix);
-            let frame = PublicTfp1FrameV1::prepare_with_service_v2(
-                prepared,
-                fixture.frame.original_v1(),
-                source,
-                &fixture.record,
-                at,
-                reservation_id,
-                reservation.budget.retention_until,
-                fixture.rules.maximum_leaves,
-                booking,
-            )
-            .unwrap();
-            let service =
-                PreparedProtectedServiceBookingV1::prepare_v1(&builder.state, &frame, booking, after_book.try_clone_v1().unwrap())
-                    .unwrap();
-            let original = OriginalAdmissionV1::Protected(PreparedProtectedOriginalInstallationV1::prepare_v1(
-                builder,
-                at,
-                frame,
-                service,
-                funded,
-                pairing,
-                admission,
-                &reservation,
-            )?);
+            assert!(matches!(prepare(builder, &reservation), Err(PalwStateV2Error::CarriageInconsistent(_))));
+            assert_eq!(builder.tfp1_original_prefix, Some(prefix));
             assert_eq!(original.material_until_daa_v1(), reservation.budget.retention_until);
+            let retirement = builder.prospective_retirement_v1(claim_id, &claim, Some(&original))?;
+            builder.plan_free_prompt_budget_v1(at, claim_id, &claim, 1, &retirement)?;
             {
                 // Use the same prospective reader as the FP budget path,
                 // with only the settlement-once fence armed for this check.
@@ -179,8 +197,13 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
                     ));
                 }
             }
+            original.check_prewrite_prefix_v2(builder, at, claim_id)?;
             builder.reserve_for_claim(&claim)?;
             builder.write_claim(claim_id, Some(claim.clone()))?;
+            assert!(matches!(
+                original.check_prewrite_prefix_v2(builder, at, claim_id),
+                Err(PalwStateV2Error::CarriageInconsistent(_))
+            ));
             assert_eq!(builder.state.last_point(), Some(&prior));
             assert_eq!(builder.paired_original_checkpoint_claim, Some(claim_id));
             reached_install = true;

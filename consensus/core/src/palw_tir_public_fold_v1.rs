@@ -16,6 +16,7 @@ mod output_source_owned_v2;
 
 include!("palw_tir_prepared_original_geometry_v1.rs");
 include!("palw_funded_original_coordinator_fold_v1.rs");
+include!("palw_protected_original_coordinator_v2.rs");
 
 /// Diagnostics for a funded carrier on the native accepted UTXO path. There is
 /// deliberately no Admitted/Complete variant and no state or spend capability.

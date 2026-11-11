@@ -4495,11 +4495,10 @@ fn apply_object_batch_10_v1(
                 (_, plan) => plan,
             };
             let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
-            if builder.extras.tir_funded_originals.get(claim_id).is_some_and(|pair| pair.public_companion_v3().is_some()) {
-                // Only after admission/booking and all pre-write checks. The
-                // dormant PublicOriginalProfile refusal above never hashes a
-                // whole prefix just to reject an unsigned companion.
-                builder.tfp1_original_prefix = Some(capture_tfp1_prefix_v1(builder, ctx, *claim_id)?);
+            if let Some(original) = &tir_original {
+                original.check_prewrite_prefix_v2(builder, ctx, *claim_id)?;
+            } else if builder.extras.tir_funded_originals.get(claim_id).is_some_and(|pair| pair.public_companion_v3().is_some()) {
+                return Err(PalwStateV2Error::PublicOriginalProfileUnavailable { claim: *claim_id });
             }
             builder.reserve_for_claim(&claim)?;
             if let Some(contract) = consumer_plan {

@@ -266,7 +266,31 @@ pub(super) struct PreparedProtectedOriginalInstallationV1 {
 
 impl PreparedProtectedOriginalInstallationV1 {
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn prepare_v1(
+    pub(super) fn prepare_in_checkpoint_v2(
+        b: &mut TransitionBuilder<'_>,
+        ctx: &PalwBlockContextV2,
+        frame: crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_positive_contract_v2::PublicTfp1FrameV1>,
+        service: crate::palw_positive_contract_v2::tfp1_original::service_booking::PreparedProtectedServiceBookingV1,
+        funding: &crate::palw_court_original_escrow_v1::PreparedEscrowFundingV1<'_>,
+        pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        admission: &crate::palw_positive_contract_v2::PublicOriginalAdmissionV1<'_>,
+        reservation: &crate::palw_positive_contract_v2::PublicOriginalReservationV1<'_>,
+    ) -> Result<Self, PalwStateV2Error> {
+        let claim = frame.claim_v1();
+        if b.paired_original_checkpoint_claim != Some(claim) || b.tfp1_original_prefix.is_some() {
+            return Err(refused("protected original preparation requires its paired checkpoint and an uncaptured prefix"));
+        }
+        let prefix = super::objects::capture_tfp1_prefix_v1(b, ctx, claim)?;
+        let previous = b.tfp1_original_prefix.replace(prefix);
+        let result = Self::prepare_v1(b, ctx, frame, service, funding, pairing, admission, reservation);
+        if result.is_err() {
+            b.tfp1_original_prefix = previous;
+        }
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_v1(
         b: &TransitionBuilder<'_>,
         ctx: &PalwBlockContextV2,
         frame: crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_positive_contract_v2::PublicTfp1FrameV1>,
@@ -368,6 +392,31 @@ pub(super) enum OriginalAdmissionV1 {
 }
 
 impl OriginalAdmissionV1 {
+    pub(super) fn check_prewrite_prefix_v2(
+        &self,
+        b: &TransitionBuilder<'_>,
+        ctx: &PalwBlockContextV2,
+        claim: Hash64,
+    ) -> Result<(), PalwStateV2Error> {
+        match self {
+            Self::Protected(plan) => {
+                let prefix = plan.prefix;
+                if b.paired_original_checkpoint_claim != Some(claim)
+                    || plan.frame.claim_v1() != claim
+                    || b.tfp1_original_prefix != Some(prefix)
+                    || prefix.claim_v1() != claim
+                    || prefix.point_v1() != *ctx
+                    || prefix.end_v1() != b.entries.len()
+                    || b.tfp1_history_journal_parent != Some(prefix.parent_v1())
+                {
+                    return Err(refused("protected original must start writing at its captured accepting prefix"));
+                }
+            }
+            Self::Plain(_) | Self::Funded(_) => check_paired_original_profile_v1(b.extras, claim)?,
+        }
+        Ok(())
+    }
+
     fn legacy_frame_v1(&self) -> Option<&Frame> {
         match self {
             Self::Plain(p) => Some(p.frame_v1()),
