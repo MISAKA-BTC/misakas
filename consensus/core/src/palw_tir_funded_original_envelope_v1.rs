@@ -43,7 +43,7 @@ pub fn is_funded_original_payload_v1(payload: &[u8]) -> bool {
 
 /// Exact borrowed funded payload of the actual transaction. Native callers
 /// separately resolve FPR2/FPA1 activation; unwrapping grants no authority.
-pub(crate) fn actual_funded_payload_v1(tx: &Transaction) -> Result<&[u8], String> {
+pub fn actual_funded_payload_v1(tx: &Transaction) -> Result<&[u8], String> {
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
         return Err("funded original subnetwork".into());
     }

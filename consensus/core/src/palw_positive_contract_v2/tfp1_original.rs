@@ -651,9 +651,34 @@ mod tests {
             ),
             Err(ContractError::Scope)
         );
-        let link = prepared.prepare_native_link_v1(&link_state, &link_point, admission_reservation).unwrap();
-        let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, link, &link_params);
         reservation.origin.carrier_transaction = NativeHash64(pairing.carrier().id().as_bytes());
+        // Populated inputs and prefix are explicit fixtures here. The native
+        // archive loader must obtain these from actual accepted stores.
+        let history_fee = 20;
+        let history_inputs = [crate::tx::UtxoEntry::new(
+            pairing.carrier().outputs.iter().map(|output| output.value).sum::<u64>() + history_fee,
+            crate::tx::ScriptPublicKey::default(),
+            1,
+            false,
+        )];
+        let history = admission
+            .prepare_tfp1_history_link_v1(
+                &link_state,
+                &link_point,
+                &pairing,
+                obligation,
+                &reservation,
+                admission_reservation,
+                Hash64::from_u64_word(804),
+                link_state.state_root(),
+                0,
+                &history_inputs,
+                history_fee,
+            )
+            .unwrap();
+        assert!(history.boundary_v1().check_populated_data(pairing.carrier(), &history_inputs, history_fee).is_ok());
+        assert!(history.boundary_v1().check_populated_data(pairing.carrier(), &history_inputs, history_fee + 1).is_err());
+        let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, history, &link_params);
         let paired = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
         assert_eq!(admission.restore_tfp1_pairing_v1(&linked, &pairing, &reservation).unwrap(), paired);
         assert!(admission.restore_tfp1_pairing_v1(&link_state, &pairing, &reservation).is_err());
@@ -982,6 +1007,21 @@ mod tests {
         };
         assert!(admission.prepare_tfp1_pairing_v1(&pairing, obligation, &wrong_supply).is_ok());
         assert!(admission.restore_tfp1_pairing_v1(&restored, &pairing, &wrong_supply).is_err());
+        // Table 198 alone cannot distinguish these raw timing inputs: the
+        // first-request deadline is unchanged. The rooted history commitment
+        // must reject them before the changed readiness can be used later.
+        let aliased_timing = PublicOriginalReservationV1 {
+            notice: FirstNoticeDemand {
+                missing_material_detected_by: reservation.notice.missing_material_detected_by + 1,
+                material_request_inclusion_daa: reservation.notice.material_request_inclusion_daa - 1,
+                ..reservation.notice
+            },
+            ..reservation
+        };
+        let aliased = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &aliased_timing).unwrap();
+        assert_eq!(aliased.companion.record(admission_reservation), paired.companion.record(admission_reservation));
+        assert_ne!(aliased.companion.material_request_ready_by, paired.companion.material_request_ready_by);
+        assert!(admission.restore_tfp1_pairing_v1(&restored, &pairing, &aliased_timing).is_err());
         let duplicate_reservation = PublicOriginalReservationV1 {
             origin: AcceptedOrigin { carrier_transaction: NativeHash64(duplicate_tx.id().as_bytes()), ..reservation.origin },
             ..reservation

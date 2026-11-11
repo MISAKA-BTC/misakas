@@ -273,12 +273,15 @@ impl TransitionBuilder<'_> {
         if table == crate::palw_positive_contract_v2::PUBLIC_MANIFEST_PAID_TABLE_V1 {
             return Err(PalwStateV2Error::KernelRouteRefused("paid ManifestRequest requires its native writer".into()));
         }
+        if table == crate::palw_tfp1_original_history_v1::PUBLIC_TFP1_HISTORY_TABLE_V1 {
+            return Err(PalwStateV2Error::KernelRouteRefused("TFP1 history requires its paired native writer".into()));
+        }
         self.apply_kernel_row_authorized_v1(table, key, new)
     }
 
     /// Called inside the original admission's existing checkpoint. No extras
     /// lane can inject a link prepared from a separately signed companion.
-    pub(super) fn install_public_tfp1_link_v1(
+    fn install_public_tfp1_link_v1(
         &mut self,
         point: &PalwBlockContextV2,
         prepared: &crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1PublicOriginalLinkV1,
@@ -296,6 +299,58 @@ impl TransitionBuilder<'_> {
         let bytes = Some(borsh::to_vec(row).expect("fixed TFP1 link serialization"));
         self.reserve_kernel_row_write_v1(table, &key, &bytes, false)?;
         self.apply_kernel_row_authorized_v1(table, key.to_vec(), bytes)
+    }
+
+    /// Link and history locator are one write unit inside the full original
+    /// checkpoint. Never attach a new locator to a previously rooted link.
+    pub(super) fn install_public_tfp1_history_link_v1(
+        &mut self,
+        point: &PalwBlockContextV2,
+        prepared: &crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1OriginalHistoryLinkV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_tfp1_original_history_v1::{PUBLIC_TFP1_HISTORY_TABLE_V1, Tfp1OriginalHistoryBoundaryV1};
+        let history = prepared.boundary_v1();
+        let key = history.claim.as_bytes();
+        history.check_insert_at_v1(point).map_err(|_| refused("TFP1 history has another accepting point"))?;
+        let link = prepared.link_v1().storage_row(&self.state, point).map_err(|_| refused("TFP1 history lacks its prepared link"))?;
+        let previous = self.state.kernel_route_state_v1().and_then(|r| r.aux.get(&(PUBLIC_TFP1_HISTORY_TABLE_V1, key.to_vec())));
+        match (link.is_some(), previous) {
+            (false, Some(bytes)) if Tfp1OriginalHistoryBoundaryV1::decode_row(&key, bytes).ok().as_ref() == Some(history) => {
+                return history.check_state_at_v1(&self.state, point).map_err(|_| refused("TFP1 history replay mismatch"));
+            }
+            (true, None) => {}
+            _ => return Err(refused("TFP1 link/history must be installed together")),
+        }
+        let mut quote = crate::palw_state_v2::native_writers::NativeWriteQuoteV1::new("paired TFP1 replay history");
+        quote.exact::<u8>(key.len() as u64)?.encoded(history)?.slots(2)?;
+        self.admit_native_write_v1(quote)?;
+        let bytes = Some(borsh::to_vec(history).expect("fixed TFP1 history serialization"));
+        self.reserve_kernel_row_write_v1(PUBLIC_TFP1_HISTORY_TABLE_V1, &key, &bytes, false)?;
+        // Temporary whole-state rollback is explicitly charged even when the
+        // compatibility native-value estimator is disabled. The production
+        // profile still needs bounded local undo before activation.
+        let checkpoint_bytes =
+            crate::palw_native_resource_v1::native_typed_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
+        let _checkpoint_owner = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(checkpoint_bytes)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let saved = (
+            self.state.clone(),
+            self.entries.len(),
+            crate::palw_court_observation_v1::checkpoint_v1(),
+            palw_claim_local_object_spans_v2::checkpoint(self),
+        );
+        if let Some(owner) = &_checkpoint_owner {
+            owner.materialized_v1();
+        }
+        let result = (|| {
+            self.install_public_tfp1_link_v1(point, prepared.link_v1())?;
+            history.check_state_at_v1(&self.state, point).map_err(|_| refused("TFP1 history/link mismatch"))?;
+            self.apply_kernel_row_authorized_v1(PUBLIC_TFP1_HISTORY_TABLE_V1, key.to_vec(), bytes)
+        })();
+        if result.is_err() {
+            self.restore(saved);
+        }
+        result
     }
 
     /// Paired pending-case and paid-rank installation at the current accepted

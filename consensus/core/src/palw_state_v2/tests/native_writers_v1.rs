@@ -898,11 +898,12 @@ pub(crate) fn prepare_tfp1_link_writer_fixture_v1(
 pub(crate) fn exercise_tfp1_link_writer_v1(
     state: PalwChainStateV2,
     point: PalwBlockContextV2,
-    prepared: crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1PublicOriginalLinkV1,
+    prepared: crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1OriginalHistoryLinkV1,
     params: &PalwStateParamsV2,
 ) -> PalwChainStateV2 {
     use crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1;
-    let (key, row) = prepared.storage_row(&state, &point).unwrap().unwrap();
+    use crate::palw_tfp1_original_history_v1::{PUBLIC_TFP1_HISTORY_TABLE_V1, rooted_tfp1_original_history_v1};
+    let (key, row) = prepared.link_v1().storage_row(&state, &point).unwrap().unwrap();
     let row = *row;
     let bytes = borsh::to_vec(&row).unwrap();
     let extras = PalwTransitionExtrasV1::default();
@@ -911,11 +912,15 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     assert!(builder.write_kernel_row_encoded_v1(PUBLIC_TFP1_LINK_TABLE_V1, &key, Some(&row)).is_err());
     assert!(builder.entries.is_empty());
     assert_eq!(builder.state, state);
-    builder.install_public_tfp1_link_v1(&point, &prepared).unwrap();
-    assert_eq!(builder.entries.len(), 1);
+    let history_bytes = borsh::to_vec(prepared.boundary_v1()).unwrap();
+    assert_eq!(history_bytes.len(), crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1::WIRE_BYTES);
+    assert!(builder.write_kernel_row(PUBLIC_TFP1_HISTORY_TABLE_V1, key.to_vec(), Some(history_bytes)).is_err());
+    builder.install_public_tfp1_history_link_v1(&point, &prepared).unwrap();
+    assert_eq!(builder.entries.len(), 2);
     assert_eq!(builder.state.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), Some(row));
-    builder.install_public_tfp1_link_v1(&point, &prepared).unwrap();
-    assert_eq!(builder.entries.len(), 1, "exact replay does not append a second journal write");
+    assert_eq!(rooted_tfp1_original_history_v1(&builder.state, row.claim_v1()).unwrap().as_ref(), Some(prepared.boundary_v1()));
+    builder.install_public_tfp1_history_link_v1(&point, &prepared).unwrap();
+    assert_eq!(builder.entries.len(), 2, "exact replay does not append more journal writes");
     builder.state.validate_public_verification_rows_v1().unwrap();
     assert!(builder.state.court_service_holds_claim_v1(&row.claim_v1()));
     assert!(
@@ -926,14 +931,22 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     let delta = PalwStateDeltaV2 { point, entries: builder.entries.clone() };
     let replayed = apply_delta_v2(&state, &delta, &params).unwrap();
     assert_eq!(replayed.state_root(), builder.state.state_root());
+    for missing in [PUBLIC_TFP1_LINK_TABLE_V1, PUBLIC_TFP1_HISTORY_TABLE_V1] {
+        let mut partial = delta.clone();
+        partial.entries.retain(|entry| !matches!(entry, PalwDeltaEntryV2::KernelRouteRow { table, .. } if *table == missing));
+        assert!(apply_delta_v2(&state, &partial, &params).is_err(), "forward journal lost one paired row");
+        assert!(revert_delta_v2(&replayed, &partial, &params).is_err(), "inverse journal lost one paired row");
+    }
     let reverted = revert_delta_v2(&replayed, &delta, &params).unwrap();
     assert_eq!(reverted.state_root(), state.state_root());
     assert_eq!(reverted.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), None);
+    assert_eq!(rooted_tfp1_original_history_v1(&reverted, row.claim_v1()).unwrap(), None);
     let encoded = borsh::to_vec(&PalwStateCarriageV2::from_state(&replayed)).unwrap();
     crate::palw_native_resource_v1::preflight_native_carriage_v1(&encoded[..], encoded.len() as u64).unwrap();
     let restored =
         borsh::from_slice::<PalwStateCarriageV2>(&encoded).unwrap().into_state(&params, Some(replayed.state_root())).unwrap();
     assert_eq!(restored.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), Some(row));
+    assert_eq!(rooted_tfp1_original_history_v1(&restored, row.claim_v1()).unwrap().as_ref(), Some(prepared.boundary_v1()));
     let mut missing_claim = replayed.clone();
     missing_claim.claims.remove(&row.claim_v1());
     assert!(missing_claim.public_tfp1_original_link_v1(row.claim_v1()).is_err());
@@ -945,7 +958,7 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     assert_eq!(erase.state_root(), replayed.state_root());
     let mut no_capacity = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     let _checker = zero_capacity(&mut no_capacity);
-    assert!(matches!(no_capacity.install_public_tfp1_link_v1(&point, &prepared), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(matches!(no_capacity.install_public_tfp1_history_link_v1(&point, &prepared), Err(PalwStateV2Error::NativeResource(_))));
     assert!(no_capacity.entries.is_empty());
     assert_eq!(no_capacity.state, state);
     restored

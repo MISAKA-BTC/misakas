@@ -52,7 +52,58 @@ pub(crate) struct PreparedTfp1PublicOriginalLinkV1 {
     pairing: PairedTfp1CarrierV1,
 }
 
+/// One intake candidate owns both the immutable link and the replay locator.
+/// No public DATA constructor or separately supplied boundary can create it.
+pub(crate) struct PreparedTfp1OriginalHistoryLinkV1 {
+    pub(super) link: PreparedTfp1PublicOriginalLinkV1,
+    boundary: crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1,
+}
+impl PreparedTfp1OriginalHistoryLinkV1 {
+    pub(crate) fn link_v1(&self) -> &PreparedTfp1PublicOriginalLinkV1 {
+        &self.link
+    }
+    pub(crate) fn boundary_v1(&self) -> &crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1 {
+        &self.boundary
+    }
+}
+
 impl PublicOriginalAdmissionV1<'_> {
+    /// Called by the original admission owner with the actual pre-object
+    /// builder boundary and validated UTXO entries. Complete policy, booking,
+    /// paid retention and FP/payer signature checks remain mandatory there.
+    pub(crate) fn prepare_tfp1_history_link_v1(
+        &self,
+        state: &PalwChainStateV2,
+        point: &PalwBlockContextV2,
+        pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        obligation: super::Tfp1PublicOriginalObligationV1,
+        inputs: &PublicOriginalReservationV1<'_>,
+        reservation: Digest,
+        selected_parent: Hash64,
+        pre_event_root: Hash64,
+        before_delta_end: usize,
+        entries: &[crate::tx::UtxoEntry],
+        fee: u64,
+    ) -> Result<PreparedTfp1OriginalHistoryLinkV1, ContractError> {
+        let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, inputs)?;
+        let boundary = crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1::from_actual_data_v1(
+            obligation.facts.claim,
+            obligation.facts.source,
+            prepared.companion.original,
+            inputs.origin,
+            selected_parent,
+            pre_event_root,
+            before_delta_end,
+            pairing.carrier(),
+            entries,
+            fee,
+            self,
+            inputs,
+        )?;
+        let link = prepared.prepare_native_link_v1(state, point, reservation)?;
+        Ok(PreparedTfp1OriginalHistoryLinkV1 { link, boundary })
+    }
+
     /// Restore a paired original from its literal accepted transaction and
     /// the admission inputs reconstructed at its original inclusion point.
     /// The current rooted link chooses profile/resource and origin; callers
@@ -63,9 +114,9 @@ impl PublicOriginalAdmissionV1<'_> {
     /// This method rechecks the companion signature and every stored admission
     /// field, but does not reconstruct the UTXO prefix or prove that a complete
     /// production reservation was installed.
-    /// In particular, table 198 retains deadlines, not all readiness inputs:
-    /// the history owner must rederive the full reservation/resource preimage
-    /// before calling. Equal stored deadlines alone are not that derivation.
+    /// Table 206 commits the full admission inputs, including raw readiness
+    /// inputs omitted from table 198. The history owner must reconstruct them
+    /// before calling; the commitment checks equality, not policy validity.
     pub(crate) fn restore_tfp1_pairing_v1(
         &self,
         state: &PalwChainStateV2,
@@ -76,6 +127,9 @@ impl PublicOriginalAdmissionV1<'_> {
         if inputs.origin != link.carrier.origin {
             return Err(ContractError::Scope);
         }
+        let history = crate::palw_tfp1_original_history_v1::rooted_tfp1_original_history_v1(state, pairing.claim())?
+            .ok_or(ContractError::Scope)?;
+        history.check_admission_inputs_v1(self, inputs)?;
         let frame = palw_tir_public_claim_v1(state, link.claim).ok_or(ContractError::Scope)?;
         let facts = link.check_frame(state, frame)?;
         let obligation = facts.service_obligation_v1(link.profile, link.resource)?;

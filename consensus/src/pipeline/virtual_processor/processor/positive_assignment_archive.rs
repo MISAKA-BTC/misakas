@@ -37,6 +37,7 @@ use kaspa_consensus_core::{
         NativeAssignmentRulesV2, NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2,
         PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
     },
+    palw_tfp1_original_history_v1::{Tfp1OriginalHistoryBoundaryV1, rooted_tfp1_original_history_v1},
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
     tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
@@ -61,22 +62,25 @@ use misaka_palw_positive_contract::{
 };
 
 /// Private concrete boundary selection. This is not a successful replay or
-/// arbitrary provider interface. Assignment and Case subjects stay distinct.
+/// arbitrary provider interface. Each subject keeps its own rooted boundary.
 enum NativeArchiveBoundaryV2 {
     Assignment(AssignmentControlBoundaryV2),
     Case(AssignmentCaseBoundaryV2),
+    Tfp1Original(Tfp1OriginalHistoryBoundaryV1),
 }
 impl NativeArchiveBoundaryV2 {
     fn fields(&self) -> (AcceptedOrigin, [u8; 64], [u8; 64], u64, u64) {
         match self {
             Self::Assignment(b) => (b.origin, b.selected_parent.0, b.pre_event_root.0, b.before_delta_end, b.fee),
             Self::Case(b) => (b.origin, b.selected_parent.0, b.pre_event_root.0, b.before_delta_end, b.fee),
+            Self::Tfp1Original(b) => (b.origin, b.selected_parent.0, b.pre_event_root.0, b.before_delta_end, b.fee),
         }
     }
     fn check_populated_data(&self, tx: &kaspa_consensus_core::tx::Transaction, entries: &[UtxoEntry], fee: u64) -> bool {
         match self {
             Self::Assignment(b) => b.check_populated_data(tx, entries, fee).is_ok(),
             Self::Case(b) => b.check_populated_data(tx, entries, fee).is_ok(),
+            Self::Tfp1Original(b) => b.check_populated_data(tx, entries, fee).is_ok(),
         }
     }
 }
@@ -116,10 +120,10 @@ pub(in crate::pipeline::virtual_processor) struct NativeCaseJournalCarriagesV2 {
     pub lease: NativeDemandLeaseV1,
 }
 
-struct NativeArchiveCarriageV2 {
-    carriage: NativeAcceptedCaseCarriageV2,
-    work: u64,
-    heap: u64,
+pub(super) struct NativeArchiveCarriageV2 {
+    pub(super) carriage: NativeAcceptedCaseCarriageV2,
+    pub(super) work: u64,
+    pub(super) heap: u64,
 }
 
 fn case_journal_fault_v2(error: CaseJournalChainErrorV2<StoreError>) -> NativeAssignmentArchiveErrorV2 {
@@ -946,6 +950,72 @@ impl VirtualStateProcessor {
         {
             return Err(E::Invalid("original actual Assignment carrier differs from journal"));
         }
+        Ok(accepted)
+    }
+
+    /// Restore the rooted TFO3 transaction and its exact historical native
+    /// prefix. The caller must still rederive admission and authenticate the
+    /// payer, FP and companion consents under the original policy.
+    pub(super) fn load_tfp1_original_carriage_v1(
+        &self,
+        current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
+        claim: kaspa_consensus_core::Hash64,
+        maximum_heap: u64,
+        maximum_work: u64,
+    ) -> Result<NativeArchiveCarriageV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::{
+            palw_claim_local_v1::prefix_v1::PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1,
+            palw_fp_answer_accounting_v1::PALW_FP_ANSWER_ENVELOPE_MAGIC_V1,
+            palw_tir_funded_original_envelope_v1::actual_funded_payload_v1,
+            palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3,
+        };
+
+        if [maximum_heap, maximum_work].into_iter().any(|limit| limit == 0 || limit == u64::MAX) {
+            return Err(E::Invalid("original archive limits are not finite"));
+        }
+        if current_state.last_point().map(|point| point.block) != Some(current_selected_parent) {
+            return Err(E::Invalid("TFO3 archive state does not name the selected parent"));
+        }
+        let boundary = rooted_tfp1_original_history_v1(current_state, claim)
+            .map_err(|_| E::Invalid("rooted TFO3 history boundary"))?
+            .ok_or(E::Unavailable("rooted TFO3 history boundary unavailable"))?;
+        let daa = boundary.origin.accepted_daa;
+        if !self.palw_tir_public_conviction_v1.is_some_and(|fence| fence.is_active(daa)) {
+            return Err(E::Invalid("TFO3 original is below its original funded fence"));
+        }
+
+        let mut accepted = self.load_positive_accepted_carriage_v2(
+            current_selected_parent,
+            current_state,
+            NativeArchiveBoundaryV2::Tfp1Original(boundary),
+            maximum_heap,
+            maximum_work,
+        )?;
+        let tx = accepted.carriage.transaction();
+        let mut remaining_work = maximum_work.checked_sub(accepted.work).ok_or(E::Unavailable("TFO3 archive replay work cap"))?;
+        // FPR2 can scan the entire wrapper, and TFO3's TFO2 path visits the
+        // funded body plus its nested TFO1. Charge all three visits before
+        // any typed scan (the direct form uses no more than this bound).
+        let framing_work = (tx.payload.len() as u64).checked_mul(3).ok_or(E::Unavailable("TFO3 archive framing work overflow"))?;
+        charge_archive_work_v2(&mut remaining_work, framing_work)?;
+        let prefixed = tx.payload.starts_with(PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1);
+        if prefixed && !self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_local_settlement_active_at(daa)) {
+            return Err(E::Invalid("TFO3 prefix wrapper was dormant at original acceptance"));
+        }
+        let payload = actual_funded_payload_v1(tx).map_err(|_| E::Invalid("original actual funded carrier framing"))?;
+        // The validated FPR2 view begins after its magic and u32 inner length.
+        // Inspect that original prefix to enforce the accounting fence even
+        // when the common unwrapping view has stripped both wrappers.
+        let accounting_offset = if prefixed { PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1.len() + size_of::<u32>() } else { 0 };
+        if tx.payload.get(accounting_offset..).is_some_and(|bytes| bytes.starts_with(PALW_FP_ANSWER_ENVELOPE_MAGIC_V1))
+            && !self.palw_fp_answer_accounting_v1.is_some_and(|fence| fence.is_active(daa))
+        {
+            return Err(E::Invalid("TFO3 answer wrapper was dormant at original acceptance"));
+        }
+        PalwTirFundedOriginalEnvelopeV3::decode_v3(payload).map_err(|_| E::Invalid("original actual carrier is not valid TFO3"))?;
+        accepted.work = maximum_work - remaining_work;
         Ok(accepted)
     }
 

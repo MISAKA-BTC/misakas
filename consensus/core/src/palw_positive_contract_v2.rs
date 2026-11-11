@@ -15,6 +15,7 @@ use crate::palw_native_resource_v1::{
     native_unit, wire::wire_struct,
 };
 use crate::palw_positive_check_v2::{CheckError, CheckLimits, CheckOutcome, CheckProgress, CoveragePlan, ExactChecker};
+use crate::palw_tfp1_original_history_v1::{PUBLIC_TFP1_HISTORY_TABLE_V1, Tfp1OriginalHistoryBoundaryV1};
 use crate::{
     Hash64, palw_attempt_rules_v1::palw_attempt_output_root_v1, palw_decode_select_v2::PalwDecodeSamplingV2,
     palw_prompt_ids_v1::PalwPromptIdsFormV1, palw_tir_class_v1::PalwTirClassV1, palw_tir_step_v1::PalwTirStepBindingV1,
@@ -64,6 +65,7 @@ pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
             | PUBLIC_COURT_RECORD_TABLE_V1
             | PUBLIC_TFP1_LINK_TABLE_V1
             | PUBLIC_MANIFEST_PAID_TABLE_V1
+            | PUBLIC_TFP1_HISTORY_TABLE_V1
     )
 }
 
@@ -77,6 +79,7 @@ pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u
         PUBLIC_COURT_RECORD_TABLE_V1 => PublicOriginalCourtRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_TFP1_LINK_TABLE_V1 => tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_MANIFEST_PAID_TABLE_V1 => tfp1_original::manifest_paid::PaidManifestRequestRowV1::decode_row(key, bytes).map(|_| ()),
+        PUBLIC_TFP1_HISTORY_TABLE_V1 => Tfp1OriginalHistoryBoundaryV1::decode_row(key, bytes).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -1232,7 +1235,7 @@ fn check_public_origin_after_draw_v1(
     Ok(())
 }
 
-fn require_current_public_origin_v1(
+pub(crate) fn require_current_public_origin_v1(
     origin: AcceptedOrigin,
     point: &crate::palw_state_v2::PalwBlockContextV2,
 ) -> Result<(), ContractError> {
@@ -1245,7 +1248,7 @@ fn require_current_public_origin_v1(
     Ok(())
 }
 
-fn check_public_origin_point_v1(
+pub(crate) fn check_public_origin_point_v1(
     origin: AcceptedOrigin,
     point: &crate::palw_state_v2::PalwBlockContextV2,
 ) -> Result<(), ContractError> {
@@ -1334,9 +1337,19 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             PUBLIC_DRAW_TABLE_V1 => self.decode_public_draw_row_v1(key, bytes).map(|_| ()),
             PUBLIC_REPLAY_APPROVAL_TABLE_V1 => self.decode_public_replay_approval_row_v1(key, bytes).map(|_| ()),
             PUBLIC_COURT_RECORD_TABLE_V1 => self.decode_public_court_row_v1(key, bytes).map(|_| ()),
-            PUBLIC_TFP1_LINK_TABLE_V1 => tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes)
-                .and_then(|row| row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)),
+            PUBLIC_TFP1_LINK_TABLE_V1 => {
+                tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes).and_then(|row| {
+                    row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)?;
+                    // Final-state validation (not the intermediate two-row
+                    // writer): a TFO3 link must have its immutable replay row.
+                    crate::palw_tfp1_original_history_v1::rooted_tfp1_original_history_v1(self, row.claim_v1())?
+                        .ok_or(ContractError::Scope)?;
+                    Ok(())
+                })
+            }
             PUBLIC_MANIFEST_PAID_TABLE_V1 => tfp1_original::manifest_paid::PaidManifestRequestRowV1::decode_row(key, bytes)
+                .and_then(|row| row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)),
+            PUBLIC_TFP1_HISTORY_TABLE_V1 => Tfp1OriginalHistoryBoundaryV1::decode_row(key, bytes)
                 .and_then(|row| row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)),
             _ => Err(ContractError::NonCanonical),
         };
@@ -1348,7 +1361,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     pub(crate) fn validate_public_verification_rows_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
         for ((table, key), bytes) in
-            route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_MANIFEST_PAID_TABLE_V1 + 1, Vec::new()))
+            route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_TFP1_HISTORY_TABLE_V1 + 1, Vec::new()))
         {
             self.validate_public_verification_row_v1(*table, key, bytes)?;
         }
@@ -1376,6 +1389,13 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 PaidManifestRequestRowV1::decode_row(key, bytes)
                     .and_then(|row| row.check_insert_at_v1(point))
                     .map_err(|_| PalwStateV2Error::DeltaMismatch("paid ManifestRequest insert has another accepting point"))?;
+            }
+            if *table == PUBLIC_TFP1_HISTORY_TABLE_V1 && !revert {
+                let bytes = new.as_deref().ok_or(PalwStateV2Error::DeltaMismatch("TFP1 history journal is insert-only"))?;
+                let point = self.last_point().ok_or(PalwStateV2Error::DeltaMismatch("TFP1 history insert has no point"))?;
+                Tfp1OriginalHistoryBoundaryV1::decode_row(key, bytes)
+                    .and_then(|row| row.check_insert_at_v1(point))
+                    .map_err(|_| PalwStateV2Error::DeltaMismatch("TFP1 history insert has another accepting point"))?;
             }
             if (if revert { old } else { new }).is_none() {
                 // A removed row could leave surviving records without a parent.
