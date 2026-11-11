@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::tfp1_tokenizer_intake_pins_native_container_and_signed_eof_without_changing_quote ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6014 filtered out; finished in 0.10s
+

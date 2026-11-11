@@ -1,0 +1,21 @@
+{
+  "codeCommit": "207a1f303",
+  "date": "2026-11-11",
+  "tests": {
+    "native_fixture": 1,
+    "batch_including_five_new_codec_transport_tests": 33,
+    "registration": 1,
+    "intake": 1,
+    "total": 36,
+    "failed": 0
+  },
+  "buildSeconds": 176,
+  "sourceHashesUnchanged": true,
+  "innerEnvelopeOnly": true,
+  "outerWireTagAllocated": false,
+  "nativePaidWriterImplemented": false,
+  "publicT12Queried": false,
+  "publicT12Submitted": false,
+  "profileActivated": false,
+  "mainPushed": false
+}

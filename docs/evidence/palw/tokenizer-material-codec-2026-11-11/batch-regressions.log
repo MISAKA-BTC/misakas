@@ -1,0 +1,38 @@
+
+running 33 tests
+test palw_court_shared_material_intake_v1::batch::admission::protected::tests::protected_compiled_cases_check_every_draft_and_fee_before_atomic_commit ... ok
+test palw_court_shared_material_intake_v1::batch::admission::tests::maximum_graph_with_latest_notice_and_recovery_is_atomic_at_10000 ... ok
+test palw_court_shared_material_intake_v1::batch::constraint_stop::tests::stop_full_ids_open_range_counts_each_native_chunk ... ok
+test palw_court_shared_material_intake_v1::batch::constraint_stop::tests::batch_stop_reserves_verified_full_ids_before_the_stop ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::begin_slots_reconstruct_the_reserved_partition ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::demand_partitions_fit_the_wire_caps_without_reordering_positions ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::envelope_preserves_every_position_without_combining_root_material ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::exact_lengths_cannot_substitute_or_reorder_selected_targets ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::later_roots_can_change_the_partition_of_an_earlier_selection ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::selected_root_uses_booked_partitions_even_when_its_ranges_are_smaller ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::signed_ranges_bind_the_target_identity_size_and_authentication ... ok
+test palw_court_shared_material_intake_v1::batch::native_ranges::tests::verification_visits_every_required_group_and_ignores_the_reserved_tail ... ok
+test palw_court_shared_material_intake_v1::batch::numerical_verification::tests::numerical_replay_quotes_both_passes_and_rejects_unfunded_work ... ok
+test palw_court_shared_material_intake_v1::batch::plain_output::tests::plain_output_control_length_and_signing_scope_v2 ... ok
+test palw_court_shared_material_intake_v1::batch::plain_tokenizer::material::tests::bct2_tokenizer_input_material_checks_body_and_native_prompt_commitments ... ok
+test palw_court_shared_material_intake_v1::batch::plain_tokenizer::material::tests::bct2_tokenizer_opening_material_scans_borsh_and_checks_path_geometry ... ok
+test palw_court_shared_material_intake_v1::batch::numerical_verification::tests::numerical_signature_binds_notice_leaf_policy_and_network ... ok
+test palw_court_shared_material_intake_v1::batch::selection::delivery::tests::bct2_selection_delivery_covers_canonical_rows_and_distinct_roles ... ok
+test palw_court_shared_material_intake_v1::batch::selection::tests::bct2_plain_selection_source_geometry_matches_complete_legacy_dependencies ... ok
+test palw_court_shared_material_intake_v1::batch::tests::accepted_demand_fixes_native_range_and_delivery_window ... ok
+test palw_court_shared_material_intake_v1::batch::tests::batch_signature_and_draft_refuse_cross_request_reuse ... ok
+test palw_court_shared_material_intake_v1::batch::tests::draft_ceiling_counts_only_owned_immutable_packet_costs ... ok
+test palw_court_shared_material_intake_v1::batch::tests::funded_batch_delivery_binds_signed_fragments_and_fits_parallel_slots ... ok
+test palw_court_shared_material_intake_v1::batch::tests::latest_case_refuses_finish_on_draft_expiry_atomically ... ok
+test palw_court_shared_material_intake_v1::batch::tests::maximum_response_slots_exist_before_the_signed_declaration ... ok
+test palw_court_shared_material_intake_v1::batch::tests::missed_inactive_route_does_not_block_selected_finish_repair ... ok
+test palw_court_shared_material_intake_v1::batch::tests::missing_batch_part_repair_keeps_retained_begin_and_expiry ... ok
+test palw_court_shared_material_intake_v1::batch::tests::opening_requires_all_owned_response_slots_and_the_native_draft_window ... ok
+test palw_court_shared_material_intake_v1::batch::tests::repair_excludes_only_the_unused_tail_of_an_owned_response ... ok
+test palw_court_shared_material_intake_v1::batch::tokenizer_transport::tests::tokenizer_assembly_rejects_gaps_duplicates_foreign_drafts_and_wrong_hash ... ok
+test palw_court_shared_material_intake_v1::batch::selection::budget::tests::bct2_selection_terminal_bounds_match_signed_and_archive_codecs ... ok
+test palw_court_shared_material_intake_v1::batch::tokenizer_transport::tests::tokenizer_envelope_rejects_unbounded_parts_without_allocating ... ok
+test palw_court_shared_material_intake_v1::batch::tokenizer_transport::tests::tokenizer_envelope_binds_every_coordinate_and_preserves_literal_lengths ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 5982 filtered out; finished in 0.90s
+

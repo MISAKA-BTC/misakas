@@ -304,3 +304,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 `6511a880e`の[burn停止planner回帰2件](../../../evidence/palw/model-burn-pause-planner-2026-11-11/README.md)が成功した。登録者不在をgenesisとみなす旧便宜関数に頼らず、実genesis objectのexact class/rootと明示catalogに基づいて対象外を判定する。未知owner、古いsequence、誤scope/rootを拒否し、年次指定後のpause無効化を確認した。実署名・支払・state保存と公開停止には未接続。
 
 2026-11-11 の[tokenizer資料と普通TFP1の共通予約](../../../evidence/palw/plain-tokenizer-batch-reservation-2026-11-11/README.md): `970845a14`で受理済み登録に束縛した入力ID・rendering/EOG資料を数値/FullIdsと同じ予約計算へ接続した。FullIdsは共有し、semantic Finishをその後の別phaseに置き、資料認証・Verify・terminalの費用と元draft期限を計上する。対象と回帰31件が成功。新case専用wire/native writer・全Selection/資料未着時の回復・保護枠・TFO3 atomic受理・公開profileは未接続で、公開quote/受付/Final/main pushの達成ではない。HF取得認定は追加せず、モデルroot/hash・claim資料・局所courtを維持する。
+
+2026-11-11 の[tokenizer資料codecと署名付き断片](../../../evidence/palw/tokenizer-material-codec-2026-11-11/README.md): `207a1f303`でcanonical入力ID・EOG/rendering bodyの有界codec、全scopeに署名を束縛した内側Begin/Part/Finish、応答者別draftと断片復元を実装した。実encoded長を予約の下限へ反映し、入力/出力の同時保持・再ハッシュも予算へ加算。native fixture・既存Batch・登録/受付境界の計36件が成功。外側タグ、実費/予約枠からのnative writer、保存/undoと公開受付は未接続。body hash一致だけで完成行を書かず、typed認証を必要とする。公開T12への照会・配備・送信は行っていない。
