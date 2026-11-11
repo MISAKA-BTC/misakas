@@ -21,3 +21,11 @@ original/class/UTXO/予約graphは局所fixture。公開T12のquote・受付・F
 上記で失敗を記録したsource文字列検査は、dispatcherではなく実際のobject handler本文だけを調べるよう修正した。3つのclass ladder参照のassertionは保持し、今回PASSした。過去の失敗ログは保持する。BCT2のfault・Holds・archiveとSelectionの署名裁定も同じbinaryで再確認した。
 
 この索引段階はterminalの全prefix cloneを除去するものではない。原子的なjournal inverseには、claim/courtの返金が失敗する前にprimary rowを書き換えてしまう箇所など、残るwriter順序とscratch観測の修正が必要。
+
+## Refund journal and ordinary-node Selection ownership
+
+`8b49e6192` と `64ce2db52` の[合同回帰13件](writer-owner-summary.json)が成功した。claimがDefaultDisputedから離れる返金と、旧court削除時の返金をprimary row/indexの変更前に記録する。courtのExposure→Courtというjournal順序は維持し、両entryの容量を先に確保する。journal空き1枠・追加RAM 0のnative builderで返金＋削除を拒否し、state/index/journal不変を確認した後、容量のあるbuilderで同じ削除が成功した。
+
+Selection adapterはoptional global flagに依存しないpending leaseを構築前に取り、保持する。依存先Vecの実capacityと予約capacityの一致、既存graphと同じhard deadline overflow拒否も追加した。既存の7ケースでconstructorの非空ownerとdependency ownerの正確なbytesを照合した。担当agentの独立レビューで、source/role/相対・絶対IDの一致と、dutyの一致が予約bookの一致を意味しない境界を再確認した。
+
+archiveだけの狭いinverseとBCT2全体のinverseは引き続き未完。Selectionの物理資料・program fill・証拠再検査の費用、公開予約・搬送はこのdescriptor ownerに含まれない。全prefix cloneの除去・公開quote成功・activationを主張しない。

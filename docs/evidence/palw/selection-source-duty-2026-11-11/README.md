@@ -9,3 +9,5 @@ core/RPCのlibrary test buildは4分30秒で成功。対象テスト2件が成�
 これは受付済みfixtureを使った裁定adapterの試験であり、受付前のcomplete plannerではない。descriptorのownerは依存先配列だけを所有し、資料・program fill・proof clone・再検査scratchを代替しない。Batch Selection notice、実際の予約・有料搬送・DA/default回復、全branchのquote/fold共通計算と公開profileは未完。公開quote・受付・Final・main pushの成功として扱わない。
 
 文書検査は既存の930 issue occurrences、971 missing-file、2 missing-heading、RFC歴史検査7件・ADR歴史検査89件で失敗し、前段階から増えていない。baselineは更新していない。
+
+`8b49e6192` で独立レビューの指摘を反映し、通常起動時にも明示pending ownerを保持し、実Vec capacityとhard deadlineの境界を検査するよう修正した。[合同回帰13件の記録](../batch-plain-output-rollback-holds-2026-11-11/README.md#refund-journal-and-ordinary-node-selection-ownership)。過去のsource/logは変更していない。

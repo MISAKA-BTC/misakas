@@ -1,0 +1,260 @@
+diff --git a/consensus/core/src/palw_batch_plain_output_native_tests_v2.rs b/consensus/core/src/palw_batch_plain_output_native_tests_v2.rs
+index c9ef45c0a..be007a06c 100644
+--- a/consensus/core/src/palw_batch_plain_output_native_tests_v2.rs
++++ b/consensus/core/src/palw_batch_plain_output_native_tests_v2.rs
+@@ -514,3 +514,67 @@ fn bct2_terminal_owns_nested_court_archive_rollback() {
+     assert_eq!(b.state.court_end_archive_v1(id).unwrap().session, session);
+     assert!(!b.plain_output_terminal_checkpoint_active_v2);
+ }
++
++#[test]
++fn bct2_inverse_prerequisite_reserves_legacy_court_refund_and_removal_together() {
++    use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
++    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
++    let fx = palw_tir_public_frame_fixture_v1(None, 4);
++    let frame = &fx.frame;
++    let (state, params, extras) = world(&fx, frame);
++    let params = params.with_rcore_plus_mirrors(None, 12_900, Vec::new());
++    let claim = frame.plan_v1().original_claim;
++    let record = state.claim(&claim).unwrap();
++    let challenger = outsider();
++    let opened = record.accepted_daa + 1;
++    let ladder = PalwBisectLadderV1::open_at_named_leaf(
++        &claim,
++        &record.trace_root,
++        &crate::palw_court_v2::court_party_id_v2(&challenger),
++        &crate::palw_court_v2::court_party_id_v2(&record.bond),
++        PalwBisectSpaceV1::StepLeaves,
++        frame.header_v1().step_leaf_count,
++        FORGED_LEAF as u64,
++        opened,
++        opened + 1,
++    )
++    .unwrap();
++    let session = ladder.session_id();
++    let mut setup = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
++    setup.state.reserved_exposure.insert(challenger, record.reserved + 7);
++    setup
++        .write_court(
++            session,
++            Some(PalwCourtSessionStateV2 {
++                claim,
++                challenger_bond: challenger,
++                opened_daa: opened,
++                deadline_daa: opened + 3,
++                ladder,
++                dissection: None,
++            }),
++        )
++        .unwrap();
++    let state = setup.state;
++
++    let mut candidate = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
++    // A previously admitted prefix owns two journal slots and already uses
++    // one. No additional allocation can be admitted during this attempt.
++    candidate.entries = Vec::with_capacity(2);
++    candidate.entries.push(PalwDeltaEntryV2::Exposure { key: challenger, old: None, new: Some(record.reserved + 7) });
++    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
++    candidate.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
++    assert!(matches!(candidate.write_court(session, None), Err(PalwStateV2Error::NativeResource(_))));
++    assert_eq!(candidate.state, state);
++    assert_eq!(candidate.entries.len(), 1);
++
++    let mut retry = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
++    retry.write_court(session, None).unwrap();
++    assert_eq!(retry.state.reserved_exposure(&challenger), 7);
++    assert!(retry.state.court_session(&session).is_none());
++    assert!(matches!(
++        retry.entries.as_slice(),
++        [PalwDeltaEntryV2::Exposure { key, .. }, PalwDeltaEntryV2::Court { key: removed, .. }]
++        if *key == challenger && *removed == session
++    ));
++}
+diff --git a/consensus/core/src/palw_court_shared_selection_native_tests.rs b/consensus/core/src/palw_court_shared_selection_native_tests.rs
+index 88600b449..18bcf7dd5 100644
+--- a/consensus/core/src/palw_court_shared_selection_native_tests.rs
++++ b/consensus/core/src/palw_court_shared_selection_native_tests.rs
+@@ -51,8 +51,16 @@ fn shared_selection_family_actual_rules_and_runtime_tiles_recheck(){
+         let duty=universe.project_native_v1(Target{position:pos,beat},visits).unwrap();
+         let source_universe=crate::palw_court_shared_tir_builder_store_v1::selection_terminal::NativeSelectionSourceUniverseV2::derive_native_v2(
+             frame,&source,profile,duty.dependencies_v1().len() as u64).unwrap();
++        let (value,lease)=source_universe.into_parts_v1();
++        assert!(lease.as_ref().is_some_and(|lease| lease.memory_v1()>0),"explicit owner also on ordinary nodes");
++        let source_universe=crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(value,lease);
+         assert_eq!(source_universe.len_v2(),universe.len_v1());
+         let source_duty=source_universe.project_native_v2(Target{position:pos,beat}).unwrap();
++        let (value,lease)=source_duty.into_parts_v1();
++        let expected=std::mem::size_of::<crate::palw_court_shared_tir_builder_store_v1::selection_terminal::NativeSelectionDutyV1>() as u64
++            +value.dependencies_v1().len() as u64*std::mem::size_of::<crate::palw_court_shared_tir_builder_store_v1::selection_terminal::SelectionDependencyV1>() as u64;
++        assert_eq!(lease.as_ref().map(|lease| lease.memory_v1()),Some(expected));
++        let source_duty=crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(value,lease);
+         assert_eq!(*source_duty,*duty,"source-only projection retains every legacy identity and dependency");
+         let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
+         assert_eq!(duty.dependencies_v1().len() as u64,(tiles+1)*roles);
+diff --git a/consensus/core/src/palw_court_shared_selection_terminal_v1.rs b/consensus/core/src/palw_court_shared_selection_terminal_v1.rs
+index 8c64b6a24..bb55af673 100644
+--- a/consensus/core/src/palw_court_shared_selection_terminal_v1.rs
++++ b/consensus/core/src/palw_court_shared_selection_terminal_v1.rs
+@@ -198,8 +198,15 @@ impl<'a> NativeSelectionSourceUniverseV2<'a> {
+         profile: Hash64,
+         maximum_dependencies: u64,
+     ) -> Result<NativeRetainedV1<Self>, E<String>> {
+-        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(frame_quote::<Self>(frame)?).map_err(E::Resource)?;
++        let lease =
++            crate::palw_native_resource_v1::reserve_native_pending_requests_v1(frame_quote::<Self>(frame)?).map_err(E::Resource)?;
+         frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
++        frame
++            .plan_v1()
++            .terms
++            .accepted_daa
++            .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
++            .ok_or_else(|| bad("plain Selection original hard deadline overflow"))?;
+         let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+         // Only the immutable original's liability pledge supplies the roles.
+         let roles = frame.custody_v1().pledge_v1().maximum_custodians;
+@@ -225,7 +232,7 @@ impl<'a> NativeSelectionSourceUniverseV2<'a> {
+     }
+ 
+     pub(crate) fn project_native_v2(&self, target: SelectionTargetV1) -> Result<NativeRetainedV1<NativeSelectionDutyV1>, E<String>> {
+-        self.project_native_reserved_v2(target, crate::palw_native_resource_v1::reserve_native_requests_v1)
++        self.project_native_reserved_v2(target, crate::palw_native_resource_v1::reserve_native_pending_requests_v1)
+     }
+ 
+     pub(crate) fn project_native_reserved_v2<F>(
+@@ -248,6 +255,9 @@ impl<'a> NativeSelectionSourceUniverseV2<'a> {
+         let cap = usize::try_from(count).map_err(|_| resource("plain Selection dependency platform overflow"))?;
+         let mut deps = Vec::new();
+         deps.try_reserve_exact(cap).map_err(|_| resource("plain Selection dependency allocation"))?;
++        if deps.capacity() != cap {
++            return Err(resource("plain Selection dependency allocator exceeded admitted capacity"));
++        }
+         let roles = self.frame.custody_v1().pledge_v1().maximum_custodians;
+         for index in 0..count {
+             let material = self.shape.material_at_v2(self.source, target.position, target.beat, index).map_err(E::Decode)?;
+diff --git a/consensus/core/src/palw_state_v2/transition_builder.rs b/consensus/core/src/palw_state_v2/transition_builder.rs
+index 702659b72..c0cfd9e75 100644
+--- a/consensus/core/src/palw_state_v2/transition_builder.rs
++++ b/consensus/core/src/palw_state_v2/transition_builder.rs
+@@ -1002,6 +1002,36 @@ impl<'a> TransitionBuilder<'a> {
+         if let Some(claim) = &new {
+             super::palw_claim_local_prefix_financial_archive_v4::on_terminal_v4(self, key, claim)?;
+         }
++        // **ADR-0062 SA-1: the accuser's stake comes back HERE**, for the reason `write_court`
++        // gives about the challenger's — one site that every door already passes through.
++        //
++        // `DefaultDisputed` is the first phase in this ruleset that holds a SECOND bond's
++        // reservation, and a claim leaves it by more doors than the DA session's own sweep: the
++        // disclosure arm resumes it, a `CourtClosed { ExecutorGuilty }` on a session that was
++        // already open voids it, and so does `ProducerDefaulted` wherever ADR-0065 D4 is not
++        // armed. None of those knows what an accusation cost — `release_for_claim` gives back
++        // what the PRODUCER put up — and a release each of them had to remember is a release one
++        // of them eventually will not.
++        //
++        // Left behind, the accuser's sompi are state the fold WRITES and cannot READ BACK:
++        // `assert_internal_consistency` rebuilds this ledger from the claims, so the next
++        // `load_tip` refuses the snapshot the chain just wrote, on every node at once.
++        //
++        // Only when the claim STOPS being disputed — a rewrite that leaves the phase in place
++        // must not give the stake back while the session is still open. Saturating for the reason
++        // the challenger's release is: a ledger that cannot go negative is worth more here than
++        // an error nobody can clear.
++        // Record it before replacing the claim and indexes so a resource
++        // refusal leaves no claim mutation without a matching journal row.
++        if let Some(previous) = self.state.claims.get(&key)
++            && let PalwClaimPhaseV2::DefaultDisputed { accuser, accuser_exposure, .. } = &previous.phase
++            && !matches!(new.as_ref().map(|record| &record.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
++        {
++            let (accuser, accuser_exposure) = (*accuser, *accuser_exposure);
++            let held = self.state.reserved_exposure.get(&accuser).copied().unwrap_or(0);
++            let back = held.saturating_sub(accuser_exposure);
++            self.write_exposure(accuser, if back == 0 { None } else { Some(back) })?;
++        }
+         let old = self.state.replace_claim_row_v2(key, new.clone());
+         // ADR-0160 F-W: the bond's staged weight, held reservation and capped term follow the record.
+         self.weight_cap_on_write(old.as_ref(), new.as_ref());
+@@ -1051,34 +1081,6 @@ impl<'a> TransitionBuilder<'a> {
+         // the row with it: the write is recorded as a delta entry like any other, so a reorg that
+         // undoes the commitment undoes its row and the credit is recomputed on the new chain.
+         let _ = &old;
+-        // **ADR-0062 SA-1: the accuser's stake comes back HERE**, for the reason `write_court`
+-        // gives about the challenger's — one site that every door already passes through.
+-        //
+-        // `DefaultDisputed` is the first phase in this ruleset that holds a SECOND bond's
+-        // reservation, and a claim leaves it by more doors than the DA session's own sweep: the
+-        // disclosure arm resumes it, a `CourtClosed { ExecutorGuilty }` on a session that was
+-        // already open voids it, and so does `ProducerDefaulted` wherever ADR-0065 D4 is not
+-        // armed. None of those knows what an accusation cost — `release_for_claim` gives back
+-        // what the PRODUCER put up — and a release each of them had to remember is a release one
+-        // of them eventually will not.
+-        //
+-        // Left behind, the accuser's sompi are state the fold WRITES and cannot READ BACK:
+-        // `assert_internal_consistency` rebuilds this ledger from the claims, so the next
+-        // `load_tip` refuses the snapshot the chain just wrote, on every node at once.
+-        //
+-        // Only when the claim STOPS being disputed — a rewrite that leaves the phase in place
+-        // must not give the stake back while the session is still open. Saturating for the reason
+-        // the challenger's release is: a ledger that cannot go negative is worth more here than
+-        // an error nobody can clear.
+-        if let Some(previous) = &old
+-            && let PalwClaimPhaseV2::DefaultDisputed { accuser, accuser_exposure, .. } = &previous.phase
+-            && !matches!(new.as_ref().map(|record| &record.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
+-        {
+-            let (accuser, accuser_exposure) = (*accuser, *accuser_exposure);
+-            let held = self.state.reserved_exposure.get(&accuser).copied().unwrap_or(0);
+-            let back = held.saturating_sub(accuser_exposure);
+-            self.write_exposure(accuser, if back == 0 { None } else { Some(back) })?;
+-        }
+         self.entries.push(PalwDeltaEntryV2::Claim { key, old, new });
+         Ok(())
+     }
+@@ -8869,6 +8871,21 @@ impl<'a> TransitionBuilder<'a> {
+         if new_claim != old_claim && new_claim.is_some() {
+             self.reserve_index_members_v1::<(Hash64, Hash64), ()>(1, "native claim court session index")?;
+         }
++        // Legacy challengers recover their exposure when the court closes.
++        // The refund and the court have separate journal entries. Reserve
++        // both before mutation, and record the refund before replacing the
++        // session so a refused refund cannot leave unjournaled indexes.
++        if new.is_none()
++            && self.params.rcore_plus_from_daa().is_none()
++            && let Some(previous) = self.state.court_sessions.get(&key)
++            && let Some(claim) = self.state.claims.get(&previous.claim)
++        {
++            let challenger = previous.challenger_bond;
++            let held = self.state.reserved_exposure.get(&challenger).copied().unwrap_or(0);
++            let back = held.saturating_sub(claim.reserved);
++            self.reserve_journal_slots_v1(2, "native legacy court refund and removal")?;
++            self.write_exposure(challenger, (back != 0).then_some(back))?;
++        }
+         let old = match &new {
+             Some(record) => self.state.court_sessions.insert(key, record.clone()),
+             None => self.state.court_sessions.remove(&key),
+@@ -8890,28 +8907,6 @@ impl<'a> TransitionBuilder<'a> {
+             // The old DAA is the exact stored key, even when the
+             // class/claim has changed since scheduling the session.
+             self.state.replace_court_deadline_v2(key, None);
+-            // **The challenger's stake comes back HERE**, so reserve and release are one pair in
+-            // one place. Opening a court charges the challenger the claim's own `reserved`; five
+-            // different sites remove a session — two sweeps, a close, a retirement, a re-open —
+-            // and a release each of them had to remember is a release one of them eventually will
+-            // not. The claim is still present at every removal (`retire_claim` closes its sessions
+-            // before it drops the claim), and a session whose claim is somehow gone had nothing
+-            // countable to give back.
+-            //
+-            // Only on a REMOVAL. `write_court` is also how a session is rewritten in place — the
+-            // abandoned-ladder refresh re-indexes the same session under the backstop — and giving
+-            // the stake back there would release it without the session ending, so a challenger
+-            // would hold an open court for free after one refresh.
+-            // ADR-0152 A-6: past `palw_rcore_plus` a court's stake never entered `reserved_exposure`
+-            // (`reserve_challenger_v1`), so nothing comes back out of it.
+-            if new.is_none()
+-                && self.params.rcore_plus_from_daa().is_none()
+-                && let Some(claim) = self.state.claims.get(&previous.claim)
+-            {
+-                let held = self.state.reserved_exposure.get(&previous.challenger_bond).copied().unwrap_or(0);
+-                let back = held.saturating_sub(claim.reserved);
+-                self.write_exposure(previous.challenger_bond, if back == 0 { None } else { Some(back) })?;
+-            }
+         }
+         if let Some(record) = &new {
+             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;

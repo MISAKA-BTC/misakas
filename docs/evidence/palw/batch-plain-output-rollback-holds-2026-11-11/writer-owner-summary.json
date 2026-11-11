@@ -1,0 +1,30 @@
+{
+  "source_commit": "64ce2db523b4063f6bd41d2ed511d70a395a7c9a",
+  "selection_owner_commit": "8b49e619226c2d32ce36728247186d92e607899d",
+  "files_sha256": {
+    "consensus/core/src/palw_batch_plain_output_native_tests_v2.rs": "29e02163e25fc03389f5ddeae663742256d85601b7bbe3b5aa8a38d8bbca8885",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "07b5d74359d534c7bb903596e4d1ba897cc67c12c60c83d1ca225d091a3c1e48",
+    "consensus/core/src/palw_court_shared_selection_terminal_v1.rs": "a67ef4670c726a3a48218d94921365ea9d603b0e1a816f87ab711d1c52d0e9bf",
+    "consensus/core/src/palw_court_shared_selection_native_tests.rs": "192b4d60c9e0655b2d7b38ae97843b75fd6d5e14bad1b605d75157fcccf75f55"
+  },
+  "binary_sha256": "f78f16e0f66840764c25211b42f0d34b12bed8ce391e46d218fdbba8e5689750",
+  "tests_passed": 13,
+  "logs_sha256": {
+    "writer-owner-build.log": "34dad53bded482eeac233138a5256fb0b73931334b94839e5c41667a74d8eb17",
+    "writer-owner-tests.log": "e54d3a54598c48010b6f54d42c72dcb762f90d443c2677afc19e31b157172602",
+    "writer-owner-source.patch": "074719cb0d210241e9d666b73a5f7f428e6fcde7a91a30948c31ace9c3355812",
+    "writer-owner-docs-check.log": "27acd965e77ff0af0021d121256137a2f086dcf96a06f173c816a4000331173d",
+    "writer-owner-rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "writer-owner-adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd"
+  },
+  "complete_scoped_undo": false,
+  "public_activation_or_admission": false,
+  "documentation_checks": {
+    "existing_issues_unchanged": true,
+    "new_issue_occurrences": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  }
+}
