@@ -1,0 +1,20 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+error[E0382]: borrow of moved value: `request`
+   --> consensus/core/src/palw_positive_contract_v2/tfp1_original.rs:721:51
+    |
+691 |         let request = paired
+    |             ------- move occurs because `request` has type `ManifestRequest`, which does not implement the `Copy` trait
+...
+698 |         let request_wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
+    |                                                                     ------- value moved here
+...
+721 |         assert_eq!(rooted.case_v1().case_id_v1(), request.case_id(&companion, request_context.claimant).unwrap());
+    |                                                   ^^^^^^^ value borrowed here after move
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+698 |         let request_wire = borsh::to_vec(&SignedManifestRequestV1 { request: request.clone(), key, signature: *signature.as_ref() }).unwrap();
+    |                                                                            +++++++++++++++++
+
+For more information about this error, try `rustc --explain E0382`.
+error: could not compile `kaspa-consensus-core` (lib test) due to 1 previous error

@@ -6,6 +6,8 @@
 
 独自モデル重み全量配信は廃止候補として依存を棚卸しする。モデル用の消失訂正・分散再配布・Node可用性サンプリングは必須経路から除外する。モデルroot/hash照合、claim固有入力/trace/Merkle opening、Nodeの局所courtは維持する。共用HTTP providerや局所証拠用のモデルopeningを一括削除しない。
 
+新profileのMinerにモデル重み全量の配信義務はない。モデル全体の取得元はHF、Minerの供給対象はclaim固有資料と局所反証に必要なopeningである。残す資料codec・provider・保存リンクを、モデル全量配信の再導入へつなげない。旧契約を保持する互換コードと全量配信専用コードの削除完了は区別する。
+
 ## 最小実装と境界
 
 `consensus/core/src/palw_model_pause_v1.rs`の純粋なplannerで、受理済みclass・artifact root・正規登録者、明示genesis/annual指定、期待旧state/sequenceを解決する。Pauseは誰でも、Resumeは登録者の認証を必要とし、別々の正の有限burn条件を導出する。返り値は未署名候補であり、native受理・実支払・状態書込みの権限ではない。

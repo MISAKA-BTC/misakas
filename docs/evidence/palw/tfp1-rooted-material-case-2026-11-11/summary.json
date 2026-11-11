@@ -1,0 +1,21 @@
+{
+  "code_commit": "026fb6335529583096268a869fde7381f0080d3f",
+  "tests": {
+    "targeted": 1,
+    "regressions": 13,
+    "failed": 0
+  },
+  "actual_signature_checks": [
+    "PublicOriginal companion",
+    "ManifestRequest"
+  ],
+  "fixture_inputs": [
+    "accepted native FP frame",
+    "funding escrow",
+    "draw membership"
+  ],
+  "public_activation": false,
+  "public_claim_admission": false,
+  "paid_response_writer_connected": false,
+  "main_push": false
+}

@@ -27,6 +27,8 @@ HF取得不能の証明、登録検査者集合、可用性への投票・多数
 
 「廃止候補」は全配信コードの削除完了を意味しない。claim資料や局所courtと共有するprovider・Merkle・保存処理を一括削除しない。局所courtに必要なモデル由来operandのopeningも、モデル全量配信とは別に維持する。off-chain downloaderの通常の通信再試行は許すが、その結果を停止・解除の裁定に使わない。
 
+ユーザーの追加確認に従い、新profileではMinerにモデル重み全量の独自配信義務を課さない。Panelはモデル全体をHFから取得し、Minerはclaim固有の入力・trace・必要なopeningを供給する。この責務分離を、モデルroot/hashの照合や局所courtに必要な限定的なモデル断片の認証を廃止する意味に解釈しない。旧profileの署名済み契約を読み替えず、不要になった全量配信専用コードは共用部分への依存を確認して削除する。
+
 ## 2. 対象モデル
 
 - 対象はcanonicalに登録された追加モデルの固定class ID。artifact root、登録者identityとの対応は受理済みnative登録から取得し、申告者の自己申告を使わない。
