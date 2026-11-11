@@ -7,8 +7,8 @@
 //! (ADR-0067 Decision 2) needs the declaration.
 //!
 //! So this store keeps what the wire delivered, verbatim: per class id, the Borsh bytes of the
-//! `PalwClassAdmissionCarriageV2` the ACCEPTED registration carried, written where the lifecycle
-//! filter accepts the object. IBD replays the same filter over the same chain blocks, so a
+//! `PalwClassAdmissionCarriageV2` the ACCEPTED registration carried, written in the block's
+//! UTXO/PALW commit. IBD replays the same filter over the same chain blocks, so a
 //! syncing node builds the same index without a separate backfill walk.
 //!
 //! # Why verbatim bytes, and why append-only
@@ -120,9 +120,10 @@ impl DbPalwClassCarriageStore {
         self.access.write(DirectDbWriter::new(&self.db), class_id, Arc::new(record))
     }
 
-    /// Genesis and pruning-snapshot declarations share their PALW commit. Do not publish
-    /// a positive cache row before the containing RocksDB batch commits.
-    /// The caller retains its store write guard through that commit.
+    /// Stage a chain registration, genesis or pruning declaration in its PALW commit.
+    /// The existing cache is invalidated and the staged value never enters it.
+    /// Retain the shared store write guard through commit or abandonment so a
+    /// reader cannot re-cache the old durable row while the batch is pending.
     pub(crate) fn insert_batch(
         &mut self,
         batch: &mut rocksdb::WriteBatch,
@@ -178,5 +179,70 @@ mod tests {
         db.write(committed).unwrap();
         assert_eq!(*store.get(id).unwrap(), record);
         assert_eq!(*DbPalwClassCarriageStore::new(db, CachePolicy::Count(16)).get(id).unwrap(), record);
+    }
+
+    #[test]
+    fn registration_batch_replaces_cached_carriage_only_with_its_palw_delta() {
+        use crate::model::stores::palw_state_v2::DbPalwStateV2Store;
+        use kaspa_consensus_core::{
+            palw_state_v2::{
+                PalwBlockContextV2, PalwBondKeyV2, PalwClassStateV2, PalwClassStatusV2, PalwDeltaEntryV2, PalwPwuRuleV2,
+                PalwStateDeltaV2,
+            },
+            tx::TransactionOutpoint,
+        };
+        use parking_lot::RwLock;
+
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let id = Hash64::from_u64_word(1);
+        let block = Hash64::from_u64_word(2);
+        let root = Hash64::from_u64_word(3);
+        let old = PalwClassCarriageRecord { registered_daa: 5, artifact_root: Hash64::from_u64_word(4), carriage: vec![1, 2] };
+        let new = PalwClassCarriageRecord { registered_daa: 8, artifact_root: Hash64::from_u64_word(5), carriage: vec![3, 4] };
+        let delta = PalwStateDeltaV2 {
+            point: PalwBlockContextV2 { block, daa_score: new.registered_daa, blue_score: 8, subsidy: 0 },
+            entries: vec![PalwDeltaEntryV2::Class {
+                key: id,
+                old: None,
+                new: Some(PalwClassStateV2 {
+                    artifact_root: new.artifact_root,
+                    slash_value_per_pwu: 1,
+                    pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
+                    status: PalwClassStatusV2::Active,
+                    registered_daa: new.registered_daa,
+                    registrant_bond: Some(PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(6), 0))),
+                    fused_attention: false,
+                }),
+            }],
+        };
+        let store = RwLock::new(DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(16)));
+        store.write().reindex_if_stale().unwrap();
+        store.write().insert(id, old.clone()).unwrap();
+        let durable = DbPalwClassCarriageStore::new(db.clone(), CachePolicy::Count(0));
+        let mut palw = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+
+        for commit in [false, true] {
+            let mut store = store.write();
+            assert_eq!(*store.get(id).unwrap(), old);
+            assert_eq!(*store.access.read_from_cache(id).unwrap(), old);
+            let mut batch = rocksdb::WriteBatch::default();
+            let _delta_owner = palw.insert_delta_batch_tracked_v1(&mut batch, block, root, &delta).unwrap();
+            store.insert_batch(&mut batch, id, new.clone()).unwrap();
+            assert!(store.access.read_from_cache(id).is_none());
+            // Observe the durable generation without repopulating the cache
+            // behind the same write guard the processor holds until commit.
+            assert_eq!(*durable.get(id).unwrap(), old);
+            assert!(!palw.has_delta(block).unwrap());
+            if commit {
+                db.write(batch).unwrap();
+            } else {
+                drop(batch);
+            }
+        }
+
+        assert_eq!(*store.read().get(id).unwrap(), new);
+        assert_eq!(*durable.get(id).unwrap(), new);
+        let (stored_root, stored_delta) = palw.delta_of_retained_v1(block).unwrap();
+        assert_eq!((stored_root, &*stored_delta), (root, &delta));
     }
 }

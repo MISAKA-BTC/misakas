@@ -526,8 +526,7 @@ struct PalwUtxoCommitV2 {
         kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2,
     >,
     genesis: Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
-    _native_genesis_carriages_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
-    genesis_carriages: Vec<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>,
+    class_carriages: class_carriage_commit_v1::PreparedClassCarriagesV1,
 }
 
 pub struct VirtualStateProcessor {
@@ -1426,6 +1425,7 @@ pub(super) enum PalwMergedOwnedWorkV1 {
     Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
 
+mod class_carriage_commit_v1;
 mod dns;
 mod evm;
 mod native_original_input_v19;
@@ -3507,10 +3507,16 @@ impl VirtualStateProcessor {
                                             );
                                         }
                                         let (delta, delta_lease) = delta.into_parts_v1();
-                                        // Keep the observed fee evidence even when the fold wrote
-                                        // no rows, so staging can detect a debit with no custody.
+                                        // Persist only declarations supported by this successful
+                                        // full fold, together with its UTXO and PALW delta.
+                                        let class_carriages = class_carriage_commit_v1::prepare_v1(
+                                            &objects,
+                                            &delta,
+                                            transition_extras.model_immutable_active,
+                                        )?;
+                                        // Keep observed fee evidence even when no rows were written.
                                         let relay_carriers = transition_extras.into_assignment_actions_v2();
-                                        Some((next_root, delta, delta_lease, assignment_materials, relay_carriers))
+                                        Some((next_root, delta, delta_lease, assignment_materials, relay_carriers, class_carriages))
                                     }
                                     Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
                                         return Err(why.into());
@@ -3557,14 +3563,14 @@ impl VirtualStateProcessor {
                         // member and does not identify the accepting block.
                         let attempt_admissions = palw_v2_staged
                             .as_ref()
-                            .filter(|(_, delta, _, _, _)| {
+                            .filter(|(_, delta, _, _, _, _)| {
                                 delta.point.block == current
                                     && self
                                         .palw_state_params_v2
                                         .as_ref()
                                         .is_some_and(|params| params.model_panel_one_retention_active_at(delta.point.daa_score))
                             })
-                            .map(|(_, delta, _, _, _)| {
+                            .map(|(_, delta, _, _, _, _)| {
                                 use kaspa_consensus_core::palw_state_v2::{PalwClaimSourceV2, PalwDeltaEntryV2};
                                 let mut created = delta.entries.iter().filter_map(|entry| match entry {
                                     PalwDeltaEntryV2::Claim { key, old: None, new: Some(row) }
@@ -3589,15 +3595,16 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged.map(|(root, delta, delta_lease, assignment_materials, relay_carriers)| PalwUtxoCommitV2 {
-                                relay_carriers,
-                                root,
-                                delta,
-                                _native_delta_lease: delta_lease,
-                                assignment_materials,
-                                genesis: None,
-                                _native_genesis_carriages_lease: None,
-                                genesis_carriages: Vec::new(),
+                            palw_v2_staged.map(|(root, delta, delta_lease, assignment_materials, relay_carriers, class_carriages)| {
+                                PalwUtxoCommitV2 {
+                                    relay_carriers,
+                                    root,
+                                    delta,
+                                    _native_delta_lease: delta_lease,
+                                    assignment_materials,
+                                    genesis: None,
+                                    class_carriages,
+                                }
                             }),
                         )?;
                         if let Some(observation) = committed_court_observation {
@@ -4022,7 +4029,7 @@ impl VirtualStateProcessor {
     ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         // Carriage source/serialization storage stays reserved until the batch
         // commit even though the staged records move into their store writer.
-        let _native_genesis_carriages = palw_v2_staged.as_mut().and_then(|staged| staged._native_genesis_carriages_lease.take());
+        let _native_class_carriages = palw_v2_staged.as_mut().and_then(|staged| staged.class_carriages.lease.take());
         let mut batch = WriteBatch::default();
         // Pruning -> PALW matches pruning/import lock order. A long-running
         // candidate must recheck irreversible ancestry at its actual commit.
@@ -4055,7 +4062,7 @@ impl VirtualStateProcessor {
         // Hold the same store exclusion through the atomic DB commit below.
         let mut palw_archive_guard = palw_v2_staged.as_ref().map(|_| self.palw_state_v2_store.write());
         // Lock order: pruning -> PALW -> class index (the ordinary and the import commits agree).
-        let mut genesis_class_store = None;
+        let mut class_carriage_store_guard = None;
         let mut native_delta_write = None;
         let mut native_genesis_write = None;
         let mut native_assignment_write = None;
@@ -4107,13 +4114,12 @@ impl VirtualStateProcessor {
                 native_genesis_write =
                     Some(store.set_tip_batch_tracked_v1(&mut batch, current, &genesis).map_err(native_store_capacity_v1)?);
             }
-            if !staged.genesis_carriages.is_empty() {
-                assert_eq!(current, self.genesis.hash, "only genesis declarations use this initial commit");
+            if !staged.class_carriages.rows.is_empty() {
                 let mut class_store = self.palw_class_carriage_store.write();
-                for (class_id, record) in staged.genesis_carriages {
-                    class_store.insert_batch(&mut batch, class_id, record).unwrap();
+                for (class_id, record) in staged.class_carriages.rows {
+                    class_store.insert_batch(&mut batch, class_id, record).map_err(native_store_capacity_v1)?;
                 }
-                genesis_class_store = Some(class_store);
+                class_carriage_store_guard = Some(class_store);
             }
             let delta = &staged.delta;
             if archive_public_material
@@ -4277,7 +4283,7 @@ impl VirtualStateProcessor {
         drop(native_relay_carriers_hold);
         drop(native_assignment_materials_hold);
         drop(native_genesis_write);
-        drop(genesis_class_store);
+        drop(class_carriage_store_guard);
         if let Some(ticket) = rewarded_commit {
             ticket.committed();
         }
@@ -6851,9 +6857,11 @@ impl VirtualStateProcessor {
                     _native_delta_lease: delta_lease,
                     assignment_materials:
                         kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2::empty_retained_for_legacy_v2(),
-                    _native_genesis_carriages_lease: carriage_lease,
                     genesis: Some(genesis_state),
-                    genesis_carriages,
+                    class_carriages: class_carriage_commit_v1::PreparedClassCarriagesV1 {
+                        rows: genesis_carriages,
+                        lease: carriage_lease,
+                    },
                 })
             })
             .transpose()?;

@@ -348,3 +348,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[native Trace量と予約・供給](../../../evidence/palw/tfp1-native-trace-budget-2026-11-11/README.md)は **実装中・Rust検証未実行**。登録programとjob geometryから閉形式でTrace値総量を導き、共通preclaim予約の送信/保持下限と、remote publisher/replayの取得前照合へ接続した。モデル取得証明は実装しない。最新のユーザー指示は、原子的受付完成→G14費用/予約/期限の本経路接続→FpTokenizer不足解消→公開quote/署名/受付→同一claim Panel/Final→当選権利消費/ブロック生成の順。完全profile・本番受付・公開到達は未完。
 
 2026-11-11 の[受付保存境界](../../../evidence/palw/tfp1-admission-checkpoint-2026-11-11/README.md)は **実装中・Rust検証未実行**。実FreePrompt dispatcherのpaired保存とcourt観測の保存を一つにし、funded mapだけの候補も保護対象にする。型付きstateコピーは同じcheckerの一時予約で所有し、失敗時state/journalと観測・prefixを戻す。TFO3全plannerからの一括install、G14全枝費用/予約/期限、FpTokenizerと公開同一claimの受付/Final/権利消費/blockは未完。モデル取得証明なし。
+
+2026-11-11 の[宣言索引の原子的保存](../../../evidence/palw/accepted-declaration-atomic-commit-2026-11-11/README.md)は **実装中・Rust検証未実行**。ノードの単体rehearsalからclass宣言の永続writeを除き、成功した実foldのdeltaと照合して、UTXO/PALWと同じDB batchへ移した。全prefix候補再演の破棄前に必要な副作用除去であり、候補filterの置換やG14完全plannerの完成ではない。公開同一claimの受付/Final/権利消費/blockは未証明。モデル取得証明なし。

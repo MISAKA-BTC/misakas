@@ -2679,35 +2679,8 @@ impl VirtualStateProcessor {
                                 certifications_graded += 1;
                             }
                             folded = next;
-                            // **ADR-0067: keep the declaration the chain just accepted.** The
-                            // state retains the class's economic facts and drops the carriage;
-                            // a node that will SERVE the class needs the graph, so it is indexed
-                            // here — the accept path IBD replays, which is what makes a syncing
-                            // node's index arrive with its chain.
-                            if publish_observations
-                                && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-                                    class_id,
-                                    artifact_root,
-                                    admission: Some(carriage),
-                                    ..
-                                } = &object
-                            {
-                                match borsh::to_vec(carriage.as_ref()) {
-                                    Ok(bytes) => {
-                                        let record = crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
-                                            registered_daa: point.daa_score,
-                                            artifact_root: *artifact_root,
-                                            carriage: bytes,
-                                        };
-                                        if let Err(err) = self.palw_class_carriage_store.write().insert(*class_id, record) {
-                                            warn!("[palw-class-carriage] could not index class {class_id}: {err}");
-                                        }
-                                    }
-                                    Err(err) => {
-                                        warn!("[palw-class-carriage] class {class_id}'s carriage does not re-serialize: {err}")
-                                    }
-                                }
-                            }
+                            // Class declarations are staged from the successful whole-fold
+                            // delta and committed with UTXOs, never from this rehearsal.
                             if self.palw_model_immutable_v1_at(point.daa_score) {
                                 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
                                 if let Obj::ClassRegistered { class_id, .. }
