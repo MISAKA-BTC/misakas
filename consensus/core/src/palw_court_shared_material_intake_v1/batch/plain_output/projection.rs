@@ -474,7 +474,9 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
             finish_daa: 1,
             verification_daa: 1,
             stop_daa: 1,
-            terminal_daa: 1,
+            // Local recovery fixture needs room to move a missed terminal
+            // packet without changing its authenticated promise window.
+            terminal_daa: 4,
         },
     };
     let derive = |at: &PalwBlockContextV2| {

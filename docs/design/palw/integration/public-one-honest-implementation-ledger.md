@@ -366,3 +366,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[保護予約のnative保存](../../../evidence/palw/tfp1-protected-service-publication-2026-11-11/README.md)は **実装中・Rust検証未実行**。実TFO3に明示的なparent所有を接続し、共通paired checkpointの対象claimを保持する。予約表の成功時内容を封印し、全役割のpacket/因果辺を専用frameのservice行へ渡す。保存入口は直前のframe/198/204/206・実prefix・実受付点を検査し、作業領域を予約して既存journal writerを使う。完全plannerと本番coordinator、FpTokenizer、公開同一claimの受付/Final/権利消費/blockは未完。モデル取得証明なし。
 
 2026-11-11 の[専用TFP1の予約同時保存と復元検査](../../../evidence/palw/tfp1-service-persistence-2026-11-11/README.md)は **実装中・Rust検証未実行**。専用frame・198/204/206・サービス予約の5件連続保存をforward/inverseで検査し、既存予約を維持した対象binding一件追加を要求する。snapshotとservice-only deltaも同scope予約/時計へ照合する。正常snapshot/delta/実pairing復元・欠落/差替え・後続観測の回帰コードを追加。完全graph認証・planner・本番受付・FpTokenizerと公開同一claimのFinal/権利消費/blockは未完。モデル取得証明なし。
+
+2026-11-11 の[専用TFP1の予約graph固定](../../../evidence/palw/tfp1-service-graph-binding-2026-11-11/README.md)は **実装中・Rust検証未実行**。明示frame第2版へ成功予約のpacket/費用/期限/因果辺を固定し、候補・native writer・snapshot・deltaで照合する。復旧slot/供給時計は固定対象から分ける。旧wireを保持し、新版は旧compact releaseでgraphを消せない。完全planner・有限disposition・本番受付・FpTokenizer・公開同一claimのFinal/権利消費/blockは未完。モデル取得証明なし。

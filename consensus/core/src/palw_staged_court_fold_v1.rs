@@ -2324,6 +2324,10 @@ impl TransitionBuilder<'_> {
             _ => None,
         };
         if key == PalwStagedCourtKeyV1::CourtService {
+            crate::palw_positive_contract_v2::tfp1_original::service_invariants::check_proposed_protected_graphs_v2(
+                &self.state,
+                new.as_ref(),
+            )?;
             if let Some(PalwStagedCourtRowV1::CourtServiceV3(row)) = &new {
                 // The released form is new consensus behaviour: dormant below the conviction fence.
                 if !self.extras.tir_public_conviction_active {

@@ -122,7 +122,7 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
             let history = admission
                 .prepare_tfp1_history_v1(at, pairing, prepared.obligation_v1(), &reservation, reservation_id, &prefix)
                 .unwrap();
-            let frame = PublicTfp1FrameV1::prepare_v1(
+            let frame = PublicTfp1FrameV1::prepare_with_service_v2(
                 prepared,
                 fixture.frame.original_v1(),
                 source,
@@ -131,6 +131,7 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
                 reservation_id,
                 reservation.budget.retention_until,
                 fixture.rules.maximum_leaves,
+                booking,
             )
             .unwrap();
             let service =
@@ -241,11 +242,59 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
         foreign.check().unwrap();
         let mut future = replayed.court_service_row_v3_v1().unwrap().clone();
         future.state.book.last_observed_daa = Some(at.daa_score + 1);
+        // These are structurally valid same-scope reservations. Previously
+        // the snapshot only compared scope and could accept these edits.
+        let mut cheaper = replayed.court_service_row_v3_v1().unwrap().clone();
+        let id = *cheaper.state.book.packets.iter().find(|(_, packet)| packet.cost.bytes > 1).unwrap().0;
+        cheaper.state.book.packets.get_mut(&id).unwrap().cost.bytes -= 1;
+        let slot = cheaper.state.book.assignments[&id];
+        cheaper.state.book.remaining.get_mut(&slot).unwrap().bytes += 1;
+        cheaper.check().unwrap();
+        let mut missing_edge = replayed.court_service_row_v3_v1().unwrap().clone();
+        assert!(missing_edge.causal.pop_first().is_some());
+        missing_edge.check().unwrap();
+        let mut wider = replayed.court_service_row_v3_v1().unwrap().clone();
+        let hard = OriginalClock::new(at.daa_score).unwrap().hard();
+        wider.state.book.packets.values_mut().find(|packet| packet.service_before < hard).unwrap().service_before += 1;
+        wider.check().unwrap();
+        let mut fewer = replayed.court_service_row_v3_v1().unwrap().clone();
+        let id = *fewer.state.book.packets.keys().find(|id| !fewer.causal.values().any(|parents| parents.contains(id))).unwrap();
+        let packet = fewer.state.book.packets.remove(&id).unwrap();
+        let slot = fewer.state.book.assignments.remove(&id).unwrap();
+        fewer.causal.remove(&id);
+        fewer.state.claims.get_mut(&claim_id).unwrap().packet_ids.remove(&id);
+        if fewer.state.book.assignments.values().any(|at| *at == slot) {
+            let left = fewer.state.book.remaining.get_mut(&slot).unwrap();
+            left.bytes += packet.cost.bytes;
+            left.work += packet.cost.work;
+            left.io += packet.cost.io;
+            left.controls += packet.cost.controls;
+        } else {
+            fewer.state.book.remaining.remove(&slot);
+        }
+        fewer.check().unwrap();
+        let mut compacted = replayed.court_service_row_v3_v1().unwrap().clone();
+        compacted.state.book.observe_block(hard + 1, h64(911).as_bytes(), Default::default()).unwrap();
+        let mut matured = replayed.clone();
+        matured.last_point.as_mut().unwrap().daa_score = hard + 1;
+        matured.last_point.as_mut().unwrap().blue_score = hard + 1;
+        matured.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(compacted.clone()).into()));
+        matured.validate_public_verification_rows_v1().unwrap();
+        assert!(!matured.court_service_release_eligible_v1(&claim_id));
+        compacted.release_v1(&BTreeSet::from([claim_id]), hard + 1).unwrap();
+        compacted.check().unwrap();
+        matured.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(compacted.clone()).into()));
+        assert!(matured.validate_public_verification_rows_v1().is_err(), "legacy compact release cannot erase the bound graph");
         for replacement in [
             None,
             Some(Row::CourtServiceV3(Box::new(empty).into())),
             Some(Row::CourtServiceV3(Box::new(foreign).into())),
             Some(Row::CourtServiceV3(Box::new(future).into())),
+            Some(Row::CourtServiceV3(Box::new(cheaper).into())),
+            Some(Row::CourtServiceV3(Box::new(missing_edge).into())),
+            Some(Row::CourtServiceV3(Box::new(wider).into())),
+            Some(Row::CourtServiceV3(Box::new(fewer).into())),
+            Some(Row::CourtServiceV3(Box::new(compacted).into())),
         ] {
             let mut invalid = replayed.clone();
             match &replacement {
@@ -256,6 +305,18 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
                     invalid.staged_courts.remove(&Key::CourtService);
                 }
             }
+            // A raw forward service writer has no accepting point parameter;
+            // the final-state validator owns the future-clock check above.
+            if !matches!(&replacement, Some(Row::CourtServiceV3(row)) if row.state.book.last_observed_daa == Some(at.daa_score + 1)) {
+                let mut forward = TransitionBuilder::try_new(&replayed, &params, false, false, false, false, &extras).unwrap();
+                assert!(forward.write_staged_row_v1(Key::CourtService, replacement.clone()).is_err());
+                assert!(forward.entries.is_empty());
+                assert_eq!(forward.state, replayed);
+            }
+            let mut altered_admission = delta.entries.clone();
+            let PalwDeltaEntryV2::StagedCourtSeed { new, .. } = &mut altered_admission[frame_index + 4] else { unreachable!() };
+            *new = replacement.clone();
+            assert!(route_less.validate_public_verification_delta_v1(&altered_admission, true).is_err());
             let entries =
                 vec![PalwDeltaEntryV2::StagedCourtSeed { key: Key::CourtService, old: Some(prior_service.clone()), new: replacement }];
             assert!(invalid.validate_public_verification_rows_v1().is_err());
@@ -315,6 +376,27 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
         let observed_state = apply_delta_v2(&parent, &with_observation, &params).unwrap();
         assert_eq!(observed_state.court_service_row_v3_v1(), Some(&observed));
         assert_eq!(revert_delta_v2(&observed_state, &with_observation, &params).unwrap().state_root(), parent_root);
+
+        // Real causal repair changes a physical assignment while preserving
+        // the authenticated graph. The local terminal window includes slack.
+        let mut missed = replayed.court_service_row_v3_v1().unwrap().clone();
+        let (&id, &slot) = missed.state.book.assignments.iter().max_by_key(|(_, slot)| *slot).unwrap();
+        assert!(!missed.causal.values().any(|parents| parents.contains(&id)), "last slot has no dependent packet");
+        assert!(slot + 2 < missed.state.book.packets[&id].service_before);
+        let repair_point = PalwBlockContextV2 { block: h64(912), daa_score: slot + 1, blue_score: slot + 1, subsidy: 0 };
+        missed.state.book.observe_block(repair_point.daa_score, repair_point.block.as_bytes(), Default::default()).unwrap();
+        let mut repaired = missed.clone();
+        assert_eq!(repaired.state.book.repair_missing_ordered_v1(&BTreeSet::from([id]), hard, &repaired.causal).unwrap(), 1);
+        assert_eq!(repaired.state.book.assigned_daa(&id), Some(slot + 2));
+        repaired.check().unwrap();
+        let mut recovery = TransitionBuilder::try_new(&replayed, &params, false, false, false, false, &extras).unwrap();
+        recovery.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(missed).into()))).unwrap();
+        recovery.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(repaired.clone()).into()))).unwrap();
+        recovery.entries.push(PalwDeltaEntryV2::LastPoint { old: Some(*at), new: Some(repair_point) });
+        let recovery_delta = PalwStateDeltaV2 { point: repair_point, entries: recovery.entries };
+        let recovered = apply_delta_v2(&replayed, &recovery_delta, &params).unwrap();
+        assert_eq!(recovered.court_service_row_v3_v1(), Some(&repaired));
+        assert_eq!(revert_delta_v2(&recovered, &recovery_delta, &params).unwrap().state_root(), replayed.state_root());
 
         let restored = revert_delta_v2(&replayed, &delta, &params).unwrap();
         assert_eq!(restored.state_root(), parent_root);

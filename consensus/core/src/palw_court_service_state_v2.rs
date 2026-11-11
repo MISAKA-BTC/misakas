@@ -316,6 +316,12 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     /// duty clock past its response deadline. Also what relaxes the material hold of the claim's DEPENDENT rows (so they leave at
     /// their own TTL and the release can follow); the original's own material stays held until the release.
     pub fn court_service_release_eligible_v1(&self, claim: &Hash64) -> bool {
+        // V2 protected frames authenticate immutable graph content. Legacy
+        // release discards that content and has no dedicated terminal record.
+        // Keep the reservation until the finite protected disposition owns it.
+        if self.public_tfp1_frame_v1(*claim).map_or(true, |frame| frame.is_some_and(|frame| frame.service_graph_v2().is_some())) {
+            return false;
+        }
         let Some(service) = self.court_service_state_v1() else { return false };
         let Some(now) = service.book.last_observed_daa else { return false };
         if self.family_supplier_rows_v1().map_or(true, |rows| {

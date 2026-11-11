@@ -191,7 +191,7 @@ pub(crate) fn exercise_funding_v1(
                     assert_eq!(accepted_booking.graph_v1(), booking.graph_v1());
                     assert_eq!(funded.actual().outpoint(), pairing.outpoint());
                     assert_ne!(&*book, empty_book);
-                    let native_frame = super::super::native_frame::PublicTfp1FrameV1::prepare_v1(
+                    let native_frame = super::super::native_frame::PublicTfp1FrameV1::prepare_with_service_v2(
                         prepared,
                         fp,
                         source,
@@ -200,6 +200,7 @@ pub(crate) fn exercise_funding_v1(
                         misaka_palw_positive_contract::identity::Digest([0x51; 64]),
                         reservation.budget.retention_until,
                         fixture.rules.maximum_leaves,
+                        &accepted_booking,
                     )
                     .unwrap();
                     crate::palw_state_v2::tests::native_writers_v1::exercise_protected_service_candidate_v1(

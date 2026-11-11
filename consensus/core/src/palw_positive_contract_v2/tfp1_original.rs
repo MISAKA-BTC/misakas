@@ -12,6 +12,7 @@ pub(crate) mod native_frame;
 pub(crate) mod native_link;
 pub(crate) mod preclaim;
 pub(crate) mod service_booking;
+pub(crate) mod service_graph;
 pub(crate) mod service_invariants;
 
 use super::{

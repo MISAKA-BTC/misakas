@@ -57,6 +57,18 @@ impl ProtectedBatchBookingV1 {
         self.graph.as_slice()
     }
 
+    /// Immutable per-original promises, excluding recoverable physical slots.
+    /// This is content identity, not delivery or computation authentication.
+    pub(crate) fn service_graph_identity_v1(&self) -> Result<Hash64, ContractError> {
+        super::service_graph::protected_graph_identity_v1(
+            self.original,
+            self.obligation,
+            self.accepted_daa,
+            self.accepted_blue_score,
+            self.graph_v1(),
+        )
+    }
+
     /// The receiving native owner must use the exact successful candidate,
     /// including its capacity and physical assignments, not just an equal
     /// packet graph rebooked against another prefix.

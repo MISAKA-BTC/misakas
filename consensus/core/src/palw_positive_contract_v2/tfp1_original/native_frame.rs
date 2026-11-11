@@ -1,7 +1,7 @@
 //! Immutable native original identity for the protected TFP1 profile.
 //! Preparing or decoding a frame does not reserve service or fund escrow.
 
-use super::{NativeTfp1PublicOriginalFactsV1, PreparedTfp1PublicOriginalV1};
+use super::{NativeTfp1PublicOriginalFactsV1, PreparedTfp1PublicOriginalV1, preclaim::ProtectedBatchBookingV1};
 use crate::{
     Hash64,
     palw_court_shared_tir_stream_v1::stream_digest,
@@ -32,8 +32,10 @@ use misaka_palw_positive_contract::{
 };
 use std::io::{self, Read, Write};
 
-const VERSION: u16 = 1;
-const ID_DOMAIN: &[u8] = b"misaka-palw/tfp1-protected-native-frame/v1";
+const VERSION_V1: u16 = 1;
+const VERSION_V2: u16 = 2;
+const ID_DOMAIN_V1: &[u8] = b"misaka-palw/tfp1-protected-native-frame/v1";
+const ID_DOMAIN_V2: &[u8] = b"misaka-palw/tfp1-protected-native-frame/v2";
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshDeserialize, BorshSerialize)]
 struct FramePinsV1 {
@@ -60,11 +62,15 @@ pub struct PublicTfp1FrameV1 {
     original: PalwFreePromptCommitmentV3,
     header: PalwPublicTirBindingHeaderV1,
     pins: FramePinsV1,
+    service_graph: Option<Hash64>,
     identity: Hash64,
 }
-native_struct!(PublicTfp1FrameV1; version, original, header, pins, identity);
+native_struct!(PublicTfp1FrameV1; version, original, header, pins, service_graph, identity);
 
 impl PublicTfp1FrameV1 {
+    // Legacy construction is retained for compatibility fixtures. New native
+    // admission must obtain its graph from the checked booking below.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_v1(
         prepared: &PreparedTfp1PublicOriginalV1,
@@ -75,6 +81,48 @@ impl PublicTfp1FrameV1 {
         reservation: Digest,
         material_until_daa: u64,
         maximum_leaves: u64,
+    ) -> Result<NativeRetainedV1<Self>, NativeDecodeErrorV1<ContractError>> {
+        Self::prepare_inner(prepared, fp, source, class, point, reservation, material_until_daa, maximum_leaves, None)
+    }
+
+    /// Pin the immutable service packet graph from the same checked booking.
+    /// Delivery and settlement remain the responsibility of their own writers.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prepare_with_service_v2(
+        prepared: &PreparedTfp1PublicOriginalV1,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        class: &PalwTirClassRecordV1,
+        point: &PalwBlockContextV2,
+        reservation: Digest,
+        material_until_daa: u64,
+        maximum_leaves: u64,
+        booking: &ProtectedBatchBookingV1,
+    ) -> Result<NativeRetainedV1<Self>, NativeDecodeErrorV1<ContractError>> {
+        use NativeDecodeErrorV1::Decode;
+        let companion = prepared.companion_v1();
+        require_current_public_origin_v1(companion.carrier.origin, point).map_err(Decode)?;
+        if booking.original_v1() != companion.original
+            || booking.obligation_v1() != prepared.obligation_v1()
+            || !booking.matches_acceptance_v1(point.daa_score, point.blue_score)
+        {
+            return Err(Decode(ContractError::Scope));
+        }
+        let graph = booking.service_graph_identity_v1().map_err(Decode)?;
+        Self::prepare_inner(prepared, fp, source, class, point, reservation, material_until_daa, maximum_leaves, Some(graph))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_inner(
+        prepared: &PreparedTfp1PublicOriginalV1,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        class: &PalwTirClassRecordV1,
+        point: &PalwBlockContextV2,
+        reservation: Digest,
+        material_until_daa: u64,
+        maximum_leaves: u64,
+        service_graph: Option<Hash64>,
     ) -> Result<NativeRetainedV1<Self>, NativeDecodeErrorV1<ContractError>> {
         use NativeDecodeErrorV1::{Decode, Resource};
 
@@ -111,7 +159,8 @@ impl PublicTfp1FrameV1 {
         if facts != obligation.facts {
             return Err(Decode(ContractError::Scope));
         }
-        let identity = frame_identity_v1(VERSION, fp, header, &pins).map_err(Decode)?;
+        let version = if service_graph.is_some() { VERSION_V2 } else { VERSION_V1 };
+        let identity = frame_identity_v1(version, fp, header, &pins, service_graph).map_err(Decode)?;
         // Cover both deep copies before either clone.
         let requests = native_typed_value_requests_v1(fp)
             .and_then(|fp_bytes| {
@@ -124,7 +173,7 @@ impl PublicTfp1FrameV1 {
             .map_err(Resource)?;
         let owner = reserve_native_pending_requests_v1(requests).map_err(Resource)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(
-            Self { version: VERSION, original: fp.clone(), header: header.clone(), pins, identity },
+            Self { version, original: fp.clone(), header: header.clone(), pins, service_graph, identity },
             owner,
         ))
     }
@@ -137,12 +186,12 @@ impl PublicTfp1FrameV1 {
     }
 
     pub(crate) fn native_facts_v1(&self) -> Result<NativeTfp1PublicOriginalFactsV1, ContractError> {
-        if self.version != VERSION || self.identity == Hash64::default() {
+        if self.identity == Hash64::default() {
             return Err(ContractError::Identity);
         }
         check_body_bounds_v1(&self.original, &self.header)?;
         let facts = checked_facts_v1(&self.original, &self.header, &self.pins)?;
-        if frame_identity_v1(self.version, &self.original, &self.header, &self.pins)? != self.identity {
+        if frame_identity_v1(self.version, &self.original, &self.header, &self.pins, self.service_graph)? != self.identity {
             return Err(ContractError::Identity);
         }
         Ok(facts)
@@ -267,6 +316,10 @@ impl PublicTfp1FrameV1 {
     pub(crate) fn identity_v1(&self) -> Hash64 {
         self.identity
     }
+
+    pub(crate) fn service_graph_v2(&self) -> Option<Hash64> {
+        self.service_graph
+    }
 }
 
 fn frame_identity_v1(
@@ -274,8 +327,16 @@ fn frame_identity_v1(
     original: &PalwFreePromptCommitmentV3,
     header: &PalwPublicTirBindingHeaderV1,
     pins: &FramePinsV1,
+    service_graph: Option<Hash64>,
 ) -> Result<Hash64, ContractError> {
-    stream_digest(ID_DOMAIN, &(version, original, header, pins)).map_err(|_| ContractError::NonCanonical)
+    match (version, service_graph) {
+        (VERSION_V1, None) => stream_digest(ID_DOMAIN_V1, &(version, original, header, pins)),
+        (VERSION_V2, Some(graph)) if graph != Hash64::default() => {
+            stream_digest(ID_DOMAIN_V2, &(version, original, header, pins, graph))
+        }
+        _ => return Err(ContractError::Identity),
+    }
+    .map_err(|_| ContractError::NonCanonical)
 }
 
 fn check_class_v1(class: &PalwTirClassRecordV1, header: &PalwPublicTirBindingHeaderV1) -> Result<(), ContractError> {
@@ -394,10 +455,18 @@ fn checked_facts_v1(
 
 impl BorshSerialize for PublicTfp1FrameV1 {
     fn serialize<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        let graph = match (self.version, self.service_graph) {
+            (VERSION_V1, None) => None,
+            (VERSION_V2, Some(graph)) if graph != Hash64::default() => Some(graph),
+            _ => return Err(wire_bad("invalid protected TFP1 frame version or service graph")),
+        };
         self.version.serialize(writer)?;
         write_body_v1(writer, &self.original, PALW_FP_COMMITMENT_TX_MAX_BYTES)?;
         write_body_v1(writer, &self.header, PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1)?;
         self.pins.serialize(writer)?;
+        if let Some(graph) = graph {
+            graph.serialize(writer)?;
+        }
         self.identity.serialize(writer)
     }
 }
@@ -419,18 +488,22 @@ impl BorshDeserialize for PublicTfp1FrameV1 {
         // nested allocation. The scratch lives on stack once per decode.
         let original = read_body_v1::<_, PALW_FP_COMMITMENT_TX_MAX_BYTES>(reader)?;
         let header = read_body_v1::<_, PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1>(reader)?;
-        Ok(Self {
-            version,
-            original,
-            header,
-            pins: FramePinsV1::deserialize_reader(reader)?,
-            identity: Hash64::deserialize_reader(reader)?,
-        })
+        let pins = FramePinsV1::deserialize_reader(reader)?;
+        let service_graph = if version == VERSION_V2 { Some(read_service_graph_v2(reader)?) } else { None };
+        Ok(Self { version, original, header, pins, service_graph, identity: Hash64::deserialize_reader(reader)? })
     }
 }
 
 fn check_version_v1(version: u16) -> io::Result<()> {
-    if version == VERSION { Ok(()) } else { Err(wire_bad("unknown protected TFP1 frame version")) }
+    if matches!(version, VERSION_V1 | VERSION_V2) { Ok(()) } else { Err(wire_bad("unknown protected TFP1 frame version")) }
+}
+
+fn read_service_graph_v2(reader: &mut impl Read) -> io::Result<Hash64> {
+    let graph = Hash64::deserialize_reader(reader)?;
+    if graph == Hash64::default() {
+        return Err(wire_bad("protected TFP1 frame has an empty service graph"));
+    }
+    Ok(graph)
 }
 
 fn check_body_length_v1(length: u32, maximum: usize) -> io::Result<usize> {
@@ -457,11 +530,16 @@ fn read_body_v1<T: BorshDeserialize + NativeWireScanV1, const MAX: usize>(reader
 impl NativeWireScanV1 for PublicTfp1FrameV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
-        check_version_v1(reader.short()?)?;
-        scan_body_v1::<_, PalwFreePromptCommitmentV3>(reader, PALW_FP_COMMITMENT_TX_MAX_BYTES)?
+        let version = reader.short()?;
+        check_version_v1(version)?;
+        let shape = scan_body_v1::<_, PalwFreePromptCommitmentV3>(reader, PALW_FP_COMMITMENT_TX_MAX_BYTES)?
             .merge(scan_body_v1::<_, PalwPublicTirBindingHeaderV1>(reader, PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1)?)?
-            .merge(FramePinsV1::scan_native_wire_v1(reader)?)?
-            .merge(Hash64::scan_native_wire_v1(reader)?)
+            .merge(FramePinsV1::scan_native_wire_v1(reader)?)?;
+        if version == VERSION_V2 {
+            reader.step()?;
+            read_service_graph_v2(reader)?;
+        }
+        shape.merge(Hash64::scan_native_wire_v1(reader)?)
     }
 }
 
@@ -554,12 +632,28 @@ mod tests {
             material_until_daa: OriginalClock::new(origin.accepted_daa).unwrap().hard(),
             maximum_leaves: header.step_leaf_count,
         };
-        let identity = frame_identity_v1(VERSION, &original, &header, &pins).unwrap();
-        let frame = PublicTfp1FrameV1 { version: VERSION, original, header, pins, identity };
+        let identity = frame_identity_v1(VERSION_V1, &original, &header, &pins, None).unwrap();
+        let frame = PublicTfp1FrameV1 { version: VERSION_V1, original, header, pins, service_graph: None, identity };
         assert_eq!(frame.native_facts_v1().unwrap(), facts);
         assert!(frame.check_structure_v1(Hash64::from_u64_word(1)).is_err());
 
         let bytes = borsh::to_vec(&frame).unwrap();
+        // Encode the old tuple and identity formula independently. In
+        // particular, v1 still has no optional graph tag or placeholder.
+        let legacy_identity =
+            stream_digest(b"misaka-palw/tfp1-protected-native-frame/v1", &(1u16, &frame.original, &frame.header, &frame.pins))
+                .unwrap();
+        let legacy = borsh::to_vec(&(
+            1u16,
+            borsh::to_vec(&frame.original).unwrap(),
+            borsh::to_vec(&frame.header).unwrap(),
+            &frame.pins,
+            legacy_identity,
+        ))
+        .unwrap();
+        assert_eq!(frame.identity_v1(), legacy_identity);
+        assert_eq!(bytes, legacy);
+        assert_eq!(frame.service_graph_v2(), None);
         let preflight =
             |bytes: &[u8]| crate::palw_native_resource_v1::preflight_native_value_v1::<PublicTfp1FrameV1>(bytes, bytes.len() as u64);
         assert!(preflight(&bytes).is_ok());
@@ -567,11 +661,11 @@ mod tests {
         assert!(preflight(&bytes[..bytes.len() - 1]).is_err());
 
         let mut wrong_version = bytes.clone();
-        wrong_version[..2].copy_from_slice(&(VERSION + 1).to_le_bytes());
+        wrong_version[..2].copy_from_slice(&(VERSION_V2 + 1).to_le_bytes());
         assert!(preflight(&wrong_version).is_err());
         assert!(borsh::from_slice::<PublicTfp1FrameV1>(&wrong_version).is_err());
 
-        let mut excessive_fp = bytes;
+        let mut excessive_fp = bytes.clone();
         excessive_fp[2..6].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(preflight(&excessive_fp).is_err());
         assert!(borsh::from_slice::<PublicTfp1FrameV1>(&excessive_fp).is_err());
@@ -580,7 +674,43 @@ mod tests {
         altered.pins.reservation.0[0] ^= 1;
         assert_eq!(altered.native_facts_v1(), Err(ContractError::Identity));
         altered.pins.maximum_leaves = 0;
-        altered.identity = frame_identity_v1(VERSION, &altered.original, &altered.header, &altered.pins).unwrap();
+        altered.identity = frame_identity_v1(VERSION_V1, &altered.original, &altered.header, &altered.pins, None).unwrap();
         assert_eq!(altered.native_facts_v1(), Err(ContractError::Scope));
+
+        let graph = Hash64::from_u64_word(32);
+        let mut v2 = frame;
+        v2.version = VERSION_V2;
+        v2.service_graph = Some(graph);
+        v2.identity = frame_identity_v1(VERSION_V2, &v2.original, &v2.header, &v2.pins, Some(graph)).unwrap();
+        assert_ne!(v2.identity_v1(), legacy_identity);
+        assert_eq!(v2.service_graph_v2(), Some(graph));
+        assert_eq!(v2.native_facts_v1().unwrap(), facts);
+        let encoded = borsh::to_vec(&v2).unwrap();
+        let graph_offset = bytes.len() - 64;
+        assert_eq!(encoded.len(), bytes.len() + 64);
+        assert_eq!(&encoded[2..graph_offset], &bytes[2..graph_offset]);
+        assert_eq!(&encoded[graph_offset..graph_offset + 64], graph.as_byte_slice());
+        assert!(preflight(&encoded).is_ok());
+        assert_eq!(borsh::from_slice::<PublicTfp1FrameV1>(&encoded).unwrap(), v2);
+
+        let mut missing = encoded.clone();
+        drop(missing.drain(graph_offset..graph_offset + 64));
+        assert!(preflight(&missing).is_err());
+        assert!(borsh::from_slice::<PublicTfp1FrameV1>(&missing).is_err());
+        let mut zero = encoded.clone();
+        zero[graph_offset..graph_offset + 64].fill(0);
+        assert!(preflight(&zero).is_err());
+        assert!(borsh::from_slice::<PublicTfp1FrameV1>(&zero).is_err());
+        let mut with_trailing = encoded.clone();
+        with_trailing.push(0);
+        assert!(preflight(&with_trailing).is_err());
+        assert!(borsh::from_slice::<PublicTfp1FrameV1>(&with_trailing).is_err());
+
+        let mut changed = encoded;
+        changed[graph_offset + 1] ^= 1;
+        assert_eq!(borsh::from_slice::<PublicTfp1FrameV1>(&changed).unwrap().native_facts_v1(), Err(ContractError::Identity));
+        v2.service_graph = None;
+        assert!(borsh::to_vec(&v2).is_err());
+        assert_eq!(v2.native_facts_v1(), Err(ContractError::Identity));
     }
 }

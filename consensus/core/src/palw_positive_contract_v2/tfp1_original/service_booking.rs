@@ -151,6 +151,7 @@ impl PreparedProtectedServiceBookingV1 {
             causal,
         };
         row.check().map_err(InvalidServiceRow)?;
+        super::service_graph::check_frame_service_graph_v2(frame, &row, &row.state.claims[&claim]).map_err(Contract)?;
         Ok(Self { claim, before: before.clone(), row: NativeRetainedV1::from_owner_reserved_v1(row, lease), book_lease })
     }
 
