@@ -140,6 +140,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
     let retained = InitialMaterialRequestPlanV1::minimum_retained_bytes_v1();
     let initial_cost = ServiceCost { bytes, work: bytes, io: retained, controls: 1 };
     let initial_plan = InitialMaterialRequestPlanV1::new_v1(at.daa_score, notice, initial_cost, retained).unwrap();
+    check_protected_role_booking(projection, projected, rescue, initial_plan, schedule, original, width);
     let with_initial = terms.with_initial_request_v2(initial_plan).unwrap();
     assert_ne!(with_initial.obligation_v1(), terms.obligation_v1());
     assert_ne!(with_initial.relative_graph, terms.relative_graph);
@@ -173,7 +174,87 @@ pub(crate) fn exercise_preclaim_booking_v1(
     check_companion_booking_parity(projection, &wide_terms, fixture, at, wide_notice, case, &empty_book, complete_cap);
 }
 
+fn protected_test_book() -> ServiceReservations {
+    // These fixture windows can align all four graphs. Give this test room
+    // to exercise role accounting rather than deliberately saturating a slot.
+    ServiceReservations::new(ServiceCost { bytes: 100_000_000, work: 100_000_000, io: 100_000_000, controls: 4096 }).unwrap()
+}
+
 #[allow(clippy::too_many_arguments)]
+fn check_protected_role_booking(
+    projection: &PlainBatchOriginalProjectionV2,
+    projected: PlainBatchProspectiveOriginalTermsV2,
+    drawn_rescue: ProtectedRescueDemand,
+    initial_request: InitialMaterialRequestPlanV1,
+    schedule: VerificationSchedule,
+    original: OriginalId,
+    width: usize,
+) {
+    use ProtectedBatchRoleV1::*;
+    let empty = &protected_test_book();
+    let rescue = ProtectedRescueDemand { max_outsiders: 1, per_outsider: drawn_rescue.per_drawn_bond, ..drawn_rescue };
+    let drawn = DrawnBatchPreclaimTermsV1::new_v1(projected, rescue).unwrap().with_initial_request_v2(initial_request).unwrap();
+    let terms = ProtectedBatchPreclaimTermsV1::new_v1(projected, rescue, Some(initial_request)).unwrap();
+    assert_ne!(terms.obligation_v1(), drawn.obligation_v1());
+    assert_eq!(terms.relative_graph_id_v1(), drawn.relative_graph);
+    let coordinates = [(Drawn, 0), (Drawn, 1), (Outsider, 0), (Defense, 0)];
+    let scopes = coordinates.map(|(role, rank)| terms.reservation_scope_v1(original, role, rank).unwrap());
+    assert_eq!(scopes.into_iter().collect::<BTreeSet<_>>().len(), coordinates.len());
+    assert_ne!(scopes[0], drawn_scope_v1(drawn.obligation_v1(), original, 0, rescue.max_drawn_bonds).unwrap());
+    for (role, invalid_rank) in [(Drawn, 2), (Outsider, 1), (Defense, 1)] {
+        assert_eq!(terms.reservation_scope_v1(original, role, invalid_rank), Err(ContractError::Budget));
+    }
+
+    let maximum_packets = (width + 1) * coordinates.len();
+    let price = |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
+    let reserve = |terms: &ProtectedBatchPreclaimTermsV1, fee, cap, book: &mut ServiceReservations| {
+        reserve_batch_v1(original, projection, &terms.0, BookingScopeV1::Protected, schedule, fee, book, cap, price)
+    };
+    let mut booked = empty.clone();
+    let (quotes, graph) = reserve(&terms, u64::MAX, maximum_packets, &mut booked).unwrap();
+    assert_eq!(quotes.iter().map(|quote| quote.scope).collect::<Vec<_>>(), scopes);
+    assert_eq!(graph.len(), maximum_packets);
+    let ids: BTreeSet<_> = graph.iter().map(|node| node.packet.id).collect();
+    assert_eq!(ids.len(), maximum_packets);
+    assert!(ids.iter().all(|id| booked.assigned_daa(id).is_some()));
+    for quote in quotes.iter() {
+        let request = initial_request.request_v1(quote.claim, quote.scope, projected.accepted_daa_v2()).unwrap();
+        assert!(ids.contains(&request.packet.id));
+        assert!(graph.iter().any(|node| node.predecessors.contains(&request.packet.id)));
+    }
+
+    let fee_floor = batch_storage_fee_v1(&quotes).unwrap();
+    assert!(fee_floor > 0);
+    let mut exact = empty.clone();
+    reserve(&terms, fee_floor, maximum_packets, &mut exact).unwrap();
+    assert_eq!(exact, booked);
+    let mut refused = empty.clone();
+    assert!(matches!(
+        reserve(&terms, fee_floor - 1, maximum_packets, &mut refused),
+        Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+    ));
+    assert_eq!(&refused, empty);
+    assert!(matches!(reserve(&terms, fee_floor, maximum_packets - 1, &mut refused), Err(BatchCourtErrorV1::CaseGraph)));
+    assert_eq!(&refused, empty);
+
+    // These short allowances pass the Trace-only floor and fail against the
+    // relevant role's graph in the common pre-commit callback.
+    let short = RemainingCapacity { additional_work: 1, ..rescue.per_drawn_bond };
+    for underfunded in [
+        ProtectedRescueDemand { per_drawn_bond: short, ..rescue },
+        ProtectedRescueDemand { per_outsider: short, ..rescue },
+        ProtectedRescueDemand { defensive: short, ..rescue },
+    ] {
+        let changed = ProtectedBatchPreclaimTermsV1::new_v1(projected, underfunded, Some(initial_request)).unwrap();
+        assert_ne!(changed.obligation_v1(), terms.obligation_v1());
+        assert!(matches!(
+            reserve(&changed, u64::MAX, maximum_packets, &mut refused),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(&refused, empty);
+    }
+}
+
 fn check_companion_booking_parity(
     projection: &PlainBatchOriginalProjectionV2,
     terms: &DrawnBatchPreclaimTermsV1,
@@ -230,7 +311,7 @@ fn check_companion_booking_parity(
     let mut priced_book = empty_book.clone();
     let (priced, _) =
         reserve_drawn_v1(OriginalId(d), projection, terms, schedule, u64::MAX, &mut priced_book, maximum_packets, price).unwrap();
-    let fee_floor = drawn_storage_fee_v1(&priced).unwrap();
+    let fee_floor = batch_storage_fee_v1(&priced).unwrap();
     assert!(fee_floor > 0);
     let budget = AggregateBudget {
         rounds: 1,
@@ -325,7 +406,68 @@ fn check_companion_booking_parity(
     assert_eq!(unsigned_graph, signed_graph);
     assert_eq!(unsigned_book, signed_book);
 
-    assert_eq!(drawn_storage_fee_v1(&unsigned_quotes).unwrap(), fee_floor);
+    assert_eq!(batch_storage_fee_v1(&unsigned_quotes).unwrap(), fee_floor);
+
+    let protected = ProtectedBatchPreclaimTermsV1::new_v1(terms.projected, terms.rescue, terms.initial_request).unwrap();
+    let protected_empty = protected_test_book();
+    let protected_packet_cap = maximum_packets + maximum_packets / terms.rescue.max_drawn_bonds as usize;
+    let mut priced_book = protected_empty.clone();
+    let (priced, _) = reserve_batch_v1(
+        OriginalId(d),
+        projection,
+        &protected.0,
+        BookingScopeV1::Protected,
+        schedule,
+        u64::MAX,
+        &mut priced_book,
+        protected_packet_cap,
+        price,
+    )
+    .unwrap();
+    let protected_budget = AggregateBudget { fee: batch_storage_fee_v1(&priced).unwrap(), ..budget };
+    let protected_obligation = protected.obligation_v1();
+    let protected_admission = PublicOriginalAdmissionV1::from_native_tfp1_v1(
+        fp,
+        &source,
+        &binding.class,
+        policy,
+        b"fixture prompt",
+        protected_obligation,
+        &protected_budget,
+    )
+    .unwrap();
+    let protected_companion = OriginalCommit { service_contract: protected_admission.service_contract, ..companion.clone() };
+    let protected_reservation = PublicOriginalReservationV1 {
+        service_obligation: protected_obligation.obligation_v1(),
+        budget: &protected_budget,
+        ..reservation
+    };
+    let protected_prepared = protected_admission
+        .prepare_tfp1_signed_bytes_v1(&sign_companion(&protected_companion), protected_obligation, &protected_reservation)
+        .unwrap();
+    let mut protected_unsigned = protected_empty.clone();
+    let mut protected_signed = protected_empty.clone();
+    let (unsigned_quotes, unsigned_graph) = protected_admission
+        .reserve_tfp1_protected_batch_candidate_v1(
+            &protected_companion,
+            &protected_reservation,
+            projection,
+            &protected,
+            &mut protected_unsigned,
+            protected_packet_cap,
+            price,
+        )
+        .unwrap();
+    let (signed_quotes, signed_graph) = protected_prepared
+        .reserve_protected_batch_candidates_v1(projection, &protected, &mut protected_signed, protected_packet_cap, price)
+        .unwrap();
+    assert_eq!(unsigned_quotes, signed_quotes);
+    assert_eq!(unsigned_graph, signed_graph);
+    assert_eq!(protected_unsigned, protected_signed);
+    assert_ne!(protected_unsigned, protected_empty);
+    assert_eq!(unsigned_quotes.len(), terms.rescue.max_drawn_bonds as usize + 1);
+    assert!(protected.reservation_scope_v1(protected_companion.id(), ProtectedBatchRoleV1::Outsider, 0).is_err());
+
     // An exact budget succeeds above; one missing unit or one already spent
     // unit must reject both paths without leaving any rank booked.
     for already_used in [false, true] {

@@ -212,12 +212,51 @@ impl PreparedTfp1PublicOriginalV1 {
         bytes: &[u8],
         context: &misaka_palw_positive_contract::public_one_honest::ManifestRequestContext<'_>,
     ) -> Result<RootedTfp1DrawnBatchCaseV1, ContractError> {
+        self.rooted_drawn_batch_case_for_profile_v1(state, draw, bytes, context, None)
+    }
+
+    /// Restore the paid selected-rank case under the new all-role resource
+    /// domain. The old selected-only namespace is never relabelled.
+    pub(crate) fn rooted_protected_drawn_batch_case_v1(
+        &self,
+        state: &PalwChainStateV2,
+        draw: &crate::palw_positive_contract_v2::PreparedPublicDrawV1,
+        bytes: &[u8],
+        context: &misaka_palw_positive_contract::public_one_honest::ManifestRequestContext<'_>,
+        terms: &super::preclaim::ProtectedBatchPreclaimTermsV1,
+    ) -> Result<RootedTfp1DrawnBatchCaseV1, ContractError> {
+        self.rooted_drawn_batch_case_for_profile_v1(state, draw, bytes, context, Some(terms))
+    }
+
+    fn rooted_drawn_batch_case_for_profile_v1(
+        &self,
+        state: &PalwChainStateV2,
+        draw: &crate::palw_positive_contract_v2::PreparedPublicDrawV1,
+        bytes: &[u8],
+        context: &misaka_palw_positive_contract::public_one_honest::ManifestRequestContext<'_>,
+        protected: Option<&super::preclaim::ProtectedBatchPreclaimTermsV1>,
+    ) -> Result<RootedTfp1DrawnBatchCaseV1, ContractError> {
         let link = self.rooted_link_v1(state)?;
+        if protected.is_some_and(|terms| {
+            !link.uses_public_frame_v1()
+                || terms.obligation_v1() != self.obligation
+                || terms.rescue_v1() != self.companion.rescue
+                || terms.initial_request_v1().is_none()
+        }) {
+            return Err(ContractError::Scope);
+        }
         let case = self.companion.rooted_drawn_batch_case_v1(state, draw, bytes, context)?;
         // This namespace is specific to the new PublicOriginal profile. Do
         // not relabel a legacy first-notice or shared-context packet with it.
         let scope = self.obligation.batch_scope_v1(link.original)?;
-        let reservation_scope = self.drawn_batch_reservation_scope_v1(case.opportunity_v1().index_v1())?;
+        let reservation_scope = match protected {
+            Some(terms) => terms.reservation_scope_v1(
+                self.companion.original,
+                super::preclaim::ProtectedBatchRoleV1::Drawn,
+                case.opportunity_v1().index_v1(),
+            )?,
+            None => self.drawn_batch_reservation_scope_v1(case.opportunity_v1().index_v1())?,
+        };
         let packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v1(
             link.claim,
             reservation_scope,
@@ -480,6 +519,15 @@ impl Tfp1PublicOriginalLinkV1 {
 
     pub(crate) fn uses_public_frame_v1(&self) -> bool {
         self.version == PUBLIC_FRAME_VERSION
+    }
+
+    /// The explicit link version pins this reference: legacy allocation for
+    /// version 1, dedicated frame identity for version 2. Callers must first
+    /// authenticate the link against its native frame and admission.
+    /// This is a storage version, not a choice of reservation domain. That
+    /// choice must match the independently authenticated profile/resource.
+    pub(crate) fn service_frame_reference_v1(&self) -> Hash64 {
+        self.fp_allocation
     }
 
     fn check_frame(

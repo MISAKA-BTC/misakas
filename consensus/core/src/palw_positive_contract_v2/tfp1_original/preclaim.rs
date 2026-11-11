@@ -18,6 +18,7 @@ use initial_request::InitialMaterialRequestPlanV1;
 use misaka_palw_positive_contract::{
     ContractError,
     public_one_honest::{OriginalCommit, OriginalId, ProtectedRescueDemand, VerificationSchedule},
+    reservations::RemainingCapacity,
 };
 
 type Booking = (NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>);
@@ -75,6 +76,130 @@ impl DrawnBatchPreclaimTermsV1 {
     }
 }
 
+/// Separate namespaces for the protected planning profile. The tags below
+/// are local hash preimage values; they do not reinterpret a claimant wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProtectedBatchRoleV1 {
+    Drawn,
+    Outsider,
+    Defense,
+}
+
+impl ProtectedBatchRoleV1 {
+    fn coordinates_v1(self, rescue: ProtectedRescueDemand) -> (u8, u64, RemainingCapacity) {
+        match self {
+            Self::Drawn => (0, rescue.max_drawn_bonds, rescue.per_drawn_bond),
+            Self::Outsider => (1, rescue.max_outsiders, rescue.per_outsider),
+            Self::Defense => (2, 1, rescue.defensive),
+        }
+    }
+}
+
+/// Covers each selected and outsider rank and one defensive opportunity.
+/// Every opportunity books the same material/verification graph as a
+/// conservative bound. This gives no claimant or responder authority, does
+/// not establish initial supply, and does not book the first notice or full
+/// inspection outside the graph. A full profile still needs those duties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProtectedBatchPreclaimTermsV1(DrawnBatchPreclaimTermsV1);
+
+impl ProtectedBatchPreclaimTermsV1 {
+    pub(crate) fn new_v1(
+        projected: PlainBatchProspectiveOriginalTermsV2,
+        rescue: ProtectedRescueDemand,
+        initial_request: Option<InitialMaterialRequestPlanV1>,
+    ) -> Result<Self, ContractError> {
+        let mut terms = DrawnBatchPreclaimTermsV1::new_v1(projected, rescue)?;
+        if let Some(plan) = initial_request {
+            terms = terms.with_initial_request_v2(plan)?;
+        }
+        let resource = crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/tfp1-protected-batch-resource/v1",
+            &(projected.resource_id_v2(), terms.relative_graph, rescue, initial_request),
+        )
+        .map_err(|_| ContractError::NonCanonical)?;
+        terms.obligation = (*projected.obligation_v2().facts_v1()).service_obligation_v1(projected.profile_id_v2(), resource)?;
+        Ok(Self(terms))
+    }
+
+    pub(crate) fn obligation_v1(&self) -> Tfp1PublicOriginalObligationV1 {
+        self.0.obligation
+    }
+
+    pub(crate) fn relative_graph_id_v1(&self) -> Hash64 {
+        self.0.relative_graph
+    }
+
+    pub(super) fn initial_request_v1(&self) -> Option<InitialMaterialRequestPlanV1> {
+        self.0.initial_request
+    }
+
+    pub(super) fn rescue_v1(&self) -> ProtectedRescueDemand {
+        self.0.rescue
+    }
+
+    pub(crate) fn reservation_scope_v1(
+        &self,
+        original: OriginalId,
+        role: ProtectedBatchRoleV1,
+        rank: u64,
+    ) -> Result<Hash64, ContractError> {
+        protected_scope_v1(self.0.obligation, original, self.0.rescue, role, rank)
+    }
+}
+
+/// Physical identity only. The consumer must independently authenticate the
+/// protected profile, companion, rank membership and booked packet.
+pub(crate) fn protected_scope_v1(
+    obligation: Tfp1PublicOriginalObligationV1,
+    original: OriginalId,
+    rescue: ProtectedRescueDemand,
+    role: ProtectedBatchRoleV1,
+    rank: u64,
+) -> Result<Hash64, ContractError> {
+    let (tag, count, _) = role.coordinates_v1(rescue);
+    if rank >= count {
+        return Err(ContractError::Budget);
+    }
+    let scope = obligation.batch_scope_v1(original)?;
+    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/tfp1-protected-batch-reservation/v1", &(scope, tag, rank))
+        .map_err(|_| ContractError::NonCanonical)
+}
+
+#[derive(Clone, Copy)]
+enum BookingScopeV1 {
+    DrawnOnly,
+    Protected,
+}
+
+impl BookingScopeV1 {
+    fn count_v1(self, rescue: ProtectedRescueDemand) -> Option<u64> {
+        match self {
+            Self::DrawnOnly => Some(rescue.max_drawn_bonds),
+            Self::Protected => rescue.max_drawn_bonds.checked_add(rescue.max_outsiders)?.checked_add(1),
+        }
+    }
+
+    fn role_rank_v1(self, rescue: ProtectedRescueDemand, index: u64) -> (ProtectedBatchRoleV1, u64) {
+        use ProtectedBatchRoleV1::*;
+        if matches!(self, Self::DrawnOnly) || index < rescue.max_drawn_bonds {
+            return (Drawn, index);
+        }
+        let remaining = index - rescue.max_drawn_bonds;
+        if remaining < rescue.max_outsiders { (Outsider, remaining) } else { (Defense, remaining - rescue.max_outsiders) }
+    }
+
+    fn scope_v1(self, terms: &DrawnBatchPreclaimTermsV1, original: OriginalId, index: u64) -> Result<Hash64, ContractError> {
+        match self {
+            Self::DrawnOnly => drawn_scope_v1(terms.obligation, original, index, terms.rescue.max_drawn_bonds),
+            Self::Protected => {
+                let (role, rank) = self.role_rank_v1(terms.rescue, index);
+                protected_scope_v1(terms.obligation, original, terms.rescue, role, rank)
+            }
+        }
+    }
+}
+
 pub(super) fn drawn_scope_v1(
     obligation: Tfp1PublicOriginalObligationV1,
     original: OriginalId,
@@ -103,6 +228,53 @@ impl PublicOriginalAdmissionV1<'_> {
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<Booking, BatchCourtErrorV1> {
+        self.reserve_batch_candidate_v1(
+            companion,
+            reservation,
+            projection,
+            terms,
+            BookingScopeV1::DrawnOnly,
+            book,
+            maximum_packets,
+            price,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reserve_tfp1_protected_batch_candidate_v1(
+        &self,
+        companion: &OriginalCommit,
+        reservation: &PublicOriginalReservationV1<'_>,
+        projection: &PlainBatchOriginalProjectionV2,
+        terms: &ProtectedBatchPreclaimTermsV1,
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+    ) -> Result<Booking, BatchCourtErrorV1> {
+        self.reserve_batch_candidate_v1(
+            companion,
+            reservation,
+            projection,
+            &terms.0,
+            BookingScopeV1::Protected,
+            book,
+            maximum_packets,
+            price,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn reserve_batch_candidate_v1(
+        &self,
+        companion: &OriginalCommit,
+        reservation: &PublicOriginalReservationV1<'_>,
+        projection: &PlainBatchOriginalProjectionV2,
+        terms: &DrawnBatchPreclaimTermsV1,
+        scopes: BookingScopeV1,
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+    ) -> Result<Booking, BatchCourtErrorV1> {
         if reservation.rescue != terms.rescue
             || terms.initial_request.is_some_and(|plan| !plan.matches_notice_v1(reservation.origin.accepted_daa, reservation.notice))
             || !terms.projected.matches_acceptance_v2(reservation.origin.accepted_daa, reservation.origin.accepted_blue_score)
@@ -120,7 +292,7 @@ impl PublicOriginalAdmissionV1<'_> {
             )?;
         }
         let fee_remaining = reservation.budget.fee.checked_sub(reservation.usage.fee).ok_or(BatchCourtErrorV1::CaseGraph)?;
-        reserve_drawn_v1(companion.id(), projection, terms, schedule, fee_remaining, book, maximum_packets, price)
+        reserve_batch_v1(companion.id(), projection, terms, scopes, schedule, fee_remaining, book, maximum_packets, price)
     }
 }
 
@@ -131,6 +303,29 @@ impl PreparedTfp1PublicOriginalV1 {
         &self,
         projection: &PlainBatchOriginalProjectionV2,
         terms: &DrawnBatchPreclaimTermsV1,
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+    ) -> Result<Booking, BatchCourtErrorV1> {
+        self.reserve_batch_candidates_v1(projection, terms, BookingScopeV1::DrawnOnly, book, maximum_packets, price)
+    }
+
+    pub(crate) fn reserve_protected_batch_candidates_v1(
+        &self,
+        projection: &PlainBatchOriginalProjectionV2,
+        terms: &ProtectedBatchPreclaimTermsV1,
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+    ) -> Result<Booking, BatchCourtErrorV1> {
+        self.reserve_batch_candidates_v1(projection, &terms.0, BookingScopeV1::Protected, book, maximum_packets, price)
+    }
+
+    fn reserve_batch_candidates_v1(
+        &self,
+        projection: &PlainBatchOriginalProjectionV2,
+        terms: &DrawnBatchPreclaimTermsV1,
+        scopes: BookingScopeV1,
         book: &mut ServiceReservations,
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
@@ -147,10 +342,11 @@ impl PreparedTfp1PublicOriginalV1 {
             plan.check_schedule_v1(origin.accepted_daa, self.companion.material_request_ready_by, self.companion.schedule)?;
         }
         let fee_remaining = self.companion.budget.fee.checked_sub(self.fee_used).ok_or(BatchCourtErrorV1::CaseGraph)?;
-        reserve_drawn_v1(
+        reserve_batch_v1(
             self.companion.original,
             projection,
             terms,
+            scopes,
             self.companion.schedule,
             fee_remaining,
             book,
@@ -163,7 +359,7 @@ impl PreparedTfp1PublicOriginalV1 {
 fn exact_vec<T>(count: usize) -> Result<Vec<T>, BatchCourtErrorV1> {
     let coverage = || {
         BatchCourtErrorV1::LocalResource(NativeCoverageV1::unsupported::<Vec<T>>(
-            "TFP1 drawn preclaim",
+            "TFP1 Batch preclaim",
             "allocation refused or capacity differs from reserved request",
         ))
     };
@@ -176,10 +372,10 @@ fn exact_vec<T>(count: usize) -> Result<Vec<T>, BatchCourtErrorV1> {
 }
 
 /// Storage charges already priced by the native compiled graph. This is a
-/// lower bound on the whole original's fee commitment: other roles, initial
-/// supply and non-storage charges must be added by the complete planner.
+/// lower bound on the whole original's fee commitment. Initial supply and
+/// non-storage charges must be added by the complete planner.
 /// Comparing a ceiling here neither burns funds nor charges them twice.
-fn drawn_storage_fee_v1(quotes: &[BatchAdmissionQuoteV1]) -> Result<u64, ServiceRefusal> {
+fn batch_storage_fee_v1(quotes: &[BatchAdmissionQuoteV1]) -> Result<u64, ServiceRefusal> {
     quotes.iter().try_fold(0u64, |sum, quote| {
         sum.checked_add(quote.carrier_storage_rent_sompi)
             .and_then(|sum| sum.checked_add(quote.numerical_fault_storage_rent_sompi))
@@ -187,6 +383,7 @@ fn drawn_storage_fee_v1(quotes: &[BatchAdmissionQuoteV1]) -> Result<u64, Service
     })
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn reserve_drawn_v1(
     original: OriginalId,
@@ -196,10 +393,25 @@ fn reserve_drawn_v1(
     fee_remaining: u64,
     book: &mut ServiceReservations,
     maximum_packets: usize,
+    price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<Booking, BatchCourtErrorV1> {
+    reserve_batch_v1(original, projection, terms, BookingScopeV1::DrawnOnly, schedule, fee_remaining, book, maximum_packets, price)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reserve_batch_v1(
+    original: OriginalId,
+    projection: &PlainBatchOriginalProjectionV2,
+    terms: &DrawnBatchPreclaimTermsV1,
+    scopes: BookingScopeV1,
+    schedule: VerificationSchedule,
+    fee_remaining: u64,
+    book: &mut ServiceReservations,
+    maximum_packets: usize,
     mut price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<Booking, BatchCourtErrorV1> {
     use BatchCourtErrorV1::{CaseGraph, LocalResource};
-    let count = usize::try_from(terms.rescue.max_drawn_bonds).map_err(|_| CaseGraph)?;
+    let count = usize::try_from(scopes.count_v1(terms.rescue).ok_or(CaseGraph)?).map_err(|_| CaseGraph)?;
     if count == 0 || count > maximum_packets {
         return Err(CaseGraph);
     }
@@ -207,10 +419,15 @@ fn reserve_drawn_v1(
     // A caller's small manifest cap cannot understate the actual claim Trace.
     // Other material, openings, fee and all-branch costs remain additional.
     let trace_bytes = projection.public_trace_payload_bytes_v1()?;
-    if terms.rescue.per_drawn_bond.transmitted_bytes < trace_bytes || terms.rescue.per_drawn_bond.retained_bytes < trace_bytes {
+    let trace_fits =
+        |allowance: RemainingCapacity| allowance.transmitted_bytes >= trace_bytes && allowance.retained_bytes >= trace_bytes;
+    if !trace_fits(terms.rescue.per_drawn_bond)
+        || (matches!(scopes, BookingScopeV1::Protected)
+            && (!trace_fits(terms.rescue.defensive) || (terms.rescue.max_outsiders != 0 && !trace_fits(terms.rescue.per_outsider))))
+    {
         return Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget));
     }
-    let scope = |rank| drawn_scope_v1(terms.obligation, original, rank as u64, count as u64).map_err(|_| CaseGraph);
+    let scope = |rank| scopes.scope_v1(terms, original, rank as u64).map_err(|_| CaseGraph);
     // Compile only one graph until the entire set's structural cap is known.
     let first_scope = scope(0)?;
     let first = projection.compile_before_allocation_v2(first_scope, &terms.projected, &mut price)?;
@@ -255,7 +472,6 @@ fn reserve_drawn_v1(
     } else {
         None
     };
-    let allowance = terms.rescue.per_drawn_bond;
     CompiledBatchAdmissionV1::reserve_protected_with_requests_v3(
         &cases,
         initial.as_deref(),
@@ -268,12 +484,14 @@ fn reserve_drawn_v1(
             // All ranks, PMR carriers and Node-produced fault storage share
             // the signed original fee ceiling. Check before publishing any
             // of this candidate's physical reservations to the caller book.
-            if drawn_storage_fee_v1(quotes)? > fee_remaining {
+            if batch_storage_fee_v1(quotes)? > fee_remaining {
                 return Err(ServiceRefusal::InvalidBudget);
             }
-            for (rank, quote) in quotes.iter().enumerate() {
-                cases[rank].1.check_public_original_schedule_v1(candidate, schedule)?;
-                if quote.scope != cases[rank].0
+            for (index, (quote, (scope, graph))) in quotes.iter().zip(&cases).enumerate() {
+                graph.check_public_original_schedule_v1(candidate, schedule)?;
+                let (role, _) = scopes.role_rank_v1(terms.rescue, index as u64);
+                let (_, _, allowance) = role.coordinates_v1(terms.rescue);
+                if quote.scope != *scope
                     || quote.relative_graph_id != terms.relative_graph
                     || quote.service.bytes > allowance.transmitted_bytes
                     || quote.service.work > allowance.additional_work

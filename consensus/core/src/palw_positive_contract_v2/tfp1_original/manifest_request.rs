@@ -6,8 +6,8 @@ use super::{
     manifest_carrier::{ManifestRequestCarrierContextV1, ManifestRequestCarrierScopeV1, ValidatedManifestRequestCarrierV1},
     manifest_paid::{PaidManifestRequestRowV1, manifest_request_charge_purpose_v1},
     native_link::Tfp1PublicOriginalLinkV1,
-    preclaim::DrawnBatchPreclaimTermsV1,
     preclaim::initial_request::InitialMaterialRequestPlanV1,
+    preclaim::{DrawnBatchPreclaimTermsV1, ProtectedBatchPreclaimTermsV1, ProtectedBatchRoleV1},
 };
 use crate::{
     Hash64,
@@ -16,7 +16,6 @@ use crate::{
         PUBLIC_MANIFEST_PAID_TABLE_V1, PreparedDrawnPublicManifestCaseV1, PreparedPublicDrawV1, require_current_public_origin_v1,
     },
     palw_state_v2::{PalwBlockContextV2, PalwChainStateV2},
-    palw_tir_public_claim_v1::palw_tir_public_claim_v1,
 };
 use misaka_palw_positive_contract::{
     ContractError,
@@ -53,7 +52,23 @@ impl PreparedTfp1PublicOriginalV1 {
             return Err(ContractError::Scope);
         }
         let plan = terms.initial_request_v1().ok_or(ContractError::Scope)?;
-        self.prepare_paid_manifest_with_plan_v1(state, draw, plan, handoff, context, at, quote_charge)
+        self.prepare_paid_manifest_with_plan_v1(state, draw, plan, None, handoff, context, at, quote_charge)
+    }
+
+    /// Selected-rank request under the explicit all-role reservation domain.
+    /// Outsider/defense capacity never grants selected-bond request authority.
+    pub(crate) fn prepare_paid_protected_manifest_request_v1(
+        &self,
+        state: &PalwChainStateV2,
+        draw: &PreparedPublicDrawV1,
+        terms: &ProtectedBatchPreclaimTermsV1,
+        handoff: &ValidatedManifestRequestCarrierV1,
+        context: &ManifestRequestContext<'_>,
+        at: PalwBlockContextV2,
+        quote_charge: impl FnOnce(ServiceCost, u64) -> Result<u64, ContractError>,
+    ) -> Result<PreparedPaidManifestRequestV1, ContractError> {
+        let plan = terms.initial_request_v1().ok_or(ContractError::Scope)?;
+        self.prepare_paid_manifest_with_plan_v1(state, draw, plan, Some(terms), handoff, context, at, quote_charge)
     }
 
     fn prepare_paid_manifest_with_plan_v1(
@@ -61,12 +76,18 @@ impl PreparedTfp1PublicOriginalV1 {
         state: &PalwChainStateV2,
         draw: &PreparedPublicDrawV1,
         plan: InitialMaterialRequestPlanV1,
+        protected: Option<&ProtectedBatchPreclaimTermsV1>,
         handoff: &ValidatedManifestRequestCarrierV1,
         context: &ManifestRequestContext<'_>,
         at: PalwBlockContextV2,
         quote_charge: impl FnOnce(ServiceCost, u64) -> Result<u64, ContractError>,
     ) -> Result<PreparedPaidManifestRequestV1, ContractError> {
         let link = self.rooted_link_v1(state)?;
+        if protected.is_some_and(|terms| {
+            !link.uses_public_frame_v1() || terms.obligation_v1() != self.obligation || terms.rescue_v1() != self.companion.rescue
+        }) {
+            return Err(ContractError::Scope);
+        }
         plan.check_schedule_v1(
             self.companion.carrier.origin.accepted_daa,
             self.companion.material_request_ready_by,
@@ -78,7 +99,10 @@ impl PreparedTfp1PublicOriginalV1 {
         let scope = ManifestRequestCarrierScopeV1 {
             claim: link.claim_v1(),
             source: link.source_v1(),
-            reservation_scope: self.drawn_batch_reservation_scope_v1(rank.index_v1())?,
+            reservation_scope: match protected {
+                Some(terms) => terms.reservation_scope_v1(self.companion.original, ProtectedBatchRoleV1::Drawn, rank.index_v1())?,
+                None => self.drawn_batch_reservation_scope_v1(rank.index_v1())?,
+            },
         };
         require_current_public_origin_v1(context.origin, &at)?;
         if context.origin.event_ordinal != 0 {
@@ -126,11 +150,12 @@ fn check_slot(
 ) -> Result<(), ContractError> {
     let service = state.court_service_row_v3_v1().ok_or(ContractError::Scope)?;
     let binding = service.state.claims.get(&link.claim_v1()).ok_or(ContractError::Scope)?;
-    let frame = palw_tir_public_claim_v1(state, link.claim_v1()).ok_or(ContractError::Scope)?;
     if binding.claim != link.claim_v1()
         || binding.source_id != link.source_v1()
-        || binding.allocation_id != frame.plan_v1().allocation_id
+        || binding.allocation_id != link.service_frame_reference_v1()
         || binding.original_accepted_daa != link.carrier_v1().origin.accepted_daa
+        || binding.hard_deadline_daa
+            != misaka_palw_positive_contract::public_one_honest::OriginalClock::new(link.carrier_v1().origin.accepted_daa)?.hard()
         || !binding.packet_ids.contains(&expected.id)
         || service.state.book.packet(&expected.id) != Some(expected)
         || service.state.book.assigned_daa(&expected.id) != Some(at.daa_score)
@@ -275,7 +300,7 @@ pub(crate) fn exercise_paid_request_v1(
                 scope.claim,
                 ServiceClaimBinding {
                     claim: scope.claim,
-                    allocation_id: palw_tir_public_claim_v1(drawn, scope.claim).unwrap().plan_v1().allocation_id,
+                    allocation_id: link.service_frame_reference_v1(),
                     source_id: scope.source,
                     original_accepted_daa: a,
                     hard_deadline_daa: context.schedule.hard(),
@@ -287,18 +312,40 @@ pub(crate) fn exercise_paid_request_v1(
         causal: BTreeMap::new(),
     };
     let mut state = drawn.clone();
-    seed_manifest_service_book_v1(&mut state, service);
+    service.state.check_context(drawn).unwrap();
+    for changed_field in 0..4 {
+        let mut wrong = service.state.clone();
+        let binding = wrong.claims.get_mut(&scope.claim).unwrap();
+        match changed_field {
+            0 => binding.allocation_id = Hash64::from_u64_word(902),
+            1 => binding.source_id = Hash64::from_u64_word(903),
+            2 => {
+                binding.original_accepted_daa += 1;
+                binding.hard_deadline_daa += 1;
+            }
+            _ => binding.hard_deadline_daa -= 1,
+        }
+        assert!(wrong.check_context(drawn).is_err(), "service scope field {changed_field} is native, not caller declared");
+    }
+    seed_manifest_service_book_v1(&mut state, service, params);
+    if let Some(frame) = state.public_tfp1_frame_v1(scope.claim).unwrap() {
+        assert!(state.court_service_holds_bond_v1(&frame.producer_v1()));
+        assert!(!state.court_service_holds_bond_v1(&crate::palw_state_v2::PalwBondKeyV2(TransactionOutpoint::new(
+            Hash64::from_u64_word(904),
+            0,
+        ))));
+    }
     let price = |actual, actual_retained| {
         assert_eq!(actual, cost);
         assert_eq!(actual_retained, retained);
         Ok(7)
     };
     let handoff = make_handoff();
-    assert!(paired.prepare_paid_manifest_with_plan_v1(drawn, draw, plan, &handoff, &context, at, price).is_err());
-    assert!(detached.prepare_paid_manifest_with_plan_v1(&state, draw, plan, &handoff, &context, at, price).is_err());
-    let prepared = paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, &handoff, &context, at, price).unwrap();
+    assert!(paired.prepare_paid_manifest_with_plan_v1(drawn, draw, plan, None, &handoff, &context, at, price).is_err());
+    assert!(detached.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &handoff, &context, at, price).is_err());
+    let prepared = paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &handoff, &context, at, price).unwrap();
     for fee in [0, 13] {
-        assert!(paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, &handoff, &context, at, |_, _| Ok(fee)).is_err());
+        assert!(paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &handoff, &context, at, |_, _| Ok(fee)).is_err());
     }
     let wrong_point = PalwBlockContextV2 { daa_score: at.daa_score + 1, ..at };
     assert!(prepared.storage_rows_at_v1(&state, &wrong_point).is_err());
@@ -320,7 +367,9 @@ pub(crate) fn exercise_paid_request_v1(
         },
         ..context
     };
-    assert!(paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, &invalid_handoff, &invalid_context, at, price).is_err());
+    assert!(
+        paired.prepare_paid_manifest_with_plan_v1(&state, draw, plan, None, &invalid_handoff, &invalid_context, at, price).is_err()
+    );
     assert_eq!(handoff.remaining_fee_v1(), 12);
     let accepted = exercise_paid_manifest_writer_v1(state, at, params, &prepared, make_handoff);
     assert!(prepared.storage_rows_at_v1(&accepted, &at).unwrap().is_none());

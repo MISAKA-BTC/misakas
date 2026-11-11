@@ -151,9 +151,16 @@ impl PublicTfp1FrameV1 {
     /// The supplied point may be later than the original's accepting block,
     /// as it is during snapshot validation and archival reconstruction.
     pub(crate) fn check_state_at_v1(&self, state: &PalwChainStateV2, point: &PalwBlockContextV2) -> Result<(), ContractError> {
+        check_public_origin_point_v1(self.origin_v1(), point)?;
+        self.check_native_claim_v1(state)
+    }
+
+    /// Native identity check usable within the accepting checkpoint, before
+    /// LastPoint advances. It confers no inclusion-time or funding authority;
+    /// the paired writer and final-state validator check those separately.
+    fn check_native_claim_v1(&self, state: &PalwChainStateV2) -> Result<(), ContractError> {
         self.native_facts_v1()?;
         let origin = self.origin_v1();
-        check_public_origin_point_v1(origin, point)?;
         let claim_id = self.claim_v1();
         let claim = state.claim(&claim_id).ok_or(ContractError::Scope)?;
         if palw_tir_public_claim_v1(state, claim_id).is_some()
@@ -174,6 +181,35 @@ impl PublicTfp1FrameV1 {
         }
         let class = state.tir_class_v1(&claim.class_id).ok_or(ContractError::Scope)?;
         check_class_v1(class, &self.header)
+    }
+
+    /// The dedicated frame tag and aux-204 version 2 identify this new scope.
+    /// Legacy bindings continue to name their actual allocation, unchanged.
+    /// Packet coverage, payment and release are independent checks.
+    pub(crate) fn check_service_binding_v1(
+        &self,
+        state: &PalwChainStateV2,
+        binding: &crate::palw_court_service_state_v2::ServiceClaimBinding,
+    ) -> Result<(), ContractError> {
+        self.check_native_claim_v1(state)?;
+        self.check_service_scope_v1(binding)
+    }
+
+    /// Fixed-field comparison for already validated native state. Admission
+    /// and snapshot validation still perform full frame/claim validation.
+    pub(crate) fn check_service_scope_v1(
+        &self,
+        binding: &crate::palw_court_service_state_v2::ServiceClaimBinding,
+    ) -> Result<(), ContractError> {
+        if binding.claim != self.claim_v1()
+            || binding.allocation_id != self.identity_v1()
+            || binding.source_id != self.source_v1()
+            || binding.original_accepted_daa != self.origin_v1().accepted_daa
+            || binding.hard_deadline_daa != OriginalClock::new(self.origin_v1().accepted_daa)?.hard()
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
     }
 
     pub(crate) fn claim_v1(&self) -> Hash64 {

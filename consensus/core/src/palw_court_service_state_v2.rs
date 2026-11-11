@@ -12,6 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ServiceClaimBinding {
     pub claim: Hash64,
+    /// Legacy TIR allocation or kernel job identity. A dedicated public TFP1
+    /// frame (aux-204 version 2) uses its domain-separated frame identity.
+    /// The native context, never this hash alone, selects the interpretation.
     pub allocation_id: Hash64,
     pub source_id: Hash64,
     pub original_accepted_daa: u64,
@@ -247,6 +250,10 @@ impl CourtServiceStateV2 {
     pub fn check_context(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), String> {
         self.check_live_v1()?;
         for binding in self.claims.values() {
+            if let Some(frame) = state.public_tfp1_frame_v1(binding.claim).map_err(|_| "invalid protected TFP1 service frame")? {
+                frame.check_service_binding_v1(state, binding).map_err(|_| "service recovery substitutes protected TFP1 scope")?;
+                continue;
+            }
             let Some(frame) = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, binding.claim) else {
                 // Lane F02b: a kernel-route original (no TIR frame) is bound to its kernel claim row: job, class, commit DAA.
                 let row = state
@@ -335,6 +342,21 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     pub fn court_service_holds_bond_v1(&self, bond: &crate::palw_state_v2::PalwBondKeyV2) -> bool {
         self.court_service_state_v1().is_some_and(|service| {
             service.claims.keys().any(|claim| {
+                use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+                match self.staged_court_row_v1(&Key::PublicTfp1FrameV1(*claim)) {
+                    Some(Row::PublicTfp1FrameV1(frame)) => {
+                        // This profile has no legacy model-weight custodians.
+                        // Other actor duties keep their independent bond holds.
+                        // State validation checks the full frame; bond exits
+                        // need only its immutable scope/owner pins here.
+                        let binding = &service.claims[claim];
+                        return frame.check_service_scope_v1(binding).is_err()
+                            || self.claim(claim).is_none_or(|claim| claim.bond != frame.producer_v1())
+                            || frame.producer_v1() == *bond;
+                    }
+                    Some(_) => return true,
+                    None => {}
+                }
                 // Missing frames are invalid on write/load; fail closed if queried
                 // on a not-yet-validated candidate rather than releasing collateral.
                 crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)

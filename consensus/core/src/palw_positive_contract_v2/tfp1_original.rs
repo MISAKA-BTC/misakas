@@ -949,6 +949,37 @@ mod tests {
                 .unwrap();
         let request_case_id = request.case_id(&companion, request_context.claimant).unwrap();
         let request_wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
+        // Run the same signed request against the dedicated frame as well.
+        // The service tariff/book remain fixtures: this verifies the native
+        // reader/writer bridge, not a complete protected-profile admission.
+        let (protected_drawn, _) = apply_palw_transition_v2_with_extras(
+            &protected_state,
+            &link_params,
+            &draw_point,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1 {
+                kernel_route: Some(kernel.clone()),
+                public_draws: vec![draw.prepare_storage_record()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (protected_case, _) = manifest_request::exercise_paid_request_v1(
+            &paired,
+            &companion_only,
+            &protected_drawn,
+            &draw,
+            &request_context,
+            &request_wire,
+            request_point,
+            &link_params,
+        );
+        assert!(protected_case.public_tfp1_original_link_v1(facts.claim).unwrap().unwrap().uses_public_frame_v1());
         let (with_case, paid_origin) = manifest_request::exercise_paid_request_v1(
             &paired,
             &companion_only,

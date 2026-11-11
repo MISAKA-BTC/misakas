@@ -1453,6 +1453,7 @@ pub(crate) fn exercise_paid_manifest_writer_v1(
 pub(crate) fn seed_manifest_service_book_v1(
     state: &mut PalwChainStateV2,
     service: crate::palw_court_service_release_v1::CourtServiceRowV3,
+    params: &PalwStateParamsV2,
 ) {
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
 
@@ -1461,6 +1462,15 @@ pub(crate) fn seed_manifest_service_book_v1(
     let key = PalwStagedCourtKeyV1::CourtService;
     assert!(!state.staged_courts.contains_key(&key));
     let row = PalwStagedCourtRowV1::CourtServiceV3(Box::new(service).into());
-    palw_staged_court_fold_v1::update_indices(state, key, None, Some(&row));
-    state.staged_courts.insert(key, row);
+    let extras = PalwTransitionExtrasV1 { tir_public_conviction_active: true, ..Default::default() };
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
+    let mut builder = TransitionBuilder::new(state, params, false, false, false, false, &extras);
+    builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    builder.write_staged_row_v1(key, Some(row)).unwrap();
+    let delta = PalwStateDeltaV2 { point: *state.last_point().unwrap(), entries: builder.entries.clone() };
+    let replayed = apply_delta_v2(state, &delta, params).unwrap();
+    assert_eq!(replayed.state_root(), builder.state.state_root());
+    assert_eq!(revert_delta_v2(&replayed, &delta, params).unwrap().state_root(), state.state_root());
+    drop(builder);
+    *state = replayed;
 }
