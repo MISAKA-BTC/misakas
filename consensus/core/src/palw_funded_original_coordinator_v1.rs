@@ -295,6 +295,8 @@ pub struct PalwFundedOriginalPairingV1 {
     /// Never a separately supplied companion or a duplicated heap buffer.
     public_companion: Option<std::ops::Range<usize>>,
     public_prompt: Option<std::ops::Range<usize>>,
+    public_manifest: Option<std::ops::Range<usize>>,
+    public_hf_descriptor: Option<std::ops::Range<usize>>,
     public_source: Option<Hash64>,
     history_inputs: Option<crate::palw_tfp1_original_history_v1::AcceptedTfp1OriginalInputsV1>,
 }
@@ -345,6 +347,14 @@ impl PalwFundedOriginalPairingV1 {
     pub fn public_prompt_bytes_v3(&self) -> Option<&[u8]> {
         self.public_prompt.as_ref().map(|range| &self.carrier.payload[range.clone()])
     }
+    /// Literal version-2 material metadata from the same actual carrier.
+    /// Structural pairing alone does not authenticate these bytes.
+    pub fn public_manifest_bytes_v2(&self) -> Option<&[u8]> {
+        self.public_manifest.as_ref().map(|range| &self.carrier.payload[range.clone()])
+    }
+    pub fn public_hf_descriptor_bytes_v2(&self) -> Option<&[u8]> {
+        self.public_hf_descriptor.as_ref().map(|range| &self.carrier.payload[range.clone()])
+    }
     /// Header identity from the actual TFP1, not payer-declared source terms.
     pub(crate) fn public_source_id_v3(&self) -> Option<Hash64> {
         self.public_source
@@ -391,6 +401,8 @@ pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8])
     };
     let public_companion = public.as_ref().map(|view| actual_range(view.companion_bytes_v3())).transpose()?;
     let public_prompt = public.as_ref().map(|view| actual_range(view.prompt_bytes_v3())).transpose()?;
+    let public_manifest = public.as_ref().and_then(|view| view.manifest_bytes_v2()).map(|bytes| actual_range(bytes)).transpose()?;
+    let public_hf_descriptor = public.as_ref().and_then(|view| view.hf_descriptor_bytes_v2()).map(actual_range).transpose()?;
     let payload = public.as_ref().map_or(actual, |view| view.funded_original_v3());
     let (suppliers, semantic_table) = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
         let decoded = crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?;
@@ -416,6 +428,8 @@ pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8])
         semantic_table,
         public_companion,
         public_prompt,
+        public_manifest,
+        public_hf_descriptor,
         public_source,
         history_inputs: None,
     })

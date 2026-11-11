@@ -23,12 +23,26 @@ use misaka_palw_positive_contract::{
     ContractError,
     identity::Digest,
     public_one_honest::{
-        ManifestScopeRules, ManifestV1, MaterialScope, hf_artifact_material_codec_v1, prompt_text_material_codec_v1,
-        tir_cold_dependencies_codec_v1, tir_cold_initial_state_codec_v1, tir_ordinary_tfp1_rules_material_codec_v1,
-        tir_output_material_codec_v1, tir_program_material_codec_v1, tir_trace_material_codec_v1, tokenizer_json_material_codec_v1,
+        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalId, hf_artifact_material_codec_v1,
+        prompt_text_material_codec_v1, tir_cold_dependencies_codec_v1, tir_cold_initial_state_codec_v1,
+        tir_ordinary_tfp1_rules_material_codec_v1, tir_output_material_codec_v1, tir_program_material_codec_v1,
+        tir_trace_material_codec_v1, tokenizer_json_material_codec_v1,
     },
     reservations::RemainingCapacity,
 };
+
+const MATERIAL_SCOPES: [MaterialScope; MaterialScope::COUNT] = [
+    MaterialScope::Artifact,
+    MaterialScope::Program,
+    MaterialScope::Prompt,
+    MaterialScope::InputTokens,
+    MaterialScope::Tokenizer,
+    MaterialScope::ExecutionRules,
+    MaterialScope::InitialState,
+    MaterialScope::Dependencies,
+    MaterialScope::Trace,
+    MaterialScope::Output,
+];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum InitialSupplyErrorV1 {
@@ -61,6 +75,7 @@ pub(crate) struct PublicTfp1InitialSupplyV1 {
     literal_prompt: Hash64,
     hf_content_root: Digest,
     hf_chunk_bytes: u32,
+    input_tokens: Digest,
     tokenizer_registration: Hash64,
     prompt_form: PalwPromptIdsFormV1,
     body_bytes: [u64; MaterialScope::COUNT],
@@ -158,8 +173,7 @@ impl PublicTfp1InitialSupplyV1 {
         if literal_prompt.is_empty() || job.declared_prefill_tokens == 0 || job.exact_decode_tokens == 0 {
             return Err(ContractError::Range.into());
         }
-        let literal_prompt_id =
-            stream_digest(b"misaka-palw/tfp1-initial-supply-prompt/v1", &literal_prompt).map_err(|_| ContractError::NonCanonical)?;
+        let literal_prompt_id = literal_prompt_id_v1(literal_prompt)?;
         let trace_values = source.trace_value_bytes_v1().ok_or(MissingTraceGeometry)?;
         let trace = TraceSupplyV1::derive_v1(source.leaf_count_v1(), trace_values, source.widest_leaf_value_bytes_v1())?;
         let trace_body = (PublicOriginalTraceIndexV1::WIRE_BYTES as u64).checked_add(trace_values).ok_or(Overflow)?;
@@ -189,6 +203,7 @@ impl PublicTfp1InitialSupplyV1 {
             literal_prompt: literal_prompt_id,
             hf_content_root: hf_entry.content_root,
             hf_chunk_bytes: hf_entry.chunk_bytes,
+            input_tokens: Digest(job.prompt_token_ids_hash.as_bytes()),
             tokenizer_registration: tokenizer.record_id_v1(),
             prompt_form,
             body_bytes,
@@ -210,37 +225,11 @@ impl PublicTfp1InitialSupplyV1 {
         initial_supply: RemainingCapacity,
     ) -> Result<(), InitialSupplyErrorV1> {
         ManifestV1::fetch_size(max_manifest_bytes)?;
-        let codecs = [
-            hf_artifact_material_codec_v1(),
-            tir_program_material_codec_v1(),
-            prompt_text_material_codec_v1(),
-            Digest(prompt_ids_form_id_v1(self.prompt_form).as_bytes()),
-            tokenizer_json_material_codec_v1(),
-            tir_ordinary_tfp1_rules_material_codec_v1(),
-            tir_cold_initial_state_codec_v1(),
-            tir_cold_dependencies_codec_v1(),
-            tir_trace_material_codec_v1(),
-            tir_output_material_codec_v1(),
-        ];
-        for (index, ((limit, codec), bytes)) in limits.iter().zip(codecs).zip(self.body_bytes).enumerate() {
+        for ((scope, limit), codec) in MATERIAL_SCOPES.into_iter().zip(limits).zip(self.codecs_v1()) {
             if limit.codec != codec {
                 return Err(ContractError::UnsupportedProfile.into());
             }
-            if limit.chunk_bytes == 0 || bytes > limit.max_bytes {
-                return Err(ContractError::Budget.into());
-            }
-            let chunk = u64::from(limit.chunk_bytes);
-            let layout_fits = match index {
-                i if i == MaterialScope::Artifact as usize => limit.chunk_bytes == self.hf_chunk_bytes && bytes <= chunk,
-                i if i == MaterialScope::Trace as usize => {
-                    chunk >= (PublicOriginalTraceIndexV1::WIRE_BYTES as u64).max(self.trace.widest_value_bytes)
-                }
-                i if i == MaterialScope::InputTokens as usize && self.prompt_form == PalwPromptIdsFormV1::MerkleV1 => {
-                    chunk == u64::from(PALW_PROMPT_IDS_TILE_LEN) * 4
-                }
-                _ => bytes <= chunk,
-            };
-            if !layout_fits {
+            if self.body_bytes_v1(scope) > limit.max_bytes || !self.chunk_fits_v1(scope, limit.chunk_bytes) {
                 return Err(ContractError::Budget.into());
             }
         }
@@ -251,6 +240,71 @@ impl PublicTfp1InitialSupplyV1 {
             return Err(ContractError::Budget.into());
         }
         Ok(())
+    }
+
+    /// Compare the literal manifest with the same native material geometry
+    /// used to price supply. The caller obtains `expected_original` from the
+    /// authenticated companion for this claim and Source and checks policy
+    /// ceilings separately. A checked manifest alone establishes neither.
+    pub(crate) fn check_manifest_v1(
+        &self,
+        expected_original: OriginalId,
+        manifest: &CheckedManifestV1,
+        literal_prompt: &[u8],
+    ) -> Result<(), InitialSupplyErrorV1> {
+        if manifest.original() != expected_original {
+            return Err(ContractError::Scope.into());
+        }
+        for (scope, codec) in MATERIAL_SCOPES.into_iter().zip(self.codecs_v1()) {
+            let entry = manifest.entry(scope);
+            if entry.codec != codec {
+                return Err(ContractError::UnsupportedProfile.into());
+            }
+            if entry.total_bytes != self.body_bytes_v1(scope) || !self.chunk_fits_v1(scope, entry.chunk_bytes) {
+                return Err(ContractError::Budget.into());
+            }
+        }
+        // The InputTokens codecs count raw u32 values, not opening frames.
+        // Both the miner and the panel bind their content root to this pin.
+        if manifest.entry(MaterialScope::Artifact).content_root != self.hf_content_root
+            || manifest.entry(MaterialScope::InputTokens).content_root != self.input_tokens
+            || literal_prompt.len() as u64 != self.body_bytes_v1(MaterialScope::Prompt)
+            || literal_prompt_id_v1(literal_prompt)? != self.literal_prompt
+        {
+            return Err(ContractError::Identity.into());
+        }
+        manifest.open_prompt_text(literal_prompt)?;
+        Ok(())
+    }
+
+    fn codecs_v1(&self) -> [Digest; MaterialScope::COUNT] {
+        [
+            hf_artifact_material_codec_v1(),
+            tir_program_material_codec_v1(),
+            prompt_text_material_codec_v1(),
+            Digest(prompt_ids_form_id_v1(self.prompt_form).as_bytes()),
+            tokenizer_json_material_codec_v1(),
+            tir_ordinary_tfp1_rules_material_codec_v1(),
+            tir_cold_initial_state_codec_v1(),
+            tir_cold_dependencies_codec_v1(),
+            tir_trace_material_codec_v1(),
+            tir_output_material_codec_v1(),
+        ]
+    }
+
+    fn chunk_fits_v1(&self, scope: MaterialScope, chunk_bytes: u32) -> bool {
+        if chunk_bytes == 0 {
+            return false;
+        }
+        let chunk = u64::from(chunk_bytes);
+        match scope {
+            MaterialScope::Artifact => chunk_bytes == self.hf_chunk_bytes && self.body_bytes_v1(scope) <= chunk,
+            MaterialScope::Trace => chunk >= (PublicOriginalTraceIndexV1::WIRE_BYTES as u64).max(self.trace.widest_value_bytes),
+            MaterialScope::InputTokens if self.prompt_form == PalwPromptIdsFormV1::MerkleV1 => {
+                chunk_bytes == PALW_PROMPT_IDS_TILE_LEN * 4
+            }
+            _ => self.body_bytes_v1(scope) <= chunk,
+        }
     }
 
     pub(crate) fn claim_v1(&self) -> Hash64 {
@@ -305,6 +359,10 @@ impl PublicTfp1InitialSupplyV1 {
         let span = until.checked_sub(from).ok_or(ContractError::Range)?;
         self.claim_wire_bytes.checked_mul(span).ok_or(InitialSupplyErrorV1::Overflow)
     }
+}
+
+fn literal_prompt_id_v1(prompt: &[u8]) -> Result<Hash64, ContractError> {
+    stream_digest(b"misaka-palw/tfp1-initial-supply-prompt/v1", &prompt).map_err(|_| ContractError::NonCanonical)
 }
 
 impl TraceSupplyV1 {
@@ -402,6 +460,7 @@ pub(crate) mod tests {
             supply.body_bytes_v1(MaterialScope::Trace),
             source.trace_value_bytes_v1().unwrap() + PublicOriginalTraceIndexV1::WIRE_BYTES as u64
         );
+        exercise_checked_manifest_v1(&supply, fp, source, &hf);
 
         let unadvanced = parent.last_point().unwrap();
         assert_eq!(
@@ -421,6 +480,127 @@ pub(crate) mod tests {
         assert_eq!(
             PublicTfp1InitialSupplyV1::derive_v1(parent, extras, at, fp, source, class, prompt_form, b"fixture prompt", None),
             Err(InitialSupplyErrorV1::MissingHfDescriptor)
+        );
+    }
+
+    fn exercise_checked_manifest_v1(
+        supply: &PublicTfp1InitialSupplyV1,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        hf: &PublicTfp1HfArtifactV1,
+    ) {
+        use misaka_palw_positive_contract::{
+            identity::{ChainScope, principal},
+            public_one_honest::{ManifestEntryV1, OriginalCommit, prompt_text_material_v1},
+        };
+        let prompt = "fixture prompt";
+        let tag = Digest([42; 64]);
+        let job = &source.header_v1().job_context;
+        let pins = hf.descriptor_v1().native_pins_v1();
+        let mut limits = supply.codecs_v1().map(|codec| ManifestScopeRules { codec, max_bytes: 0, chunk_bytes: 0 });
+        for scope in MATERIAL_SCOPES {
+            let bytes = supply.body_bytes_v1(scope);
+            let limit = &mut limits[scope as usize];
+            limit.max_bytes = bytes + 1;
+            limit.chunk_bytes = match scope {
+                MaterialScope::Artifact => supply.hf_chunk_bytes,
+                MaterialScope::InputTokens if supply.prompt_form == PalwPromptIdsFormV1::MerkleV1 => PALW_PROMPT_IDS_TILE_LEN * 4,
+                _ => u32::try_from(bytes).unwrap(),
+            };
+        }
+        let prompt_rules = limits[MaterialScope::Prompt as usize];
+        let prompt_entry = prompt_text_material_v1(tag, prompt, prompt_rules).unwrap();
+        let original = OriginalCommit {
+            scope: ChainScope { network: Digest(fp.job.network_domain.as_bytes()), ruleset: tag, branch: tag },
+            job: Digest(job.job_id.as_bytes()),
+            execution: Digest(job.context_hash().as_bytes()),
+            miner: principal(fp.job.executor_pubkey.as_slice().try_into().unwrap()),
+            registered_class: pins.class,
+            artifact: pins.inventory,
+            program: pins.program,
+            prompt: prompt_entry.subject,
+            input_tokens: Digest(job.prompt_token_ids_hash.as_bytes()),
+            tokenizer: pins.tokenizer,
+            execution_rules: Digest(job.cu_ruleset_id.as_bytes()),
+            generation_seed: job.execution_seed,
+            initial_state: tag,
+            dependencies: tag,
+            prefill: job.declared_prefill_tokens,
+            decode: job.exact_decode_tokens,
+            max_context: job.max_context_tokens,
+            output: Digest(fp.output_root.as_bytes()),
+            trace_root: Digest(fp.execution_root.as_bytes()),
+            manifest_root: tag,
+            service_contract: tag,
+        };
+        // The body sizes and native HF/Prompt/Input entries are real. Other
+        // content roots are fixture metadata for this size-only comparison.
+        let subjects = [
+            original.artifact,
+            original.program,
+            original.prompt,
+            original.input_tokens,
+            original.tokenizer,
+            original.execution_rules,
+            original.initial_state,
+            original.dependencies,
+            original.trace_root,
+            original.output,
+        ];
+        let mut manifest = ManifestV1 {
+            service_contract: original.service_contract,
+            entries: std::array::from_fn(|i| ManifestEntryV1 {
+                subject: subjects[i],
+                content_root: subjects[i],
+                codec: limits[i].codec,
+                total_bytes: supply.body_bytes[i],
+                chunk_bytes: limits[i].chunk_bytes,
+            }),
+        };
+        manifest.entries[MaterialScope::Artifact as usize] = hf.entry_v1();
+        manifest.entries[MaterialScope::Prompt as usize] = prompt_entry;
+        let checked = |mut original: OriginalCommit, body: &ManifestV1, limits: &[ManifestScopeRules; MaterialScope::COUNT]| {
+            let total_limit = supply.payload_bytes + 1;
+            let wire = original.bind_manifest(body, limits, total_limit, ManifestV1::WIRE_BYTES).unwrap();
+            let manifest = original.authenticate_manifest(&wire, ManifestV1::WIRE_BYTES).unwrap();
+            (original.id(), manifest.decode(&original, limits, total_limit).unwrap())
+        };
+        let (expected, actual) = checked(original.clone(), &manifest, &limits);
+        assert_eq!(supply.check_manifest_v1(expected, &actual, prompt.as_bytes()), Ok(()));
+        assert_eq!(
+            supply.check_manifest_v1(OriginalId(tag), &actual, prompt.as_bytes()),
+            Err(InitialSupplyErrorV1::Contract(ContractError::Scope))
+        );
+        for scope in MATERIAL_SCOPES {
+            let mut changed = manifest.clone();
+            changed.entries[scope as usize].total_bytes += 1;
+            let (id, changed) = checked(original.clone(), &changed, &limits);
+            assert_eq!(
+                supply.check_manifest_v1(id, &changed, prompt.as_bytes()),
+                Err(InitialSupplyErrorV1::Contract(ContractError::Budget))
+            );
+        }
+        for scope in [MaterialScope::Artifact, MaterialScope::InputTokens, MaterialScope::Prompt] {
+            let mut changed = manifest.clone();
+            changed.entries[scope as usize].content_root = tag;
+            let (id, changed) = checked(original.clone(), &changed, &limits);
+            assert_eq!(
+                supply.check_manifest_v1(id, &changed, prompt.as_bytes()),
+                Err(InitialSupplyErrorV1::Contract(ContractError::Identity))
+            );
+        }
+        let mut different_chunk = manifest.clone();
+        let mut different_limits = limits;
+        different_limits[MaterialScope::Artifact as usize].chunk_bytes += 1;
+        different_chunk.entries[MaterialScope::Artifact as usize].chunk_bytes += 1;
+        let (id, different_chunk) = checked(original, &different_chunk, &different_limits);
+        assert_eq!(
+            supply.check_manifest_v1(id, &different_chunk, prompt.as_bytes()),
+            Err(InitialSupplyErrorV1::Contract(ContractError::Budget))
+        );
+        assert_eq!(
+            supply.check_manifest_v1(expected, &actual, b"Fixture prompt"),
+            Err(InitialSupplyErrorV1::Contract(ContractError::Identity))
         );
     }
 
@@ -458,6 +638,7 @@ pub(crate) mod tests {
             literal_prompt: Hash64::from_u64_word(3),
             hf_content_root: Digest([4; 64]),
             hf_chunk_bytes: 450,
+            input_tokens: Digest([6; 64]),
             tokenizer_registration: Hash64::from_u64_word(5),
             prompt_form: PalwPromptIdsFormV1::MerkleV1,
             body_bytes,

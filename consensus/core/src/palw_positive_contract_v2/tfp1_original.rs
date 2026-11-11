@@ -2,6 +2,7 @@
 //! PublicOneHonest companion. The binding is available before either
 //! signature, and does not authenticate an accepted carrier or reserve slots.
 
+pub(crate) mod carrier_material;
 pub(crate) mod funding;
 pub(crate) mod initial_supply;
 pub(crate) mod manifest_carrier;
@@ -392,6 +393,12 @@ impl PublicOriginalAdmissionV1<'_> {
         self.check_tfp1_prompt_bytes_v1(pairing.public_prompt_bytes_v3().ok_or(ContractError::Scope)?)?;
         let mut prepared =
             self.prepare_tfp1_signed_bytes_v1(pairing.public_companion_v3().ok_or(ContractError::Scope)?, obligation, reservation)?;
+        if pairing.public_manifest_bytes_v2().is_some() {
+            // Reuse the authenticated companion's literal preimage. A v2
+            // suffix cannot be ignored by either intake or history replay.
+            let signed = SignedPublicOriginalV1::decode(pairing.public_companion_v3().ok_or(ContractError::Scope)?)?;
+            carrier_material::check_pairing_material_v2(self, pairing, &signed.original)?;
+        }
         // The pairing derives both slices from the same actual transaction.
         // Preserve a digest of the signed literal, independent of the
         // immutable semantic claim ID used before either signature.
@@ -406,6 +413,94 @@ impl PublicOriginalAdmissionV1<'_> {
             funding_amount: pairing.envelope().funding.terms.funding_amount_sompi,
         });
         Ok(prepared)
+    }
+
+    /// Version-2 admission preparation additionally resolves the literal HF
+    /// reference against the selected parent's class/container. This returns
+    /// identity metadata and native initial-supply geometry, not evidence of
+    /// model availability, service delivery, or successful admission. The
+    /// accepting owner resolves profile policy, prompt form and parent first.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub(crate) fn prepare_tfp1_material_pairing_v2(
+        &self,
+        parent: &crate::palw_state_v2::PalwChainStateV2,
+        extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        obligation: Tfp1PublicOriginalObligationV1,
+        reservation: &PublicOriginalReservationV1<'_>,
+    ) -> Result<
+        (PreparedTfp1PublicOriginalV1, super::PublicTfp1HfArtifactV1, initial_supply::PublicTfp1InitialSupplyV1),
+        carrier_material::MaterialPairingErrorV2,
+    > {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_pending_requests_v1};
+        use carrier_material::MaterialPairingErrorV2::LocalResource;
+        super::require_current_public_origin_v1(reservation.origin, point)?;
+        if self.job != &source.header_v1().job_context {
+            return Err(ContractError::Scope.into());
+        }
+        super::tfp1_material::require_cold_tfp1_v1(fp, &source.header_v1().job_context)?;
+        let fp_bytes = borsh::object_length(fp).map_err(|_| ContractError::NonCanonical)?;
+        if fp_bytes > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES {
+            return Err(ContractError::Budget.into());
+        }
+        // The legacy FP/context/class identity helpers serialize temporary
+        // preimages. Own those buffers before calling them, as the native
+        // initial-supply planner does. Fixed manifest/descriptor decode and
+        // contract hashes themselves have no dynamically sized allocation.
+        let mut requests = TirNativeRequestsV1::new();
+        for bytes in [
+            fp_bytes,
+            borsh::object_length(&source.header_v1().job_context).map_err(|_| ContractError::NonCanonical)?,
+            borsh::object_length(&self.class.layout).map_err(|_| ContractError::NonCanonical)?,
+        ] {
+            requests.vec_v1::<u8>((bytes as u64).max(1024)).map_err(LocalResource)?;
+        }
+        let _hash_scratch = reserve_native_pending_requests_v1(requests.bytes_v1()).map_err(LocalResource)?;
+        if NativeTfp1PublicOriginalFactsV1::derive_v1(fp, source)? != obligation.facts {
+            return Err(ContractError::Scope.into());
+        }
+        let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, reservation)?;
+        let descriptor = misaka_palw_positive_contract::public_one_honest::HfArtifactDescriptorV1::decode_v1(
+            pairing.public_hf_descriptor_bytes_v2().ok_or(ContractError::Scope)?,
+        )?;
+        let hf = super::PublicTfp1HfArtifactV1::resolve_v1(
+            parent,
+            fp,
+            source,
+            descriptor,
+            self.manifest_scope_limits[MaterialScope::Artifact as usize],
+        )?;
+        hf.check_context_v1(fp, source, self.class)?;
+        drop(_hash_scratch);
+        let prompt = pairing.public_prompt_bytes_v3().ok_or(ContractError::Scope)?;
+        let supply = initial_supply::PublicTfp1InitialSupplyV1::derive_v1(
+            parent,
+            extras,
+            point,
+            fp,
+            source,
+            self.class,
+            prompt_form,
+            prompt,
+            Some(&hf),
+        )?;
+        supply.check_limits_v1(
+            self.max_manifest_bytes,
+            self.manifest_scope_limits,
+            self.manifest_total_limit,
+            reservation.initial_supply,
+        )?;
+        let signed = SignedPublicOriginalV1::decode(pairing.public_companion_v3().ok_or(ContractError::Scope)?)?;
+        let manifest = signed
+            .original
+            .authenticate_manifest(pairing.public_manifest_bytes_v2().ok_or(ContractError::Scope)?, self.max_manifest_bytes)?
+            .decode(&signed.original, self.manifest_scope_limits, self.manifest_total_limit)?;
+        supply.check_manifest_v1(prepared.companion.original, &manifest, prompt)?;
+        Ok((prepared, hf, supply))
     }
 
     /// Verify an actual signed companion after the native TFP1 planner
@@ -723,6 +818,131 @@ mod tests {
         let prepared = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
         let signed_only = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
         assert_eq!(prepared.accepted_companion_v1(), signed_only.accepted_companion_v1());
+        // Version 2 must authenticate its actual suffix before returning the
+        // same prepared owner. This fixture checks metadata, not delivery or
+        // native payment. Parent container resolution is tested separately.
+        {
+            use crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3;
+            use misaka_palw_positive_contract::public_one_honest::{
+                HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1, HfArtifactDescriptorV1, HfArtifactNativePinsV1, ManifestEntryV1,
+                hf_artifact_material_codec_v1,
+            };
+            let mut v2_limits = limits;
+            v2_limits[MaterialScope::Artifact as usize] = ManifestScopeRules {
+                codec: hf_artifact_material_codec_v1(),
+                max_bytes: HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1 as u64,
+                chunk_bytes: HF_ARTIFACT_DESCRIPTOR_MAX_BYTES_V1 as u32,
+            };
+            let v2_admission =
+                PublicOriginalAdmissionV1 { manifest_scope_limits: &v2_limits, manifest_total_limit: 2048, ..admission };
+            let descriptor = HfArtifactDescriptorV1::new_v1(
+                HfArtifactNativePinsV1 {
+                    class: companion.registered_class,
+                    program: companion.program,
+                    tokenizer: companion.tokenizer,
+                    inventory: companion.artifact,
+                    container: d,
+                    binding_manifest: d,
+                },
+                "fixture/model",
+                [1; 20],
+                d,
+                d,
+            )
+            .unwrap();
+            let descriptor_bytes = descriptor.encode_v1().unwrap();
+            let subjects = [
+                companion.artifact,
+                companion.program,
+                companion.prompt,
+                companion.input_tokens,
+                companion.tokenizer,
+                companion.execution_rules,
+                companion.initial_state,
+                companion.dependencies,
+                companion.trace_root,
+                companion.output,
+            ];
+            let mut manifest = ManifestV1 {
+                service_contract: companion.service_contract,
+                entries: subjects.map(|subject| ManifestEntryV1 {
+                    subject,
+                    content_root: d,
+                    codec: d,
+                    total_bytes: 1,
+                    chunk_bytes: 1,
+                }),
+            };
+            manifest.entries[MaterialScope::Artifact as usize] = descriptor.manifest_entry_v1(v2_limits[0]).unwrap();
+            manifest.entries[MaterialScope::Prompt as usize] =
+                prompt_text_material_v1(scope.ruleset, prompt_text, v2_limits[2]).unwrap();
+            manifest.entries[MaterialScope::InitialState as usize] = cold.initial_state.0;
+            manifest.entries[MaterialScope::Dependencies as usize] = cold.dependencies.0;
+            let mut v2_companion = companion.clone();
+            let manifest_bytes: [u8; ManifestV1::WIRE_BYTES as usize] =
+                v2_companion.bind_manifest(&manifest, &v2_limits, 2048, ManifestV1::WIRE_BYTES).unwrap().try_into().unwrap();
+            let v2_signed: [u8; SignedPublicOriginalV1::WIRE_BYTES] = sign(v2_companion.clone()).try_into().unwrap();
+            let inner = funded.encode_v1().unwrap();
+            let make = |manifest: &[u8; ManifestV1::WIRE_BYTES as usize], descriptor: &[u8]| {
+                let mut tx = pairing.carrier().clone();
+                tx.payload = PalwTirFundedOriginalEnvelopeV3::from_parts_with_manifest_v2(
+                    &inner,
+                    prompt_text.as_bytes(),
+                    &v2_signed,
+                    manifest,
+                    descriptor,
+                )
+                .unwrap()
+                .encode_v3()
+                .unwrap();
+                tx.finalize();
+                crate::palw_funded_original_coordinator_v1::palw_funded_original_pairing_v1(&tx).unwrap()
+            };
+            let actual = make(&manifest_bytes, &descriptor_bytes);
+            let v2_reservation = PublicOriginalReservationV1 {
+                origin: AcceptedOrigin { carrier_transaction: NativeHash64(actual.carrier().id().as_bytes()), ..reservation.origin },
+                ..reservation
+            };
+            assert_eq!(
+                v2_admission.prepare_tfp1_pairing_v1(&actual, obligation, &v2_reservation).unwrap().companion_v1().original,
+                v2_companion.id()
+            );
+            let mut wrong_manifest = manifest_bytes;
+            wrong_manifest[0] ^= 1;
+            let mut wrong_descriptor = descriptor_bytes.clone();
+            *wrong_descriptor.last_mut().unwrap() ^= 1;
+            for substituted in [make(&wrong_manifest, &descriptor_bytes), make(&manifest_bytes, &wrong_descriptor)] {
+                let changed = PublicOriginalReservationV1 {
+                    origin: AcceptedOrigin {
+                        carrier_transaction: NativeHash64(substituted.carrier().id().as_bytes()),
+                        ..v2_reservation.origin
+                    },
+                    ..v2_reservation
+                };
+                assert!(v2_admission.prepare_tfp1_pairing_v1(&substituted, obligation, &changed).is_err());
+            }
+            // A v1 body cannot be used through the material-required entry.
+            assert!(
+                admission
+                    .prepare_tfp1_material_pairing_v2(
+                        &crate::palw_state_v2::PalwChainStateV2::genesis(),
+                        &crate::palw_state_v2::PalwTransitionExtrasV1::default(),
+                        &crate::palw_state_v2::PalwBlockContextV2 {
+                            block: Hash64::from_bytes(reservation.origin.accepting_block.0),
+                            daa_score: reservation.origin.accepted_daa,
+                            blue_score: reservation.origin.accepted_blue_score,
+                            subsidy: 0,
+                        },
+                        form,
+                        original,
+                        &source,
+                        &pairing,
+                        obligation,
+                        &reservation,
+                    )
+                    .is_err()
+            );
+        }
         let link_point = crate::palw_state_v2::PalwBlockContextV2 {
             block: Hash64::from_bytes(reservation.origin.accepting_block.0),
             daa_score: reservation.origin.accepted_daa,
