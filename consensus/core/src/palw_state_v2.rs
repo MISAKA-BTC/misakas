@@ -11632,6 +11632,7 @@ pub struct PalwChainStateV2 {
     improvement_eval_claims: BTreeMap<Hash64, crate::palw_improve_eval_v1::PalwEvalJobKeyV1>,
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
     deadlines: BTreeSet<(u64, Hash64)>,
+    deadlines_by_claim: BTreeSet<(Hash64, u64)>,
     /// `(accepted_blue_score, claim)` for every non-terminal claim — what the frontier reads.
     unresolved: BTreeSet<(u64, Hash64)>,
     /// **One inference, one claim** (ADR-0074 Decision 4): the work identity of every live
@@ -11640,9 +11641,11 @@ pub struct PalwChainStateV2 {
     work_ids: BTreeMap<Hash64, Hash64>,
     /// Open court sessions per claim — what gates `ReceiptLicensed → Final`.
     open_courts_by_claim: BTreeMap<Hash64, u32>,
+    court_sessions_by_claim: BTreeSet<(Hash64, Hash64)>,
     /// `(deadline_daa, session)` — the court backstop sweep queue. Exactly rebuildable from the
     /// session records (each carries its deadline), so never serialized, never hashed.
     court_deadlines: BTreeSet<(u64, Hash64)>,
+    court_deadline_by_session: BTreeMap<Hash64, u64>,
     /// `((assembly_deadline_daa, (session, side))` — the DECLARED CLOSE sweep queue (audit H-2c).
     ///
     /// [`PalwCourtCloseGroupV2`]'s own doc priced the row against "the assembly window (`4 x
@@ -13684,6 +13687,7 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    plain_output_terminal_checkpoint_active_v2: bool,
     assignment_materials: Vec<PositiveAssignmentAcceptedMaterialV2>,
     assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
     assignment_active_raw: Option<PositiveAssignmentRawActionV2>,
@@ -24733,8 +24737,10 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     for session in state.court_sessions.values() {
         *open_courts.entry(session.claim).or_insert(0) += 1;
     }
+    state.court_deadline_by_session = court_deadlines.iter().map(|&(daa, session)| (session, daa)).collect();
     state.court_deadlines = court_deadlines;
     state.open_courts_by_claim = open_courts;
+    state.court_sessions_by_claim = state.court_sessions.iter().map(|(id, session)| (session.claim, *id)).collect();
     state.court_close_deadlines = state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
     // ADR-0152 R-core+ (S-SPEC 1g): the accuser and reporter indexes, from the maps they summarize.
     state.courts_by_challenger = palw_courts_by_challenger_of_v1(&state.court_sessions);
@@ -24853,6 +24859,7 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
             deadlines.insert((at, *id));
         }
     }
+    state.deadlines_by_claim = deadlines.iter().map(|(at, id)| (*id, *at)).collect();
     state.deadlines = deadlines;
     Ok(())
 }
@@ -27033,10 +27040,13 @@ impl PalwStateCarriageV2 {
             safe_frontier: self.safe_frontier,
             last_point: self.last_point,
             deadlines: BTreeSet::new(),
+            deadlines_by_claim: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
             open_courts_by_claim: BTreeMap::new(),
+            court_sessions_by_claim: BTreeSet::new(),
             court_deadlines: BTreeSet::new(),
+            court_deadline_by_session: BTreeMap::new(),
             court_close_deadlines: BTreeSet::new(),
             courts_by_challenger: BTreeSet::new(),
             commitments_by_reporter: BTreeMap::new(),

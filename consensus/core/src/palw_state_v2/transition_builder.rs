@@ -95,6 +95,7 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Self {
         Self {
             native_reservation,
+            plain_output_terminal_checkpoint_active_v2: false,
             claim_local_gc_undo_v3: BTreeMap::new(),
             claim_local_gc_sequence_v3: 0,
             claim_local_gc_defer_v3: false,
@@ -752,6 +753,12 @@ impl<'a> TransitionBuilder<'a> {
             u64::from(self.state.court_sessions.contains_key(&key.0)),
             "native court_deadlines session re-index",
         )?;
+        self.reserve_index_members_v1::<Hash64, u64>(
+            u64::from(
+                self.state.court_sessions.contains_key(&key.0) && !self.state.court_deadline_by_session.contains_key(&key.0),
+            ),
+            "native court deadline reverse re-index",
+        )?;
         let old = match &new {
             Some(record) => self.state.court_close_groups.insert(key, record.clone()),
             None => self.state.court_close_groups.remove(&key),
@@ -773,8 +780,7 @@ impl<'a> TransitionBuilder<'a> {
         let session_id = key.0;
         if let Some(session) = self.state.court_sessions.get(&session_id) {
             let next = court_next_deadline_v2(&self.state, session);
-            self.state.court_deadlines.retain(|(_, id)| *id != session_id);
-            self.state.court_deadlines.insert((next, session_id));
+            self.state.replace_court_deadline_v2(session_id, Some(next));
         }
         Ok(())
     }
@@ -8767,21 +8773,33 @@ impl<'a> TransitionBuilder<'a> {
         if !archive {
             return self.write_court_inner_v1(key, new, false);
         }
+        if self.plain_output_terminal_checkpoint_active_v2 {
+            // Terminal settlement propagates this error to its outer
+            // transaction, which owns the entire court/DA/claim cascade.
+            return self.write_court_archive_v1(key, new);
+        }
         let saved = self.try_checkpoint()?;
-        let result = (|| {
-            let pending = self.build_pending_court_archive_v1(key)?;
-            self.write_court_inner_v1(key, new, true)?;
-            self.write_staged_row_v1(
-                crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtEndArchive(key),
-                Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtEndArchive(Box::new(pending).into())),
-            )?;
-            self.capture_archive_native_origins_v1(key)
-        })();
+        let result = self.write_court_archive_v1(key, new);
         if result.is_err() {
             self.restore(saved);
         }
         result
     }
+
+    fn write_court_archive_v1(
+        &mut self,
+        key: Hash64,
+        new: Option<PalwCourtSessionStateV2>,
+    ) -> Result<(), PalwStateV2Error> {
+        let pending = self.build_pending_court_archive_v1(key)?;
+        self.write_court_inner_v1(key, new, true)?;
+        self.write_staged_row_v1(
+            crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtEndArchive(key),
+            Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtEndArchive(Box::new(pending).into())),
+        )?;
+        self.capture_archive_native_origins_v1(key)
+    }
+
     fn write_court_inner_v1(
         &mut self,
         key: Hash64,
@@ -8794,26 +8812,44 @@ impl<'a> TransitionBuilder<'a> {
                 self.state.require_paid_consumer_dispute_v1(&record.claim, record.opened_daa, record.deadline_daa)?;
             }
         }
+        self.reserve_map_row_v1(&key, &new, |state| &state.court_sessions, false, "native court session writer")?;
+        let old_claim = self.state.court_sessions.get(&key).map(|row| row.claim);
+        let new_claim = new.as_ref().map(|row| row.claim);
+        if let Some(claim) = new_claim {
+            // A replacement removes and re-adds its count and challenger key.
+            // Either operation can allocate a fresh tree node.
+            let count_node = self.state.open_courts_by_claim.get(&claim).is_none_or(|n| *n == 1 && old_claim == new_claim);
+            self.reserve_index_members_v1::<Hash64, u32>(u64::from(count_node), "native open court counts")?;
+            self.reserve_index_members_v1::<(PalwBondKeyV2, Hash64), ()>(1, "native court challenger index")?;
+        }
+        if new_claim.is_some() {
+            self.reserve_index_members_v1::<(u64, Hash64), ()>(1, "native court deadline index")?;
+            self.reserve_index_members_v1::<Hash64, u64>(1, "native session deadline index")?;
+        }
+        if new_claim != old_claim && new_claim.is_some() {
+            self.reserve_index_members_v1::<(Hash64, Hash64), ()>(1, "native claim court session index")?;
+        }
         let old = match &new {
             Some(record) => self.state.court_sessions.insert(key, record.clone()),
             None => self.state.court_sessions.remove(&key),
         };
+        if old_claim != new_claim {
+            if let Some(claim) = old_claim {
+                self.state.court_sessions_by_claim.remove(&(claim, key));
+            }
+            if let Some(claim) = new_claim {
+                self.state.court_sessions_by_claim.insert((claim, key));
+            }
+        }
         if let Some(previous) = &old {
             let count = self.state.open_courts_by_claim.get_mut(&previous.claim).expect("index tracks every session");
             *count -= 1;
             if *count == 0 {
                 self.state.open_courts_by_claim.remove(&previous.claim);
             }
-            // **By SESSION, not by the key this call would recompute.** The index holds at most
-            // one entry per session, and since ADR-0082 C-5 the key is a function of state OUTSIDE
-            // the session record (the class's `fused_attention`, reached through the claim) — so a
-            // removal that recomputed the key would miss the entry on any path where that state
-            // has moved since the insert. There is one such path today, the sweep's defensive
-            // "the claim is gone, drop the session" branch, and the failure it produces is not a
-            // stale row but `MissingSession` on every later block: a chain halt. Removing by
-            // session id cannot miss, and the scan is over the open sessions, which
-            // `CourtSessionsAtCapacity` bounds.
-            self.state.court_deadlines.retain(|(_, session_id)| *session_id != key);
+            // The old DAA is the exact stored key, even when the
+            // class/claim has changed since scheduling the session.
+            self.state.replace_court_deadline_v2(key, None);
             // **The challenger's stake comes back HERE**, so reserve and release are one pair in
             // one place. Opening a court charges the challenger the claim's own `reserved`; five
             // different sites remove a session — two sweeps, a close, a retirement, a re-open —
@@ -8840,7 +8876,7 @@ impl<'a> TransitionBuilder<'a> {
         if let Some(record) = &new {
             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;
             let next = court_next_deadline_v2(&self.state, record);
-            self.state.court_deadlines.insert((next, key));
+            self.state.replace_court_deadline_v2(key, Some(next));
         }
         // ADR-0152 A-6 (S-SPEC 1g): the challenger index follows the session, old out, new in.
         if let Some(previous) = &old {
@@ -9018,23 +9054,17 @@ impl<'a> TransitionBuilder<'a> {
                 deadline = deadline.max(closed.saturating_add(1));
             }
         }
-        // RFC-0006: the one index node this arm can add (an already-armed identical row adds none).
-        self.reserve_index_members_v1::<(u64, Hash64), ()>(
-            u64::from(!self.state.deadlines.contains(&(deadline, claim))),
-            "native deadline index",
-        )?;
-        self.state.deadlines.insert((deadline, claim));
+        let added = u64::from(!self.state.deadlines.contains(&(deadline, claim)));
+        self.reserve_index_members_v1::<(u64, Hash64), ()>(added, "native deadline index")?;
+        self.reserve_index_members_v1::<(Hash64, u64), ()>(added, "native claim deadline lookup")?;
+        self.state.insert_claim_deadline_v2(deadline, claim);
         Ok(())
     }
 
     pub(super) fn disarm_deadline(&mut self, claim: Hash64) {
-        // RFC-0006: removal only — the index is never in the delta (no journal slot) and a `BTreeSet::remove` frees and allocates
-        // nothing, so there is nothing to admit. It moves no value and settles no obligation (RFC-0008: not a settlement leg).
-        // A claim holds at most one deadline; the scan is over a set that shrinks as claims
-        // resolve. (An index keyed the other way would dodge the scan but double the index
-        // surface; measured need decides later, behavior cannot change.)
-        if let Some(entry) = self.state.deadlines.iter().find(|(_, id)| *id == claim).copied() {
-            self.state.deadlines.remove(&entry);
+        let first = self.state.claim_deadlines_v2(claim).next();
+        if let Some(deadline) = first {
+            self.state.remove_claim_deadline_v2(deadline, claim);
         }
     }
 
@@ -9112,7 +9142,9 @@ impl<'a> TransitionBuilder<'a> {
         if let Some(lease) = &lease {
             lease.materialized_v1();
         }
+        let prior_scope = std::mem::replace(&mut self.plain_output_terminal_checkpoint_active_v2, true);
         let result = apply(self);
+        self.plain_output_terminal_checkpoint_active_v2 = prior_scope;
         if result.is_err() {
             self.restore(saved);
         }
@@ -10196,11 +10228,15 @@ impl<'a> TransitionBuilder<'a> {
         // re-armed the claim's `Final`; a voided claim has none to re-arm. Below the fence a void
         // leaves them to their own sweep, as it always did.
         if self.extras.offence_attribution_active {
-            let open: Vec<Hash64> = self.state.court_sessions.iter().filter(|(_, s)| s.claim == id).map(|(k, _)| *k).collect();
             // audit B-05 (widened): a service-bound session archived by this neutral close must not keep the challenger's court
             // stake as an unresolvable nominal hold (`build_pending_court_archive_v1`).
             let neutral = std::mem::replace(&mut self.court_neutral_void_close, true);
-            let closed = open.into_iter().try_for_each(|session| self.write_court(session, None));
+            let closed = (|| {
+                while let Some(session) = self.state.first_court_session_of_claim_v2(id) {
+                    self.write_court(session, None)?;
+                }
+                Ok::<(), PalwStateV2Error>(())
+            })();
             self.court_neutral_void_close = neutral;
             closed?;
         }
@@ -10474,9 +10510,7 @@ impl<'a> TransitionBuilder<'a> {
         // can reach retirement with a session still open because a VOID does not require the
         // court to have closed, and `CLAIM_RETIREMENT == WINDOW_COURT` on the shipped ruleset, so
         // the two land together rather than needing a DAA jump.
-        let orphans: Vec<Hash64> =
-            self.state.court_sessions.iter().filter(|(_, session)| session.claim == id).map(|(session_id, _)| *session_id).collect();
-        for session_id in orphans {
+        while let Some(session_id) = self.state.first_court_session_of_claim_v2(id) {
             self.write_court(session_id, None)?;
         }
         // ADR-0152 DA-6 (M3): the claim's DA record retires with it, burning unrefunded exposure.

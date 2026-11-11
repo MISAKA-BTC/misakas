@@ -341,7 +341,7 @@ pub(super) fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlo
         if deadline >= ctx.daa_score {
             break;
         }
-        builder.state.deadlines.remove(&(deadline, claim_id));
+        builder.state.remove_claim_deadline_v2(deadline, claim_id);
         let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
         // Lane PL part C × G14 (SHARD): no uncharged end of a held lane-A claim while an accusation is pending — DL-1 arms none
         // (unreachable by the derivation); skipped consistently with it, the end of the last accusation re-arms.

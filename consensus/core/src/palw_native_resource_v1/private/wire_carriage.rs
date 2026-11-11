@@ -833,6 +833,20 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
     let n = count("court_sessions", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
+    let n = count("claims", false)?;
+    sum = sum.allocation(
+        n,
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, u64), ()>>(),
+    )?;
+    let n = count("court_sessions", false)?;
+    sum = sum.allocation(
+        n,
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), ()>>(),
+    )?;
+    sum = sum.allocation(
+        n,
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<crate::Hash64, u64>>(),
+    )?;
     let n = count("court_close_groups", false)?;
     sum = sum.allocation(
         n,

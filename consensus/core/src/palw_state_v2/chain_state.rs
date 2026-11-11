@@ -209,10 +209,13 @@ impl PalwChainStateV2 {
             improvement_licence_expiries: BTreeSet::new(),
             improvement_eval_claims: BTreeMap::new(),
             deadlines: BTreeSet::new(),
+            deadlines_by_claim: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
             open_courts_by_claim: BTreeMap::new(),
+            court_sessions_by_claim: BTreeSet::new(),
             court_deadlines: BTreeSet::new(),
+            court_deadline_by_session: BTreeMap::new(),
             court_close_deadlines: BTreeSet::new(),
             courts_by_challenger: BTreeSet::new(),
             commitments_by_reporter: BTreeMap::new(),
@@ -2754,7 +2757,11 @@ impl PalwChainStateV2 {
     /// A test's way to replace an open court session (its ladder walked to `Terminal` off-fold) — R6-CELL round 4's court-v4 fixture.
     #[cfg(test)]
     pub(crate) fn test_replace_court_session_v2(&mut self, session_id: Hash64, session: PalwCourtSessionStateV2) {
-        self.court_sessions.insert(session_id, session);
+        let claim = session.claim;
+        if let Some(old) = self.court_sessions.insert(session_id, session) {
+            assert_eq!(old.claim, claim, "fixture only changes the session ladder");
+        }
+        self.court_sessions_by_claim.insert((claim, session_id));
     }
 
     /// A test's way to stand a `tir_classes` row in (the fold writes rows only through a registration).
@@ -4419,6 +4426,11 @@ impl PalwChainStateV2 {
                 )));
             }
         }
+        if self.court_sessions_by_claim.len() != self.court_sessions.len()
+            || self.court_sessions.iter().any(|(id, session)| !self.court_sessions_by_claim.contains(&(session.claim, *id)))
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("claim court session index differs".into()));
+        }
         if open_courts != self.open_courts_by_claim {
             return Err(PalwStateV2Error::CarriageInconsistent("open-court index differs from the sessions".into()));
         }
@@ -4427,7 +4439,10 @@ impl PalwChainStateV2 {
         // the index it is checking, which is how a ladder move looked like corruption.
         let court_deadlines: BTreeSet<(u64, Hash64)> =
             self.court_sessions.iter().map(|(id, s)| (court_next_deadline_v2(self, s), *id)).collect();
-        if court_deadlines != self.court_deadlines {
+        if court_deadlines != self.court_deadlines
+            || self.court_deadline_by_session.len() != self.court_deadlines.len()
+            || self.court_deadlines.iter().any(|&(daa, session)| self.court_deadline_by_session.get(&session) != Some(&daa))
+        {
             return Err(PalwStateV2Error::CarriageInconsistent("court-deadline index differs from the sessions".into()));
         }
         // RFC-0002 F7: an IR dissection is a row about a live session of its own id, which holds no
@@ -5054,7 +5069,57 @@ impl PalwChainStateV2 {
 
     /// The parameterized deadline check: with params in hand the exact deadline of every
     /// non-terminal claim is recomputable, and the index must match it entry for entry.
+    pub(super) fn insert_claim_deadline_v2(&mut self, deadline: u64, claim: Hash64) {
+        let inserted = self.deadlines.insert((deadline, claim));
+        let reverse = self.deadlines_by_claim.insert((claim, deadline));
+        debug_assert_eq!(inserted, reverse);
+    }
+
+    pub(super) fn remove_claim_deadline_v2(&mut self, deadline: u64, claim: Hash64) {
+        let removed = self.deadlines.remove(&(deadline, claim));
+        let reverse = self.deadlines_by_claim.remove(&(claim, deadline));
+        debug_assert_eq!(removed, reverse);
+    }
+
+    pub(super) fn claim_deadlines_v2(&self, claim: Hash64) -> impl Iterator<Item = u64> + '_ {
+        self.deadlines_by_claim.range((claim, 0)..=(claim, u64::MAX)).map(|&(_, deadline)| deadline)
+    }
+
+    /// Preserve the exact previous key. The deadline depends on rows
+    /// outside the session, which may already have changed at removal.
+    pub(super) fn replace_court_deadline_v2(&mut self, session: Hash64, next: Option<u64>) {
+        let previous = self.court_deadline_by_session.get(&session).copied();
+        if previous == next {
+            return;
+        }
+        if let Some(previous) = previous {
+            let removed = self.court_deadlines.remove(&(previous, session));
+            debug_assert!(removed);
+        }
+        if let Some(daa) = next {
+            self.court_deadline_by_session.insert(session, daa);
+            self.court_deadlines.insert((daa, session));
+        } else {
+            self.court_deadline_by_session.remove(&session);
+        }
+    }
+
+    pub(super) fn first_court_session_of_claim_v2(&self, claim: Hash64) -> Option<Hash64> {
+        self.court_sessions_of_claim_v2(claim).next()
+    }
+
+    pub(super) fn court_sessions_of_claim_v2(&self, claim: Hash64) -> impl Iterator<Item = Hash64> + '_ {
+        self.court_sessions_by_claim
+            .range((claim, Hash64::default())..=(claim, Hash64::from_bytes([255; 64])))
+            .map(|&(_, session)| session)
+    }
+
     pub fn assert_deadline_consistency(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        if self.deadlines.len() != self.deadlines_by_claim.len()
+            || self.deadlines.iter().any(|&(at, id)| !self.deadlines_by_claim.contains(&(id, at)))
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("claim deadline reverse index differs".into()));
+        }
         // **ADR-0152 DL-1, past `palw_rcore_plus`: one deadline function, and the index IS it.** Every
         // row of `palw_rcore_deadline_v1` is exact at rest — the licensed row's `max(floor, last)`
         // included (see `rebuild_deadline_index_v2`) — so the index is checked for equality, not

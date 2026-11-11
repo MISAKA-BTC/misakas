@@ -406,3 +406,70 @@ fn bct2_paid_plain_output_verify_receipt_and_fault_terminal() {
     let offence = palw_court_conviction_offence_id_v1(&producer.0, &claim);
     assert!(verdict.state.consumed_offences.contains_key(&offence));
 }
+
+#[test]
+fn bct2_terminal_owns_nested_court_archive_rollback() {
+    use crate::config::params::ForkActivation;
+    use crate::palw_batch_court_v1::plain_output_transport::BatchPlainOutputTransportV2;
+    use crate::palw_native_resource_v1::{
+        NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1, native_typed_value_requests_v1,
+    };
+    const CHILD: &str = "MISAKA_TEST_BCT2_ARCHIVE_OWNER";
+    if std::env::var_os(CHILD).is_none() {
+        let name = format!("{}::bct2_terminal_owns_nested_court_archive_rollback", module_path!());
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name.split_once("::").unwrap().1, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 64 << 20, database_bytes: 0 }));
+    let fx = palw_tir_public_frame_fixture_v1(Some((FORGED_LEAF, 1)), 4);
+    let frame = &fx.frame;
+    let (mut state, params, mut extras) = world(&fx, frame);
+    let params = params.with_tir_from_daa(Some(0));
+    // This unrelated prefix makes a nested full-state clone distinguishable
+    // from reservations made for the one archived session and its groups.
+    for n in 0..512 {
+        let key = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(h(20_000 + n), 0));
+        state.bonds.insert(key, PalwBondStateV2 { pubkey: vec![7; 2_592], ..bond_state(n) });
+    }
+    let policy = BatchPlainOutputTransportV2 {
+        activation: ForkActivation::new(0),
+        maximum_source_blocks: 1,
+        maximum_source_controls: 1,
+        maximum_work_per_pass: 1 << 20,
+        maximum_io_per_pass: 1 << 20,
+        maximum_workspace_per_carrier: 2 << 20,
+        maximum_prefix_bytes: 16 << 20,
+        maximum_prefix_work_per_byte: 1,
+    };
+    extras.batch_plain_output_transport_v2 = Some(policy);
+    let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    archive_service(&mut b, frame);
+    let (id, session) = archive_session(&mut b, frame);
+    let state = b.state.clone();
+    let prefix_bytes = native_typed_value_requests_v1(&state).unwrap();
+    let journal = b.entries.len();
+
+    let injected = "fixture refusal after court archive".to_string();
+    let result = b.with_bounded_plain_output_checkpoint_v2(policy.maximum_prefix_bytes, |inner| {
+        let requested = inner.native_reservation.requests_v1();
+        inner.write_court(id, None)?;
+        assert!(inner.state.court_session(&id).is_none());
+        assert_eq!(inner.state.court_end_archive_v1(id).unwrap().session, session);
+        assert!(inner.native_reservation.requests_v1() - requested < prefix_bytes);
+        Err::<(), _>(PalwStateV2Error::CarriageInconsistent(injected.clone()))
+    });
+    assert!(matches!(result, Err(PalwStateV2Error::CarriageInconsistent(why)) if why == injected));
+    assert_eq!(b.state, state);
+    assert_eq!(b.entries.len(), journal);
+    assert!(!b.plain_output_terminal_checkpoint_active_v2);
+
+    b.with_bounded_plain_output_checkpoint_v2(policy.maximum_prefix_bytes, |inner| inner.write_court(id, None)).unwrap();
+    assert!(b.state.court_session(&id).is_none());
+    assert_eq!(b.state.court_end_archive_v1(id).unwrap().session, session);
+    assert!(!b.plain_output_terminal_checkpoint_active_v2);
+}

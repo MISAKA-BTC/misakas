@@ -2266,7 +2266,11 @@ impl TransitionBuilder<'_> {
                         .map(|row| super::terminal_operational_release_at_v1(row, self.params, None))
                         .transpose()?
                         .flatten();
-                    self.state.deadlines.retain(|(deadline, id)| *id != claim || operational == Some(*deadline));
+                    loop {
+                        let obsolete = self.state.claim_deadlines_v2(claim).find(|deadline| Some(*deadline) != operational);
+                        let Some(deadline) = obsolete else { break };
+                        self.state.remove_claim_deadline_v2(deadline, claim);
+                    }
                 }
             }
         }

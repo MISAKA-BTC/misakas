@@ -1410,8 +1410,7 @@ mod held_close_chunks_clock {
         state.court_close_deadlines.insert((group.assembly_deadline_daa, (sid, side)));
         state.court_close_groups.insert((sid, side), group);
         let next = court_next_deadline_v2(state, state.court_sessions.get(&sid).expect("the session"));
-        state.court_deadlines.retain(|(_, id)| *id != sid);
-        state.court_deadlines.insert((next, sid));
+        state.replace_court_deadline_v2(sid, Some(next));
     }
 
     /// The clock as it stood before the clause: the IR phase's, the executor's declared close, the record's.
@@ -23861,7 +23860,8 @@ mod adr0082_dissection_drill {
             state.court_sessions.insert(id, template.clone());
             *state.open_courts_by_claim.entry(template.claim).or_insert(0) += 1;
             let next = court_next_deadline_v2(&state, &template);
-            state.court_deadlines.insert((next, id));
+            state.court_sessions_by_claim.insert((template.claim, id));
+            state.replace_court_deadline_v2(id, Some(next));
         }
         assert_eq!(state.court_sessions.len() as u64, ceiling, "the chain is exactly at the ceiling");
 
@@ -35310,4 +35310,28 @@ fn court_f02_lifecycle_is_dormant_below_its_fences() {
     let b = TransitionBuilder::new(&state, &lane, false, false, false, false, &armed);
     assert!(lifecycle::shared_court_lifecycle_active_v1(&b, 50));
     assert!(!lifecycle::shared_court_lifecycle_active_v1(&b, 49));
+}
+
+#[test]
+fn claim_local_court_indexes_keep_order_and_exact_old_deadline() {
+    let claim = h64(0xBC20);
+    let other = h64(0xBC21);
+    let session = h64(0xBC22);
+    let mut state = PalwChainStateV2::genesis();
+    state.insert_claim_deadline_v2(90, claim);
+    state.insert_claim_deadline_v2(89, other);
+    state.insert_claim_deadline_v2(75, claim);
+    state.insert_claim_deadline_v2(75, claim);
+    assert_eq!(state.claim_deadlines_v2(claim).collect::<Vec<_>>(), [75, 90]);
+    state.remove_claim_deadline_v2(75, claim);
+    assert_eq!(state.claim_deadlines_v2(claim).collect::<Vec<_>>(), [90]);
+    assert_eq!(state.deadlines, BTreeSet::from([(89, other), (90, claim)]));
+
+    state.replace_court_deadline_v2(session, Some(101));
+    state.replace_court_deadline_v2(other, Some(101));
+    state.replace_court_deadline_v2(session, Some(102));
+    assert_eq!(state.court_deadlines, BTreeSet::from([(101, other), (102, session)]));
+    state.replace_court_deadline_v2(session, None);
+    assert_eq!(state.court_deadlines, BTreeSet::from([(101, other)]));
+    assert_eq!(state.court_deadline_by_session, BTreeMap::from([(other, 101)]));
 }
