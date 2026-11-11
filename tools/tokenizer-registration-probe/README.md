@@ -104,3 +104,27 @@ candidate budget. The reported scanner timings include these refusal checks.
 This measures the physical accounting functions only. No actual DAG blocks,
 wallet validation, native folds, or parser invocations occur in this mode.
 The scaled policy is a local measurement input.
+
+### Modeled 780-carrier native candidate
+
+Export a new bundle with `TKR_MEASUREMENT_SOURCE_BLOCKS=780` and the desired
+tokenizer case. The exporter signs Open, Part, and Finish under that local
+policy, which keeps the same one-control source partition as the one-source
+bundle. The manifest records the policy and the expected single-Finish
+transition. The bundle codec is unchanged.
+
+Run `native-run-candidate BUNDLE_DIR`. The last action models 780 physical
+copies of the same signed Finish, each with a distinct synthetic UTXO
+outpoint and an increasing accepted ordinal. The source and candidate
+scanners charge every copy. Each of two fee trials rolls back each body
+before the next, so every copy reaches Finish authorization and Part checks.
+Both observed rehearsals keep the completed prefix. A single authoritative
+fold then processes all copies. The resulting state root and journal size
+must match the single-Finish oracle, exactly one slot must be consumed, and
+every projected fee must match the authoritative fold. The other 779 copies
+are terminal no-ops after completion. The five passes share one Finish
+derivation key in the production cache for this parent and accepting point.
+
+This exercises a conservative native candidate workload with synthetic
+funding. It does not construct a DAG with 780 legal source blocks, admit
+780 Round bodies, or measure the public T12 profile.

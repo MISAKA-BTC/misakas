@@ -149,10 +149,13 @@ fn run_tokenizer_registration_measurement() {
     policy.metadata_bytes = policy.metadata_floor_v1().unwrap();
     policy.max_work = 10_000_000_000;
     policy.max_registration_charge = 100_000_000_000;
-    policy.service_budget.bytes = 128 * 1024;
-    policy.service_budget.io = 128 * 1024 * 1024;
-    policy.service_budget.work = policy.bookkeeping_work_v1().unwrap().sweep + policy.max_work;
-    policy.service_budget.controls = 1;
+    let sources: u64 = std::env::var("TKR_MEASUREMENT_SOURCE_BLOCKS").map_or(1, |value| value.parse().unwrap());
+    assert!(matches!(sources, 1 | 780), "choose the one-source or the 780-source local measurement envelope");
+    policy.maximum_source_blocks = sources;
+    policy.service_budget.bytes = sources * 128 * 1024;
+    policy.service_budget.io = sources * 128 * 1024 * 1024;
+    policy.service_budget.work = policy.bookkeeping_work_v1().unwrap().sweep + sources * policy.max_work;
+    policy.service_budget.controls = sources;
     policy.check_source_budget_v1().unwrap();
     extras.class_semantics_active = true;
     extras.tir_container_identity_active = true;
