@@ -4,7 +4,7 @@ FAIL — no-new-regressions
   "passed": false,
   "markdown_files": 1006,
   "targets": {
-    "ok": 11894,
+    "ok": 11898,
     "missing-doc-file": 971,
     "outside-package-unchecked": 352,
     "external-unchecked": 326,

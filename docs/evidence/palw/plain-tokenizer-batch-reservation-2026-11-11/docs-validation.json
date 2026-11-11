@@ -3,5 +3,7 @@
   "counterSha256": "f47503d7ffeb46801258b72a5535bb2e0dbf74f62b5776057ca1cd3e8873e577",
   "matchesPriorKnownIssues": true,
   "rfcOutputUnchanged": true,
-  "adrOutputUnchanged": true
+  "adrOutputUnchanged": true,
+  "finalSuccessfulLinkCount": 11898,
+  "finalChange": "Four new evidence links resolve; issue counts and diagnostics unchanged."
 }
