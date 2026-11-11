@@ -9,6 +9,9 @@ use std::{
     path::Path,
 };
 
+mod legacy_tfp1_replay;
+pub use legacy_tfp1_replay::{LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, check_legacy_tfp1_public_replay_v1};
+
 use crate::public_material::{TRACE_OPENING_PREFIX, TRACE_TILE_PREFIX, trace_tile_wire_overhead};
 use kaspa_consensus_core::{
     Hash64,
@@ -87,8 +90,50 @@ pub(crate) fn check_public_replay_trace_v1(
     chunk_bytes: usize,
     limits: PublicTraceAcquisitionV1,
 ) -> Result<(), PanelSourceErrorR1> {
-    let count = replayed.step_leaf_count;
-    if count == 0 || count != hashes.len() as u64 {
+    if replayed.step_leaf_count != hashes.len() as u64 {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    check_public_replay_trace_budget_v1(replayed.step_leaf_count, total_bytes, limits)?;
+    let published = fetch_public_trace_index_v1(provider, original)?;
+    if published != *replayed {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    check_public_replay_trace_tiles_v1(provider, original, &published, total_bytes, chunk_bytes, limits, |index| {
+        hashes.get(index as usize).copied().ok_or(PanelSourceErrorR1::Binding)
+    })
+}
+
+fn check_public_replay_trace_tiles_v1(
+    provider: &dyn MaterialProvider,
+    original: &OriginalCommit,
+    published: &PublicOriginalTraceIndexV1,
+    total_bytes: u64,
+    chunk_bytes: usize,
+    limits: PublicTraceAcquisitionV1,
+    mut replay_hash: impl FnMut(u64) -> Result<Hash64, PanelSourceErrorR1>,
+) -> Result<(), PanelSourceErrorR1> {
+    let count = published.step_leaf_count;
+    let mut remaining = total_bytes.checked_sub(PublicOriginalTraceIndexV1::WIRE_BYTES as u64).ok_or(PanelSourceErrorR1::Binding)?;
+    for index in 0..count {
+        let max_value_bytes = chunk_bytes.min(usize::try_from(remaining).unwrap_or(usize::MAX));
+        let (opening, tile) = fetch_public_trace_tile_v1(provider, original, published, index, limits.max_tiles, max_value_bytes)?;
+        if opening.leaf_hash != replay_hash(index)? {
+            return Err(PanelSourceErrorR1::Binding);
+        }
+        remaining -= tile.values_le.len() as u64;
+    }
+    if remaining != 0 {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(())
+}
+
+fn check_public_replay_trace_budget_v1(
+    count: u64,
+    total_bytes: u64,
+    limits: PublicTraceAcquisitionV1,
+) -> Result<(), PanelSourceErrorR1> {
+    if count == 0 || total_bytes < PublicOriginalTraceIndexV1::WIRE_BYTES as u64 {
         return Err(PanelSourceErrorR1::Binding);
     }
     // Reserve the longest possible opening for every tile before fetching.
@@ -96,23 +141,6 @@ pub(crate) fn check_public_replay_trace_v1(
     let max_wire = count.checked_mul(overhead).and_then(|bytes| total_bytes.checked_add(bytes));
     if count > limits.max_tiles || max_wire.is_none_or(|bytes| bytes > limits.max_wire_bytes) {
         return Err(PanelSourceErrorR1::Budget);
-    }
-    let published = fetch_public_trace_index_v1(provider, original)?;
-    if published != *replayed {
-        return Err(PanelSourceErrorR1::Binding);
-    }
-    let mut remaining = total_bytes.checked_sub(PublicOriginalTraceIndexV1::WIRE_BYTES as u64).ok_or(PanelSourceErrorR1::Binding)?;
-    for (index, hash) in hashes.iter().enumerate() {
-        let max_value_bytes = chunk_bytes.min(usize::try_from(remaining).unwrap_or(usize::MAX));
-        let (opening, tile) =
-            fetch_public_trace_tile_v1(provider, original, &published, index as u64, limits.max_tiles, max_value_bytes)?;
-        if opening.leaf_hash != *hash {
-            return Err(PanelSourceErrorR1::Binding);
-        }
-        remaining -= tile.values_le.len() as u64;
-    }
-    if remaining != 0 {
-        return Err(PanelSourceErrorR1::Binding);
     }
     Ok(())
 }

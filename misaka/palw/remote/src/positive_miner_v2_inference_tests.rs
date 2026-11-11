@@ -1261,3 +1261,260 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
     server.stop();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trace_tile() {
+    use crate::{
+        evidence::fs::{FsProvider, write_provider_chunk},
+        positive_panel_sources::{
+            LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, PanelSourceErrorR1, PublicTraceAcquisitionV1,
+            check_legacy_tfp1_public_replay_v1,
+        },
+        public_material::{public_original_replay_path, public_original_trace_index_path, public_original_trace_tile_path},
+    };
+    use kaspa_consensus_core::{
+        palw_backend::PalwExecutionBackendV1,
+        palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_from_context_v3},
+        palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_claim_id_v3,
+        },
+        palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
+        palw_tir_attempt_v1::palw_tir_canonical_context_v1,
+        palw_tir_court_v1::PublicOriginalTraceIndexV1,
+        palw_tir_public_source_v1::PalwTirPublicSourceV1,
+        tx::{TransactionId, TransactionOutpoint},
+    };
+    use misaka_palw_positive_contract::public_one_honest::*;
+    use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1};
+
+    let fixture = Fixture::with_profile(true, true);
+    let raw = br#"{"model":{"type":"BPE","vocab":{"x":0,"a":1,"b":2,"y":3},"merges":[]},"added_tokens":[]}"#;
+    let prompt = b"ab";
+    let form = PalwPromptIdsFormV1::MerkleV1;
+    let scopes = [
+        tir_inventory_material_codec_v1(),
+        tir_program_material_codec_v1(),
+        prompt_text_material_codec_v1(),
+        Digest(prompt_ids_form_id_v1(form).as_bytes()),
+        tokenizer_json_material_codec_v1(),
+        d(70), // This local material check does not claim an ExecutionRules relation.
+        tir_cold_initial_state_codec_v1(),
+        tir_cold_dependencies_codec_v1(),
+        tir_trace_material_codec_v1(),
+        tir_output_material_codec_v1(),
+    ];
+    let mut rules = scopes.map(|codec| ManifestScopeRules { codec, max_bytes: 1 << 16, chunk_bytes: 1 << 16 });
+    rules[MaterialScope::InputTokens as usize].chunk_bytes = PALW_PROMPT_IDS_TILE_LEN * 4;
+    let scope_rules = |scope: MaterialScope| rules[scope as usize];
+    let tokenizer =
+        kaspa_consensus_core::palw_positive_contract_v2::public_tokenizer_material_v1(raw, scope_rules(MaterialScope::Tokenizer))
+            .unwrap();
+
+    let directory = std::env::temp_dir().join(format!("misaka-legacy-tfp1-public-replay-{}", std::process::id()));
+    std::fs::create_dir(&directory).unwrap();
+    let container = directory.join("registered.palwtir");
+    misaka_palw_tir_artifact::write_container_v1(
+        &container,
+        &fixture.plan.program,
+        borsh::to_vec(&fixture.class.layout).unwrap(),
+        tokenizer.subject.0,
+        "test".into(),
+        &mut |param, layer| {
+            assert_eq!((param, layer), (0, None));
+            Ok((1..=16).collect())
+        },
+    )
+    .unwrap();
+    let artifact = Arc::new(TirArtifactV1::open(&container).unwrap());
+    let (root, _) = artifact.inventory_root().unwrap();
+    assert_eq!(root.as_bytes(), fixture.artifact.0);
+    let class = artifact.class().unwrap();
+    let class_id = class.class_id(&root);
+    let canonical = palw_tir_canonical_context_v1(&class, class_id, (2, 1)).unwrap();
+    let maximum_leaves = 1024;
+    let backend = TirBackendV1::new("legacy fixture".into(), artifact, root, canonical, form, maximum_leaves)
+        .unwrap()
+        .with_network_id_v1(b"legacy-tfp1-public-replay")
+        .with_fp_class_facts_v1(PalwFpClassFactsV3 {
+            model_profile_id: h(76),
+            runtime_manifest_hash: h(77),
+            runtime_class_id: h(78),
+            shape_profile_id: class_id,
+            cu_ruleset_id: h(79),
+        });
+    let pair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([64; 32]);
+    let key = *pair.verification_key.as_ref();
+    let ids = [1u32, 2];
+    let job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: h(80),
+        class_id,
+        executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(81), 0),
+        executor_pubkey: key.to_vec(),
+        operator_id: h(82),
+        anchor_block: h(83),
+        anchor_daa: 1000,
+        job_nonce: [84; 32],
+        tokenizer_id: class.tokenizer_id,
+        prompt_token_ids_hash: prompt_token_ids_commitment_v1(form, &ids).unwrap(),
+        prompt_tokens: ids.len() as u32,
+        decode_token_limit: 1,
+        max_context_tokens: 64,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+        temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        decode: None,
+        tail: None,
+    };
+    let run = backend.execute_free_prompt(&job, &[1, 2]).unwrap();
+    let PalwPublicExecutionBindingHeaderV1::Tir(header) = backend.public_execution_binding_header_v1(&run.outcome.material).unwrap()
+    else {
+        panic!("ordinary legacy fixture must emit a TIR header");
+    };
+    let ctx = &header.job_context;
+    let fp = palw_fp_commitment_from_context_v3(&job, ctx, &run, 41_000).unwrap();
+    let (record, _) = palw_tir_class_record_v1(&class, &root).unwrap();
+    let source =
+        PalwTirPublicSourceV1::new_v1(&record, &class.layout, &header, fp.execution_root, fp.trace_root, maximum_leaves).unwrap();
+    let scope = ChainScope { network: d(85), ruleset: d(86), branch: d(87) };
+    let prompt_entry = prompt_text_material_v1(scope.ruleset, "ab", scope_rules(MaterialScope::Prompt)).unwrap();
+    let mut original = OriginalCommit {
+        scope,
+        job: Digest(ctx.job_id.as_bytes()),
+        execution: Digest(ctx.context_hash().as_bytes()),
+        miner: principal(&key),
+        registered_class: Digest(class_id.as_bytes()),
+        artifact: Digest(root.as_bytes()),
+        program: Digest(class.graph_ir_root().as_bytes()),
+        prompt: prompt_entry.subject,
+        input_tokens: Digest(ctx.prompt_token_ids_hash.as_bytes()),
+        tokenizer: tokenizer.subject,
+        execution_rules: Digest(ctx.cu_ruleset_id.as_bytes()),
+        generation_seed: ctx.execution_seed,
+        initial_state: d(0),
+        dependencies: d(0),
+        prefill: ctx.declared_prefill_tokens,
+        decode: ctx.exact_decode_tokens,
+        max_context: ctx.max_context_tokens,
+        output: Digest(fp.output_root.as_bytes()),
+        trace_root: Digest(fp.execution_root.as_bytes()),
+        manifest_root: d(0),
+        service_contract: d(88),
+    };
+    let initial = tir_cold_initial_state_material_v1(&original, scope_rules(MaterialScope::InitialState)).unwrap().0;
+    original.initial_state = initial.subject;
+    let deps = tir_cold_dependencies_material_v1(&original, scope_rules(MaterialScope::Dependencies)).unwrap().0;
+    original.dependencies = deps.subject;
+    let trace = PublicOriginalTraceIndexV1 {
+        full_logits_trace_root: header.full_logits_trace_root,
+        step_leaf_count: header.step_leaf_count,
+        step_merkle_root: header.step_merkle_root,
+    };
+    let tiles: Vec<_> = (0..trace.step_leaf_count).map(|index| backend.step_opening(&run.outcome.material, index).unwrap()).collect();
+    let trace_bytes =
+        PublicOriginalTraceIndexV1::WIRE_BYTES as u64 + tiles.iter().map(|(_, tile)| tile.values_le.len() as u64).sum::<u64>();
+    let program = TirMinerJobV2 { class: &class, context: ctx, prompt: &ids, prompt_form: form };
+    let entry = |scope: MaterialScope, subject: Digest, total_bytes: u64| {
+        let r = scope_rules(scope);
+        ManifestEntryV1 { subject, content_root: subject, codec: r.codec, total_bytes, chunk_bytes: r.chunk_bytes }
+    };
+    let output: Vec<_> = run.output_token_ids.iter().flat_map(|id| id.to_le_bytes()).collect();
+    let manifest = ManifestV1 {
+        service_contract: original.service_contract,
+        entries: [
+            tir_inventory_material_v1(original.artifact, 16, scope_rules(MaterialScope::Artifact)).unwrap(),
+            program.public_program_material(scope_rules(MaterialScope::Program)).unwrap(),
+            prompt_entry,
+            program.public_input_token_material(scope_rules(MaterialScope::InputTokens)).unwrap(),
+            tokenizer,
+            entry(MaterialScope::ExecutionRules, original.execution_rules, 1),
+            initial,
+            deps,
+            entry(MaterialScope::Trace, original.trace_root, trace_bytes),
+            entry(MaterialScope::Output, original.output, output.len() as u64),
+        ],
+    };
+    let encoded = original.bind_manifest(&manifest, &rules, 1 << 20, ManifestV1::WIRE_BYTES).unwrap();
+    let manifest =
+        original.authenticate_manifest(&encoded, ManifestV1::WIRE_BYTES).unwrap().decode(&original, &rules, 1 << 20).unwrap();
+    let signature =
+        *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0; 32]).unwrap().as_ref();
+    let signed = SignedPublicOriginalV1 { original, key, signature };
+    let id = signed.original.id();
+    let provider = FsProvider { id: "local".into(), root: directory.join("published") };
+    for (scope, bytes) in [
+        (MaterialScope::Program, class.program.as_slice()),
+        (MaterialScope::Prompt, prompt.as_slice()),
+        (MaterialScope::Tokenizer, raw.as_slice()),
+        (MaterialScope::Output, output.as_slice()),
+    ] {
+        write_provider_chunk(&provider.root.join(public_original_replay_path(id, scope).unwrap()), bytes).unwrap();
+    }
+    write_provider_chunk(&provider.root.join(public_original_trace_index_path(id)), &borsh::to_vec(&trace).unwrap()).unwrap();
+    for (index, tile) in tiles.iter().enumerate() {
+        write_provider_chunk(&provider.root.join(public_original_trace_tile_path(id, index as u64)), &borsh::to_vec(tile).unwrap())
+            .unwrap();
+    }
+    let requested = Cell::new(0);
+    let native_need = backend.tir_own_step_source_need_v1(&header, &job, &ids).unwrap();
+    let verify = |expected_form, literal_prompt, source_id| {
+        check_legacy_tfp1_public_replay_v1(
+            &provider,
+            LegacyTfp1ReplayContextV1 {
+                claim: fp_claim_id_v3(&fp),
+                original: id,
+                companion_carrier: SignedPublicOriginalV1::carrier_digest(&signed.original, &signed.key, &signed.signature),
+                source_id,
+                source: &source,
+                fp: &fp,
+                prompt_form: expected_form,
+                literal_prompt,
+            },
+            &signed,
+            &manifest,
+            &backend,
+            &directory,
+            LegacyTfp1ReplayLimitsV1 {
+                max_input_output_bytes: 1 << 20,
+                trace: PublicTraceAcquisitionV1 { max_tiles: maximum_leaves, max_wire_bytes: 1 << 20 },
+            },
+            |need| {
+                requested.set(requested.get() + 1);
+                let required_extra = (ids.len() + run.output_token_ids.len()) as u64 * std::mem::size_of::<u32>() as u64
+                    + trace.step_leaf_count * 2 * std::mem::size_of::<Hash64>() as u64;
+                assert!(need.resident_ram_bytes >= native_need.resident_ram_bytes + required_extra);
+                assert_eq!(need.disk_bytes, native_need.disk_bytes);
+                assert_eq!(need.leaf_count, trace.step_leaf_count);
+                Ok(())
+            },
+        )
+    };
+    let source_id = source.source_id_v1();
+    assert_eq!(verify(PalwPromptIdsFormV1::Flat, prompt, source_id), Err(PanelSourceErrorR1::Binding));
+    assert_eq!(verify(form, b"ab ", source_id), Err(PanelSourceErrorR1::Binding));
+    assert_eq!(verify(form, prompt, h(99)), Err(PanelSourceErrorR1::Binding));
+    assert_eq!(requested.get(), 0);
+    assert_eq!(verify(form, prompt, source_id), Ok(()));
+    assert_eq!(requested.get(), 1);
+    {
+        let own = backend.open_tir_own_step_source_v1(&header, &job, &ids, &directory).unwrap();
+        let count = u32::try_from(trace.step_leaf_count).unwrap();
+        let hashes = own.leaf_hashes_v1(0, count).unwrap();
+        assert_eq!(hashes.capacity(), count as usize);
+        assert!(hashes.iter().zip(&tiles).all(|(hash, (opening, _))| *hash == opening.leaf_hash));
+        assert_eq!(own.leaf_hashes_v1(trace.step_leaf_count - 1, 1).unwrap(), [tiles.last().unwrap().0.leaf_hash]);
+        assert!(own.leaf_hashes_v1(0, 0).is_err());
+        assert!(own.leaf_hashes_v1(0, 1025).is_err());
+        assert!(own.leaf_hashes_v1(trace.step_leaf_count, 1).is_err());
+    }
+    let last = public_original_trace_tile_path(id, trace.step_leaf_count - 1);
+    let mut corrupted = tiles.last().unwrap().clone();
+    corrupted.1.values_le[0] ^= 1;
+    write_provider_chunk(&provider.root.join(&last), &borsh::to_vec(&corrupted).unwrap()).unwrap();
+    assert_eq!(verify(form, prompt, source_id), Err(PanelSourceErrorR1::Binding));
+    std::fs::remove_file(provider.root.join(last)).unwrap();
+    assert_eq!(verify(form, prompt, source_id), Err(PanelSourceErrorR1::Incomplete));
+    assert_eq!(requested.get(), 3);
+    std::fs::remove_dir_all(directory).unwrap();
+}

@@ -370,7 +370,16 @@ impl PalwTirOwnStepSourceV1 for OwnStepSource {
         if end > tree.widths[0] {
             return Err("own raw hash range outside original job".into());
         }
-        (first..end).map(|at| tree.checked(0, at).map(|(_, raw)| raw)).collect()
+        let count = count as usize;
+        let mut hashes = Vec::new();
+        hashes.try_reserve_exact(count).map_err(|error| error.to_string())?;
+        if hashes.capacity() != count {
+            return Err("own raw hash request backing exceeds exact capacity".into());
+        }
+        for at in first..end {
+            hashes.push(tree.checked(0, at)?.1);
+        }
+        Ok(hashes)
     }
     fn row_node_v1(&self, level: u8, index: u64) -> Result<Hash64, String> {
         self.rows
