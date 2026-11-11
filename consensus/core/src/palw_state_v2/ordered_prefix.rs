@@ -20,6 +20,14 @@ impl PalwOrderedPrefixV1<'_> {
     pub fn journal_len_v1(&self) -> usize {
         self.builder.entries.len()
     }
+
+    /// Consume a successful rehearsal for bootstrap/read checks. This drops
+    /// its journal and preserves the construction lease with the partial
+    /// state. It does not run finalization, advance LastPoint, or produce a
+    /// persistent delta; the canonical transition must still be completed.
+    pub fn into_rehearsal_state_v2(self) -> crate::palw_native_resource_v1::NativeChainStateV1 {
+        self.builder.native_reservation.finish_state_envelope_v1(self.builder.state)
+    }
 }
 
 /// Local retry envelope, not a consensus tariff or a bound on the work of
@@ -140,22 +148,76 @@ impl PalwOrderedReplayFailureV1 {
     }
 }
 
+/// Node-side gates run against the same state the ordinary fold reads and
+/// leaves. Hooks must keep their effects candidate-local until the entire
+/// pass succeeds; retries discard and reconstruct those effects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwOrderedObjectStageV2 {
+    Before,
+    After,
+}
+
+/// A Node gate's error is not reclassified as a consensus refusal. The Node
+/// retains its own distinction between an invalid candidate and a local or
+/// context failure. Native failures retain their exact ordered location.
+#[derive(Debug)]
+pub enum PalwOrderedCandidateFailureV2<E> {
+    Native(PalwOrderedReplayFailureV1),
+    Candidate { object_index: usize, stage: PalwOrderedObjectStageV2, error: E },
+}
+
+fn without_candidate_error_v2(failure: PalwOrderedCandidateFailureV2<std::convert::Infallible>) -> PalwOrderedReplayFailureV1 {
+    match failure {
+        PalwOrderedCandidateFailureV2::Native(failure) => failure,
+        PalwOrderedCandidateFailureV2::Candidate { error, .. } => match error {},
+    }
+}
+
 /// Uses the actual fold's complete input basis. No unmetered production
 /// entrypoint exists: all retries share one budget, charged before any fold
 /// initialization. This bounds repeated visits, not each operation's CPU work.
 /// Errors discard the whole candidate. Rebuild all input/position maps after
 /// filtering; never concatenate singleton journals or reuse stale extras.
 #[allow(clippy::too_many_arguments)]
-pub fn palw_v2_replay_accepted_prefix_v1<'a>(
-    budget: &mut PalwOrderedReplayBudgetV1<'a>,
+pub fn palw_v2_replay_accepted_prefix_v1<'parent: 'pass, 'pass>(
+    budget: &mut PalwOrderedReplayBudgetV1<'parent>,
     accepted_objects: &[PalwConsensusObjectV2],
     block_work: PalwBlockWorkV3<'_>,
     merged_work: &[PalwMergedWorkV1<'_>],
     own_execution_key: Hash64,
-    extras: &'a PalwTransitionExtrasV1,
-) -> Result<PalwOrderedPrefixV1<'a>, PalwOrderedReplayFailureV1> {
+    extras: &'pass PalwTransitionExtrasV1,
+) -> Result<PalwOrderedPrefixV1<'pass>, PalwOrderedReplayFailureV1> {
+    palw_v2_replay_accepted_prefix_with_checks_v2(
+        budget,
+        accepted_objects,
+        block_work,
+        merged_work,
+        own_execution_key,
+        extras,
+        &mut |_, _, _, _| Ok::<(), std::convert::Infallible>(()),
+    )
+    .map_err(without_candidate_error_v2)
+}
+
+/// Replay one complete candidate list with actual Node admission gates at
+/// each ordinary object. Before hooks see all preceding raw/BCT/TKR actions;
+/// After hooks run only after a successful ordinary fold. Failure returns no
+/// state owner. Rebuild the full list, positions and extras before retrying
+/// with the same budget; never continue from a refused pass's local state.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_replay_accepted_prefix_with_checks_v2<'parent: 'pass, 'pass, E>(
+    budget: &mut PalwOrderedReplayBudgetV1<'parent>,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    own_execution_key: Hash64,
+    extras: &'pass PalwTransitionExtrasV1,
+    check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
+) -> Result<PalwOrderedPrefixV1<'pass>, PalwOrderedCandidateFailureV2<E>> {
     use PalwOrderedReplayLocationV1 as At;
-    budget.begin_v1(accepted_objects.len(), extras).map_err(|error| PalwOrderedReplayFailureV1 { location: At::Budget, error })?;
+    budget
+        .begin_v1(accepted_objects.len(), extras)
+        .map_err(|error| PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 { location: At::Budget, error }))?;
     let parent = budget.parent;
     let params = budget.params;
     let ctx = &budget.point;
@@ -175,10 +237,9 @@ pub fn palw_v2_replay_accepted_prefix_v1<'a>(
             budget.rules.da_court,
             extras,
         )
-        .map_err(|error| PalwOrderedReplayFailureV1 { location: At::Preparation, error })?;
+        .map_err(|error| PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 { location: At::Preparation, error }))?;
         let mut location = At::Order;
-        apply_ordered_prefix_located_v1(&mut prefix.builder, parent, ctx, accepted_objects, &mut location)
-            .map_err(|error| PalwOrderedReplayFailureV1 { location, error })?;
+        apply_ordered_prefix_checked_v2(&mut prefix.builder, parent, ctx, accepted_objects, &mut location, check)?;
         Ok(prefix)
     })
 }
@@ -389,6 +450,23 @@ fn apply_ordered_prefix_located_v1(
     accepted_objects: &[PalwConsensusObjectV2],
     location: &mut PalwOrderedReplayLocationV1,
 ) -> Result<(), PalwStateV2Error> {
+    apply_ordered_prefix_checked_v2(builder, parent, ctx, accepted_objects, location, &mut |_, _, _, _| {
+        Ok::<(), std::convert::Infallible>(())
+    })
+    .map_err(|failure| without_candidate_error_v2(failure).error)
+}
+
+fn apply_ordered_prefix_checked_v2<E>(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    location: &mut PalwOrderedReplayLocationV1,
+    check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
+) -> Result<(), PalwOrderedCandidateFailureV2<E>> {
+    use PalwOrderedCandidateFailureV2::{Candidate, Native};
+    use PalwOrderedObjectStageV2::{After, Before};
+    let native = |location, error| Native(PalwOrderedReplayFailureV1 { location, error });
     let extras = builder.extras;
     use PalwOrderedReplayLocationV1 as At;
     *location = At::Order;
@@ -403,9 +481,14 @@ fn apply_ordered_prefix_located_v1(
         |carrier| carrier.accepted_ordinal_v1(),
         |carrier| carrier.accepted_ordinal_v1(),
     )
-    .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("native carriers do not follow accepted lifecycle order".into()))?;
+    .ok_or_else(|| {
+        native(*location, PalwStateV2Error::CarriageInconsistent("native carriers do not follow accepted lifecycle order".into()))
+    })?;
     if extras.tokenizer_registration_expected_fees_v1.len() != extras.tokenizer_registration_carriers_v1.len() {
-        return Err(PalwStateV2Error::CarriageInconsistent("tokenizer fee projection and carrier counts differ".into()));
+        return Err(native(
+            *location,
+            PalwStateV2Error::CarriageInconsistent("tokenizer fee projection and carrier counts differ".into()),
+        ));
     }
     let tokenizer_parent_root = (!extras.tokenizer_registration_carriers_v1.is_empty()).then(|| parent.state_root());
     let mut raw_cursor = 0;
@@ -417,39 +500,50 @@ fn apply_ordered_prefix_located_v1(
             AcceptedNativeCourtItemV1::Batch(carrier) => Some(carrier.accepted_ordinal_v1()),
             AcceptedNativeCourtItemV1::Tokenizer(carrier) => Some(carrier.accepted_ordinal_v1()),
         };
-        apply_raw_located_v1(builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal, location)?;
+        apply_raw_located_v1(builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal, location)
+            .map_err(|error| native(*location, error))?;
         match item {
             AcceptedNativeCourtItemV1::Ordinary(object) => {
                 *location = At::Ordinary { object_index: index };
-                apply_object(builder, ctx, object)?;
+                check(Before, index, &builder.state, object).map_err(|error| Candidate {
+                    object_index: index,
+                    stage: Before,
+                    error,
+                })?;
+                apply_object(builder, ctx, object).map_err(|error| native(*location, error))?;
+                check(After, index, &builder.state, object).map_err(|error| Candidate { object_index: index, stage: After, error })?;
                 index += 1;
             }
             AcceptedNativeCourtItemV1::Batch(carrier) => {
                 *location = At::Batch { accepted_tx_ordinal: carrier.accepted_ordinal_v1() };
-                builder.apply_batch_court_carrier_v1(ctx, carrier)?;
+                builder.apply_batch_court_carrier_v1(ctx, carrier).map_err(|error| native(*location, error))?;
             }
             AcceptedNativeCourtItemV1::Tokenizer(carrier) => {
                 *location = At::Tokenizer { accepted_tx_ordinal: carrier.accepted_ordinal_v1() };
-                let (fee, _refusal) = builder.apply_tokenizer_registration_at_v1(
-                    parent,
-                    tokenizer_parent_root.expect("carrier requires parent root"),
-                    ctx,
-                    carrier,
-                )?;
+                let (fee, _refusal) = builder
+                    .apply_tokenizer_registration_at_v1(
+                        parent,
+                        tokenizer_parent_root.expect("carrier requires parent root"),
+                        ctx,
+                        carrier,
+                    )
+                    .map_err(|error| native(*location, error))?;
                 *location = At::Order;
                 if extras.tokenizer_registration_expected_fees_v1.get(&carrier.carrier_v1()) != Some(&fee) {
-                    return Err(PalwStateV2Error::CarriageInconsistent(
-                        "tokenizer fee projection differs on actual accepted prefix".into(),
+                    return Err(native(
+                        *location,
+                        PalwStateV2Error::CarriageInconsistent("tokenizer fee projection differs on actual accepted prefix".into()),
                     ));
                 }
             }
         }
     }
-    apply_raw_located_v1(builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal, location)?;
+    apply_raw_located_v1(builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal, location)
+        .map_err(|error| native(*location, error))?;
     builder.tfp1_history_journal_parent = None;
     *location = At::Order;
     if raw_cursor != extras.positive_assignment_actions.len() {
-        return Err(PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix"));
+        return Err(native(*location, PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix")));
     }
     Ok(())
 }

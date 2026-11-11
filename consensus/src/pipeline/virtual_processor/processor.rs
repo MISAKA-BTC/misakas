@@ -3093,7 +3093,7 @@ impl VirtualStateProcessor {
                                     )
                                     .into());
                                 }
-                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(assignment_raw_schedule) =
+                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(observed_schedule) =
                                     assignment_rehearsal
                                 else {
                                     return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
@@ -3102,6 +3102,7 @@ impl VirtualStateProcessor {
                                     )
                                     .into());
                                 };
+                                let assignment_raw_schedule = observed_schedule.into_canonical_v2(&accepted_batch, &tokenizer.accepted)?;
                                 // The singleton filter has consumed the measured basis. The
                                 // authoritative fold below builds its own actual basis anew.
                                 drop(native_original_context_v19);
@@ -3201,13 +3202,8 @@ impl VirtualStateProcessor {
                                 // header's single declared `pow_algo_id`, and the two constants
                                 // differ. The match is written total anyway rather than asserted,
                                 // because a panic here would be a remote one.
-                                let work = match (attempt.as_ref(), receipt_spend.as_ref()) {
-                                    (Some(envelope), _) => kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
-                                    (None, Some(spend)) => {
-                                        kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::ReceiptSpend(&spend.spend)
-                                    }
-                                    (None, None) => kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
-                                };
+                                let (work, own_execution_key, own_job_anchor) =
+                                    self.palw_native_own_work_v1(header.as_ref(), attempt.as_ref(), receipt_spend.as_ref());
                                 // ADR-0058: the anticone's work rides this block's transition.
                                 // Assembled against the walk state (the parent's); the transition
                                 // re-runs the stateful admission per work against its LIVE fold
@@ -3227,46 +3223,7 @@ impl VirtualStateProcessor {
                                         self.palw_v2_merged_works(&ctx.ghostdag_data, state, state_params, &merged_non_daa, &point)?;
                                     (merged_owned, merged_preskips)
                                 };
-                                let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
-                                    .iter()
-                                    .map(|owned| match owned {
-                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits, origin_header) => self
-                                            .palw_merged_attempt_work_v1(
-                                                *blue,
-                                                Some(origin_header.as_ref()),
-                                                envelope,
-                                                *subsidy,
-                                                *carve,
-                                                *bits,
-                                            ),
-                                        PalwMergedOwnedWorkV1::Spend(blue, envelope) => {
-                                            kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
-                                                carrying_block: *blue,
-                                                work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::ReceiptSpend(
-                                                    &envelope.spend,
-                                                ),
-                                                // A receipt spend is the free-prompt lane (B-5 dedups it on (claim,
-                                                // quantum)); B-4's attempt-execution dedup does not apply, so the key is unread.
-                                                execution_key: kaspa_hashes::Hash64::default(),
-                                                // A receipt spend escrows nothing (it is not an attempt claim), so the
-                                                // subsidy and the carve are unread.
-                                                subsidy: 0,
-                                                escrow_carve: None,
-                                                bits: 0,
-                                                // Not an attempt: it answers no anchor.
-                                                job_anchor: kaspa_hashes::Hash64::default(),
-                                            }
-                                        }
-                                    })
-                                    .collect();
-                                // B-4: this block's OWN attempt's execution key, from its own header
-                                // (pre_pow + nonce), and (ADR-0152 v3.1 J-1) its execution anchor —
-                                // the job identity the claim records. Both `default` when the block
-                                // carries no attempt.
-                                let (own_execution_key, own_job_anchor) = match attempt.as_ref() {
-                                    Some(envelope) => self.palw_attempt_keys_v1(Some(header.as_ref()), &envelope.attempt),
-                                    None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
-                                };
+                                let (merged_refs, _merged_refs_owner) = self.palw_native_merged_work_refs_v1(&merged_owned)?;
                                 use kaspa_consensus_core::{
                                     palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1},
                                     palw_positive_certification_v2::{

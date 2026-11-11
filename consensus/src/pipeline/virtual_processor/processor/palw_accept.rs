@@ -86,6 +86,272 @@ impl NativeAcceptedOrdinalsV1 {
     }
 }
 
+/// Physical order of ordinary objects that survived the gate loop. Native
+/// positions are counts in this list, never ordinals in a filtered tx view.
+struct NativeAcceptedObjectOrderV1 {
+    ids: NativeAcceptedOrdinalsV1,
+    accepted: Vec<usize>,
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+
+impl NativeAcceptedObjectOrderV1 {
+    fn new(
+        ids: &[TransactionId],
+        maximum_objects: usize,
+    ) -> Result<Self, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_pending_requests_v1};
+        let path = "native ordinary candidate positions";
+        let bytes = maximum_objects
+            .checked_mul(size_of::<usize>())
+            .and_then(|bytes| u64::try_from(bytes).ok())
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>(path))?;
+        let lease = reserve_native_pending_requests_v1(bytes)?;
+        let mut accepted = Vec::new();
+        accepted.try_reserve_exact(maximum_objects).map_err(|_| NativeCoverageV1::unsupported::<Self>(path, "allocation refused"))?;
+        if accepted.capacity() != maximum_objects {
+            return Err(NativeCoverageV1::unsupported::<Self>(path, "allocation differs from reservation"));
+        }
+        if let Some(lease) = &lease {
+            lease.materialized_v1();
+        }
+        Ok(Self { ids: NativeAcceptedOrdinalsV1::new(ids.iter().copied())?, accepted, _lease: lease })
+    }
+
+    fn record(
+        &mut self,
+        carrier: Option<TransactionId>,
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        let key = self.ids.checked_order_key(carrier)?;
+        if self.accepted.len() == self.accepted.capacity() || self.accepted.last().is_some_and(|previous| *previous > key) {
+            return Err(Self::inconsistent("ordinary objects do not follow the complete accepted transaction order"));
+        }
+        self.accepted.push(key);
+        Ok(())
+    }
+
+    fn inconsistent(why: &str) -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+            "native ordinary candidate positions",
+            why,
+        )
+    }
+
+    fn before(
+        &self,
+        carrier: TransactionId,
+        ordinal: usize,
+    ) -> Result<usize, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        if self.ids.get(carrier) != Some(ordinal) {
+            return Err(Self::inconsistent("native carrier differs from its physical accepted ordinal"));
+        }
+        Ok(self.accepted.partition_point(|key| *key <= ordinal))
+    }
+
+    fn check_schedule(
+        &self,
+        batch: &IndexedBatchHandoffsV1,
+        tokenizer: &IndexedTokenizerHandoffsV1,
+        raw: &[kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2],
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        // Batch carrier identity was checked against the same complete
+        // acceptance stream before building the indexed handoffs.
+        for (slot, carrier) in batch {
+            if self.accepted.partition_point(|key| *key <= carrier.accepted_ordinal_v1()) != *slot {
+                return Err(Self::inconsistent("Batch handoff position differs from the surviving ordinary prefix"));
+            }
+        }
+        for (slot, carrier) in tokenizer {
+            if self.before(carrier.carrier_v1(), carrier.accepted_ordinal_v1())? != *slot {
+                return Err(Self::inconsistent("tokenizer handoff position differs from the surviving ordinary prefix"));
+            }
+        }
+        for action in raw {
+            let ordinal = action.action.origin().accepted_tx_ordinal as usize;
+            if self.before(action.action.transaction().id(), ordinal)? != action.before_object as usize {
+                return Err(Self::inconsistent("raw assignment position differs from the surviving ordinary prefix"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Node-side effects of judging one ordinary object. A fresh pass starts
+/// with a fresh owner. This owner records neither native state nor a delta.
+#[derive(Default)]
+struct NativeOrdinaryGateV2 {
+    court_closes: usize,
+    court_cost: kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1,
+    court_one_move: kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1,
+    refunds: Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    refund_owed: Option<PalwPendingCarrierRefundV1>,
+    refund_rows_reserved: usize,
+}
+
+#[derive(Clone, Copy)]
+struct NativeOrdinaryCourtChargeV2 {
+    audit_active: bool,
+    spends_slot: bool,
+    charge_on_attempt: bool,
+    one_move: bool,
+    cost: Option<kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1>,
+}
+
+enum NativeOrdinaryCourtRefusalV2 {
+    Cost(&'static str),
+    Budget {
+        spent: kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1,
+        budget: kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1,
+    },
+    Slot,
+}
+
+#[derive(Debug)]
+enum NativeOrdinaryGateRefusalV2 {
+    UnpaidRent { available: u64, owed: u64 },
+    Rent(String),
+    Validator(String),
+    Resource(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1),
+}
+
+impl NativeOrdinaryGateV2 {
+    /// Evaluate court room against the exact supplied pre-object state and
+    /// this pass's prior costs. Other Node gates may still refuse the object
+    /// before the checked validator is called.
+    fn prepare_court_v2(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        daa: u64,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        audit_active: bool,
+        completion_attempt_active: bool,
+    ) -> Result<NativeOrdinaryCourtChargeV2, NativeOrdinaryCourtRefusalV2> {
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_COURT_CLOSE_MAX_PER_BLOCK, palw_court_close_completes_a_group_v1, palw_court_move_spends_the_slot_v1,
+        };
+        let completes_close = palw_court_close_completes_a_group_v1(state, object);
+        let spends_slot = completes_close || palw_court_move_spends_the_slot_v1(state, object);
+        let policy = params.court_capacity_at_v1(daa);
+        let accounted = kaspa_consensus_core::palw_court_transport_v1::palw_court_accounted_op_v1(state, params, daa, object)
+            .map_err(NativeOrdinaryCourtRefusalV2::Cost)?;
+        if let (Some(policy), Some((cost, one_move))) = (policy.as_ref(), accounted) {
+            let (spent, budget) =
+                if one_move { (self.court_one_move, policy.one_move_budget) } else { (self.court_cost, policy.block_budget) };
+            if spent.checked_add(cost).is_none_or(|total| !total.fits_within(&budget)) {
+                return Err(NativeOrdinaryCourtRefusalV2::Budget { spent, budget });
+            }
+        }
+        if policy.is_none() && spends_slot && self.court_closes >= PALW_COURT_CLOSE_MAX_PER_BLOCK {
+            return Err(NativeOrdinaryCourtRefusalV2::Slot);
+        }
+        Ok(NativeOrdinaryCourtChargeV2 {
+            audit_active,
+            spends_slot,
+            charge_on_attempt: completes_close && completion_attempt_active,
+            one_move: accounted.is_some_and(|(_, one_move)| one_move),
+            cost: accounted.map(|(cost, _)| cost),
+        })
+    }
+
+    /// Before phase: check the actual carrier's legacy rent, then the checked
+    /// Node validator against the supplied native pre-object state.
+    #[allow(clippy::too_many_arguments)]
+    fn check_before_v2(
+        processor: &VirtualStateProcessor,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        originals: &std::collections::BTreeMap<
+            Hash64,
+            kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
+        >,
+        funded: &std::collections::BTreeMap<
+            Hash64,
+            kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        >,
+        fee_after_prior_burn: u64,
+    ) -> Result<(), NativeOrdinaryGateRefusalV2> {
+        use super::palw_validate::PalwObjectAdmissionFaultV1;
+        use NativeOrdinaryGateRefusalV2::{Rent, Resource, UnpaidRent, Validator};
+        use kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1;
+
+        match processor.palw_tir_public_minimum_rent_v1(state, params, point, object, originals, funded) {
+            Ok(Some(owed)) if fee_after_prior_burn == PALW_RENT_UNPRICED || fee_after_prior_burn < owed => {
+                return Err(UnpaidRent { available: fee_after_prior_burn, owed });
+            }
+            Err(NativeDecodeErrorV1::Resource(why)) => return Err(Resource(why)),
+            Err(NativeDecodeErrorV1::Decode(why)) => return Err(Rent(why)),
+            _ => {}
+        }
+        match processor.palw_v2_validate_objects_classified_v1(state, params, point, std::slice::from_ref(object)) {
+            Ok(()) => Ok(()),
+            Err(PalwObjectAdmissionFaultV1::Resource(why)) => Err(Resource(why)),
+            Err(PalwObjectAdmissionFaultV1::Semantic(why)) => Err(Validator(why)),
+        }
+    }
+
+    /// Gate hooks use the canonical Before/After phases. Before only charges
+    /// the outcomes that reached the old checked validator. After is called
+    /// only for a successfully applied native object.
+    fn check_stage_v2(
+        &mut self,
+        stage: kaspa_consensus_core::palw_state_v2::PalwOrderedObjectStageV2,
+        charge: NativeOrdinaryCourtChargeV2,
+        check_before: impl FnOnce() -> Result<(), NativeOrdinaryGateRefusalV2>,
+    ) -> Result<(), NativeOrdinaryGateRefusalV2> {
+        use kaspa_consensus_core::palw_state_v2::PalwOrderedObjectStageV2::{After, Before};
+        match stage {
+            Before => {
+                let result = check_before();
+                match &result {
+                    Ok(()) if !charge.audit_active && charge.spends_slot => self.court_closes += 1,
+                    Err(NativeOrdinaryGateRefusalV2::Validator(_)) => self.refused_v2(charge, true),
+                    _ => {}
+                }
+                result
+            }
+            After => {
+                self.record_cost_v2(charge);
+                if charge.audit_active && charge.spends_slot {
+                    self.court_closes += 1;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// An adjudicated completion consumes its attempted court cost even if
+    /// either validator refuses it. Pre-audit native failure already used
+    /// the slot in Before. A validator refusal did not reach that charge.
+    fn refused_v2(&mut self, charge: NativeOrdinaryCourtChargeV2, validator_refusal: bool) {
+        if charge.charge_on_attempt {
+            if charge.audit_active || validator_refusal {
+                self.court_closes += 1;
+            }
+            self.record_cost_v2(charge);
+        }
+    }
+
+    fn record_cost_v2(&mut self, charge: NativeOrdinaryCourtChargeV2) {
+        if let Some(cost) = charge.cost {
+            let spent = if charge.one_move { &mut self.court_one_move } else { &mut self.court_cost };
+            *spent = spent.checked_add(cost).expect("court cost prechecked");
+        }
+    }
+
+    fn flush_refund_v2(&mut self, accepted: usize, pending_payouts: usize, block: BlockHash) {
+        VirtualStateProcessor::palw_v2_settle_carrier_refund(
+            &mut self.refund_owed,
+            accepted,
+            pending_payouts,
+            &mut self.refund_rows_reserved,
+            &mut self.refunds,
+            block,
+        );
+    }
+}
+
 /// Immutable output of the existing production resolver at one block. The legacy
 /// extras remain readable for the existing fold APIs, but cannot be mutated through
 /// this boundary. Accepted-fact assembly explicitly takes ownership of those extras.
@@ -891,26 +1157,37 @@ impl VirtualStateProcessor {
         if matches!(mode, NativeAssignmentRehearsalModeV2::TemplateFees(_)) != (point.block == ORIGIN) {
             return Err(NativeCoverageV1::unsupported::<Self>("relay rehearsal", "preview and accepted block contexts differ").into());
         }
+        let mut order = if matches!(mode, NativeAssignmentRehearsalModeV2::Observed)
+            && !objects.is_empty()
+            && (!actions.is_empty() || !batch_candidates.is_empty() || !tokenizer.candidates.is_empty())
+            && self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(point.daa_score).is_some()
+        {
+            Some(NativeAcceptedObjectOrderV1::new(accepted_ids, objects.len())?)
+        } else {
+            None
+        };
         if actions.is_empty() && matches!(mode, NativeAssignmentRehearsalModeV2::Observed) {
+            let accepted = kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
+                self.palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+                    state,
+                    state_params,
+                    point,
+                    objects,
+                    block,
+                    own_attempt_class,
+                    round_fee_incomes,
+                    escrow_settlements,
+                    native_original_context,
+                    None,
+                    batch_candidates,
+                    accepted_batch,
+                    tokenizer,
+                    order.as_mut(),
+                )
+            })?;
             return Ok((
-                kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
-                    self.palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
-                        state,
-                        state_params,
-                        point,
-                        objects,
-                        block,
-                        own_attempt_class,
-                        round_fee_incomes,
-                        escrow_settlements,
-                        native_original_context,
-                        None,
-                        batch_candidates,
-                        accepted_batch,
-                        tokenizer,
-                    )
-                })?,
-                NativeAssignmentRehearsalResultV2::Observed(Vec::new()),
+                accepted,
+                NativeAssignmentRehearsalResultV2::Observed(NativeObservedAssignmentScheduleV2 { schedule: Vec::new(), order }),
             ));
         }
         let mut raw = NativeAssignmentRehearsalV2::new(actions, accepted_ids, mode)?;
@@ -929,8 +1206,12 @@ impl VirtualStateProcessor {
                 batch_candidates,
                 accepted_batch,
                 tokenizer,
+                order.as_mut(),
             )
         })?;
+        if let NativeAssignmentRehearsalResultV2::Observed(observed) = &mut raw.result {
+            observed.order = order;
+        }
         Ok((legacy, raw.result))
     }
 
@@ -981,6 +1262,7 @@ impl VirtualStateProcessor {
                 &[],
                 &mut accepted_batch,
                 &mut TokenizerRegistrationAcceptanceV1::default(),
+                None,
             )
         })
     }
@@ -1038,11 +1320,12 @@ impl VirtualStateProcessor {
             batch_candidates,
             accepted_batch,
             tokenizer,
+            None,
         )
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    pub(super) fn palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
+    fn palw_v2_accepted_objects_and_refunds_with_context_inner_v19(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
@@ -1060,6 +1343,7 @@ impl VirtualStateProcessor {
         batch_candidates: &[(usize, BatchHandoffV1)],
         accepted_batch: &mut IndexedBatchHandoffsV1,
         tokenizer: &mut TokenizerRegistrationAcceptanceV1,
+        mut native_order: Option<&mut NativeAcceptedObjectOrderV1>,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -1228,15 +1512,13 @@ impl VirtualStateProcessor {
         // `accepted.push`, so "refused" is read the one way that cannot miss a path: an object that
         // carried a refund is owed it iff `accepted` is no longer after it than it was before it.
         // Only objects past `palw_audit_2026_09_23` carry one (`palw_v2_objects_of_block`).
-        let mut refunds: Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1> = Vec::new();
-        let mut refund_owed: Option<PalwPendingCarrierRefundV1> = None;
+        let mut gate = NativeOrdinaryGateV2::default();
         // **Refunds COUNT against `PALW_V2_MAX_PENDING_PAYOUTS`** (user decision on the P-B1
         // review). Each refund this filter owes takes one queue row at step 3′, after every object,
         // so its row is RESERVED here the moment it is owed: a later move is measured against the
         // queue plus the reserved rows, and cannot take the row a refund was promised. A refund the
         // queue has no room for is not owed (its MSK stays in the sink, logged); the node's mempool
         // and template refuse such a carrier, so an honest node never mines one.
-        let mut refund_rows_reserved = 0usize;
         // Past the 2026-09-23 fence (on a chain past the 2026-09-11 audit, whose rehearsal folds
         // the real step 3 so `folded` counts every row an accepted move wrote) the queue is counted
         // EXACTLY: accepted moves' rows are in `folded`, owed refunds are reserved, and a refused
@@ -1256,13 +1538,6 @@ impl VirtualStateProcessor {
         let exact_queue = audit_active && self.palw_audit_2026_09_23_at(point.daa_score);
         let mut certifications_graded = 0usize;
         let mut exec_origin_budget = kaspa_consensus_core::palw_work_slice_v2::PalwExecOriginBudgetV1::default();
-        // ADR-0080 design A, W9: how many declared closes this block has already completed.
-        let mut court_closes_completed = 0usize;
-        // Lane g14-court-capacity (audit G-07): past `palw_court_capacity_v1` the block's court operations are bounded by the policy's
-        // deterministic cost-unit budget instead of the one-slot rule (the fold charges the same units as its second lock).
-        let mut court_cost_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
-        // Lane g14-court-capacity-r2: the one-move accusations spend their own budget (the fold's second lock likewise).
-        let mut court_one_move_spent = kaspa_consensus_core::palw_court_capacity_v1::PalwCourtCostV1::default();
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
         // RFC-0002 Phase F: whether this block has handed an IR class registration to the gate
@@ -1342,12 +1617,9 @@ impl VirtualStateProcessor {
                     }
                 }
             }
-            Self::palw_v2_settle_carrier_refund(
-                &mut refund_owed,
+            gate.flush_refund_v2(
                 accepted.len(),
                 folded.pending_payouts_iter().count().saturating_add(model_payout_rows_promised),
-                &mut refund_rows_reserved,
-                &mut refunds,
                 block,
             );
             let carried = match item {
@@ -1457,7 +1729,7 @@ impl VirtualStateProcessor {
             };
             let PalwCarriedObjectV1 {
                 object,
-                native_carrier: _,
+                native_carrier,
                 carrier_fee,
                 fp_answer,
                 prefix_dependency,
@@ -1536,7 +1808,7 @@ impl VirtualStateProcessor {
                 .collect::<std::collections::BTreeMap<_, _>>();
             let history_custody_pledges =
                 history_pledge.into_iter().map(|pledge| (pledge.claim, pledge)).collect::<std::collections::BTreeMap<_, _>>();
-            refund_owed = (refund.is_some() || unrefundable.is_some()).then_some(PalwPendingCarrierRefundV1 {
+            gate.refund_owed = (refund.is_some() || unrefundable.is_some()).then_some(PalwPendingCarrierRefundV1 {
                 accepted_before: accepted.len(),
                 refund,
                 unrefundable,
@@ -2211,7 +2483,7 @@ impl VirtualStateProcessor {
                 if rows > 0 {
                     let held = folded.pending_payouts_iter().count();
                     let cap = kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS;
-                    let promised = model_payout_rows_promised.saturating_add(refund_rows_reserved);
+                    let promised = model_payout_rows_promised.saturating_add(gate.refund_rows_reserved);
                     if held.saturating_add(promised).saturating_add(rows) > cap {
                         info!(
                             "Block {block}: a model-market move was dropped, and the block stands: the payout queue holds {held} \
@@ -2406,56 +2678,38 @@ impl VirtualStateProcessor {
                     heavy_prompt_claims.insert(charge.claim_id);
                 }
             }
-            let completes_a_close = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object);
-            let spends_the_court_slot =
-                completes_a_close || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
-            // **Liveness fix L-COURT-01 (`palw_court_completion_attempt_v1`): a completion is charged on ATTEMPT.** A completing chunk
-            // makes `palw_v2_validate_objects` assemble, digest, decode and adjudicate its close (up to 2.7 MB) — the work the slot
-            // exists to bound (`palw_court_close_completes_a_group_v1`'s doc) — and a refused one leaves its group intact, so under
-            // AC-SLOT's charge-on-apply a block could carry that refused completion any number of times, one adjudication each. Past the
-            // fence the attempt spends the slot (and its court cost) whether it applies or is refused. Only completions: AC-SLOT's other
-            // slot-spending moves (a replayed root claim the fold refuses) keep charge-on-apply, so a copy cannot crowd out a filer.
-            let charge_on_attempt = completes_a_close && self.palw_court_completion_attempt_at(point.daa_score);
-            let court_policy = state_params.court_capacity_at_v1(point.daa_score);
-            let accounted = match kaspa_consensus_core::palw_court_transport_v1::palw_court_accounted_op_v1(
+            // L-COURT-01 accounts an adjudicated completing close on
+            // attempt. The charged disposition is recorded only at the
+            // same validator/native outcomes as the legacy gate.
+            let charge = match gate.prepare_court_v2(
                 &folded,
                 state_params,
                 point.daa_score,
                 &object,
+                audit_active,
+                self.palw_court_completion_attempt_at(point.daa_score),
             ) {
-                Ok(accounted) => accounted,
-                Err(why) => {
+                Ok(charge) => charge,
+                Err(NativeOrdinaryCourtRefusalV2::Cost(why)) => {
                     info!("Block {block}: court cost refused: {why}; the object is dropped and the block stands");
                     continue;
                 }
-            };
-            let court_cost = accounted.map(|(cost, _)| cost);
-            let court_one_move = accounted.is_some_and(|(_, one_move)| one_move);
-            if let (Some(policy), Some(cost)) = (court_policy.as_ref(), court_cost) {
-                let (spent, budget) = if court_one_move {
-                    (court_one_move_spent, policy.one_move_budget)
-                } else {
-                    (court_cost_spent, policy.block_budget)
-                };
-                if spent.checked_add(cost).is_none_or(|total| !total.fits_within(&budget)) {
+                Err(NativeOrdinaryCourtRefusalV2::Budget { spent, budget }) => {
                     info!(
                         "Block {block}: a court operation was dropped, and the block stands: the block's court budget {budget:?} is \
                          spent ({spent:?} of it; palw_court_capacity_v1)"
                     );
                     continue;
                 }
-            }
-            if court_policy.is_none()
-                && spends_the_court_slot
-                && court_closes_completed >= kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
-            {
-                info!(
-                    "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
-                     stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
-                    kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
-                );
-                continue;
-            }
+                Err(NativeOrdinaryCourtRefusalV2::Slot) => {
+                    info!(
+                        "Block {block}: a court move that spends the block's adjudication slot was dropped, and the block \
+                         stands: the block already spent {} (PALW_COURT_CLOSE_MAX_PER_BLOCK)",
+                        kaspa_consensus_core::palw_state_v2::PALW_COURT_CLOSE_MAX_PER_BLOCK
+                    );
+                    continue;
+                }
+            };
             // A completing owned terminal carries the same heavy-prompt budget as a direct offence.
             // Its rent was bought by the signed declaration; partial chunks never consume this slot.
             if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { part } = &object
@@ -2532,37 +2786,20 @@ impl VirtualStateProcessor {
                 }
                 tir_registration_gated = true;
             }
-            // These are NEW paid allocations, independent of the old optional
-            // certification-rent fence. The actual outer UTXO fee must cover the
-            // original full plan or this owner's own acquisition/work contract.
-            match self.palw_tir_public_minimum_rent_v1(
-                &folded,
-                state_params,
-                point,
-                &object,
-                &tir_public_originals,
-                &tir_funded_originals,
-            ) {
-                Ok(Some(owed)) if carrier_fee == PALW_RENT_UNPRICED || carrier_fee < owed => {
-                    info!(
-                        "Block {block}: a TIR public allocation was dropped: carrier rent available after bond burn {carrier_fee} is not a paid allocation of {owed}"
-                    );
-                    continue;
-                }
-                Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)) => return Err(why.into()),
-                Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) => {
-                    info!("Block {block}: a TIR public allocation was dropped before admission: {why}");
-                    continue;
-                }
-                _ => {}
-            }
-            match self.palw_v2_validate_objects_classified_v1(&folded, state_params, point, std::slice::from_ref(&object)) {
+            use kaspa_consensus_core::palw_state_v2::PalwOrderedObjectStageV2::{After, Before};
+            match gate.check_stage_v2(Before, charge, || {
+                NativeOrdinaryGateV2::check_before_v2(
+                    self,
+                    &folded,
+                    state_params,
+                    point,
+                    &object,
+                    &tir_public_originals,
+                    &tir_funded_originals,
+                    carrier_fee,
+                )
+            }) {
                 Ok(()) => {
-                    // **AC-SLOT below the fence: the slot is charged on the acceptance check** (the
-                    // pre-audit behavior). Past the fence it is charged only after the move applies.
-                    if !audit_active && spends_the_court_slot {
-                        court_closes_completed += 1;
-                    }
                     // A bought registration was already folded before its slot was charged (above);
                     // that result is this one, computed once.
                     let applied = if let Some(next) = rehearsed_registration.take() {
@@ -2640,19 +2877,8 @@ impl VirtualStateProcessor {
                     };
                     match applied {
                         Ok(next) => {
-                            if let Some(cost) = court_cost {
-                                if court_one_move {
-                                    court_one_move_spent = court_one_move_spent.checked_add(cost).expect("court cost prechecked");
-                                } else {
-                                    court_cost_spent = court_cost_spent.checked_add(cost).expect("court cost prechecked");
-                                }
-                            }
-                            // **AC-SLOT past the fence: the slot is spent only by a move that
-                            // ACTUALLY APPLIES.** A move the fold refuses is dropped below and
-                            // leaves the slot for the next.
-                            if audit_active && spends_the_court_slot {
-                                court_closes_completed += 1;
-                            }
+                            gate.check_stage_v2(After, charge, || unreachable!("After does not run the pre-object check"))
+                                .expect("successful native application only records its prechecked court cost");
                             if !audit_active {
                                 rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
                             }
@@ -2701,6 +2927,9 @@ impl VirtualStateProcessor {
                             {
                                 accepted_carrier_spends.entry(*claim).or_default().extend(input_spends.iter().copied());
                             }
+                            if let Some(order) = native_order.as_deref_mut() {
+                                order.record(native_carrier)?;
+                            }
                             accepted.push(object);
                         }
                         Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
@@ -2708,42 +2937,25 @@ impl VirtualStateProcessor {
                             return Err(PalwLocalTransitionFaultV1::Context(why));
                         }
                         Err(why) => {
-                            // L-COURT-01: the refused completion was adjudicated; past the fence it spends what it was attempted
-                            // against (below the audit fence the slot was charged on acceptance already).
-                            if charge_on_attempt {
-                                if audit_active {
-                                    court_closes_completed += 1;
-                                }
-                                if let Some(cost) = court_cost {
-                                    if court_one_move {
-                                        court_one_move_spent = court_one_move_spent.checked_add(cost).expect("court cost prechecked");
-                                    } else {
-                                        court_cost_spent = court_cost_spent.checked_add(cost).expect("court cost prechecked");
-                                    }
-                                }
-                            }
+                            gate.refused_v2(charge, false);
                             info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                         }
                     }
                 }
-                Err(super::palw_validate::PalwObjectAdmissionFaultV1::Resource(why)) => return Err(why.into()),
-                Err(super::palw_validate::PalwObjectAdmissionFaultV1::Semantic(why)) => {
+                Err(NativeOrdinaryGateRefusalV2::Resource(why)) => return Err(why.into()),
+                Err(NativeOrdinaryGateRefusalV2::UnpaidRent { available, owed }) => {
+                    info!(
+                        "Block {block}: a TIR public allocation was dropped: carrier rent available after bond burn {available} is not a paid allocation of {owed}"
+                    );
+                }
+                Err(NativeOrdinaryGateRefusalV2::Rent(why)) => {
+                    info!("Block {block}: a TIR public allocation was dropped before admission: {why}");
+                }
+                Err(NativeOrdinaryGateRefusalV2::Validator(why)) => {
                     // Review of #12: a charged registration the gate refused bars its registrant
                     // from another slot in this block (see the charging site).
                     if let Some(registrant) = bought_registration {
                         class_registrants_refused.insert(registrant);
-                    }
-                    // L-COURT-01: a completion the acceptance layer refused was assembled and adjudicated there; past the fence it
-                    // spends the slot and its court cost all the same.
-                    if charge_on_attempt {
-                        court_closes_completed += 1;
-                        if let Some(cost) = court_cost {
-                            if court_one_move {
-                                court_one_move_spent = court_one_move_spent.checked_add(cost).expect("court cost prechecked");
-                            } else {
-                                court_cost_spent = court_cost_spent.checked_add(cost).expect("court cost prechecked");
-                            }
-                        }
                     }
                     info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                 }
@@ -2752,14 +2964,7 @@ impl VirtualStateProcessor {
         if let Some(raw) = assignment_actions {
             raw.finish(self, state_params, point, accepted.len(), &mut folded, &fee_extras)?;
         }
-        Self::palw_v2_settle_carrier_refund(
-            &mut refund_owed,
-            accepted.len(),
-            folded.pending_payouts_iter().count().saturating_add(model_payout_rows_promised),
-            &mut refund_rows_reserved,
-            &mut refunds,
-            block,
-        );
+        gate.flush_refund_v2(accepted.len(), folded.pending_payouts_iter().count().saturating_add(model_payout_rows_promised), block);
         // **What this block actually carried.** A dropped object says so; an ACCEPTED one said
         // nothing at all, so "the chain is not carrying courts" and "the chain is carrying courts
         // and something later discards them" looked identical from every log on every node. On the
@@ -2786,7 +2991,7 @@ impl VirtualStateProcessor {
         Ok((
             accepted,
             folded,
-            refunds,
+            gate.refunds,
             accepted_tir_originals,
             accepted_funded_originals,
             accepted_answers,
@@ -3700,10 +3905,8 @@ impl VirtualStateProcessor {
                 // The ordinary extractor verified the FP signature above.
                 // Bind every extracted field to this same literal carrier;
                 // admission still verifies its companion, payer and policy.
-                if let Err(why) = pairing
-                    .envelope()
-                    .protected_original_v2()
-                    .and_then(|envelope| envelope.matches_object_v1(&carried.object))
+                if let Err(why) =
+                    pairing.envelope().protected_original_v2().and_then(|envelope| envelope.matches_object_v1(&carried.object))
                 {
                     info!("[palw-funded-original] protected carrier {} object refused: {why}", carried.carrier);
                     return false;
@@ -4940,8 +5143,26 @@ fn relay_fee_plan_matches_actual_carrier_position_and_all_prior_fees() {
     assert!(plan.match_carrier(1, Some(point), parent, carrier, &tx, 20, 2, 17).is_err());
 }
 
+pub(super) struct NativeObservedAssignmentScheduleV2 {
+    schedule: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
+    order: Option<NativeAcceptedObjectOrderV1>,
+}
+
+impl NativeObservedAssignmentScheduleV2 {
+    pub(super) fn into_canonical_v2(
+        self,
+        batch: &IndexedBatchHandoffsV1,
+        tokenizer: &IndexedTokenizerHandoffsV1,
+    ) -> Result<Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>, PalwLocalTransitionFaultV1> {
+        if let Some(order) = self.order {
+            order.check_schedule(batch, tokenizer, &self.schedule)?;
+        }
+        Ok(self.schedule)
+    }
+}
+
 pub(super) enum NativeAssignmentRehearsalResultV2 {
-    Observed(Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>),
+    Observed(NativeObservedAssignmentScheduleV2),
     Planned(NativeRelayFeePlanV2),
 }
 impl NativeAssignmentRehearsalResultV2 {
@@ -5011,7 +5232,7 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             schedule.try_reserve_exact(actions.len()).map_err(|_| {
                 NativeCoverageV1::unsupported::<Self>("Assignment accepted-prefix rehearsal", "schedule allocation refused")
             })?;
-            NativeAssignmentRehearsalResultV2::Observed(schedule)
+            NativeAssignmentRehearsalResultV2::Observed(NativeObservedAssignmentScheduleV2 { schedule, order: None })
         };
         Ok(Self { actions, cursor: 0, accepted_ids, result, mode })
     }
@@ -5143,8 +5364,8 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
                     why
                 ),
             }
-            if let NativeAssignmentRehearsalResultV2::Observed(schedule) = &mut self.result {
-                schedule.push(kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2 {
+            if let NativeAssignmentRehearsalResultV2::Observed(observed) = &mut self.result {
+                observed.schedule.push(kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2 {
                     before_object: u32::try_from(accepted_count)
                         .map_err(|_| NativeCoverageV1::overflow::<Self>("Assignment object slot"))?,
                     action: action.clone(),
@@ -5157,8 +5378,53 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
 }
 
 #[cfg(test)]
+mod native_ordinary_gate_tests {
+    use super::{NativeOrdinaryCourtChargeV2, NativeOrdinaryGateRefusalV2, NativeOrdinaryGateV2};
+    use kaspa_consensus_core::{
+        palw_court_capacity_v1::PalwCourtCostV1,
+        palw_state_v2::PalwOrderedObjectStageV2::{After, Before},
+    };
+
+    #[test]
+    fn native_ordinary_gate_keeps_attempt_charges_and_pre_audit_slot_timing() {
+        let cost = PalwCourtCostV1 { work: 1, ..Default::default() };
+        let charge = NativeOrdinaryCourtChargeV2 {
+            audit_active: true,
+            spends_slot: true,
+            charge_on_attempt: true,
+            one_move: true,
+            cost: Some(cost),
+        };
+        let mut gate = NativeOrdinaryGateV2::default();
+        assert!(matches!(
+            gate.check_stage_v2(Before, charge, || Err(NativeOrdinaryGateRefusalV2::UnpaidRent { available: 1, owed: 2 })),
+            Err(NativeOrdinaryGateRefusalV2::UnpaidRent { .. })
+        ));
+        assert_eq!((gate.court_closes, gate.court_one_move), (0, PalwCourtCostV1::default()));
+        assert!(matches!(
+            gate.check_stage_v2(Before, charge, || Err(NativeOrdinaryGateRefusalV2::Validator("completion".into()))),
+            Err(NativeOrdinaryGateRefusalV2::Validator(_))
+        ));
+        assert_eq!((gate.court_closes, gate.court_one_move), (1, cost));
+
+        let old = NativeOrdinaryCourtChargeV2 { audit_active: false, ..charge };
+        let mut gate = NativeOrdinaryGateV2::default();
+        gate.check_stage_v2(Before, old, || Ok(())).unwrap();
+        assert_eq!((gate.court_closes, gate.court_one_move), (1, PalwCourtCostV1::default()));
+        gate.refused_v2(old, false);
+        assert_eq!((gate.court_closes, gate.court_one_move), (1, cost));
+
+        let mut gate = NativeOrdinaryGateV2::default();
+        gate.check_stage_v2(Before, charge, || Ok(())).unwrap();
+        assert_eq!((gate.court_closes, gate.court_one_move), (0, PalwCourtCostV1::default()));
+        gate.check_stage_v2(After, charge, || panic!("After must not rerun validation")).unwrap();
+        assert_eq!((gate.court_closes, gate.court_one_move), (1, cost));
+    }
+}
+
+#[cfg(test)]
 mod native_accepted_ordinal_tests {
-    use super::NativeAcceptedOrdinalsV1;
+    use super::{NativeAcceptedObjectOrderV1, NativeAcceptedOrdinalsV1};
     use kaspa_hashes::Hash64;
 
     #[test]
@@ -5179,6 +5445,22 @@ mod native_accepted_ordinal_tests {
         objects.retain(|(_, label)| *label != "first");
         assert_eq!(objects.partition_point(|object| key(object) <= tokenizer), 2);
         assert_eq!(ordinals.get(h(40)), Some(tokenizer), "filtering must not renumber the native carrier");
+    }
+
+    #[test]
+    fn surviving_prefix_rebuilds_handoff_positions_without_renumbering_carriers() {
+        let h = Hash64::from_u64_word;
+        let ids = [h(10), h(20), h(30), h(40), h(50), h(60)];
+        let mut order = NativeAcceptedObjectOrderV1::new(&ids, 4).unwrap();
+        order.record(None).unwrap();
+        order.record(Some(h(20))).unwrap();
+        // The ordinary object at physical ordinal 2 was dropped.
+        order.record(Some(h(50))).unwrap();
+        assert_eq!(order.before(h(40), 3).unwrap(), 2);
+        assert_eq!(order.before(h(60), 5).unwrap(), 3);
+        assert!(order.before(h(40), 2).is_err());
+        assert!(order.record(Some(h(30))).is_err());
+        assert_eq!(order.before(h(60), 5).unwrap(), 3);
     }
 
     #[test]

@@ -156,3 +156,168 @@ fn ordered_visit_exhaustion_is_local_and_precedes_candidate_application() {
         );
     }
 }
+
+#[test]
+fn ordered_node_checks_observe_actual_before_and_after_states_and_discard_failed_pass() {
+    use PalwOrderedCandidateFailureV2::{Candidate, Native};
+    use PalwOrderedObjectStageV2::{After, Before};
+    let p = economy_params();
+    let parent = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 10, 1), &[registration(h64(1), 1000, None)], None)
+        .unwrap()
+        .0;
+    let parent_root = parent.state_root();
+    let point = ctx(2, 11, 2);
+    let extras = PalwTransitionExtrasV1::default();
+    let objects = [registration(h64(2), 1, Some(bond_key(1))), registration(h64(3), 1, Some(bond_key(1)))];
+    let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+        &parent,
+        &p,
+        point,
+        replay_rules(),
+        PalwOrderedReplayLimitsV1 { passes: 2, candidate_visits: 4 },
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    let failure = palw_v2_replay_accepted_prefix_with_checks_v2(
+        &mut budget,
+        &objects,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &extras,
+        &mut |stage, index, state, object| {
+            assert_eq!(object, &objects[index]);
+            assert_eq!(state.last_point(), parent.last_point());
+            seen.push((stage, index));
+            if stage == Before {
+                assert!(state.class(&h64(2)).is_none());
+            } else {
+                assert!(state.class(&h64(2)).is_some());
+                assert_eq!(state.registration_exposure(&bond_key(1)), 1_000);
+                return Err("node refusal after tentative ordinary write");
+            }
+            Ok(())
+        },
+    )
+    .err()
+    .unwrap();
+    assert!(matches!(failure, Candidate { object_index: 0, stage: After, error: "node refusal after tentative ordinary write" }));
+    assert_eq!(seen, [(Before, 0), (After, 0)], "a refused pass never checks later candidates");
+    assert_eq!(budget.remaining_v1(), PalwOrderedReplayLimitsV1 { passes: 1, candidate_visits: 2 });
+    assert_eq!(parent.state_root(), parent_root);
+    assert!(parent.class(&h64(2)).is_none());
+
+    // A retry re-enters from the same parent. The callback can distinguish
+    // application stages without concatenating singleton journals.
+    seen.clear();
+    let replay = palw_v2_replay_accepted_prefix_with_checks_v2(
+        &mut budget,
+        &objects,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &extras,
+        &mut |stage, index, state, _| {
+            seen.push((stage, index));
+            let applied = index + usize::from(stage == After);
+            assert_eq!(state.registration_exposure(&bond_key(1)), applied as u64 * 1_000);
+            assert_eq!(state.class(&h64(2)).is_some(), applied >= 1);
+            assert_eq!(state.class(&h64(3)).is_some(), applied >= 2);
+            Ok::<(), &'static str>(())
+        },
+    )
+    .unwrap();
+    assert_eq!(seen, [(Before, 0), (After, 0), (Before, 1), (After, 1)]);
+    assert!(replay.journal_len_v1() > 0);
+    let partial = replay.into_rehearsal_state_v2();
+    assert_eq!(partial.last_point(), parent.last_point(), "handoff is not a completed block transition");
+    assert_eq!(partial.registration_exposure(&bond_key(1)), 2_000);
+    let calls = seen.len();
+    let exhausted = palw_v2_replay_accepted_prefix_with_checks_v2(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &extras,
+        &mut |stage, index, _, _| {
+            seen.push((stage, index));
+            Ok::<(), &'static str>(())
+        },
+    )
+    .err()
+    .unwrap();
+    assert!(matches!(exhausted, Native(PalwOrderedReplayFailureV1 { location: PalwOrderedReplayLocationV1::Budget, .. })));
+    assert_eq!(seen.len(), calls, "exhaustion precedes preparation and Node gates");
+}
+
+#[test]
+fn ordered_node_checks_preserve_native_failure_location_and_do_not_run_after_failed_object() {
+    use PalwOrderedObjectStageV2::{After, Before};
+    let p = params();
+    let parent = PalwChainStateV2::genesis();
+    let extras = PalwTransitionExtrasV1::default();
+    let first = registration(h64(1), 1000, None);
+    let objects = [first.clone(), first];
+    let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+        &parent,
+        &p,
+        ctx(1, 10, 1),
+        replay_rules(),
+        PalwOrderedReplayLimitsV1 { passes: 1, candidate_visits: 2 },
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    let failure = palw_v2_replay_accepted_prefix_with_checks_v2(
+        &mut budget,
+        &objects,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &extras,
+        &mut |stage, index, _, _| {
+            seen.push((stage, index));
+            Ok::<(), &'static str>(())
+        },
+    )
+    .err()
+    .unwrap();
+    assert_eq!(seen, [(Before, 0), (After, 0), (Before, 1)]);
+    let PalwOrderedCandidateFailureV2::Native(failure) = failure else { panic!("native failure was reclassified") };
+    assert!(matches!(failure.error, PalwStateV2Error::DuplicateClass(id) if id == h64(1)));
+    assert_eq!(failure.ordinary_refusal_index_v1(), Some(1));
+    assert!(parent.classes.is_empty());
+}
+
+#[test]
+fn ordered_retries_rebuild_pass_local_extras_without_resetting_budget() {
+    let p = params();
+    let parent = PalwChainStateV2::genesis();
+    let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+        &parent,
+        &p,
+        ctx(1, 10, 1),
+        replay_rules(),
+        PalwOrderedReplayLimitsV1 { passes: 2, candidate_visits: 2 },
+    )
+    .unwrap();
+    // Each pass owns a distinct extras value. Its lifetime must not be tied
+    // to the parent-bound budget or retained across a filtered-list rebuild.
+    for class in [h64(1), h64(2)] {
+        let extras = PalwTransitionExtrasV1::default();
+        let objects = [registration(class, 1000, None)];
+        let prefix = palw_v2_replay_accepted_prefix_with_checks_v2(
+            &mut budget,
+            &objects,
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            &extras,
+            &mut |_, _, _, _| Ok::<(), std::convert::Infallible>(()),
+        )
+        .unwrap();
+        assert!(prefix.state_v1().class(&class).is_some());
+    }
+    assert_eq!(budget.remaining_v1(), PalwOrderedReplayLimitsV1 { passes: 0, candidate_visits: 0 });
+    assert!(parent.classes.is_empty());
+}

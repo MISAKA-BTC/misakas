@@ -5,7 +5,8 @@ use kaspa_consensus_core::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV
 use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
 use kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3;
 use kaspa_consensus_core::palw_native_resource_v1::{
-    NativeCoverageV1, NativeDecodeErrorV1, NativeRetainedV1, reserve_native_requests_v1, retain_native_value_decode_classified_v1,
+    NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, NativeRetainedV1, reserve_native_requests_v1,
+    retain_native_value_decode_classified_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwChainStateV2, PalwMergedWorkV1, PalwNativeOriginalInputContextV19, PalwStateParamsV2,
@@ -39,6 +40,58 @@ impl RawAttemptV19 {
     }
 }
 impl VirtualStateProcessor {
+    /// Project work already resolved by the caller. Header/receipt validation
+    /// and bootstrap agreement remain at the accepting caller.
+    pub(super) fn palw_native_own_work_v1<'a>(
+        &self,
+        header: &Header,
+        attempt: Option<&'a PalwAttemptEnvelopeV2>,
+        receipt: Option<&'a PalwReceiptSpendEnvelopeV3>,
+    ) -> (PalwBlockWorkV3<'a>, Hash64, Hash64) {
+        if let Some(attempt) = attempt {
+            let (execution_key, job_anchor) = self.palw_attempt_keys_v1(Some(header), &attempt.attempt);
+            return (PalwBlockWorkV3::Attempt(attempt), execution_key, job_anchor);
+        }
+        let work = receipt.map_or(PalwBlockWorkV3::None, |receipt| PalwBlockWorkV3::ReceiptSpend(&receipt.spend));
+        (work, Hash64::default(), Hash64::default())
+    }
+
+    /// The same merge-work projection supplies the accepting fold and the
+    /// native input measurement. The caller keeps the allocation owner until
+    /// the final reader of these borrowed work entries has finished.
+    pub(super) fn palw_native_merged_work_refs_v1<'a>(
+        &self,
+        merged: &'a [PalwMergedOwnedWorkV1],
+    ) -> Result<(Vec<PalwMergedWorkV1<'a>>, Option<NativeDemandLeaseV1>), PalwLocalTransitionFaultV1> {
+        let path = "actual merged work reference array";
+        let count = u64::try_from(merged.len()).map_err(|_| NativeCoverageV1::overflow::<PalwMergedWorkV1<'_>>(path))?;
+        let bytes = count
+            .checked_mul(std::mem::size_of::<PalwMergedWorkV1<'_>>() as u64)
+            .ok_or_else(|| NativeCoverageV1::overflow::<PalwMergedWorkV1<'_>>(path))?;
+        let owner = reserve_native_requests_v1(bytes)?;
+        let mut refs = Vec::new();
+        let exhausted = |why| NativeCoverageV1::unsupported::<PalwMergedWorkV1<'_>>(path, why);
+        refs.try_reserve_exact(merged.len()).map_err(|_| exhausted("work reference allocation failed"))?;
+        if refs.capacity() > merged.len() {
+            return Err(exhausted("work reference allocation exceeds its reservation").into());
+        }
+        refs.extend(merged.iter().map(|m| match m {
+            PalwMergedOwnedWorkV1::Attempt(blue, e, subsidy, carve, bits, origin) => {
+                self.palw_merged_attempt_work_v1(*blue, Some(origin.as_ref()), e, *subsidy, *carve, *bits)
+            }
+            PalwMergedOwnedWorkV1::Spend(blue, e) => PalwMergedWorkV1 {
+                carrying_block: *blue,
+                work: PalwBlockWorkV3::ReceiptSpend(&e.spend),
+                execution_key: Default::default(),
+                subsidy: 0,
+                escrow_carve: None,
+                bits: 0,
+                job_anchor: Default::default(),
+            },
+        }));
+        Ok((refs, owner))
+    }
+
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub(super) fn palw_native_original_input_context_for_header_v19<'a>(
         &self,
@@ -71,33 +124,8 @@ impl VirtualStateProcessor {
             Ok(s) => s,
             Err(_) => return Ok((None, receipt)),
         };
-        let work = match (raw.as_ref(), actual_receipt.as_ref()) {
-            (Some(e), _) => PalwBlockWorkV3::Attempt(e.base()),
-            (None, Some(s)) => PalwBlockWorkV3::ReceiptSpend(&s.spend),
-            (None, None) => PalwBlockWorkV3::None,
-        };
-        let key = raw.as_ref().map(|e| self.palw_attempt_keys_v1(Some(header), &e.base().attempt).0).unwrap_or_default();
-        let overflow = || NativeCoverageV1::overflow::<PalwMergedWorkV1<'_>>("actual merged work reference array");
-        let count = u64::try_from(merged.len()).map_err(|_| overflow())?;
-        let bytes = count.checked_mul(std::mem::size_of::<PalwMergedWorkV1<'_>>() as u64).ok_or_else(overflow)?;
-        let _refs = reserve_native_requests_v1(bytes)?;
-        let refs: Vec<_> = merged
-            .iter()
-            .map(|m| match m {
-                PalwMergedOwnedWorkV1::Attempt(blue, e, subsidy, carve, bits, origin) => {
-                    self.palw_merged_attempt_work_v1(*blue, Some(origin.as_ref()), e, *subsidy, *carve, *bits)
-                }
-                PalwMergedOwnedWorkV1::Spend(blue, e) => PalwMergedWorkV1 {
-                    carrying_block: *blue,
-                    work: PalwBlockWorkV3::ReceiptSpend(&e.spend),
-                    execution_key: Default::default(),
-                    subsidy: 0,
-                    escrow_carve: None,
-                    bits: 0,
-                    job_anchor: Default::default(),
-                },
-            })
-            .collect();
+        let (work, key, _) = self.palw_native_own_work_v1(header, raw.as_ref().map(RawAttemptV19::base), actual_receipt.as_ref());
+        let (refs, _refs_owner) = self.palw_native_merged_work_refs_v1(merged)?;
         let context = kaspa_consensus_core::palw_state_v2::palw_native_original_input_context_v19(
             parent,
             point,
