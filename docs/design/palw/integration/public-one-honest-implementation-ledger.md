@@ -313,3 +313,6 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 
 
 2026-11-11 の[TFP1 preclaimと選出枠予約](../../../evidence/palw/tfp1-preclaim-protected-booking-2026-11-11/README.md)は **実装中・Rust検証未実行**。旧allocationを要求せず、署名前後で同じnative相対graph・全rescue配分・正規draw rankの物理namespaceを使う。総packet数、各枠の資源、保持期限と実予約/修復windowの期限を確定前に照合し、失敗時に部分予約を残さない構造にした。実署名キーをcapture前に固定するfixtureと回帰コードも追加した。完全profile・公開quote/intake・支払/保存・Panel/Finalへの接続は未完であり、公開T12成功とはしない。Minerのモデル全量配信は追加しない。
+
+
+2026-11-11 の[Selection受付前共通予約](../../../evidence/palw/selection-preclaim-common-booking-2026-11-11/README.md)は **実装中・Rust検証未実行**。native custody役割数と元Source/親TKR1を照合し、任意1行を覆う全tile/FullIdsの役割別搬送、検査、終端再検査を数値/tokenizerと同じ保護枠予約へ接続した。新profile/resource identity、供給者別ordinal、保存を伴う検査のinspection期限と回帰コードを追加。case単位の行固定、支払/typed writer、原子的裁定・archive/回復、完全profileとStudio公開受理/Final/当選時権利消費・ブロック生成は未完。モデル全量配信を追加していない。

@@ -616,7 +616,7 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(derive(&b.state, &PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at }, original).is_err());
     let branch = derive(&b.state, &at, original).unwrap();
     crate::palw_court_shared_material_intake_v1::batch::plain_output::projection::exercise_batch_booking_before_allocation_v2(
-        &b.state, &extras, &at, &fx,
+        &b.state, &extras, &params, &at, &fx,
     );
     crate::palw_court_shared_material_intake_v1::batch::admission::plain_tokenizer::check_compiled_tokenizer_fixture_v2(
         &branch, original, &source,

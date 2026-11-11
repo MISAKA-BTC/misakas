@@ -8,7 +8,9 @@ use crate::{
         batch::{
             admission::{
                 BatchAdmissionQuoteV1, BatchDeliveryV1, CompiledBatchAdmissionV1, NativeBatchDeliveryCostsV1,
-                NativeBatchDeliveryShapeV1, compile_native_batch_plain_tokenizer_v2, plain_tokenizer::PlainTokenizerBatchBudgetV2,
+                NativeBatchDeliveryShapeV1, compile_native_batch_plain_selection_v3, compile_native_batch_plain_tokenizer_v2,
+                plain_selection::{PlainSelectionBranchV3, PlainSelectionBudgetV3},
+                plain_tokenizer::PlainTokenizerBatchBudgetV2,
             },
             native_ranges::{NumericalBatchProjectionV1, numerical_batch_projection_v1},
             plain_tokenizer::PlainBatchTokenizerV2,
@@ -19,7 +21,7 @@ use crate::{
     palw_positive_contract_v2::tfp1_original::{NativeTfp1PublicOriginalFactsV1, Tfp1PublicOriginalObligationV1},
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
     palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwTransitionExtrasV1},
+    palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1},
     palw_tir_public_source_v1::{PalwTirPublicSourceV1, parameter_cover_v1::StreamingParameterCoverBudgetV1},
 };
 
@@ -36,6 +38,7 @@ pub(crate) struct PlainBatchOriginalProjectionV2 {
     prompt: PalwPromptIdsFormV1,
     numeric: NativeRetainedV1<NumericalBatchProjectionV1>,
     output: PlainBatchOutputV2,
+    selection: Option<PlainSelectionBranchV3>,
 }
 
 /// Output of native compilation before an allocation or a final packet
@@ -132,7 +135,49 @@ impl PlainBatchOriginalProjectionV2 {
             prompt,
             numeric,
             output,
+            selection: None,
         })
+    }
+
+    /// Extend this exact prospective original using the current native
+    /// custody bound. It is not the drawn-claimant count. The accepting owner
+    /// must still bind the signed custody contract and implement all protected
+    /// notice/row/repair consumers before enabling the complete profile.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_native_selection_v3(
+        mut self,
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        params: &PalwStateParamsV2,
+        at: &PalwBlockContextV2,
+        original: &PalwFreePromptCommitmentV3,
+        policy: PlainSelectionBudgetV3,
+    ) -> Result<Self, NativeDecodeErrorV1<String>> {
+        use NativeDecodeErrorV1::Decode;
+        if self.selection.is_some()
+            || self.acceptance_clocks != (at.daa_score, at.blue_score)
+            || self.claim != fp_claim_id_v3(original)
+            || parent.claim(&self.claim).is_some()
+        {
+            return Err(Decode("Selection projection substitutes original or prospective clocks".into()));
+        }
+        // The legacy helper has a conservative sentinel for absent registry.
+        // A new profile must require actual native role data, not price that
+        // sentinel as if it described a real custody population.
+        if !params.panel_v3_rule_at(at.daa_score) && extras.model_registry.is_none() {
+            return Err(Decode("Selection projection has no native custody policy".into()));
+        }
+        let tokenizer = PlainBatchTokenizerV2::derive_v2(parent, extras, at, original, &self.source, self.prompt).map_err(Decode)?;
+        if tokenizer != self.tokenizer {
+            return Err(Decode("Selection projection changes the authenticated parent tokenizer registration".into()));
+        }
+        let roles = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(at.daa_score, params, extras)
+            .map_err(|why| Decode(format!("Selection native custody: {why:?}")))?;
+        let record = parent.tir_class_v1(&original.job.class_id).ok_or_else(|| Decode("Selection class absent".into()))?;
+        let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(parent, original.job.class_id)
+            .ok_or_else(|| Decode("Selection layout absent".into()))?;
+        self.selection = Some(PlainSelectionBranchV3::derive_v3(original, &self.source, record, layout, roles, policy)?);
+        Ok(self)
     }
 
     fn compile_v2(
@@ -151,10 +196,31 @@ impl PlainBatchOriginalProjectionV2 {
             material_until_daa,
             maximums: self.numeric.maximums_v1(),
         };
-        compile_native_batch_plain_tokenizer_v2(shape, &self.output, &self.tokenizer, tokenizer_budget, costs, storage, price)
+        match &self.selection {
+            Some(selection) => compile_native_batch_plain_selection_v3(
+                shape,
+                &self.output,
+                &self.tokenizer,
+                tokenizer_budget,
+                selection,
+                costs,
+                storage,
+                price,
+            ),
+            None => {
+                compile_native_batch_plain_tokenizer_v2(shape, &self.output, &self.tokenizer, tokenizer_budget, costs, storage, price)
+            }
+        }
     }
 
     fn resource_id_v2(&self, relative_graph: Hash64) -> Result<Hash64, BatchCourtErrorV1> {
+        if let Some(selection) = &self.selection {
+            return crate::palw_court_shared_tir_stream_v1::stream_digest(
+                b"misaka-palw/plain-batch-original-resource/selection-v3",
+                &(self.claim, self.source.source_id_v1(), self.tokenizer.branch_id_v2(), selection.identity_v3()?, relative_graph),
+            )
+            .map_err(|_| BatchCourtErrorV1::CaseGraph);
+        }
         crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/plain-batch-original-resource/tokenizer-v2",
             &(self.claim, self.source.source_id_v1(), self.tokenizer.branch_id_v2(), relative_graph),
@@ -165,6 +231,13 @@ impl PlainBatchOriginalProjectionV2 {
     fn profile_id_v2(&self, service_profile: Hash64) -> Result<Hash64, BatchCourtErrorV1> {
         if service_profile == Hash64::default() {
             return Err(BatchCourtErrorV1::CaseGraph);
+        }
+        if let Some(selection) = &self.selection {
+            return crate::palw_court_shared_tir_stream_v1::stream_digest(
+                b"misaka-palw/plain-batch-selection-profile/v3",
+                &(service_profile, self.tokenizer.branch_id_v2(), selection.identity_v3()?),
+            )
+            .map_err(|_| BatchCourtErrorV1::CaseGraph);
         }
         crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/plain-batch-tokenizer-profile/v2",
@@ -347,6 +420,7 @@ impl PlainBatchOriginalProjectionV2 {
 pub(crate) fn exercise_batch_booking_before_allocation_v2(
     parent: &PalwChainStateV2,
     extras: &PalwTransitionExtrasV1,
+    params: &PalwStateParamsV2,
     at: &PalwBlockContextV2,
     fixture: &crate::palw_tir_public_claim_v1::PalwTirPublicFrameFixtureV1,
 ) {
@@ -452,4 +526,82 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
     rebased.reserve_before_allocation_v2(&mut unchanged, a, &rebased_terms, quote_price).unwrap();
     assert_eq!(unchanged, first_book);
     crate::palw_positive_contract_v2::tfp1_original::preclaim::tests::exercise_preclaim_booking_v1(&projection, terms, fixture, at);
+
+    // Explicit local custody policy. The branch derives its role count from
+    // this native input, never from the selected-claimant rescue count.
+    let mut selection_extras = extras.clone();
+    let mut globals = crate::palw_model_registry_v1::PALW_REGISTRY_GLOBALS_V1;
+    globals.seat_count = 2;
+    selection_extras.model_registry = Some(crate::palw_model_registry_v1::PalwModelRegistryFoldV1 {
+        globals,
+        span_daa: 600,
+        genesis_works: Default::default(),
+        grace_until_daa: 0,
+        admission_audit_period_daa: None,
+        readiness_v2_active: false,
+        bond_maturity: None,
+    });
+    let selection_policy = PlainSelectionBudgetV3 {
+        verification: ServiceCost { bytes: 1_000_000, work: 5_000_000, io: 5_000_000, controls: 1 },
+        verification_daa: 1,
+        workspace_bytes: 128 << 20,
+        maximum_proof_bytes: 1_000_000,
+        maximum_dependencies: 4096,
+        maximum_ranges_per_role: 512,
+        maximum_material_visits: 1_000_000,
+    };
+    let make_selection = |extras: &PalwTransitionExtrasV1| {
+        derive(at).with_native_selection_v3(parent, extras, params, at, fixture.frame.original_v1(), selection_policy)
+    };
+    let selected = make_selection(&selection_extras).unwrap();
+    assert_eq!(selected.selection.as_ref().unwrap().role_count_v3(), 3);
+    let mut absent_policy = selection_extras.clone();
+    absent_policy.model_registry = None;
+    assert!(make_selection(&absent_policy).is_err());
+    let selection_costs = NativeBatchDeliveryCostsV1 {
+        terminal: ServiceCost {
+            bytes: 2_000_000,
+            work: costs.terminal.work + selection_policy.verification.work,
+            io: costs.terminal.io + selection_policy.verification.io,
+            controls: 1,
+        },
+        ..costs
+    };
+    let selected_terms = selected
+        .compile_prospective_original_terms_v2(profile, at.daa_score + 11_000, selection_costs, tokenizer_budget, storage, quote_price)
+        .unwrap();
+    assert_ne!(selected_terms.profile_id_v2(), terms.profile_id_v2());
+    assert_ne!(selected_terms.resource_id_v2(), terms.resource_id_v2());
+    let selected_book =
+        ServiceReservations::new(ServiceCost { bytes: 100_000_000, work: 100_000_000, io: 100_000_000, controls: 4096 }).unwrap();
+    let mut booked = selected_book.clone();
+    let (selected_quote, graph) = selected.reserve_before_allocation_v2(&mut booked, a, &selected_terms, quote_price).unwrap();
+    assert!(selected_quote.service.bytes > first.service.bytes);
+    assert!(selected_quote.retained_payload_bytes > first.retained_payload_bytes);
+    let branch = selected.selection.as_ref().unwrap();
+    let verification = branch.verification_id_v3(selected.claim, a).unwrap();
+    let node = graph.iter().find(|node| node.packet.id == verification).unwrap();
+    assert!(!node.predecessors.is_empty());
+    for predecessor in &node.predecessors {
+        assert!(booked.assigned_daa(predecessor).unwrap() < booked.assigned_daa(&verification).unwrap());
+    }
+    let (_, terminal) =
+        crate::palw_court_shared_material_intake_v1::batch::admission::batch_numerical_service_ids_v1(selected.claim, a).unwrap();
+    assert!(graph.iter().find(|node| node.packet.id == terminal).unwrap().predecessors.contains(&verification));
+    assert!(booked.assigned_daa(&verification).unwrap() < booked.assigned_daa(&terminal).unwrap());
+    let mut refused = selected_book.clone();
+    assert!(selected.reserve_before_allocation_v2(&mut refused, a, &terms, quote_price).is_err());
+    assert_eq!(refused, selected_book);
+    assert!(
+        selected
+            .compile_prospective_original_terms_v2(profile, at.daa_score + 11_000, costs, tokenizer_budget, storage, quote_price,)
+            .is_err(),
+        "new terminal must fund Selection recheck too"
+    );
+    crate::palw_positive_contract_v2::tfp1_original::preclaim::tests::exercise_preclaim_booking_v1(
+        &selected,
+        selected_terms,
+        fixture,
+        at,
+    );
 }

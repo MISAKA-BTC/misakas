@@ -140,6 +140,11 @@ impl CompiledBatchAdmissionV1 {
         for (_, finish, _) in &self.spans {
             check(finish, schedule.material_ready_by())?;
         }
+        // A verification may also retain an archive record. Storage ownership
+        // never changes it into a later filing-only stage.
+        for id in &self.inspection_packets {
+            check(id, schedule.inspection_by())?;
+        }
         for node in &self.graph {
             if node.packet.id != self.terminal && !self.controls.iter().any(|control| control.packet == node.packet.id) {
                 check(&node.packet.id, schedule.inspection_by())?;
@@ -263,5 +268,57 @@ mod tests {
         assert!(CompiledBatchAdmissionV1::reserve_protected_v2(&[(h(100), &a), (h(101), &b)], &mut book, 14).is_err());
         assert_eq!(book, initial);
         drop(b_owner);
+    }
+
+    #[test]
+    fn retained_verification_keeps_inspection_deadline_before_filing() {
+        use misaka_palw_positive_contract::public_one_honest::{
+            FirstNoticeDemand, MaterialCaseDemand, OriginalClock, VerificationSchedule,
+        };
+        let (mut case, _owner) = compiled(2).into_parts_v1();
+        let verify = case.inspection_packets[0];
+        // Give the verification an archive payload too. Its service window
+        // could otherwise move beyond inspection, while still fitting filing.
+        case.controls.push(BatchRetainedControlV1 { packet: verify, payload_bytes: 1 });
+        for node in &mut case.graph {
+            node.packet.service_before = if node.packet.id == verify {
+                9000
+            } else if node.packet.id == case.terminal {
+                9800
+            } else {
+                4000
+            };
+        }
+        let schedule = VerificationSchedule::new(
+            OriginalClock::new(2).unwrap(),
+            FirstNoticeDemand {
+                draw_ready_by: 3,
+                material_ready_by: 3,
+                cold_acquisition_daa: 1,
+                full_inspection_daa: 1,
+                notice_inclusion_daa: 1,
+                missing_material_detected_by: 3,
+                material_request_inclusion_daa: 1,
+            },
+            MaterialCaseDemand {
+                material_delivery_daa: 878,
+                full_inspection_daa: 1000,
+                localization_daa: 0,
+                filing_daa: 4000,
+                adjudication_and_recovery_daa: 800,
+            },
+        )
+        .unwrap();
+        assert_eq!((schedule.material_ready_by(), schedule.inspection_by(), schedule.filed_by()), (4000, 5000, 9000));
+        let initial = ServiceReservations::new(ServiceCost { bytes: 65536, work: 2, io: 2, controls: 2 }).unwrap();
+        let mut book = initial.clone();
+        let result = CompiledBatchAdmissionV1::reserve_protected_checked_v2(
+            &[(Hash64::from_u64_word(2), &case)],
+            &mut book,
+            7,
+            |_, candidate| case.check_public_original_schedule_v1(candidate, schedule),
+        );
+        assert!(matches!(result, Err(BatchCourtErrorV1::Reservation(ServiceRefusal::DeadlineExhausted))));
+        assert_eq!(book, initial);
     }
 }

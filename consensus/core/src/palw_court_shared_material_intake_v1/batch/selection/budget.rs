@@ -21,7 +21,7 @@ use borsh::BorshSerialize;
 /// objective replay. Archive row multiplicity, settlement writes, native pass
 /// count, UTXO/script cost, and conversion into service work units are the
 /// enclosing profile's responsibilities.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
 #[allow(dead_code)]
 pub(crate) struct SelectionTerminalBoundsV2 {
     pub pin_bytes: u64,

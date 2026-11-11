@@ -1,4 +1,5 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
+pub(crate) mod plain_selection;
 pub(crate) mod plain_tokenizer;
 pub(crate) mod protected;
 use super::numerical_verification::NumericalBatchReplayBudgetV1;
@@ -18,6 +19,7 @@ use crate::{
         reserve_native_requests_v1,
     },
 };
+use plain_selection::PlainSelectionBranchV3;
 use plain_tokenizer::{PlainTokenizerBatchBudgetV2, TOKENIZER_DEMAND_ORDINAL_V2, material_ranges_v2, tokenizer_verification_id_v2};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -288,7 +290,7 @@ pub(crate) fn compile_native_batch_plain_output_v2(
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
-    compile_native_batch_delivery_with_output_v2(shape, None, Some(output), None, costs, storage, cost)
+    compile_native_batch_delivery_with_output_v2(shape, None, Some(output), None, None, costs, storage, cost)
 }
 
 /// Compile the relative graph without trying a provisional packet namespace
@@ -301,7 +303,7 @@ pub(crate) fn compile_native_batch_delivery_shape_v1(
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
-    compile_native_batch_delivery_with_output_v2(shape, stop, None, None, costs, storage, cost)
+    compile_native_batch_delivery_with_output_v2(shape, stop, None, None, None, costs, storage, cost)
 }
 
 /// The registered-tokenizer extension is a separate prospective grammar.
@@ -317,7 +319,42 @@ pub(crate) fn compile_native_batch_plain_tokenizer_v2(
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
-    compile_native_batch_delivery_with_output_v2(shape, None, Some(output), Some((tokenizer, tokenizer_budget)), costs, storage, cost)
+    compile_native_batch_delivery_with_output_v2(
+        shape,
+        None,
+        Some(output),
+        Some((tokenizer, tokenizer_budget)),
+        None,
+        costs,
+        storage,
+        cost,
+    )
+}
+
+/// Selection's chosen-row envelope is an additional independent branch in
+/// each protected opportunity. This compiler does not authorize row changes,
+/// supplier standing, paid delivery or the existing claim-wide notice route.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn compile_native_batch_plain_selection_v3(
+    shape: NativeBatchDeliveryShapeV1<'_>,
+    output: &PlainBatchOutputV2,
+    tokenizer: &PlainBatchTokenizerV2,
+    tokenizer_budget: PlainTokenizerBatchBudgetV2,
+    selection: &PlainSelectionBranchV3,
+    costs: NativeBatchDeliveryCostsV1,
+    storage: MaterialIntakeScheduleV1,
+    cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
+    compile_native_batch_delivery_with_output_v2(
+        shape,
+        None,
+        Some(output),
+        Some((tokenizer, tokenizer_budget)),
+        Some(selection),
+        costs,
+        storage,
+        cost,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -326,6 +363,7 @@ fn compile_native_batch_delivery_with_output_v2(
     stop: Option<(&ConstraintStopBatchOperandsV1, ServiceCost, ServiceCost)>,
     output: Option<&PlainBatchOutputV2>,
     tokenizer: Option<(&PlainBatchTokenizerV2, PlainTokenizerBatchBudgetV2)>,
+    selection: Option<&PlainSelectionBranchV3>,
     costs: NativeBatchDeliveryCostsV1,
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
@@ -340,6 +378,11 @@ fn compile_native_batch_delivery_with_output_v2(
             !branch.matches_claim_v2(claim)
                 || !branch.matches_acceptance_v2(shape.accepted_daa)
                 || output.is_none_or(|output| output.full_ids_range != [branch.bounds_v2().full_ids_body_bytes])
+        })
+        || selection.is_some_and(|branch| {
+            branch.claim != claim
+                || tokenizer.is_none_or(|(tokenizer, _)| tokenizer.source_id_v2() != branch.source_v3())
+                || output.is_none()
         })
         || shape.maximums.is_empty()
         || shape.maximums.len() > costs.maximum_packets
@@ -358,6 +401,27 @@ fn compile_native_batch_delivery_with_output_v2(
         budget.check_v2(branch.bounds_v2())?;
         budget.check_terminal_v2(numerical_verification, costs.terminal)?;
     }
+    if let Some(branch) = selection {
+        let (_, tokenizer_budget) = tokenizer.ok_or(CaseGraph)?;
+        let base = ServiceCost {
+            work: numerical_verification.work.checked_add(tokenizer_budget.verification.work).ok_or(DeliveryCost)?,
+            io: numerical_verification.io.checked_add(tokenizer_budget.verification.io).ok_or(DeliveryCost)?,
+            ..numerical_verification
+        };
+        branch.check_terminal_v3(base, costs.terminal)?;
+    }
+    let selection_demands = selection
+        .map(|branch| {
+            let per_role = branch.envelope.demands_per_role_v2().count();
+            let total = (per_role as u64).checked_mul(branch.envelope.roles_v2()).ok_or(CaseGraph)?;
+            let total = usize::try_from(total).map_err(|_| CaseGraph)?;
+            if total == 0 || total > costs.maximum_packets {
+                return Err(CaseGraph);
+            }
+            Ok(total)
+        })
+        .transpose()?
+        .unwrap_or(0);
     let tokenizer_ranges = tokenizer.map(|(branch, _)| material_ranges_v2(branch)).transpose()?;
     let tokenizer_demands = tokenizer_ranges.as_ref().map_or(0, |ranges| super::native_ranges::partition_maximums_v1(ranges).count());
     let a = shape.accepted_daa;
@@ -412,19 +476,32 @@ fn compile_native_batch_delivery_with_output_v2(
     let output_window = output.map(|output| take_service_window_v1(&mut cursor, output.control_daa, before)).transpose()?;
     let tokenizer_window =
         tokenizer.map(|(_, budget)| take_service_window_v1(&mut cursor, budget.verification_daa, before)).transpose()?;
+    let selection_window =
+        selection.map(|branch| take_service_window_v1(&mut cursor, branch.budget.verification_daa, before)).transpose()?;
     let terminal_window = take_service_window_v1(&mut cursor, timing.terminal_daa, before)?;
     let packet = |id, cost, window: &Range<u64>| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
     let demand_count = super::native_ranges::partition_maximums_v1(shape.maximums).count();
-    let extra_branches = usize::from(stop.is_some() || output.is_some()) + tokenizer_demands;
+    let extra_branches = usize::from(stop.is_some() || output.is_some())
+        .checked_add(tokenizer_demands)
+        .and_then(|n| n.checked_add(selection_demands))
+        .ok_or(CaseGraph)?;
     let demand_capacity = demand_count.checked_add(extra_branches).ok_or(CaseGraph)?;
-    let control_nodes = 2 + 2 * usize::from(stop.is_some()) + usize::from(output.is_some()) + usize::from(tokenizer.is_some());
+    let control_nodes = 2
+        + 2 * usize::from(stop.is_some())
+        + usize::from(output.is_some())
+        + usize::from(tokenizer.is_some())
+        + usize::from(selection.is_some());
     if demand_count == 0 || demand_capacity > costs.maximum_packets {
         return Err(CaseGraph);
     }
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<MaximumBatchDemandV1>(demand_capacity as u64).map_err(LocalResource)?;
     q.vec_v1::<CausalServicePacketV1>(control_nodes as u64).map_err(LocalResource)?;
-    q.vec_v1::<[u8; 64]>(2 + (tokenizer_demands + usize::from(tokenizer.is_some())) as u64).map_err(LocalResource)?;
+    q.vec_v1::<BatchRetainedControlV1>(2).map_err(LocalResource)?;
+    q.vec_v1::<[u8; 64]>(
+        2 + (tokenizer_demands + selection_demands + usize::from(tokenizer.is_some()) + usize::from(selection.is_some())) as u64,
+    )
+    .map_err(LocalResource)?;
     let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(LocalResource)?;
     let mut demands = Vec::with_capacity(demand_capacity);
     demands.extend(super::native_ranges::partition_maximums_v1(shape.maximums).enumerate().map(|(ordinal, range_maximums)| {
@@ -481,6 +558,33 @@ fn compile_native_batch_delivery_with_output_v2(
         });
         graph[1].predecessors.push(control);
     }
+    let mut retained_controls = Vec::with_capacity(2);
+    retained_controls.extend(retained);
+    if let Some((branch, window)) = selection.zip(selection_window) {
+        // Numerical ordinals grow from zero; Output/Tokenizer grow down from
+        // MAX. The checked middle band never aliases either existing grammar.
+        let first_ordinal = 1u64 << 63;
+        let tokenizer_first = TOKENIZER_DEMAND_ORDINAL_V2.checked_sub(tokenizer_demands as u64).ok_or(CaseGraph)?;
+        let last_ordinal = first_ordinal.checked_add(selection_demands as u64).ok_or(CaseGraph)?;
+        if demand_count as u64 >= first_ordinal || last_ordinal >= tokenizer_first {
+            return Err(CaseGraph);
+        }
+        let control = branch.verification_id_v3(claim, scope)?;
+        for role in 0..branch.envelope.roles_v2() {
+            for (index, range_maximums) in branch.envelope.demands_per_role_v2().enumerate() {
+                demands.push(MaximumBatchDemandV1 {
+                    ordinal: branch.demand_ordinal_v3(role, index)?,
+                    range_maximums,
+                    predecessors: &[],
+                    verification: control,
+                });
+            }
+        }
+        graph.push(CausalServicePacketV1 { packet: packet(control, branch.budget.verification, &window), predecessors: vec![] });
+        graph[1].predecessors.push(control);
+        retained_controls.push(BatchRetainedControlV1 { packet: control, payload_bytes: branch.bounds.archive_cause_bytes });
+    }
+    retained_controls.sort_unstable_by_key(|control| control.packet);
     let plan = BatchAdmissionV1 {
         claim,
         scope,
@@ -491,7 +595,7 @@ fn compile_native_batch_delivery_with_output_v2(
             material_until_daa: shape.material_until_daa,
         },
         demands: &demands,
-        retained_controls: retained.as_slice(),
+        retained_controls: &retained_controls,
         terminal,
         recovery_daa: costs.recovery_daa,
         maximum_packets: costs.maximum_packets,
@@ -618,6 +722,9 @@ impl BatchAdmissionV1<'_> {
             // Extra causal edge and Vec growth for each semantic Finish.
             bytes = bytes.checked_add((ranges as u64).checked_mul(128).ok_or(DeliveryCost)?).ok_or(DeliveryCost)?;
         }
+        let mut inspection_memory = TirNativeRequestsV1::new();
+        inspection_memory.vec_v1::<[u8; 64]>(self.demands.len() as u64).map_err(BatchCourtErrorV1::LocalResource)?;
+        bytes = bytes.checked_add(inspection_memory.bytes_v1()).ok_or(DeliveryCost)?;
         let lease = reserve(bytes).map_err(BatchCourtErrorV1::LocalResource)?;
         let native_nodes: BTreeMap<_, _> = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index)).collect();
         let terminal = *native_nodes.get(&self.terminal).ok_or(CaseGraph)?;
@@ -717,6 +824,7 @@ impl BatchAdmissionV1<'_> {
                 graph.append(&mut response);
             }
         }
+        let inspection_packets = verifications.iter().copied().collect::<Vec<_>>();
         let terminal_predecessors = &mut graph[terminal].predecessors;
         for predecessor in terminal_predecessors.iter() {
             verifications.remove(predecessor);
@@ -754,6 +862,7 @@ impl BatchAdmissionV1<'_> {
                 graph,
                 spans,
                 controls: self.retained_controls.to_vec(),
+                inspection_packets,
                 relative_graph_id,
                 service,
                 retained_payload_bytes,
@@ -781,6 +890,7 @@ pub(crate) struct CompiledBatchAdmissionV1 {
     graph: Vec<CausalServicePacketV1>,
     spans: Vec<([u8; 64], [u8; 64], u64)>,
     controls: Vec<BatchRetainedControlV1>,
+    inspection_packets: Vec<[u8; 64]>,
     relative_graph_id: Hash64,
     service: ServiceCost,
     retained_payload_bytes: u64,
@@ -818,6 +928,7 @@ impl CompiledBatchAdmissionV1 {
             graph,
             spans,
             controls,
+            inspection_packets: _,
             relative_graph_id,
             service,
             retained_payload_bytes,
