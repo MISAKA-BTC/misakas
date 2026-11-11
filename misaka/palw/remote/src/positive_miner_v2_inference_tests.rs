@@ -1263,29 +1263,96 @@ fn panel_replays_the_same_original_the_miner_executes_signs_and_publishes() {
 }
 
 #[test]
-fn ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trace_tile() {
+fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original() {
     use crate::{
         evidence::fs::{FsProvider, write_provider_chunk},
         positive_panel_sources::{
-            LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, PanelSourceErrorR1, PublicTraceAcquisitionV1,
-            check_legacy_tfp1_public_replay_v1,
+            LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, LegacyTfp1TraceExportV1, LegacyTfp1TracePublishAdmissionV1,
+            LegacyTfp1TracePublishLimitsV1, LegacyTfp1TracePublishScopeV1, LegacyTfp1TracePublisherV1, PanelSourceErrorR1,
+            PublicTraceAcquisitionV1, check_legacy_tfp1_public_replay_v1,
         },
         public_material::{public_original_replay_path, public_original_trace_index_path, public_original_trace_tile_path},
     };
     use kaspa_consensus_core::{
-        palw_backend::PalwExecutionBackendV1,
+        palw_backend::{PalwExecutionBackendV1, PalwOriginalCaptureReaderV1, PalwTirPublicCaptureNeedV1, PalwTirPublicCaptureSliceV1},
         palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_from_context_v3},
         palw_freeprompt_v3::{
             PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_claim_id_v3,
         },
+        palw_positive_contract_v2::{public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1},
         palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1,
         palw_tir_attempt_v1::palw_tir_canonical_context_v1,
         palw_tir_court_v1::PublicOriginalTraceIndexV1,
-        palw_tir_public_source_v1::PalwTirPublicSourceV1,
+        palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicSourceV1, PalwTirPublicUnitBoundV1},
         tx::{TransactionId, TransactionOutpoint},
     };
     use misaka_palw_positive_contract::public_one_honest::*;
-    use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1};
+    use misaka_palw_tir_exec::node::{TirArtifactV1, TirBackendV1, memory::TirMemoryLeaseV1};
+
+    struct Capture(Vec<u8>);
+    impl PalwOriginalCaptureReaderV1 for Capture {
+        fn len_v1(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_v1(&self, offset: u64, length: u32) -> Result<Vec<u8>, String> {
+            let start = usize::try_from(offset).map_err(|e| e.to_string())?;
+            let end = start.checked_add(length as usize).ok_or("capture range overflow")?;
+            self.0.get(start..end).map(<[u8]>::to_vec).ok_or_else(|| "capture range out of bounds".into())
+        }
+    }
+    #[derive(Default)]
+    struct Admission {
+        opened: u64,
+        reads: u64,
+        writes: Vec<(Option<u64>, u64)>,
+        denied: bool,
+        deny_write: bool,
+        retained_upper: u64,
+    }
+    impl LegacyTfp1TracePublishAdmissionV1 for Admission {
+        fn reserve_capture_v1(
+            &mut self,
+            scope: LegacyTfp1TracePublishScopeV1,
+            need: PalwTirPublicCaptureNeedV1,
+            maximum_retained_trace_bytes: u64,
+        ) -> Result<TirMemoryLeaseV1, String> {
+            assert_ne!(scope.source, Hash64::default());
+            assert!(need.resident_ram_bytes > 0);
+            self.opened += 1;
+            self.retained_upper = maximum_retained_trace_bytes;
+            Ok(Box::new(()))
+        }
+        fn reserve_read_v1(
+            &mut self,
+            scope: LegacyTfp1TracePublishScopeV1,
+            request: PalwTirPublicRequestV1,
+            quote: PalwTirPublicCaptureSliceV1,
+            native_bound: PalwTirPublicUnitBoundV1,
+            maximum_encoded_bytes: u64,
+        ) -> Result<TirMemoryLeaseV1, String> {
+            if self.denied {
+                return Err("test read admission refused".into());
+            }
+            assert_eq!(quote.source_id, scope.source);
+            assert!(matches!(request, PalwTirPublicRequestV1::StepLeaf { .. }));
+            assert!(maximum_encoded_bytes > 0 && native_bound.resident_ram_bytes > 0);
+            self.reads += 1;
+            Ok(Box::new(()))
+        }
+        fn reserve_write_v1(
+            &mut self,
+            scope: LegacyTfp1TracePublishScopeV1,
+            leaf: Option<u64>,
+            bytes: u64,
+        ) -> Result<TirMemoryLeaseV1, String> {
+            if self.deny_write {
+                return Err("test write admission refused".into());
+            }
+            assert_eq!(scope.material_until_daa, 41_000);
+            self.writes.push((leaf, bytes));
+            Ok(Box::new(()))
+        }
+    }
 
     let fixture = Fixture::with_profile(true, true);
     let raw = br#"{"model":{"type":"BPE","vocab":{"x":0,"a":1,"b":2,"y":3},"merges":[]},"added_tokens":[]}"#;
@@ -1297,7 +1364,7 @@ fn ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trac
         prompt_text_material_codec_v1(),
         Digest(prompt_ids_form_id_v1(form).as_bytes()),
         tokenizer_json_material_codec_v1(),
-        d(70), // This local material check does not claim an ExecutionRules relation.
+        tir_ordinary_tfp1_rules_material_codec_v1(),
         tir_cold_initial_state_codec_v1(),
         tir_cold_dependencies_codec_v1(),
         tir_trace_material_codec_v1(),
@@ -1402,10 +1469,27 @@ fn ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trac
         manifest_root: d(0),
         service_contract: d(88),
     };
-    let initial = tir_cold_initial_state_material_v1(&original, scope_rules(MaterialScope::InitialState)).unwrap().0;
+    let cold = public_tfp1_cold_material_v1(
+        &fp,
+        &source,
+        &class,
+        scope_rules(MaterialScope::InitialState),
+        scope_rules(MaterialScope::Dependencies),
+    )
+    .unwrap();
+    let (initial, initial_body) = cold.initial_state;
+    let (deps, deps_body) = cold.dependencies;
     original.initial_state = initial.subject;
-    let deps = tir_cold_dependencies_material_v1(&original, scope_rules(MaterialScope::Dependencies)).unwrap().0;
     original.dependencies = deps.subject;
+    let (rules_entry, rules_body) = public_ordinary_tfp1_rules_material_v1(
+        &fp,
+        &source,
+        &class,
+        &fixture.plan.program,
+        form,
+        scope_rules(MaterialScope::ExecutionRules),
+    )
+    .unwrap();
     let trace = PublicOriginalTraceIndexV1 {
         full_logits_trace_root: header.full_logits_trace_root,
         step_leaf_count: header.step_leaf_count,
@@ -1428,7 +1512,7 @@ fn ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trac
             prompt_entry,
             program.public_input_token_material(scope_rules(MaterialScope::InputTokens)).unwrap(),
             tokenizer,
-            entry(MaterialScope::ExecutionRules, original.execution_rules, 1),
+            rules_entry,
             initial,
             deps,
             entry(MaterialScope::Trace, original.trace_root, trace_bytes),
@@ -1448,13 +1532,113 @@ fn ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trac
         (MaterialScope::Prompt, prompt.as_slice()),
         (MaterialScope::Tokenizer, raw.as_slice()),
         (MaterialScope::Output, output.as_slice()),
+        (MaterialScope::ExecutionRules, rules_body.as_slice()),
+        (MaterialScope::InitialState, initial_body.as_slice()),
+        (MaterialScope::Dependencies, deps_body.as_slice()),
     ] {
         write_provider_chunk(&provider.root.join(public_original_replay_path(id, scope).unwrap()), bytes).unwrap();
     }
-    write_provider_chunk(&provider.root.join(public_original_trace_index_path(id)), &borsh::to_vec(&trace).unwrap()).unwrap();
+    let context = LegacyTfp1ReplayContextV1 {
+        claim: fp_claim_id_v3(&fp),
+        original: id,
+        companion_carrier: SignedPublicOriginalV1::carrier_digest(&signed.original, &signed.key, &signed.signature),
+        source_id: source.source_id_v1(),
+        source: &source,
+        fp: &fp,
+        prompt_form: form,
+        literal_prompt: prompt,
+    };
+    let mut admission = Admission::default();
+    let limits = LegacyTfp1TracePublishLimitsV1 {
+        max_capture_bytes: 1 << 20,
+        max_polls: 1024,
+        max_retained_trace_bytes: 1 << 20,
+        max_leaves: maximum_leaves,
+    };
+    let capture = Arc::new(Capture(run.outcome.material.clone()));
+    for foreign in [
+        LegacyTfp1ReplayContextV1 { source_id: h(99), ..context },
+        LegacyTfp1ReplayContextV1 { prompt_form: PalwPromptIdsFormV1::Flat, ..context },
+        LegacyTfp1ReplayContextV1 { literal_prompt: b"ab ", ..context },
+    ] {
+        assert!(matches!(
+            LegacyTfp1TracePublisherV1::open_v1(
+                foreign,
+                &signed,
+                &manifest,
+                &backend,
+                capture.clone(),
+                &directory,
+                &provider.root,
+                41_000,
+                limits,
+                &mut admission,
+            ),
+            Err(PanelSourceErrorR1::Binding)
+        ));
+    }
+    assert_eq!(admission.opened, 0);
+    let mut publisher = LegacyTfp1TracePublisherV1::open_v1(
+        context,
+        &signed,
+        &manifest,
+        &backend,
+        capture,
+        &directory,
+        &provider.root,
+        41_000,
+        limits,
+        &mut admission,
+    )
+    .unwrap();
+    assert_eq!(admission.opened, 1);
+    let index_path = provider.root.join(public_original_trace_index_path(id));
+    admission.denied = true;
+    assert!(matches!(publisher.advance_v1(&mut admission), Err(PanelSourceErrorR1::ReplayExecution(_))));
+    assert_eq!(admission.reads, 0);
+    assert!(admission.writes.is_empty() && !index_path.exists());
+    admission.denied = false;
+    admission.deny_write = true;
+    assert!((0..limits.max_polls).any(|_| match publisher.advance_v1(&mut admission) {
+        Ok(LegacyTfp1TraceExportV1::Pending) => false,
+        Err(PanelSourceErrorR1::ReplayProvider(_)) => true,
+        outcome => panic!("unexpected outcome before write admission: {outcome:?}"),
+    }));
+    assert!(admission.reads > 0, "reader work was charged before refusing the write");
+    assert!(admission.writes.is_empty());
+    assert!(!provider.root.join(public_original_trace_tile_path(id, 0)).exists());
+    assert!(!index_path.exists());
+    admission.deny_write = false;
+    let mut exported = 0;
+    let completion = (0..limits.max_polls + 1)
+        .find_map(|_| match publisher.advance_v1(&mut admission).unwrap() {
+            LegacyTfp1TraceExportV1::Pending => None,
+            LegacyTfp1TraceExportV1::Tile { index } => {
+                assert_eq!(index, exported);
+                assert!(!index_path.exists());
+                exported += 1;
+                None
+            }
+            complete @ LegacyTfp1TraceExportV1::Complete { .. } => Some(complete),
+        })
+        .unwrap();
+    let physical = PublicOriginalTraceIndexV1::WIRE_BYTES as u64
+        + tiles.iter().map(|tile| borsh::object_length(tile).unwrap() as u64).sum::<u64>();
+    assert!(matches!(
+        completion,
+        LegacyTfp1TraceExportV1::Complete { scope, leaves, wire_bytes }
+            if scope.claim == context.claim && scope.original == id && scope.source == context.source_id
+                && leaves == trace.step_leaf_count && wire_bytes == physical
+    ));
+    assert!(admission.retained_upper >= physical);
+    assert!(admission.retained_upper <= limits.max_retained_trace_bytes);
+    assert_eq!(publisher.advance_v1(&mut admission), Ok(completion));
+    assert_eq!(admission.writes.len() as u64, trace.step_leaf_count + 1);
+    assert_eq!(admission.writes.last(), Some(&(None, PublicOriginalTraceIndexV1::WIRE_BYTES as u64)));
+    assert_eq!(std::fs::read(index_path).unwrap(), borsh::to_vec(&trace).unwrap());
     for (index, tile) in tiles.iter().enumerate() {
-        write_provider_chunk(&provider.root.join(public_original_trace_tile_path(id, index as u64)), &borsh::to_vec(tile).unwrap())
-            .unwrap();
+        let path = provider.root.join(public_original_trace_tile_path(id, index as u64));
+        assert_eq!(std::fs::read(path).unwrap(), borsh::to_vec(tile).unwrap());
     }
     let requested = Cell::new(0);
     let native_need = backend.tir_own_step_source_need_v1(&header, &job, &ids).unwrap();
@@ -1507,6 +1691,19 @@ fn ordinary_tfp1_public_replay_checks_native_merkle_prompt_and_every_legacy_trac
         assert!(own.leaf_hashes_v1(0, 0).is_err());
         assert!(own.leaf_hashes_v1(0, 1025).is_err());
         assert!(own.leaf_hashes_v1(trace.step_leaf_count, 1).is_err());
+    }
+    for (scope, body) in [
+        (MaterialScope::ExecutionRules, rules_body.as_slice()),
+        (MaterialScope::InitialState, initial_body.as_slice()),
+        (MaterialScope::Dependencies, deps_body.as_slice()),
+    ] {
+        let path = provider.root.join(public_original_replay_path(id, scope).unwrap());
+        let mut corrupted = body.to_vec();
+        corrupted[0] ^= 1;
+        write_provider_chunk(&path, &corrupted).unwrap();
+        assert_eq!(verify(form, prompt, source_id), Err(PanelSourceErrorR1::Binding));
+        assert_eq!(requested.get(), 1);
+        write_provider_chunk(&path, body).unwrap();
     }
     let last = public_original_trace_tile_path(id, trace.step_leaf_count - 1);
     let mut corrupted = tiles.last().unwrap().clone();

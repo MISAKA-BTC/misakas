@@ -454,6 +454,37 @@ pub fn tir_wide_rules_material_entry_v1(
     })
 }
 
+/// Ordinary native TFP1 rules have their own material codec. This names the
+/// existing native program/job rules; it does not enable a relation plan.
+pub fn tir_ordinary_tfp1_rules_material_codec_v1() -> Digest {
+    hash(b"misaka/palw/material-codec/v1", &b"tir-ordinary-tfp1-rules-v1/whole")
+}
+
+/// Eight native identities in order: program, primitive set, logits scheme,
+/// context trace scheme, CU rules, complete FP job, execution context, and
+/// prompt commitment form. The FP job identity includes selector/stop rules.
+/// The caller derives these from native metadata, never from this preimage.
+pub fn tir_ordinary_tfp1_rules_material_entry_v1(
+    subject: Digest,
+    bytes: &[u8; 512],
+    rules: ManifestScopeRules,
+) -> Result<ManifestEntryV1, ContractError> {
+    if rules.codec != tir_ordinary_tfp1_rules_material_codec_v1() {
+        return Err(ContractError::UnsupportedProfile);
+    }
+    let total_bytes = bytes.len() as u64;
+    if total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
+        return Err(ContractError::Budget);
+    }
+    Ok(ManifestEntryV1 {
+        subject,
+        content_root: hash(b"misaka/palw/tir-ordinary-tfp1-rules/v1", bytes),
+        codec: rules.codec,
+        total_bytes,
+        chunk_bytes: rules.chunk_bytes,
+    })
+}
+
 /// Position zero, zero-filled Fixed tensors and empty Hist windows. Shapes,
 /// layers and the job seed are determined by the program and execution IDs.
 pub fn tir_cold_initial_state_codec_v1() -> Digest {
@@ -464,12 +495,22 @@ pub fn tir_cold_initial_state_material_v1(
     original: &OriginalCommit,
     rules: ManifestScopeRules,
 ) -> Result<(ManifestEntryV1, [u8; 128]), ContractError> {
+    tir_cold_initial_state_for_execution_v1(original.program, original.execution, rules)
+}
+
+/// The same existing preimage derived from independently resolved native
+/// identities, without constructing or trusting a candidate OriginalCommit.
+pub fn tir_cold_initial_state_for_execution_v1(
+    program: Digest,
+    execution: Digest,
+    rules: ManifestScopeRules,
+) -> Result<(ManifestEntryV1, [u8; 128]), ContractError> {
     if rules.codec != tir_cold_initial_state_codec_v1() {
         return Err(ContractError::UnsupportedProfile);
     }
     let mut bytes = [0; 128];
-    bytes[..64].copy_from_slice(&original.program.0);
-    bytes[64..].copy_from_slice(&original.execution.0);
+    bytes[..64].copy_from_slice(&program.0);
+    bytes[64..].copy_from_slice(&execution.0);
     let total_bytes = bytes.len() as u64;
     if total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
         return Err(ContractError::Budget);
@@ -487,12 +528,21 @@ pub fn tir_cold_dependencies_material_v1(
     original: &OriginalCommit,
     rules: ManifestScopeRules,
 ) -> Result<(ManifestEntryV1, [u8; 68]), ContractError> {
+    tir_cold_dependencies_for_execution_v1(original.execution, rules)
+}
+
+/// Byte-identical empty dependency preimage for a natively established cold
+/// execution. The caller must establish that it has no consumed dependency.
+pub fn tir_cold_dependencies_for_execution_v1(
+    execution: Digest,
+    rules: ManifestScopeRules,
+) -> Result<(ManifestEntryV1, [u8; 68]), ContractError> {
     if rules.codec != tir_cold_dependencies_codec_v1() {
         return Err(ContractError::UnsupportedProfile);
     }
     // Execution identity followed by the canonical zero u32 item count.
     let mut bytes = [0; 68];
-    bytes[..64].copy_from_slice(&original.execution.0);
+    bytes[..64].copy_from_slice(&execution.0);
     let total_bytes = bytes.len() as u64;
     if total_bytes > rules.max_bytes || total_bytes > u64::from(rules.chunk_bytes) {
         return Err(ContractError::Budget);

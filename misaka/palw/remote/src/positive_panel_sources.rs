@@ -10,7 +10,12 @@ use std::{
 };
 
 mod legacy_tfp1_replay;
+mod legacy_tfp1_trace_publish;
 pub use legacy_tfp1_replay::{LegacyTfp1ReplayContextV1, LegacyTfp1ReplayLimitsV1, check_legacy_tfp1_public_replay_v1};
+pub use legacy_tfp1_trace_publish::{
+    LegacyTfp1TraceExportV1, LegacyTfp1TracePublishAdmissionV1, LegacyTfp1TracePublishLimitsV1, LegacyTfp1TracePublishScopeV1,
+    LegacyTfp1TracePublisherV1,
+};
 
 use crate::public_material::{TRACE_OPENING_PREFIX, TRACE_TILE_PREFIX, trace_tile_wire_overhead};
 use kaspa_consensus_core::{
@@ -38,8 +43,9 @@ use misaka_palw_positive_contract::{
     messages::{AdmissionContext, ClaimForm, MinerResultCommit, MinerServiceContract, SourceKind, SourceRequest},
     ports::MinerSource,
     public_one_honest::{
-        CheckedManifestV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit, tir_cold_dependencies_material_v1,
-        tir_cold_initial_state_material_v1, tir_inventory_material_v1, tir_output_material_codec_v1, tir_program_material_codec_v1,
+        CheckedManifestV1, ManifestEntryV1, ManifestScopeRules, ManifestV1, MaterialScope, OriginalCommit,
+        tir_cold_dependencies_material_v1, tir_cold_initial_state_material_v1, tir_inventory_material_v1,
+        tir_output_material_codec_v1, tir_program_material_codec_v1, tir_trace_material_codec_v1,
     },
 };
 use misaka_palw_tir::TirProgramV1;
@@ -128,21 +134,37 @@ fn check_public_replay_trace_tiles_v1(
     Ok(())
 }
 
+fn checked_public_trace_entry_v1<'a>(
+    original: &OriginalCommit,
+    manifest: &'a CheckedManifestV1,
+) -> Result<&'a ManifestEntryV1, PanelSourceErrorR1> {
+    let trace = manifest.entry(MaterialScope::Trace);
+    if manifest.original() != original.id()
+        || trace.codec != tir_trace_material_codec_v1()
+        || trace.subject != original.trace_root
+        || trace.content_root != original.trace_root
+        || u64::from(trace.chunk_bytes) < PublicOriginalTraceIndexV1::WIRE_BYTES as u64
+    {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(trace)
+}
+
 fn check_public_replay_trace_budget_v1(
     count: u64,
     total_bytes: u64,
     limits: PublicTraceAcquisitionV1,
-) -> Result<(), PanelSourceErrorR1> {
+) -> Result<u64, PanelSourceErrorR1> {
     if count == 0 || total_bytes < PublicOriginalTraceIndexV1::WIRE_BYTES as u64 {
         return Err(PanelSourceErrorR1::Binding);
     }
     // Reserve the longest possible opening for every tile before fetching.
     let overhead = trace_tile_wire_overhead(count) as u64;
-    let max_wire = count.checked_mul(overhead).and_then(|bytes| total_bytes.checked_add(bytes));
-    if count > limits.max_tiles || max_wire.is_none_or(|bytes| bytes > limits.max_wire_bytes) {
-        return Err(PanelSourceErrorR1::Budget);
-    }
-    Ok(())
+    count
+        .checked_mul(overhead)
+        .and_then(|bytes| total_bytes.checked_add(bytes))
+        .filter(|bytes| count <= limits.max_tiles && *bytes <= limits.max_wire_bytes)
+        .ok_or(PanelSourceErrorR1::Budget)
 }
 
 /// Fetch one opening and tile, rejecting invalid vector lengths before
@@ -792,6 +814,18 @@ fn check_public_input_tokens_v1(
     form: PalwPromptIdsFormV1,
     ids: &[u32],
 ) -> Result<(), PanelSourceErrorR1> {
+    check_public_input_token_entry_v1(original, manifest, form)?;
+    if ids.len() != original.prefill as usize || !prompt_token_ids_match_v1(form, ids, &Hash64::from_bytes(original.input_tokens.0)) {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(())
+}
+
+fn check_public_input_token_entry_v1(
+    original: &OriginalCommit,
+    manifest: &CheckedManifestV1,
+    form: PalwPromptIdsFormV1,
+) -> Result<(), PanelSourceErrorR1> {
     let entry = manifest.entry(MaterialScope::InputTokens);
     let canonical_layout = match form {
         PalwPromptIdsFormV1::Flat => entry.total_bytes <= u64::from(entry.chunk_bytes),
@@ -802,8 +836,6 @@ fn check_public_input_tokens_v1(
         || entry.content_root != original.input_tokens
         || entry.total_bytes != u64::from(original.prefill) * 4
         || !canonical_layout
-        || ids.len() != original.prefill as usize
-        || !prompt_token_ids_match_v1(form, ids, &Hash64::from_bytes(entry.content_root.0))
     {
         return Err(PanelSourceErrorR1::Binding);
     }

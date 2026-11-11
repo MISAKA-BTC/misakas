@@ -29,6 +29,7 @@ pub(crate) struct NativeTfp1PublicOriginalFactsV1 {
     output: Hash64,
     trace: Hash64,
     miner: PrincipalId,
+    cold_execution: bool,
 }
 
 impl NativeTfp1PublicOriginalFactsV1 {
@@ -59,6 +60,7 @@ impl NativeTfp1PublicOriginalFactsV1 {
             output: original.output_root,
             trace: original.trace_root,
             miner: principal(key),
+            cold_execution: super::tfp1_material::require_cold_tfp1_v1(original, &header.job_context).is_ok(),
         })
     }
 
@@ -176,10 +178,36 @@ impl PublicOriginalAdmissionV1<'_> {
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<(), ContractError> {
         obligation.check_companion_v1(companion, reservation.budget)?;
+        // The current TFO3 bridge implements a fresh V3/V4 execution. Derive
+        // these roots from native metadata rather than accepting matching
+        // caller/candidate placeholders. Other dependency forms need their
+        // own material relation before this bridge may admit them.
+        if !obligation.facts.cold_execution {
+            return Err(ContractError::UnsupportedProfile);
+        }
+        use misaka_palw_positive_contract::public_one_honest::{
+            tir_cold_dependencies_for_execution_v1, tir_cold_initial_state_for_execution_v1,
+        };
+        let execution = Digest(self.job.context_hash().as_bytes());
+        let initial = tir_cold_initial_state_for_execution_v1(
+            Digest(self.class.graph_ir_root().as_bytes()),
+            execution,
+            self.manifest_scope_limits[MaterialScope::InitialState as usize],
+        )?
+        .0
+        .subject;
+        let dependencies =
+            tir_cold_dependencies_for_execution_v1(execution, self.manifest_scope_limits[MaterialScope::Dependencies as usize])?
+                .0
+                .subject;
         if self.job.context_hash() != obligation.facts.job_context
             || self.artifact != obligation.facts.artifact
             || self.miner != obligation.facts.miner
             || reservation.service_obligation != obligation.obligation
+            || self.initial_state != initial
+            || self.dependencies != dependencies
+            || companion.initial_state != initial
+            || companion.dependencies != dependencies
         {
             return Err(ContractError::Scope);
         }
@@ -299,6 +327,52 @@ mod tests {
             max_bytes: 64,
             chunk_bytes: 64,
         };
+        limits[MaterialScope::InitialState as usize] = ManifestScopeRules {
+            codec: misaka_palw_positive_contract::public_one_honest::tir_cold_initial_state_codec_v1(),
+            max_bytes: 128,
+            chunk_bytes: 128,
+        };
+        limits[MaterialScope::Dependencies as usize] = ManifestScopeRules {
+            codec: misaka_palw_positive_contract::public_one_honest::tir_cold_dependencies_codec_v1(),
+            max_bytes: 68,
+            chunk_bytes: 68,
+        };
+        let cold = super::super::public_tfp1_cold_material_v1(
+            original,
+            &source,
+            &binding.class,
+            limits[MaterialScope::InitialState as usize],
+            limits[MaterialScope::Dependencies as usize],
+        )
+        .unwrap();
+        use misaka_palw_positive_contract::public_one_honest::{
+            tir_cold_dependencies_material_v1, tir_cold_initial_state_material_v1, tir_ordinary_tfp1_rules_material_codec_v1,
+            tir_wide_rules_material_codec_v1,
+        };
+        let program = binding.class.decode_program().unwrap();
+        let rules = ManifestScopeRules { codec: tir_ordinary_tfp1_rules_material_codec_v1(), max_bytes: 512, chunk_bytes: 512 };
+        let ordinary_rules = |program: &misaka_palw_tir::TirProgramV1, form, rules| {
+            super::super::public_ordinary_tfp1_rules_material_v1(original, &source, &binding.class, program, form, rules)
+        };
+        let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+        let (entry, bytes) = ordinary_rules(&program, form, rules).unwrap();
+        assert_eq!(entry.total_bytes, 512);
+        assert_eq!(&bytes[..64], &binding.class.graph_ir_root().as_bytes());
+        assert_eq!(&bytes[5 * 64..6 * 64], &crate::palw_freeprompt_v3::fp_job_id_v3(&original.job).as_bytes());
+        let other_form = ordinary_rules(&program, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1, rules).unwrap();
+        assert_ne!(entry.content_root, other_form.0.content_root);
+        assert_eq!(entry.subject, other_form.0.subject); // The native CU ID is unchanged.
+        assert_eq!(ordinary_rules(&program, form, ManifestScopeRules { max_bytes: 511, ..rules }), Err(ContractError::Budget));
+        assert_eq!(
+            ordinary_rules(&program, form, ManifestScopeRules { codec: tir_wide_rules_material_codec_v1(), ..rules }),
+            Err(ContractError::UnsupportedProfile)
+        );
+        let mut foreign_program = program.clone();
+        foreign_program.token_bound += 1;
+        assert_eq!(ordinary_rules(&foreign_program, form, rules), Err(ContractError::Scope));
+        let mut prefix = original.clone();
+        prefix.job.version = 11;
+        assert_eq!(super::super::tfp1_material::require_cold_tfp1_v1(&prefix, job), Err(ContractError::UnsupportedProfile));
         let prompt = prompt_text_material_v1(scope.ruleset, prompt_text, limits[MaterialScope::Prompt as usize]).unwrap().subject;
         let admission = PublicOriginalAdmissionV1 {
             scope,
@@ -307,12 +381,12 @@ mod tests {
             artifact: facts.artifact,
             miner: facts.miner,
             prompt,
-            initial_state: d,
-            dependencies: d,
+            initial_state: cold.initial_state.0.subject,
+            dependencies: cold.dependencies.0.subject,
             service_contract: obligation.service_contract_v1(&budget),
             max_manifest_bytes: ManifestV1::WIRE_BYTES,
             manifest_scope_limits: &limits,
-            manifest_total_limit: 64 + MaterialScope::COUNT as u64 - 1,
+            manifest_total_limit: 64 + 128 + 68 + MaterialScope::COUNT as u64 - 3,
         };
         let mut reservation = PublicOriginalReservationV1 {
             origin: AcceptedOrigin {
@@ -365,8 +439,8 @@ mod tests {
             tokenizer: Digest(job.tokenizer_id.as_bytes()),
             execution_rules: Digest(job.cu_ruleset_id.as_bytes()),
             generation_seed: job.execution_seed,
-            initial_state: d,
-            dependencies: d,
+            initial_state: cold.initial_state.0.subject,
+            dependencies: cold.dependencies.0.subject,
             prefill: job.declared_prefill_tokens,
             decode: job.exact_decode_tokens,
             max_context: job.max_context_tokens,
@@ -375,12 +449,25 @@ mod tests {
             manifest_root: d,
             service_contract: obligation.service_contract_v1(&budget),
         };
+        assert_eq!(
+            tir_cold_initial_state_material_v1(&companion, limits[MaterialScope::InitialState as usize]).unwrap(),
+            cold.initial_state
+        );
+        assert_eq!(
+            tir_cold_dependencies_material_v1(&companion, limits[MaterialScope::Dependencies as usize]).unwrap(),
+            cold.dependencies
+        );
         let sign = |original: OriginalCommit| {
             let signature =
                 libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [32; 32]).unwrap();
             borsh::to_vec(&SignedPublicOriginalV1 { original, key, signature: *signature.as_ref() }).unwrap()
         };
         assert_eq!(admission.check_tfp1_candidate_v1(&companion, obligation, &reservation), Ok(()));
+        // Even a caller repeating the candidate's invented roots cannot
+        // replace the native cold-state/dependency identities.
+        let placeholder = PublicOriginalAdmissionV1 { initial_state: d, dependencies: d, ..admission };
+        let invented = OriginalCommit { initial_state: d, dependencies: d, ..companion.clone() };
+        assert_eq!(placeholder.check_tfp1_candidate_v1(&invented, obligation, &reservation), Err(ContractError::Scope));
         let prepared = admission.prepare_tfp1_signed_bytes_v1(&sign(companion.clone()), obligation, &reservation).unwrap();
         assert_eq!(prepared.companion_v1().original, companion.id());
         assert_ne!(prepared.companion_v1().original.0.0, facts.claim.as_bytes());
@@ -487,6 +574,8 @@ mod tests {
         assert!(index.check(&wrong_trace, fixture.rules.maximum_leaves).is_err());
         for foreign in [
             OriginalCommit { output: d, ..companion.clone() },
+            OriginalCommit { initial_state: d, ..companion.clone() },
+            OriginalCommit { dependencies: d, ..companion.clone() },
             wrong_trace,
             OriginalCommit { execution: Digest(facts.execution_root.as_bytes()), ..companion.clone() },
             OriginalCommit { registered_class: d, ..companion.clone() },

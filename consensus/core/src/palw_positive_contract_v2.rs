@@ -5,7 +5,10 @@
 
 pub(crate) mod protected_batch_case;
 pub mod record;
+mod tfp1_material;
 pub(crate) mod tfp1_original;
+
+pub use tfp1_material::{PublicTfp1ColdMaterialV1, public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1};
 
 use crate::palw_native_resource_v1::{
     NativeCoverageV1, NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, native_struct, native_tuple_struct,
