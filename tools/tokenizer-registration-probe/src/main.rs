@@ -3,6 +3,7 @@
 //! measured process's peak RSS. This is not a full native-fold qualification.
 mod native_bundle;
 mod native_run;
+mod native_scan;
 
 use kaspa_consensus_core::{
     palw_fp_constraint_job_v1::{PalwTokenTableEogOpeningV1, PalwTokenTableV1, palw_token_table_file_decode_v1},
@@ -162,10 +163,19 @@ fn main() {
     match args.get(1).map(String::as_str) {
         Some("prepare") if args.len() == 5 => prepare(Path::new(&args[2]), Path::new(&args[3]), Path::new(&args[4])),
         Some("run") if args.len() == 5 => measure(Path::new(&args[2]), &args[3], args[4].parse().unwrap()),
-        Some("native-run") if args.len() == 3 => {
+        Some("native-run" | "native-run-multipass") if args.len() == 3 => {
+            let multipass = args[1] == "native-run-multipass";
             let dir = std::path::PathBuf::from(&args[2]);
-            std::thread::Builder::new().stack_size(64 * 1024 * 1024).spawn(move || native_run::run(&dir)).unwrap().join().unwrap();
+            std::thread::Builder::new()
+                .stack_size(64 * 1024 * 1024)
+                .spawn(move || native_run::run(&dir, multipass))
+                .unwrap()
+                .join()
+                .unwrap();
         }
-        _ => panic!("usage: prepare NEW_DIR RAW_TOKENIZER TOKEN_TABLE | run DIR CASE REPETITIONS | native-run BUNDLE_DIR"),
+        Some("native-scan-max") if args.len() == 4 => native_scan::run(Path::new(&args[2]), args[3].parse().unwrap()),
+        _ => panic!(
+            "usage: prepare NEW_DIR RAW_TOKENIZER TOKEN_TABLE | run DIR CASE REPETITIONS | native-run BUNDLE_DIR | native-run-multipass BUNDLE_DIR | native-scan-max BUNDLE_DIR SOURCE_COUNT"
+        ),
     }
 }

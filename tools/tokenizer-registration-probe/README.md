@@ -75,3 +75,32 @@ For a separate run with declared logical limits, set both
 `TKR_MEASUREMENT_LOGICAL_RAM_BYTES` and `TKR_MEASUREMENT_LOGICAL_DB_BYTES` to
 finite positive byte counts. These limits exercise logical admission. The
 runner does not install a filesystem quota.
+
+Use `native-run-multipass BUNDLE_DIR` to run the same single-carrier
+candidates through two fee projections and rollbacks, two observed
+rehearsals, and one authoritative fold. Each candidate shares one Finish
+cache across those passes. Both observed prefixes must have the same root,
+and the authoritative root, fee, and journal size must match the bundle.
+This uses the bundle's one-source policy and one Finish, with separate
+timings for each pass. It does not measure a full mergeset or its physical
+carrier scanner.
+
+The book reserves against a single source partition. For equal-cost
+Finishes, the per-DAA slot upper bound is the smallest of the pending
+session limit and the four source-budget dimensions divided by their
+corresponding Finish costs, rounded down. Other booked packets can lower
+the available slots. This fixture has one control per source partition
+and every Finish consumes one control, so its upper bound is one Finish
+slot per DAA even with independent classes. A candidate can carry other
+physical controls that the scanner charges and the native fold refuses.
+That physical carrier count is separate from the book's slot bound.
+
+`native-scan-max BUNDLE_DIR SOURCE_COUNT` scales a copy of the measurement
+policy to preserve the one-control source budget across the supplied number
+of modeled sources. It charges malformed duplicates and unresolved Finish
+duplicates in separate runs. It verifies that a second copy exceeds one
+source's budget and that a copy beyond the modeled source count exceeds the
+candidate budget. The reported scanner timings include these refusal checks.
+This measures the physical accounting functions only. No actual DAG blocks,
+wallet validation, native folds, or parser invocations occur in this mode.
+The scaled policy is a local measurement input.

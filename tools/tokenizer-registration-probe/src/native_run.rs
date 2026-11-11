@@ -7,10 +7,13 @@ use kaspa_consensus_core::{
     },
     palw_state_v2::{
         PalwBlockWorkV3, PalwStateCarriageV2, TokenizerRegistrationFeeWorkingStateV1, apply_delta_v2,
-        apply_palw_transition_retained_v7, palw_tokenizer_registration_status_v1, revert_delta_v2,
+        apply_palw_transition_retained_v7, palw_tokenizer_registration_status_v1, palw_v2_apply_one_tokenizer_registration_owned_v1,
+        palw_v2_pre_object_base_retained_v1, revert_delta_v2,
     },
     palw_tokenizer_finish_derivation_cache_v1::TokenizerFinishDerivationCacheV1,
-    palw_tokenizer_registration_carriage_v1::{TokenizerRegistrationCarrierContextV1, ValidatedTokenizerRegistrationCarrierV1},
+    palw_tokenizer_registration_carriage_v1::{
+        TokenizerRegistrationCarrierContextV1, ValidatedTokenizerRegistrationCarrierV1, tokenizer_registration_parent_quote_v1,
+    },
     palw_tokenizer_registration_state_v1::TokenizerRegistrationStatusV1,
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
     tx::{
@@ -21,14 +24,14 @@ use kaspa_consensus_core::{
 use serde_json::json;
 use std::{collections::BTreeMap, fs::File, io::Read, path::Path, time::Instant};
 
-fn read_bounded(path: &Path, limit: u64) -> Vec<u8> {
+pub(crate) fn read_bounded(path: &Path, limit: u64) -> Vec<u8> {
     let mut bytes = Vec::new();
     File::open(path).unwrap_or_else(|error| panic!("{}: {error}", path.display())).take(limit + 1).read_to_end(&mut bytes).unwrap();
     assert!(bytes.len() as u64 <= limit, "{} exceeds the measurement input bound", path.display());
     bytes
 }
 
-pub fn run(dir: &Path) {
+pub fn run(dir: &Path, multipass: bool) {
     match (std::env::var_os("TKR_MEASUREMENT_LOGICAL_RAM_BYTES"), std::env::var_os("TKR_MEASUREMENT_LOGICAL_DB_BYTES")) {
         (None, None) => {}
         (Some(memory), Some(database)) => {
@@ -60,6 +63,8 @@ pub fn run(dir: &Path) {
     let policy_id = manifest.policy.id_v1().unwrap();
     let extras = manifest.extras();
     let mut metrics = BTreeMap::<&str, u128>::new();
+    let source = manifest.policy.source_budget_v1().unwrap();
+    let mut maximum_equal_cost_finish_slots = None;
     for (index, action) in manifest.actions.iter().enumerate() {
         assert_eq!(state.state_root(), action.parent_root);
         if index == snapshot_before {
@@ -84,6 +89,23 @@ pub fn run(dir: &Path) {
         let payload = read_bounded(&dir.join(action_file(index)), 96 * 1024);
         let kind = *payload.get(4).expect("carrier kind");
         assert_eq!(kind == 2, index == snapshot_before, "the final action is the single Finish");
+        if kind == 2 {
+            let quote = tokenizer_registration_parent_quote_v1(&state, manifest.open_ids[1]).expect("authenticated Finish quote");
+            let cost = quote.finish_cost;
+            let upper_bound = [
+                source.bytes / cost.bytes,
+                source.work / cost.work,
+                source.io / cost.io,
+                source.controls / cost.controls,
+                u64::from(manifest.policy.max_pending_total),
+            ]
+            .into_iter()
+            .min()
+            .unwrap();
+            assert_eq!(source.controls, 1);
+            assert_eq!(upper_bound, 1);
+            maximum_equal_cost_finish_slots = Some(upper_bound);
+        }
         let start = Instant::now();
         let tx = Transaction::new(
             0,
@@ -135,6 +157,62 @@ pub fn run(dir: &Path) {
         scratch.begin_body_v1(&manifest.params, &extras).unwrap();
         *metrics.entry("fee_rollback_ns").or_default() += start.elapsed().as_nanos();
         drop(scratch);
+        if multipass {
+            let start = Instant::now();
+            let mut scratch = TokenizerRegistrationFeeWorkingStateV1::new(&state, &manifest.params, &action.at, &extras).unwrap();
+            scratch.begin_body_v1(&manifest.params, &extras).unwrap();
+            *metrics.entry("fee_replay_base_ns").or_default() += start.elapsed().as_nanos();
+            let start = Instant::now();
+            let (repeat_fee, repeat_refusal) = memo
+                .scope_v1(|| scratch.apply_v1(&state, action.parent_root, &manifest.params, &action.at, &carrier, &extras))
+                .unwrap();
+            assert_eq!((repeat_fee, repeat_refusal), (fee, None));
+            let phase = if kind == 2 { "finish_cached_fee_replay_ns" } else { "open_part_fee_replay_ns" };
+            *metrics.entry(phase).or_default() += start.elapsed().as_nanos();
+            let start = Instant::now();
+            scratch.begin_body_v1(&manifest.params, &extras).unwrap();
+            *metrics.entry("fee_replay_rollback_ns").or_default() += start.elapsed().as_nanos();
+        }
+
+        if multipass {
+            let mut observed_roots = [Hash64::default(); 2];
+            let phases = if kind == 2 {
+                ["finish_cached_observed_rehearsal_ns", "finish_cached_observed_replay_ns"]
+            } else {
+                ["open_part_observed_rehearsal_ns", "open_part_observed_replay_ns"]
+            };
+            for (root, phase) in observed_roots.iter_mut().zip(phases) {
+                let start = Instant::now();
+                let base =
+                    palw_v2_pre_object_base_retained_v1(&state, &manifest.params, &action.at, false, false, false, false, &extras)
+                        .unwrap();
+                *metrics.entry("observed_pre_object_base_ns").or_default() += start.elapsed().as_nanos();
+                let start = Instant::now();
+                let (observed, observed_fee, refusal) = memo
+                    .scope_v1(|| {
+                        palw_v2_apply_one_tokenizer_registration_owned_v1(
+                            base,
+                            &state,
+                            action.parent_root,
+                            &manifest.params,
+                            &action.at,
+                            &carrier,
+                            false,
+                            false,
+                            false,
+                            false,
+                            &extras,
+                        )
+                    })
+                    .unwrap();
+                *metrics.entry(phase).or_default() += start.elapsed().as_nanos();
+                assert_eq!((observed_fee, refusal), (fee, None));
+                *root = observed.state_root();
+            }
+            // The rehearsal prefix is not a settled block. Compare the two
+            // prefixes here and verify the authoritative block below.
+            assert_eq!(observed_roots[0], observed_roots[1]);
+        }
 
         let mut authoritative = extras.clone();
         authoritative.tokenizer_registration_expected_fees_v1.insert(carrier.carrier_v1(), fee);
@@ -187,6 +265,13 @@ pub fn run(dir: &Path) {
         json!({
             "case": manifest.case, "scope": "production native APIs on seeded accepted-parent inputs",
             "policyId": policy_id.to_string(), "initialRoot": manifest.initial_root.to_string(),
+            "mode": if multipass { "single_carrier_multipass" } else { "single_carrier_replay" },
+            "nativePassesPerAction": if multipass { 5 } else { 2 },
+            "feeRollbacksPerAction": if multipass { 2 } else { 1 },
+            "finishCacheSharedWithinAction": true,
+            "maximumSourceBlocksPolicy": manifest.policy.maximum_source_blocks,
+            "sourceControls": source.controls,
+            "maximumEqualCostFinishSlotsPerDaaUpperBound": maximum_equal_cost_finish_slots.unwrap(),
             "finalRoot": state.state_root().to_string(), "actions": manifest.actions.len(),
             "snapshotBytes": manifest.snapshot_bytes, "metrics": metrics,
             "nativeLogicalAdmissionEnabled": native_logical_admission_enabled_v1(),
