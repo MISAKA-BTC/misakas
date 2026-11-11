@@ -1,0 +1,40 @@
+{
+  "schema": "palw-plain-output-submission-regression-v1",
+  "sourceCommit": "abfe8ef6ad95786e5d0f23e1a79c1ab1f94a4b11",
+  "filesSha256": {
+    "consensus/core/src/palw_court_shared_material_intake_v1.rs": "d19c41d8ca409feec6388fe82f4206ef47857668dad41660d72ac56b9c3dbcf7",
+    "consensus/core/src/palw_court_shared_material_intake_v1/storage_rent.rs": "6a537da3795b866a4f4f2aecbc2b8641f2f153f0f304564d19943eee890fb2c5",
+    "consensus/core/src/palw_user_views_v1.rs": "14ffa2025e7ca539b370b9a359febfd87a7bb7f8f704e50ed6d924e729546ba2",
+    "consensus/src/consensus/mod.rs": "b3e4a01e94bf9d6c25228862380b7f975a117d8565397199e2621701e83289ee",
+    "consensus/src/pipeline/virtual_processor/processor/palw.rs": "aeeae49941f1e6764bd5678d3bbbe3e796ce7b7e4b1f2fa1fc453a38562d1493",
+    "misaka/apps/cli/src/main.rs": "f3157965e0d9d0c3c1bde44a7189809eac376db31e45490f77f963c293e95937",
+    "misaka/apps/cli/src/palw_batch.rs": "30c96f1de3d38b1ba9fe7d081531dbec040539d9179c6b26f5edc5c97fdcd7f8",
+    "misaka/apps/cli/src/palw_batch/plain_output.rs": "b942dceee23c3f30e38e5bc71b28f95a277f51c007419a60dd9cdefb40e8b2b6",
+    "rpc/service/src/service.rs": "45217337883e6dbc7eca3b1adffc7784cc474128d80d271712c4d8984bab3975"
+  },
+  "testsPassed": 3,
+  "testsFailed": 0,
+  "checks": {
+    "node": "PASS",
+    "rpc": "PASS",
+    "cli": "PASS"
+  },
+  "binarySha256": {
+    "misaka-69603545b9fc6e7a": "fe2e6f4e54addf29537577783d0371a44457414afc109d710cd9f882fca0fc52",
+    "kaspa_rpc_service-6fa4aa06fc549817": "ac91604b94a2d808cf2ccc74a211abd6c26724dcf7f300671f9796e1906b8558"
+  },
+  "logSha256": {
+    "check.log": "a0d7e249f03acf5f6e61373d509db096cbecd17db8cbd0c21c2f1aa9d65a1fdf",
+    "cli-tests.log": "487ae521a217d7bfed3c0cbcc9c1d3a44c95fb8e537e820ab9e93448c34f006c",
+    "rpc-test.log": "871619d614a010bef4667dfc4206829853c0e9f84910c3241f9e221cfb5fa847"
+  },
+  "publicDeployment": false,
+  "publicSubmission": false,
+  "publicAdmission": false,
+  "limits": [
+    "CLI tests validate quote subject/digest/parent/network/slot and RPC selector exclusivity. They do not perform a network send.",
+    "Valid paid BCT2 core receipt and terminal fixture is a separate pending check.",
+    "Dedicated plain FullIds Open signing quote and complete Selection/DA integration remain pending.",
+    "All shipped plain Output transport policies remain absent."
+  ]
+}
