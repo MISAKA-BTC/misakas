@@ -29,6 +29,9 @@ use kaspa_consensus_core::{
 };
 use kaspa_database::{create_temp_db, prelude::ConnBuilder};
 
+#[path = "tokenizer_registration/db_measurement.rs"]
+mod db_measurement;
+
 const START: u64 = 46;
 const FEE: u64 = 2_000_000;
 const REGISTRANT: usize = 2;
@@ -352,6 +355,15 @@ async fn prepare_class(
 ) -> (Mined, TokenizerRegistrationOpenBodyV1, &'static [u8], kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1)
 {
     let raw = br#"{"model":{"vocab":{"A":0},"merges":[]},"added_tokens":[]}"#;
+    let (mined, body, eog) = prepare_class_for_raw(env, policy, raw).await;
+    (mined, body, raw, eog)
+}
+
+async fn prepare_class_for_raw(
+    env: Env,
+    policy: TokenizerRegistrationPolicyV1,
+    raw: &[u8],
+) -> (Mined, TokenizerRegistrationOpenBodyV1, kaspa_consensus_core::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1) {
     let mut c = case("dense-gqa-2layer");
     c.class.tokenizer_id = palw_tokenizer_raw_commitment_v1(raw);
     let mut m = mine_registration_on(env, &c, REGISTRANT).await;
@@ -382,7 +394,7 @@ async fn prepare_class(
         material_until_daa: now + 40 + policy.retention_daa,
         max_registration_charge: policy.max_registration_charge,
     };
-    (m, body, raw, eog)
+    (m, body, eog)
 }
 
 pub(in crate::pipeline::virtual_processor::tests) async fn prepare_round_class(
