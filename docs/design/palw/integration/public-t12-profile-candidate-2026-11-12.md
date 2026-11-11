@@ -55,6 +55,10 @@
 
 `FirstNoticeDemand` の具体値は `draw_ready_by=a+32`、`material_ready_by=a+512`、`cold_acquisition_daa=512`、`full_inspection_daa=1024`、`notice_inclusion_daa=256`、`missing_material_detected_by=a+1024`、`material_request_inclusion_daa=256` とする候補。canonical包含の実サービス枠を予約できなければ受理しない。
 
+ここでの**初回資料供給**は、Minerがclaim固有のprompt・入力・seed/初期状態・出力・trace・opening用資料をHTTP provider等で取得可能にする義務を指す。Nodeがその全量をダウンロードすることや、全資料をon-chain packetに変換することではない。HTTPの送信/保持予算と、実際にNodeへ包含するnotice・要求・局所court packetの費用/予約を分ける。モデルの取得成功証明や供給receiptは作らない。
+
+§5の10 scopeは**検証が参照する資料の目録**で、全scopeを毎回Minerが再掲載する指示ではない。モデル重み・config・tokenizer等の静的モデル資料はPanelがHF固定版から取得し、登録済みroot/hashと照合する。MISAKAの実行program・rulesやtokenizerの登録済み情報も、認証済みの登録情報・cache等から再利用できる。取得元を変えても固定した内容は変えない。現在のordinary replayにはProgram/TokenizerをHTTP providerから読む経路が残っており、新profileでのHF/登録済み情報の再利用への接続は未完了。現行の資料量算出が静的scopeを含むことを、Minerのモデル再配布義務やHF重みのon-chain予約へ読み替えない。
+
 **a+1,280は初回目標で、資料要求権の打切りではない。** 原noticeまで適格な要求が可能な契約を維持する。後から正規の欠落を認識する主体も保護できるよう、最遅合法時点までの要求・repair・後続検査の機会を全グラフに予約する。初期実装の一つの早いPMR枠だけで代用しない。具体的な予約方式は、各適格主体について256 DAA以下の間隔の要求機会をnotice末まで確保する案とし、実包含条件・最遅提出条件・失われた供給枠の回復を明記して検証する。これを既存の単一`InitialMaterialRequestPlanV1`が実装済みとは扱わない。必要な機会が失われた場合は成功不可・NoSlashHold/未検証終結とし、正直者のdefaultや有罪を推定しない。
 
 | 最後の合法notice（a+3,120）の後 | 候補 | 最遅到達点 |

@@ -103,7 +103,7 @@ impl BatchCourtWindowV1 {
         check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<u64, BatchCourtErrorV1> {
-        self.reserve_initial_request_many_with_v3(book, graph, terminals, &[], recovery_daa, check_assignments, reserve)
+        self.reserve_initial_request_many_with_v3(book, graph, terminals, &[], &[], recovery_daa, check_assignments, reserve)
     }
 
     /// A timely initial request and its post-notice continuation share one
@@ -115,6 +115,7 @@ impl BatchCourtWindowV1 {
         graph: &[CausalServicePacketV1],
         terminals: &[[u8; 64]],
         initial_requests: &[[u8; 64]],
+        independent_early: &[[u8; 64]],
         recovery_daa: u64,
         check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
@@ -132,6 +133,8 @@ impl BatchCourtWindowV1 {
         if terminals.is_empty()
             || terminals.len() > graph.len()
             || initial_requests.windows(2).any(|pair| pair[0] >= pair[1])
+            || independent_early.windows(2).any(|pair| pair[0] >= pair[1])
+            || independent_early.iter().any(|id| initial_requests.binary_search(id).is_err())
             || terminals.iter().any(|id| initial_requests.binary_search(id).is_ok())
         {
             return Err(CaseGraph);
@@ -143,7 +146,9 @@ impl BatchCourtWindowV1 {
         for node in graph {
             let initial = initial_requests.binary_search(&node.packet.id).is_ok();
             let valid_window = if initial {
-                node.predecessors.is_empty()
+                (node.predecessors.is_empty()
+                    || (independent_early.binary_search(&node.packet.id).is_ok()
+                        && node.predecessors.iter().all(|id| independent_early.binary_search(id).is_ok())))
                     && node.packet.release_daa > self.claim_accepted_daa
                     && node.packet.service_before <= first_service
             } else {
@@ -159,7 +164,9 @@ impl BatchCourtWindowV1 {
         if initial_requests.iter().any(|id| !nodes.contains_key(id)) {
             return Err(CaseGraph);
         }
-        let mut visited = BTreeSet::new();
+        // These early duties are independently required; they need not
+        // depend on an eventual material case being opened or adjudicated.
+        let mut visited: BTreeSet<_> = independent_early.iter().copied().collect();
         for &terminal in terminals {
             if !visited.insert(terminal) {
                 return Err(CaseGraph);

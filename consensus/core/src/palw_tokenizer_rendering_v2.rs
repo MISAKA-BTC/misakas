@@ -1240,11 +1240,23 @@ pub(crate) fn palw_rooted_tokenizer_for_original_v2<'a>(
     original: &PalwFreePromptCommitmentV3,
     header: &PalwPublicTirBindingHeaderV1,
 ) -> Option<(&'a PalwRootedTokenizerRegistrationRowV1, PalwRootedTokenizerOpeningBoundsV1)> {
-    if parent.last_point()?.blue_score >= at.blue_score {
+    palw_rooted_tokenizer_for_original_at_clocks_v3(parent, extras, at.daa_score, at.blue_score, original, header)
+}
+
+/// Quote uses prospective clocks without inventing an accepting block or tx.
+pub(crate) fn palw_rooted_tokenizer_for_original_at_clocks_v3<'a>(
+    parent: &'a PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    candidate_daa: u64,
+    candidate_blue_score: u64,
+    original: &PalwFreePromptCommitmentV3,
+    header: &PalwPublicTirBindingHeaderV1,
+) -> Option<(&'a PalwRootedTokenizerRegistrationRowV1, PalwRootedTokenizerOpeningBoundsV1)> {
+    if parent.last_point()?.blue_score >= candidate_blue_score {
         return None;
     }
-    let row = palw_rooted_tokenizer_registration_v1(parent, extras, original.job.class_id, at.daa_score)?;
-    if row.point.blue_score >= at.blue_score {
+    let row = palw_rooted_tokenizer_registration_v1(parent, extras, original.job.class_id, candidate_daa)?;
+    if row.point.blue_score >= candidate_blue_score {
         return None;
     }
     Some((row, rooted_tokenizer_opening_bounds_for_original_v2(parent, row, original, header)?))

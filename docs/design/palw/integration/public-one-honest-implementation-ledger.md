@@ -20,6 +20,16 @@ Panel人数・全工程の物理容量・料金・署名branchの本番設定に
 
 今回のコード変更は **実装済み・Rust検証未実行**。方針書§1に従い通し接続後にbuild/testを実行する。公開配備・署名送信は行っていない。取得可否証明やMinerのモデル重み配信義務は追加しない。同一claimのPanel/Final・当選権利消費・対応ブロック生成は引き続き未達。
 
+### 資料照合・候補予約・資金計算の共通入口（2026-11-12、未検証）
+
+[受付準備](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/funding/admission.rs)に、unsigned候補のliteral prompt/manifest/HF固定参照の照合から、同じnative供給量との一致、保護予約、基本fee・保存費・資本の必要額導出までを順に呼ぶ入口を追加した。signed側も同じ資料・予約・資金計算を使い、実carrier・origin・payer署名・実出力を追加検査する。候補bookの複製と公開点を共有し、後段の費用不足・payer拒否では呼出元のbookを更新しない。unsigned側はprospective DAA/blue clockだけを持ち、架空のAcceptedOriginを作らない。
+
+[初回義務](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/preclaim/original_duties.rs)では、HTTP資料の全bytesをon-chain packetへ換算していた作業中の処理を除去した。HTTPの送信/保持義務を別に束縛し、追加native予約は初回noticeの実carrier枠とする。モデル重みの配信・取得証明は追加しない。literal資料から再導出した供給量は、予約条件内のnative値全体と照合する。初回noticeと既存Batch/PMRを一つの候補bookとpacket上限で予約し、各主体の保護枠内で通知費用を計上する。
+
+回帰コードは、登録済みtokenizer/containerを使うunsigned資料照合、literal差替えと古いclockの拒否、unsigned/signedの予約・必要資金一致、基本feeが1 sompi不足する場合のbook不変、HTTP資料量に比例したon-chain packetが増えないことを追加した。**Cargo・回帰実行は未実施**であり、整形・静的照合を動作検証とはしない。
+
+新しい合成入口の本番caller、完全profile resolver、最遅資料要求・repair・有限精算、RPC/Studio新版、受付coordinatorへの接続はまだない。合成関数の追加を公開quote成功・本番受付の到達としない。Draftの搬送費プールや候補価格は実装・有効化していない。公開T12の同一claimの受付・Panel/Final・当選権利消費・対応blockは引き続き未証明。
+
 ### 実候補順と最終fold入力の照合（2026-11-12、未検証）
 
 [Node受付](../../../../consensus/src/pipeline/virtual_processor/processor/palw_accept.rs)のordinary gateを既存の本経路と全prefix再検査で共有し、保護付きcompanionを含む候補について、拒否されたordinary/Batchも残す物理イベント台帳を追加した。[core再演](../../../../consensus/core/src/palw_state_v2/ordered_prefix.rs)は各実tx ordinalの直前までraw actionを適用してからNodeの試行課金・返金枠を照合する。synthetic候補の前へraw actionを繰り上げず、末尾rawの後にも返金枠を処理する。TKR1の拒否時の試行消費と実UTXO手数料の照合は維持する。

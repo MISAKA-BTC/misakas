@@ -1,5 +1,8 @@
 use super::*;
-use crate::{palw_state_v2::PalwBlockContextV2, palw_tir_public_claim_v1::PalwTirPublicFrameFixtureV1};
+use crate::{
+    palw_positive_contract_v2::PublicOriginalReservationV1, palw_state_v2::PalwBlockContextV2,
+    palw_tir_public_claim_v1::PalwTirPublicFrameFixtureV1,
+};
 use misaka_palw_positive_contract::{
     identity::Digest,
     public_one_honest::{FirstNoticeDemand, MaterialCaseDemand, OriginalClock, VerificationSchedule},
@@ -208,7 +211,7 @@ fn check_protected_role_booking(
     let maximum_packets = (width + 1) * coordinates.len();
     let price = |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
     let reserve = |terms: &ProtectedBatchPreclaimTermsV1, fee, cap, book: &mut ServiceReservations| {
-        reserve_batch_v1(original, projection, &terms.0, BookingScopeV1::Protected, schedule, fee, book, cap, price)
+        reserve_batch_v1(original, projection, &terms.batch, BookingScopeV1::Protected, schedule, fee, None, book, cap, price)
     };
     let mut booked = empty.clone();
     let (quotes, graph) = reserve(&terms, u64::MAX, maximum_packets, &mut booked).unwrap();
@@ -397,7 +400,15 @@ fn check_companion_booking_parity(
     let prepared = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
     let mut unsigned_book = empty_book.clone();
     let (unsigned_quotes, unsigned_graph) = admission
-        .reserve_tfp1_drawn_batch_candidate_v1(&companion, &reservation, projection, terms, &mut unsigned_book, maximum_packets, price)
+        .reserve_tfp1_drawn_batch_candidate_v1(
+            &companion,
+            &reservation.prospective_v2(),
+            projection,
+            terms,
+            &mut unsigned_book,
+            maximum_packets,
+            price,
+        )
         .unwrap();
     let mut signed_book = empty_book.clone();
     let (signed_quotes, signed_graph) =
@@ -415,10 +426,11 @@ fn check_companion_booking_parity(
     let (priced, _) = reserve_batch_v1(
         OriginalId(d),
         projection,
-        &protected.0,
+        &protected.batch,
         BookingScopeV1::Protected,
         schedule,
         u64::MAX,
+        None,
         &mut priced_book,
         protected_packet_cap,
         price,
@@ -445,12 +457,118 @@ fn check_companion_booking_parity(
     let protected_prepared = protected_admission
         .prepare_tfp1_signed_bytes_v1(&sign_companion(&protected_companion), protected_obligation, &protected_reservation)
         .unwrap();
+    // Exercise the new combined reservation with the same real companion
+    // signing key. Early duty prices/geometry here are reservation fixtures,
+    // not a complete profile or evidence of successful native delivery.
+    if let Some(initial) = terms.initial_request {
+        let duties = ProtectedOriginalDutiesV1::reservation_fixture_v1(terms, at.blue_score, schedule);
+        let combined =
+            ProtectedBatchPreclaimTermsV1::new_with_original_duties_v2(terms.projected, terms.rescue, initial, duties).unwrap();
+        let obligation = combined.obligation_v1();
+        assert_ne!(obligation, protected_obligation);
+        let notice_packets = usize::try_from(terms.rescue.max_drawn_bonds + terms.rescue.max_outsiders).unwrap();
+        assert_eq!(duties.count_v1().unwrap(), notice_packets, "off-chain material bytes do not create service packets");
+        let cap = protected_packet_cap + notice_packets;
+        let fee = protected_budget.fee.checked_add(duties.fees_v1().total_v1().unwrap()).unwrap();
+        let resolve = |fee| {
+            let budget = AggregateBudget { fee, ..protected_budget };
+            let admission = PublicOriginalAdmissionV1::from_native_tfp1_v1(
+                fp,
+                &source,
+                &binding.class,
+                policy,
+                b"fixture prompt",
+                obligation,
+                &budget,
+            )
+            .unwrap();
+            let companion = OriginalCommit { service_contract: admission.service_contract, ..protected_companion.clone() };
+            (budget, admission, companion)
+        };
+        let (combined_budget, combined_admission, combined_companion) = resolve(fee);
+        let combined_reservation =
+            PublicOriginalReservationV1 { service_obligation: obligation.obligation_v1(), budget: &combined_budget, ..reservation };
+        let prepared = combined_admission
+            .prepare_tfp1_signed_bytes_v1(&sign_companion(&combined_companion), obligation, &combined_reservation)
+            .unwrap();
+        let mut unsigned = protected_empty.clone();
+        let mut signed = protected_empty.clone();
+        let quote = combined_admission
+            .reserve_tfp1_protected_batch_candidate_v1(
+                &combined_companion,
+                &combined_reservation.prospective_v2(),
+                projection,
+                &combined,
+                &mut unsigned,
+                cap,
+                price,
+            )
+            .unwrap();
+        let booking = prepared.reserve_protected_batch_candidates_v1(projection, &combined, &mut signed, cap, price).unwrap();
+        assert_eq!(quote.graph_v1(), booking.graph_v1());
+        assert_eq!(quote.quotes_v1(), booking.quotes_v1());
+        assert_eq!(quote.early_fees_v1(), Some(duties.fees_v1()));
+        assert_eq!(booking.early_fees_v1(), quote.early_fees_v1());
+        assert_eq!(booking.graph_v1().len(), cap);
+        assert_eq!(unsigned, signed);
+        assert!(booking.check_book_v1(&signed).is_ok());
+        for node in duties.graph_v1(combined_companion.id()).unwrap().iter() {
+            assert_eq!(signed.packet(&node.packet.id), Some(&node.packet));
+            assert!(signed.assigned_daa(&node.packet.id).unwrap() <= schedule.first_notice_by());
+        }
+        let mut refused = protected_empty.clone();
+        let short_http = PublicOriginalProspectiveReservationV2 {
+            initial_supply: RemainingCapacity { transmitted_bytes: (1 << 20) - 1, ..initial_supply },
+            ..combined_reservation.prospective_v2()
+        };
+        assert!(matches!(
+            combined_admission.reserve_tfp1_protected_batch_candidate_v1(
+                &combined_companion,
+                &short_http,
+                projection,
+                &combined,
+                &mut refused,
+                cap,
+                price,
+            ),
+            Err(BatchCourtErrorV1::CaseGraph)
+        ));
+        assert_eq!(refused, protected_empty, "off-chain underbudget fails before booking");
+        assert!(matches!(
+            prepared.reserve_protected_batch_candidates_v1(projection, &combined, &mut refused, cap - 1, price),
+            Err(BatchCourtErrorV1::CaseGraph)
+        ));
+        assert_eq!(refused, protected_empty);
+        let (short_budget, short_admission, short_companion) = resolve(fee - 1);
+        let short_reservation = PublicOriginalReservationV1 { budget: &short_budget, ..combined_reservation };
+        let short =
+            short_admission.prepare_tfp1_signed_bytes_v1(&sign_companion(&short_companion), obligation, &short_reservation).unwrap();
+        assert!(matches!(
+            short.reserve_protected_batch_candidates_v1(projection, &combined, &mut refused, cap, price),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(refused, protected_empty);
+        assert!(matches!(
+            short_admission.reserve_tfp1_protected_batch_candidate_v1(
+                &short_companion,
+                &short_reservation.prospective_v2(),
+                projection,
+                &combined,
+                &mut refused,
+                cap,
+                price,
+            ),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(refused, protected_empty);
+    }
+
     let mut protected_unsigned = protected_empty.clone();
     let mut protected_signed = protected_empty.clone();
     let unsigned_booking = protected_admission
         .reserve_tfp1_protected_batch_candidate_v1(
             &protected_companion,
-            &protected_reservation,
+            &protected_reservation.prospective_v2(),
             projection,
             &protected,
             &mut protected_unsigned,
@@ -503,7 +621,7 @@ fn check_companion_booking_parity(
     let funding_booking = funding_admission
         .reserve_tfp1_protected_batch_candidate_v1(
             &funding_companion,
-            &funding_reservation,
+            &funding_reservation.prospective_v2(),
             projection,
             &protected,
             &mut funding_book,
@@ -554,7 +672,7 @@ fn check_companion_booking_parity(
         assert!(matches!(
             tight_admission.reserve_tfp1_drawn_batch_candidate_v1(
                 &tight_companion,
-                &tight_reservation,
+                &tight_reservation.prospective_v2(),
                 projection,
                 terms,
                 &mut refused,
@@ -589,7 +707,7 @@ fn check_companion_booking_parity(
         assert!(matches!(
             admission.reserve_tfp1_drawn_batch_candidate_v1(
                 &companion,
-                &later_reservation,
+                &later_reservation.prospective_v2(),
                 projection,
                 terms,
                 &mut unchanged,
@@ -612,7 +730,7 @@ fn check_companion_booking_parity(
     assert!(matches!(
         admission.reserve_tfp1_drawn_batch_candidate_v1(
             &companion,
-            &wrong_blue,
+            &wrong_blue.prospective_v2(),
             projection,
             terms,
             &mut unchanged,
@@ -637,7 +755,7 @@ fn check_companion_booking_parity(
     assert!(matches!(
         short_admission.reserve_tfp1_drawn_batch_candidate_v1(
             &short_companion,
-            &short_reservation,
+            &short_reservation.prospective_v2(),
             projection,
             terms,
             &mut unchanged,

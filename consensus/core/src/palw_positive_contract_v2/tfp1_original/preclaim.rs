@@ -2,6 +2,7 @@
 //! Selected-bond graphs are only part of a complete profile; this module does
 //! not authorize original admission, settlement or public activation.
 pub(crate) mod initial_request;
+pub(crate) mod original_duties;
 use super::{PreparedTfp1PublicOriginalV1, Tfp1PublicOriginalObligationV1};
 use crate::{
     Hash64,
@@ -12,7 +13,7 @@ use crate::{
         plain_output::projection::{PlainBatchOriginalProjectionV2, PlainBatchProspectiveOriginalTermsV2},
     },
     palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1, TirNativeRequestsV1, reserve_native_pending_requests_v1},
-    palw_positive_contract_v2::{PublicOriginalAdmissionV1, PublicOriginalReservationV1},
+    palw_positive_contract_v2::{PublicOriginalAdmissionV1, PublicOriginalProspectiveReservationV2},
 };
 use initial_request::InitialMaterialRequestPlanV1;
 use misaka_palw_positive_contract::{
@@ -20,6 +21,7 @@ use misaka_palw_positive_contract::{
     public_one_honest::{OriginalCommit, OriginalId, ProtectedRescueDemand, VerificationSchedule},
     reservations::RemainingCapacity,
 };
+use original_duties::{OriginalEarlyDutyFeesV1, ProtectedOriginalDutiesV1, fits};
 
 type Booking = (NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>);
 
@@ -33,6 +35,7 @@ pub(crate) struct ProtectedBatchBookingV1 {
     accepted_blue_score: u64,
     book_identity: Hash64,
     quotes: NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>,
+    early_fees: Option<OriginalEarlyDutyFeesV1>,
     graph: NativeRetainedV1<Vec<CausalServicePacketV1>>,
 }
 
@@ -51,6 +54,10 @@ impl ProtectedBatchBookingV1 {
 
     pub(crate) fn quotes_v1(&self) -> &[BatchAdmissionQuoteV1] {
         self.quotes.as_slice()
+    }
+
+    pub(crate) fn early_fees_v1(&self) -> Option<OriginalEarlyDutyFeesV1> {
+        self.early_fees
     }
 
     pub(crate) fn graph_v1(&self) -> &[CausalServicePacketV1] {
@@ -199,13 +206,37 @@ impl ProtectedBatchRoleV1 {
 /// not establish initial supply, and does not book the first notice or full
 /// inspection outside the graph. A full profile still needs those duties.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ProtectedBatchPreclaimTermsV1(DrawnBatchPreclaimTermsV1);
+pub(crate) struct ProtectedBatchPreclaimTermsV1 {
+    batch: DrawnBatchPreclaimTermsV1,
+    early: Option<ProtectedOriginalDutiesV1>,
+}
 
 impl ProtectedBatchPreclaimTermsV1 {
+    /// Legacy Batch-only fixture. The live-shaped path requires a native
+    /// early-duty plan and cannot construct empty coverage with this API.
+    #[cfg(test)]
     pub(crate) fn new_v1(
         projected: PlainBatchProspectiveOriginalTermsV2,
         rescue: ProtectedRescueDemand,
         initial_request: Option<InitialMaterialRequestPlanV1>,
+    ) -> Result<Self, ContractError> {
+        Self::new_inner_v1(projected, rescue, initial_request, None)
+    }
+
+    pub(crate) fn new_with_original_duties_v2(
+        projected: PlainBatchProspectiveOriginalTermsV2,
+        rescue: ProtectedRescueDemand,
+        initial_request: InitialMaterialRequestPlanV1,
+        duties: ProtectedOriginalDutiesV1,
+    ) -> Result<Self, ContractError> {
+        Self::new_inner_v1(projected, rescue, Some(initial_request), Some(duties))
+    }
+
+    fn new_inner_v1(
+        projected: PlainBatchProspectiveOriginalTermsV2,
+        rescue: ProtectedRescueDemand,
+        initial_request: Option<InitialMaterialRequestPlanV1>,
+        duties: Option<ProtectedOriginalDutiesV1>,
     ) -> Result<Self, ContractError> {
         let mut terms = DrawnBatchPreclaimTermsV1::new_v1(projected, rescue)?;
         if let Some(plan) = initial_request {
@@ -216,24 +247,42 @@ impl ProtectedBatchPreclaimTermsV1 {
             &(projected.resource_id_v2(), terms.relative_graph, rescue, initial_request),
         )
         .map_err(|_| ContractError::NonCanonical)?;
+        let resource = if let Some(duties) = duties {
+            crate::palw_court_shared_tir_stream_v1::stream_digest(
+                b"misaka-palw/tfp1-protected-batch-with-early-duties/v2",
+                &(resource, duties.identity_v1()?),
+            )
+            .map_err(|_| ContractError::NonCanonical)?
+        } else {
+            resource
+        };
         terms.obligation = (*projected.obligation_v2().facts_v1()).service_obligation_v1(projected.profile_id_v2(), resource)?;
-        Ok(Self(terms))
+        Ok(Self { batch: terms, early: duties })
+    }
+
+    /// Rebind freshly resolved literal material before either entrance can
+    /// reserve this plan. The off-chain obligation is not a delivery receipt.
+    pub(crate) fn check_initial_supply_v2(
+        &self,
+        supply: &super::initial_supply::PublicTfp1InitialSupplyV1,
+    ) -> Result<(), BatchCourtErrorV1> {
+        self.early.as_ref().ok_or(BatchCourtErrorV1::CaseGraph)?.check_initial_supply_v2(supply)
     }
 
     pub(crate) fn obligation_v1(&self) -> Tfp1PublicOriginalObligationV1 {
-        self.0.obligation
+        self.batch.obligation
     }
 
     pub(crate) fn relative_graph_id_v1(&self) -> Hash64 {
-        self.0.relative_graph
+        self.batch.relative_graph
     }
 
     pub(super) fn initial_request_v1(&self) -> Option<InitialMaterialRequestPlanV1> {
-        self.0.initial_request
+        self.batch.initial_request
     }
 
     pub(super) fn rescue_v1(&self) -> ProtectedRescueDemand {
-        self.0.rescue
+        self.batch.rescue
     }
 
     pub(crate) fn reservation_scope_v1(
@@ -242,7 +291,7 @@ impl ProtectedBatchPreclaimTermsV1 {
         role: ProtectedBatchRoleV1,
         rank: u64,
     ) -> Result<Hash64, ContractError> {
-        protected_scope_v1(self.0.obligation, original, self.0.rescue, role, rank)
+        protected_scope_v1(self.batch.obligation, original, self.batch.rescue, role, rank)
     }
 }
 
@@ -319,7 +368,7 @@ impl PublicOriginalAdmissionV1<'_> {
     pub(crate) fn reserve_tfp1_drawn_batch_candidate_v1(
         &self,
         companion: &OriginalCommit,
-        reservation: &PublicOriginalReservationV1<'_>,
+        reservation: &PublicOriginalProspectiveReservationV2<'_>,
         projection: &PlainBatchOriginalProjectionV2,
         terms: &DrawnBatchPreclaimTermsV1,
         book: &mut ServiceReservations,
@@ -332,6 +381,7 @@ impl PublicOriginalAdmissionV1<'_> {
             projection,
             terms,
             BookingScopeV1::DrawnOnly,
+            None,
             book,
             maximum_packets,
             price,
@@ -342,7 +392,7 @@ impl PublicOriginalAdmissionV1<'_> {
     pub(crate) fn reserve_tfp1_protected_batch_candidate_v1(
         &self,
         companion: &OriginalCommit,
-        reservation: &PublicOriginalReservationV1<'_>,
+        reservation: &PublicOriginalProspectiveReservationV2<'_>,
         projection: &PlainBatchOriginalProjectionV2,
         terms: &ProtectedBatchPreclaimTermsV1,
         book: &mut ServiceReservations,
@@ -354,8 +404,9 @@ impl PublicOriginalAdmissionV1<'_> {
             companion,
             reservation,
             projection,
-            &terms.0,
+            &terms.batch,
             BookingScopeV1::Protected,
+            terms.early.as_ref(),
             book,
             maximum_packets,
             price,
@@ -363,10 +414,11 @@ impl PublicOriginalAdmissionV1<'_> {
         Ok(ProtectedBatchBookingV1 {
             original,
             obligation: terms.obligation_v1(),
-            accepted_daa: reservation.origin.accepted_daa,
-            accepted_blue_score: reservation.origin.accepted_blue_score,
+            accepted_daa: reservation.accepted_daa,
+            accepted_blue_score: reservation.accepted_blue_score,
             book_identity: protected_book_identity_v1(book),
             quotes,
+            early_fees: terms.early.as_ref().map(ProtectedOriginalDutiesV1::fees_v1),
             graph,
         })
     }
@@ -375,32 +427,44 @@ impl PublicOriginalAdmissionV1<'_> {
     fn reserve_batch_candidate_v1(
         &self,
         companion: &OriginalCommit,
-        reservation: &PublicOriginalReservationV1<'_>,
+        reservation: &PublicOriginalProspectiveReservationV2<'_>,
         projection: &PlainBatchOriginalProjectionV2,
         terms: &DrawnBatchPreclaimTermsV1,
         scopes: BookingScopeV1,
+        duties: Option<&ProtectedOriginalDutiesV1>,
         book: &mut ServiceReservations,
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<Booking, BatchCourtErrorV1> {
         if reservation.rescue != terms.rescue
-            || terms.initial_request.is_some_and(|plan| !plan.matches_notice_v1(reservation.origin.accepted_daa, reservation.notice))
-            || !terms.projected.matches_acceptance_v2(reservation.origin.accepted_daa, reservation.origin.accepted_blue_score)
+            || terms.initial_request.is_some_and(|plan| !plan.matches_notice_v1(reservation.accepted_daa, reservation.notice))
+            || !terms.projected.matches_acceptance_v2(reservation.accepted_daa, reservation.accepted_blue_score)
             || reservation.budget.retention_until < terms.projected.material_until_daa_v2()
         {
             return Err(BatchCourtErrorV1::CaseGraph);
         }
         self.check_tfp1_candidate_v1(companion, terms.obligation, reservation).map_err(|_| BatchCourtErrorV1::CaseGraph)?;
-        let schedule = self.check_reservation_v1(companion, reservation).map_err(|_| BatchCourtErrorV1::CaseGraph)?.2;
+        let schedule = self.check_prospective_reservation_v2(companion, reservation).map_err(|_| BatchCourtErrorV1::CaseGraph)?.2;
         if let Some(plan) = terms.initial_request {
             plan.check_schedule_v1(
-                reservation.origin.accepted_daa,
+                reservation.accepted_daa,
                 reservation.notice.draw_ready_by.max(reservation.notice.missing_material_detected_by),
                 schedule,
             )?;
         }
         let fee_remaining = reservation.budget.fee.checked_sub(reservation.usage.fee).ok_or(BatchCourtErrorV1::CaseGraph)?;
-        reserve_batch_v1(companion.id(), projection, terms, scopes, schedule, fee_remaining, book, maximum_packets, price)
+        reserve_batch_v1(
+            companion.id(),
+            projection,
+            terms,
+            scopes,
+            schedule,
+            fee_remaining,
+            duties.map(|duties| (duties, reservation.initial_supply)),
+            book,
+            maximum_packets,
+            price,
+        )
     }
 }
 
@@ -415,7 +479,7 @@ impl PreparedTfp1PublicOriginalV1 {
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<Booking, BatchCourtErrorV1> {
-        self.reserve_batch_candidates_v1(projection, terms, BookingScopeV1::DrawnOnly, book, maximum_packets, price)
+        self.reserve_batch_candidates_v1(projection, terms, BookingScopeV1::DrawnOnly, None, book, maximum_packets, price)
     }
 
     pub(crate) fn reserve_protected_batch_candidates_v1(
@@ -426,8 +490,15 @@ impl PreparedTfp1PublicOriginalV1 {
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<ProtectedBatchBookingV1, BatchCourtErrorV1> {
-        let (quotes, graph) =
-            self.reserve_batch_candidates_v1(projection, &terms.0, BookingScopeV1::Protected, book, maximum_packets, price)?;
+        let (quotes, graph) = self.reserve_batch_candidates_v1(
+            projection,
+            &terms.batch,
+            BookingScopeV1::Protected,
+            terms.early.as_ref(),
+            book,
+            maximum_packets,
+            price,
+        )?;
         Ok(ProtectedBatchBookingV1 {
             original: self.companion.original,
             obligation: self.obligation,
@@ -435,6 +506,7 @@ impl PreparedTfp1PublicOriginalV1 {
             accepted_blue_score: self.companion.carrier.origin.accepted_blue_score,
             book_identity: protected_book_identity_v1(book),
             quotes,
+            early_fees: terms.early.as_ref().map(ProtectedOriginalDutiesV1::fees_v1),
             graph,
         })
     }
@@ -444,6 +516,7 @@ impl PreparedTfp1PublicOriginalV1 {
         projection: &PlainBatchOriginalProjectionV2,
         terms: &DrawnBatchPreclaimTermsV1,
         scopes: BookingScopeV1,
+        duties: Option<&ProtectedOriginalDutiesV1>,
         book: &mut ServiceReservations,
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
@@ -467,6 +540,7 @@ impl PreparedTfp1PublicOriginalV1 {
             scopes,
             self.companion.schedule,
             fee_remaining,
+            duties.map(|duties| (duties, self.companion.initial_supply)),
             book,
             maximum_packets,
             price,
@@ -513,7 +587,18 @@ fn reserve_drawn_v1(
     maximum_packets: usize,
     price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<Booking, BatchCourtErrorV1> {
-    reserve_batch_v1(original, projection, terms, BookingScopeV1::DrawnOnly, schedule, fee_remaining, book, maximum_packets, price)
+    reserve_batch_v1(
+        original,
+        projection,
+        terms,
+        BookingScopeV1::DrawnOnly,
+        schedule,
+        fee_remaining,
+        None,
+        book,
+        maximum_packets,
+        price,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -524,13 +609,23 @@ fn reserve_batch_v1(
     scopes: BookingScopeV1,
     schedule: VerificationSchedule,
     fee_remaining: u64,
+    early: Option<(&ProtectedOriginalDutiesV1, RemainingCapacity)>,
     book: &mut ServiceReservations,
     maximum_packets: usize,
     mut price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<Booking, BatchCourtErrorV1> {
     use BatchCourtErrorV1::{CaseGraph, LocalResource};
     let count = usize::try_from(scopes.count_v1(terms.rescue).ok_or(CaseGraph)?).map_err(|_| CaseGraph)?;
-    if count == 0 || count > maximum_packets {
+    let early_count = if let Some((duties, initial_supply)) = early {
+        if !matches!(scopes, BookingScopeV1::Protected) {
+            return Err(CaseGraph);
+        }
+        duties.check_v1(terms, schedule, initial_supply)?;
+        duties.count_v1()?
+    } else {
+        0
+    };
+    if count == 0 || count.checked_add(early_count).is_none_or(|n| n > maximum_packets) {
         return Err(CaseGraph);
     }
     // Both unsigned quote and signed intake use this native Source geometry.
@@ -550,7 +645,7 @@ fn reserve_batch_v1(
     let first_scope = scope(0)?;
     let first = projection.compile_before_allocation_v2(first_scope, &terms.projected, &mut price)?;
     let width = first.packet_count_v1().checked_add(usize::from(terms.initial_request.is_some())).ok_or(CaseGraph)?;
-    if width == 0 || width.checked_mul(count).is_none_or(|n| n > maximum_packets) {
+    if width == 0 || width.checked_mul(count).and_then(|n| n.checked_add(early_count)).is_none_or(|n| n > maximum_packets) {
         return Err(CaseGraph);
     }
     let mut scratch = TirNativeRequestsV1::new();
@@ -590,9 +685,11 @@ fn reserve_batch_v1(
     } else {
         None
     };
-    CompiledBatchAdmissionV1::reserve_protected_with_requests_v3(
+    let early_graph = early.map(|(duties, _)| duties.graph_v1(original)).transpose()?;
+    CompiledBatchAdmissionV1::reserve_protected_with_early_duties_v1(
         &cases,
         initial.as_deref(),
+        early_graph.as_ref().map_or(&[], |graph| graph.as_slice()),
         book,
         maximum_packets,
         |quotes, candidate| {
@@ -602,22 +699,29 @@ fn reserve_batch_v1(
             // All ranks, PMR carriers and Node-produced fault storage share
             // the signed original fee ceiling. Check before publishing any
             // of this candidate's physical reservations to the caller book.
-            if batch_storage_fee_v1(quotes)? > fee_remaining {
+            let batch_fee = batch_storage_fee_v1(quotes)?;
+            let early_fees = early.map_or(Some(0), |(duties, _)| duties.fees_v1().total_v1());
+            if early_fees.and_then(|fee| fee.checked_add(batch_fee)).is_none_or(|fee| fee > fee_remaining) {
                 return Err(ServiceRefusal::InvalidBudget);
             }
             for (index, (quote, (scope, graph))) in quotes.iter().zip(&cases).enumerate() {
                 graph.check_public_original_schedule_v1(candidate, schedule)?;
                 let (role, _) = scopes.role_rank_v1(terms.rescue, index as u64);
                 let (_, _, allowance) = role.coordinates_v1(terms.rescue);
-                if quote.scope != *scope
-                    || quote.relative_graph_id != terms.relative_graph
-                    || quote.service.bytes > allowance.transmitted_bytes
-                    || quote.service.work > allowance.additional_work
-                    || quote
+                let required = RemainingCapacity {
+                    transmitted_bytes: quote.service.bytes,
+                    additional_work: quote.service.work,
+                    retained_bytes: quote
                         .retained_payload_bytes
                         .checked_add(quote.retained_numerical_fault_bytes)
-                        .is_none_or(|bytes| bytes > allowance.retained_bytes)
-                {
+                        .ok_or(ServiceRefusal::InvalidBudget)?,
+                };
+                let required = if let Some((duties, _)) = early {
+                    required.checked_add(duties.notice_capacity_v1(role)).map_err(|_| ServiceRefusal::InvalidBudget)?
+                } else {
+                    required
+                };
+                if quote.scope != *scope || quote.relative_graph_id != terms.relative_graph || !fits(required, allowance) {
                     return Err(ServiceRefusal::InvalidBudget);
                 }
             }

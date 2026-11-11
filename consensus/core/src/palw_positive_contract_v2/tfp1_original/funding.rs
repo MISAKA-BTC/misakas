@@ -119,8 +119,9 @@ impl<'booking> Tfp1FundingRequirementsV1<'booking> {
         if usize::try_from(count).ok() != Some(quotes.len()) {
             return Err(Scope.into());
         }
+        let (early_escrow, mut future_carrier_fee) =
+            booking.early_fees_v1().map_or((0, 0), |fees| (fees.escrow_sompi, fees.future_carrier_sompi));
         let mut node_storage = 0u64;
-        let mut carrier_storage = 0u64;
         for (index, quote) in quotes.iter().enumerate() {
             let index = u64::try_from(index).map_err(|_| Coverage)?;
             let (role, rank) = if index < rescue.max_drawn_bonds {
@@ -145,10 +146,11 @@ impl<'booking> Tfp1FundingRequirementsV1<'booking> {
                 return Err(Coverage.into());
             }
             node_storage = node_storage.checked_add(quote.numerical_fault_storage_rent_sompi).ok_or(Coverage)?;
-            carrier_storage = carrier_storage.checked_add(quote.carrier_storage_rent_sompi).ok_or(Coverage)?;
+            future_carrier_fee = future_carrier_fee.checked_add(quote.carrier_storage_rent_sompi).ok_or(Coverage)?;
         }
-        let original_fee = policy.original_fee_sompi.checked_add(node_storage).ok_or(Coverage)?;
-        let total_fee = original_fee.checked_add(carrier_storage).and_then(|n| n.checked_add(fee_used)).ok_or(Coverage)?;
+        let original_fee =
+            policy.original_fee_sompi.checked_add(node_storage).and_then(|fee| fee.checked_add(early_escrow)).ok_or(Coverage)?;
+        let total_fee = original_fee.checked_add(future_carrier_fee).and_then(|n| n.checked_add(fee_used)).ok_or(Coverage)?;
         if total_fee > budget.fee {
             return Err(Coverage.into());
         }
@@ -164,7 +166,7 @@ impl<'booking> Tfp1FundingRequirementsV1<'booking> {
                 policy.original_fee_sompi,
                 policy.capital_floor_sompi,
                 node_storage,
-                carrier_storage,
+                future_carrier_fee,
             ),
         )
         .map_err(|_| Scope)?;
@@ -191,7 +193,7 @@ impl<'booking> Tfp1FundingRequirementsV1<'booking> {
             fee_budget: budget.fee,
             retention_until: budget.retention_until,
             original_fee_sompi: original_fee,
-            future_carrier_fee_sompi: carrier_storage,
+            future_carrier_fee_sompi: future_carrier_fee,
         })
     }
 

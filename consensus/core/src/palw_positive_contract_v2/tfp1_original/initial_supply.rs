@@ -17,7 +17,7 @@ use crate::{
     palw_tir_court_v1::PublicOriginalTraceIndexV1,
     palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1,
     palw_tir_public_source_v1::PalwTirPublicSourceV1,
-    palw_tokenizer_rendering_v2::palw_rooted_tokenizer_for_original_v2,
+    palw_tokenizer_rendering_v2::palw_rooted_tokenizer_for_original_at_clocks_v3,
 };
 use misaka_palw_positive_contract::{
     ContractError,
@@ -109,6 +109,24 @@ impl PublicTfp1InitialSupplyV1 {
         literal_prompt: &[u8],
         hf: Option<&PublicTfp1HfArtifactV1>,
     ) -> Result<Self, InitialSupplyErrorV1> {
+        Self::derive_at_clocks_v2(parent, extras, at.daa_score, at.blue_score, fp, source, class, prompt_form, literal_prompt, hf)
+    }
+
+    /// The unsigned and signed paths share native geometry. Only actual
+    /// intake has an AcceptedOrigin; size/registration planning needs clocks.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn derive_at_clocks_v2(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        candidate_daa: u64,
+        candidate_blue_score: u64,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        class: &PalwTirClassV1,
+        prompt_form: PalwPromptIdsFormV1,
+        literal_prompt: &[u8],
+        hf: Option<&PublicTfp1HfArtifactV1>,
+    ) -> Result<Self, InitialSupplyErrorV1> {
         use InitialSupplyErrorV1::*;
         let header = source.header_v1();
         let job = &header.job_context;
@@ -163,7 +181,8 @@ impl PublicTfp1InitialSupplyV1 {
         let hf_entry = hf.entry_v1();
 
         let (tokenizer, _) =
-            palw_rooted_tokenizer_for_original_v2(parent, extras, at, fp, header).ok_or(MissingTokenizerRegistration)?;
+            palw_rooted_tokenizer_for_original_at_clocks_v3(parent, extras, candidate_daa, candidate_blue_score, fp, header)
+                .ok_or(MissingTokenizerRegistration)?;
         let tokenizer_bytes = tokenizer.facts_v1().statement.exact_raw_bytes;
         if tokenizer_bytes == 0 {
             return Err(MissingTokenizerRegistration);
@@ -461,6 +480,7 @@ pub(crate) mod tests {
             source.trace_value_bytes_v1().unwrap() + PublicOriginalTraceIndexV1::WIRE_BYTES as u64
         );
         exercise_checked_manifest_v1(&supply, fp, source, &hf);
+        exercise_unsigned_material_v3(parent, extras, at, fp, source, class, prompt_form, &supply, &hf);
 
         let unadvanced = parent.last_point().unwrap();
         assert_eq!(
@@ -481,6 +501,198 @@ pub(crate) mod tests {
             PublicTfp1InitialSupplyV1::derive_v1(parent, extras, at, fp, source, class, prompt_form, b"fixture prompt", None),
             Err(InitialSupplyErrorV1::MissingHfDescriptor)
         );
+    }
+
+    /// The actual registered tokenizer/container fixture reaches the shared
+    /// quote/intake material path with prospective clocks only. Test tariffs
+    /// and metadata do not authorize a public profile or an accepted carrier.
+    #[allow(clippy::too_many_arguments)]
+    fn exercise_unsigned_material_v3(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        at: &PalwBlockContextV2,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        class: &PalwTirClassV1,
+        form: PalwPromptIdsFormV1,
+        supply: &PublicTfp1InitialSupplyV1,
+        hf: &PublicTfp1HfArtifactV1,
+    ) {
+        use crate::palw_positive_contract_v2::{
+            PublicOriginalAdmissionV1, PublicOriginalProspectiveReservationV2, tfp1_original::Tfp1PublicAdmissionPolicyV1,
+        };
+        use misaka_palw_positive_contract::{
+            identity::ChainScope,
+            messages::AggregateBudget,
+            public_one_honest::{FirstNoticeDemand, ManifestEntryV1, MaterialCaseDemand, OriginalCommit, ProtectedRescueDemand},
+            rows::AggregateUsage,
+        };
+        let scope =
+            ChainScope { network: Digest(fp.job.network_domain.as_bytes()), ruleset: Digest([91; 64]), branch: Digest([92; 64]) };
+        let mut limits = supply.codecs_v1().map(|codec| ManifestScopeRules { codec, max_bytes: 1, chunk_bytes: 1 });
+        for kind in MATERIAL_SCOPES {
+            let bytes = supply.body_bytes_v1(kind);
+            limits[kind as usize].max_bytes = bytes.max(1);
+            limits[kind as usize].chunk_bytes = match kind {
+                MaterialScope::Artifact => hf.entry_v1().chunk_bytes,
+                MaterialScope::InputTokens if form == PalwPromptIdsFormV1::MerkleV1 => PALW_PROMPT_IDS_TILE_LEN * 4,
+                MaterialScope::Trace => u32::try_from(bytes.max(136)).unwrap(),
+                _ => u32::try_from(bytes.max(1)).unwrap(),
+            };
+        }
+        let capacity = RemainingCapacity {
+            transmitted_bytes: supply.claim_wire_bytes_v1(),
+            retained_bytes: supply.claim_wire_bytes_v1(),
+            additional_work: 100,
+        };
+        let rescue = ProtectedRescueDemand {
+            max_drawn_bonds: 1,
+            per_drawn_bond: capacity,
+            max_outsiders: 1,
+            per_outsider: capacity,
+            defensive: capacity,
+        };
+        let total = capacity.checked_add(rescue.total().unwrap()).unwrap();
+        let budget = AggregateBudget {
+            rounds: 100,
+            unique_source_bytes: supply.claim_wire_bytes_v1(),
+            transmitted_bytes: total.transmitted_bytes,
+            additional_work: total.additional_work,
+            retained_bytes: total.retained_bytes,
+            retention_until: at.daa_score + 12_000,
+            fee: 100_000,
+            witness_attempts: 10,
+        };
+        let obligation = NativeTfp1PublicOriginalFactsV1::derive_v1(fp, source)
+            .unwrap()
+            .service_obligation_v1(Hash64::from_u64_word(93), Hash64::from_u64_word(94))
+            .unwrap();
+        let admission = PublicOriginalAdmissionV1::from_native_tfp1_v1(
+            fp,
+            source,
+            class,
+            Tfp1PublicAdmissionPolicyV1 {
+                scope,
+                max_manifest_bytes: ManifestV1::WIRE_BYTES,
+                manifest_scope_limits: &limits,
+                manifest_total_limit: supply.manifest_payload_bytes_v1(),
+            },
+            b"fixture prompt",
+            obligation,
+            &budget,
+        )
+        .unwrap();
+        let job = &source.header_v1().job_context;
+        let mut companion = OriginalCommit {
+            scope,
+            job: Digest(job.job_id.as_bytes()),
+            execution: Digest(job.context_hash().as_bytes()),
+            miner: admission.miner,
+            registered_class: Digest(fp.job.class_id.as_bytes()),
+            artifact: Digest(admission.artifact.as_bytes()),
+            program: Digest(class.graph_ir_root().as_bytes()),
+            prompt: admission.prompt,
+            input_tokens: Digest(job.prompt_token_ids_hash.as_bytes()),
+            tokenizer: Digest(job.tokenizer_id.as_bytes()),
+            execution_rules: Digest(job.cu_ruleset_id.as_bytes()),
+            generation_seed: job.execution_seed,
+            initial_state: admission.initial_state,
+            dependencies: admission.dependencies,
+            prefill: job.declared_prefill_tokens,
+            decode: job.exact_decode_tokens,
+            max_context: job.max_context_tokens,
+            output: Digest(fp.output_root.as_bytes()),
+            trace_root: Digest(fp.execution_root.as_bytes()),
+            manifest_root: Digest([0; 64]),
+            service_contract: admission.service_contract,
+        };
+        let subjects = [
+            companion.artifact,
+            companion.program,
+            companion.prompt,
+            companion.input_tokens,
+            companion.tokenizer,
+            companion.execution_rules,
+            companion.initial_state,
+            companion.dependencies,
+            companion.trace_root,
+            companion.output,
+        ];
+        let mut manifest = ManifestV1 {
+            service_contract: companion.service_contract,
+            entries: std::array::from_fn(|i| ManifestEntryV1 {
+                subject: subjects[i],
+                content_root: subjects[i],
+                codec: limits[i].codec,
+                total_bytes: supply.body_bytes[i],
+                chunk_bytes: limits[i].chunk_bytes,
+            }),
+        };
+        manifest.entries[MaterialScope::Artifact as usize] = hf.entry_v1();
+        manifest.entries[MaterialScope::Prompt as usize] = misaka_palw_positive_contract::public_one_honest::prompt_text_material_v1(
+            scope.ruleset,
+            "fixture prompt",
+            limits[MaterialScope::Prompt as usize],
+        )
+        .unwrap();
+        let manifest_bytes =
+            companion.bind_manifest(&manifest, &limits, supply.manifest_payload_bytes_v1(), ManifestV1::WIRE_BYTES).unwrap();
+        let descriptor_bytes = hf.descriptor_v1().encode_v1().unwrap();
+        let usage = AggregateUsage::default();
+        let reservation = PublicOriginalProspectiveReservationV2 {
+            accepted_daa: at.daa_score,
+            accepted_blue_score: at.blue_score,
+            service_obligation: obligation.obligation_v1(),
+            notice: FirstNoticeDemand {
+                draw_ready_by: at.daa_score + 1,
+                material_ready_by: at.daa_score + 2,
+                cold_acquisition_daa: 2,
+                full_inspection_daa: 2,
+                notice_inclusion_daa: 2,
+                missing_material_detected_by: at.daa_score + 4,
+                material_request_inclusion_daa: 2,
+            },
+            case: MaterialCaseDemand {
+                material_delivery_daa: 2,
+                full_inspection_daa: 2,
+                localization_daa: 2,
+                filing_daa: 2,
+                adjudication_and_recovery_daa: 2,
+            },
+            initial_supply: capacity,
+            rescue,
+            usage: &usage,
+            budget: &budget,
+        };
+        let check = |prompt: &[u8], manifest: &[u8], descriptor: &[u8], reservation: &PublicOriginalProspectiveReservationV2<'_>| {
+            admission.check_tfp1_candidate_material_v3(
+                parent,
+                extras,
+                form,
+                fp,
+                source,
+                &companion,
+                prompt,
+                manifest,
+                descriptor,
+                obligation,
+                reservation,
+            )
+        };
+        let (same_hf, same_supply) = check(b"fixture prompt", &manifest_bytes, &descriptor_bytes, &reservation).unwrap();
+        assert_eq!(same_hf.entry_v1(), hf.entry_v1());
+        assert_eq!(&same_supply, supply);
+        assert!(check(b"Fixture prompt", &manifest_bytes, &descriptor_bytes, &reservation).is_err());
+        let mut wrong_manifest = manifest_bytes.clone();
+        wrong_manifest[0] ^= 1;
+        assert!(check(b"fixture prompt", &wrong_manifest, &descriptor_bytes, &reservation).is_err());
+        let mut wrong_descriptor = descriptor_bytes.clone();
+        let last = wrong_descriptor.len() - 1;
+        wrong_descriptor[last] ^= 1;
+        assert!(check(b"fixture prompt", &manifest_bytes, &wrong_descriptor, &reservation).is_err());
+        let stale =
+            PublicOriginalProspectiveReservationV2 { accepted_blue_score: parent.last_point().unwrap().blue_score, ..reservation };
+        assert!(check(b"fixture prompt", &manifest_bytes, &descriptor_bytes, &stale).is_err());
     }
 
     fn exercise_checked_manifest_v1(

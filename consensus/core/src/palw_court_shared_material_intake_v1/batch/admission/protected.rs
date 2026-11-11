@@ -2,7 +2,7 @@
 //! expiry and retained-control checks. The caller still authenticates the
 //! complete selected/outsider/defense opportunity set before compilation.
 use super::*;
-use crate::palw_batch_court_v1::protected_cases::{BatchCaseGraphV2, reserve_independent_batch_cases_with_requests_v3};
+use crate::palw_batch_court_v1::protected_cases::{BatchCaseGraphV2, reserve_batch_and_early_duties_v1};
 use crate::palw_native_resource_v1::reserve_native_pending_requests_v1;
 
 pub(crate) struct BatchInitialRequestV1 {
@@ -59,6 +59,17 @@ impl CompiledBatchAdmissionV1 {
         maximum_packets: usize,
         check: impl FnOnce(&[BatchAdmissionQuoteV1], &ServiceReservations) -> Result<(), ServiceRefusal>,
     ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+        Self::reserve_protected_with_early_duties_v1(cases, requests, &[], book, maximum_packets, check)
+    }
+
+    pub(crate) fn reserve_protected_with_early_duties_v1(
+        cases: &[(Hash64, &Self)],
+        requests: Option<&[BatchInitialRequestV1]>,
+        early: &[CausalServicePacketV1],
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        check: impl FnOnce(&[BatchAdmissionQuoteV1], &ServiceReservations) -> Result<(), ServiceRefusal>,
+    ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, LocalResource};
         let first = cases.first().ok_or(CaseGraph)?.1;
         if cases.len() > maximum_packets
@@ -100,11 +111,12 @@ impl CompiledBatchAdmissionV1 {
         // These are aggregate economic quantities, not a new service capacity.
         // Overflow must refuse the entire candidate before it commits.
         let mut totals = [0u64; 10];
-        let (_, graph) = reserve_independent_batch_cases_with_requests_v3(
+        let (_, graph) = reserve_batch_and_early_duties_v1(
             first.window,
             book,
             &graphs,
             initial.as_deref(),
+            early,
             first.recovery_daa,
             maximum_packets,
             |candidate| {

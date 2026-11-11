@@ -56,19 +56,38 @@ pub(crate) fn reserve_independent_batch_cases_with_requests_v3(
     maximum_packets: usize,
     check_assignments: impl FnOnce(&ServiceReservations) -> Result<(), ServiceRefusal>,
 ) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), Error> {
+    reserve_batch_and_early_duties_v1(window, book, cases, requests, &[], recovery_daa, maximum_packets, check_assignments)
+}
+
+pub(crate) fn reserve_batch_and_early_duties_v1(
+    window: BatchCourtWindowV1,
+    book: &mut ServiceReservations,
+    cases: &[BatchCaseGraphV2<'_>],
+    requests: Option<&[ServicePacket]>,
+    early: &[CausalServicePacketV1],
+    recovery_daa: u64,
+    maximum_packets: usize,
+    check_assignments: impl FnOnce(&ServiceReservations) -> Result<(), ServiceRefusal>,
+) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), Error> {
     if cases.is_empty() || cases.len() > maximum_packets {
         return Err(Error::CaseGraph);
     }
     if requests.is_some_and(|requests| requests.len() != cases.len()) {
         return Err(Error::CaseGraph);
     }
-    let nodes = cases.iter().try_fold(requests.map_or(0, |requests| requests.len()), |sum, case| {
+    let initial_count = early.len().checked_add(requests.map_or(0, |requests| requests.len())).ok_or(Error::CaseGraph)?;
+    if initial_count > maximum_packets {
+        return Err(Error::CaseGraph);
+    }
+    let nodes = cases.iter().try_fold(initial_count, |sum, case| {
         if case.opportunity == Hash64::default() || case.graph.is_empty() {
             return Err(Error::CaseGraph);
         }
         sum.checked_add(case.graph.len()).filter(|sum| *sum <= maximum_packets).ok_or(Error::CaseGraph)
     })?;
-    let edges = cases.iter().flat_map(|case| case.graph).try_fold(0u64, |sum, node| {
+    let early_edges =
+        early.iter().try_fold(0u64, |sum, node| sum.checked_add(node.predecessors.len() as u64)).ok_or(Error::CaseGraph)?;
+    let edges = cases.iter().flat_map(|case| case.graph).try_fold(early_edges, |sum, node| {
         let count = node.predecessors.len() as u64 + u64::from(requests.is_some() && node.predecessors.is_empty());
         sum.checked_add(count).ok_or(Error::CaseGraph)
     })?;
@@ -79,7 +98,8 @@ pub(crate) fn reserve_independent_batch_cases_with_requests_v3(
     let owner = reserve_native_pending_requests_v1(owned.bytes_v1()).map_err(Error::LocalResource)?;
     let mut scratch = TirNativeRequestsV1::new();
     scratch.vec_v1::<[u8; 64]>(cases.len() as u64).map_err(Error::LocalResource)?;
-    scratch.vec_v1::<[u8; 64]>(requests.map_or(0, |requests| requests.len()) as u64).map_err(Error::LocalResource)?;
+    scratch.vec_v1::<[u8; 64]>(initial_count as u64).map_err(Error::LocalResource)?;
+    scratch.vec_v1::<[u8; 64]>(early.len() as u64).map_err(Error::LocalResource)?;
     scratch
         .exact_v1::<u8>(
             (nodes as u64)
@@ -92,7 +112,15 @@ pub(crate) fn reserve_independent_batch_cases_with_requests_v3(
     let mut opportunities = BTreeMap::new();
     let mut membership = BTreeMap::new();
     let mut terminals = exact_vec(cases.len())?;
-    let mut initial_ids = exact_vec(requests.map_or(0, |requests| requests.len()))?;
+    let mut initial_ids = exact_vec(initial_count)?;
+    let mut early_ids = exact_vec(early.len())?;
+    for node in early {
+        if membership.insert(node.packet.id, cases.len()).is_some() {
+            return Err(Error::CaseGraph);
+        }
+        initial_ids.push(node.packet.id);
+        early_ids.push(node.packet.id);
+    }
     for (index, case) in cases.iter().enumerate() {
         if opportunities.insert(case.opportunity, ()).is_some() {
             return Err(Error::CaseGraph);
@@ -119,6 +147,11 @@ pub(crate) fn reserve_independent_batch_cases_with_requests_v3(
         }
     }
     let mut graph = exact_vec(nodes)?;
+    for node in early {
+        let mut predecessors = exact_vec(node.predecessors.len())?;
+        predecessors.extend_from_slice(&node.predecessors);
+        graph.push(CausalServicePacketV1 { packet: node.packet.clone(), predecessors });
+    }
     for (index, case) in cases.iter().enumerate() {
         if let Some(requests) = requests {
             graph.push(CausalServicePacketV1 { packet: requests[index].clone(), predecessors: Vec::new() });
@@ -136,11 +169,13 @@ pub(crate) fn reserve_independent_batch_cases_with_requests_v3(
         node.predecessors.sort_unstable();
     }
     initial_ids.sort_unstable();
+    early_ids.sort_unstable();
     let required = window.reserve_initial_request_many_with_v3(
         book,
         &graph,
         &terminals,
         &initial_ids,
+        &early_ids,
         recovery_daa,
         |candidate, _| check_assignments(candidate),
         reserve_native_pending_requests_v1,

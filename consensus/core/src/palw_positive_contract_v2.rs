@@ -206,6 +206,40 @@ pub struct PublicOriginalReservationV1<'a> {
     pub budget: &'a AggregateBudget,
 }
 
+/// Unsigned planning view. Prospective clocks are not an accepted carrier,
+/// transaction or inclusion block. This type can check reservation geometry
+/// but cannot produce an AcceptedMaterial or a persistent admission record.
+#[derive(Clone, Copy)]
+pub struct PublicOriginalProspectiveReservationV2<'a> {
+    pub accepted_daa: u64,
+    pub accepted_blue_score: u64,
+    pub service_obligation: Digest,
+    pub notice: FirstNoticeDemand,
+    pub case: MaterialCaseDemand,
+    pub initial_supply: RemainingCapacity,
+    pub rescue: ProtectedRescueDemand,
+    pub usage: &'a AggregateUsage,
+    pub budget: &'a AggregateBudget,
+}
+
+impl<'a> PublicOriginalReservationV1<'a> {
+    /// Signed intake uses exactly the same arithmetic as quote. Only the
+    /// signed owner retains the actual inclusion/transaction identity.
+    pub fn prospective_v2(&self) -> PublicOriginalProspectiveReservationV2<'a> {
+        PublicOriginalProspectiveReservationV2 {
+            accepted_daa: self.origin.accepted_daa,
+            accepted_blue_score: self.origin.accepted_blue_score,
+            service_obligation: self.service_obligation,
+            notice: self.notice,
+            case: self.case,
+            initial_supply: self.initial_supply,
+            rescue: self.rescue,
+            usage: self.usage,
+            budget: self.budget,
+        }
+    }
+}
+
 fn public_original_capacity_v1(
     max_manifest_bytes: u32,
     manifest_payload_bytes: u64,
@@ -1955,10 +1989,10 @@ impl PublicOriginalAdmissionV1<'_> {
     }
 
     /// Shared unsigned/signed reservation validation; no signature or state write.
-    fn check_reservation_v1(
+    fn check_prospective_reservation_v2(
         &self,
         original: &OriginalCommit,
-        reservation: &PublicOriginalReservationV1<'_>,
+        reservation: &PublicOriginalProspectiveReservationV2<'_>,
     ) -> Result<(u64, RemainingCapacity, VerificationSchedule), ContractError> {
         let manifest_payload_bytes = self
             .manifest_scope_limits
@@ -1972,8 +2006,8 @@ impl PublicOriginalAdmissionV1<'_> {
             reservation.initial_supply,
             reservation.rescue,
         )?;
-        let clock = OriginalClock::new(reservation.origin.accepted_daa)?;
-        if reservation.notice.draw_ready_by <= reservation.origin.accepted_daa {
+        let clock = OriginalClock::new(reservation.accepted_daa)?;
+        if reservation.notice.draw_ready_by <= reservation.accepted_daa {
             return Err(ContractError::Range);
         }
         if reservation.budget.retention_until < clock.hard() {
@@ -1994,7 +2028,8 @@ impl PublicOriginalAdmissionV1<'_> {
         signature: &[u8; SIGNATURE_BYTES],
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<PreparedPublicOriginalV1, ContractError> {
-        let (manifest_payload_bytes, capacity, schedule) = self.check_reservation_v1(original, reservation)?;
+        let (manifest_payload_bytes, capacity, schedule) =
+            self.check_prospective_reservation_v2(original, &reservation.prospective_v2())?;
         let original_id = self.authenticate(original, key, signature)?;
         Ok(PreparedPublicOriginalV1 {
             original: original_id,

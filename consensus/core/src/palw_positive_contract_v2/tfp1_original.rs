@@ -16,7 +16,8 @@ pub(crate) mod service_graph;
 pub(crate) mod service_invariants;
 
 use super::{
-    PreparedPublicOriginalV1, PublicOriginalAdmissionV1, PublicOriginalReservationV1, public_original_service_contract_id_v1,
+    PreparedPublicOriginalV1, PublicOriginalAdmissionV1, PublicOriginalProspectiveReservationV2, PublicOriginalReservationV1,
+    public_original_service_contract_id_v1,
 };
 use crate::{
     Hash64,
@@ -313,18 +314,18 @@ impl PublicOriginalAdmissionV1<'_> {
         &self,
         companion: &OriginalCommit,
         obligation: Tfp1PublicOriginalObligationV1,
-        reservation: &PublicOriginalReservationV1<'_>,
+        reservation: &PublicOriginalProspectiveReservationV2<'_>,
     ) -> Result<(), ContractError> {
         self.check_tfp1_link_v1(companion, obligation, reservation)?;
         self.check_original_metadata_v1(companion)?;
-        self.check_reservation_v1(companion, reservation).map(|_| ())
+        self.check_prospective_reservation_v2(companion, reservation).map(|_| ())
     }
 
     fn check_tfp1_link_v1(
         &self,
         companion: &OriginalCommit,
         obligation: Tfp1PublicOriginalObligationV1,
-        reservation: &PublicOriginalReservationV1<'_>,
+        reservation: &PublicOriginalProspectiveReservationV2<'_>,
     ) -> Result<(), ContractError> {
         obligation.check_companion_v1(companion, reservation.budget)?;
         // The current TFO3 bridge implements a fresh V3/V4 execution. Derive
@@ -439,9 +440,47 @@ impl PublicOriginalAdmissionV1<'_> {
         (PreparedTfp1PublicOriginalV1, super::PublicTfp1HfArtifactV1, initial_supply::PublicTfp1InitialSupplyV1),
         carrier_material::MaterialPairingErrorV2,
     > {
+        super::require_current_public_origin_v1(reservation.origin, point)?;
+        let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, reservation)?;
+        let signed = SignedPublicOriginalV1::decode(pairing.public_companion_v3().ok_or(ContractError::Scope)?)?;
+        let (hf, supply) = self.check_tfp1_candidate_material_v3(
+            parent,
+            extras,
+            prompt_form,
+            fp,
+            source,
+            &signed.original,
+            pairing.public_prompt_bytes_v3().ok_or(ContractError::Scope)?,
+            pairing.public_manifest_bytes_v2().ok_or(ContractError::Scope)?,
+            pairing.public_hf_descriptor_bytes_v2().ok_or(ContractError::Scope)?,
+            obligation,
+            &reservation.prospective_v2(),
+        )?;
+        Ok((prepared, hf, supply))
+    }
+
+    /// Authenticate unsigned literal materials against the exact native FP,
+    /// immutable parent and prospective clocks. Signed intake calls this same
+    /// path after authenticating its actual carrier. No accepted carrier or
+    /// persistent admission is constructed by this planning operation.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_tfp1_candidate_material_v3(
+        &self,
+        parent: &crate::palw_state_v2::PalwChainStateV2,
+        extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        fp: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        companion: &OriginalCommit,
+        prompt: &[u8],
+        manifest_bytes: &[u8],
+        descriptor_bytes: &[u8],
+        obligation: Tfp1PublicOriginalObligationV1,
+        reservation: &PublicOriginalProspectiveReservationV2<'_>,
+    ) -> Result<(super::PublicTfp1HfArtifactV1, initial_supply::PublicTfp1InitialSupplyV1), carrier_material::MaterialPairingErrorV2>
+    {
         use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_pending_requests_v1};
         use carrier_material::MaterialPairingErrorV2::LocalResource;
-        super::require_current_public_origin_v1(reservation.origin, point)?;
         if self.job != &source.header_v1().job_context {
             return Err(ContractError::Scope.into());
         }
@@ -466,10 +505,18 @@ impl PublicOriginalAdmissionV1<'_> {
         if NativeTfp1PublicOriginalFactsV1::derive_v1(fp, source)? != obligation.facts {
             return Err(ContractError::Scope.into());
         }
-        let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, reservation)?;
-        let descriptor = misaka_palw_positive_contract::public_one_honest::HfArtifactDescriptorV1::decode_v1(
-            pairing.public_hf_descriptor_bytes_v2().ok_or(ContractError::Scope)?,
+        self.check_tfp1_candidate_v1(companion, obligation, reservation)?;
+        self.check_tfp1_prompt_bytes_v1(prompt)?;
+        carrier_material::check_literal_material_v2(
+            companion,
+            prompt,
+            manifest_bytes,
+            descriptor_bytes,
+            self.max_manifest_bytes,
+            self.manifest_scope_limits,
+            self.manifest_total_limit,
         )?;
+        let descriptor = misaka_palw_positive_contract::public_one_honest::HfArtifactDescriptorV1::decode_v1(descriptor_bytes)?;
         let hf = super::PublicTfp1HfArtifactV1::resolve_v1(
             parent,
             fp,
@@ -479,11 +526,11 @@ impl PublicOriginalAdmissionV1<'_> {
         )?;
         hf.check_context_v1(fp, source, self.class)?;
         drop(_hash_scratch);
-        let prompt = pairing.public_prompt_bytes_v3().ok_or(ContractError::Scope)?;
-        let supply = initial_supply::PublicTfp1InitialSupplyV1::derive_v1(
+        let supply = initial_supply::PublicTfp1InitialSupplyV1::derive_at_clocks_v2(
             parent,
             extras,
-            point,
+            reservation.accepted_daa,
+            reservation.accepted_blue_score,
             fp,
             source,
             self.class,
@@ -497,13 +544,13 @@ impl PublicOriginalAdmissionV1<'_> {
             self.manifest_total_limit,
             reservation.initial_supply,
         )?;
-        let signed = SignedPublicOriginalV1::decode(pairing.public_companion_v3().ok_or(ContractError::Scope)?)?;
-        let manifest = signed
-            .original
-            .authenticate_manifest(pairing.public_manifest_bytes_v2().ok_or(ContractError::Scope)?, self.max_manifest_bytes)?
-            .decode(&signed.original, self.manifest_scope_limits, self.manifest_total_limit)?;
-        supply.check_manifest_v1(prepared.companion.original, &manifest, prompt)?;
-        Ok((prepared, hf, supply))
+        let manifest = companion.authenticate_manifest(manifest_bytes, self.max_manifest_bytes)?.decode(
+            companion,
+            self.manifest_scope_limits,
+            self.manifest_total_limit,
+        )?;
+        supply.check_manifest_v1(companion.id(), &manifest, prompt)?;
+        Ok((hf, supply))
     }
 
     /// Verify an actual signed companion after the native TFP1 planner
@@ -516,7 +563,7 @@ impl PublicOriginalAdmissionV1<'_> {
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<PreparedTfp1PublicOriginalV1, ContractError> {
         let signed = SignedPublicOriginalV1::decode(bytes)?;
-        self.check_tfp1_link_v1(&signed.original, obligation, reservation)?;
+        self.check_tfp1_link_v1(&signed.original, obligation, &reservation.prospective_v2())?;
         let companion = self.prepare(&signed.original, &signed.key, &signed.signature, reservation)?;
         Ok(PreparedTfp1PublicOriginalV1 { companion, obligation, fee_used: reservation.usage.fee, pairing: None })
     }
@@ -744,13 +791,16 @@ mod tests {
                 libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [32; 32]).unwrap();
             borsh::to_vec(&SignedPublicOriginalV1 { original, key, signature: *signature.as_ref() }).unwrap()
         };
-        assert_eq!(admission.check_tfp1_candidate_v1(&companion, obligation, &reservation), Ok(()));
+        assert_eq!(admission.check_tfp1_candidate_v1(&companion, obligation, &reservation.prospective_v2()), Ok(()));
         // Repeating a foreign network in both expected inputs and a correctly
         // re-signed companion cannot substitute for the native FP network.
         let foreign_scope = ChainScope { network: Digest([99; 64]), ..scope };
         let foreign_admission = PublicOriginalAdmissionV1 { scope: foreign_scope, ..admission };
         let foreign_companion = OriginalCommit { scope: foreign_scope, ..companion.clone() };
-        assert_eq!(foreign_admission.check_tfp1_candidate_v1(&foreign_companion, obligation, &reservation), Err(ContractError::Scope));
+        assert_eq!(
+            foreign_admission.check_tfp1_candidate_v1(&foreign_companion, obligation, &reservation.prospective_v2()),
+            Err(ContractError::Scope)
+        );
         assert_eq!(
             foreign_admission.prepare_tfp1_signed_bytes_v1(&sign(foreign_companion), obligation, &reservation),
             Err(ContractError::Scope)
@@ -759,7 +809,10 @@ mod tests {
         // replace the native cold-state/dependency identities.
         let placeholder = PublicOriginalAdmissionV1 { initial_state: d, dependencies: d, ..admission };
         let invented = OriginalCommit { initial_state: d, dependencies: d, ..companion.clone() };
-        assert_eq!(placeholder.check_tfp1_candidate_v1(&invented, obligation, &reservation), Err(ContractError::Scope));
+        assert_eq!(
+            placeholder.check_tfp1_candidate_v1(&invented, obligation, &reservation.prospective_v2()),
+            Err(ContractError::Scope)
+        );
         let prepared = admission.prepare_tfp1_signed_bytes_v1(&sign(companion.clone()), obligation, &reservation).unwrap();
         assert_eq!(prepared.companion_v1().original, companion.id());
         assert_ne!(prepared.companion_v1().original.0.0, facts.claim.as_bytes());

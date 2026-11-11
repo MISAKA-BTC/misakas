@@ -60,6 +60,36 @@ pub(crate) fn exercise_funding_v1(
     assert_eq!(required.scope_v1().required_amount_sompi, policy.original_fee_sompi + node_storage + policy.capital_floor_sompi);
     assert!(derive(Tfp1FundingPolicyV1 { original_fee_sompi: policy.original_fee_sompi + 1, ..policy }).is_err());
 
+    // The unsigned path must include the same native fee calculation as the
+    // signed payer path, not stop after the narrower Batch fee floor passes.
+    let quote = |book: &mut NativeRetainedV1<ServiceReservations>, policy| {
+        admission.reserve_and_quote_protected_funding_v2(
+            fp,
+            source,
+            companion,
+            &reservation.prospective_v2(),
+            projection,
+            terms,
+            book,
+            maximum_packets,
+            |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 }),
+            policy,
+        )
+    };
+    let mut unsigned_book = NativeRetainedV1::retain_existing_v1(empty_book.clone()).unwrap();
+    let unsigned_quote = quote(&mut unsigned_book, policy).unwrap();
+    assert_eq!(&unsigned_quote.funding, required.scope_v1());
+    assert_eq!(unsigned_quote.original_fee_sompi, required.original_fee_sompi_v1());
+    assert_eq!(unsigned_quote.future_carrier_fee_sompi, required.future_carrier_fee_sompi_v1());
+    assert_eq!(unsigned_quote.booking.graph_v1(), booking.graph_v1());
+    assert_eq!(unsigned_quote.booking.quotes_v1(), booking.quotes_v1());
+    let mut short_book = NativeRetainedV1::retain_existing_v1(empty_book.clone()).unwrap();
+    assert!(matches!(
+        quote(&mut short_book, Tfp1FundingPolicyV1 { original_fee_sompi: policy.original_fee_sompi + 1, ..policy }),
+        Err(admission::Tfp1ProtectedFundingAdmissionErrorV1::Funding(FundingRefusalV1::Coverage))
+    ));
+    assert_eq!(&*short_book, empty_book, "unsigned fee refusal must not publish candidate reservations");
+
     let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([92; 32]);
     let public = keypair.verification_key.as_ref().to_vec();
     let a = reservation.origin.accepted_daa;
@@ -189,6 +219,7 @@ pub(crate) fn exercise_funding_v1(
                     let (accepted_booking, funded) = result.unwrap();
                     assert_eq!(accepted_booking.quotes_v1(), booking.quotes_v1());
                     assert_eq!(accepted_booking.graph_v1(), booking.graph_v1());
+                    assert_eq!(&*book, &*unsigned_book, "signed payer checks must book the same graph as the unsigned quote");
                     assert_eq!(funded.actual().outpoint(), pairing.outpoint());
                     assert_ne!(&*book, empty_book);
                     let native_frame = super::super::native_frame::PublicTfp1FrameV1::prepare_with_service_v2(
