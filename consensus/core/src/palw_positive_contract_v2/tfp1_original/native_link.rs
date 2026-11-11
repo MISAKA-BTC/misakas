@@ -53,6 +53,51 @@ pub(crate) struct PreparedTfp1PublicOriginalLinkV1 {
 }
 
 impl PreparedTfp1PublicOriginalV1 {
+    /// Restore the association from the literal paired transaction on the
+    /// executing branch. Settled funding is allowed here: only installation
+    /// needs the fresh escrow. A detached signed companion is insufficient.
+    fn rooted_link_v1(&self, state: &PalwChainStateV2) -> Result<Tfp1PublicOriginalLinkV1, ContractError> {
+        let pairing = self.pairing.ok_or(ContractError::Scope)?;
+        let row = state.public_tfp1_original_link_v1(self.obligation.facts.claim)?.ok_or(ContractError::Scope)?;
+        if row.original != self.companion.original
+            || row.carrier != self.companion.carrier
+            || row.literal_fp != pairing.literal_fp
+            || (row.profile, row.resource, row.obligation)
+                != (self.obligation.profile, self.obligation.resource, self.obligation.obligation)
+            || row.admission_at(state, state.last_point().ok_or(ContractError::Scope)?)?
+                != self.companion.record(row.admission_reservation)
+        {
+            return Err(ContractError::Scope);
+        }
+        let frame = palw_tir_public_claim_v1(state, row.claim).ok_or(ContractError::Scope)?;
+        if row.check_frame(state, frame)? != self.obligation.facts {
+            return Err(ContractError::Scope);
+        }
+        Ok(row)
+    }
+
+    /// A native TFP1 request must satisfy both the immutable paired link and
+    /// the accepted draw/request chain. No caller-supplied claim or namespace
+    /// is promoted into authority. This does not spend a physical service slot.
+    pub(crate) fn rooted_drawn_batch_case_v1(
+        &self,
+        state: &PalwChainStateV2,
+        draw: &crate::palw_positive_contract_v2::PreparedPublicDrawV1,
+        bytes: &[u8],
+        context: &misaka_palw_positive_contract::public_one_honest::ManifestRequestContext<'_>,
+    ) -> Result<RootedTfp1DrawnBatchCaseV1, ContractError> {
+        let link = self.rooted_link_v1(state)?;
+        let case = self.companion.rooted_drawn_batch_case_v1(state, draw, bytes, context)?;
+        // This namespace is specific to the new PublicOriginal profile. Do
+        // not relabel a legacy first-notice or shared-context packet with it.
+        let scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/tfp1-public-original-batch/v1",
+            &(link.claim, link.source, link.original, link.profile, link.resource, link.obligation),
+        )
+        .map_err(|_| ContractError::NonCanonical)?;
+        Ok(RootedTfp1DrawnBatchCaseV1 { claim: link.claim, source: link.source, scope, case_scope: case.case_scope_v1(scope)?, case })
+    }
+
     pub(crate) fn prepare_native_link_v1(
         self,
         state: &PalwChainStateV2,
@@ -88,6 +133,35 @@ impl PreparedTfp1PublicOriginalV1 {
             return Err(ContractError::Scope);
         }
         Ok(PreparedTfp1PublicOriginalLinkV1 { row, admission, pairing })
+    }
+}
+
+/// A branch-local result, not a wire credential. Native writers must derive
+/// it again from their current prefix before validating reserved slots/fees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RootedTfp1DrawnBatchCaseV1 {
+    claim: Hash64,
+    source: Hash64,
+    scope: Hash64,
+    case_scope: Hash64,
+    case: crate::palw_positive_contract_v2::protected_batch_case::RootedDrawnBatchCaseV1,
+}
+
+impl RootedTfp1DrawnBatchCaseV1 {
+    pub(crate) fn claim_v1(&self) -> Hash64 {
+        self.claim
+    }
+    pub(crate) fn source_v1(&self) -> Hash64 {
+        self.source
+    }
+    pub(crate) fn scope_v1(&self) -> Hash64 {
+        self.scope
+    }
+    pub(crate) fn case_scope_v1(&self) -> Hash64 {
+        self.case_scope
+    }
+    pub(crate) fn case_v1(&self) -> crate::palw_positive_contract_v2::protected_batch_case::RootedDrawnBatchCaseV1 {
+        self.case
     }
 }
 

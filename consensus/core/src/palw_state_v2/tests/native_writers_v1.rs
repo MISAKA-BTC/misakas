@@ -879,8 +879,8 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     state: PalwChainStateV2,
     point: PalwBlockContextV2,
     prepared: crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1PublicOriginalLinkV1,
-    params: PalwStateParamsV2,
-) {
+    params: &PalwStateParamsV2,
+) -> PalwChainStateV2 {
     use crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1;
     let (key, row) = prepared.storage_row(&state, &point).unwrap().unwrap();
     let row = *row;
@@ -928,4 +928,5 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     assert!(matches!(no_capacity.install_public_tfp1_link_v1(&point, &prepared), Err(PalwStateV2Error::NativeResource(_))));
     assert!(no_capacity.entries.is_empty());
     assert_eq!(no_capacity.state, state);
+    restored
 }

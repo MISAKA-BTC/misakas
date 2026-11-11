@@ -626,7 +626,118 @@ mod tests {
             Err(ContractError::Scope)
         );
         let link = prepared.prepare_native_link_v1(&link_state, &link_point, admission_reservation).unwrap();
-        exercise_tfp1_link_writer_v1(link_state, link_point, link, link_params);
+        let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, link, &link_params);
+        reservation.origin.carrier_transaction = NativeHash64(pairing.carrier().id().as_bytes());
+        let paired = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
+        let companion_only = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
+        use crate::palw_state_v2::{
+            PalwBlockContextV2, PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras, revert_delta_v2,
+        };
+        use misaka_palw_positive_contract::{
+            identity::principal,
+            public_one_honest::{
+                Claimant, MANIFEST_REQUEST_SIGN_CONTEXT, ManifestRequestContext, PanelBond, PublicDrawMemberV1,
+                SignedManifestRequestV1,
+            },
+        };
+        let draw_point = PalwBlockContextV2 { block: Hash64::from_u64_word(806), daa_score: 101, blue_score: 102, subsidy: 0 };
+        let bond = PanelBond { transaction: Digest([72; 64]), index: 0 };
+        let member = PublicDrawMemberV1 { bond, principal: principal(&key), rescue_reservation: Digest([73; 64]) };
+        let draw = paired.companion_v1().prepare_draw(Digest([74; 64]), draw_point, &[member], Digest([75; 64])).unwrap();
+        let kernel = crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+            network_domain: Hash64::from_u64_word(1),
+            ruleset_digest: Hash64::from_u64_word(2),
+            ..Default::default()
+        };
+        let (drawn, _) = apply_palw_transition_v2_with_extras(
+            &linked,
+            &link_params,
+            &draw_point,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1 {
+                kernel_route: Some(kernel.clone()),
+                public_draws: vec![draw.prepare_storage_record()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let request_point = PalwBlockContextV2 { block: Hash64::from_u64_word(807), daa_score: 102, blue_score: 103, subsidy: 0 };
+        let request_context = ManifestRequestContext {
+            original: &companion,
+            claimant: Claimant::DrawnBond(bond),
+            signer: member.principal,
+            inspection_scope: Digest([75; 64]),
+            supply_obligation: Digest([76; 64]),
+            reservation: member.rescue_reservation,
+            max_manifest_bytes: ManifestV1::WIRE_BYTES,
+            manifest_limits: paired.companion_v1().manifest_limits,
+            manifest_body_bytes_reserved: u64::from(ManifestV1::WIRE_BYTES),
+            schedule: paired.companion_v1().schedule,
+            origin: AcceptedOrigin {
+                accepting_block: NativeHash64(request_point.block.as_bytes()),
+                accepted_daa: request_point.daa_score,
+                accepted_blue_score: request_point.blue_score,
+                carrier_block: NativeHash64([77; 64]),
+                carrier_transaction: NativeHash64([78; 64]),
+                accepted_tx_ordinal: 0,
+                event_ordinal: 0,
+            },
+        };
+        let request = paired
+            .companion_v1()
+            .drawn_manifest_request(&draw, &companion, bond, request_context.inspection_scope, request_context.supply_obligation)
+            .unwrap();
+        let signature =
+            libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [35; 32])
+                .unwrap();
+        let request_case_id = request.case_id(&companion, request_context.claimant).unwrap();
+        let request_wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
+        let pending = paired
+            .companion_v1()
+            .prepare_drawn_manifest_storage_record(admission_reservation, &draw, &request_wire, &request_context)
+            .unwrap();
+        assert!(paired.rooted_drawn_batch_case_v1(&linked, &draw, &request_wire, &request_context).is_err());
+        assert!(paired.rooted_drawn_batch_case_v1(&drawn, &draw, &request_wire, &request_context).is_err());
+        let (with_case, case_delta) = apply_palw_transition_v2_with_extras(
+            &drawn,
+            &link_params,
+            &request_point,
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &PalwTransitionExtrasV1 { kernel_route: Some(kernel), public_drawn_manifest_cases: vec![pending], ..Default::default() },
+        )
+        .unwrap();
+        let rooted = paired.rooted_drawn_batch_case_v1(&with_case, &draw, &request_wire, &request_context).unwrap();
+        assert_eq!((rooted.claim_v1(), rooted.source_v1()), (facts.claim, facts.source));
+        assert_ne!(rooted.scope_v1(), rooted.case_scope_v1());
+        assert_eq!(rooted.case_v1().case_id_v1(), request_case_id);
+        assert_eq!(rooted.case_v1().opportunity_v1().rescue_reservation_v1(), member.rescue_reservation);
+        assert!(companion_only.rooted_drawn_batch_case_v1(&with_case, &draw, &request_wire, &request_context).is_err());
+        assert!(paired.rooted_drawn_batch_case_v1(&link_state, &draw, &request_wire, &request_context).is_err());
+        let rolled_back = revert_delta_v2(&with_case, &case_delta, &link_params).unwrap();
+        assert!(paired.rooted_drawn_batch_case_v1(&rolled_back, &draw, &request_wire, &request_context).is_err());
+        let restored = crate::palw_state_v2::PalwStateCarriageV2::from_state(&with_case)
+            .into_state(&link_params, Some(with_case.state_root()))
+            .unwrap();
+        assert_eq!(paired.rooted_drawn_batch_case_v1(&restored, &draw, &request_wire, &request_context), Ok(rooted));
+        let duplicate_reservation = PublicOriginalReservationV1 {
+            origin: AcceptedOrigin { carrier_transaction: NativeHash64(duplicate_tx.id().as_bytes()), ..reservation.origin },
+            ..reservation
+        };
+        let duplicate_prepared = admission.prepare_tfp1_pairing_v1(&duplicate, obligation, &duplicate_reservation).unwrap();
+        assert!(duplicate_prepared.rooted_drawn_batch_case_v1(&restored, &draw, &request_wire, &request_context).is_err());
+        let mut wrong_wire = request_wire.clone();
+        *wrong_wire.last_mut().unwrap() ^= 1;
+        assert!(paired.rooted_drawn_batch_case_v1(&restored, &draw, &wrong_wire, &request_context).is_err());
         // A valid transaction with a changed literal prompt cannot borrow the
         // same signed companion, even after its new actual txid is supplied.
         let foreign_prompt = pair_carrier(&funded, b"different text");
