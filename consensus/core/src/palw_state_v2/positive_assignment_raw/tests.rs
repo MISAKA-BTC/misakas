@@ -297,3 +297,109 @@ fn source_response_for_unknown_case_does_not_stall_other_accepted_transactions()
     assert_eq!(builder.state.state_root_preimage(), state.state_root_preimage());
     assert!(builder.entries.is_empty());
 }
+
+#[test]
+fn physical_replay_runs_raw_between_omitted_events_and_before_tail_observer() {
+    use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, PositiveNativeOperationV2};
+    use PalwOrderedPhysicalKindV3::{OmittedBatch, OmittedOrdinary};
+    use misaka_palw_positive_contract::identity::{CaseId, ResultId};
+    let mut payload = vec![1, 0, 176];
+    payload.extend_from_slice(
+        &borsh::to_vec(&PositiveNativeBodyV2 {
+            version: 2,
+            revision: 1,
+            operation: PositiveNativeOperationV2::Expire { case: CaseId(d(42)), result: ResultId(d(43)) },
+        })
+        .unwrap(),
+    );
+    let state = PalwChainStateV2::genesis();
+    let params = state_params();
+    let events = [
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: None, kind: OmittedOrdinary },
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(1), kind: OmittedOrdinary },
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(3), kind: OmittedBatch },
+    ];
+    for (ordinal, expected) in [(2, vec![Some(0), Some(1)]), (4, vec![Some(0), Some(1), Some(2)])] {
+        let extras = PalwTransitionExtrasV1 {
+            positive_assignment_actions: vec![PositiveAssignmentScheduledActionV2 {
+                before_object: 0,
+                action: action_payload(ordinal, payload.clone()),
+            }],
+            ..Default::default()
+        };
+        let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+            &state,
+            &params,
+            point(),
+            PalwOrderedReplayRulesV1 {
+                unavailable_abstains: false,
+                capability_bound: false,
+                uncertified_weightless: false,
+                da_court: false,
+            },
+            PalwOrderedReplayLimitsV1 { passes: 1, candidate_visits: 4 },
+        )
+        .unwrap();
+        let mut seen = Vec::new();
+        let failure = palw_v2_replay_accepted_prefix_with_physical_checks_v3(
+            &mut budget,
+            &[],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            &extras,
+            &events,
+            &mut |event, accepted, _| {
+                assert_eq!(accepted, 0);
+                seen.push(event);
+                Ok::<_, std::convert::Infallible>(())
+            },
+            &mut |_, _, _, _| unreachable!("no canonical ordinary objects"),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(seen, expected);
+        assert!(matches!(failure, PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 {
+            location: PalwOrderedReplayLocationV1::RawAssignment { action_index: 0, accepted_tx_ordinal: Some(at) },
+            error: PalwStateV2Error::NativeContextUnavailable(_),
+        }) if at == ordinal));
+    }
+
+    // This unsigned raw release is refused semantically in the fixture;
+    // the canonical raw walker consumes its ordinal and reaches the tail.
+    let extras = PalwTransitionExtrasV1 {
+        positive_assignment_actions: vec![PositiveAssignmentScheduledActionV2 { before_object: 0, action: action(4) }],
+        ..Default::default()
+    };
+    let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+        &state,
+        &params,
+        point(),
+        PalwOrderedReplayRulesV1 {
+            unavailable_abstains: false,
+            capability_bound: false,
+            uncertified_weightless: false,
+            da_court: false,
+        },
+        PalwOrderedReplayLimitsV1 { passes: 1, candidate_visits: 4 },
+    )
+    .unwrap();
+    let mut seen = Vec::new();
+    palw_v2_replay_accepted_prefix_with_physical_checks_v3(
+        &mut budget,
+        &[],
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        &extras,
+        &events,
+        &mut |event, accepted, _| {
+            assert_eq!(accepted, 0);
+            seen.push(event);
+            Ok::<_, std::convert::Infallible>(())
+        },
+        &mut |_, _, _, _| unreachable!("no canonical ordinary objects"),
+    )
+    .unwrap();
+    assert_eq!(seen, [Some(0), Some(1), Some(2), None]);
+}

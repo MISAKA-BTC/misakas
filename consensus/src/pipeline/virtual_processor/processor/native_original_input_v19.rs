@@ -13,6 +13,19 @@ use kaspa_consensus_core::palw_state_v2::{
     PalwStateV2Error,
 };
 
+/// The result of checking actual header work against one candidate's
+/// bootstrap bond view. Resolution itself never disqualifies the chain block
+/// or announces a successful fallback. The accepting caller publishes that
+/// outcome only after it has chosen the candidate list.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PalwOwnAttemptAdmissionV2 {
+    NoAttempt,
+    Attempt(PalwAttemptEnvelopeV2),
+    CeilingBinder { envelope: PalwAttemptEnvelopeV2, refusal: String },
+    BaseRecovery { refusal: String },
+    Rejected { refusal: String },
+}
+
 enum RawAttemptV19 {
     Legacy(NativeRetainedV1<PalwAttemptEnvelopeV2>),
     Material(NativeRetainedV1<PalwAttemptMaterialEnvelopeV3>),
@@ -40,6 +53,36 @@ impl RawAttemptV19 {
     }
 }
 impl VirtualStateProcessor {
+    /// Resolve every existing own-attempt branch in one place. A later
+    /// ordered-selection pass must repeat this exact resolver on its final
+    /// bootstrap view, not re-use an earlier success flag or turn a local
+    /// resource/context failure into a BASE-recovery decision.
+    pub(super) fn palw_resolve_own_attempt_v2(
+        &self,
+        header: &Header,
+        parent: &PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        point: &PalwBlockContextV2,
+        bootstrap: Option<&PalwChainStateV2>,
+    ) -> Result<PalwOwnAttemptAdmissionV2, PalwLocalTransitionFaultV1> {
+        match self.palw_v2_check_attempt_admission(header, parent, params, point, bootstrap) {
+            Ok(Some(envelope)) => Ok(PalwOwnAttemptAdmissionV2::Attempt(envelope)),
+            Ok(None) => Ok(PalwOwnAttemptAdmissionV2::NoAttempt),
+            Err(PalwAttemptAdmissionFaultV1::Local(why)) => Err(why),
+            Err(PalwAttemptAdmissionFaultV1::Invalid(refusal)) => {
+                if let Some(envelope) = self.palw_v2_anchor_at_ceiling_binder_v1(header, parent, params, point, bootstrap)? {
+                    return Ok(PalwOwnAttemptAdmissionV2::CeilingBinder { envelope, refusal });
+                }
+                if self.palw_base_coinbase_recovery_admission_v1(header, parent)
+                    && kaspa_consensus_core::config::params::palw_base_coinbase_recovery_missing_bond_v1(&refusal)
+                {
+                    return Ok(PalwOwnAttemptAdmissionV2::BaseRecovery { refusal });
+                }
+                Ok(PalwOwnAttemptAdmissionV2::Rejected { refusal })
+            }
+        }
+    }
+
     /// Project work already resolved by the caller. Header/receipt validation
     /// and bootstrap agreement remain at the accepting caller.
     pub(super) fn palw_native_own_work_v1<'a>(

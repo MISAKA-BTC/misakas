@@ -20489,9 +20489,10 @@ pub fn palw_fp_lane_available_v1(
 
 mod ordered_prefix;
 pub use ordered_prefix::{
-    PalwOrderedCandidateFailureV2, PalwOrderedObjectStageV2, PalwOrderedPrefixV1, PalwOrderedReplayBudgetV1,
-    PalwOrderedReplayFailureV1, PalwOrderedReplayLimitsV1, PalwOrderedReplayLocationV1, PalwOrderedReplayRulesV1,
-    palw_v2_replay_accepted_prefix_v1, palw_v2_replay_accepted_prefix_with_checks_v2,
+    PalwOrderedCandidateFailureV2, PalwOrderedObjectStageV2, PalwOrderedPhysicalEventV3, PalwOrderedPhysicalKindV3,
+    PalwOrderedPrefixV1, PalwOrderedReplayBudgetV1, PalwOrderedReplayFailureV1, PalwOrderedReplayLimitsV1,
+    PalwOrderedReplayLocationV1, PalwOrderedReplayRulesV1, palw_v2_replay_accepted_prefix_v1,
+    palw_v2_replay_accepted_prefix_with_checks_v2, palw_v2_replay_accepted_prefix_with_physical_checks_v3,
 };
 
 mod objects;

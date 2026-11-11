@@ -78,13 +78,18 @@ impl<'a> PalwOrderedReplayBudgetV1<'a> {
     pub fn remaining_v1(&self) -> PalwOrderedReplayLimitsV1 {
         self.remaining
     }
-    fn begin_v1(&mut self, objects: usize, extras: &PalwTransitionExtrasV1) -> Result<(), PalwStateV2Error> {
-        let counts = [
-            objects,
-            extras.batch_court_carriers_v1.len(),
-            extras.tokenizer_registration_carriers_v1.len(),
-            extras.positive_assignment_actions.len(),
-        ];
+    fn begin_v1(
+        &mut self,
+        objects: usize,
+        extras: &PalwTransitionExtrasV1,
+        physical_events: Option<usize>,
+    ) -> Result<(), PalwStateV2Error> {
+        let canonical = objects
+            .checked_add(extras.batch_court_carriers_v1.len())
+            .and_then(|n| n.checked_add(extras.tokenizer_registration_carriers_v1.len()))
+            .ok_or_else(|| replay_capacity_v1("candidate event count overflow"))?;
+        let events = canonical.max(physical_events.unwrap_or(0));
+        let counts = [events, extras.positive_assignment_actions.len()];
         let visits = counts
             .into_iter()
             .try_fold(0u64, |sum, n| u64::try_from(n).ok().and_then(|n| sum.checked_add(n)))
@@ -157,6 +162,36 @@ pub enum PalwOrderedObjectStageV2 {
     After,
 }
 
+/// One candidate at its physical acceptance position. Omitted candidates
+/// remain in the visit stream, but do not enter the native fold input basis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwOrderedPhysicalEventV3 {
+    pub accepted_ordinal: Option<usize>,
+    pub kind: PalwOrderedPhysicalKindV3,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwOrderedPhysicalKindV3 {
+    Ordinary,
+    Batch,
+    Tokenizer,
+    OmittedOrdinary,
+    OmittedBatch,
+}
+
+impl PalwOrderedPhysicalKindV3 {
+    fn omitted_v3(self) -> bool {
+        matches!(self, Self::OmittedOrdinary | Self::OmittedBatch)
+    }
+}
+
+type PhysicalObserverV3<'a, E> = dyn FnMut(Option<usize>, usize, &PalwChainStateV2) -> Result<(), E> + 'a;
+
+struct PhysicalReplayV3<'a, E> {
+    events: &'a [PalwOrderedPhysicalEventV3],
+    observe: &'a mut PhysicalObserverV3<'a, E>,
+}
+
 /// A Node gate's error is not reclassified as a consensus refusal. The Node
 /// retains its own distinction between an invalid candidate and a local or
 /// context failure. Native failures retain their exact ordered location.
@@ -164,12 +199,15 @@ pub enum PalwOrderedObjectStageV2 {
 pub enum PalwOrderedCandidateFailureV2<E> {
     Native(PalwOrderedReplayFailureV1),
     Candidate { object_index: usize, stage: PalwOrderedObjectStageV2, error: E },
+    Physical { event_index: Option<usize>, error: E },
 }
 
 fn without_candidate_error_v2(failure: PalwOrderedCandidateFailureV2<std::convert::Infallible>) -> PalwOrderedReplayFailureV1 {
     match failure {
         PalwOrderedCandidateFailureV2::Native(failure) => failure,
-        PalwOrderedCandidateFailureV2::Candidate { error, .. } => match error {},
+        PalwOrderedCandidateFailureV2::Candidate { error, .. } | PalwOrderedCandidateFailureV2::Physical { error, .. } => {
+            match error {}
+        }
     }
 }
 
@@ -214,9 +252,50 @@ pub fn palw_v2_replay_accepted_prefix_with_checks_v2<'parent: 'pass, 'pass, E>(
     extras: &'pass PalwTransitionExtrasV1,
     check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
 ) -> Result<PalwOrderedPrefixV1<'pass>, PalwOrderedCandidateFailureV2<E>> {
+    replay_accepted_prefix_v3(budget, accepted_objects, block_work, merged_work, own_execution_key, extras, check, None)
+}
+
+/// Uses the physical acceptance order for both raw interleaving and Node
+/// effects. The observer receives the physical index (None at the tail) and
+/// the number of already applied ordinary objects.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_replay_accepted_prefix_with_physical_checks_v3<'parent: 'pass, 'pass, E>(
+    budget: &mut PalwOrderedReplayBudgetV1<'parent>,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    own_execution_key: Hash64,
+    extras: &'pass PalwTransitionExtrasV1,
+    events: &[PalwOrderedPhysicalEventV3],
+    observe: &mut impl FnMut(Option<usize>, usize, &PalwChainStateV2) -> Result<(), E>,
+    check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
+) -> Result<PalwOrderedPrefixV1<'pass>, PalwOrderedCandidateFailureV2<E>> {
+    replay_accepted_prefix_v3(
+        budget,
+        accepted_objects,
+        block_work,
+        merged_work,
+        own_execution_key,
+        extras,
+        check,
+        Some(PhysicalReplayV3 { events, observe }),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn replay_accepted_prefix_v3<'parent: 'pass, 'pass, E>(
+    budget: &mut PalwOrderedReplayBudgetV1<'parent>,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    own_execution_key: Hash64,
+    extras: &'pass PalwTransitionExtrasV1,
+    check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
+    physical: Option<PhysicalReplayV3<'_, E>>,
+) -> Result<PalwOrderedPrefixV1<'pass>, PalwOrderedCandidateFailureV2<E>> {
     use PalwOrderedReplayLocationV1 as At;
     budget
-        .begin_v1(accepted_objects.len(), extras)
+        .begin_v1(accepted_objects.len(), extras, physical.as_ref().map(|v| v.events.len()))
         .map_err(|error| PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 { location: At::Budget, error }))?;
     let parent = budget.parent;
     let params = budget.params;
@@ -239,7 +318,7 @@ pub fn palw_v2_replay_accepted_prefix_with_checks_v2<'parent: 'pass, 'pass, E>(
         )
         .map_err(|error| PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 { location: At::Preparation, error }))?;
         let mut location = At::Order;
-        apply_ordered_prefix_checked_v2(&mut prefix.builder, parent, ctx, accepted_objects, &mut location, check)?;
+        apply_ordered_prefix_checked_v2(&mut prefix.builder, parent, ctx, accepted_objects, &mut location, check, physical)?;
         Ok(prefix)
     })
 }
@@ -450,9 +529,15 @@ fn apply_ordered_prefix_located_v1(
     accepted_objects: &[PalwConsensusObjectV2],
     location: &mut PalwOrderedReplayLocationV1,
 ) -> Result<(), PalwStateV2Error> {
-    apply_ordered_prefix_checked_v2(builder, parent, ctx, accepted_objects, location, &mut |_, _, _, _| {
-        Ok::<(), std::convert::Infallible>(())
-    })
+    apply_ordered_prefix_checked_v2(
+        builder,
+        parent,
+        ctx,
+        accepted_objects,
+        location,
+        &mut |_, _, _, _| Ok::<(), std::convert::Infallible>(()),
+        None,
+    )
     .map_err(|failure| without_candidate_error_v2(failure).error)
 }
 
@@ -463,6 +548,7 @@ fn apply_ordered_prefix_checked_v2<E>(
     accepted_objects: &[PalwConsensusObjectV2],
     location: &mut PalwOrderedReplayLocationV1,
     check: &mut impl FnMut(PalwOrderedObjectStageV2, usize, &PalwChainStateV2, &PalwConsensusObjectV2) -> Result<(), E>,
+    mut physical: Option<PhysicalReplayV3<'_, E>>,
 ) -> Result<(), PalwOrderedCandidateFailureV2<E>> {
     use PalwOrderedCandidateFailureV2::{Candidate, Native};
     use PalwOrderedObjectStageV2::{After, Before};
@@ -494,14 +580,48 @@ fn apply_ordered_prefix_checked_v2<E>(
     let mut raw_cursor = 0;
     let mut previous_raw_ordinal = None;
     let mut index = 0;
+    let mut event_index = 0;
+    let inconsistent = |reason: &str| native(At::Order, PalwStateV2Error::CarriageInconsistent(reason.into()));
+    if let Some(physical) = &physical
+        && (physical.events.windows(2).any(|pair| pair[0].accepted_ordinal > pair[1].accepted_ordinal)
+            || physical.events.iter().any(|event| {
+                event.accepted_ordinal.is_none()
+                    && !matches!(event.kind, PalwOrderedPhysicalKindV3::Ordinary | PalwOrderedPhysicalKindV3::OmittedOrdinary)
+            }))
+    {
+        return Err(inconsistent("physical candidate order or synthetic lane is invalid"));
+    }
     for item in ordered {
-        let before = match &item {
-            AcceptedNativeCourtItemV1::Ordinary(_) => None,
-            AcceptedNativeCourtItemV1::Batch(carrier) => Some(carrier.accepted_ordinal_v1()),
-            AcceptedNativeCourtItemV1::Tokenizer(carrier) => Some(carrier.accepted_ordinal_v1()),
+        let (kind, before) = match &item {
+            AcceptedNativeCourtItemV1::Ordinary(_) => (PalwOrderedPhysicalKindV3::Ordinary, None),
+            AcceptedNativeCourtItemV1::Batch(carrier) => (PalwOrderedPhysicalKindV3::Batch, Some(carrier.accepted_ordinal_v1())),
+            AcceptedNativeCourtItemV1::Tokenizer(carrier) => {
+                (PalwOrderedPhysicalKindV3::Tokenizer, Some(carrier.accepted_ordinal_v1()))
+            }
         };
-        apply_raw_located_v1(builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal, location)
-            .map_err(|error| native(*location, error))?;
+        if let Some(physical) = &mut physical {
+            loop {
+                let event = physical.events.get(event_index).ok_or_else(|| inconsistent("missing physical candidate event"))?;
+                if !event.kind.omitted_v3()
+                    && (event.kind != kind || before.is_some_and(|ordinal| event.accepted_ordinal != Some(ordinal)))
+                {
+                    return Err(inconsistent("physical candidate differs from canonical fold input"));
+                }
+                if let Some(ordinal) = event.accepted_ordinal {
+                    apply_raw_located_v1(builder, ctx, index, Some(ordinal), &mut raw_cursor, &mut previous_raw_ordinal, location)
+                        .map_err(|error| native(*location, error))?;
+                }
+                (physical.observe)(Some(event_index), index, &builder.state)
+                    .map_err(|error| PalwOrderedCandidateFailureV2::Physical { event_index: Some(event_index), error })?;
+                event_index += 1;
+                if !event.kind.omitted_v3() {
+                    break;
+                }
+            }
+        } else {
+            apply_raw_located_v1(builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal, location)
+                .map_err(|error| native(*location, error))?;
+        }
         match item {
             AcceptedNativeCourtItemV1::Ordinary(object) => {
                 *location = At::Ordinary { object_index: index };
@@ -538,8 +658,25 @@ fn apply_ordered_prefix_checked_v2<E>(
             }
         }
     }
+    if let Some(physical) = &mut physical {
+        for (event_index, event) in physical.events.iter().enumerate().skip(event_index) {
+            if !event.kind.omitted_v3() {
+                return Err(inconsistent("physical candidate remains outside canonical fold input"));
+            }
+            if let Some(ordinal) = event.accepted_ordinal {
+                apply_raw_located_v1(builder, ctx, index, Some(ordinal), &mut raw_cursor, &mut previous_raw_ordinal, location)
+                    .map_err(|error| native(*location, error))?;
+            }
+            (physical.observe)(Some(event_index), index, &builder.state)
+                .map_err(|error| PalwOrderedCandidateFailureV2::Physical { event_index: Some(event_index), error })?;
+        }
+    }
     apply_raw_located_v1(builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal, location)
         .map_err(|error| native(*location, error))?;
+    if let Some(physical) = &mut physical {
+        (physical.observe)(None, index, &builder.state)
+            .map_err(|error| PalwOrderedCandidateFailureV2::Physical { event_index: None, error })?;
+    }
     builder.tfp1_history_journal_parent = None;
     *location = At::Order;
     if raw_cursor != extras.positive_assignment_actions.len() {

@@ -20,6 +20,16 @@ Panel人数・全工程の物理容量・料金・署名branchの本番設定に
 
 今回のコード変更は **実装済み・Rust検証未実行**。方針書§1に従い通し接続後にbuild/testを実行する。公開配備・署名送信は行っていない。取得可否証明やMinerのモデル重み配信義務は追加しない。同一claimのPanel/Final・当選権利消費・対応ブロック生成は引き続き未達。
 
+### 実候補順と最終fold入力の照合（2026-11-12、未検証）
+
+[Node受付](../../../../consensus/src/pipeline/virtual_processor/processor/palw_accept.rs)のordinary gateを既存の本経路と全prefix再検査で共有し、保護付きcompanionを含む候補について、拒否されたordinary/Batchも残す物理イベント台帳を追加した。[core再演](../../../../consensus/core/src/palw_state_v2/ordered_prefix.rs)は各実tx ordinalの直前までraw actionを適用してからNodeの試行課金・返金枠を照合する。synthetic候補の前へraw actionを繰り上げず、末尾rawの後にも返金枠を処理する。TKR1の拒否時の試行消費と実UTXO手数料の照合は維持する。
+
+[production caller](../../../../consensus/src/pipeline/virtual_processor/processor.rs)は、新companionが実際に採用候補へ残った場合に限り、最終foldへ渡す同じobjects・実own/merged work・全extrasで再演する。実carriageは同じ検証済みacceptance dataとfee handoffから別ownerとして取得する。予算は明示的な1 passと全物理イベント+raw数であり、各操作のnative資源計上も維持する。旧rehearsal stateは先に解放する。再演後のbootstrap bondによるown attempt判定を、最終workに使った判定と比較し、不一致を成功やblock不正の認定へ変換しない。保存・公開court telemetryは後続のauthoritative foldの成功に限る。
+
+**これは選別の固定点や受付の完成ではない。** 一度落としたnative ordinary/Batch verdict、旧probeが除外した未課金raw actionの再検討、候補集合/own workが変わった場合の全basis再導出と有限再選別は残る。暫定own attemptが`Rejected`の場合は旧経路の早期disqualifyが残り、今回の一致検査は非`Rejected`判定に限られる。完全な選別では拒否も全basisで照合してからstatusを公開する必要がある。新TFO3のprofile未設定拒否は維持されており、このcaller追加だけでは公開成功経路へ到達しない。全工程planner・新版quote・実資金/予約から共通installへの接続も未完了。誤った候補集合を拒否できることを正常受付の達成とは数えない。
+
+物理イベント、欠落/逆順、拒否候補を含む訪問予算、raw fault境界の試験コードを追加する。方針書§1に従いCargo check/build/testは通し接続後に実行するため、この変更はRustの型検査・動作検証を未実施。候補値の明示採択、公開設定・実支払・配備は行っていない。
+
 ### 旧pledgeを必要としない提出形式
 
 入口の調査で、旧TFO3のwire版1/2は内側のTFP1にcustody pledge・history pledge条件・正のrent宣言を要求することが判明した。RFC-0053の方針を実装する新提出経路に、これらを仮の値で付けない。次の明示版を追加し、旧署名・旧wireの意味を維持する。

@@ -3050,6 +3050,14 @@ impl VirtualStateProcessor {
                                 } else {
                                     None
                                 };
+                                // Retain physical dispositions only for a candidate carrying the
+                                // new protected companion. Old profiles keep their existing walk.
+                                // The full-basis check below runs only if one survives admission.
+                                let record_protected_physical_v3 =
+                                    self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(point.daa_score).is_some()
+                                        && objects.iter().any(|carried| {
+                                            carried.funded_original.as_ref().is_some_and(|pair| pair.public_companion_v3().is_some())
+                                        });
                                 let mut accepted_batch = Vec::new();
                                 let mut tokenizer = palw_accept::TokenizerRegistrationAcceptanceV1 {
                                     candidates: tokenizer_candidates,
@@ -3084,6 +3092,7 @@ impl VirtualStateProcessor {
                                         &batch_candidates,
                                         &mut accepted_batch,
                                         &mut tokenizer,
+                                        record_protected_physical_v3,
                                     )
                                 })?;
                                 if tokenizer.fees != ctx.palw_tokenizer_fees_v1 {
@@ -3093,8 +3102,7 @@ impl VirtualStateProcessor {
                                     )
                                     .into());
                                 }
-                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(observed_schedule) =
-                                    assignment_rehearsal
+                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(observed_schedule) = assignment_rehearsal
                                 else {
                                     return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
                                         "Assignment final fold",
@@ -3102,7 +3110,8 @@ impl VirtualStateProcessor {
                                     )
                                     .into());
                                 };
-                                let assignment_raw_schedule = observed_schedule.into_canonical_v2(&accepted_batch, &tokenizer.accepted)?;
+                                let (assignment_raw_schedule, protected_physical_v3) =
+                                    observed_schedule.into_canonical_with_physical_v3(&accepted_batch, &tokenizer.accepted)?;
                                 // The singleton filter has consumed the measured basis. The
                                 // authoritative fold below builds its own actual basis anew.
                                 drop(native_original_context_v19);
@@ -3123,53 +3132,40 @@ impl VirtualStateProcessor {
                                 // block. See ADR-0064's correction.
                                 let bootstrap =
                                     self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &*folded);
-                                let attempt = match self.palw_v2_check_attempt_admission(
-                                    &header,
-                                    state,
-                                    state_params,
-                                    &point,
-                                    bootstrap,
-                                ) {
-                                    Ok(attempt) => attempt,
-                                    // Lane bind-deadlock (`palw_anchor_at_ceiling`): an anchor whose
-                                    // bond is at its ceiling still binds the claims due at it.
-                                    Err(PalwAttemptAdmissionFaultV1::Local(why)) => return Err(why),
-                                    Err(PalwAttemptAdmissionFaultV1::Invalid(adm_error)) => match self
-                                        .palw_v2_anchor_at_ceiling_binder_v1(&header, state, state_params, &point, bootstrap)?
-                                    {
-                                        Some(envelope) => {
-                                            info!(
-                                                "Block {} anchors at its bond's exposure ceiling ({}): it binds the claims due at \
-                                                     it and its own attempt carries no claim (palw_anchor_at_ceiling)",
-                                                current, adm_error
-                                            );
-                                            Some(envelope)
-                                        }
-                                        None if self.palw_base_coinbase_recovery_admission_v1(&header, state)
-                                            && kaspa_consensus_core::config::params::palw_base_coinbase_recovery_missing_bond_v1(
-                                                &adm_error,
-                                            ) =>
-                                        {
-                                            // RFC-0041: the block stands and carries no claim. The child coinbase
-                                            // pays its declared worker share (`palw_v2_skipped_own_attempt_carve`
-                                            // returns 0). The placeholder outpoint is not registered.
-                                            info!(
-                                                "Block {} stands as BASE coinbase recovery ({adm_error}): no claim, no bond, the existing idle-floor subsidy",
-                                                current
-                                            );
-                                            None
-                                        }
-                                        None => {
-                                            info!(
-                                                "Block {} is disqualified from virtual chain (PALW admission): {}",
-                                                current, adm_error
-                                            );
-                                            self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                            chain_disqualified_counter += 1;
-                                            continue;
-                                        }
-                                    },
+                                use native_original_input_v19::PalwOwnAttemptAdmissionV2;
+                                let own_attempt_admission =
+                                    self.palw_resolve_own_attempt_v2(&header, state, state_params, &point, bootstrap)?;
+                                let attempt = match &own_attempt_admission {
+                                    PalwOwnAttemptAdmissionV2::Attempt(envelope) => Some(envelope),
+                                    PalwOwnAttemptAdmissionV2::NoAttempt => None,
+                                    PalwOwnAttemptAdmissionV2::CeilingBinder { envelope, refusal } => {
+                                        info!(
+                                            "Block {} anchors at its bond's exposure ceiling ({}): it binds the claims due at \
+                                             it and its own attempt carries no claim (palw_anchor_at_ceiling)",
+                                            current, refusal
+                                        );
+                                        Some(envelope)
+                                    }
+                                    PalwOwnAttemptAdmissionV2::BaseRecovery { refusal } => {
+                                        // RFC-0041 keeps the declared worker share, with no
+                                        // claim or bond for the placeholder outpoint.
+                                        info!(
+                                            "Block {} stands as BASE coinbase recovery ({refusal}): no claim, no bond, the existing idle-floor subsidy",
+                                            current
+                                        );
+                                        None
+                                    }
+                                    PalwOwnAttemptAdmissionV2::Rejected { refusal } => {
+                                        info!("Block {} is disqualified from virtual chain (PALW admission): {}", current, refusal);
+                                        self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                        chain_disqualified_counter += 1;
+                                        continue;
+                                    }
                                 };
+                                // Admission owns its envelope now. Release the legacy
+                                // rehearsal and its construction lease before a protected
+                                // full-prefix replay allocates another working state.
+                                drop(folded);
                                 let receipt_spend = match native_original_receipt_v19
                                     .take()
                                     .unwrap_or_else(|| self.palw_v2_check_receipt_spend(&header, state, state_params, &point))
@@ -3203,7 +3199,7 @@ impl VirtualStateProcessor {
                                 // differ. The match is written total anyway rather than asserted,
                                 // because a panic here would be a remote one.
                                 let (work, own_execution_key, own_job_anchor) =
-                                    self.palw_native_own_work_v1(header.as_ref(), attempt.as_ref(), receipt_spend.as_ref());
+                                    self.palw_native_own_work_v1(header.as_ref(), attempt, receipt_spend.as_ref());
                                 // ADR-0058: the anticone's work rides this block's transition.
                                 // Assembled against the walk state (the parent's); the transition
                                 // re-runs the stateful admission per work against its LIVE fold
@@ -3280,9 +3276,6 @@ impl VirtualStateProcessor {
                                     }
                                     Some(owner)
                                 };
-                                // Telemetry is scoped to the synchronous authoritative fold, never acceptance rehearsals.
-                                let court_observation_guard =
-                                    kaspa_consensus_core::palw_court_observation_v1::CourtObservationGuardV1::enter(current);
                                 let transition_extras = prefix_dependencies.attach_v1(&fp_answers, {
                                     let mut extras =
                                         self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
@@ -3353,6 +3346,90 @@ impl VirtualStateProcessor {
                                         self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                     extras
                                 })?;
+                                // A protected original must be rechecked against the complete
+                                // basis that the authoritative fold below will use: actual own
+                                // and merged work, all accepted objects and the rebuilt extras.
+                                // This single pass checks the selected list. It is not a fixed-
+                                // point selector: a mismatch must never silently become approval.
+                                if transition_extras.tir_funded_originals.values().any(|pair| pair.public_companion_v3().is_some()) {
+                                    use kaspa_consensus_core::palw_state_v2::{
+                                        PalwOrderedReplayBudgetV1, PalwOrderedReplayLimitsV1, PalwOrderedReplayRulesV1,
+                                    };
+                                    let unavailable =
+                                        |why| NativeCoverageV1::unsupported::<Self>("protected original ordered admission", why);
+                                    let ledger = protected_physical_v3
+                                        .ok_or_else(|| unavailable("accepted protected original has no physical candidate ledger"))?;
+                                    let candidate_visits = ledger
+                                        .event_count_v3()
+                                        .checked_add(transition_extras.positive_assignment_actions.len())
+                                        .and_then(|count| u64::try_from(count).ok())
+                                        .ok_or_else(|| unavailable("physical replay visit count overflow"))?;
+                                    let mut replay_budget = PalwOrderedReplayBudgetV1::new_v1(
+                                        state,
+                                        state_params,
+                                        point,
+                                        PalwOrderedReplayRulesV1 {
+                                            unavailable_abstains: self.palw_unavailable_abstains_at(point.daa_score),
+                                            capability_bound: self.palw_capability_bound_at(point.daa_score),
+                                            uncertified_weightless: self.palw_uncertified_weightless_at(point.daa_score),
+                                            da_court: self.palw_da_court_at(point.daa_score),
+                                        },
+                                        PalwOrderedReplayLimitsV1 { passes: 1, candidate_visits },
+                                    )
+                                    .map_err(|why| match why {
+                                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => {
+                                            PalwLocalTransitionFaultV1::Resource(why)
+                                        }
+                                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why) => {
+                                            PalwLocalTransitionFaultV1::Context(why)
+                                        }
+                                        _ => unavailable("physical replay budget cannot bind the accepting point").into(),
+                                    })?;
+                                    // Re-decode from the same verified acceptance data and real fee
+                                    // handoffs. Leased answers/prefix dependencies are not cloned
+                                    // without their native ownership or borrowed from another tx.
+                                    let (replay_carried, _, _) = self.palw_v2_objects_of_block(
+                                        &ctx.mergeset_acceptance_data,
+                                        state,
+                                        current,
+                                        header.daa_score,
+                                        &ctx.palw_v2_accepted_tx_fees,
+                                        &ctx.palw_v2_rent_available_fees,
+                                        &ctx.palw_batch_handoffs_v1,
+                                        &ctx.palw_tokenizer_handoffs_v1,
+                                        &ctx.palw_tfp1_history_seeds_v1,
+                                    )?;
+                                    let replayed = tokenizer_registration_v1::with_prefix_scope_v1(tokenizer_prefix.as_ref(), || {
+                                        self.palw_recheck_observed_prefix_v3(
+                                            &mut replay_budget,
+                                            state,
+                                            state_params,
+                                            &point,
+                                            &objects,
+                                            work,
+                                            &merged_refs,
+                                            own_execution_key,
+                                            &transition_extras,
+                                            ledger,
+                                            replay_carried,
+                                            own_attempt_class,
+                                        )
+                                    })?;
+                                    let replay_bootstrap = self
+                                        .palw_bootstrap_activation
+                                        .filter(|fence| fence.is_active(point.daa_score))
+                                        .map(|_| &*replayed);
+                                    let replay_admission =
+                                        self.palw_resolve_own_attempt_v2(&header, state, state_params, &point, replay_bootstrap)?;
+                                    if replay_admission != own_attempt_admission {
+                                        return Err(unavailable(
+                                            "own work changed under the complete accepted prefix; reselection required",
+                                        )
+                                        .into());
+                                    }
+                                    // Rehearsal owns no persistent delta. Only the successful
+                                    // authoritative fold below may publish state and UTXO effects.
+                                }
                                 let selected_parent = ctx.ghostdag_data.selected_parent;
                                 let live_case_cap = self
                                     .palw_positive_assignment_params_v2
@@ -3373,6 +3450,10 @@ impl VirtualStateProcessor {
                                         })?
                                         .ok_or(PalwStateV2Error::NativeContextUnavailable(HistoryUnavailable))
                                 };
+                                // Publish observations only from the authoritative fold,
+                                // after every provisional admission replay has been dropped.
+                                let court_observation_guard =
+                                    kaspa_consensus_core::palw_court_observation_v1::CourtObservationGuardV1::enter(current);
                                 match tokenizer_registration_v1::with_prefix_scope_v1(tokenizer_prefix.as_ref(), || {
                                     kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
                                         state,

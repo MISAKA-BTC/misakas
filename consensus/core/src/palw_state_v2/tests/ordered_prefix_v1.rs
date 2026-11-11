@@ -321,3 +321,64 @@ fn ordered_retries_rebuild_pass_local_extras_without_resetting_budget() {
     assert_eq!(budget.remaining_v1(), PalwOrderedReplayLimitsV1 { passes: 0, candidate_visits: 0 });
     assert!(parent.classes.is_empty());
 }
+
+#[test]
+fn physical_replay_visits_omitted_events_at_the_actual_prefix() {
+    use PalwOrderedPhysicalKindV3::{Batch, OmittedBatch, OmittedOrdinary, Ordinary};
+    let p = params();
+    let parent = PalwChainStateV2::genesis();
+    let extras = PalwTransitionExtrasV1::default();
+    let objects = [registration(h64(1), 1000, None)];
+    let events = [
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: None, kind: OmittedOrdinary },
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(1), kind: OmittedBatch },
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(2), kind: Ordinary },
+        PalwOrderedPhysicalEventV3 { accepted_ordinal: Some(3), kind: OmittedOrdinary },
+    ];
+    let run = |events: &[PalwOrderedPhysicalEventV3], visits| {
+        let mut budget = PalwOrderedReplayBudgetV1::new_v1(
+            &parent,
+            &p,
+            ctx(1, 10, 1),
+            replay_rules(),
+            PalwOrderedReplayLimitsV1 { passes: 1, candidate_visits: visits },
+        )
+        .unwrap();
+        let mut seen = Vec::new();
+        let result = palw_v2_replay_accepted_prefix_with_physical_checks_v3(
+            &mut budget,
+            &objects,
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            &extras,
+            events,
+            &mut |event, index, state| {
+                seen.push((event, index, state.class(&h64(1)).is_some()));
+                Ok::<_, std::convert::Infallible>(())
+            },
+            &mut |_, _, _, _| Ok(()),
+        );
+        (seen, result)
+    };
+    let (seen, success) = run(&events, 4);
+    assert!(success.is_ok());
+    assert_eq!(seen, [(Some(0), 0, false), (Some(1), 0, false), (Some(2), 0, false), (Some(3), 1, true), (None, 1, true)]);
+    let (seen, refused) = run(&events, 3);
+    assert!(seen.is_empty());
+    assert!(matches!(
+        refused,
+        Err(PalwOrderedCandidateFailureV2::Native(PalwOrderedReplayFailureV1 {
+            location: PalwOrderedReplayLocationV1::Budget,
+            error: PalwStateV2Error::NativeResource(_),
+        }))
+    ));
+    let mut backward = events;
+    backward.swap(1, 2);
+    let (seen, refused) = run(&backward, 4);
+    assert!(seen.is_empty());
+    assert!(refused.is_err());
+    let mut missing = events;
+    missing[2].kind = Batch;
+    assert!(run(&missing, 4).1.is_err());
+}
