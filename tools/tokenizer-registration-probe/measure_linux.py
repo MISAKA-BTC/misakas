@@ -40,7 +40,7 @@ def main():
     parser.add_argument("output", type=Path)
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--core-source-commit", help="Core revision when reusing an identified release library")
-    parser.add_argument("--mode", choices=("parser", "native", "native-multipass", "scanner"), default="parser")
+    parser.add_argument("--mode", choices=("parser", "native", "native-multipass", "native-candidate", "scanner"), default="parser")
     parser.add_argument("--source-count", type=int, default=780, choices=range(1, 781), metavar="N", help="Scanner sources, 1..780")
     parser.add_argument("--repetitions", type=int, default=5, choices=range(1, 101), metavar="N", help="Repetitions, 1..100")
     args = parser.parse_args()
@@ -57,6 +57,7 @@ def main():
         "runs": [],
         "scope": {"parser": "Parser", "native": "Two-pass native replay of seeded accepted-parent bundles",
                   "native-multipass": "Five-pass native replay of seeded accepted-parent bundles",
+                  "native-candidate": "Modeled 780-carrier native candidate; no DAG or UTXO validation",
                   "scanner": "Source/candidate scanner only; no native fold or parser"}[args.mode]
                  + "; shared host, default affinity, nice 10. Not complete native service qualification.",
         "mode": args.mode,
@@ -65,8 +66,8 @@ def main():
     }
     env = dict(os.environ, LC_ALL="C")
     jobs = [(case, case, ["run", str(cases), case, str(args.repetitions)]) for case in CASES]
-    if args.mode in ("native", "native-multipass"):
-        command = "native-run" if args.mode == "native" else "native-run-multipass"
+    if args.mode in ("native", "native-multipass", "native-candidate"):
+        command = {"native": "native-run", "native-multipass": "native-run-multipass", "native-candidate": "native-run-candidate"}[args.mode]
         jobs = [(case, f"{case}-{iteration}", [command, str(cases / case)])
                 for case in ("actual", "maximum_raw") for iteration in range(args.repetitions)]
     elif args.mode == "scanner":
