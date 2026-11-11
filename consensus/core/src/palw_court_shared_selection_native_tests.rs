@@ -51,8 +51,16 @@ fn shared_selection_family_actual_rules_and_runtime_tiles_recheck(){
         let duty=universe.project_native_v1(Target{position:pos,beat},visits).unwrap();
         let source_universe=crate::palw_court_shared_tir_builder_store_v1::selection_terminal::NativeSelectionSourceUniverseV2::derive_native_v2(
             frame,&source,profile,duty.dependencies_v1().len() as u64).unwrap();
+        let (value,lease)=source_universe.into_parts_v1();
+        assert!(lease.as_ref().is_some_and(|lease| lease.memory_v1()>0),"explicit owner also on ordinary nodes");
+        let source_universe=crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(value,lease);
         assert_eq!(source_universe.len_v2(),universe.len_v1());
         let source_duty=source_universe.project_native_v2(Target{position:pos,beat}).unwrap();
+        let (value,lease)=source_duty.into_parts_v1();
+        let expected=std::mem::size_of::<crate::palw_court_shared_tir_builder_store_v1::selection_terminal::NativeSelectionDutyV1>() as u64
+            +value.dependencies_v1().len() as u64*std::mem::size_of::<crate::palw_court_shared_tir_builder_store_v1::selection_terminal::SelectionDependencyV1>() as u64;
+        assert_eq!(lease.as_ref().map(|lease| lease.memory_v1()),Some(expected));
+        let source_duty=crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(value,lease);
         assert_eq!(*source_duty,*duty,"source-only projection retains every legacy identity and dependency");
         let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
         assert_eq!(duty.dependencies_v1().len() as u64,(tiles+1)*roles);

@@ -198,8 +198,15 @@ impl<'a> NativeSelectionSourceUniverseV2<'a> {
         profile: Hash64,
         maximum_dependencies: u64,
     ) -> Result<NativeRetainedV1<Self>, E<String>> {
-        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(frame_quote::<Self>(frame)?).map_err(E::Resource)?;
+        let lease =
+            crate::palw_native_resource_v1::reserve_native_pending_requests_v1(frame_quote::<Self>(frame)?).map_err(E::Resource)?;
         frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
+        frame
+            .plan_v1()
+            .terms
+            .accepted_daa
+            .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+            .ok_or_else(|| bad("plain Selection original hard deadline overflow"))?;
         let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
         // Only the immutable original's liability pledge supplies the roles.
         let roles = frame.custody_v1().pledge_v1().maximum_custodians;
@@ -225,7 +232,7 @@ impl<'a> NativeSelectionSourceUniverseV2<'a> {
     }
 
     pub(crate) fn project_native_v2(&self, target: SelectionTargetV1) -> Result<NativeRetainedV1<NativeSelectionDutyV1>, E<String>> {
-        self.project_native_reserved_v2(target, crate::palw_native_resource_v1::reserve_native_requests_v1)
+        self.project_native_reserved_v2(target, crate::palw_native_resource_v1::reserve_native_pending_requests_v1)
     }
 
     pub(crate) fn project_native_reserved_v2<F>(
@@ -248,6 +255,9 @@ impl<'a> NativeSelectionSourceUniverseV2<'a> {
         let cap = usize::try_from(count).map_err(|_| resource("plain Selection dependency platform overflow"))?;
         let mut deps = Vec::new();
         deps.try_reserve_exact(cap).map_err(|_| resource("plain Selection dependency allocation"))?;
+        if deps.capacity() != cap {
+            return Err(resource("plain Selection dependency allocator exceeded admitted capacity"));
+        }
         let roles = self.frame.custody_v1().pledge_v1().maximum_custodians;
         for index in 0..count {
             let material = self.shape.material_at_v2(self.source, target.position, target.beat, index).map_err(E::Decode)?;
