@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal' (1715033) panicked at consensus/core/src/palw_tir_public_claim_v1.rs:1195:38:
+fixture requires a real native generic arithmetic quote: Incomplete { source_id: b14abfaad3a4a1df3f17d8dfb793a59a23ca8c7c2b1b3b321301ef695ae1ae8fecdf7d89a9d3f67efe80c11ebae29e7fc62125bf6a87d065dd6148d7e47c7447, missing: [DoorBeyondLiabilityHorizon { required: 17246, allowed: 10000 }] }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5992 filtered out; finished in 0.17s
+

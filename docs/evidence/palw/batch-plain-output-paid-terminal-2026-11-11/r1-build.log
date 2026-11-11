@@ -1,0 +1,52 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling aho-corasick v1.1.3
+   Compiling criterion v0.5.1
+   Compiling regex-automata v0.4.8
+   Compiling regex v1.11.0
+   Compiling vergen v8.3.2
+   Compiling workflow-core-macros v0.18.0
+   Compiling bindgen v0.72.1
+   Compiling workflow-core v0.18.0
+   Compiling workflow-wasm v0.18.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/math)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/wasm/core)
+   Compiling librocksdb-sys v0.17.3+10.4.2
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/notify)
+   Compiling prost-build v0.14.3
+   Compiling tonic-prost-build v0.14.5
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/mining/errors)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/protocol/p2p)
+   Compiling env_logger v0.9.3
+   Compiling bindgen v0.59.2
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/components/consensusmanager)
+   Compiling workflow-perf-monitor v0.0.2
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/client)
+   Compiling workflow-task v0.18.0
+   Compiling workflow-websocket v0.18.0
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/mining)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-rpc-macros v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/macros)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/core)
+   Compiling kaspa-perf-monitor v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/metrics/perf_monitor)
+   Compiling workflow-rpc v0.18.0
+   Compiling rocksdb v0.24.0
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/database)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/indexes/utxoindex)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/components/connectionmanager)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/service)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9m 42s
+  Executable unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-698db0d76a225778)
+  Executable unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_rpc_service-6fa4aa06fc549817)

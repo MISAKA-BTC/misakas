@@ -1,0 +1,15 @@
+
+running 1 test
+
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal' (1720852) panicked at consensus/core/src/palw_batch_plain_output_native_tests_v2.rs:266:64:
+called `Result::unwrap()` on an `Err` value: NativeResource(Unsupported { component: "plain Output rollback", native_type: "kaspa_consensus_core::palw_state_v2::TransitionBuilder<'_>", reason: "candidate prefix has no audited native owner" })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5992 filtered out; finished in 0.44s
+

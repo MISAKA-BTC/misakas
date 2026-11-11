@@ -1,0 +1,34 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/indexes/core)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/mining/errors)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/core)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/evm/core)
+   Compiling misaka-palw-constraint v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/constraint)
+   Compiling misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/core)
+   Compiling misaka-palw-derive v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/derive)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/endpoints)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/remote)
+   Compiling kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/wrpc/client)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/sdk)
+   Compiling misaka-palw-extension v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/extension)
+   Compiling misaka-cli v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/apps/cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 17s
+     Running unittests src/main.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka-69603545b9fc6e7a)
+
+running 3 tests
+test palw_batch::plain_output::tests::plain_output_quote_requires_exact_subject_digest_and_live_slot ... ok
+test palw_batch::plain_output::tests::plain_output_terminal_requires_fault_parent_network_and_exact_send_slot ... ok
+test palw_batch::plain_output::tests::plain_output_full_ids_quote_uses_canonical_range_and_reserved_ordinal ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 284 filtered out; finished in 0.01s
+

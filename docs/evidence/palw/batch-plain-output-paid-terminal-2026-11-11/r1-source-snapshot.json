@@ -1,0 +1,17 @@
+{
+  "baseCommit": "8b61a5ebbd2d96c3a3b29b293a75f6ac6b50e300",
+  "files": {
+    "consensus/core/src/palw_court_shared_material_intake_v1.rs": "d19c41d8ca409feec6388fe82f4206ef47857668dad41660d72ac56b9c3dbcf7",
+    "consensus/core/src/palw_court_shared_material_intake_v1/storage_rent.rs": "6a537da3795b866a4f4f2aecbc2b8641f2f153f0f304564d19943eee890fb2c5",
+    "consensus/core/src/palw_court_shared_tokenizer_native_tests.rs": "266837b8884765d22a646ba0beb9cc9de26cf5aa4fd379d32787c49223bdf1e2",
+    "consensus/core/src/palw_tir_public_claim_v1.rs": "8533df7d74cd5ccc07fc102e75427ea128efd0bd212617e0b18acefb9b7c7d79",
+    "consensus/core/src/palw_user_views_v1.rs": "14ffa2025e7ca539b370b9a359febfd87a7bb7f8f704e50ed6d924e729546ba2",
+    "consensus/src/consensus/mod.rs": "b3e4a01e94bf9d6c25228862380b7f975a117d8565397199e2621701e83289ee",
+    "consensus/src/pipeline/virtual_processor/processor/palw.rs": "aeeae49941f1e6764bd5678d3bbbe3e796ce7b7e4b1f2fa1fc453a38562d1493",
+    "misaka/apps/cli/src/main.rs": "f3157965e0d9d0c3c1bde44a7189809eac376db31e45490f77f963c293e95937",
+    "misaka/apps/cli/src/palw_batch.rs": "30c96f1de3d38b1ba9fe7d081531dbec040539d9179c6b26f5edc5c97fdcd7f8",
+    "misaka/apps/cli/src/palw_batch/plain_output.rs": "b942dceee23c3f30e38e5bc71b28f95a277f51c007419a60dd9cdefb40e8b2b6",
+    "rpc/service/src/service.rs": "45217337883e6dbc7eca3b1adffc7784cc474128d80d271712c4d8984bab3975",
+    "consensus/core/src/palw_batch_plain_output_native_tests_v2.rs": "c612f63aa3a19960bfd16935366205018c4cf30f74cc0e54a003582f68f1e8ef"
+  }
+}

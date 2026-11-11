@@ -1,0 +1,19 @@
+{
+  "baseCommit": "adbbc5e2bd2b203aef1b20ae0af4bdedc25b2152",
+  "files": {
+    "consensus/core/src/palw_batch_court_v1/carriage.rs": "54bafa11a72014325c841ba4af33f6430f318137183d8496bfbb4680635b8688",
+    "consensus/core/src/palw_court_shared_material_intake_v1.rs": "8b0972c46218d3a188d7da27bea3ca1bc209ea7dfffad168eedaac8d98f4a0a9",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/plain_output.rs": "d14ca6969b0fe43934c577358706855608ece077907cc31e9d97815d3a6084fc",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/plain_output/quote.rs": "4e76864e17e43cff9cd9138121d3af07d153c368491335f49e51e4d74a40837f",
+    "consensus/core/src/palw_court_shared_tokenizer_native_tests.rs": "266837b8884765d22a646ba0beb9cc9de26cf5aa4fd379d32787c49223bdf1e2",
+    "consensus/core/src/palw_tir_public_claim_v1.rs": "16e72252216f47847fbf3e6f54358be0af58f3155c311886b14a4d7c332f4881",
+    "consensus/core/src/palw_user_views_v1.rs": "875850ab0cd761f0bfaa8d9c73ad72f5fc647ca1d90ee715d95887e3805c5721",
+    "consensus/src/consensus/mod.rs": "d3efbf2a37e878d39e86b40fd2a1fe764269ec9d4a453a23d7d997063fc040aa",
+    "consensus/src/pipeline/virtual_processor/processor/palw.rs": "4240eb379c9ffd20b41d178953fce62353ec0bb1d6909263d2edcf49237dc616",
+    "misaka/apps/cli/src/main.rs": "8c1a56bd05919a25d1fa620ef4cef847d418d0c5c0302dfc928ed5619f66129c",
+    "misaka/apps/cli/src/palw_batch.rs": "b6cb332359640cd8964f10e03a85a41dd2d9635fdda4b3a2db911ee762555c1d",
+    "misaka/apps/cli/src/palw_batch/plain_output.rs": "fb0e1805a136ccb0e16e251a739451e72cfcf55f038b23bd85217d71a997a165",
+    "rpc/service/src/service.rs": "7f3d22107003b1e63d7124e05747a7d5d75aa47fc91b1cb0b5d17bcf1ce892c5",
+    "consensus/core/src/palw_batch_plain_output_native_tests_v2.rs": "763d8cbeb5512c44ef333f858f0ff27a29a363af39f721a6fa31ec52b55c92fb"
+  }
+}

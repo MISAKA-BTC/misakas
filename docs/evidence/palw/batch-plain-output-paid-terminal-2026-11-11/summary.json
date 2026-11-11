@@ -1,0 +1,85 @@
+{
+  "schema": "palw-plain-output-paid-terminal-regression-v1",
+  "sourceCommit": "557edb41194922a43816c81b995fe5e3d197a303",
+  "fullIdsQuoteCommit": "5a756864f",
+  "filesSha256": {
+    "consensus/core/src/palw_batch_court_v1/carriage.rs": "54bafa11a72014325c841ba4af33f6430f318137183d8496bfbb4680635b8688",
+    "consensus/core/src/palw_batch_court_v1/plain_output_transport.rs": "8a4a2fda57d9e16b9150e57ff2c78bf1a001a4d9d656d874fdbf55699dc88939",
+    "consensus/core/src/palw_batch_plain_output_native_tests_v2.rs": "0c556531af8aac44500309d09ff88e14ff29f004c43e684c425640db321a6fde",
+    "consensus/core/src/palw_court_shared_material_intake_v1.rs": "8b0972c46218d3a188d7da27bea3ca1bc209ea7dfffad168eedaac8d98f4a0a9",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/plain_output.rs": "d14ca6969b0fe43934c577358706855608ece077907cc31e9d97815d3a6084fc",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/plain_output/quote.rs": "4e76864e17e43cff9cd9138121d3af07d153c368491335f49e51e4d74a40837f",
+    "consensus/core/src/palw_court_shared_tokenizer_native_tests.rs": "266837b8884765d22a646ba0beb9cc9de26cf5aa4fd379d32787c49223bdf1e2",
+    "consensus/core/src/palw_native_resource_v1/transition.rs": "fd1d359506130e8f802c9447d6ad3926e0c7fbc13ef817d8374fc713e80a1a45",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "ac6a88b2d12e35cb2fcde8ccf05135c2a781806a056e49943bcf594bf56e6b2e",
+    "consensus/core/src/palw_tir_public_claim_v1.rs": "16e72252216f47847fbf3e6f54358be0af58f3155c311886b14a4d7c332f4881",
+    "consensus/core/src/palw_user_views_v1.rs": "875850ab0cd761f0bfaa8d9c73ad72f5fc647ca1d90ee715d95887e3805c5721",
+    "consensus/src/consensus/mod.rs": "d3efbf2a37e878d39e86b40fd2a1fe764269ec9d4a453a23d7d997063fc040aa",
+    "consensus/src/pipeline/virtual_processor/processor/palw.rs": "e8b9968c5a3dd14329c21d721322cbaeb8ea7e91a4233e387c221efa040b739b",
+    "misaka/apps/cli/src/main.rs": "8c1a56bd05919a25d1fa620ef4cef847d418d0c5c0302dfc928ed5619f66129c",
+    "misaka/apps/cli/src/palw_batch.rs": "b6cb332359640cd8964f10e03a85a41dd2d9635fdda4b3a2db911ee762555c1d",
+    "misaka/apps/cli/src/palw_batch/plain_output.rs": "fb0e1805a136ccb0e16e251a739451e72cfcf55f038b23bd85217d71a997a165",
+    "rpc/service/src/service.rs": "7f3d22107003b1e63d7124e05747a7d5d75aa47fc91b1cb0b5d17bcf1ce892c5"
+  },
+  "testsPassed": 9,
+  "testsFailedFinal": 0,
+  "testCounts": {
+    "core": 5,
+    "cli": 3,
+    "rpc": 1
+  },
+  "isolatedCoreChild": "The one paid fault test also executes once in an isolated default-capability child; it is counted once in the five parent tests.",
+  "checks": {
+    "node": "PASS",
+    "rpc": "PASS",
+    "cli": "PASS",
+    "existingWarning": "unused palw_derived::compare"
+  },
+  "binarySha256": {
+    "kaspa_consensus_core-698db0d76a225778": "2cb76e2d6a606d4630c96dca01abc260b9c4965cb43cc03983b8dca6d54d78b8",
+    "kaspa_rpc_service-6fa4aa06fc549817": "55a3d5bc741796a93ae33291a122c9478e59619da3fd8fd91a07dba3400ce80e",
+    "misaka-69603545b9fc6e7a": "e3679576069d1d9909b2df2e12314207ae38fa5297866a53e66ca7113bba009f"
+  },
+  "cliBuildScope": "CLI binary was built before the R3 internal prefix/workspace lease fix; its CLI, SDK and quote operand code is unchanged. Final combined check compiles all three packages after the fix.",
+  "profile": "macOS dev/test, consensus-core opt-level=0, incremental=false, jobs=2, worker stack 64 MiB",
+  "initialFailures": [
+    "R1 fixture legacy sequential quote exceeded its test ceiling before BCT2 execution; fixture uses the existing long original clock and explicit signed history pledge/semantic bundle. BCT2 own hard window unchanged.",
+    "R2 paid Terminal failed because optional-capability value_requests returned zero and no audited prefix owner on ordinary process. R3 uses always-typed sizing and explicit workspace lease.",
+    "FullIds Node refactor shadowed the query target with parent hash; corrected identifier and final Node check passed."
+  ],
+  "localPressureClassification": "Typed prefix/workspace excess remains NativeResource; no semantic no-op or invalid-block classification.",
+  "publicDeployment": false,
+  "publicSubmission": false,
+  "publicAcceptance": false,
+  "mainPush": false,
+  "limitations": [
+    "Initial original/class/custody and native service graph are local fixture inputs; original public quote/admission not exercised.",
+    "Validated UTXO handoff is supplied by the fixture; real transaction script/P2P/DAG processing is not in this core test.",
+    "Fault is a false Output root fixed before constructing the original; expected terminal is CourtFraud, not a normal claim Final.",
+    "No live legacy court archive is present in this fixture. Nested archive checkpoint handling and claim/session/deadline indices are the next work.",
+    "Complete Selection/DA planner/runtime and post-admission global-growth bounds remain incomplete.",
+    "No public profile numeric values or activation were adopted by these results."
+  ],
+  "logSha256": {
+    "r1-build.log": "6632f090fb7dabb24d1f2c6edacfa72f8deb1ee9c701bcc16987f56273a7b2e2",
+    "r1-fault.log": "ffed806ea324eee9524d9afe1cf138fe3e718b645f088b92fe45f0323a0d69aa",
+    "r2-build.log": "34dad53bded482eeac233138a5256fb0b73931334b94839e5c41667a74d8eb17",
+    "r2-fault.log": "27b3755f01abf5510a7c5487c7e3d8eedcbede2c1eef26ec9aff0f8014b18705",
+    "r3-build.log": "6cb1c8a91d9ef8ae5cc82cb8dda1a2b742f3f072e2a180415ca12d597b3f291f",
+    "r3-core-tests.log": "2b38fb7ce84e86842f1c1a2d83441ff59bee0220720bc29fb37a007c5f5922cb",
+    "r3-rpc-test.log": "871619d614a010bef4667dfc4206829853c0e9f84910c3241f9e221cfb5fa847",
+    "cli-tests.log": "017883185073ab36b35222aab5af4360c48522a97b638bcff7a53bb75e07a9e1",
+    "initial-node-check.log": "df24cbfac4c9d1e7be60acc18db36effc9524bf0dd32e234a0a7e54dd8893c17",
+    "final-node-check.log": "c9e6c2146e9841589eb8fe4e4915643c6e536dd1e32ec8752539b25a5121a50a",
+    "r1-source-snapshot.json": "5bb79f82274673ed17300cea73cd7e5e58312a64ab34c326dceca2daea78d10d",
+    "r2-source-snapshot.json": "ede3a7e4802f17de9013904a116a029ad9cd85677d3516d3971ded6b6017f6b0"
+  },
+  "documentationChecks": {
+    "status": "known existing failures unchanged",
+    "newIssueOccurrences": 930,
+    "missingFileOccurrences": 971,
+    "missingHeadingOccurrences": 2,
+    "rfcHistoricalFailures": 7,
+    "adrHistoricalFailures": 89
+  }
+}
