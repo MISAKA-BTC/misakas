@@ -1181,6 +1181,7 @@ pub mod palw_tir_funded_original_envelope_v1;
 pub mod palw_tir_public_carriage_v1;
 pub mod palw_tir_public_claim_v1;
 pub mod palw_tir_public_custody_v1;
+pub mod palw_tir_protected_fp_envelope_v2;
 pub mod palw_tir_public_fp_envelope_v1;
 
 pub mod palw_native_state_anchor_v39;

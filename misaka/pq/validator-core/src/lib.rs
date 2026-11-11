@@ -10,6 +10,8 @@
 //! and signing path. No consensus surface — this is a node-local helper crate.
 
 mod palw_fp_answer_accounting;
+mod protected_original_v3;
+pub use protected_original_v3::build_protected_original_carrier_v3_with;
 /// ADR-0079 Decision 8 / SA-2: the ONE message shape a free-prompt signature may cover, and the
 /// only place a `PalwFpCommitmentV3` claim id is allowed to come from. Both signing forms — the
 /// rail's local seed and the signer sidecar's `--print-claim` digest — pass through it.
@@ -2903,6 +2905,7 @@ pub fn select_funding(
 
 #[cfg(test)]
 mod tests {
+    include!("protected_original_v3_tests.rs");
     use super::*;
     use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS};
     use kaspa_consensus_core::tx::ScriptPublicKey;

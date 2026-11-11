@@ -3508,6 +3508,21 @@ impl VirtualStateProcessor {
                     &tx.payload
                 };
                 if let Some(pairing) = funded_pairings.remove(&tx.id()) {
+                    if pairing.envelope().is_protected_v2() {
+                        // Keep the actual funded carrier alongside its exact
+                        // signed FP decoder view. The protected branch has no
+                        // legacy custody pledge or history pledge to fabricate.
+                        match pairing.envelope().protected_original_v2() {
+                            Ok(envelope) => {
+                                let mut view = tx.clone();
+                                view.payload = envelope.original_payload_v1().to_vec();
+                                funded_carriers.insert(tx.id(), pairing);
+                                history_views.push(view);
+                            }
+                            Err(why) => info!("[palw-funded-original] protected carrier {} has no literal original: {why}", tx.id()),
+                        }
+                        continue;
+                    }
                     // The pairing already decoded the literal TFP1 and checked the carrier's own funding output.
                     match pairing.envelope().original_v1() {
                         Ok(envelope) => {
@@ -3679,6 +3694,21 @@ impl VirtualStateProcessor {
         );
         let mut extraction = extraction;
         extraction.objects.retain(|carried| {
+            if let Some(pairing) = funded_carriers.get(&carried.carrier)
+                && pairing.envelope().is_protected_v2()
+            {
+                // The ordinary extractor verified the FP signature above.
+                // Bind every extracted field to this same literal carrier;
+                // admission still verifies its companion, payer and policy.
+                if let Err(why) = pairing
+                    .envelope()
+                    .protected_original_v2()
+                    .and_then(|envelope| envelope.matches_object_v1(&carried.object))
+                {
+                    info!("[palw-funded-original] protected carrier {} object refused: {why}", carried.carrier);
+                    return false;
+                }
+            }
             let Some(envelope) = tir_public_carriers.get(&carried.carrier) else { return true };
             if let Err(why) =
                 envelope.pledge.authenticate_transaction_local_v1(&carried.object, Self::verify_mldsa87_with_context_bool)
@@ -3922,7 +3952,7 @@ impl VirtualStateProcessor {
                     .unwrap_or_default();
                 Some(Ok(PalwCarriedObjectV1 {
                     native_carrier: Some(carried.carrier),
-                    carrier_fee: fee_of(carried.carrier, tir_public_carriers.contains_key(&carried.carrier)),
+                    carrier_fee: fee_of(carried.carrier, tir_public_carriers.contains_key(&carried.carrier) || funded_carriers.contains_key(&carried.carrier)),
                     fp_answer,
                     prefix_dependency: prefix_envelopes.remove(&carried.carrier),
                     history_pledge,

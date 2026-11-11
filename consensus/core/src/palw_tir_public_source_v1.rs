@@ -228,7 +228,7 @@ fn hash(domain: &[u8], bytes: &[u8]) -> Hash64 {
 }
 /// Exact existing Source identity, without copying the serialized header.
 /// Identity alone does not validate registration, geometry or availability.
-pub(crate) fn public_source_header_id_v1(
+pub fn public_source_header_id_v1(
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
 ) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/tir-public-source/v1", header)

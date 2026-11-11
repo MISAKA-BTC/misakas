@@ -1,12 +1,14 @@
 //! TFO3 carries a literal existing funded original, the exact public prompt
 //! text and a fixed PublicOriginal companion. Version 2 also carries the
-//! manifest and bounded HF descriptor. This codec checks framing and resource
+//! manifest and bounded HF descriptor. Version 3 uses a dedicated TFP2 body
+//! inside funded-original v2, with the same required material suffix. This codec checks framing and resource
 //! shape. The accepting fold authenticates the actual carrier and its material.
 
 use crate::{
     palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1},
     palw_tir_funded_original_envelope_v1::{
         PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1 as TFO1, PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1, PalwTirFundedOriginalEnvelopeV1,
+        scan_protected_funded_body_v2,
     },
     palw_tir_funded_original_envelope_v2::{MAGIC as TFO2, PalwTirFundedOriginalEnvelopeV2},
 };
@@ -18,6 +20,7 @@ use misaka_palw_positive_contract::{
 pub const MAGIC: &[u8; 4] = b"TFO3";
 const VERSION_V1: u16 = 1;
 const VERSION_WITH_MANIFEST_V2: u16 = 2;
+const PROTECTED_WIRE_VERSION: u16 = 3;
 const HEADER_BYTES: usize = MAGIC.len() + 2 + 4 + 4;
 const COMPANION_BYTES: usize = SignedPublicOriginalV1::WIRE_BYTES;
 const MANIFEST_BYTES: usize = ManifestV1::WIRE_BYTES as usize;
@@ -47,6 +50,7 @@ pub struct PalwTirFundedOriginalEnvelopeV3<'a> {
     companion: &'a [u8; COMPANION_BYTES],
     manifest_material: Option<ManifestMaterialV2<'a>>,
     inner_shape: NativeWireShapeV1,
+    protected: bool,
 }
 
 impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
@@ -61,7 +65,7 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
             return Err("TFO3 exceeds its total transport bound or has wrong magic".into());
         }
         let version = read_field::<2>(bytes, MAGIC.len()).map(u16::from_le_bytes)?;
-        if !matches!(version, VERSION_V1 | VERSION_WITH_MANIFEST_V2) {
+        if !matches!(version, VERSION_V1 | VERSION_WITH_MANIFEST_V2 | PROTECTED_WIRE_VERSION) {
             return Err("unknown TFO3 version".into());
         }
         let inner_bytes = read_field::<4>(bytes, MAGIC.len() + 2).map(u32::from_le_bytes)? as usize;
@@ -86,11 +90,15 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         if descriptor.len() != descriptor_len {
             return Err("TFO3 HF descriptor does not reach exact EOF".into());
         }
-        Self::from_parts_with_manifest_v2(funded, prompt, companion, manifest, descriptor)
+        if version == PROTECTED_WIRE_VERSION {
+            Self::from_parts_protected_v3(funded, prompt, companion, manifest, descriptor)
+        } else {
+            Self::from_parts_with_manifest_v2(funded, prompt, companion, manifest, descriptor)
+        }
     }
 
     pub fn from_parts_v3(funded: &'a [u8], prompt: &'a [u8], companion: &'a [u8; COMPANION_BYTES]) -> Result<Self, String> {
-        Self::from_parts(funded, prompt, companion, None)
+        Self::from_parts(funded, prompt, companion, None, false)
     }
 
     pub fn from_parts_with_manifest_v2(
@@ -100,7 +108,17 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         manifest: &'a [u8; MANIFEST_BYTES],
         hf_descriptor: &'a [u8],
     ) -> Result<Self, String> {
-        Self::from_parts(funded, prompt, companion, Some(ManifestMaterialV2 { manifest, hf_descriptor }))
+        Self::from_parts(funded, prompt, companion, Some(ManifestMaterialV2 { manifest, hf_descriptor }), false)
+    }
+
+    pub fn from_parts_protected_v3(
+        funded: &'a [u8],
+        prompt: &'a [u8],
+        companion: &'a [u8; COMPANION_BYTES],
+        manifest: &'a [u8; MANIFEST_BYTES],
+        hf_descriptor: &'a [u8],
+    ) -> Result<Self, String> {
+        Self::from_parts(funded, prompt, companion, Some(ManifestMaterialV2 { manifest, hf_descriptor }), true)
     }
 
     fn from_parts(
@@ -108,11 +126,12 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         prompt: &'a [u8],
         companion: &'a [u8; COMPANION_BYTES],
         manifest_material: Option<ManifestMaterialV2<'a>>,
+        protected: bool,
     ) -> Result<Self, String> {
         encoded_len_v3(funded.len(), prompt.len(), manifest_material)?;
         let prompt = std::str::from_utf8(prompt).map_err(|_| "TFO3 prompt is not UTF-8")?;
-        let inner_shape = scan_funded_v3(funded)?;
-        Ok(Self { funded, prompt, companion, manifest_material, inner_shape })
+        let inner_shape = if protected { scan_protected_funded_v3(funded)? } else { scan_funded_v3(funded)? };
+        Ok(Self { funded, prompt, companion, manifest_material, inner_shape, protected })
     }
 
     pub fn encode_v3(&self) -> Result<Vec<u8>, String> {
@@ -122,7 +141,12 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(total).map_err(|_| "TFO3 output allocation failed")?;
         bytes.extend_from_slice(MAGIC);
-        let version = if self.manifest_material.is_some() { VERSION_WITH_MANIFEST_V2 } else { VERSION_V1 };
+        let version = match (self.protected, self.manifest_material.is_some()) {
+            (true, true) => PROTECTED_WIRE_VERSION,
+            (false, true) => VERSION_WITH_MANIFEST_V2,
+            (false, false) => VERSION_V1,
+            (true, false) => return Err("protected TFO3 lacks mandatory material".into()),
+        };
         bytes.extend_from_slice(&version.to_le_bytes());
         bytes.extend_from_slice(&inner_bytes.to_le_bytes());
         bytes.extend_from_slice(&prompt_bytes.to_le_bytes());
@@ -136,6 +160,18 @@ impl<'a> PalwTirFundedOriginalEnvelopeV3<'a> {
             bytes.extend_from_slice(material.hf_descriptor);
         }
         Ok(bytes)
+    }
+
+    pub fn is_protected_v3(&self) -> bool {
+        self.protected
+    }
+
+    /// This owned decode is selected only from the bounded exact outer view.
+    pub(crate) fn decode_protected_base_v3(&self) -> Result<PalwTirFundedOriginalEnvelopeV1, String> {
+        if !self.is_protected_v3() {
+            return Err("protected TFO3 wire version required".into());
+        }
+        PalwTirFundedOriginalEnvelopeV1::decode_protected_inner_v2(self.funded)
     }
 
     pub fn funded_original_v3(&self) -> &'a [u8] {
@@ -199,6 +235,16 @@ fn encoded_len_v3(funded: usize, prompt: usize, manifest_material: Option<Manife
         .and_then(|bytes| bytes.checked_add(suffix_bytes))
         .filter(|bytes| *bytes <= MAX_BYTES)
         .ok_or_else(|| "TFO3 exceeds the existing funded original transport bound".into())
+}
+
+fn scan_protected_funded_v3(funded: &[u8]) -> Result<NativeWireShapeV1, String> {
+    let body = funded.strip_prefix(TFO1).ok_or("protected TFO3 must carry its direct TFO1 v2 body")?;
+    let mut reader = NativeWireReaderV1::new(body, body.len() as u64);
+    let shape = scan_protected_funded_body_v2(&mut reader).map_err(|why| why.to_string())?;
+    if reader.remaining() != 0 {
+        return Err("protected funded original has trailing bytes".into());
+    }
+    Ok(shape)
 }
 
 fn scan_funded_v3(funded: &[u8]) -> Result<NativeWireShapeV1, String> {
@@ -474,6 +520,218 @@ mod tests {
         assert_eq!(unchecked(&over_bound).len(), MAX_BYTES + 1);
         assert!(PalwTirFundedOriginalEnvelopeV3::from_parts_v3(&over_bound, PROMPT.as_bytes(), &[0; COMPANION_BYTES]).is_err());
         assert!(PalwTirFundedOriginalEnvelopeV3::decode_v3(&unchecked(&over_bound)).is_err());
+    }
+
+    #[test]
+    fn tfo3_protected_wire_pins_signed_fp_header_funding_and_literal_carrier() {
+        use crate::{
+            mldsa87_primitives::{mldsa87_key_id, p2pkh_mldsa87_spk},
+            palw_court_original_escrow_v1::COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,
+            palw_fp_execution_v3::palw_fp_job_pin_v1,
+            palw_freeprompt_v3::{PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3},
+            palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1,
+            palw_tir_funded_original_envelope_v1::decode_funded_original_carrier_v3,
+            palw_tir_protected_fp_envelope_v2::PalwTirProtectedFpEnvelopeV2,
+            palw_tir_public_claim_v1::palw_tir_public_signed_material_frame_fixture_v1,
+            tx::{PopulatedTransaction, UtxoEntry, ValidatedTransaction},
+        };
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+        use misaka_palw_positive_contract::{
+            identity::{ChainScope, Digest, principal},
+            public_one_honest::{ORIGINAL_SIGN_CONTEXT, OriginalCommit},
+            rows::{AcceptedOrigin, NativeHash64},
+        };
+
+        let h = Hash64::from_u64_word;
+        let executor = mldsa::generate_key_pair([0x66; 32]);
+        let payer = mldsa::generate_key_pair([0x67; 32]);
+        let executor_key = *executor.verification_key.as_ref();
+        let payer_key = payer.verification_key.as_ref().to_vec();
+        let fixture = palw_tir_public_signed_material_frame_fixture_v1(&executor_key);
+        let header = fixture.frame.header_v1();
+        let job = &header.job_context;
+        let mut fp = PalwFpCommitmentTxPayloadV3 {
+            version: PALW_FP_V3_VERSION,
+            commitment: fixture.frame.original_v1().clone(),
+            prompt_token_ids: fixture.execution.prompt,
+            signature: Vec::new(),
+        };
+        let claim = fp.claim_id();
+        fp.signature = mldsa::sign(&executor.signing_key, claim.as_byte_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, [0x68; 32])
+            .unwrap()
+            .as_ref()
+            .to_vec();
+        let literal_fp = borsh::to_vec(&fp).unwrap();
+        let protected = PalwTirProtectedFpEnvelopeV2::new_v1(literal_fp.clone(), header.clone()).unwrap();
+        let protected_wire = protected.encode_v1().unwrap();
+        let mut bad_header = header.clone();
+        bad_header.step_merkle_root = h(99);
+        assert!(PalwTirProtectedFpEnvelopeV2::new_v1(literal_fp.clone(), bad_header).is_err());
+        for cut in [0, 4, 6, 10, protected_wire.len() - 1] {
+            assert!(PalwTirProtectedFpEnvelopeV2::decode_v1(&protected_wire[..cut]).is_err());
+        }
+        let mut oversized_fp = protected_wire.clone();
+        oversized_fp[6..10].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(PalwTirProtectedFpEnvelopeV2::decode_v1(&oversized_fp).is_err());
+
+        let legacy = funded_original_transport_fixture_v1();
+        let mut consent = legacy.funding.clone();
+        consent.terms.claim = claim;
+        consent.terms.job_identity = palw_fp_job_pin_v1(&fp.commitment);
+        consent.terms.execution_root = fp.commitment.execution_root;
+        consent.terms.source_id = crate::palw_tir_public_source_v1::public_source_header_id_v1(header).unwrap();
+        consent.terms.network_domain = fp.commitment.job.network_domain;
+        consent.terms.payer_key_id = mldsa87_key_id(&payer_key);
+        consent.terms.refund_payload = kaspa_hashes::blake2b_512_address_payload(&payer_key);
+        consent.signature = mldsa::sign(
+            &payer.signing_key,
+            consent.terms.id_v1().as_byte_slice(),
+            COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1,
+            [0x69; 32],
+        )
+        .unwrap()
+        .as_ref()
+        .to_vec();
+        let mut changed_consent = consent.clone();
+        changed_consent.terms.source_id = h(99);
+        assert!(PalwTirFundedOriginalEnvelopeV1::new_protected_v2(protected.clone(), changed_consent, payer_key.clone()).is_err());
+        let base = PalwTirFundedOriginalEnvelopeV1::new_protected_v2(protected, consent, payer_key.clone()).unwrap();
+        let inner = base.encode_protected_inner_v2().unwrap();
+        assert!(borsh::to_vec(&base).is_err());
+        assert!(base.encode_v1().is_err());
+        assert!(base.original_v1().is_err());
+        assert!(PalwTirFundedOriginalEnvelopeV1::decode_v1(&inner).is_err());
+        assert!(decode_funded_original_carrier_v3(&inner).is_err());
+
+        // Actual executor and payer signatures over a local transport
+        // fixture. Manifest/descriptor bodies are framing placeholders.
+        let d = Digest([0x70; 64]);
+        let original = OriginalCommit {
+            scope: ChainScope { network: Digest(fp.commitment.job.network_domain.as_bytes()), ruleset: d, branch: d },
+            job: Digest(job.job_id.as_bytes()),
+            execution: Digest(job.context_hash().as_bytes()),
+            miner: principal(&executor_key),
+            registered_class: Digest(fp.commitment.job.class_id.as_bytes()),
+            artifact: Digest(header.artifact_root.as_bytes()),
+            program: Digest(fixture.record.graph_ir_root.as_bytes()),
+            prompt: d,
+            input_tokens: Digest(job.prompt_token_ids_hash.as_bytes()),
+            tokenizer: Digest(job.tokenizer_id.as_bytes()),
+            execution_rules: Digest(job.cu_ruleset_id.as_bytes()),
+            generation_seed: job.execution_seed,
+            initial_state: d,
+            dependencies: d,
+            prefill: job.declared_prefill_tokens,
+            decode: job.exact_decode_tokens,
+            max_context: job.max_context_tokens,
+            output: Digest(fp.commitment.output_root.as_bytes()),
+            trace_root: Digest(fp.commitment.execution_root.as_bytes()),
+            manifest_root: d,
+            service_contract: d,
+        };
+        let signed = SignedPublicOriginalV1 {
+            signature: *mldsa::sign(&executor.signing_key, &original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0x71; 32]).unwrap().as_ref(),
+            original,
+            key: executor_key,
+        };
+        let companion: [u8; COMPANION_BYTES] = borsh::to_vec(&signed).unwrap().try_into().unwrap();
+        let manifest = [1; MANIFEST_BYTES];
+        let descriptor = [2; 3];
+        let wire =
+            PalwTirFundedOriginalEnvelopeV3::from_parts_protected_v3(&inner, PROMPT.as_bytes(), &companion, &manifest, &descriptor)
+                .unwrap()
+                .encode_v3()
+                .unwrap();
+        let view = PalwTirFundedOriginalEnvelopeV3::decode_v3(&wire).unwrap();
+        assert!(view.is_protected_v3());
+        assert_eq!(view.encode_v3().unwrap(), wire);
+        assert_eq!(view.funded_original_v3(), inner);
+        assert_eq!(view.companion_bytes_v3(), &companion);
+        assert_eq!(view.manifest_bytes_v2(), Some(&manifest));
+        assert_eq!(view.hf_descriptor_bytes_v2(), Some(descriptor.as_slice()));
+        assert!(view.inner_native_shape_v3().heap > literal_fp.len() as u64);
+        let suffix = HEADER_BYTES + inner.len() + PROMPT.len() + COMPANION_BYTES;
+        for cut in [suffix, suffix + MANIFEST_BYTES, wire.len() - 1] {
+            assert!(PalwTirFundedOriginalEnvelopeV3::decode_v3(&wire[..cut]).is_err());
+        }
+        for downgrade in [VERSION_V1, VERSION_WITH_MANIFEST_V2] {
+            let mut changed = wire.clone();
+            changed[4..6].copy_from_slice(&downgrade.to_le_bytes());
+            if downgrade == VERSION_V1 {
+                changed.truncate(HEADER_BYTES + inner.len() + PROMPT.len() + COMPANION_BYTES);
+            }
+            assert!(PalwTirFundedOriginalEnvelopeV3::decode_v3(&changed).is_err());
+        }
+        for old_inner in [legacy.encode_v1().unwrap(), family(&legacy).encode_v2().unwrap()] {
+            assert!(
+                PalwTirFundedOriginalEnvelopeV3::from_parts_protected_v3(
+                    &old_inner,
+                    PROMPT.as_bytes(),
+                    &companion,
+                    &manifest,
+                    &descriptor
+                )
+                .is_err()
+            );
+        }
+        let mut nested_family = family(&legacy);
+        nested_family.funded_original = inner.clone();
+        let mut malformed_family = TFO2.to_vec();
+        malformed_family.extend(borsh::to_vec(&nested_family).unwrap());
+        assert!(decode_funded_original_carrier_v3(&malformed_family).is_err());
+
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(TransactionOutpoint::new(h(99), 0), vec![], 0, 0)],
+            vec![
+                TransactionOutput::new(1, ScriptPublicKey::default()),
+                TransactionOutput::new(1000, p2pkh_mldsa87_spk(&base.funding.terms.refund_payload.as_bytes())),
+            ],
+            0,
+            crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+            0,
+            wire.clone(),
+        );
+        let mut paired = palw_funded_original_pairing_payload_v1(&tx, &wire).unwrap();
+        assert_eq!(paired.carrier(), &tx);
+        assert_eq!(paired.claim(), claim);
+        assert_eq!(paired.outpoint(), TransactionOutpoint::new(tx.id(), 1));
+        assert_eq!(paired.envelope().original_header_v2().unwrap(), *header);
+        assert_eq!(paired.envelope().protected_original_v2().unwrap().original_payload_v1(), literal_fp);
+        let recovered = paired.envelope().original_fp_v2().unwrap();
+        assert_eq!(recovered, fp);
+        recovered.validate_signature_v3(crate::palw_attempt_material_v3::verify_ready_signature_v3).unwrap();
+        paired.envelope().funding.verify_signature_v1(&payer_key).unwrap();
+        let recovered_companion = view.companion_v3().unwrap();
+        recovered_companion.original.authenticate(&recovered_companion.key, &recovered_companion.signature).unwrap();
+        assert_eq!(paired.public_companion_v3(), Some(companion.as_slice()));
+        assert_eq!(paired.envelope().legacy_declared_rent_sompi_v2().unwrap(), None);
+
+        // Exercise the actual populated fee/identity boundary. This local
+        // fixture supplies its entries, so it makes no node admission claim.
+        let populated = PopulatedTransaction::new(&tx, vec![UtxoEntry::new(1011, ScriptPublicKey::default(), 1, false)]);
+        let (_, fee) = base.inspect_populated_carrier_v1(&populated).unwrap();
+        assert_eq!(fee.actual_fee_v1(), 10);
+        let validated = ValidatedTransaction::new(populated, 10);
+        let seed = ValidatedTfp1OriginalInputsV1::prepare_v1(&validated).unwrap().unwrap();
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64(h(80).as_bytes()),
+            carrier_block: NativeHash64(h(81).as_bytes()),
+            carrier_transaction: NativeHash64(tx.id().as_bytes()),
+            accepted_tx_ordinal: 7,
+            event_ordinal: 0,
+            accepted_daa: 100,
+            accepted_blue_score: 101,
+        };
+        paired.bind_history_inputs_v1(seed, origin, h(79)).unwrap();
+        assert_eq!(paired.history_inputs_v1().unwrap().origin_v1(), origin);
+        let mut altered = wire.clone();
+        *altered.last_mut().unwrap() ^= 1;
+        assert!(palw_funded_original_pairing_payload_v1(&tx, &altered).is_err());
+        let mut unwrapped = tx.clone();
+        unwrapped.payload = inner;
+        unwrapped.finalize();
+        assert!(base.inspect_carrier_v1(&unwrapped).is_err());
     }
 
     #[test]

@@ -343,6 +343,12 @@ pub const PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1: &str = "G03_FRAMELESS_TIR_ORI
 /// a block where they do not resolve refuses every TIR original (fail-closed), framed or not. `Ok` below the fence and for every
 /// non-TIR class (A-2: nothing is judged there).
 pub(super) fn require_original_frame_v1(b: &TransitionBuilder<'_>, claim: Hash64, class_id: Hash64) -> Result<(), PalwStateV2Error> {
+    if b.extras.tir_funded_originals.get(&claim).is_some_and(|pair| pair.envelope().is_protected_v2()) {
+        // This explicit wire version does not carry a legacy TFP1 pledge.
+        // Dispatch to the protected-profile gate rather than requesting a
+        // synthetic legacy frame. An unconfigured planner still refuses it.
+        return check_paired_original_profile_v1(b.extras, claim);
+    }
     if !b.extras.tir_public_conviction_active
         || b.state.tir_class_v1(&class_id).is_none()
         || b.extras.tir_public_originals.contains_key(&claim)

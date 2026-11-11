@@ -763,8 +763,11 @@ impl VirtualStateProcessor {
             // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
             if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_payload_v1(payload) {
                 return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::decode_funded_original_carrier_v3(payload)
-                    .and_then(|envelope| envelope.original_v1())
-                    .map(|original| original.declared_rent_sompi)
+                    // TFO3 wire v3 has no legacy custody-rent declaration.
+                    // Its actual transaction fee and native funded-output
+                    // requirements remain separate acceptance obligations.
+                    .and_then(|envelope| envelope.legacy_declared_rent_sompi_v2())
+                    .map(|rent| rent.unwrap_or(0))
                     .unwrap_or(0);
             }
             return kaspa_consensus_core::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::decode_v1(payload)

@@ -145,40 +145,10 @@ impl PalwTirPublicFpEnvelopeV1 {
     pub fn original_fp_v1(&self) -> Result<PalwFpCommitmentTxPayloadV3, String> {
         self.check_shape_v1()?;
         let payload = decode_original(&self.original_payload)?;
+        check_original_binding_v1(&payload, &self.header)?;
         let original = &payload.commitment;
         let ctx = &self.header.job_context;
-        let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
-            model_profile_id: ctx.model_profile_id,
-            runtime_manifest_hash: ctx.runtime_manifest_hash,
-            runtime_class_id: ctx.runtime_class_id,
-            shape_profile_id: ctx.shape_profile_id,
-            cu_ruleset_id: ctx.cu_ruleset_id,
-        };
-        let facts = crate::palw_fp_execution_v3::PalwFpRunFactsV3 {
-            decode_tokens_executed: original.decode_tokens_executed,
-            stop_reason: original.stop_reason,
-            full_logits_trace_root: original.trace_root,
-            activation_leg_root: Hash64::default(),
-            checkpoint_leg_root: Hash64::default(),
-            step_leg_root: self.header.step_merkle_root,
-            step_leaf_count: original.work_leaves,
-        };
-        let expected = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&original.job, &class, &facts, &ctx.network_id)
-            .map_err(|e| e.to_string())?;
-        let root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
-            &ctx.context_hash(),
-            &self.header.full_logits_trace_root,
-            &ctx.shape_profile_id,
-            self.header.step_leaf_count,
-            &self.header.step_merkle_root,
-        );
-        if expected != *ctx
-            || ctx.shape_profile_id != original.job.class_id
-            || original.execution_root != self.header.committed_execution_root
-            || root != self.header.committed_execution_root
-            || original.trace_root != self.header.full_logits_trace_root
-            || original.work_leaves != self.header.step_leaf_count
-            || self.pledge.claim != payload.claim_id()
+        if self.pledge.claim != payload.claim_id()
             || self.pledge.producer != PalwBondKeyV2(original.job.executor_bond)
             || self.pledge.execution_root != original.execution_root
             || self.pledge.job_identity != crate::palw_fp_execution_v3::palw_fp_job_pin_v1(original)
@@ -192,56 +162,110 @@ impl PalwTirPublicFpEnvelopeV1 {
     /// performs no receipt/capital/payment admission and verifies no signatures.
     pub fn matches_object_v1(&self, object: &crate::palw_state_v2::PalwConsensusObjectV2) -> Result<(), String> {
         let payload = self.original_fp_v1()?;
-        let c = &payload.commitment;
-        let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted {
-            claim,
-            class_id,
-            bond,
-            executor_pubkey,
-            work_leaves,
-            prompt_token_ids_hash,
-            prompt_tokens,
-            prompt_token_ids,
-            decode_tokens_executed,
-            trace_root,
-            output_root,
-            execution_root,
-            trace_chunk_count,
-            trace_retention_daa,
-            job_pin,
-            public_job,
-            consumed_prefix_state,
-            eval,
-        } = object
-        else {
-            return Err("TFP1 is not paired with an original FP object".into());
-        };
-        if *claim != payload.claim_id()
-            || *class_id != c.job.class_id
-            || *bond != self.pledge.producer
-            || *executor_pubkey != c.job.executor_pubkey
-            || *work_leaves != c.work_leaves
-            || *prompt_token_ids_hash != c.job.prompt_token_ids_hash
-            || *prompt_tokens != c.job.prompt_tokens
-            || *prompt_token_ids != payload.prompt_token_ids
-            || *decode_tokens_executed != c.decode_tokens_executed
-            || *trace_root != c.trace_root
-            || *output_root != c.output_root
-            || *execution_root != c.execution_root
-            || *trace_chunk_count != c.trace_chunk_count
-            || *trace_retention_daa != c.trace_retention_daa
-            || *job_pin != self.pledge.job_identity
-            || *consumed_prefix_state != payload.consumed_prefix_state_v1()
-            || eval.is_some()
-            || public_job.as_deref() != Some(c)
-        {
-            return Err("TFP1 is not the literal original FP object's transaction-local scope".into());
-        }
-        Ok(())
+        match_original_object_v1(&payload, self.pledge.producer, self.pledge.job_identity, object)
     }
 }
 
-fn decode_original(bytes: &[u8]) -> Result<PalwFpCommitmentTxPayloadV3, String> {
+/// Exact common FP/header geometry for both transports.
+pub(super) fn check_original_binding_v1(
+    payload: &PalwFpCommitmentTxPayloadV3,
+    header: &PalwPublicTirBindingHeaderV1,
+) -> Result<(), String> {
+    let original = &payload.commitment;
+    let ctx = &header.job_context;
+    let class = crate::palw_fp_execution_v3::PalwFpClassFactsV3 {
+        model_profile_id: ctx.model_profile_id,
+        runtime_manifest_hash: ctx.runtime_manifest_hash,
+        runtime_class_id: ctx.runtime_class_id,
+        shape_profile_id: ctx.shape_profile_id,
+        cu_ruleset_id: ctx.cu_ruleset_id,
+    };
+    let facts = crate::palw_fp_execution_v3::PalwFpRunFactsV3 {
+        decode_tokens_executed: original.decode_tokens_executed,
+        stop_reason: original.stop_reason,
+        full_logits_trace_root: original.trace_root,
+        activation_leg_root: Hash64::default(),
+        checkpoint_leg_root: Hash64::default(),
+        step_leg_root: header.step_merkle_root,
+        step_leaf_count: original.work_leaves,
+    };
+    let expected = crate::palw_fp_execution_v3::palw_fp_job_context_v3(&original.job, &class, &facts, &ctx.network_id)
+        .map_err(|e| e.to_string())?;
+    let root = crate::palw_tir_step_v1::palw_tir_execution_root_v1(
+        &ctx.context_hash(),
+        &header.full_logits_trace_root,
+        &ctx.shape_profile_id,
+        header.step_leaf_count,
+        &header.step_merkle_root,
+    );
+    if expected != *ctx
+        || ctx.shape_profile_id != original.job.class_id
+        || original.execution_root != header.committed_execution_root
+        || root != header.committed_execution_root
+        || original.trace_root != header.full_logits_trace_root
+        || original.work_leaves != header.step_leaf_count
+    {
+        return Err("TFP1 substitutes original FP claim, producer, header context, roots, count or job".into());
+    }
+    Ok(())
+}
+
+/// The accepted object must be exactly the one carried by the literal FP.
+pub(super) fn match_original_object_v1(
+    payload: &PalwFpCommitmentTxPayloadV3,
+    producer: PalwBondKeyV2,
+    job_identity: Hash64,
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+) -> Result<(), String> {
+    let c = &payload.commitment;
+    let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted {
+        claim,
+        class_id,
+        bond,
+        executor_pubkey,
+        work_leaves,
+        prompt_token_ids_hash,
+        prompt_tokens,
+        prompt_token_ids,
+        decode_tokens_executed,
+        trace_root,
+        output_root,
+        execution_root,
+        trace_chunk_count,
+        trace_retention_daa,
+        job_pin,
+        public_job,
+        consumed_prefix_state,
+        eval,
+    } = object
+    else {
+        return Err("TFP1 is not paired with an original FP object".into());
+    };
+    if *claim != payload.claim_id()
+        || *class_id != c.job.class_id
+        || *bond != producer
+        || *executor_pubkey != c.job.executor_pubkey
+        || *work_leaves != c.work_leaves
+        || *prompt_token_ids_hash != c.job.prompt_token_ids_hash
+        || *prompt_tokens != c.job.prompt_tokens
+        || *prompt_token_ids != payload.prompt_token_ids
+        || *decode_tokens_executed != c.decode_tokens_executed
+        || *trace_root != c.trace_root
+        || *output_root != c.output_root
+        || *execution_root != c.execution_root
+        || *trace_chunk_count != c.trace_chunk_count
+        || *trace_retention_daa != c.trace_retention_daa
+        || *job_pin != job_identity
+        || *consumed_prefix_state != payload.consumed_prefix_state_v1()
+        || eval.is_some()
+        || public_job.as_deref() != Some(c)
+    {
+        return Err("TFP1 is not the literal original FP object's transaction-local scope".into());
+    }
+    Ok(())
+}
+
+pub(super) fn decode_original(bytes: &[u8]) -> Result<PalwFpCommitmentTxPayloadV3, String> {
     // The original job's first variable field is its executor key. Preflight
     // that declaration before invoking the unchanged original job-tail codec.
     let mut key = Cursor::new(bytes);

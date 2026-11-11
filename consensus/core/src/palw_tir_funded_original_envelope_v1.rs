@@ -3,6 +3,7 @@
 //! UTXO lock, payer authorization, paid fee, complete graph or accepted original.
 use crate::mldsa87_primitives::{MLDSA87_PUBKEY_LEN, MLDSA87_SIGNATURE_LEN, mldsa87_key_id};
 use crate::palw_court_original_escrow_v1::{ActualCarrierFundingV1, FundingConsentV1, inspect_transaction_v1};
+use crate::palw_tir_protected_fp_envelope_v2::PalwTirProtectedFpEnvelopeV2;
 use crate::palw_tir_public_fp_envelope_v1::{PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1, PalwTirPublicFpEnvelopeV1};
 use crate::tx::Transaction;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -10,13 +11,13 @@ use std::io::{self, Read};
 
 /// Independent framing, never a TFP1 version extension or old lifecycle tag.
 pub const PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1: &[u8; 4] = b"TFO1";
-/// Keep the existing public-original transport ceiling. New metadata is not a
-/// reason to raise legacy payload, signature, custody or transaction limits.
+const PROTECTED_VERSION: u16 = 2;
+/// Keep the existing public-original transport ceiling.
 pub const PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1: usize = PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1;
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwTirFundedOriginalEnvelopeV1 {
     pub version: u16,
-    /// Exact standalone old TFP1 encoding, including magic and strict EOF.
+    /// Exact TFP1 (v1) or protected TFP2 (v2) encoding, with magic and strict EOF.
     pub original_envelope: Vec<u8>,
     pub funding: FundingConsentV1,
     /// Fixed algorithm width, checked before allocation. This transport key is
@@ -70,7 +71,13 @@ pub fn actual_funded_payload_v1(tx: &Transaction) -> Result<&[u8], String> {
 /// suppliers remain intact for their existing decoder and authority checks.
 pub(crate) fn funded_inner_payload_v3(payload: &[u8]) -> Result<&[u8], String> {
     match crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::classify_v3(payload) {
-        Some(view) => Ok(view?.funded_original_v3()),
+        Some(view) => {
+            let view = view?;
+            if view.is_protected_v3() {
+                return Err("protected TFO3 must remain paired to its full outer payload".into());
+            }
+            Ok(view.funded_original_v3())
+        }
         None => Ok(payload),
     }
 }
@@ -78,10 +85,25 @@ pub(crate) fn funded_inner_payload_v3(payload: &[u8]) -> Result<&[u8], String> {
 /// Structural view across supported funded wrappers; it does not authenticate
 /// a PublicOriginal companion or admit its underlying FP object.
 pub fn decode_funded_original_carrier_v3(payload: &[u8]) -> Result<PalwTirFundedOriginalEnvelopeV1, String> {
-    crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(funded_inner_payload_v3(payload)?)
+    if let Some(view) = crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::classify_v3(payload) {
+        let view = view?;
+        if view.is_protected_v3() {
+            return view.decode_protected_base_v3();
+        }
+        return crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(view.funded_original_v3());
+    }
+    crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)
 }
 fn invalid(why: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, why.into())
+}
+impl BorshSerialize for PalwTirFundedOriginalEnvelopeV1 {
+    fn serialize<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+        if self.version != 1 {
+            return Err(invalid("unframed TFO1 requires legacy version 1"));
+        }
+        self.body_fields_v1().serialize(writer)
+    }
 }
 impl BorshDeserialize for PalwTirFundedOriginalEnvelopeV1 {
     fn deserialize_reader<R: Read>(r: &mut R) -> io::Result<Self> {
@@ -89,10 +111,7 @@ impl BorshDeserialize for PalwTirFundedOriginalEnvelopeV1 {
         if version != 1 {
             return Err(invalid("unknown TFO1 version before allocation"));
         }
-        let original_envelope = crate::palw_public_binding_v1::read_bounded_bytes_v1(r, PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1)?;
-        let funding = FundingConsentV1::deserialize_reader(r)?;
-        let payer_pubkey = crate::palw_public_binding_v1::read_bounded_bytes_v1(r, MLDSA87_PUBKEY_LEN)?;
-        let out = Self { version, original_envelope, funding, payer_pubkey };
+        let out = Self::read_body_after_version(r, version)?;
         out.check_v1().map_err(invalid)?;
         Ok(out)
     }
@@ -103,13 +122,124 @@ impl PalwTirFundedOriginalEnvelopeV1 {
         out.check_v1()?;
         Ok(out)
     }
+    /// Encode this funded version only as the inner of a protected TFO3.
+    pub fn new_protected_v2(
+        original: PalwTirProtectedFpEnvelopeV2,
+        funding: FundingConsentV1,
+        payer_pubkey: Vec<u8>,
+    ) -> Result<Self, String> {
+        let out = Self { version: PROTECTED_VERSION, original_envelope: original.encode_v1()?, funding, payer_pubkey };
+        out.check_protected_v2()?;
+        Ok(out)
+    }
+
+    fn read_body_after_version<R: Read>(r: &mut R, version: u16) -> io::Result<Self> {
+        let original_envelope = crate::palw_public_binding_v1::read_bounded_bytes_v1(r, PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1)?;
+        let funding = FundingConsentV1::deserialize_reader(r)?;
+        let payer_pubkey = crate::palw_public_binding_v1::read_bounded_bytes_v1(r, MLDSA87_PUBKEY_LEN)?;
+        Ok(Self { version, original_envelope, funding, payer_pubkey })
+    }
+
+    pub fn is_protected_v2(&self) -> bool {
+        self.version == PROTECTED_VERSION
+    }
+
+    fn check_protected_v2(&self) -> Result<(), String> {
+        self.protected_original_v2().map(|_| ())
+    }
+
+    /// Structural original/header, without any synthesized legacy pledge.
+    pub fn protected_original_v2(&self) -> Result<PalwTirProtectedFpEnvelopeV2, String> {
+        self.protected_original_with_fp_v2().map(|(envelope, _)| envelope)
+    }
+
+    fn protected_original_with_fp_v2(
+        &self,
+    ) -> Result<(PalwTirProtectedFpEnvelopeV2, crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3), String> {
+        if !self.is_protected_v2() {
+            return Err("protected funded original version required".into());
+        }
+        self.check_funding_framing_v1()?;
+        let (original, fp) = PalwTirProtectedFpEnvelopeV2::decode_with_fp_v1(&self.original_envelope)?;
+        let t = &self.funding.terms;
+        let job = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&fp.commitment);
+        let source = crate::palw_tir_public_source_v1::public_source_header_id_v1(original.header_v1())?;
+        if (t.claim, t.job_identity, t.execution_root, t.source_id, t.network_domain)
+            != (fp.claim_id(), job, fp.commitment.execution_root, source, fp.commitment.job.network_domain)
+            || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&original.header_v1().job_context) != job
+        {
+            return Err("protected funded original substitutes its literal claim/job/execution/Source/network".into());
+        }
+        self.check_outer_size_v1()?;
+        Ok((original, fp))
+    }
+
+    pub fn original_fp_v2(&self) -> Result<crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3, String> {
+        if self.is_protected_v2() {
+            self.protected_original_with_fp_v2().map(|(_, fp)| fp)
+        } else {
+            self.original_v1()?.original_fp_v1()
+        }
+    }
+
+    pub fn original_header_v2(&self) -> Result<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1, String> {
+        if self.is_protected_v2() { Ok(self.protected_original_v2()?.into_header_v1()) } else { Ok(self.original_v1()?.header) }
+    }
+
+    pub fn legacy_declared_rent_sompi_v2(&self) -> Result<Option<u64>, String> {
+        if self.is_protected_v2() {
+            self.check_protected_v2()?;
+            Ok(None)
+        } else {
+            Ok(Some(self.original_v1()?.declared_rent_sompi))
+        }
+    }
+
+    /// The protected base is not a standalone accepted payload. Wrap these
+    /// bytes with the mandatory companion and material in TFO3 wire version 3.
+    pub fn encode_protected_inner_v2(&self) -> Result<Vec<u8>, String> {
+        self.check_protected_v2()?;
+        self.encode_framed_v1()
+    }
+
+    /// Only the already scanned protected outer view calls this.
+    pub(crate) fn decode_protected_inner_v2(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1 {
+            return Err("protected funded original exceeds total wire ceiling".into());
+        }
+        let mut body = bytes.strip_prefix(PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1).ok_or("TFO1 magic absent")?;
+        let version = u16::deserialize_reader(&mut body).map_err(|e| e.to_string())?;
+        if version != PROTECTED_VERSION {
+            return Err("TFO3 wire version 3 requires protected funded original version 2".into());
+        }
+        let envelope = Self::read_body_after_version(&mut body, version).map_err(|e| e.to_string())?;
+        if !body.is_empty() {
+            return Err("protected funded original has trailing bytes".into());
+        }
+        envelope.check_protected_v2()?;
+        Ok(envelope)
+    }
+
     /// Structural and transaction-local identity checks, never a substitute for
     /// native original quote, explicit signature verification or actual funds.
     pub fn check_v1(&self) -> Result<(), String> {
+        if self.version != 1 {
+            return Err("TFO1 version, key/signature shape, funding interval or payer identity".into());
+        }
+        self.check_funding_framing_v1()?;
+        let t = &self.funding.terms;
+        let original = PalwTirPublicFpEnvelopeV1::decode_v1(&self.original_envelope)?;
+        let fp = original.original_fp_v1()?;
+        if (t.claim, t.job_identity, t.execution_root) != (fp.claim_id(), original.pledge.job_identity, fp.commitment.execution_root) {
+            return Err("TFO1 funding substitutes its literal original claim/job/execution".into());
+        }
+        self.check_outer_size_v1()
+    }
+
+    fn check_funding_framing_v1(&self) -> Result<(), String> {
         self.funding.check_v1().map_err(|e| format!("{e:?}"))?;
         let t = &self.funding.terms;
-        if self.version != 1
-            || self.payer_pubkey.len() != MLDSA87_PUBKEY_LEN
+        if self.payer_pubkey.len() != MLDSA87_PUBKEY_LEN
             || self.funding.signature.len() != MLDSA87_SIGNATURE_LEN
             || t.version != 1
             || t.funding_amount_sompi == 0
@@ -121,12 +251,15 @@ impl PalwTirFundedOriginalEnvelopeV1 {
         if self.original_envelope.is_empty() || self.original_envelope.len() > PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1 {
             return Err("TFO1 original envelope exceeds existing transport bound".into());
         }
-        let original = PalwTirPublicFpEnvelopeV1::decode_v1(&self.original_envelope)?;
-        let fp = original.original_fp_v1()?;
-        if (t.claim, t.job_identity, t.execution_root) != (fp.claim_id(), original.pledge.job_identity, fp.commitment.execution_root) {
-            return Err("TFO1 funding substitutes its literal original claim/job/execution".into());
-        }
-        if borsh::object_length(self)
+        Ok(())
+    }
+
+    fn body_fields_v1(&self) -> (u16, &Vec<u8>, &FundingConsentV1, &Vec<u8>) {
+        (self.version, &self.original_envelope, &self.funding, &self.payer_pubkey)
+    }
+
+    fn check_outer_size_v1(&self) -> Result<(), String> {
+        if borsh::object_length(&self.body_fields_v1())
             .map_err(|e| e.to_string())?
             .checked_add(4)
             .is_none_or(|n| n > PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1)
@@ -137,8 +270,11 @@ impl PalwTirFundedOriginalEnvelopeV1 {
     }
     pub fn encode_v1(&self) -> Result<Vec<u8>, String> {
         self.check_v1()?;
+        self.encode_framed_v1()
+    }
+    fn encode_framed_v1(&self) -> Result<Vec<u8>, String> {
         let mut out = PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1.to_vec();
-        out.extend(borsh::to_vec(self).map_err(|e| e.to_string())?);
+        self.body_fields_v1().serialize(&mut out).map_err(|e| e.to_string())?;
         Ok(out)
     }
     pub fn decode_v1(bytes: &[u8]) -> Result<Self, String> {
@@ -171,14 +307,23 @@ impl PalwTirFundedOriginalEnvelopeV1 {
     /// can be misreported as proof of payment. Final txid is obtained here,
     /// outside the signed terms; there is no funding-txid self-reference.
     pub fn inspect_carrier_v1<'a>(&self, tx: &'a Transaction) -> Result<ActualCarrierFundingV1<'a>, String> {
-        let literal = self.encode_v1()?;
-        let payload = funded_inner_payload_v3(actual_funded_payload_v1(tx)?)?;
-        let family = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
-            Some(crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?)
+        let outer = actual_funded_payload_v1(tx)?;
+        let family;
+        let (literal, payload) = if self.is_protected_v2() {
+            let view = crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::decode_v3(outer)?;
+            if !view.is_protected_v3() {
+                return Err("protected funded original requires TFO3 wire version 3".into());
+            }
+            (self.encode_protected_inner_v2()?, view.funded_original_v3())
         } else {
-            None
+            let payload = funded_inner_payload_v3(outer)?;
+            family = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
+                Some(crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?)
+            } else {
+                None
+            };
+            (self.encode_v1()?, family.as_ref().map_or(payload, |e| e.funded_original.as_slice()))
         };
-        let payload = family.as_ref().map_or(payload, |e| e.funded_original.as_slice());
         // Inspect the actual outer TX: its signed input scope and funding output are never projected.
         if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || payload != literal {
             return Err("TFO1 is not paired to this literal original carrier".into());
@@ -272,6 +417,8 @@ mod tests {
     fn roundtrip_preserves_literal_legacy_original_claim_and_signatures() {
         let e = envelope();
         let bytes = e.encode_v1().unwrap();
+        let old_body = borsh::to_vec(&(1u16, &e.original_envelope, &e.funding, &e.payer_pubkey)).unwrap();
+        assert_eq!(bytes[4..], old_body);
         let decoded = PalwTirFundedOriginalEnvelopeV1::decode_v1(&bytes).unwrap();
         assert_eq!(decoded, e);
         let old = e.original_v1().unwrap();
@@ -450,19 +597,38 @@ impl crate::palw_native_resource_v1::NativeWireScanV1 for PalwTirFundedOriginalE
     fn scan_native_wire_v1<R: Read>(
         r: &mut crate::palw_native_resource_v1::NativeWireReaderV1<R>,
     ) -> io::Result<crate::palw_native_resource_v1::NativeWireShapeV1> {
-        use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireShapeV1};
-        r.step()?;
-        let start = r.remaining();
-        if r.short()? != 1 {
-            return Err(invalid("unframed TFO1 version"));
-        }
-        let n = r.word()? as u64;
-        if n == 0 || n > PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1 as u64 {
-            return Err(invalid("TFO1 original length bound"));
-        }
-        let mut shape = NativeWireShapeV1 { outer_entries: n, byte_entries: n, ..Default::default() }.allocation(n * 2, 1)?;
-        // A nested limited reader cannot consume FundingConsent or payer bytes.
-        let mut tfp = NativeWireReaderV1::new((&mut *r).take(n), n);
+        scan_funded_body_v1(r, 1)
+    }
+}
+
+/// Only protected TFO3 framing selects this scanner. Generic TFO1 native
+/// Source16 decoding remains version 1.
+pub(crate) fn scan_protected_funded_body_v2<R: Read>(
+    r: &mut crate::palw_native_resource_v1::NativeWireReaderV1<R>,
+) -> io::Result<crate::palw_native_resource_v1::NativeWireShapeV1> {
+    scan_funded_body_v1(r, PROTECTED_VERSION)
+}
+
+fn scan_funded_body_v1<R: Read>(
+    r: &mut crate::palw_native_resource_v1::NativeWireReaderV1<R>,
+    version: u16,
+) -> io::Result<crate::palw_native_resource_v1::NativeWireShapeV1> {
+    use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};
+    r.step()?;
+    let start = r.remaining();
+    if r.short()? != version {
+        return Err(invalid("unframed TFO1 version"));
+    }
+    let n = r.word()? as u64;
+    if n == 0 || n > PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1 as u64 {
+        return Err(invalid("TFO1 original length bound"));
+    }
+    let mut shape = NativeWireShapeV1 { outer_entries: n, byte_entries: n, ..Default::default() }.allocation(n * 2, 1)?;
+    // A nested limited reader cannot consume FundingConsent or payer bytes.
+    let mut tfp = NativeWireReaderV1::new((&mut *r).take(n), n);
+    let scratch = if version == PROTECTED_VERSION {
+        PalwTirProtectedFpEnvelopeV2::scan_native_wire_v1(&mut tfp)?
+    } else {
         let mut magic = [0; 4];
         tfp.read_exact(&mut magic)?;
         if &magic != crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAGIC_V1 || tfp.short()? != 1 {
@@ -471,44 +637,7 @@ impl crate::palw_native_resource_v1::NativeWireScanV1 for PalwTirFundedOriginalE
         if u64::deserialize_reader(&mut tfp)? == 0 {
             return Err(invalid("inner TFP1 rent"));
         }
-        let payload = tfp.word()? as u64;
-        if payload == 0 || payload > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u64 {
-            return Err(invalid("inner FP payload bound"));
-        }
-        let mut fp = NativeWireReaderV1::new((&mut tfp).take(payload), payload);
-        if fp.short()? != crate::palw_freeprompt_v3::PALW_FP_V3_VERSION {
-            return Err(invalid("inner original FP version"));
-        }
-        let mut scratch = crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3::scan_native_wire_v1(&mut fp)?;
-        let tokens = fp.word()? as u64;
-        if tokens > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u64 / 4 || tokens > fp.remaining() / 4 {
-            return Err(invalid("inner prompt count"));
-        }
-        fp.skip(tokens * 4)?;
-        scratch = scratch.merge(
-            NativeWireShapeV1 { collection_entries: tokens, ..Default::default() }
-                .allocation(tokens * 2, std::mem::size_of::<u32>())?,
-        )?;
-        let sig = fp.word()? as u64;
-        if sig != MLDSA87_SIGNATURE_LEN as u64 {
-            return Err(invalid("inner FP signature width"));
-        }
-        fp.skip(sig)?;
-        scratch = scratch.merge(NativeWireShapeV1 { byte_entries: sig, ..Default::default() }.allocation(sig * 2, 1)?)?;
-        if fp.remaining() != 0 {
-            return Err(invalid("inner FP trailing bytes"));
-        }
-        // The TFP owns original_payload while decode_original checks a
-        // canonical reserialization Vec. Charge these two actual byte buffers.
-        scratch = scratch.allocation(payload * 2, 1)?;
-        let header_start = tfp.remaining();
-        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::scan_native_wire_v1(&mut tfp)?;
-        if header_start - tfp.remaining() > crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1 as u64 {
-            return Err(invalid("inner header bound"));
-        }
-        // check_shape clones header; expected job context also owns network ID.
-        // Their two-pass native shape is an upper for those real temporaries.
-        scratch = scratch.merge(header)?.merge(header)?;
+        let mut scratch = scan_original_fp_and_header_v1(&mut tfp)?;
         let pledge_start = tfp.remaining();
         scratch = scratch.merge(crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1::scan_native_wire_v1(&mut tfp)?)?;
         if pledge_start - tfp.remaining() > crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_PLEDGE_MAX_BYTES_V1 as u64 {
@@ -528,19 +657,65 @@ impl crate::palw_native_resource_v1::NativeWireScanV1 for PalwTirFundedOriginalE
         if tfp.remaining() != 0 {
             return Err(invalid("inner TFP1 trailing bytes"));
         }
-        shape = shape.merge(scratch)?;
-        shape = shape.merge(FundingConsentV1::scan_native_wire_v1(r)?)?;
-        let key = r.word()? as u64;
-        if key != MLDSA87_PUBKEY_LEN as u64 {
-            return Err(invalid("TFO1 payer key width"));
-        }
-        r.skip(key)?;
-        shape = shape.merge(NativeWireShapeV1 { byte_entries: key, ..Default::default() }.allocation(key * 2, 1)?)?;
-        if start - r.remaining() + 4 > PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1 as u64 {
-            return Err(invalid("TFO1 existing total bound"));
-        }
-        Ok(shape)
+        scratch
+    };
+    shape = shape.merge(scratch)?;
+    shape = shape.merge(FundingConsentV1::scan_native_wire_v1(r)?)?;
+    let key = r.word()? as u64;
+    if key != MLDSA87_PUBKEY_LEN as u64 {
+        return Err(invalid("TFO1 payer key width"));
     }
+    r.skip(key)?;
+    shape = shape.merge(NativeWireShapeV1 { byte_entries: key, ..Default::default() }.allocation(key * 2, 1)?)?;
+    if start - r.remaining() + 4 > PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1 as u64 {
+        return Err(invalid("TFO1 existing total bound"));
+    }
+    Ok(shape)
+}
+
+pub(super) fn scan_original_fp_and_header_v1<R: Read>(
+    r: &mut crate::palw_native_resource_v1::NativeWireReaderV1<R>,
+) -> io::Result<crate::palw_native_resource_v1::NativeWireShapeV1> {
+    use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};
+
+    let payload = r.word()? as u64;
+    if payload == 0 || payload > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u64 {
+        return Err(invalid("inner FP payload bound"));
+    }
+    let mut fp = NativeWireReaderV1::new((&mut *r).take(payload), payload);
+    if fp.short()? != crate::palw_freeprompt_v3::PALW_FP_V3_VERSION {
+        return Err(invalid("inner original FP version"));
+    }
+    let mut scratch = crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3::scan_native_wire_v1(&mut fp)?;
+    let tokens = fp.word()? as u64;
+    if tokens > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as u64 / 4 || tokens > fp.remaining() / 4 {
+        return Err(invalid("inner prompt count"));
+    }
+    fp.skip(tokens * 4)?;
+    scratch = scratch.merge(
+        NativeWireShapeV1 { collection_entries: tokens, ..Default::default() }.allocation(tokens * 2, std::mem::size_of::<u32>())?,
+    )?;
+    let sig = fp.word()? as u64;
+    if sig != MLDSA87_SIGNATURE_LEN as u64 {
+        return Err(invalid("inner FP signature width"));
+    }
+    fp.skip(sig)?;
+    scratch = scratch.merge(NativeWireShapeV1 { byte_entries: sig, ..Default::default() }.allocation(sig * 2, 1)?)?;
+    if fp.remaining() != 0 {
+        return Err(invalid("inner FP trailing bytes"));
+    }
+    // The TFP owns original_payload while decode_original checks a
+    // canonical reserialization Vec. Charge these two actual byte buffers.
+    scratch = scratch.allocation(payload * 2, 1)?;
+    let header_start = r.remaining();
+    let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::scan_native_wire_v1(r)?;
+    if header_start - r.remaining() > crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_HEADER_MAX_BYTES_V1 as u64 {
+        return Err(invalid("inner header bound"));
+    }
+    // check_shape clones header; expected job context also owns network ID.
+    // Their two-pass native shape is an upper for those real temporaries.
+    scratch = scratch.merge(header)?.merge(header)?;
+    Ok(scratch)
 }
 
 #[cfg(test)]

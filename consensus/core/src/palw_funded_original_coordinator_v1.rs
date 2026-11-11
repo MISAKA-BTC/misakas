@@ -410,13 +410,15 @@ pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8])
     } else {
         (Vec::new(), None)
     };
-    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)?;
-    let original = envelope.original_v1()?;
+    // Decode through the complete outer carrier. A protected base is legal
+    // only under TFO3 wire v3, never as a stripped TFO1/TFO2 fallback.
+    let envelope = crate::palw_tir_funded_original_envelope_v1::decode_funded_original_carrier_v3(actual)?;
+    let header = envelope.original_header_v2()?;
     let public_source =
-        public.as_ref().map(|_| crate::palw_tir_public_source_v1::public_source_header_id_v1(&original.header)).transpose()?;
-    let claim = original.original_fp_v1()?.claim_id();
-    if claim != envelope.funding.terms.claim || original.pledge.claim != claim {
-        return Err("TFO1 terms, pledge and literal original name different claims".into());
+        public.as_ref().map(|_| crate::palw_tir_public_source_v1::public_source_header_id_v1(&header)).transpose()?;
+    let claim = envelope.original_fp_v2()?.claim_id();
+    if claim != envelope.funding.terms.claim {
+        return Err("funding terms and literal original name different claims".into());
     }
     let outpoint = envelope.inspect_carrier_v1(tx)?.outpoint();
     Ok(PalwFundedOriginalPairingV1 {

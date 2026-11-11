@@ -18,6 +18,17 @@ Panel人数・全工程の物理容量・料金・署名branchの本番設定に
 
 今回のコード変更は **実装済み・Rust検証未実行**。方針書§1に従い通し接続後にbuild/testを実行する。公開配備・署名送信は行っていない。取得可否証明やMinerのモデル重み配信義務は追加しない。同一claimのPanel/Final・当選権利消費・対応ブロック生成は引き続き未達。
 
+### 旧pledgeを必要としない提出形式
+
+入口の調査で、旧TFO3のwire版1/2は内側のTFP1にcustody pledge・history pledge条件・正のrent宣言を要求することが判明した。RFC-0053の方針を実装する新提出経路に、これらを仮の値で付けない。次の明示版を追加し、旧署名・旧wireの意味を維持する。
+
+- [TFP2](../../../../consensus/core/src/palw_tir_protected_fp_envelope_v2.rs) のwire版1は、元の署名付きFP payloadとTIR headerだけを保持する。元claim ID・FP署名・job・rootを再生成せず、headerとの一致を共通の検査で確認する。
+- [TFO1 funded body](../../../../consensus/core/src/palw_tir_funded_original_envelope_v1.rs) の版2はこのTFP2と既存のpayer consentを包み、[TFO3](../../../../consensus/core/src/palw_tir_funded_original_envelope_v3.rs) のwire版3内でだけ読める。TFO3版3はprompt・companion・manifest・HF参照を必須とする。旧TFO3版1/2、TFO2、単独TFO1へdowngradeして受理しない。
+- [取引作成](../../../../misaka/pq/validator-core/src/protected_original_v3.rs) は署名済みpayloadを保持し、専用の資金出力とお釣りを分け、最後の取引入力だけを署名する。通常の取引feeと資金出力を二重に数えない。新版に旧custody rentのburn宣言はないが、nativeの全工程費用・資金要件が免除される意味ではない。
+- [Node読取り](../../../../consensus/src/pipeline/virtual_processor/processor/palw_accept.rs) は元の実取引ID・資金pairingとFPの読取り用viewを保持し、旧pledge行を生成しない。新しい形式の専用frameは旧frame必須判定の代わりに保護profileの判定へ渡す。
+
+この接続は **実装済み・Rust検証未実行**。新しい形式もisolationとnativeの未設定profile gateで止まる。共通planner・公開quote・Studioの新版producer選択はまだ未接続で、取引作成用APIの追加をStudioからの送信や公開受理と数えない。モデル取得証明、モデル重みの独自配信、数値policyの採択・有効化は追加していない。
+
 ## 経路と接続先
 
 | 経路 | 既存の接続先 | 新 profile の残件 |
