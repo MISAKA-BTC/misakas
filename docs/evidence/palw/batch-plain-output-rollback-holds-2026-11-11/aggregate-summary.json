@@ -1,0 +1,31 @@
+{
+  "source_commit": "967a440b1f73b95bfd863aa2c5dce91464aa4021",
+  "files_sha256": {
+    "consensus/core/src/palw_native_resource_v1/inventory.rs": "0decfcba40e08b52184b6b04328988c34a15a06afd1e5f3e6ab468cba6fdf959",
+    "consensus/core/src/palw_native_resource_v1/private/palw_state_v2.rs": "c6386cde654747e27bf6d041cab38ee8672777d972bd2362956e057b0fa28956",
+    "consensus/core/src/palw_native_resource_v1/private/wire_carriage.rs": "cc053ab37ba177e4134f38063d8c229c6b965b71509599d720862201bf0cfd03",
+    "consensus/core/src/palw_state_v2.rs": "ad3508013132aef7056fb5a84b6c006fe9cfc81a5841a52b3b03f72523fb2768",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "412d923b23f9cf0fa8ad2cd9f68bec1b9325117038408074acb261861fd3558a",
+    "consensus/core/src/palw_state_v2/tests.rs": "ff0eb13e22d32c09fe75a2d014238c45796295e72bfe800c53f8f11e859cf05e",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "e530fe070d0054c5bc725244aaa48517583697763feb306d6bae7645e0ed8142"
+  },
+  "binary_sha256": "4256be335c2e5c1262e4526a32a24b7c6e747dee475837b1578529355e8b156d",
+  "tests_passed": 11,
+  "logs_sha256": {
+    "aggregate-build.log": "6cb1c8a91d9ef8ae5cc82cb8dda1a2b742f3f072e2a180415ca12d597b3f291f",
+    "aggregate-tests.log": "d7e3dca9a0fa2c21dbf8f833e427c3c143c96bdb5528dacdfe6400725cfe571f",
+    "aggregate-docs-check.log": "2262ebcea2b4efe209c736472529300e34e84a2d548d42e72247414de1fe8cca",
+    "aggregate-rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "aggregate-adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd"
+  },
+  "complete_scoped_undo": false,
+  "public_activation_or_admission": false,
+  "documentation_checks": {
+    "existing_issues_unchanged": true,
+    "new_issue_occurrences": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  }
+}

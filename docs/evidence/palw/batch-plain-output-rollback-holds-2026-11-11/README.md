@@ -13,3 +13,11 @@ Holds段階はBCT2 7件が成功した。元commitmentから正常な同一fixtu
 original/class/UTXO/予約graphは局所fixture。公開T12のquote・受付・Finalを示すものではない。aggregate liabilityが同じproducerの別claimへ及ぼす既存の処理を維持した、実際に変更した行だけのrollbackと全Selection/DA共通plannerは未完である。
 
 文書検査の既存失敗は930 issue occurrences、971 missing-file occurrences、2 missing-heading occurrences、RFC歴史検査7件・ADR歴史検査89件で前段階と同じ。baselineは更新していない。
+
+## Aggregate liability lookup
+
+`967a440b1` の[追加回帰11件](aggregate-summary.json)が成功した。同じproducerのProvisional・PanelBound・ReceiptLicensedだけを引く派生索引を追加し、claim更新・replay・復元とnative inventoryへ接続した。vestingは既存payee索引を使い、従来のclaim ID順に並べ直してproducer leg→seat legの順序を維持する。対象行とheld forfeitのコピーは先にtyped資源予約を行う。aggregateでvoidされる対象、collateral・vestingの取り分、journal順序とrevertの結果は従来どおり。
+
+上記で失敗を記録したsource文字列検査は、dispatcherではなく実際のobject handler本文だけを調べるよう修正した。3つのclass ladder参照のassertionは保持し、今回PASSした。過去の失敗ログは保持する。BCT2のfault・Holds・archiveとSelectionの署名裁定も同じbinaryで再確認した。
+
+この索引段階はterminalの全prefix cloneを除去するものではない。原子的なjournal inverseには、claim/courtの返金が失敗する前にprimary rowを書き換えてしまう箇所など、残るwriter順序とscratch観測の修正が必要。
