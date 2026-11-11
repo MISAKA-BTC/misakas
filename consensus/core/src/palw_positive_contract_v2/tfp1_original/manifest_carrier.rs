@@ -1,6 +1,8 @@
 //! Literal protected drawn ManifestRequest transport and local UTXO fee handoff.
 //! Consensus must separately authenticate the request, its slot and its lifetime.
 
+pub(crate) mod replay;
+
 use crate::{
     Hash64, TransactionId,
     palw_court_carrier_fee_v1::{CarrierFeeBudgetV1, CarrierFeeRefusalV1},
@@ -111,7 +113,13 @@ pub(crate) struct ValidatedManifestRequestCarrierV1 {
     request: [u8; REQUEST_BYTES],
     budget: NativeRetainedV1<CarrierFeeBudgetV1>,
     charged: bool,
+    charge_purpose: Option<Hash64>,
+    replay_parent_root: Option<Hash64>,
 }
+
+crate::palw_native_resource_v1::native_struct!(ManifestRequestCarrierScopeV1; claim, source, reservation_scope);
+crate::palw_native_resource_v1::native_struct!(ManifestRequestCarrierContextV1; scope, at, carrier_block, accepted_ordinal, carrier);
+crate::palw_native_resource_v1::native_struct!(ValidatedManifestRequestCarrierV1; context, request, budget, charged, charge_purpose, replay_parent_root);
 
 impl ValidatedManifestRequestCarrierV1 {
     pub(crate) fn prepare_v1(
@@ -150,6 +158,8 @@ impl ValidatedManifestRequestCarrierV1 {
             request: *request,
             budget: NativeRetainedV1::from_owner_reserved_v1(budget, fee_owner),
             charged: false,
+            charge_purpose: None,
+            replay_parent_root: None,
         }))
     }
 
@@ -200,6 +210,7 @@ impl ValidatedManifestRequestCarrierV1 {
         candidate.allocate_v1(identity.as_bytes(), amount).map_err(Fee)?;
         self.budget = NativeRetainedV1::from_owner_reserved_v1(candidate, owner);
         self.charged = true;
+        self.charge_purpose = Some(purpose);
         Ok(())
     }
 }
@@ -251,7 +262,7 @@ mod tests {
         borsh::to_vec(&signed).unwrap().try_into().unwrap()
     }
 
-    fn tx() -> Transaction {
+    pub(super) fn tx() -> Transaction {
         Transaction::new(
             0,
             vec![TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(12), 0), vec![], 0, 0)],
@@ -263,11 +274,11 @@ mod tests {
         )
     }
 
-    fn populated(tx: &Transaction, fee: u64) -> ValidatedTransaction<'_> {
+    pub(super) fn populated(tx: &Transaction, fee: u64) -> ValidatedTransaction<'_> {
         ValidatedTransaction::new(PopulatedTransaction::new(tx, vec![UtxoEntry::new(100, ScriptPublicKey::default(), 1, false)]), fee)
     }
 
-    fn point() -> PalwBlockContextV2 {
+    pub(super) fn point() -> PalwBlockContextV2 {
         PalwBlockContextV2 { block: Hash64::from_u64_word(13), daa_score: 14, blue_score: 15, subsidy: 0 }
     }
 

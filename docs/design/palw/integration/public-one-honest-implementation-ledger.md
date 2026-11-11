@@ -324,3 +324,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[初回MaterialRequestと後続の共同予約](../../../evidence/palw/initial-manifest-request-booking-2026-11-11/README.md)は **実装中・Rust検証未実行**。期限前の初回要求を同じ順位の後続グラフと原子的に予約し、費用・保持・resource identityへ反映した。署名前後のreadiness照合と順位入替え拒否を追加。PMR1 literal carrierとvalidated UTXO feeの一回割当まで追加したが、有料native writer・paid receipt・book消費・collectible控除は未接続。公開受付・当選時の権利消費・対応blockの達成証拠ではない。
 
 2026-11-11 の[有料MaterialRequest native writer](../../../evidence/palw/paid-manifest-native-writer-2026-11-11/README.md)は **実装中・Rust検証未実行**。rooted paired original/draw・署名・順位別実slotを照合し、199のpending行と新205の有料順位行を原子的に書く処理を追加した。実fee割当失敗時のrollback、同一受理の追加chargeゼロ、snapshot/delta検査を接続。予約表は供給履歴として保持する。production accepted order・collectible fee/外側Round候補・完全料金と供給policy・局所undo・後続paid認証・公開通し経路は未完。Studioの公開受理・権利消費・対応blockは未証明のまま。
+
+2026-11-11 の[資料要求の受理順と料金再演](../../../evidence/palw/manifest-ordered-replay-2026-11-11/README.md)は **実装中・Rust検証未実行**。三native経路の受理順V2、不変UTXO seedからの独立fee候補、shared writer、各取引の料金結果の完全照合を追加。別parent候補の投影を拒否し、rollback copyを明示的な型別予約へ修正した。production processorはまだV1入口であり、完全TFO3 coordinator/native history復元からの接続、collectible反映、公開受付以降は残る。

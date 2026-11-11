@@ -307,6 +307,43 @@ impl TransitionBuilder<'_> {
         prepared: &crate::palw_positive_contract_v2::tfp1_original::manifest_request::PreparedPaidManifestRequestV1,
         handoff: &mut crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ValidatedManifestRequestCarrierV1,
     ) -> Result<u64, PalwStateV2Error> {
+        self.install_paid_manifest_request_with_v1(point, prepared, handoff, |_, charge| Ok(charge))
+    }
+
+    /// Rehearsal and actual replay each own a fresh fee candidate from one
+    /// immutable validated seed. A failed outer body drops its entire builder
+    /// and effect; the next attempt cannot inherit a prior attempt's charges.
+    pub(super) fn install_shared_paid_manifest_request_v1(
+        &mut self,
+        parent_root: Hash64,
+        point: &PalwBlockContextV2,
+        prepared: &crate::palw_positive_contract_v2::tfp1_original::manifest_request::PreparedPaidManifestRequestV1,
+        seed: &crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::replay::ManifestRequestReplaySeedV1,
+    ) -> Result<crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::replay::ManifestRequestFeeV1, PalwStateV2Error>
+    {
+        use crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ManifestRequestCarrierErrorV1;
+        let map_error = |why| match why {
+            ManifestRequestCarrierErrorV1::Resource(coverage) => PalwStateV2Error::NativeResource(coverage),
+            other => refused(format!("invalid ManifestRequest replay: {other:?}")),
+        };
+        let mut candidate = seed.candidate_at_v1(parent_root, point).map_err(map_error)?;
+        self.install_paid_manifest_request_with_v1(point, prepared, &mut candidate, |candidate, charge| {
+            seed.project_after_candidate_v1(candidate, charge).map_err(map_error)
+        })
+    }
+
+    /// If `finish` can fail, the caller must own and discard the fee candidate
+    /// on error. The borrowed-ledger API uses an infallible finish instead.
+    fn install_paid_manifest_request_with_v1<T>(
+        &mut self,
+        point: &PalwBlockContextV2,
+        prepared: &crate::palw_positive_contract_v2::tfp1_original::manifest_request::PreparedPaidManifestRequestV1,
+        handoff: &mut crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ValidatedManifestRequestCarrierV1,
+        finish: impl FnOnce(
+            &crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ValidatedManifestRequestCarrierV1,
+            u64,
+        ) -> Result<T, PalwStateV2Error>,
+    ) -> Result<T, PalwStateV2Error> {
         use crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ManifestRequestCarrierErrorV1;
         use crate::palw_positive_contract_v2::{PUBLIC_MANIFEST_PAID_TABLE_V1, PUBLIC_PENDING_MANIFEST_TABLE_V1};
         let carrier_error = |why| match why {
@@ -318,7 +355,7 @@ impl TransitionBuilder<'_> {
             .storage_rows_at_v1(&self.state, point)
             .map_err(|why| refused(format!("invalid paid ManifestRequest prefix: {why:?}")))?
         else {
-            return Ok(0);
+            return finish(handoff, 0);
         };
         let pending_key = prepared.pending_key_v1();
         let paid_key = paid.key_v1();
@@ -331,13 +368,14 @@ impl TransitionBuilder<'_> {
         self.reserve_kernel_row_write_v1(PUBLIC_MANIFEST_PAID_TABLE_V1, &paid_key, &paid_bytes, false)?;
         // Every state write can fail on its context/index hooks. Restore both
         // rows and all journals together. The external fee ledger is changed
-        // only as the final fallible action; allocation failure preserves it.
+        // only after all row writes. The borrowed-ledger path's finish cannot
+        // fail; the shared-seed path drops its ledger if projection fails.
         // Own this temporary clone only for this attempt. A rejected sequence
         // must not retain one whole-state reservation per failed request.
         // Replacing the clone with bounded local undo is still a production
         // profile resource requirement, not implied by this temporary lease.
         let checkpoint_bytes =
-            crate::palw_native_resource_v1::native_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
+            crate::palw_native_resource_v1::native_typed_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
         let _checkpoint_owner = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(checkpoint_bytes)
             .map_err(PalwStateV2Error::NativeResource)?;
         let saved = (
@@ -357,7 +395,7 @@ impl TransitionBuilder<'_> {
             handoff
                 .allocate_charge_v1(prepared.carrier_v1(), prepared.charge_purpose_v1(), prepared.charge_sompi_v1())
                 .map_err(carrier_error)?;
-            Ok(prepared.charge_sompi_v1())
+            finish(handoff, prepared.charge_sompi_v1())
         })();
         if result.is_err() {
             self.restore(saved);

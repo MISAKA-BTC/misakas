@@ -1037,6 +1037,56 @@ pub(crate) fn exercise_paid_manifest_writer_v1(
     assert_eq!(duplicate.remaining_fee_v1(), before);
     assert_eq!(builder.entries.len(), journal_len);
 
+    // Both phases replay the SAME immutable UTXO seed from the SAME parent.
+    // Discarding a successful preview cannot consume the actual phase's fee.
+    use crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::replay::reconcile_manifest_request_fees_v1;
+    let parent_root = parent.state_root();
+    let seed = make_handoff().into_replay_seed_v1(parent_root).unwrap();
+    let mut preview = TransitionBuilder::new(&parent, params, false, false, false, false, &extras);
+    let expected_fee = preview.install_shared_paid_manifest_request_v1(parent_root, &at, prepared, &seed).unwrap();
+    assert_eq!(expected_fee.charge_v1(), charge);
+    assert_eq!(preview.state, builder.state);
+    drop(preview);
+    assert_eq!(seed.candidate_at_v1(parent_root, &at).unwrap().remaining_fee_v1(), before);
+    let mut actual = TransitionBuilder::new(&parent, params, false, false, false, false, &extras);
+    assert!(actual.install_shared_paid_manifest_request_v1(h64(0), &at, prepared, &seed).is_err());
+    assert_eq!(actual.state, parent);
+    assert!(actual.entries.is_empty());
+    use crate::palw_batch_court_v1::fold_order::{AcceptedPublicNativeCourtItemV2, in_accepted_public_native_order_v2};
+    let manifests = [(1, seed.clone())];
+    let empty: &[(usize, usize)] = &[];
+    let ordered = in_accepted_public_native_order_v2(
+        [0, 1].into_iter(),
+        empty,
+        empty,
+        &manifests,
+        |n| *n,
+        |n| *n,
+        |seed| seed.accepted_ordinal_v1(),
+    )
+    .unwrap();
+    let mut ordinary_seen = 0;
+    let mut actual_fee = None;
+    for item in ordered {
+        match item {
+            AcceptedPublicNativeCourtItemV2::Ordinary(_) => ordinary_seen += 1,
+            AcceptedPublicNativeCourtItemV2::Manifest(seed) => {
+                assert_eq!(ordinary_seen, 1);
+                actual_fee = Some(actual.install_shared_paid_manifest_request_v1(parent_root, &at, prepared, seed).unwrap());
+            }
+            _ => panic!("the fixture has no Batch or Tokenizer carrier"),
+        }
+    }
+    let actual_fee = actual_fee.unwrap();
+    let totals = reconcile_manifest_request_fees_v1(&[expected_fee], &[actual_fee], parent_root, &at, 1).unwrap();
+    assert_eq!(totals.charge, charge);
+    assert_eq!(totals.collectible_fee, before - charge);
+    assert_eq!(actual.state, builder.state);
+    let duplicate_fee = actual.install_shared_paid_manifest_request_v1(parent_root, &at, prepared, &seed).unwrap();
+    assert_eq!(duplicate_fee.charge_v1(), 0);
+    assert!(reconcile_manifest_request_fees_v1(&[expected_fee], &[duplicate_fee], parent_root, &at, 1).is_err());
+    assert!(reconcile_manifest_request_fees_v1(&[actual_fee, actual_fee], &[actual_fee, actual_fee], parent_root, &at, 2).is_err());
+
     let previous = builder.state.last_point;
     assert_ne!(previous, Some(at), "the fixture must exercise an unadvanced prefix");
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: previous, new: Some(at) });
