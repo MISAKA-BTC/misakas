@@ -1,0 +1,53 @@
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+error: pattern requires `..` due to inaccessible fields
+   --> consensus/core/src/palw_native_resource_v1/typed.rs:265:17
+    |
+265 |             let Self { $($(#[$attr])* $field),* } = self;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: consensus/core/src/palw_native_resource_v1/generated.rs:60:1
+    |
+ 60 | native_struct!(crate::palw_state_v2::Pal...active, class_court_windows, panel_v3, kernel_route);
+    | ----------------------------------------...---------------------------------------------------- in this macro invocation
+    |
+    = note: this error originates in the macro `native_struct` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: ignore the inaccessible and unused fields
+    |
+265 |             let Self { $($(#[$attr])* $field, ..),* } = self;
+    |                                             ++++
+
+error: pattern requires `..` due to inaccessible fields
+   --> consensus/core/src/palw_native_resource_v1/typed.rs:270:17
+    |
+270 |             let Self { $($(#[$attr])* $field),* } = self;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: consensus/core/src/palw_native_resource_v1/generated.rs:60:1
+    |
+ 60 | native_struct!(crate::palw_state_v2::Pal...active, class_court_windows, panel_v3, kernel_route);
+    | ----------------------------------------...---------------------------------------------------- in this macro invocation
+    |
+    = note: this error originates in the macro `native_struct` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: ignore the inaccessible and unused fields
+    |
+270 |             let Self { $($(#[$attr])* $field, ..),* } = self;
+    |                                             ++++
+
+error: pattern requires `..` due to inaccessible fields
+   --> consensus/core/src/palw_native_resource_v1/typed.rs:275:17
+    |
+275 |             let Self { $($(#[$attr])* $field),* }=self;
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+   ::: consensus/core/src/palw_native_resource_v1/generated.rs:60:1
+    |
+ 60 | native_struct!(crate::palw_state_v2::Pal...active, class_court_windows, panel_v3, kernel_route);
+    | ----------------------------------------...---------------------------------------------------- in this macro invocation
+    |
+    = note: this error originates in the macro `native_struct` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: ignore the inaccessible and unused fields
+    |
+275 |             let Self { $($(#[$attr])* $field, ..),* }=self;
+    |                                             ++++
+
+error: could not compile `kaspa-consensus-core` (lib) due to 3 previous errors

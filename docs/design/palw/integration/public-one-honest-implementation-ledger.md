@@ -263,3 +263,6 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 
 
 BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch-plain-output-consumers-2026-11-11/README.md)が成功した。`a7b678d79` のSDK3・通常UTXO支払1・CLI1・RPC1・core2を確認し、Nodeで見つかったJSON macroの依存不足を `9f0bd5a74` で修正した。最初のconsumer filterで選択されなかったCLI/RPCは同じ生成binaryから個別実行している。公開搬送、Selection/DAを含む共通planner、公開TFP1 quoteと受理は未完のままである。
+
+
+`61adac48e` の[BCT2搬送・local受付回帰5件](../../../evidence/palw/batch-plain-output-transport-2026-11-11/README.md)とNode/mining/P2P build検査が成功した。source DAA gate、物理carrier集計、実UTXO handoff、所有状態を引き継ぐ仮実行・確定writer、固定receipt rent、peer/process別の再試行可能な負荷制限を接続した。Selectionの新しい受付前幾何は既存FullIds＋全row tile×roleと一致する。全public policyはNone。有効なBCT2からreceipt/Terminalまでの通し成功、Selection/DAのruntime、受付後の他状態の成長を含むterminal上限保証は未完で、公開適格性・TFP1受理を主張しない。

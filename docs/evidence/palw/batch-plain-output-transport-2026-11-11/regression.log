@@ -1,0 +1,40 @@
+   Compiling tokio v1.54.1
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/kernel)
+   Compiling workflow-core v0.18.0
+   Compiling workflow-wasm v0.18.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/math)
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/core)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/wasm/core)
+   Compiling secp256k1-sys v0.10.1
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/database)
+   Compiling secp256k1 v0.29.1
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/mining/errors)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/mining)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 13s
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-08530b949a455caa)
+
+running 4 tests
+test palw_batch_court_v1::plain_output_transport::tests::bct2_physical_meter_counts_duplicates_and_malformed_before_adjudication ... ok
+test palw_batch_court_v1::plain_output_local_work::tests::bct2_local_intake_charges_malformed_and_duplicates_and_refills_without_clock_reversal ... ok
+test palw_court_shared_material_intake_v1::storage_rent::tests::bct2_fixed_receipt_rent_matches_native_handoff_on_refusal_and_retry ... ok
+test palw_court_shared_material_intake_v1::batch::selection::tests::bct2_plain_selection_source_geometry_matches_complete_legacy_dependencies ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 5988 filtered out; finished in 0.22s
+
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_mining-cf5b0f7bf55ac59a)
+
+running 1 test
+test mempool::validate_and_insert_transaction::plain_output_local_tests::bct2_mempool_backpressure_precedes_validation_and_is_retryable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 134 filtered out; finished in 0.00s
+

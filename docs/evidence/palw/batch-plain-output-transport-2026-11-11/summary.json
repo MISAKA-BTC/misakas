@@ -1,0 +1,44 @@
+{
+  "schema": "palw-bct2-transport-functional-v1",
+  "sourceCommit": "61adac48eef737f8832de6b74eec090360ab8a72",
+  "selectionGeometryCommit": "da09d5e51",
+  "testPassed": 5,
+  "testFailed": 0,
+  "testCounts": {
+    "core": 4,
+    "mining": 1
+  },
+  "profile": "macOS test; core opt-level=0; incremental=false; jobs=2",
+  "workerStackBytes": 67108864,
+  "nodeMiningFlowsCheck": "PASS",
+  "initialCheckFailure": "NativeHeap generated fields omitted the new transport policy; generator/field accounting corrected",
+  "binaries": {
+    "kaspa_consensus_core-08530b949a455caa": "c4d6c99cb3f8d0042a8b0845b564a5d9a88c70792ade7e1647ebd5049a48498c",
+    "kaspa_mining-cf5b0f7bf55ac59a": "2358f912b4228be3183896651fbd5a3ba37c89e0dda47081b1e4557228cb8837"
+  },
+  "logs": {
+    "initial-check.log": "5c4a96bfc64a04dcb4f1cf39c919aefff0d36112cbf56d207d5cc98ab6b90b60",
+    "first-full-check.log": "44dff27af503afd0652bb113251a37ee22b52356bf89c5eb5b65be43dd4065ee",
+    "final-check.log": "dd36671b2c0dfb478ca87710b66cb2cefebaaa1caba0e03bdacfe01941526757",
+    "regression.log": "02a6c1d14301fb0c7baf57d7b743424fec766e2d3bfe9a18dacd14380f7888e5",
+    "source-snapshot.json": "0882c918159ab849b78b2b368d6e9d59a56ec78ef747db33a0dcc039281d4cf5"
+  },
+  "publicPolicyConfigured": false,
+  "publicDeployment": false,
+  "publicAdmissionConfirmed": false,
+  "limitations": [
+    "Valid BCT2 Verify to retained receipt to fault Terminal through the funded dispatcher is not yet exercised.",
+    "Selection geometry preserves legacy full-row-tile times role dependencies; active Selection and DA fallback integration remain incomplete.",
+    "Finite prefix checkpoint bound does not guarantee that global state growth after original admission stays within it. Claim-local indexing/undo or an admission guarantee remains required before public activation.",
+    "Local peer/process rates reuse operational H1 burst/refill; they are not a public physical capacity measurement.",
+    "No public TFP1 quote success, admission, Final, receipt production or main push demonstrated by these tests."
+  ],
+  "documentationChecks": {
+    "status": "known existing failures unchanged",
+    "newIssueOccurrences": 930,
+    "missingFileOccurrences": 971,
+    "missingHeadingOccurrences": 2,
+    "rfcHistoricalFailures": 7,
+    "adrHistoricalFailures": 89
+  }
+}
