@@ -384,7 +384,6 @@ impl PlainBatchOutputV2 {
         if original.job.tail.is_some()
             || original.job.is_prefix_state()
             || original.job.is_constraint()
-            || crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_none()
             || original.output_root == Hash64::default()
             || !source.supports_tiled_trace_v1()
             || source.decode_count_v1() == 0
@@ -398,6 +397,9 @@ impl PlainBatchOutputV2 {
         {
             return Err(BatchCourtErrorV1::CaseGraph);
         }
+        // The tail/Prefix/Constraint exclusions above already ensure that
+        // of_job_v1 returns Some. Do not clone a V4 logit-bias
+        // vector merely to check rule presence while deriving byte bounds.
         let full_ids_bytes = crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(source.decode_count_v1());
         if !(1..=super::MATERIAL_PIPELINED_MAX_BYTES).contains(&full_ids_bytes) {
             return Err(BatchCourtErrorV1::DeliveryCost);

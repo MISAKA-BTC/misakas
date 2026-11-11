@@ -2,6 +2,9 @@
 //! It preserves the legacy FullIds + all row tiles × supplier roles envelope.
 //! No branch reservation, active notice, supplier identity or verdict is created.
 
+pub(crate) mod budget;
+pub(crate) mod delivery;
+
 use super::plain_output::PlainBatchOutputV2;
 use crate::{
     Hash64,
