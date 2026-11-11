@@ -323,7 +323,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     /// All bindings remain unresolved in this candidate. Quota alone cannot
     /// discharge a duty, and no unadopted release flag or wall-clock expiry can.
     pub fn court_service_holds_claim_v1(&self, claim: &Hash64) -> bool {
-        self.court_service_state_v1().is_some_and(|service| service.claims.contains_key(claim))
+        self.public_tfp1_link_holds_claim_v1(claim)
+            || self.court_service_state_v1().is_some_and(|service| service.claims.contains_key(claim))
     }
     /// **G14 lane r6-d1-release (user decision D1): the service binding holds only a claim's RETIREMENT, never its Final.** A bound
     /// claim owes its normal pre-Final and Final deadlines (DL-1 arms them, `finalize_claim` proceeds); once terminal, its retirement

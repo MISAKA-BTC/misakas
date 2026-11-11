@@ -267,6 +267,35 @@ impl TransitionBuilder<'_> {
     }
 
     fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
+        if table == crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1 {
+            return Err(PalwStateV2Error::KernelRouteRefused("TFP1 link requires its paired native writer".into()));
+        }
+        self.apply_kernel_row_authorized_v1(table, key, new)
+    }
+
+    /// Called inside the original admission's existing checkpoint. No extras
+    /// lane can inject a link prepared from a separately signed companion.
+    pub(super) fn install_public_tfp1_link_v1(
+        &mut self,
+        point: &PalwBlockContextV2,
+        prepared: &crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1PublicOriginalLinkV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some((key, row)) = prepared
+            .storage_row(&self.state, point)
+            .map_err(|why| PalwStateV2Error::KernelRouteRefused(format!("invalid paired TFP1 link: {why:?}")))?
+        else {
+            return Ok(());
+        };
+        let table = crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1;
+        let mut quote = crate::palw_state_v2::native_writers::NativeWriteQuoteV1::new("paired native TFP1 link");
+        quote.exact::<u8>(key.len() as u64)?.encoded(row)?;
+        self.admit_native_write_v1(quote)?;
+        let bytes = Some(borsh::to_vec(row).expect("fixed TFP1 link serialization"));
+        self.reserve_kernel_row_write_v1(table, &key, &bytes, false)?;
+        self.apply_kernel_row_authorized_v1(table, key.to_vec(), bytes)
+    }
+
+    fn apply_kernel_row_authorized_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
         if let Some(value) = new.as_deref() {
             crate::palw_positive_contract_v2::check_public_verification_row_v1(table, &key, value)
                 .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid public verification row: {error:?}")))?;

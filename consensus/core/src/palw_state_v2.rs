@@ -24063,6 +24063,9 @@ fn apply_kernel_route_row_v1(
     revert: bool,
 ) -> Result<(), PalwStateV2Error> {
     let (expected, install) = if revert { (new, old) } else { (old, new) };
+    if table == crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1 && !matches!((old, new), (None, Some(_))) {
+        return Err(PalwStateV2Error::DeltaMismatch("TFP1 link journal only permits an immutable insertion"));
+    }
     if crate::palw_positive_contract_v2::is_public_verification_table_v1(table)
         && matches!((expected, install), (Some(old), Some(new)) if old != new)
     {

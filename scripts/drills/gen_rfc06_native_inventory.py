@@ -405,6 +405,8 @@ OWNER_NATIVE_HEAP.update({
     'crate::palw_positive_contract_v2::PublicOriginalAdmissionRecordV1',
     'crate::palw_positive_contract_v2::PreparedPublicCourtRecordV1',
     'crate::palw_positive_contract_v2::PublicOriginalCourtRecordV1',
+    'crate::palw_positive_contract_v2::tfp1_original::native_link::Tfp1PublicOriginalLinkV1',
+    'crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1PublicOriginalLinkV1',
     'crate::palw_positive_contract_v2::PreparedPublicDrawRecordV1',
     'crate::palw_positive_contract_v2::PublicDrawRecordV1',
     'crate::palw_positive_contract_v2::PublicReplayApprovalRecordV1',

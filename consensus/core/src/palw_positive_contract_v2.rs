@@ -50,6 +50,7 @@ pub(crate) const PUBLIC_MANIFEST_RESPONSE_TABLE_V1: u8 = 200;
 pub(crate) const PUBLIC_DRAW_TABLE_V1: u8 = 201;
 pub(crate) const PUBLIC_REPLAY_APPROVAL_TABLE_V1: u8 = 202;
 pub(crate) const PUBLIC_COURT_RECORD_TABLE_V1: u8 = 203;
+pub(crate) const PUBLIC_TFP1_LINK_TABLE_V1: u8 = 204;
 
 pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
     matches!(
@@ -60,6 +61,7 @@ pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
             | PUBLIC_DRAW_TABLE_V1
             | PUBLIC_REPLAY_APPROVAL_TABLE_V1
             | PUBLIC_COURT_RECORD_TABLE_V1
+            | PUBLIC_TFP1_LINK_TABLE_V1
     )
 }
 
@@ -71,6 +73,7 @@ pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u
         PUBLIC_DRAW_TABLE_V1 => PublicDrawRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_REPLAY_APPROVAL_TABLE_V1 => PublicReplayApprovalRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_COURT_RECORD_TABLE_V1 => PublicOriginalCourtRecordV1::decode_row(key, bytes).map(|_| ()),
+        PUBLIC_TFP1_LINK_TABLE_V1 => tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -1296,6 +1299,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             PUBLIC_DRAW_TABLE_V1 => self.decode_public_draw_row_v1(key, bytes).map(|_| ()),
             PUBLIC_REPLAY_APPROVAL_TABLE_V1 => self.decode_public_replay_approval_row_v1(key, bytes).map(|_| ()),
             PUBLIC_COURT_RECORD_TABLE_V1 => self.decode_public_court_row_v1(key, bytes).map(|_| ()),
+            PUBLIC_TFP1_LINK_TABLE_V1 => tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes)
+                .and_then(|row| row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)),
             _ => Err(ContractError::NonCanonical),
         };
         result.map_err(|error| {
@@ -1306,7 +1311,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     pub(crate) fn validate_public_verification_rows_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
         for ((table, key), bytes) in
-            route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_COURT_RECORD_TABLE_V1 + 1, Vec::new()))
+            route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_TFP1_LINK_TABLE_V1 + 1, Vec::new()))
         {
             self.validate_public_verification_row_v1(*table, key, bytes)?;
         }
@@ -1631,6 +1636,27 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let record = PublicOriginalAdmissionRecordV1::decode_row(&key.1, bytes)?;
         record.check_state_point(self.last_point().ok_or(ContractError::Scope)?)?;
         Ok(Some(record))
+    }
+
+    /// A rooted link never substitutes for restoring the literal companion,
+    /// draw and request. It pins which OriginalId may be used for this claim.
+    pub(crate) fn public_tfp1_original_link_v1(
+        &self,
+        claim: Hash64,
+    ) -> Result<Option<tfp1_original::native_link::Tfp1PublicOriginalLinkV1>, ContractError> {
+        let Some(route) = self.kernel_route_state_v1() else { return Ok(None) };
+        let key = claim.as_bytes();
+        let Some(bytes) = route.aux.get(&(PUBLIC_TFP1_LINK_TABLE_V1, key.to_vec())) else { return Ok(None) };
+        let row = tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(&key, bytes)?;
+        row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)?;
+        Ok(Some(row))
+    }
+
+    pub(crate) fn public_tfp1_link_holds_claim_v1(&self, claim: &Hash64) -> bool {
+        // Until the new profile's bounded release/archive path is complete,
+        // never strand a link by retiring the native identity it authenticates.
+        self.kernel_route_state_v1()
+            .is_some_and(|route| route.aux.contains_key(&(PUBLIC_TFP1_LINK_TABLE_V1, claim.as_bytes().to_vec())))
     }
 }
 

@@ -2,6 +2,8 @@
 //! PublicOneHonest companion. The binding is available before either
 //! signature, and does not authenticate an accepted carrier or reserve slots.
 
+pub(crate) mod native_link;
+
 use super::{
     PreparedPublicOriginalV1, PublicOriginalAdmissionV1, PublicOriginalReservationV1, public_original_service_contract_id_v1,
 };
@@ -39,21 +41,34 @@ impl NativeTfp1PublicOriginalFactsV1 {
     }
 
     pub(crate) fn derive_v1(original: &PalwFreePromptCommitmentV3, source: &PalwTirPublicSourceV1) -> Result<Self, ContractError> {
-        let header = source.header_v1();
+        if original.work_leaves != source.leaf_count_v1() || original.decode_tokens_executed != source.decode_count_v1() {
+            return Err(ContractError::Scope);
+        }
+        Self::from_native_header_v1(original, source.header_v1(), fp_claim_id_v3(original), source.source_id_v1())
+    }
+
+    // Called only for a verified Source or an already rooted frame keyed by
+    // the native claim. The link reader separately rehashes the exact header.
+    fn from_native_header_v1(
+        original: &PalwFreePromptCommitmentV3,
+        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        claim: Hash64,
+        source: Hash64,
+    ) -> Result<Self, ContractError> {
         if original.job.class_id != header.job_context.shape_profile_id
             || palw_fp_job_pin_v1(original) != palw_fp_job_pin_of_context_v1(&header.job_context)
             || original.execution_root != header.committed_execution_root
             || original.trace_root != header.full_logits_trace_root
-            || original.work_leaves != source.leaf_count_v1()
-            || original.decode_tokens_executed != source.decode_count_v1()
+            || original.work_leaves != header.step_leaf_count
+            || original.decode_tokens_executed != header.job_context.exact_decode_tokens
             || original.output_root == Hash64::default()
         {
             return Err(ContractError::Scope);
         }
         let key = original.job.executor_pubkey.as_slice().try_into().map_err(|_| ContractError::Identity)?;
         Ok(Self {
-            claim: fp_claim_id_v3(original),
-            source: source.source_id_v1(),
+            claim,
+            source,
             job_context: header.job_context.context_hash(),
             artifact: header.artifact_root,
             execution_root: original.execution_root,
@@ -89,7 +104,7 @@ impl NativeTfp1PublicOriginalFactsV1 {
             ),
         )
         .map_err(|_| ContractError::NonCanonical)?;
-        Ok(Tfp1PublicOriginalObligationV1 { facts: self, obligation: Digest(obligation.as_bytes()) })
+        Ok(Tfp1PublicOriginalObligationV1 { facts: self, profile, resource, obligation: Digest(obligation.as_bytes()) })
     }
 }
 
@@ -98,6 +113,8 @@ impl NativeTfp1PublicOriginalFactsV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Tfp1PublicOriginalObligationV1 {
     facts: NativeTfp1PublicOriginalFactsV1,
+    profile: Hash64,
+    resource: Hash64,
     obligation: Digest,
 }
 
@@ -140,6 +157,15 @@ impl Tfp1PublicOriginalObligationV1 {
 pub(crate) struct PreparedTfp1PublicOriginalV1 {
     companion: PreparedPublicOriginalV1,
     obligation: Tfp1PublicOriginalObligationV1,
+    pairing: Option<PairedTfp1CarrierV1>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PairedTfp1CarrierV1 {
+    literal_fp: Hash64,
+    funding_contract: Hash64,
+    funding_outpoint: crate::tx::TransactionOutpoint,
+    funding_amount: u64,
 }
 
 #[allow(dead_code)]
@@ -245,7 +271,22 @@ impl PublicOriginalAdmissionV1<'_> {
             return Err(ContractError::Scope);
         }
         self.check_tfp1_prompt_bytes_v1(pairing.public_prompt_bytes_v3().ok_or(ContractError::Scope)?)?;
-        self.prepare_tfp1_signed_bytes_v1(pairing.public_companion_v3().ok_or(ContractError::Scope)?, obligation, reservation)
+        let mut prepared =
+            self.prepare_tfp1_signed_bytes_v1(pairing.public_companion_v3().ok_or(ContractError::Scope)?, obligation, reservation)?;
+        // The pairing derives both slices from the same actual transaction.
+        // Preserve a digest of the signed literal, independent of the
+        // immutable semantic claim ID used before either signature.
+        prepared.pairing = Some(PairedTfp1CarrierV1 {
+            literal_fp: stream_digest(
+                b"misaka-palw/tfp1-public-original-literal/v1",
+                &pairing.envelope().original_envelope.as_slice(),
+            )
+            .map_err(|_| ContractError::NonCanonical)?,
+            funding_contract: pairing.envelope().funding.terms.id_v1(),
+            funding_outpoint: pairing.outpoint(),
+            funding_amount: pairing.envelope().funding.terms.funding_amount_sompi,
+        });
+        Ok(prepared)
     }
 
     /// Verify an actual signed companion after the native TFP1 planner
@@ -260,7 +301,7 @@ impl PublicOriginalAdmissionV1<'_> {
         let signed = SignedPublicOriginalV1::decode(bytes)?;
         self.check_tfp1_link_v1(&signed.original, obligation, reservation)?;
         let companion = self.prepare(&signed.original, &signed.key, &signed.signature, reservation)?;
-        Ok(PreparedTfp1PublicOriginalV1 { companion, obligation })
+        Ok(PreparedTfp1PublicOriginalV1 { companion, obligation, pairing: None })
     }
 }
 
@@ -526,7 +567,66 @@ mod tests {
         let pairing = pair_carrier(&funded, prompt_text.as_bytes());
         assert_eq!(admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation), Err(ContractError::Scope));
         reservation.origin.carrier_transaction = NativeHash64(pairing.carrier().id().as_bytes());
-        assert!(admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).is_ok());
+        let prepared = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
+        let signed_only = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
+        assert_eq!(prepared.accepted_companion_v1(), signed_only.accepted_companion_v1());
+        let link_point = crate::palw_state_v2::PalwBlockContextV2 {
+            block: Hash64::from_bytes(reservation.origin.accepting_block.0),
+            daa_score: reservation.origin.accepted_daa,
+            blue_score: reservation.origin.accepted_blue_score,
+            subsidy: 0,
+        };
+        let admission_reservation = Digest([71; 64]);
+        use crate::palw_state_v2::tests::native_writers_v1::{exercise_tfp1_link_writer_v1, prepare_tfp1_link_writer_fixture_v1};
+        // Seed the admitted frame and table 198 for the typed writer test.
+        // This is not an end-to-end production admission of the fixture.
+        let terms = &pairing.envelope().funding.terms;
+        let escrow = crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1::fresh_v1(
+            terms.id_v1(),
+            facts.claim,
+            pairing.outpoint(),
+            terms.funding_amount_sompi,
+            terms.payer_key_id,
+            terms.refund_payload,
+            link_point.daa_score,
+            misaka_palw_positive_contract::public_one_honest::OriginalClock::new(link_point.daa_score).unwrap().hard(),
+            true,
+        )
+        .unwrap();
+        let (link_state, link_params) = prepare_tfp1_link_writer_fixture_v1(
+            &fixture,
+            link_point,
+            prepared.companion_v1().prepare_storage_record(admission_reservation),
+            escrow,
+        );
+        assert_eq!(signed_only.prepare_native_link_v1(&link_state, &link_point, admission_reservation), Err(ContractError::Scope));
+        let wrong_point = crate::palw_state_v2::PalwBlockContextV2 { block: Hash64::from_u64_word(805), ..link_point };
+        assert_eq!(
+            admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap().prepare_native_link_v1(
+                &link_state,
+                &wrong_point,
+                admission_reservation
+            ),
+            Err(ContractError::Scope)
+        );
+        // A second literal carrier can have the same signed FP, Source and
+        // companion and the same accepting point. Only the winner has the
+        // exact escrow outpoint rooted by native admission.
+        let mut duplicate_tx = pairing.carrier().clone();
+        duplicate_tx.outputs[0].value += 1;
+        duplicate_tx.finalize();
+        let duplicate = crate::palw_funded_original_coordinator_v1::palw_funded_original_pairing_v1(&duplicate_tx).unwrap();
+        reservation.origin.carrier_transaction = NativeHash64(duplicate_tx.id().as_bytes());
+        assert_eq!(
+            admission.prepare_tfp1_pairing_v1(&duplicate, obligation, &reservation).unwrap().prepare_native_link_v1(
+                &link_state,
+                &link_point,
+                admission_reservation
+            ),
+            Err(ContractError::Scope)
+        );
+        let link = prepared.prepare_native_link_v1(&link_state, &link_point, admission_reservation).unwrap();
+        exercise_tfp1_link_writer_v1(link_state, link_point, link, link_params);
         // A valid transaction with a changed literal prompt cannot borrow the
         // same signed companion, even after its new actual txid is supplied.
         let foreign_prompt = pair_carrier(&funded, b"different text");

@@ -2391,7 +2391,7 @@ mod tests {
 /// `apply_verified_control_v1`), the outer transaction fee/burn, the processor's block/template walk, the node filer, and the
 /// capacity-liability freeze (its admission refusal is ADM's existing `ProducerFrozen` test).
 #[cfg(test)]
-mod conviction_e2e_tests {
+pub(crate) mod conviction_e2e_tests {
     include!("palw_tir_continuation_source_owned_tests_v2.rs");
     include!("palw_tir_finished_material_owned_tests_v2.rs");
     include!("palw_tir_native_header_identity_tests_v2.rs");
@@ -2548,7 +2548,10 @@ mod conviction_e2e_tests {
 
     /// The accepted world the colluders built: the licensed claim, its drawn Panel, the colluders' native S4 locks, the registered
     /// class and the rooted frame (its indices — producer exposure and the liable signers' exit holds — rebuilt from the rows).
-    fn world(fx: &PalwTirPublicFrameFixtureV1, frame: &Frame) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1) {
+    pub(crate) fn world(
+        fx: &PalwTirPublicFrameFixtureV1,
+        frame: &Frame,
+    ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1) {
         world_with(fx, frame, &drawn())
     }
     /// [`world`] with the drawn Panel `drawn`.

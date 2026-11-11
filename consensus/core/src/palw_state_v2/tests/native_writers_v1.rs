@@ -630,8 +630,8 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let other_signature =
         libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &other_request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [3; 32])
             .unwrap();
-    let other_wire = borsh::to_vec(&SignedManifestRequestV1 { request: other_request, key, signature: *other_signature.as_ref() })
-        .unwrap();
+    let other_wire =
+        borsh::to_vec(&SignedManifestRequestV1 { request: other_request, key, signature: *other_signature.as_ref() }).unwrap();
     assert!(prepared.rooted_drawn_batch_case_v1(&restored_case, &draw, &other_wire, &other_context).is_err());
     assert!(prepared.rooted_drawn_batch_case_v1(&restored_case, &draw, &wire, &other_context).is_err());
     let other_pending = prepared.prepare_drawn_manifest_storage_record(Digest([2; 64]), &draw, &other_wire, &other_context).unwrap();
@@ -840,4 +840,92 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         Err(PalwStateV2Error::DeltaMismatch("public verification row is immutable"))
     ));
     assert_eq!(state, child);
+}
+
+/// Native identity rows are fixtures; the caller supplies a real signed TFO3
+/// and its exact fresh escrow. This does not simulate a paid public admission.
+pub(crate) fn prepare_tfp1_link_writer_fixture_v1(
+    fx: &crate::palw_tir_public_claim_v1::PalwTirPublicFrameFixtureV1,
+    point: PalwBlockContextV2,
+    admission: crate::palw_positive_contract_v2::PreparedPublicOriginalRecordV1,
+    escrow: crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1,
+) -> (PalwChainStateV2, PalwStateParamsV2) {
+    let (mut state, params, _) = super::super::palw_tir_public_fold_v1::conviction_e2e_tests::world(fx, &fx.frame);
+    let id = fx.frame.plan_v1().original_claim;
+    assert_eq!(point.daa_score, fx.frame.plan_v1().terms.accepted_daa);
+    let claim = state.claims.get_mut(&id).unwrap();
+    claim.accepted_block = point.block;
+    claim.accepted_blue_score = point.blue_score;
+    state.last_point = Some(point);
+    state.kernel_route = Some(crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
+        crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
+        None,
+        misaka_palw_kernel::rows::LedgerScalarsV1 { daa: point.daa_score, burned: 0 },
+    ));
+    state.funded_escrows_by_claim.insert((escrow.claim, escrow.contract_id));
+    state.funded_escrows.insert(escrow.contract_id, escrow);
+    let (key, row) = admission.storage_row(&state, &point).unwrap().unwrap();
+    let bytes = borsh::to_vec(row).unwrap();
+    state
+        .kernel_route
+        .as_mut()
+        .unwrap()
+        .aux
+        .insert((crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, key.to_vec()), bytes);
+    (state, params)
+}
+
+pub(crate) fn exercise_tfp1_link_writer_v1(
+    state: PalwChainStateV2,
+    point: PalwBlockContextV2,
+    prepared: crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1PublicOriginalLinkV1,
+    params: PalwStateParamsV2,
+) {
+    use crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1;
+    let (key, row) = prepared.storage_row(&state, &point).unwrap().unwrap();
+    let row = *row;
+    let bytes = borsh::to_vec(&row).unwrap();
+    let extras = PalwTransitionExtrasV1::default();
+    let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    assert!(builder.write_kernel_row(PUBLIC_TFP1_LINK_TABLE_V1, key.to_vec(), Some(bytes.clone())).is_err());
+    assert!(builder.write_kernel_row_encoded_v1(PUBLIC_TFP1_LINK_TABLE_V1, &key, Some(&row)).is_err());
+    assert!(builder.entries.is_empty());
+    assert_eq!(builder.state, state);
+    builder.install_public_tfp1_link_v1(&point, &prepared).unwrap();
+    assert_eq!(builder.entries.len(), 1);
+    assert_eq!(builder.state.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), Some(row));
+    builder.install_public_tfp1_link_v1(&point, &prepared).unwrap();
+    assert_eq!(builder.entries.len(), 1, "exact replay does not append a second journal write");
+    builder.state.validate_public_verification_rows_v1().unwrap();
+    assert!(builder.state.court_service_holds_claim_v1(&row.claim_v1()));
+    assert!(
+        builder
+            .state
+            .court_service_holds_material_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirClaim(row.claim_v1()))
+    );
+    let delta = PalwStateDeltaV2 { point, entries: builder.entries.clone() };
+    let replayed = apply_delta_v2(&state, &delta, &params).unwrap();
+    assert_eq!(replayed.state_root(), builder.state.state_root());
+    let reverted = revert_delta_v2(&replayed, &delta, &params).unwrap();
+    assert_eq!(reverted.state_root(), state.state_root());
+    assert_eq!(reverted.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), None);
+    let encoded = borsh::to_vec(&PalwStateCarriageV2::from_state(&replayed)).unwrap();
+    crate::palw_native_resource_v1::preflight_native_carriage_v1(&encoded[..], encoded.len() as u64).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&encoded).unwrap().into_state(&params, Some(replayed.state_root())).unwrap();
+    assert_eq!(restored.public_tfp1_original_link_v1(row.claim_v1()).unwrap(), Some(row));
+    let mut missing_claim = replayed.clone();
+    missing_claim.claims.remove(&row.claim_v1());
+    assert!(missing_claim.public_tfp1_original_link_v1(row.claim_v1()).is_err());
+    let mut wrong_origin = replayed.clone();
+    wrong_origin.claims.get_mut(&row.claim_v1()).unwrap().accepted_block = h64(999);
+    assert!(wrong_origin.public_tfp1_original_link_v1(row.claim_v1()).is_err());
+    let mut erase = replayed.clone();
+    assert!(apply_kernel_route_row_v1(&mut erase, PUBLIC_TFP1_LINK_TABLE_V1, &key, &Some(bytes), &None, false).is_err());
+    assert_eq!(erase.state_root(), replayed.state_root());
+    let mut no_capacity = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let _checker = zero_capacity(&mut no_capacity);
+    assert!(matches!(no_capacity.install_public_tfp1_link_v1(&point, &prepared), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(no_capacity.entries.is_empty());
+    assert_eq!(no_capacity.state, state);
 }

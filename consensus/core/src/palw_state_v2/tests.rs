@@ -22,7 +22,7 @@ mod court_admission_workspace_v2;
 mod court_capacity_workspace_v2;
 mod court_deadline_workspace_v2;
 mod legacy_court_ingress_workspace_v2;
-mod native_writers_v1;
+pub(crate) mod native_writers_v1;
 mod row_writers_v1;
 mod vesting_workspace_v2;
 // G14 lane F03 (P0-2, T05 slice): unlinked colluding Sybil on the outside reservation.
