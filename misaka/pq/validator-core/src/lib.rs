@@ -1255,6 +1255,29 @@ impl ValidatorKey {
         Ok(tx)
     }
 
+    /// Fund a BCT2 plain Output request or retained-receipt reference. The
+    /// payer's UTXO signature covers the complete payload and fee; it does not
+    /// replace the Verify control's filer signature or grant native authority.
+    /// The node must still check the activated profile and reserved slot.
+    pub fn build_palw_batch_plain_output_tx_v2(
+        &self,
+        wire: &kaspa_consensus_core::palw_batch_court_v1::carriage::BatchPlainOutputWireV2,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        let payload = kaspa_consensus_core::palw_batch_court_v1::carriage::encode_batch_plain_output_payload_v2(wire)
+            .map_err(|error| format!("plain Batch Output payload: {error}"))?;
+        self.build_funded_overlay_tx(
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            payload,
+            funding_outpoint,
+            funding,
+            fee,
+            false,
+        )
+    }
+
     /// Fund an already purpose-signed TKR1 control using an ordinary UTXO.
     /// The payer may differ from the control's opener. `fee` is the complete
     /// input/output difference: a new Open's quoted service charge plus the
@@ -4688,6 +4711,67 @@ mod rfc9_sighash_audit {
         changed_entry.amount += 1;
         assert!(!valid(&tx, &changed_entry));
         assert!(payer.build_palw_tokenizer_registration_tx(&wire, outpoint, &entry, entry.amount).is_err());
+    }
+
+    #[test]
+    fn batch_plain_output_funding_binds_both_controls_and_keeps_filer_separate() {
+        use kaspa_consensus_core::{
+            hashing::sighash::SigHashReusedValuesUnsync,
+            palw_batch_court_v1::carriage::{
+                BatchPlainOutputTerminalV2, BatchPlainOutputWireV2, PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2, SignedBatchPlainOutputV2,
+                decode_batch_plain_output_payload_v2,
+            },
+            palw_state_v2::PalwBondKeyV2,
+        };
+        use kaspa_txscript::{TxScriptEngine, caches::Cache};
+        let payer = key();
+        let filer = ValidatorKey::from_seed([0x79; VALIDATOR_SEED_LEN]);
+        let h = Hash64::from_u64_word;
+        let mut control = SignedBatchPlainOutputV2 {
+            version: 2,
+            claim: h(2),
+            scope: h(3),
+            source: h(4),
+            notice: h(5),
+            policy: h(6),
+            material: h(7),
+            filer: PalwBondKeyV2(TransactionOutpoint::new(h(8), 0)),
+            signature: [0; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        control.signature =
+            filer.sign_with_context(control.signing_message_v2(h(1)).unwrap().as_byte_slice(), PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2);
+        control.verify_signature_v2(h(1), filer.public_key()).unwrap();
+        assert!(control.verify_signature_v2(h(1), payer.public_key()).is_err());
+        let (outpoint, entry) = funding(&payer);
+        let valid = |tx: &Transaction, funding: &UtxoEntry| {
+            let populated = PopulatedTransaction::new(tx, vec![funding.clone()]);
+            let cache = Cache::new(0);
+            let reused = SigHashReusedValuesUnsync::new();
+            TxScriptEngine::from_transaction_input(&populated, &tx.inputs[0], 0, funding, &reused, &cache).execute().is_ok()
+        };
+        for wire in [
+            BatchPlainOutputWireV2::Verify(control),
+            BatchPlainOutputWireV2::Terminal(BatchPlainOutputTerminalV2 { claim: h(2), receipt_digest: h(9) }),
+        ] {
+            let fee = 123_456;
+            let tx = payer.build_palw_batch_plain_output_tx_v2(&wire, outpoint, &entry, fee).unwrap();
+            assert_eq!(tx.subnetwork_id, kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE);
+            assert_eq!(entry.amount - tx.outputs.iter().map(|output| output.value).sum::<u64>(), fee);
+            assert_eq!(decode_batch_plain_output_payload_v2(&tx.payload).unwrap(), Some(wire.clone()));
+            assert!(valid(&tx, &entry));
+            let mut changed = tx.clone();
+            changed.outputs[0].value -= 1;
+            assert!(!valid(&changed, &entry));
+            let mut changed = tx.clone();
+            *changed.payload.last_mut().unwrap() ^= 1;
+            assert!(!valid(&changed, &entry));
+            let mut changed_entry = entry.clone();
+            changed_entry.amount += 1;
+            assert!(!valid(&tx, &changed_entry));
+            assert!(payer.build_palw_batch_plain_output_tx_v2(&wire, outpoint, &entry, entry.amount).is_err());
+        }
+        let invalid = BatchPlainOutputWireV2::Terminal(BatchPlainOutputTerminalV2 { claim: h(2), receipt_digest: Hash64::default() });
+        assert!(payer.build_palw_batch_plain_output_tx_v2(&invalid, outpoint, &entry, 123_456).is_err());
     }
 
     #[test]

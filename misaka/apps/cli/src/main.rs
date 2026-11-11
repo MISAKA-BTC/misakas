@@ -1777,6 +1777,20 @@ enum PalwCmd {
         #[arg(long)]
         maximum_fee_sompi: Option<u64>,
     },
+    /// Prepare a BCT2 plain Output request from accepted FullIds. Does not submit.
+    BatchPreparePlainOutput {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        notice: String,
+        /// New file for the purpose-signed BCT2 payload; never overwritten.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
     /// Fund the booked numerical fault terminal for an accepted finding.
     BatchConvict {
         #[command(flatten)]
@@ -3820,6 +3834,9 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move {
                 palw_batch::verify_numerical(ctx, &key.source(), &bond, &claim, &notice, leaf, submit, maximum_fee_sompi).await
             })
+        }
+        Command::Palw(PalwCmd::BatchPreparePlainOutput { key, bond, claim, notice, out }) => {
+            Box::pin(async move { palw_batch::prepare_plain_output_v2(ctx, &key.source(), &bond, &claim, &notice, &out).await })
         }
         Command::Palw(PalwCmd::BatchConvict { key, claim, submit, maximum_fee_sompi }) => {
             Box::pin(async move { palw_batch::convict_numerical(ctx, &key.source(), &claim, submit, maximum_fee_sompi).await })

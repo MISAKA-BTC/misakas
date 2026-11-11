@@ -26,6 +26,9 @@ use kaspa_rpc_core::{GetPalwCourtStateRequest, api::rpc::RpcApi};
 use serde::Deserialize;
 use std::{io::Read, path::Path};
 
+mod plain_output;
+pub(crate) use plain_output::prepare_plain_output_v2;
+
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub(crate) enum ResponseStep {
     Begin,

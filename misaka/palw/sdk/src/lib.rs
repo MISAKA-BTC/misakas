@@ -675,3 +675,6 @@ pub mod court_family_supplier_v1;
 
 /// Offline RFC-0051 tokenizer registration carrier preparation.
 pub mod tokenizer_registration;
+
+/// Offline BCT2 plain Output requests and rooted receipt references.
+pub mod batch_plain_output_v2;

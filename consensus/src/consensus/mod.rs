@@ -4429,6 +4429,9 @@ impl ConsensusApi for Consensus {
         if let kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1::BatchVerifyNumerical { claim } = target {
             return self.virtual_processor.palw_batch_numerical_verify_quote_v1_impl(claim);
         }
+        if let kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1::BatchVerifyPlainOutputV2 { claim } = target {
+            return self.virtual_processor.palw_batch_plain_output_verify_quote_v2_impl(claim);
+        }
         self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, _| {
             kaspa_consensus_core::palw_user_views_v1::palw_court_state_json_v1(state, params, target, clock).map(|doc| doc.to_string())
         })

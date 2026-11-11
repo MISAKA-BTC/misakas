@@ -366,6 +366,7 @@ pub enum PalwCourtTargetV1 {
     BatchStopFullIdsOpen { claim: Hash64, notice: Hash64 },
     BatchStop { claim: Hash64 },
     BatchVerifyNumerical { claim: Hash64 },
+    BatchVerifyPlainOutputV2 { claim: Hash64 },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -384,7 +385,9 @@ pub fn palw_court_state_json_v1(
         PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => {
             return batch_response_json_v1(state, claim, ordinal, target, now);
         }
-        PalwCourtTargetV1::BatchStop { .. } | PalwCourtTargetV1::BatchVerifyNumerical { .. } => return None,
+        PalwCourtTargetV1::BatchStop { .. }
+        | PalwCourtTargetV1::BatchVerifyNumerical { .. }
+        | PalwCourtTargetV1::BatchVerifyPlainOutputV2 { .. } => return None,
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
             return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
         }
@@ -432,7 +435,35 @@ pub fn palw_court_state_json_v1(
     if let Some(finding) = batch_numerical_finding_json_v1(state, claim_id) {
         view["batchNumericalFinding"] = finding;
     }
+    if let Some(finding) = batch_plain_output_finding_json_v2(state, claim_id) {
+        view["batchPlainOutputFinding"] = finding;
+    }
     Some(view)
+}
+
+fn batch_plain_output_finding_json_v2(state: &PalwChainStateV2, claim: Hash64) -> Option<Value> {
+    use crate::palw_batch_court_v1::carriage::quote_batch_plain_output_terminal_v2;
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    use crate::palw_tir_objective_v1::PalwTirOutputStopVerdictV1 as Verdict;
+    let Row::CourtBatchPlainOutputReceiptV2(row) = state.staged_court_row_v1(&Key::CourtBatchPlainOutputReceiptV2(claim))? else {
+        return None;
+    };
+    row.check_context(state).ok()?;
+    let receipt = &row.receipt;
+    let (terminal_daa, refusal) = match quote_batch_plain_output_terminal_v2(state, claim) {
+        Ok(quote) => (Some(quote.slot_daa), None),
+        Err(reason) => (None, Some(reason)),
+    };
+    Some(json!({
+        "version": 2, "claimId": claim.to_string(),
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "scopeId": receipt.signed.scope.to_string(), "sourceId": receipt.signed.source.to_string(),
+        "noticeId": receipt.signed.notice.to_string(), "materialId": receipt.signed.material.to_string(),
+        "verificationBlock": receipt.at.block.to_string(), "verificationDaa": receipt.at.daa_score,
+        "materialUntilDaa": row.material_until_daa, "receiptDigest": receipt.digest_v2().ok()?.to_string(),
+        "verdict": match receipt.verdict { Verdict::Holds => "holds", Verdict::OutputRootFault => "output-root-fault", Verdict::ExecutionFault => "execution-fault" },
+        "terminalDaa": terminal_daa, "terminalRefusal": refusal,
+    }))
 }
 
 fn batch_numerical_finding_json_v1(state: &PalwChainStateV2, claim: Hash64) -> Option<Value> {
@@ -504,6 +535,58 @@ pub fn palw_batch_numerical_verify_quote_json_v1(
         "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchVerifyNumerical", "nowDaa": now,
         "tipBlock": state.last_point().map(|point| point.block.to_string()),
         "claimId": claim.to_string(), "verify": verify, "error": error,
+    })
+}
+
+/// A request to inspect accepted FullIds, not a ruling or a reserved slot.
+/// Native rules must be resolved by the caller at the existing booking.
+pub fn palw_batch_plain_output_verify_quote_json_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim: Hash64,
+    now: u64,
+    rules_at: impl FnOnce(u64) -> Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>,
+) -> Value {
+    let result = (|| -> Result<Value, String> {
+        use crate::palw_batch_court_v1::carriage::{PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2, quote_batch_plain_output_verify_v2};
+        use crate::palw_court_shared_material_intake_v1::batch::plain_output::{
+            batch_plain_output_control_id_v2, plain_output_context_v2,
+        };
+        use crate::palw_staged_court_state_v1::PalwStagedCourtRowV1 as Row;
+        let context = plain_output_context_v2(state, claim)?;
+        let service = state.court_service_row_v3_v1().ok_or("plain Batch Output has no causal service book")?;
+        context.check_binding(&service.state)?;
+        let packet = batch_plain_output_control_id_v2(claim, context.scope_id).map_err(|error| format!("{error:?}"))?;
+        let slot = service.state.book.assigned_daa(&packet).ok_or("plain Batch Output has no reserved verification slot")?;
+        if now > slot {
+            return Err("plain Batch Output verification slot has passed".into());
+        }
+        let (_, notice_key) = state.court_shared_initial_notice_v1(claim).ok_or("plain Batch Output has no initial notice")?;
+        let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(notice_key) else {
+            return Err("plain Batch Output initial notice is unavailable".into());
+        };
+        let rules = rules_at(slot).ok_or("plain Batch Output profile is not active at the reserved slot")?;
+        let quote = quote_batch_plain_output_verify_v2(state, params, &rules, claim, notice.opened_by)?;
+        let signed = quote.unsigned;
+        Ok(json!({
+            "wireVersion": signed.version, "claimId": signed.claim.to_string(),
+            "scopeId": signed.scope.to_string(), "sourceId": signed.source.to_string(),
+            "noticeId": signed.notice.to_string(), "policyId": signed.policy.to_string(),
+            "materialId": signed.material.to_string(), "signer": palw_bond_key_text_v1(&signed.filer),
+            "networkDomain": rules.network_domain.to_string(), "assignedDaa": quote.slot_daa,
+            "signingDigest": quote.signing_digest.to_string(),
+            "signingContextHex": faster_hex::hex_string(PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2),
+        }))
+    })();
+    let (verify, error) = match result {
+        Ok(verify) => (verify, None),
+        Err(error) => (Value::Null, Some(error)),
+    };
+    json!({
+        "version": 2, "kind": "palwBatchVerifyPlainOutput", "nowDaa": now,
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "claimId": claim.to_string(), "verify": verify, "error": error,
+        "acceptanceConfirmed": false,
     })
 }
 

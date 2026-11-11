@@ -257,3 +257,6 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 
 
 `ebefd0152` の[M=780 native candidate検査](../../../evidence/palw/tokenizer-registration-native-candidate-2026-11-11/README.md)で、一時予約が状態不変のFinish再送でも累積し、最大8 MiB入力が論理RAM 4 GiBに達する不具合を検出した。`098da5e04` はjournal長・容量が不変でfee照合が成功した場合の返却を共通writerへ移した。同じ上限・入力で実24.08秒／最大70.48秒の機能検査が成功し、確定foldのFinish成立1件・slot消費1件・再送779件の状態不変を確認した。通常コア回帰25件も成功。macOS opt-level 0のモデル化した候補であり、実780-source DAG、公開障害の原因、Linux性能や公開profileの適格性とは区別する。
+
+
+2026-11-11 の BCT2 plain Output 接続作業（**実装中・動作未検証**）: core の専用 codec/署名目的を共有 API とし、SDKの[署名要求作成](../../../../misaka/palw/sdk/src/batch_plain_output_v2.rs)、通常UTXOを使う[支払取引builder](../../../../misaka/pq/validator-core/src/lib.rs)を追加した。Verifyの申立人署名と支払者署名を分け、Terminalは既存どおり受理済みreceipt digestの署名なし参照である。Nodeの署名要求読取は認証済みselected parent、virtual viewとimport状態の再確認を使い、context v3、予約graph、受理済みFullIdsがそろわなければ拒否する。既存RPCの `batch_open=verify-plain-output-v2` とCLI `batch-prepare-plain-output` を接続し、CLIはネットワーク/claim/notice/申立人/目的/digest/slotを照合して新規payloadファイルへ保存する。送信・予約・受理を行ったとは表示しない。通常CourtStateには保存されたplain Output receiptのholds/faultを区別して返す。SDK・取引署名・CLI・RPCの回帰コードは併記したが、この作業段階では未実行。BCT2公開搬送、全branchの共通planner、公開TFP1 quote成功は引き続き未完である。
