@@ -72,8 +72,17 @@ impl NativeAcceptedOrdinalsV1 {
         self.ordinals.get(&id).copied()
     }
 
-    fn order_key(&self, id: Option<TransactionId>) -> usize {
-        id.map_or(0, |id| self.get(id).map_or(usize::MAX, |ordinal| ordinal + 1))
+    fn checked_order_key(
+        &self,
+        id: Option<TransactionId>,
+    ) -> Result<usize, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        let Some(id) = id else { return Ok(0) };
+        let path = "native ordinary accepted transaction ordinal";
+        let ordinal = self
+            .get(id)
+            .ok_or_else(|| NativeCoverageV1::unsupported::<Self>(path, "ordinary carrier is absent from complete acceptance data"))?;
+        ordinal.checked_add(1).ok_or_else(|| NativeCoverageV1::overflow::<Self>(path))
     }
 }
 
@@ -4011,6 +4020,11 @@ impl VirtualStateProcessor {
                 )
                 .into());
             }
+            if let Some(ordinals) = &native_ordinals {
+                for object in &carried {
+                    ordinals.checked_order_key(object.native_carrier)?;
+                }
+            }
             // The decorated sort stores one (key, original index) per item.
             // The legacy stable sort can use a full element buffer.
             let sort_element = if native_ordinals.is_some() {
@@ -4037,8 +4051,13 @@ impl VirtualStateProcessor {
                 })?)
             };
             let legacy_ordinal = |id: TransactionId| txs.iter().position(|tx| tx.id() == id);
+            // All keys were checked above. The sort only permutes carried
+            // objects and the complete ordinal index stays immutable.
+            let checked_literal_key = |ordinals: &NativeAcceptedOrdinalsV1, object: &PalwCarriedObjectV1| {
+                ordinals.checked_order_key(object.native_carrier).expect("prevalidated accepted ordinal")
+            };
             if let Some(ordinals) = &native_ordinals {
-                carried.sort_by_cached_key(|object| ordinals.order_key(object.native_carrier));
+                carried.sort_by_cached_key(|object| checked_literal_key(ordinals, object));
             } else {
                 carried.sort_by_key(|object| object.native_carrier.map_or(0, |id| legacy_ordinal(id).map_or(usize::MAX, |n| n + 1)));
             }
@@ -4051,7 +4070,7 @@ impl VirtualStateProcessor {
                 .chain(tokenizer.iter_mut().map(|(before, handoff)| (before, handoff.accepted_ordinal_v1())))
             {
                 *before = carried.partition_point(|object| match &native_ordinals {
-                    Some(ordinals) => ordinals.order_key(object.native_carrier) <= position,
+                    Some(ordinals) => checked_literal_key(ordinals, object) <= position,
                     None => object.native_carrier.is_none_or(|id| legacy_ordinal(id).is_some_and(|index| index < position)),
                 });
             }
@@ -5142,16 +5161,32 @@ mod native_accepted_ordinal_tests {
     #[test]
     fn tokenizer_ordinals_keep_decoder_gaps_and_stable_ordinary_order() {
         let h = Hash64::from_u64_word;
-        let ids = [h(10), h(20), h(30), h(40), h(50)];
+        let ids = [h(10), h(20), h(30), h(40), h(30), h(50)];
         let ordinals = NativeAcceptedOrdinalsV1::new(ids.into_iter()).unwrap();
         // 20 was filtered from the decoder view, 40 is the TKR carrier.
-        let mut objects = [(Some(h(50)), "last"), (Some(h(30)), "first"), (None, "derived"), (Some(h(30)), "second")];
-        objects.sort_by_cached_key(|(id, _)| ordinals.order_key(*id));
-        assert_eq!(objects.map(|(_, label)| label), ["derived", "first", "second", "last"]);
+        let mut objects = vec![(Some(h(50)), "last"), (Some(h(30)), "first"), (None, "derived"), (Some(h(30)), "second")];
+        let key = |(id, _): &(Option<Hash64>, &str)| ordinals.checked_order_key(*id).unwrap();
+        objects.sort_by_cached_key(key);
+        assert_eq!(objects.iter().map(|(_, label)| *label).collect::<Vec<_>>(), ["derived", "first", "second", "last"]);
+        assert_eq!(ordinals.get(h(30)), Some(2), "duplicates retain their first physical ordinal");
         let tokenizer = ordinals.get(h(40)).unwrap();
         assert_eq!(tokenizer, 3);
-        assert_eq!(objects.partition_point(|(id, _)| ordinals.order_key(*id) <= tokenizer), 3);
-        assert_eq!(objects.partition_point(|(id, _)| ordinals.order_key(*id) <= 0), 1);
-        assert_eq!(ordinals.order_key(Some(h(999))), usize::MAX);
+        assert_eq!(objects.partition_point(|object| key(object) <= tokenizer), 3);
+        assert_eq!(objects.partition_point(|object| key(object) == 0), 1);
+        objects.retain(|(_, label)| *label != "first");
+        assert_eq!(objects.partition_point(|object| key(object) <= tokenizer), 2);
+        assert_eq!(ordinals.get(h(40)), Some(tokenizer), "filtering must not renumber the native carrier");
+    }
+
+    #[test]
+    fn literal_ordinary_order_refuses_unknown_or_unrepresentable_carriers() {
+        let known = Hash64::from_u64_word(1);
+        let unknown = Hash64::from_u64_word(2);
+        let mut ordinals = NativeAcceptedOrdinalsV1::new(std::iter::once(known)).unwrap();
+        assert_eq!(ordinals.checked_order_key(None).unwrap(), 0);
+        assert_eq!(ordinals.checked_order_key(Some(known)).unwrap(), 1);
+        assert!(ordinals.checked_order_key(Some(unknown)).is_err());
+        ordinals.ordinals.insert(known, usize::MAX);
+        assert!(ordinals.checked_order_key(Some(known)).is_err());
     }
 }

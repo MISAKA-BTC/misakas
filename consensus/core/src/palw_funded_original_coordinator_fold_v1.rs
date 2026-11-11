@@ -279,9 +279,7 @@ pub(super) fn admit_original_v1(
     // A recognized companion cannot be stripped and admitted under the old
     // funded profile. Replace this refusal only with complete native protected
     // planning and atomic TFP1/companion installation, never a DTO success flag.
-    if b.extras.tir_funded_originals.get(&claim).is_some_and(|pair| pair.public_companion_v3().is_some()) {
-        return Err(FundedOriginalRefusalV1::Missing(FundedMissingV1::PublicOriginalProfile).into_state_v1());
-    }
+    check_paired_original_profile_v1(b.extras, claim)?;
     let funded = b.extras.tir_funded_originals.contains_key(&claim);
     if (funded || prepared.is_some())
         && b.params.family_supplier_active_at(ctx.daa_score)

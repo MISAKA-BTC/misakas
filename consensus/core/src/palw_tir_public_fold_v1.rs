@@ -356,6 +356,16 @@ pub(super) fn require_original_frame_v1(b: &TransitionBuilder<'_>, claim: Hash64
     })
 }
 
+/// The new companion must be dispatched before any legacy frame/source or
+/// archive allocation. No caller-supplied profile flag grants this route.
+/// Replace this refusal with the complete native planner, not the old price.
+fn check_paired_original_profile_v1(extras: &PalwTransitionExtrasV1, claim: Hash64) -> Result<(), PalwStateV2Error> {
+    if extras.tir_funded_originals.get(&claim).is_some_and(|pair| pair.public_companion_v3().is_some()) {
+        return Err(PalwStateV2Error::PublicOriginalProfileUnavailable { claim });
+    }
+    Ok(())
+}
+
 pub(super) fn prepare_paired_original_v1(
     b: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -363,6 +373,7 @@ pub(super) fn prepare_paired_original_v1(
     public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
 ) -> Result<Option<PreparedOriginalFrameV1>, PalwStateV2Error> {
     let PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = object else { return Ok(None) };
+    check_paired_original_profile_v1(b.extras, *claim)?;
     let Some(envelope) = b.extras.tir_public_originals.get(claim) else { return Ok(None) };
     check_paired_original_v1(b, object)?;
     let original = envelope.original_fp_v1().map_err(refused)?.commitment;
@@ -413,6 +424,9 @@ pub fn palw_tir_public_preclaim_quote_v1(
     object: &PalwConsensusObjectV2,
     envelope: &crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
 ) -> Result<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1, PalwStateV2Error> {
+    if let PalwConsensusObjectV2::FreePromptCommitted { claim, .. } = object {
+        check_paired_original_profile_v1(extras, *claim)?;
+    }
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     rules(&builder)?;
     extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
@@ -7449,7 +7463,8 @@ pub(crate) mod conviction_e2e_tests {
                         let make_trial = |memory_bytes| {
                             let mut trial = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
                             trial.prepare_native_court_end_cause_v1(&at(&frame, 7), &correct).unwrap();
-                            let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes, database_bytes: 0 });
+                            let checker =
+                                NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes, database_bytes: 0 });
                             trial.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
                             trial
                         };

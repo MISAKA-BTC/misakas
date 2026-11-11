@@ -116,10 +116,10 @@ pub struct PalwOrderedReplayFailureV1 {
     pub error: PalwStateV2Error,
 }
 impl PalwOrderedReplayFailureV1 {
-    /// Explicit duplicate refusals may be considered for filtering. Unknown
-    /// or new errors stay hard by default, including arithmetic/state faults.
-    /// Active TFO3 semantic admission refusals need their own typed category;
-    /// a generic carriage error must never be reinterpreted as peer-invalid.
+    /// Explicit duplicates and the unsupported public profile may be
+    /// considered for filtering. Unknown/new errors remain hard, including
+    /// arithmetic/state faults. Future active TFO3 semantic refusals need
+    /// their own typed category; generic carriage errors stay hard.
     pub fn ordinary_refusal_index_v1(&self) -> Option<usize> {
         if !matches!(
             self.error,
@@ -129,6 +129,7 @@ impl PalwOrderedReplayFailureV1 {
                 | PalwStateV2Error::DuplicateClaim(_)
                 | PalwStateV2Error::DuplicateExecution(_)
                 | PalwStateV2Error::DuplicateSession(_)
+                | PalwStateV2Error::PublicOriginalProfileUnavailable { .. }
         ) {
             return None;
         }

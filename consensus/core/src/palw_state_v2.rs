@@ -9873,6 +9873,11 @@ pub enum PalwStateV2Error {
     EmptyPanel,
     #[error("carriage is inconsistent with itself: {0}")]
     CarriageInconsistent(String),
+    /// A recognized TFO3 cannot use the legacy original allocation. This is
+    /// a deterministic candidate refusal, not a local construction failure.
+    /// Retained until the complete profile/planner/atomic installer is wired.
+    #[error("public original {claim} refused: typed-missing PublicOriginalProfile")]
+    PublicOriginalProfileUnavailable { claim: Hash64 },
     #[error("delta does not apply to this state: {0}")]
     DeltaMismatch(&'static str),
     #[error("no state stored for parent block {0}")]

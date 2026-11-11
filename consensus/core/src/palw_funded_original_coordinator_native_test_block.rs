@@ -539,11 +539,26 @@
                     let mut rejected = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &paired_extras).unwrap();
                     let before = rejected.state.state_root();
                     let entries = rejected.entries.len();
-                    let prepared = prepare_paired_original_v1(&rejected, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
+                    assert!(matches!(prepare_paired_original_v1(&rejected, &ctx, &object, Some(&fp.commitment)),
+                        Err(PalwStateV2Error::PublicOriginalProfileUnavailable { claim: refused }) if refused == claim));
+                    // Removing the legacy view must not downgrade a recognized
+                    // companion into an unpaired old-style commitment.
+                    let mut no_legacy = paired_extras.clone();
+                    no_legacy.tir_public_originals.clear();
+                    let without_view = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &no_legacy).unwrap();
+                    assert!(matches!(prepare_paired_original_v1(&without_view, &ctx, &object, None),
+                        Err(PalwStateV2Error::PublicOriginalProfileUnavailable { claim: refused }) if refused == claim));
+                    assert!(matches!(palw_tir_public_preclaim_quote_v1(&served, &batch_params, &ctx, &paired_extras, &object,
+                        paired_extras.tir_public_originals.get(&claim).unwrap()),
+                        Err(PalwStateV2Error::PublicOriginalProfileUnavailable { claim: refused }) if refused == claim));
+                    // The coordinator's second guard must also refuse a frame
+                    // prepared under the historical profile, without installing it.
+                    let legacy = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &funded_extras).unwrap();
+                    let prepared = prepare_paired_original_v1(&legacy, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
                     assert!(matches!(coordinate_funded_original_v1(&rejected, &ctx, claim, prepared),
                         Err(FundedOriginalRefusalV1::Missing(PalwFundedOriginalMissingV1::PublicOriginalProfile))));
                     let why = super::super::apply_object(&mut rejected, &ctx, &object).unwrap_err();
-                    assert!(matches!(why, PalwStateV2Error::CarriageInconsistent(ref why) if why.contains("PublicOriginalProfile")), "{why:?}");
+                    assert!(matches!(why, PalwStateV2Error::PublicOriginalProfileUnavailable { claim: refused } if refused == claim), "{why:?}");
                     assert_eq!(rejected.state.state_root(), before);
                     assert_eq!(rejected.entries.len(), entries);
                     assert!(rejected.state.claim(&claim).is_none());

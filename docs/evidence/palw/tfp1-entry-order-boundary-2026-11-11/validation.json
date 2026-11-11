@@ -1,0 +1,22 @@
+{
+  "status": "IMPLEMENTATION_IN_PROGRESS",
+  "previous_goal_turn": "progress: 42d7bb534 HF descriptor consumer",
+  "rust_build_test": "NOT_RUN: adopted vertical implementation order",
+  "rustfmt": "PASS for complete Rust modules; include fragments retain existing style",
+  "git_diff_check": "PASS",
+  "independent_static_review": "COMPLETE; direct preparation guard is before allocation; full object still enforces earlier G03; unsigned op248 is separate",
+  "docs_check": "FAIL_EXISTING",
+  "docs_errors": 973,
+  "docs_error_set_unchanged": true,
+  "docs_error_digest": "5c01e614c115863b1707e5dd80df722edc03c800ab53ddf29f87fb95528153b2",
+  "docs_error_digest_format": "sha256 of sorted error keys joined by newline, no final newline",
+  "rfc_historical_errors": 7,
+  "adr_historical_errors": 87,
+  "regressions": "WRITTEN_NOT_RUN: paired preparation/preclaim refusal, old frame coordinator refusal, no legacy-view downgrade, refusal location, literal ordinal gaps/duplicates/missing/overflow",
+  "normal_tfo3_intake": "INCOMPLETE",
+  "full_prefix_node_filter": "NOT_CONNECTED",
+  "deployment": "NOT_RUN",
+  "public_probe": "NOT_RUN",
+  "same_claim_admission": "NOT_PROVEN",
+  "winning_right_consumption_and_corresponding_block": "NOT_PROVEN"
+}

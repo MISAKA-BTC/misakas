@@ -338,3 +338,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[全prefix再演の失敗位置と制限](../../../evidence/palw/tfp1-ordered-replay-budget-2026-11-11/README.md)は **実装中・Rust検証未実行**。親/params/包含点に固定したnon-Clone budgetを必須化し、失敗を含むpass数・全native/raw候補訪問数を初期化前に累積計上する。失敗位置をordinary配列indexと実native ordinalで区別し、local/context/order不整合を候補除外にしない。これは各courtのCPU/IO上限の代替ではない。node filter・完全profile・原子的intake・公開受付/Final/当選時権利消費/対応blockは未完。
 
 2026-11-11 の[通常TFP1のHF参照資料](../../../evidence/palw/tfp1-hf-descriptor-2026-11-11/README.md)は **実装中・Rust検証未実行**。最大732 bytesの独立Artifact codecを追加し、native class/container等との照合、unsigned manifestのdescriptor byte計上、通常replay・trace publisherの同一モデル照合、参照bodyの有界取得/配信を接続した。モデル全量のMiner配信義務・HF可用性認定は追加しない。HF runnerのsource manifest/recipe照合、完全profile・G14受付・Final・当選時権利消費・対応blockは未完。
+
+2026-11-11 の[TFO3入口と実受理順](../../../evidence/palw/tfp1-entry-order-boundary-2026-11-11/README.md)は **実装中・Rust検証未実行**。新companionを旧frame/source見積もり前に型付き拒否し、同型だけを全prefix再演のordinary除外候補へ追加。Node literal sortは完全AcceptanceDataにないcarrierやoverflowを仮の末尾位置へ置かずlocal faultとする。正常TFO3 intake、候補filterの全prefix再演への置換、公開Final・当選時権利消費・blockは未完。

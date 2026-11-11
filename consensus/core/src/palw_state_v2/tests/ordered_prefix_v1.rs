@@ -131,6 +131,19 @@ fn ordered_visit_exhaustion_is_local_and_precedes_candidate_application() {
         error: PalwStateV2Error::CarriageInconsistent("fixture: mismatched native carrier".into()),
     };
     assert_eq!(order_fault.ordinary_refusal_index_v1(), None);
+    let unavailable = PalwStateV2Error::PublicOriginalProfileUnavailable { claim: h64(19) };
+    assert_eq!(
+        PalwOrderedReplayFailureV1 { location: PalwOrderedReplayLocationV1::Ordinary { object_index: 3 }, error: unavailable.clone() }
+            .ordinary_refusal_index_v1(),
+        Some(3)
+    );
+    for location in [
+        PalwOrderedReplayLocationV1::Preparation,
+        PalwOrderedReplayLocationV1::Order,
+        PalwOrderedReplayLocationV1::Tokenizer { accepted_tx_ordinal: 3 },
+    ] {
+        assert_eq!(PalwOrderedReplayFailureV1 { location, error: unavailable.clone() }.ordinary_refusal_index_v1(), None);
+    }
     for error in [
         PalwStateV2Error::Overflow("fixture exposure"),
         PalwStateV2Error::InvalidParams("fixture params"),
