@@ -118,7 +118,7 @@ pub struct NativeSourceMaterialGraphV3 {
 fn hash<T: BorshSerialize>(scope: Hash64, kind: &T) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/source-material-graph/v3", &(scope, kind))
 }
-fn source_graph_relative_scope_v3(
+pub(crate) fn source_graph_relative_scope_v3(
     frame: &PalwTirPublicClaimV1,
     source: &PalwTirPublicSourceV1,
     profile: Hash64,

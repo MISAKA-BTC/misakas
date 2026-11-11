@@ -178,6 +178,118 @@ impl<'a> NativeSelectionUniverseV1<'a> {
         ))
     }
 }
+/// Plain original's complete Selection dependencies without an allocated
+/// source graph. This preserves the V3 material and V1 duty identities; it
+/// does not grant a booking, supply receipt, or Batch intake authority.
+#[allow(dead_code)]
+pub(crate) struct NativeSelectionSourceUniverseV2<'a> {
+    frame: &'a Frame,
+    source: &'a Source,
+    profile: Hash64,
+    relative_scope: Hash64,
+    absolute_scope: Hash64,
+    shape: crate::palw_court_shared_material_intake_v1::batch::selection::PlainBatchSelectionV2,
+}
+#[allow(dead_code)]
+impl<'a> NativeSelectionSourceUniverseV2<'a> {
+    pub(crate) fn derive_native_v2(
+        frame: &'a Frame,
+        source: &'a Source,
+        profile: Hash64,
+        maximum_dependencies: u64,
+    ) -> Result<NativeRetainedV1<Self>, E<String>> {
+        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(frame_quote::<Self>(frame)?).map_err(E::Resource)?;
+        frame.check_structure_v1(&frame.key_v1()).map_err(E::Decode)?;
+        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+        // Only the immutable original's liability pledge supplies the roles.
+        let roles = frame.custody_v1().pledge_v1().maximum_custodians;
+        let shape = crate::palw_court_shared_material_intake_v1::batch::selection::PlainBatchSelectionV2::derive_v2(
+            frame.original_v1(),
+            source,
+            roles,
+            u64::MAX,
+        )
+        .map_err(|why| E::Decode(format!("plain Selection source geometry: {why:?}")))?;
+        if shape.dependency_count_v2() > maximum_dependencies {
+            return Err(resource("plain Selection dependency exploration budget"));
+        }
+        let relative_scope =
+            crate::palw_court_source_material_graph_v3::source_graph_relative_scope_v3(frame, source, profile, set.len(), roles)
+                .map_err(E::Decode)?;
+        let absolute_scope = set.scope_id().map_err(E::Decode)?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(Self { frame, source, profile, relative_scope, absolute_scope, shape }, lease))
+    }
+
+    pub(crate) fn len_v2(&self) -> u64 {
+        self.shape.target_count_v2()
+    }
+
+    pub(crate) fn project_native_v2(&self, target: SelectionTargetV1) -> Result<NativeRetainedV1<NativeSelectionDutyV1>, E<String>> {
+        self.project_native_reserved_v2(target, crate::palw_native_resource_v1::reserve_native_requests_v1)
+    }
+
+    pub(crate) fn project_native_reserved_v2<F>(
+        &self,
+        target: SelectionTargetV1,
+        reserve: F,
+    ) -> Result<NativeRetainedV1<NativeSelectionDutyV1>, E<String>>
+    where
+        F: FnOnce(u64) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, NativeCoverageV1>,
+    {
+        use crate::palw_court_shared_material_intake_v1::MaterialTargetV1;
+        if target.position >= self.source.decode_count_v1() || target.beat >= self.source.vocab_v1() {
+            return Err(bad("plain Selection target outside original D/V"));
+        }
+        let count = self.shape.dependency_count_v2();
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<NativeSelectionDutyV1>(1).map_err(E::Resource)?;
+        q.exact_v1::<SelectionDependencyV1>(count).map_err(E::Resource)?;
+        let lease = reserve(q.bytes_v1()).map_err(E::Resource)?;
+        let cap = usize::try_from(count).map_err(|_| resource("plain Selection dependency platform overflow"))?;
+        let mut deps = Vec::new();
+        deps.try_reserve_exact(cap).map_err(|_| resource("plain Selection dependency allocation"))?;
+        let roles = self.frame.custody_v1().pledge_v1().maximum_custodians;
+        for index in 0..count {
+            let material = self.shape.material_at_v2(self.source, target.position, target.beat, index).map_err(E::Decode)?;
+            let (material_target, tile) = match material.target {
+                MaterialTargetV1::FullIds => (Target::FullIds, None),
+                MaterialTargetV1::Unit { ordinal } => (Target::Unit(ordinal), Some(index / roles - 1)),
+                _ => return Err(bad("plain Selection produced a foreign material target")),
+            };
+            // Exact existing graph grammar, without creating unrelated nodes.
+            let logical = hash(
+                b"misaka-palw/source-material-graph/v3",
+                &(self.relative_scope, Node::Finish { target: material_target, role: material.role }),
+            )
+            .map_err(E::Decode)?;
+            let absolute =
+                hash(b"misaka-palw/source-allocation-packet/v3", &(self.absolute_scope, logical)).map_err(E::Decode)?.as_bytes();
+            deps.push(SelectionDependencyV1 { tile, role: material.role, logical, absolute });
+        }
+        let p = self.frame.plan_v1();
+        let logical = hash(
+            b"misaka-palw/selection-duty-logical/v1",
+            &(self.relative_scope, p.original_claim, self.source.source_id_v1(), target.position, target.beat),
+        )
+        .map_err(E::Decode)?;
+        let absolute = hash(b"misaka-palw/selection-duty-absolute/v1", &(self.absolute_scope, logical)).map_err(E::Decode)?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(
+            NativeSelectionDutyV1 {
+                claim: p.original_claim,
+                source: self.source.source_id_v1(),
+                profile: self.profile,
+                allocation: p.allocation_id,
+                resource: p.resource_plan_id,
+                accepted: p.terms.accepted_daa,
+                target,
+                logical,
+                absolute,
+                deps,
+            },
+            lease,
+        ))
+    }
+}
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SelectionDependencyV1 {
     pub tile: Option<u64>,
@@ -185,6 +297,7 @@ pub(crate) struct SelectionDependencyV1 {
     pub logical: Hash64,
     pub absolute: [u8; 64],
 }
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct NativeSelectionDutyV1 {
     claim: Hash64,
     source: Hash64,

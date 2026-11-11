@@ -49,6 +49,11 @@ fn shared_selection_family_actual_rules_and_runtime_tiles_recheck(){
         if wrong{assert_ne!(beat,committed);}
         let visits=graph.nodes_v3().count() as u64;
         let duty=universe.project_native_v1(Target{position:pos,beat},visits).unwrap();
+        let source_universe=crate::palw_court_shared_tir_builder_store_v1::selection_terminal::NativeSelectionSourceUniverseV2::derive_native_v2(
+            frame,&source,profile,duty.dependencies_v1().len() as u64).unwrap();
+        assert_eq!(source_universe.len_v2(),universe.len_v1());
+        let source_duty=source_universe.project_native_v2(Target{position:pos,beat}).unwrap();
+        assert_eq!(*source_duty,*duty,"source-only projection retains every legacy identity and dependency");
         let tiles=u64::from(source.vocab_v1()).div_ceil(crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
         assert_eq!(duty.dependencies_v1().len() as u64,(tiles+1)*roles);
         // Independent one-pass test index over actual graph Finish nodes.
@@ -79,6 +84,19 @@ fn shared_selection_family_actual_rules_and_runtime_tiles_recheck(){
             else{assert!(matches!(projected,Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));}
             assert_eq!(checker.outstanding(),(0,0));
         }
+        for limit in [required-1,required]{
+            let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:limit,database_bytes:0});
+            let projected=source_universe.project_native_reserved_v2(Target{position:pos,beat},|q|{assert_eq!(q,required);checker.reserve_requests_v1(q,0).map(Some)});
+            if limit==required {let held=projected.unwrap();assert_eq!(*held,*duty);assert_eq!(checker.outstanding(),(required,0));drop(held);}
+            else{assert!(matches!(projected,Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));}
+            assert_eq!(checker.outstanding(),(0,0));
+        }
+        assert!(source_universe.project_native_v2(Target{position:source.decode_count_v1(),beat}).is_err());
+        assert!(source_universe.project_native_v2(Target{position:pos,beat:source.vocab_v1()}).is_err());
+        assert!(crate::palw_court_shared_tir_builder_store_v1::selection_terminal::NativeSelectionSourceUniverseV2::derive_native_v2(
+            frame,&source,profile,duty.dependencies_v1().len() as u64-1).is_err());
+        // Exercise the same signed native interpreter using the source-only duty.
+        let duty=source_duty;
         assert!(matches!(universe.project_native_v1(Target{position:pos,beat},0),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
         assert!(universe.project_native_v1(Target{position:source.decode_count_v1(),beat},visits).is_err());
         assert!(universe.project_native_v1(Target{position:pos,beat:source.vocab_v1()},visits).is_err());
