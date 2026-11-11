@@ -1,0 +1,15 @@
+# Plain Output archive rollback and Holds — 2026-11-11
+
+`403a2d099` のclaim/session/deadline索引とarchive rollback修正、`ad53d0213` の正常Output試験を記録する。[集計・source/binary/log digest](summary.json)。
+
+claimに属するcourtとdeadlineの逆引きを追加し、終了・retirement・service清掃で全件走査を避けた。court deadlineは更新前の正確なキーを保存する。索引は保存形式とstate rootへ加えず、復元時に再構築し、native memory inventoryへ計上する。
+
+BCT2 Terminalの外側rollbackがarchive処理も所有する。archive中の追加の全prefix cloneを省き、下位の失敗は外側へ戻す。隔離processでnative論理制限を有効にし、512件の無関係bondを持つprefixから実court archiveを書いた後に意図的な拒否を返した。state全体・journal・scope flagの復元と、その後の同じarchiveの成功を確認した。外側のbounded prefix clone自体は残っている。
+
+archive段階はBCT2 6件、索引と既存timeout・held terminal・rearm・retirement・sibling close・archive reorg・budget refusal・service清掃のruntime 12件が成功した。最初の回帰集合ではsource文字列検査 `every_held_court_arm_of_the_fold_reads_the_claims_class_ladder` が失敗した。先頭の汎用matchを取る既存の検査で、旧生成binaryでも同じ失敗との報告がある。検査対象sourceが実行時ファイルではなくcompile-time `include_str!` であることを確認した。この失敗をPASSへ置き換えずrawログを残す。
+
+Holds段階はBCT2 7件が成功した。元commitmentから正常な同一fixture claimに、署名付きFullIds搬送と有料Verifyを実行し、Holds receiptを保存する。Terminal quoteは拒否し、そのHolds receiptの正しいdigestを使った有料Terminalも拒否する。state root・journalは不変でclaimはReceiptLicensedのまま維持する。Holdsはclaim全体の正しさ・必要認証・Finalの代替ではない。
+
+original/class/UTXO/予約graphは局所fixture。公開T12のquote・受付・Finalを示すものではない。aggregate liabilityが同じproducerの別claimへ及ぼす既存の処理を維持した、実際に変更した行だけのrollbackと全Selection/DA共通plannerは未完である。
+
+文書検査の既存失敗は930 issue occurrences、971 missing-file occurrences、2 missing-heading occurrences、RFC歴史検査7件・ADR歴史検査89件で前段階と同じ。baselineは更新していない。

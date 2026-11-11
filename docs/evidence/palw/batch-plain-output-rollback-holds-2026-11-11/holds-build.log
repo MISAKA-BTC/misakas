@@ -1,0 +1,4 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 59s
+  Executable unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-698db0d76a225778)
+  Executable unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_rpc_service-6fa4aa06fc549817)

@@ -272,3 +272,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の BCT2 送信接続: [認証済みparent・予約DAAに基づくCLI送信記録](../../../evidence/palw/batch-plain-output-submission-2026-11-11/README.md)。Verify/Terminalのnative支払、費用上限、送信直前quote再照合を実装し、Node/RPC/CLI checkと対象CLI2件・RPC1件が成功した。公開送信はしておらず、mempool受付もclaim受理と表示しない。plain FullIds Open専用quote、全Selection/DA、bounded終端処理は引き続き未完。
 
 2026-11-11 の FullIds→有料BCT2終端: [同じfixture claimの搬送・receipt・CourtFraud終端](../../../evidence/palw/batch-plain-output-paid-terminal-2026-11-11/README.md)を確認した（core5、CLI3、RPC1、最終Node/RPC/CLI check成功）。通常起動時にtyped prefix予約が0になって有効なTerminalを拒否する不具合を修正し、ローカル資源不足をNativeResourceとして保持する。FullIds専用Open quote/CLIも接続した。original/UTXO/graphはfixtureであり、公開受付や正常Finalではない。live court archive・索引/undo、全Selection/DA、公開profile設定は未完。
+
+2026-11-11 の [court索引・archive rollback・正常Holds試験](../../../evidence/palw/batch-plain-output-rollback-holds-2026-11-11/README.md): `403a2d099` でclaim別索引とnested archive checkpointの重複を解消し、BCT2 6件・runtime回帰12件が成功。既存source文字列検査1件の失敗はrawログに保持。`ad53d0213` ではBCT2 7件が成功し、正常Holds receiptを根拠にTerminalがclaimを無効化しないことを確認した。外側prefix clone、aggregateを含むbounded undo、Selection/DA共通plannerと公開quoteは未完。

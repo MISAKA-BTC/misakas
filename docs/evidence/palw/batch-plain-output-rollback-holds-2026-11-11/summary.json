@@ -1,0 +1,58 @@
+{
+  "source_commits": [
+    "403a2d099a7734a5d80376dc01e0f4558bfa09e0",
+    "ad53d0213e661d8a36501ae4e6d04a11edd45457"
+  ],
+  "final_source_file_sha256": {
+    "consensus/core/src/palw_batch_plain_output_native_tests_v2.rs": "3baa0d625e4a816f842305667d879ee7406ba1173be0f118c5dc098613f002b7",
+    "consensus/core/src/palw_native_resource_v1/inventory.rs": "5311f92469047ad85444e928d51748f433ed2d329ea66f2e4982d7f92316b3b4",
+    "consensus/core/src/palw_native_resource_v1/private/palw_state_v2.rs": "894afcb9c8ec1568942b29392f8a8fa6cf1351be4271c69820d8acb6343392bf",
+    "consensus/core/src/palw_native_resource_v1/private/wire_carriage.rs": "8ff5ed75b17563bce4545afe73fa3e2d751557f0d54d3794b6332dd5f93c13ee",
+    "consensus/core/src/palw_staged_court_fold_v1.rs": "34a94c153774e00175ad3d345740e9cd1abfdb65ea42bd9089c353e6917d01f4",
+    "consensus/core/src/palw_state_v2.rs": "da8384075d826d64ed10cbfff1e45c3c45a04c764dd491d0601e14633e02a426",
+    "consensus/core/src/palw_state_v2/chain_state.rs": "80adc0352de8e11c051911362456ac7c0cb2d24a82c89104a06121d817b20732",
+    "consensus/core/src/palw_state_v2/deadlines.rs": "1586f33391d63bdc9d87c14768778029b94f534c8c3ef7fc43914a2790081f4c",
+    "consensus/core/src/palw_state_v2/tests.rs": "5a36b374b2778bb2c831a1f71699fd69e4b0ee2fe1fe2e52d956e35557b9b84d",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "f364bc754d7f9f9bb67a26f7b8fcdd39c7a8c9210bbc6b91dd1bd92dc2b40d6f"
+  },
+  "archive": {
+    "bct2_tests_passed": 6,
+    "runtime_regressions_passed": 12,
+    "test_binary_sha256": "6f6929561bd9080c7d0acc2fcd2c3da2d89b6dc249fa998b9d62b5273f6571a6"
+  },
+  "holds": {
+    "bct2_tests_passed": 7,
+    "test_binary_sha256": "9cfa8d272c806e333c81308e7a1a95f303b83b5954a836bf5efd9ec555f7b113"
+  },
+  "known_failure": {
+    "test": "every_held_court_arm_of_the_fold_reads_the_claims_class_ladder",
+    "reason": "source-inspection matches earlier generic ShardCourtAccused match rather than dispatch body; runtime cases independently pass",
+    "prior_binary_failure_reported_by_child": true,
+    "fold_source_is_compile_time_include_str": true
+  },
+  "logs_sha256": {
+    "archive-build.log": "5c0d5c5d25ce2b0b7bec1b56e9c13496ee1dc3a33c979be7a044f32b66906ebf",
+    "archive-bct2-tests.log": "61b901491ee934a9256d2fefb7efdec6665473b54b390899316199bc1194976e",
+    "archive-runtime-regressions.log": "19f584f8f2bad62d2c4f1a5bea77135aa64c3a8e8d0eefe632428f5c10d5b546",
+    "archive-initial-regressions.log": "12692f00d7b221e11ac28a80db3cbdb31de2adda52ed8c8abb86b80cbceefa1e",
+    "holds-build.log": "a629f899d3a8dc88856eefaa69422c0b10bb7108063c468854d5f63159108533",
+    "holds-tests.log": "79d41e02aef73fa645e1ac0c142eeaef74922100c473a1f1f692e6aba468de93",
+    "docs-check.log": "58e43c502e69d636bb3b3f68275eaaa1e71b83a931ce9316f09312cab4d47ffc",
+    "rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd"
+  },
+  "limits": [
+    "Local native fixtures only; no public admission, quote, activation or main push.",
+    "Outer bounded full-prefix rollback remains; this stage removes nested archive prefix copies only.",
+    "Aggregate producer liability may touch sibling claims; unchanged liability rules must be covered by subsequent bounded undo.",
+    "Holds is a predicate result, not SecurityCertified or Final."
+  ],
+  "documentation_checks": {
+    "existing_issues_unchanged": true,
+    "new_issue_occurrences": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  }
+}

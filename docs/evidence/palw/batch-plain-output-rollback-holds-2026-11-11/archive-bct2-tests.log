@@ -1,0 +1,23 @@
+
+running 6 tests
+test palw_batch_court_v1::plain_output_transport::tests::bct2_physical_meter_counts_duplicates_and_malformed_before_adjudication ... ok
+test palw_batch_court_v1::plain_output_local_work::tests::bct2_local_intake_charges_malformed_and_duplicates_and_refills_without_clock_reversal ... ok
+test palw_court_shared_material_intake_v1::storage_rent::tests::bct2_fixed_receipt_rent_matches_native_handoff_on_refusal_and_retry ... ok
+
+running 1 test
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5994 filtered out; finished in 0.08s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... ok
+test palw_court_shared_material_intake_v1::batch::selection::tests::bct2_plain_selection_source_geometry_matches_complete_legacy_dependencies ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5994 filtered out; finished in 0.38s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 5989 filtered out; finished in 0.41s
+

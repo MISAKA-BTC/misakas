@@ -1,0 +1,18 @@
+
+running 12 tests
+test palw_state_v2::tests::claim_local_court_indexes_keep_order_and_exact_old_deadline ... ok
+test palw_state_v2::tests::court_deadline_workspace_v2::actual_court_timeout_flags_off_parity_and_not_due_boundary_preserve_state_and_journal ... ok
+test palw_state_v2::tests::court_deadline_workspace_v2::actual_court_timeout_capacity_refuses_before_copies_or_verdict_and_retry_keeps_original_outcome ... ok
+test palw_state_v2::tests::rcore_s1_api::dl1_reproduces_todays_deadline_index ... ok
+test palw_state_v2::tests::an_open_court_blocks_final_and_a_cleared_court_rearms_it ... ok
+test palw_state_v2::tests::a_court_session_cannot_outlive_its_claim_and_stop_the_chain ... ok
+test palw_state_v2::tests::adr0082_dissection_drill::c08_the_fused_terminal_conviction_returns_past_the_deep_fence ... ok
+test palw_state_v2::tests::adr0082_dissection_drill::c08_a_held_class_keeps_the_fused_terminal_mercy_past_the_deep_fence ... ok
+[fix-a B-05w] void-closed sibling archive at material_until+1: present false, challenger exit-held false
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::audit_fixa_b05_a_void_closed_sibling_session_releases_the_challenger_after_material_until ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_court_sweeps_skip_held_without_starving_cleanup ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_native_verdict_preserves_other_side ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::archive_d3_the_per_block_pruner_waits_for_the_material_horizon_and_reorg_restores ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 5983 filtered out; finished in 0.19s
+
