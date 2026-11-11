@@ -2734,6 +2734,10 @@ impl VirtualStateProcessor {
                     if palw_state.is_some() && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(pov_daa_score) {
                         ctx.positive_accepting_point = Some(positive_point);
                     }
+                    if palw_state.is_some() && self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score)) {
+                        // Only a real accepting block can give these inputs a native history origin.
+                        ctx.palw_tfp1_history_accepting_point_v1 = Some(positive_point);
+                    }
                     if self.palw_lifecycle_kind_fences.batch_court_in_force_at(pov_daa_score) {
                         ctx.palw_batch_accepting_point_v1 = Some(positive_point);
                     }
@@ -2948,6 +2952,7 @@ impl VirtualStateProcessor {
                                     &ctx.palw_v2_rent_available_fees,
                                     &ctx.palw_batch_handoffs_v1,
                                     &ctx.palw_tokenizer_handoffs_v1,
+                                    &ctx.palw_tfp1_history_seeds_v1,
                                 )?;
                                 let history_custody_pledges = objects
                                     .iter()

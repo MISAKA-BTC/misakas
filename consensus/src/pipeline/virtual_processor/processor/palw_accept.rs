@@ -1,6 +1,7 @@
 //! **`VirtualStateProcessor`: palw accept methods** — moved out of `processor.rs` (2026-10-13, a behaviour-preserving split: the methods are the same; each keeps the reach it had).
 
 use super::*;
+use crate::pipeline::virtual_processor::utxo_validation::AcceptedTfp1HistorySeedsV1;
 use kaspa_consensus_core::palw_batch_court_v1::fold_order::{
     AcceptedNativeCourtItemV1, in_accepted_native_order_v1, index_batch_carriers_v1,
 };
@@ -10,6 +11,22 @@ pub(super) type IndexedBatchHandoffsV1 = Vec<(usize, BatchHandoffV1)>;
 pub(super) type TokenizerHandoffV1 =
     kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::SharedValidatedTokenizerRegistrationCarrierV1;
 pub(super) type IndexedTokenizerHandoffsV1 = Vec<(usize, TokenizerHandoffV1)>;
+
+pub(in crate::pipeline::virtual_processor) fn bind_accepted_tfp1_history_v1(
+    pairing: &mut kaspa_consensus_core::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+    history_seeds: &AcceptedTfp1HistorySeedsV1,
+    block: BlockHash,
+    block_daa: u64,
+) -> Result<(), misaka_palw_positive_contract::ContractError> {
+    if let Some(history) = history_seeds.get(&pairing.carrier().id()) {
+        if history.origin.accepting_block.0 != block.as_bytes() || history.origin.accepted_daa != block_daa {
+            return Err(misaka_palw_positive_contract::ContractError::Scope);
+        }
+        pairing.bind_history_inputs_v1(history.inputs, history.origin, history.selected_parent)?;
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 pub(super) struct TokenizerRegistrationAcceptanceV1 {
     pub(super) candidates: IndexedTokenizerHandoffsV1,
@@ -525,6 +542,7 @@ impl VirtualStateProcessor {
             rent_fees,
             &Default::default(),
             &Default::default(),
+            &Default::default(),
         )?;
         let (objects, folded, _, _, funded, _, _, _) = self.palw_v2_accepted_objects_and_originals(
             (state, params, point),
@@ -795,6 +813,7 @@ impl VirtualStateProcessor {
             &ctx.palw_v2_rent_available_fees,
             &ctx.palw_batch_handoffs_v1,
             &ctx.palw_tokenizer_handoffs_v1,
+            &ctx.palw_tfp1_history_seeds_v1,
         )?;
         // The producer can attach its own attempt after template construction.
         // Mixed object application can depend on that attempt's class.
@@ -3349,6 +3368,7 @@ impl VirtualStateProcessor {
         rent_available_fees: &std::collections::HashMap<TransactionId, u64>,
         batch_handoffs: &std::collections::BTreeMap<TransactionId, BatchHandoffV1>,
         tokenizer_handoffs: &std::collections::BTreeMap<TransactionId, TokenizerHandoffV1>,
+        tfp1_history_seeds: &AcceptedTfp1HistorySeedsV1,
     ) -> Result<(Vec<PalwCarriedObjectV1>, IndexedBatchHandoffsV1, IndexedTokenizerHandoffsV1), PalwLocalTransitionFaultV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Ok((Vec::new(), Vec::new(), Vec::new()));
@@ -3463,7 +3483,11 @@ impl VirtualStateProcessor {
             } else {
                 kaspa_consensus_core::palw_funded_original_coordinator_v1::palw_funded_original_pairing_v1(tx)
             } {
-                Ok(pairing) => {
+                Ok(mut pairing) => {
+                    if let Err(why) = bind_accepted_tfp1_history_v1(&mut pairing, tfp1_history_seeds, block, block_daa) {
+                        info!("[palw-tfp1-history] carrier {} refused: {why:?}", tx.id());
+                        return false;
+                    }
                     funded_pairings.insert(tx.id(), pairing);
                     true
                 }

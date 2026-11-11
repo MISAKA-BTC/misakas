@@ -20,6 +20,88 @@ use std::io::{self, Read};
 
 pub(crate) const PUBLIC_TFP1_HISTORY_TABLE_V1: u8 = 206;
 
+/// Fixed DATA captured while the actual accepted UTXOs are still available.
+/// No wire decoder or caller-supplied digest creates this native handoff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ValidatedTfp1OriginalInputsV1 {
+    carrier: Hash64,
+    populated_inputs: Digest,
+    input_count: u32,
+    fee: u64,
+}
+native_struct!(ValidatedTfp1OriginalInputsV1; carrier, populated_inputs, input_count, fee);
+
+impl ValidatedTfp1OriginalInputsV1 {
+    /// The UTXO owner supplies its validated transaction. Other FP forms do
+    /// not acquire new requirements. Malformed wrappers produce no handoff
+    /// and remain subject to the existing funded ingress refusal.
+    pub fn prepare_v1(tx: &crate::tx::ValidatedTransaction<'_>) -> Result<Option<Self>, ContractError> {
+        let Ok(payload) = crate::palw_tir_funded_original_envelope_v1::actual_funded_payload_v1(tx.tx) else { return Ok(None) };
+        if !crate::palw_tir_funded_original_envelope_v3::recognizes_v3(payload) {
+            return Ok(None);
+        }
+        crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::decode_v3(payload)
+            .map_err(|_| ContractError::NonCanonical)?;
+        let seed = Self {
+            carrier: tx.tx.id(),
+            populated_inputs: crate::palw_positive_assignment_case_material_v2::assigned_case_inputs_id_v2(tx.tx.id(), &tx.entries)?,
+            input_count: u32::try_from(tx.entries.len()).map_err(|_| ContractError::Budget)?,
+            fee: tx.calculated_fee,
+        };
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64([0; 64]),
+            carrier_block: NativeHash64([0; 64]),
+            carrier_transaction: NativeHash64(seed.carrier.as_bytes()),
+            accepted_tx_ordinal: 0,
+            event_ordinal: 0,
+            accepted_daa: 0,
+            accepted_blue_score: 0,
+        };
+        crate::palw_positive_assignment_case_material_v2::check_native_populated_inputs_v2(
+            origin,
+            seed.input_count,
+            seed.populated_inputs,
+            seed.fee,
+            tx.tx,
+            &tx.entries,
+            tx.calculated_fee,
+        )?;
+        if seed.input_count == 0 {
+            return Err(ContractError::Scope);
+        }
+        Ok(Some(seed))
+    }
+    pub fn carrier_v1(&self) -> Hash64 {
+        self.carrier
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AcceptedTfp1OriginalInputsV1 {
+    seed: ValidatedTfp1OriginalInputsV1,
+    origin: AcceptedOrigin,
+    parent: Hash64,
+}
+impl AcceptedTfp1OriginalInputsV1 {
+    pub(crate) fn bind_v1(seed: ValidatedTfp1OriginalInputsV1, origin: AcceptedOrigin, parent: Hash64) -> Result<Self, ContractError> {
+        if seed.carrier.as_bytes() != origin.carrier_transaction.0
+            || origin.event_ordinal != 0
+            || origin.accepted_daa == 0
+            || origin.accepted_blue_score == 0
+            || [origin.accepting_block.0, origin.carrier_block.0, parent.as_bytes()].contains(&[0; 64])
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(Self { seed, origin, parent })
+    }
+    pub(crate) fn origin_v1(&self) -> AcceptedOrigin {
+        self.origin
+    }
+    pub(crate) fn parent_v1(&self) -> Hash64 {
+        self.parent
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Tfp1OriginalHistoryBoundaryV1 {
     version: u16,
@@ -42,41 +124,42 @@ impl Tfp1OriginalHistoryBoundaryV1 {
     pub const WIRE_BYTES: usize = 2 + 10 * 64 + 3 * 4 + 4 * 8;
 
     /// DATA construction is crate-local; the paired native writer is the only
-    /// path that roots it. Prefix values come from the accepting builder,
-    /// populated entries/fee from that same actual accepted transaction.
+    /// path that roots it. The prefix token comes from the full ordered
+    /// builder; the fixed UTXO handoff comes from that exact accepted carrier.
     pub(crate) fn from_actual_data_v1(
         claim: Hash64,
         source: Hash64,
         original: OriginalId,
         origin: AcceptedOrigin,
-        selected_parent: Hash64,
-        pre_event_root: Hash64,
-        before_delta_end: usize,
-        transaction: &Transaction,
-        entries: &[UtxoEntry],
-        fee: u64,
+        prefix: &crate::palw_state_v2::Tfp1OriginalPrefixV1,
+        accepted: AcceptedTfp1OriginalInputsV1,
         admission: &PublicOriginalAdmissionV1<'_>,
         inputs: &PublicOriginalReservationV1<'_>,
     ) -> Result<Self, ContractError> {
-        if origin != inputs.origin {
+        if origin != inputs.origin
+            || origin != accepted.origin
+            || prefix.claim_v1() != claim
+            || prefix.carrier_v1() != accepted.seed.carrier
+            || prefix.parent_v1() != accepted.parent
+        {
             return Err(ContractError::Scope);
         }
+        require_prefix_point_v1(prefix, origin)?;
         let row = Self {
             version: 1,
             claim,
             source,
             original,
             origin,
-            selected_parent: NativeHash64(selected_parent.as_bytes()),
-            pre_event_root: Digest(pre_event_root.as_bytes()),
-            before_delta_end: u64::try_from(before_delta_end).map_err(|_| ContractError::Budget)?,
-            populated_inputs: crate::palw_positive_assignment_case_material_v2::assigned_case_inputs_id_v2(transaction.id(), entries)?,
-            input_count: u32::try_from(entries.len()).map_err(|_| ContractError::Budget)?,
-            fee,
+            selected_parent: NativeHash64(accepted.parent.as_bytes()),
+            pre_event_root: Digest(prefix.root_v1().as_bytes()),
+            before_delta_end: u64::try_from(prefix.end_v1()).map_err(|_| ContractError::Budget)?,
+            populated_inputs: accepted.seed.populated_inputs,
+            input_count: accepted.seed.input_count,
+            fee: accepted.seed.fee,
             admission_inputs: admission_inputs_id_v1(admission, inputs)?,
         };
         row.check_shape_v1(&claim.as_bytes())?;
-        row.check_populated_data(transaction, entries, fee)?;
         Ok(row)
     }
 
@@ -164,6 +247,10 @@ impl Tfp1OriginalHistoryBoundaryV1 {
         Self::decode_row(key, &bytes).map_err(|_| wire_bad("invalid TFP1 history row"))?;
         Ok(NativeWireShapeV1::default())
     }
+}
+
+fn require_prefix_point_v1(prefix: &crate::palw_state_v2::Tfp1OriginalPrefixV1, origin: AcceptedOrigin) -> Result<(), ContractError> {
+    crate::palw_positive_contract_v2::require_current_public_origin_v1(origin, &prefix.point_v1())
 }
 
 /// Native record lookup, never a caller-supplied archive boundary. A matching

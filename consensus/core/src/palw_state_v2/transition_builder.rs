@@ -95,6 +95,8 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Self {
         Self {
             native_reservation,
+            tfp1_history_journal_parent: None,
+            tfp1_original_prefix: None,
             plain_output_terminal_checkpoint_active_v2: false,
             claim_local_gc_undo_v3: BTreeMap::new(),
             claim_local_gc_sequence_v3: 0,

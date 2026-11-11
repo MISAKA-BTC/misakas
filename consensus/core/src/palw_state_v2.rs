@@ -13688,6 +13688,8 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    tfp1_history_journal_parent: Option<Hash64>,
+    tfp1_original_prefix: Option<objects::Tfp1OriginalPrefixV1>,
     plain_output_terminal_checkpoint_active_v2: bool,
     assignment_materials: Vec<PositiveAssignmentAcceptedMaterialV2>,
     assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
@@ -15909,6 +15911,9 @@ fn apply_palw_transition_v7_inner(
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
     use crate::palw_batch_court_v1::fold_order::{AcceptedNativeCourtItemV1, in_accepted_native_order_v1};
+    // Only this whole ordered fold can name positions in its persistent delta.
+    // Single-object rehearsal builders deliberately keep this scope absent.
+    builder.tfp1_history_journal_parent = parent.last_point().map(|point| point.block);
     let ordered = in_accepted_native_order_v1(
         accepted_objects.iter(),
         &extras.batch_court_carriers_v1,
@@ -15953,6 +15958,7 @@ fn apply_palw_transition_v7_inner(
         }
     }
     positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal)?;
+    builder.tfp1_history_journal_parent = None;
     if raw_cursor != extras.positive_assignment_actions.len() {
         return Err(PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix"));
     }
@@ -20683,6 +20689,7 @@ pub fn palw_fp_lane_available_v1(
 }
 
 mod objects;
+pub(crate) use objects::Tfp1OriginalPrefixV1;
 use objects::apply_object;
 
 /// Everything the free-prompt lane's price reads besides the state, resolved by the caller: the

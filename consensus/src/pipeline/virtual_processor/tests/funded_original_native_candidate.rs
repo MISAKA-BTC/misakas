@@ -251,6 +251,95 @@ async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_in
     assert_eq!(state.state_root(), root);
     assert!(state.claim(&fp.claim_id()).is_none());
     assert_eq!(validated.calculated_fee, value - envelope.funding.terms.funding_amount_sompi);
+    {
+        use crate::{
+            model::stores::{
+                acceptance_data::AcceptanceDataStore, block_transactions::BlockTransactionsStore, ghostdag::GhostdagData,
+            },
+            pipeline::virtual_processor::{
+                processor::palw_accept::bind_accepted_tfp1_history_v1, utxo_validation::UtxoProcessingContext,
+            },
+        };
+        use kaspa_consensus_core::{
+            dns_finality::ActiveBondView, palw_funded_original_coordinator_v1::palw_funded_original_pairing_v1,
+            palw_state_v2::PalwBlockContextV2, palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3,
+            subnets::SUBNETWORK_ID_NATIVE,
+        };
+        use misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1;
+
+        // Only the framing of this dummy companion is exercised. The real
+        // TFP1, payer consent and both normal UTXO spends remain signed.
+        let companion = [0x42; SignedPublicOriginalV1::WIRE_BYTES];
+        let wire =
+            PalwTirFundedOriginalEnvelopeV3::from_parts_v3(&tx.payload, b"history fixture", &companion).unwrap().encode_v3().unwrap();
+        let paired_tx = make(wire);
+        let validated_pair = vp.validate_transaction_in_utxo_context(&paired_tx, &view, now, full, None).unwrap();
+        assert!(matches!(
+            vp.palw_funded_original_candidate_from_native_v1(&state, now, &validated_pair),
+            PalwFundedOriginalCandidateV1::Missing(why) if why.contains("complete protected public-original profile")
+        ));
+        let ordinary_input = TransactionOutpoint::new(h(0xF201), 0);
+        let mut ordinary = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(ordinary_input, vec![], 0, 1)],
+            vec![TransactionOutput::new(value - 1_000_000, spk.clone())],
+            0,
+            SUBNETWORK_ID_NATIVE,
+            0,
+            vec![],
+        );
+        sign(&mut ordinary, &entry);
+        let composed: UtxoCollection = [(previous, entry.clone()), (ordinary_input, entry.clone())].into_iter().collect();
+        vp.validate_transaction_in_utxo_context(&ordinary, &composed, now, full, None).unwrap();
+
+        // Exercise the native UTXO walk against a test-only stored selected-
+        // parent body. This fixture does not insert an accepted PALW claim.
+        let selected_parent = h(0xF202);
+        let mut body = config.params.genesis.build_genesis_transactions();
+        let coinbase = body[0].id();
+        body.extend([ordinary.clone(), paired_tx.clone()]);
+        vp.block_transactions_store.insert(selected_parent, body.into()).unwrap();
+        let ghostdag = GhostdagData::new_with_selected_parent(selected_parent, 0);
+        let at = PalwBlockContextV2 { block: h(0xF203), daa_score: now, blue_score: now + 1, subsidy: 0 };
+        let mut accepted = UtxoProcessingContext::new((&ghostdag).into(), kaspa_muhash::MuHash::new());
+        accepted.palw_tfp1_history_accepting_point_v1 = Some(at);
+        vp.calculate_utxo_state_with_tokenizer_v1(&mut accepted, &composed, &ActiveBondView::default(), now, Some(&state), None)
+            .unwrap();
+        assert_eq!(accepted.accepted_tx_ids, [coinbase, ordinary.id(), paired_tx.id()]);
+        assert_eq!(accepted.palw_tfp1_history_seeds_v1.len(), 1);
+        let history = &accepted.palw_tfp1_history_seeds_v1[&paired_tx.id()];
+        assert_eq!(history.selected_parent, selected_parent);
+        assert_eq!(history.origin.accepting_block.0, at.block.as_bytes());
+        assert_eq!(history.origin.accepted_daa, at.daa_score);
+        assert_eq!(history.origin.accepted_blue_score, at.blue_score);
+        assert_eq!(history.origin.accepted_tx_ordinal, 2);
+        assert_eq!(history.origin.event_ordinal, 0);
+        vp.acceptance_data_store.insert(at.block, accepted.mergeset_acceptance_data.clone().into()).unwrap();
+        let (archived_block, archived_tx, _) = vp
+            .acceptance_data_store
+            .accepted_origin_at_bounded_v2(at.block, history.origin.accepted_tx_ordinal, 4_096)
+            .unwrap()
+            .unwrap();
+        assert_eq!(archived_block.as_bytes(), history.origin.carrier_block.0);
+        assert_eq!(archived_tx.transaction_id.as_bytes(), history.origin.carrier_transaction.0);
+        assert_eq!(archived_tx.index_within_block, 2);
+
+        let mut pairing = palw_funded_original_pairing_v1(&paired_tx).unwrap();
+        assert!(bind_accepted_tfp1_history_v1(&mut pairing, &accepted.palw_tfp1_history_seeds_v1, h(0xF204), now).is_err());
+        bind_accepted_tfp1_history_v1(&mut pairing, &accepted.palw_tfp1_history_seeds_v1, at.block, now).unwrap();
+        assert_eq!(pairing.carrier().id(), paired_tx.id());
+        let wrong_ordinal = misaka_palw_positive_contract::rows::AcceptedOrigin { accepted_tx_ordinal: 1, ..history.origin };
+        assert!(pairing.bind_history_inputs_v1(history.inputs, wrong_ordinal, selected_parent).is_err());
+
+        let mut preview = UtxoProcessingContext::new((&ghostdag).into(), kaspa_muhash::MuHash::new());
+        preview.positive_relay_preview_point = Some(at);
+        vp.calculate_utxo_state_with_tokenizer_v1(&mut preview, &composed, &ActiveBondView::default(), now, Some(&state), None)
+            .unwrap();
+        assert_eq!(preview.accepted_tx_ids, accepted.accepted_tx_ids);
+        assert!(preview.palw_tfp1_history_seeds_v1.is_empty());
+        assert_eq!(state.state_root(), root);
+        assert!(state.claim(&fp.claim_id()).is_none());
+    }
     // Read-only outer accounting carrier: actual funding signatures authenticate FPA1 bytes,
     // while the inner payer consent still authenticates its own unchanged TFO1 terms.
     let answer = vec![0; fp.commitment.decode_tokens_executed as usize];

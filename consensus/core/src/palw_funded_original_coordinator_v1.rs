@@ -296,9 +296,32 @@ pub struct PalwFundedOriginalPairingV1 {
     public_companion: Option<std::ops::Range<usize>>,
     public_prompt: Option<std::ops::Range<usize>>,
     public_source: Option<Hash64>,
+    history_inputs: Option<crate::palw_tfp1_original_history_v1::AcceptedTfp1OriginalInputsV1>,
 }
 
 impl PalwFundedOriginalPairingV1 {
+    /// Attach only the actual UTXO handoff to the same literal carrier. Native
+    /// acceptance supplies origin/parent; repeated identical attachment is inert.
+    pub fn bind_history_inputs_v1(
+        &mut self,
+        seed: crate::palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1,
+        origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+        selected_parent: Hash64,
+    ) -> Result<(), misaka_palw_positive_contract::ContractError> {
+        use misaka_palw_positive_contract::ContractError;
+        if self.public_companion_v3().is_none() || seed.carrier_v1() != self.carrier.id() || !self.carrier.id_is_current() {
+            return Err(ContractError::Scope);
+        }
+        let value = crate::palw_tfp1_original_history_v1::AcceptedTfp1OriginalInputsV1::bind_v1(seed, origin, selected_parent)?;
+        if self.history_inputs.is_some_and(|previous| previous != value) {
+            return Err(ContractError::Scope);
+        }
+        self.history_inputs = Some(value);
+        Ok(())
+    }
+    pub(crate) fn history_inputs_v1(&self) -> Option<crate::palw_tfp1_original_history_v1::AcceptedTfp1OriginalInputsV1> {
+        self.history_inputs
+    }
     pub fn carrier(&self) -> &Transaction {
         &self.carrier
     }
@@ -394,5 +417,6 @@ pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8])
         public_companion,
         public_prompt,
         public_source,
+        history_inputs: None,
     })
 }

@@ -964,6 +964,29 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     restored
 }
 
+/// Explicit fixture: seal a prefix with the same private owner used by the
+/// actual ordered fold. A singleton builder must refuse to mint it.
+pub(crate) fn tfp1_history_prefix_fixture_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    point: &PalwBlockContextV2,
+    pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+) -> super::super::objects::Tfp1OriginalPrefixV1 {
+    let mut extras = PalwTransitionExtrasV1::default();
+    extras.tir_funded_originals.insert(pairing.claim(), pairing.clone());
+    let mut builder = TransitionBuilder::new(state, params, false, false, false, false, &extras);
+    assert!(super::super::objects::capture_tfp1_prefix_v1(&builder, point, pairing.claim()).is_err());
+    builder.tfp1_history_journal_parent = Some(pairing.history_inputs_v1().unwrap().parent_v1());
+    let prefix = super::super::objects::capture_tfp1_prefix_v1(&builder, point, pairing.claim()).unwrap();
+    assert_eq!(prefix.root_v1(), state.state_root());
+    assert_eq!(prefix.end_v1(), 0);
+    let wrong_point = PalwBlockContextV2 { block: h64(999), ..*point };
+    assert!(super::super::objects::capture_tfp1_prefix_v1(&builder, &wrong_point, pairing.claim()).is_err());
+    builder.tfp1_history_journal_parent = Some(h64(998));
+    assert!(super::super::objects::capture_tfp1_prefix_v1(&builder, point, pairing.claim()).is_err());
+    prefix
+}
+
 /// Exercise the paid writer on the caller's rooted draw and booked packet.
 /// The fixture's handoff factory supplies the same validated UTXO carrier.
 pub(crate) fn exercise_paid_manifest_writer_v1(

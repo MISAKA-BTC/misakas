@@ -30,7 +30,9 @@ use crate::{
     },
 };
 use kaspa_consensus_core::BlockHash;
-use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+use kaspa_consensus_core::palw_native_resource_v1::{
+    NativeCoverageV1, NativeDemandLeaseV1, btree_node_envelope_bytes_v1, reserve_native_pending_requests_v1,
+};
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
@@ -48,6 +50,7 @@ use kaspa_consensus_core::{
     },
     header::Header,
     muhash::MuHashExtensions,
+    palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1,
     subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
     tx::{
         MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry,
@@ -62,10 +65,22 @@ use kaspa_core::{info, trace};
 use kaspa_muhash::MuHash;
 use kaspa_txscript::{script_class::parse_evm_deposit_lock, verify_mldsa87_with_context};
 use kaspa_utils::refs::Refs;
+use misaka_palw_positive_contract::rows::{AcceptedOrigin, NativeHash64};
 
 use rayon::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use std::iter::once;
+
+pub(super) struct AcceptedTfp1HistorySeedV1 {
+    pub(super) inputs: ValidatedTfp1OriginalInputsV1,
+    pub(super) origin: AcceptedOrigin,
+    pub(super) selected_parent: BlockHash,
+    // The input digest, origin and parent are fixed data. Only the map node
+    // allocates here; attaching the seed to a pairing copies inline data.
+    _lease: Option<NativeDemandLeaseV1>,
+}
+
+pub(super) type AcceptedTfp1HistorySeedsV1 = std::collections::BTreeMap<TransactionId, AcceptedTfp1HistorySeedV1>;
 
 pub(crate) mod crescendo {
     use kaspa_core::{info, log::CRESCENDO_KEYWORD};
@@ -213,6 +228,10 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Actual accepted carrier fee remaining after mandatory released-bond burn.
     /// The raw fee map above retains its existing meaning.
     pub palw_v2_rent_available_fees: std::collections::HashMap<TransactionId, u64>,
+    /// Real accepting point and native input digests, never virtual template
+    /// provenance. These live through ordered rehearsal and the actual fold.
+    pub palw_tfp1_history_accepting_point_v1: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    pub palw_tfp1_history_seeds_v1: AcceptedTfp1HistorySeedsV1,
     /// Real accepting point and BCT1 facts retained only for the candidate
     /// block's Court walk. The virtual template needs fee projection only.
     pub palw_batch_accepting_point_v1: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
@@ -453,6 +472,7 @@ impl<'a> UtxoProcessingContext<'a> {
         self.reserve_accrual = 0;
         self.palw_v2_accepted_tx_fees.clear();
         self.palw_v2_rent_available_fees.clear();
+        self.palw_tfp1_history_seeds_v1.clear();
         self.palw_batch_handoffs_v1.clear();
         self.palw_tokenizer_handoffs_v1.clear();
         self.palw_tokenizer_fees_v1.clear();
@@ -491,6 +511,8 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_bond_burns: Default::default(),
             palw_v2_accepted_tx_fees: Default::default(),
             palw_v2_rent_available_fees: Default::default(),
+            palw_tfp1_history_accepting_point_v1: None,
+            palw_tfp1_history_seeds_v1: Default::default(),
             palw_batch_accepting_point_v1: None,
             palw_tokenizer_handoffs_v1: Default::default(),
             palw_tokenizer_fees_v1: Default::default(),
@@ -850,6 +872,80 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1
         };
         inspect(state, self.palw_network_domain_v2(), accepting_daa, validated, self.palw_state_params_v2.as_ref(), native)
+    }
+
+    fn capture_tfp1_original_history_seed_v1(
+        &self,
+        histories: &mut AcceptedTfp1HistorySeedsV1,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        selected_parent: BlockHash,
+        carrier_block: BlockHash,
+        accepted_ordinal: usize,
+        validated: &ValidatedTransaction<'_>,
+    ) -> Result<(), NativeCoverageV1> {
+        use kaspa_consensus_core::{
+            palw_claim_local_v1::prefix_v1::PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1,
+            palw_fp_answer_accounting_v1::PALW_FP_ANSWER_ENVELOPE_MAGIC_V1, palw_tir_funded_original_envelope_v3::recognizes_v3,
+            subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+        };
+        use std::collections::btree_map::Entry;
+
+        let tx = validated.tx;
+        if tx.subnetwork_id != SUBNETWORK_ID_PALW_FP_COMMITMENT {
+            return Ok(());
+        }
+        // A shallow magic check avoids rescanning unrelated FPR2 and FPA1
+        // transactions. The core seed factory validates actual framing and
+        // funding payload using the original transaction, never this hint.
+        let mut payload = tx.payload.as_slice();
+        if let Some(body) = payload.strip_prefix(PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1) {
+            let Some(inner) = body.get(size_of::<u32>()..) else { return Ok(()) };
+            if !self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_local_settlement_active_at(point.daa_score)) {
+                return Ok(());
+            }
+            payload = inner;
+        }
+        if let Some(body) = payload.strip_prefix(PALW_FP_ANSWER_ENVELOPE_MAGIC_V1) {
+            let Some(inner) = body.get(size_of::<u32>()..) else { return Ok(()) };
+            if !self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(point.daa_score)) {
+                return Ok(());
+            }
+            payload = inner;
+        }
+        if !recognizes_v3(payload) {
+            return Ok(());
+        }
+        let inputs = match ValidatedTfp1OriginalInputsV1::prepare_v1(validated) {
+            Ok(Some(inputs)) => inputs,
+            Ok(None) => return Ok(()),
+            Err(why) => {
+                kaspa_core::debug!("[palw-tfp1-history] carrier {} did not yield native input data: {why:?}", tx.id());
+                return Ok(());
+            }
+        };
+        let path = "accepted TFO3 history seeds";
+        let ordinal = u32::try_from(accepted_ordinal).map_err(|_| NativeCoverageV1::overflow::<AcceptedTfp1HistorySeedV1>(path))?;
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64(point.block.as_bytes()),
+            carrier_block: NativeHash64(carrier_block.as_bytes()),
+            carrier_transaction: NativeHash64(tx.id().as_bytes()),
+            accepted_tx_ordinal: ordinal,
+            event_ordinal: 0,
+            accepted_daa: point.daa_score,
+            accepted_blue_score: point.blue_score,
+        };
+        // The map has one entry per actual accepted TFO3 transaction. Quote
+        // its typed node before insert and retain the lease through all phases.
+        let Entry::Vacant(entry) = histories.entry(tx.id()) else {
+            return Err(NativeCoverageV1::unsupported::<AcceptedTfp1HistorySeedV1>(path, "duplicate accepted carrier"));
+        };
+        let lease =
+            reserve_native_pending_requests_v1(btree_node_envelope_bytes_v1::<TransactionId, AcceptedTfp1HistorySeedV1>() as u64)?;
+        let row = entry.insert(AcceptedTfp1HistorySeedV1 { inputs, origin, selected_parent, _lease: lease });
+        if let Some(lease) = &row._lease {
+            lease.materialized_v1();
+        }
+        Ok(())
     }
 
     /// Qualify only a literal op12 whose first input is the rooted Case coin.
@@ -1330,6 +1426,16 @@ impl VirtualStateProcessor {
             let mut new_provisional_escrows: Vec<TransactionOutpoint> = Vec::new();
             for (validated_tx, original_index) in validated_transactions.iter() {
                 let accepted_ordinal = ctx.accepted_tx_ids.len();
+                if let Some(point) = ctx.palw_tfp1_history_accepting_point_v1 {
+                    self.capture_tfp1_original_history_seed_v1(
+                        &mut ctx.palw_tfp1_history_seeds_v1,
+                        point,
+                        selected_parent,
+                        merged_block,
+                        accepted_ordinal,
+                        validated_tx,
+                    )?;
+                }
                 // The Full-script seal is provenance only. Each borrow ends
                 // before the ordinary acceptance code mutates this prefix.
                 // Failed extra validation leaves the ordinary UTXO path intact.

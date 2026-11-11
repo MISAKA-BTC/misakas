@@ -2,6 +2,61 @@
 
 use super::*;
 
+/// Minted only while a native ordered builder owns the whole accepting
+/// journal. A singleton rehearsal's local index is never an archive position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Tfp1OriginalPrefixV1 {
+    claim: Hash64,
+    carrier: Hash64,
+    parent: Hash64,
+    point: PalwBlockContextV2,
+    root: Hash64,
+    end: usize,
+}
+impl Tfp1OriginalPrefixV1 {
+    pub(crate) fn claim_v1(&self) -> Hash64 {
+        self.claim
+    }
+    pub(crate) fn carrier_v1(&self) -> Hash64 {
+        self.carrier
+    }
+    pub(crate) fn parent_v1(&self) -> Hash64 {
+        self.parent
+    }
+    pub(crate) fn point_v1(&self) -> PalwBlockContextV2 {
+        self.point
+    }
+    pub(crate) fn root_v1(&self) -> Hash64 {
+        self.root
+    }
+    pub(crate) fn end_v1(&self) -> usize {
+        self.end
+    }
+}
+
+pub(super) fn capture_tfp1_prefix_v1(
+    builder: &TransitionBuilder<'_>,
+    point: &PalwBlockContextV2,
+    claim: Hash64,
+) -> Result<Tfp1OriginalPrefixV1, PalwStateV2Error> {
+    let refuse = || PalwStateV2Error::CarriageInconsistent("TFO3 history lacks the actual ordered prefix and UTXO origin".into());
+    let parent = builder.tfp1_history_journal_parent.ok_or_else(refuse)?;
+    let pairing = builder.extras.tir_funded_originals.get(&claim).ok_or_else(refuse)?;
+    let inputs = pairing.history_inputs_v1().ok_or_else(refuse)?;
+    if inputs.parent_v1() != parent || pairing.public_companion_v3().is_none() {
+        return Err(refuse());
+    }
+    crate::palw_positive_contract_v2::require_current_public_origin_v1(inputs.origin_v1(), point).map_err(|_| refuse())?;
+    Ok(Tfp1OriginalPrefixV1 {
+        claim,
+        carrier: pairing.carrier().id(),
+        parent,
+        point: *point,
+        root: builder.state.state_root(),
+        end: builder.entries.len(),
+    })
+}
+
 pub(super) fn apply_object(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -58,10 +113,14 @@ fn apply_object_with_pair_v1(
     // FP reservation/budget writes cannot leave an accepted unprotected claim.
     // `checkpoint()` is test-only on the integration line; production rollback goes through the native resource reservation.
     let saved = builder.try_checkpoint()?;
-    let result = match if paired { palw_tir_public_fold_v1::check_paired_original_v1(builder, object) } else { Ok(()) } {
-        Ok(()) => apply_object_inner(builder, ctx, object),
-        Err(why) => Err(why),
-    };
+    let previous_prefix = builder.tfp1_original_prefix.take();
+    let result = (|| {
+        if paired {
+            palw_tir_public_fold_v1::check_paired_original_v1(builder, object)?;
+        }
+        apply_object_inner(builder, ctx, object)
+    })();
+    builder.tfp1_original_prefix = previous_prefix;
     if result.is_err() {
         builder.restore(saved);
     }
@@ -4441,6 +4500,12 @@ fn apply_object_batch_10_v1(
                 (_, plan) => plan,
             };
             let panel_authorization = palw_panel_lifetime_fold_v2::select_authorization(builder, &claim)?;
+            if builder.extras.tir_funded_originals.get(claim_id).is_some_and(|pair| pair.public_companion_v3().is_some()) {
+                // Only after admission/booking and all pre-write checks. The
+                // dormant PublicOriginalProfile refusal above never hashes a
+                // whole prefix just to reject an unsigned companion.
+                builder.tfp1_original_prefix = Some(capture_tfp1_prefix_v1(builder, ctx, *claim_id)?);
+            }
             builder.reserve_for_claim(&claim)?;
             if let Some(contract) = consumer_plan {
                 builder.commit_paid_consumer_v1(*claim_id, contract)?;

@@ -68,8 +68,8 @@ impl PreparedTfp1OriginalHistoryLinkV1 {
 }
 
 impl PublicOriginalAdmissionV1<'_> {
-    /// Called by the original admission owner with the actual pre-object
-    /// builder boundary and validated UTXO entries. Complete policy, booking,
+    /// Called by the original admission owner with its sealed pre-write
+    /// boundary and pairing-bound validated UTXO handoff. Complete policy, booking,
     /// paid retention and FP/payer signature checks remain mandatory there.
     pub(crate) fn prepare_tfp1_history_link_v1(
         &self,
@@ -79,11 +79,7 @@ impl PublicOriginalAdmissionV1<'_> {
         obligation: super::Tfp1PublicOriginalObligationV1,
         inputs: &PublicOriginalReservationV1<'_>,
         reservation: Digest,
-        selected_parent: Hash64,
-        pre_event_root: Hash64,
-        before_delta_end: usize,
-        entries: &[crate::tx::UtxoEntry],
-        fee: u64,
+        prefix: &crate::palw_state_v2::Tfp1OriginalPrefixV1,
     ) -> Result<PreparedTfp1OriginalHistoryLinkV1, ContractError> {
         let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, inputs)?;
         let boundary = crate::palw_tfp1_original_history_v1::Tfp1OriginalHistoryBoundaryV1::from_actual_data_v1(
@@ -91,12 +87,8 @@ impl PublicOriginalAdmissionV1<'_> {
             obligation.facts.source,
             prepared.companion.original,
             inputs.origin,
-            selected_parent,
-            pre_event_root,
-            before_delta_end,
-            pairing.carrier(),
-            entries,
-            fee,
+            prefix,
+            pairing.history_inputs_v1().ok_or(ContractError::Scope)?,
             self,
             inputs,
         )?;

@@ -590,7 +590,7 @@ mod tests {
             );
             crate::palw_funded_original_coordinator_v1::palw_funded_original_pairing_v1(&tx).unwrap()
         };
-        let pairing = pair_carrier(&funded, prompt_text.as_bytes());
+        let mut pairing = pair_carrier(&funded, prompt_text.as_bytes());
         assert_eq!(admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation), Err(ContractError::Scope));
         reservation.origin.carrier_transaction = NativeHash64(pairing.carrier().id().as_bytes());
         let prepared = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
@@ -661,20 +661,30 @@ mod tests {
             1,
             false,
         )];
+        let seed = {
+            use crate::tx::{PopulatedTransaction, ValidatedTransaction};
+            let validated =
+                ValidatedTransaction::new(PopulatedTransaction::new(pairing.carrier(), history_inputs.to_vec()), history_fee);
+            let invalid =
+                ValidatedTransaction::new(PopulatedTransaction::new(pairing.carrier(), history_inputs.to_vec()), history_fee + 1);
+            assert!(crate::palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1::prepare_v1(&invalid).is_err());
+            crate::palw_tfp1_original_history_v1::ValidatedTfp1OriginalInputsV1::prepare_v1(&validated).unwrap().unwrap()
+        };
+        let history_parent = Hash64::from_u64_word(804);
+        pairing.bind_history_inputs_v1(seed, reservation.origin, history_parent).unwrap();
+        pairing.bind_history_inputs_v1(seed, reservation.origin, history_parent).unwrap();
+        let mut duplicate_history = duplicate.clone();
+        assert!(duplicate_history.bind_history_inputs_v1(seed, reservation.origin, history_parent).is_err());
+        let rebound = AcceptedOrigin { accepted_tx_ordinal: 1, ..reservation.origin };
+        assert!(pairing.bind_history_inputs_v1(seed, rebound, history_parent).is_err());
+        let prefix = crate::palw_state_v2::tests::native_writers_v1::tfp1_history_prefix_fixture_v1(
+            &link_state,
+            &link_params,
+            &link_point,
+            &pairing,
+        );
         let history = admission
-            .prepare_tfp1_history_link_v1(
-                &link_state,
-                &link_point,
-                &pairing,
-                obligation,
-                &reservation,
-                admission_reservation,
-                Hash64::from_u64_word(804),
-                link_state.state_root(),
-                0,
-                &history_inputs,
-                history_fee,
-            )
+            .prepare_tfp1_history_link_v1(&link_state, &link_point, &pairing, obligation, &reservation, admission_reservation, &prefix)
             .unwrap();
         assert!(history.boundary_v1().check_populated_data(pairing.carrier(), &history_inputs, history_fee).is_ok());
         assert!(history.boundary_v1().check_populated_data(pairing.carrier(), &history_inputs, history_fee + 1).is_err());
