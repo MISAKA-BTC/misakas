@@ -1,0 +1,64 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+error[E0506]: cannot assign to `b.state.last_point` because it is borrowed
+   --> consensus/core/src/palw_court_shared_tokenizer_native_tests.rs:608:5
+    |
+607 |     assert!(derive(&b.state, &at, original).is_err(), "unaccepted in-flight registration cannot authorize reuse");
+    |                    -------- `b.state.last_point` is borrowed here
+608 |     b.state.last_point = Some(registration_point);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `b.state.last_point` is assigned to here but it was already borrowed
+609 |     assert!(derive(&b.state, &PalwBlockContextV2 { daa_score: registration_point.daa_score, ..at }, original).is_err());
+    |             ------ borrow later used here
+
+error[E0716]: temporary value dropped while borrowed
+   --> consensus/core/src/palw_court_shared_tokenizer_native_tests.rs:609:31
+    |
+609 |     assert!(derive(&b.state, &PalwBlockContextV2 { daa_score: registration_point.daa_score, ..at }, original).is_err());
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                    - temporary value is freed at the end of this statement
+    |                               |
+    |                               creates a temporary value which is freed while still in use
+610 |     assert!(derive(&b.state, &PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at }, original).is_err());
+    |             ------ borrow later used here
+    |
+help: consider using a `let` binding to create a longer lived value
+    |
+609 ~     let binding = PalwBlockContextV2 { daa_score: registration_point.daa_score, ..at };
+610 ~     assert!(derive(&b.state, &binding, original).is_err());
+    |
+
+error[E0716]: temporary value dropped while borrowed
+   --> consensus/core/src/palw_court_shared_tokenizer_native_tests.rs:610:31
+    |
+610 |     assert!(derive(&b.state, &PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at }, original).is_err());
+    |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                    - temporary value is freed at the end of this statement
+    |                               |
+    |                               creates a temporary value which is freed while still in use
+611 |     let branch = derive(&b.state, &at, original).unwrap();
+    |                  ------ borrow later used here
+    |
+help: consider using a `let` binding to create a longer lived value
+    |
+610 ~     let binding = PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at };
+611 ~     assert!(derive(&b.state, &binding, original).is_err());
+    |
+
+error[E0716]: temporary value dropped while borrowed
+   --> consensus/core/src/palw_court_shared_tokenizer_native_tests.rs:616:27
+    |
+616 |         derive(&b.state, &PalwBlockContextV2 { daa_score: at.daa_score + 1, blue_score: at.blue_score + 1, ..at }, original).unwrap();
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^                    - temporary value is freed at the end of this statement
+    |                           |
+    |                           creates a temporary value which is freed while still in use
+...
+620 |     assert!(derive(&b.state, &at, &foreign_original).is_err());
+    |             ------ borrow later used here
+    |
+help: consider using a `let` binding to create a longer lived value
+    |
+615 ~     let binding = PalwBlockContextV2 { daa_score: at.daa_score + 1, blue_score: at.blue_score + 1, ..at };
+616 ~     let rebased =
+617 ~         derive(&b.state, &binding, original).unwrap();
+    |
+
+Some errors have detailed explanations: E0506, E0716.
+For more information about an error, try `rustc --explain E0506`.
+error: could not compile `kaspa-consensus-core` (lib test) due to 4 previous errors

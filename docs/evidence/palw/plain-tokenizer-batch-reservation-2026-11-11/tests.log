@@ -1,0 +1,9 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 57s
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08)
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6009 filtered out; finished in 0.20s
+

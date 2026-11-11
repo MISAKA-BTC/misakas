@@ -1,0 +1,20 @@
+{
+  "codeCommit": "970845a14",
+  "date": "2026-11-11",
+  "tests": {
+    "new_native_fixture": 1,
+    "batch_regressions": 28,
+    "registration_boundary": 1,
+    "intake_boundary": 1,
+    "total": 31,
+    "failed": 0
+  },
+  "buildSeconds": 177,
+  "publicT12Queried": false,
+  "publicT12Submitted": false,
+  "nativeWriterImplemented": false,
+  "profileActivated": false,
+  "mainPushed": false,
+  "initialFailure": "fixture closure reference lifetimes, fixed before r2",
+  "r3Change": "FullIds-before-authenticated-Finish dependency, separate paid phase, original draft expiry"
+}

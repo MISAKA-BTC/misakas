@@ -302,3 +302,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の後続ユーザー指示を[RFC-0053](../../../rfc/0053-additional-model-burn-pause.md)／[ADR-0221](../../../adr/0221-additional-model-burn-pause.md)として採択。先行段落のHF公開契約・定期有効期限・取得不能裁定は廃止し、以後の残件から削除する。追加モデルだけを誰でもburnで停止、登録者burnで解除し、genesis・年次fork指定を除外する。[実装追補](additional-model-burn-pause-2026-11-11.md)に未署名plannerとnative署名/支払/保存/全Final・reward gateの境界を記録する。モデルのtier・既存責任・原期限は維持する。
 
 `6511a880e`の[burn停止planner回帰2件](../../../evidence/palw/model-burn-pause-planner-2026-11-11/README.md)が成功した。登録者不在をgenesisとみなす旧便宜関数に頼らず、実genesis objectのexact class/rootと明示catalogに基づいて対象外を判定する。未知owner、古いsequence、誤scope/rootを拒否し、年次指定後のpause無効化を確認した。実署名・支払・state保存と公開停止には未接続。
+
+2026-11-11 の[tokenizer資料と普通TFP1の共通予約](../../../evidence/palw/plain-tokenizer-batch-reservation-2026-11-11/README.md): `970845a14`で受理済み登録に束縛した入力ID・rendering/EOG資料を数値/FullIdsと同じ予約計算へ接続した。FullIdsは共有し、semantic Finishをその後の別phaseに置き、資料認証・Verify・terminalの費用と元draft期限を計上する。対象と回帰31件が成功。新case専用wire/native writer・全Selection/資料未着時の回復・保護枠・TFO3 atomic受理・公開profileは未接続で、公開quote/受付/Final/main pushの達成ではない。HF取得認定は追加せず、モデルroot/hash・claim資料・局所courtを維持する。
