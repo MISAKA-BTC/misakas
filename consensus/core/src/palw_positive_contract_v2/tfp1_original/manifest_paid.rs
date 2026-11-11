@@ -85,6 +85,27 @@ impl PaidManifestRequestRowV1 {
         self.charged_sompi
     }
 
+    /// Continuation authority belongs to this exact signed request and draw
+    /// rank. A different paid request for the same original cannot sponsor it.
+    pub(super) fn check_continuation_v1(
+        &self,
+        link: &Tfp1PublicOriginalLinkV1,
+        reservation_scope: Hash64,
+        case: CaseId,
+        origin: AcceptedOrigin,
+    ) -> Result<(), ContractError> {
+        if self.claim != link.claim_v1()
+            || self.source != link.source_v1()
+            || self.original != link.original_v1()
+            || self.reservation_scope != reservation_scope
+            || self.case != case
+            || self.origin != origin
+        {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+
     pub(crate) fn check_insert_at_v1(&self, point: &PalwBlockContextV2) -> Result<(), ContractError> {
         require_current_public_origin_v1(self.origin, point)
     }

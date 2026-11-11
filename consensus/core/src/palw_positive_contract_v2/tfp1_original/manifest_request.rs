@@ -193,7 +193,7 @@ pub(crate) fn exercise_paid_request_v1(
     wire: &[u8],
     at: PalwBlockContextV2,
     params: &crate::palw_state_v2::PalwStateParamsV2,
-) {
+) -> (PalwChainStateV2, misaka_palw_positive_contract::rows::AcceptedOrigin) {
     use super::manifest_carrier::{MANIFEST_REQUEST_CARRIER_BYTES_V1, encode_manifest_request_carrier_v1};
     use crate::{
         palw_court_service_release_v1::CourtServiceRowV3,
@@ -324,4 +324,6 @@ pub(crate) fn exercise_paid_request_v1(
     assert_eq!(handoff.remaining_fee_v1(), 12);
     let accepted = exercise_paid_manifest_writer_v1(state, at, params, &prepared, make_handoff);
     assert!(prepared.storage_rows_at_v1(&accepted, &at).unwrap().is_none());
+    assert!(paired.rooted_drawn_batch_case_v1(&accepted, draw, wire, &context).is_ok());
+    (accepted, context.origin)
 }

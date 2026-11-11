@@ -655,6 +655,8 @@ mod tests {
         let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, link, &link_params);
         reservation.origin.carrier_transaction = NativeHash64(pairing.carrier().id().as_bytes());
         let paired = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
+        assert_eq!(admission.restore_tfp1_pairing_v1(&linked, &pairing, &reservation).unwrap(), paired);
+        assert!(admission.restore_tfp1_pairing_v1(&link_state, &pairing, &reservation).is_err());
         let companion_only = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
         use crate::palw_state_v2::{
             PalwBlockContextV2, PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras, revert_delta_v2,
@@ -693,7 +695,7 @@ mod tests {
         )
         .unwrap();
         let request_point = PalwBlockContextV2 { block: Hash64::from_u64_word(807), daa_score: 102, blue_score: 103, subsidy: 0 };
-        let request_context = ManifestRequestContext {
+        let mut request_context = ManifestRequestContext {
             original: &companion,
             claimant: Claimant::DrawnBond(bond),
             signer: member.principal,
@@ -723,7 +725,7 @@ mod tests {
                 .unwrap();
         let request_case_id = request.case_id(&companion, request_context.claimant).unwrap();
         let request_wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
-        manifest_request::exercise_paid_request_v1(
+        let (with_case, paid_origin) = manifest_request::exercise_paid_request_v1(
             &paired,
             &companion_only,
             &drawn,
@@ -733,13 +735,15 @@ mod tests {
             request_point,
             &link_params,
         );
+        request_context.origin = paid_origin;
         let pending = paired
             .companion_v1()
             .prepare_drawn_manifest_storage_record(admission_reservation, &draw, &request_wire, &request_context)
             .unwrap();
+        let request_digest = pending.row.request_digest();
         assert!(paired.rooted_drawn_batch_case_v1(&linked, &draw, &request_wire, &request_context).is_err());
         assert!(paired.rooted_drawn_batch_case_v1(&drawn, &draw, &request_wire, &request_context).is_err());
-        let (with_case, case_delta) = apply_palw_transition_v2_with_extras(
+        let (unpaid_case, case_delta) = apply_palw_transition_v2_with_extras(
             &drawn,
             &link_params,
             &request_point,
@@ -752,9 +756,47 @@ mod tests {
             &PalwTransitionExtrasV1 { kernel_route: Some(kernel), public_drawn_manifest_cases: vec![pending], ..Default::default() },
         )
         .unwrap();
+        // The legacy extras path can root a pending row, but cannot confer
+        // paid TFO3 continuation authority. Only the paired writer above can.
+        assert!(paired.rooted_drawn_batch_case_v1(&unpaid_case, &draw, &request_wire, &request_context).is_err());
         let rooted = paired.rooted_drawn_batch_case_v1(&with_case, &draw, &request_wire, &request_context).unwrap();
         assert_eq!((rooted.claim_v1(), rooted.source_v1()), (facts.claim, facts.source));
         assert_ne!(rooted.scope_v1(), rooted.case_scope_v1());
+        // A paid receipt in another physical namespace must not authorize
+        // this draw rank, even if its pending request cross-reference is valid.
+        {
+            use crate::palw_positive_contract_v2::PUBLIC_MANIFEST_PAID_TABLE_V1;
+            use manifest_paid::{PaidManifestRequestRowV1, manifest_request_charge_purpose_v1};
+            let other_scope = manifest_carrier::ManifestRequestCarrierScopeV1 {
+                claim: facts.claim,
+                source: facts.source,
+                reservation_scope: Hash64::from_u64_word(990),
+            };
+            let packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v1(
+                facts.claim,
+                other_scope.reservation_scope,
+            )
+            .unwrap();
+            let other_paid = PaidManifestRequestRowV1::new_v1(
+                other_scope,
+                companion.id(),
+                request_case_id,
+                request_context.origin,
+                request_digest,
+                manifest_request_charge_purpose_v1(companion.id(), packet).unwrap(),
+                7,
+            )
+            .unwrap();
+            // The snapshot cross-reference deliberately does not reconstruct
+            // the draw. Continuation must rederive rank from actual membership.
+            other_paid.check_state_at_v1(&with_case, &request_point).unwrap();
+            let mut carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(&with_case);
+            let route = carriage.kernel_route.as_mut().unwrap();
+            route.aux.retain(|(table, _), _| *table != PUBLIC_MANIFEST_PAID_TABLE_V1);
+            route.aux.insert((PUBLIC_MANIFEST_PAID_TABLE_V1, packet.to_vec()), borsh::to_vec(&other_paid).unwrap());
+            let wrong_rank = carriage.into_state(&link_params, None).unwrap();
+            assert!(paired.rooted_drawn_batch_case_v1(&wrong_rank, &draw, &request_wire, &request_context).is_err());
+        }
         let prebooked_scope = companion_only.drawn_batch_reservation_scope_v1(0).unwrap();
         assert_eq!(rooted.reservation_scope_v1(), prebooked_scope);
         assert_ne!(rooted.reservation_scope_v1(), rooted.case_scope_v1());
@@ -905,17 +947,47 @@ mod tests {
         }
         assert!(companion_only.rooted_drawn_batch_case_v1(&with_case, &draw, &request_wire, &request_context).is_err());
         assert!(paired.rooted_drawn_batch_case_v1(&link_state, &draw, &request_wire, &request_context).is_err());
-        let rolled_back = revert_delta_v2(&with_case, &case_delta, &link_params).unwrap();
+        let rolled_back = revert_delta_v2(&unpaid_case, &case_delta, &link_params).unwrap();
         assert!(paired.rooted_drawn_batch_case_v1(&rolled_back, &draw, &request_wire, &request_context).is_err());
         let restored = crate::palw_state_v2::PalwStateCarriageV2::from_state(&with_case)
             .into_state(&link_params, Some(with_case.state_root()))
             .unwrap();
-        assert_eq!(paired.rooted_drawn_batch_case_v1(&restored, &draw, &request_wire, &request_context), Ok(rooted));
+        let restored_original = admission.restore_tfp1_pairing_v1(&restored, &pairing, &reservation).unwrap();
+        assert_eq!(restored_original, paired);
+        let restored_draw = restored_original
+            .companion_v1()
+            .restore_draw(
+                &restored.public_draw_record_v1(companion.id()).unwrap().unwrap(),
+                Digest([74; 64]),
+                draw_point,
+                &[member],
+                Digest([75; 64]),
+            )
+            .unwrap();
+        assert_eq!(
+            restored_original.rooted_drawn_batch_case_v1(&restored, &restored_draw, &request_wire, &request_context),
+            Ok(rooted)
+        );
+        let shifted_reservation = PublicOriginalReservationV1 {
+            origin: AcceptedOrigin { accepted_tx_ordinal: reservation.origin.accepted_tx_ordinal + 1, ..reservation.origin },
+            ..reservation
+        };
+        assert!(admission.restore_tfp1_pairing_v1(&restored, &pairing, &shifted_reservation).is_err());
+        let wrong_supply = PublicOriginalReservationV1 {
+            initial_supply: RemainingCapacity {
+                transmitted_bytes: reservation.initial_supply.transmitted_bytes - 1,
+                ..reservation.initial_supply
+            },
+            ..reservation
+        };
+        assert!(admission.prepare_tfp1_pairing_v1(&pairing, obligation, &wrong_supply).is_ok());
+        assert!(admission.restore_tfp1_pairing_v1(&restored, &pairing, &wrong_supply).is_err());
         let duplicate_reservation = PublicOriginalReservationV1 {
             origin: AcceptedOrigin { carrier_transaction: NativeHash64(duplicate_tx.id().as_bytes()), ..reservation.origin },
             ..reservation
         };
         let duplicate_prepared = admission.prepare_tfp1_pairing_v1(&duplicate, obligation, &duplicate_reservation).unwrap();
+        assert!(admission.restore_tfp1_pairing_v1(&restored, &duplicate, &duplicate_reservation).is_err());
         assert!(duplicate_prepared.rooted_drawn_batch_case_v1(&restored, &draw, &request_wire, &request_context).is_err());
         let mut wrong_wire = request_wire.clone();
         *wrong_wire.last_mut().unwrap() ^= 1;

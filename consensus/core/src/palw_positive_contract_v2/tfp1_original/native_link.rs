@@ -8,7 +8,7 @@ use crate::{
     palw_native_resource_v1::{typed::native_struct, wire::wire_struct},
     palw_positive_contract_v2::{
         AcceptedMaterial, PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PUBLIC_TFP1_LINK_TABLE_V1, PublicOriginalAdmissionRecordV1,
-        require_current_public_origin_v1,
+        PublicOriginalAdmissionV1, PublicOriginalReservationV1, require_current_public_origin_v1,
     },
     palw_state_v2::{PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimSourceV2},
     palw_tir_public_claim_v1::{PalwTirPublicClaimV1, palw_tir_public_claim_v1},
@@ -52,6 +52,43 @@ pub(crate) struct PreparedTfp1PublicOriginalLinkV1 {
     pairing: PairedTfp1CarrierV1,
 }
 
+impl PublicOriginalAdmissionV1<'_> {
+    /// Restore a paired original from its literal accepted transaction and
+    /// the admission inputs reconstructed at its original inclusion point.
+    /// The current rooted link chooses profile/resource and origin; callers
+    /// cannot nominate a replacement obligation or refresh the original clock.
+    ///
+    /// The history owner must authenticate carrier inclusion and reconstruct
+    /// the original admission inputs, FP/payer authorization and UTXO funding.
+    /// This method rechecks the companion signature and every stored admission
+    /// field, but does not reconstruct the UTXO prefix or prove that a complete
+    /// production reservation was installed.
+    /// In particular, table 198 retains deadlines, not all readiness inputs:
+    /// the history owner must rederive the full reservation/resource preimage
+    /// before calling. Equal stored deadlines alone are not that derivation.
+    pub(crate) fn restore_tfp1_pairing_v1(
+        &self,
+        state: &PalwChainStateV2,
+        pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        inputs: &PublicOriginalReservationV1<'_>,
+    ) -> Result<PreparedTfp1PublicOriginalV1, ContractError> {
+        let link = state.public_tfp1_original_link_v1(pairing.claim())?.ok_or(ContractError::Scope)?;
+        if inputs.origin != link.carrier.origin {
+            return Err(ContractError::Scope);
+        }
+        let frame = palw_tir_public_claim_v1(state, link.claim).ok_or(ContractError::Scope)?;
+        let facts = link.check_frame(state, frame)?;
+        let obligation = facts.service_obligation_v1(link.profile, link.resource)?;
+        let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, inputs)?;
+        // Includes the literal companion digest, original rescue capacities,
+        // deadlines and reservation, not only semantic claim equality.
+        if prepared.rooted_link_v1(state)? != link {
+            return Err(ContractError::Scope);
+        }
+        Ok(prepared)
+    }
+}
+
 impl PreparedTfp1PublicOriginalV1 {
     /// Restore the association from the literal paired transaction on the
     /// executing branch. Settled funding is allowed here: only installation
@@ -78,7 +115,8 @@ impl PreparedTfp1PublicOriginalV1 {
 
     /// A native TFP1 request must satisfy both the immutable paired link and
     /// the accepted draw/request chain. No caller-supplied claim or namespace
-    /// is promoted into authority. This does not spend a physical service slot.
+    /// is promoted into authority. The paired paid row must already exist;
+    /// restoring it does not charge again or consume a second physical slot.
     pub(crate) fn rooted_drawn_batch_case_v1(
         &self,
         state: &PalwChainStateV2,
@@ -92,6 +130,19 @@ impl PreparedTfp1PublicOriginalV1 {
         // not relabel a legacy first-notice or shared-context packet with it.
         let scope = self.obligation.batch_scope_v1(link.original)?;
         let reservation_scope = self.drawn_batch_reservation_scope_v1(case.opportunity_v1().index_v1())?;
+        let packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v1(
+            link.claim,
+            reservation_scope,
+        )
+        .map_err(|_| ContractError::Scope)?;
+        let route = state.kernel_route_state_v1().ok_or(ContractError::Scope)?;
+        let paid_bytes = route
+            .aux
+            .get(&(crate::palw_positive_contract_v2::PUBLIC_MANIFEST_PAID_TABLE_V1, packet.to_vec()))
+            .ok_or(ContractError::Scope)?;
+        let paid = super::manifest_paid::PaidManifestRequestRowV1::decode_row(&packet, paid_bytes)?;
+        paid.check_state_at_v1(state, state.last_point().ok_or(ContractError::Scope)?)?;
+        paid.check_continuation_v1(&link, reservation_scope, case.case_id_v1(), context.origin)?;
         Ok(RootedTfp1DrawnBatchCaseV1 {
             claim: link.claim,
             source: link.source,
