@@ -22,6 +22,7 @@ use std::{collections::VecDeque, thread::JoinHandle};
 mod palw_mergeset_view;
 mod round_observer_snapshot_v1;
 mod template_parent_snapshot_v1;
+mod tir_original_quote_parent_v1;
 // RFC-0018 §10 T-1/T-2: three models × three miners from the same parents; arrival-order independence (unbuilt source).
 mod rfc0018_dag_siblings;
 mod rfc18_dag_width;

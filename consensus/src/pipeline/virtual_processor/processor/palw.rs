@@ -1780,24 +1780,48 @@ impl VirtualStateProcessor {
             return Err("TIR original quote exceeds the original bounded FP descriptor".into());
         }
         let params = self.palw_state_params_v2.as_ref().ok_or("PALW V2 state parameters unavailable")?;
-        let (_, state) =
-            self.palw_v2_reader_state(params).map_err(|e| e.to_string())?.ok_or("PALW V2 accepted snapshot unavailable")?;
-        let point = state.last_point().ok_or("TIR original quote snapshot has no accepted clock")?;
-        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(point.daa_score)) {
-            return Ok(None);
+        // Signing must use the current selected parent's authenticated state,
+        // not the last-known-good reader's potentially older branch. Cold
+        // reconstruction runs without retaining the virtual read guard.
+        let captured = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?;
+        let prepared =
+            self.prepare_template_parent_v1(&captured).map_err(|e| format!("TIR original quote parent unavailable: {e:?}"))?;
+        prepared.checked.map_err(|e| format!("TIR original quote parent is not authenticated: {e:?}"))?;
+        let (target, state) = prepared.state.as_ref().ok_or("TIR original quote parent unavailable")?;
+        let point = state.last_point().ok_or("TIR original quote parent has no accepted clock")?;
+        if *target != captured.ghostdag_data.selected_parent || point.block != *target {
+            return Err("TIR original quote parent differs from selected parent".into());
         }
-        let extras = self.palw_transition_extras_for(point);
-        let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_with_diagnostics_v1(
-            &state,
-            params,
-            &extras,
-            point.daa_score,
-            &original,
-            &header,
-            diagnostics,
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(plan.map(|plan| (point.daa_score, plan)))
+        // v1 continues to quote the accepted clock and legacy plan. This does
+        // not fabricate a prospective accepted origin or enable TFO3. Hold
+        // diagnostics locally too: neither success nor refusal diagnostics may
+        // escape a read whose parent/import generation changed underneath it.
+        let mut local_diagnostics = None;
+        let plan = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(point.daa_score)) {
+            let extras = self.palw_transition_extras_for(point);
+            kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_with_diagnostics_v1(
+                state,
+                params,
+                &extras,
+                point.daa_score,
+                &original,
+                &header,
+                if diagnostics.is_some() { Some(&mut local_diagnostics) } else { None },
+            )
+            .map_err(|e| e.to_string())
+        } else {
+            Ok(None)
+        };
+        let current = self.virtual_stores.read();
+        let after = current.state.get().map_err(|e| e.to_string())?;
+        if !Arc::ptr_eq(&captured, &after) {
+            return Err("TIR original quote selected view changed; retry the quote".into());
+        }
+        self.check_prepared_template_parent_v1(&prepared).map_err(|e| format!("TIR original quote import/state changed: {e:?}"))?;
+        if let Some(out) = diagnostics {
+            *out = local_diagnostics;
+        }
+        Ok(plan?.map(|plan| (point.daa_score, plan)))
     }
 
     /// A new-family producer's original allocation at its explicit prospective
