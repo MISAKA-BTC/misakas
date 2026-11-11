@@ -1,0 +1,137 @@
+{
+  "toolSourceCommit": "4d0aee958075f2e010094fa46f6668316647ba96",
+  "profile": "macOS dev, core opt-level 0; functional comparison only",
+  "runs": [
+    {
+      "path": "/tmp/t12-tokenizer-native-bundle-actual-run.log",
+      "sha256": "b73dcae2d6ea00b460fb82744ab59735cedd542eee0c3dd6039737d6eaf1b112",
+      "result": {
+        "actions": 69,
+        "case": "actual",
+        "declaredLogicalLimits": null,
+        "finalRoot": "044b0b978fa16c3060d7584105fc248550ace93e108ba927a7a9a5dcfa97dcfe1daed7861516c97e906cd94ceefea2fdf0188d9cbb6cdb84ecfd2791e7387a40",
+        "initialRoot": "57a9a3f0ade777462f48e3a43f574003cec0500caa35361eb9d4c6d2ce9f3bfa1a490c8f6f508d7f67c8725bb7faff50e00ad5419cd08e083f8fa61e98c66ab7",
+        "metrics": {
+          "fee_base_ns": 188512414,
+          "fee_rollback_ns": 1946039,
+          "finish_cached_fold_ns": 18306000,
+          "finish_cold_fee_rehearsal_ns": 343933333,
+          "handoff_ns": 24145703,
+          "journal_bytes": 5489979,
+          "journal_undo_redo_ns": 382952417,
+          "open_fold_ns": 25407001,
+          "open_part_fee_rehearsal_ns": 671468585,
+          "part_fold_ns": 819329461,
+          "snapshot_encode_ns": 1546917,
+          "snapshot_restore_ns": 28529167
+        },
+        "nativeLogicalAdmissionEnabled": false,
+        "nativeResourceAdmissionEnabled": false,
+        "policyId": "1007f512a8068111bebf84474b0bdc26f8c1ee8c543329acafc2c1b61ddc4ea5b2366fdfde787dff6b82de348223e58e9e8b532ed9b8345270c7f682042f94b1",
+        "scope": "production native APIs on seeded accepted-parent inputs",
+        "snapshotBytes": 4601264
+      }
+    },
+    {
+      "path": "/tmp/t12-tokenizer-native-bundle-max-run.log",
+      "sha256": "f8424af7f2a942c7a50b532c67f28749b1528b292aad3c64f072fb0e82120ddf",
+      "result": {
+        "actions": 259,
+        "case": "maximum_raw",
+        "declaredLogicalLimits": null,
+        "finalRoot": "340cb1a57ac3c5d4396018f76031d1a9282cb95ab0568fe8514853efa03ddf3e848d3658bba8637f49a225110587cf188b5a4a9829adbc0b3474e73de6ae5dab",
+        "initialRoot": "9621e9e08243096a131a3ea50e2635ec8c8939b556c25879e66bd8b8bfb9da302babe75e4f9c92f7db62710f4c12f9c8316a712d565b9dc1dd22a3aed461e590",
+        "metrics": {
+          "fee_base_ns": 2723529961,
+          "fee_rollback_ns": 8154756,
+          "finish_cached_fold_ns": 45000166,
+          "finish_cold_fee_rehearsal_ns": 154428083,
+          "handoff_ns": 95457164,
+          "journal_bytes": 21705513,
+          "journal_undo_redo_ns": 5695631209,
+          "open_fold_ns": 38024875,
+          "open_part_fee_rehearsal_ns": 2738471669,
+          "part_fold_ns": 5390478788,
+          "snapshot_encode_ns": 2017333,
+          "snapshot_restore_ns": 110774625
+        },
+        "nativeLogicalAdmissionEnabled": false,
+        "nativeResourceAdmissionEnabled": false,
+        "policyId": "1007f512a8068111bebf84474b0bdc26f8c1ee8c543329acafc2c1b61ddc4ea5b2366fdfde787dff6b82de348223e58e9e8b532ed9b8345270c7f682042f94b1",
+        "scope": "production native APIs on seeded accepted-parent inputs",
+        "snapshotBytes": 18188793
+      }
+    },
+    {
+      "path": "/tmp/t12-tokenizer-native-bundle-actual-logical-run.log",
+      "sha256": "607fad6edf2d9a8baf459f94536635144538900db1311c30f9138c667c7b76bc",
+      "result": {
+        "actions": 69,
+        "case": "actual",
+        "declaredLogicalLimits": {
+          "databaseBytes": 34359738368,
+          "memoryBytes": 4294967296
+        },
+        "finalRoot": "044b0b978fa16c3060d7584105fc248550ace93e108ba927a7a9a5dcfa97dcfe1daed7861516c97e906cd94ceefea2fdf0188d9cbb6cdb84ecfd2791e7387a40",
+        "initialRoot": "57a9a3f0ade777462f48e3a43f574003cec0500caa35361eb9d4c6d2ce9f3bfa1a490c8f6f508d7f67c8725bb7faff50e00ad5419cd08e083f8fa61e98c66ab7",
+        "metrics": {
+          "fee_base_ns": 215197497,
+          "fee_rollback_ns": 1432334,
+          "finish_cached_fold_ns": 18980875,
+          "finish_cold_fee_rehearsal_ns": 342097708,
+          "handoff_ns": 23017585,
+          "journal_bytes": 5489979,
+          "journal_undo_redo_ns": 383806915,
+          "open_fold_ns": 22873916,
+          "open_part_fee_rehearsal_ns": 663668535,
+          "part_fold_ns": 851132459,
+          "snapshot_encode_ns": 1133125,
+          "snapshot_restore_ns": 29770250
+        },
+        "nativeLogicalAdmissionEnabled": true,
+        "nativeResourceAdmissionEnabled": false,
+        "policyId": "1007f512a8068111bebf84474b0bdc26f8c1ee8c543329acafc2c1b61ddc4ea5b2366fdfde787dff6b82de348223e58e9e8b532ed9b8345270c7f682042f94b1",
+        "scope": "production native APIs on seeded accepted-parent inputs",
+        "snapshotBytes": 4601264
+      }
+    },
+    {
+      "path": "/tmp/t12-tokenizer-native-bundle-max-logical-run.log",
+      "sha256": "72a7d9d9b02d3fcea24f1246bc9d5e4e7eb07aa6c7c6c101e4de41a7b668ff85",
+      "result": {
+        "actions": 259,
+        "case": "maximum_raw",
+        "declaredLogicalLimits": {
+          "databaseBytes": 34359738368,
+          "memoryBytes": 4294967296
+        },
+        "finalRoot": "340cb1a57ac3c5d4396018f76031d1a9282cb95ab0568fe8514853efa03ddf3e848d3658bba8637f49a225110587cf188b5a4a9829adbc0b3474e73de6ae5dab",
+        "initialRoot": "9621e9e08243096a131a3ea50e2635ec8c8939b556c25879e66bd8b8bfb9da302babe75e4f9c92f7db62710f4c12f9c8316a712d565b9dc1dd22a3aed461e590",
+        "metrics": {
+          "fee_base_ns": 3037778720,
+          "fee_rollback_ns": 8242949,
+          "finish_cached_fold_ns": 46376708,
+          "finish_cold_fee_rehearsal_ns": 154888542,
+          "handoff_ns": 93549033,
+          "journal_bytes": 21705513,
+          "journal_undo_redo_ns": 5706491082,
+          "open_fold_ns": 40833625,
+          "open_part_fee_rehearsal_ns": 2753673757,
+          "part_fold_ns": 5720291540,
+          "snapshot_encode_ns": 2162667,
+          "snapshot_restore_ns": 113475208
+        },
+        "nativeLogicalAdmissionEnabled": true,
+        "nativeResourceAdmissionEnabled": false,
+        "policyId": "1007f512a8068111bebf84474b0bdc26f8c1ee8c543329acafc2c1b61ddc4ea5b2366fdfde787dff6b82de348223e58e9e8b532ed9b8345270c7f682042f94b1",
+        "scope": "production native APIs on seeded accepted-parent inputs",
+        "snapshotBytes": 18188793
+      }
+    },
+    {
+      "path": "/tmp/t12-tokenizer-native-bundle-refused-logical-run.log",
+      "sha256": "786e7087987810f5fed46495c3aa2f96e4ad73c3f4ebc4f299cb8872624e70d3",
+      "refusalLog": "\nthread '<unnamed>' (1582603) panicked at tools/tokenizer-registration-probe/src/native_run.rs:57:14:\ncalled `Result::unwrap()` on an `Err` value: Resource(Unsupported { component: \"logical native capacity\", native_type: \"kaspa_consensus_core::palw_native_resource_v1::demand::NativeDemandCheckerV1\", reason: \"typed requests exceed logical capacity (RAM bytes: outstanding 0, request 525983, limit 1; DB bytes: outstanding 0, request 0, limit 1)\" })\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\nthread 'main' (1582602) panicked at tools/tokenizer-registration-probe/src/main.rs:167:123:\ncalled `Result::unwrap()` on an `Err` value: Any { .. }\n"
+    }
+  ]
+}

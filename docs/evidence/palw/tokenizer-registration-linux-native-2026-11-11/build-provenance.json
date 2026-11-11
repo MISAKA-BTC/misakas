@@ -1,0 +1,13 @@
+{
+  "coreSourceCommit": "8a69231393ee636cc311f7ddaaca29afae185c43",
+  "toolSourceCommit": "4d0aee958075f2e010094fa46f6668316647ba96",
+  "toolFilesSha256": {
+    "tools/tokenizer-registration-probe/src/main.rs": "0dc11d8d994370e2fd372357575c87eab7398ca7d9fe14b92941ef5fa15915d1",
+    "tools/tokenizer-registration-probe/src/native_bundle.rs": "dc375b066d7384dcd98fd9858b39d72e10d76cfce996167dc59016206455e36e",
+    "tools/tokenizer-registration-probe/src/native_run.rs": "02e1815f42803b517fa360f6f54ebfdfb6b1c5ff435e3c9e208a4b37c5a5b0ed",
+    "tools/tokenizer-registration-probe/measure_linux.py": "7d9e83cc34554423bdce97a8c3a2429c44c0db16d82f509488156f6f2217bba9"
+  },
+  "toolArchiveSha256": "676b69ce8325dfe8402ee4c0bf72d858077ac71aaf7eb1b28e7b2dba70235ab3",
+  "productionCoreUnmodified": true,
+  "publicDeployment": false
+}

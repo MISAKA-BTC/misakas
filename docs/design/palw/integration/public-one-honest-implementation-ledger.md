@@ -248,3 +248,9 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 
 
 `9d9f88348` の[実 tokenizer を使う RocksDB 試験](../../../evidence/palw/tokenizer-registration-physical-db-actual-2026-11-11/README.md)では、2,104,556 bytes・33 Partを予約 DAA 順に実署名・UTXOで受理した。Finish後の flush 済み全ファイル長は登録側22,695,446 bytes / 同じブロック数の空取引側5,418,212 bytes。raw GC・compaction後は14,074,322 / 6,388,433 bytesとなり、DBを閉じて再度開いても検査済み登録と元の35 source body・35 journalが残った。macOS opt-level 0の機能・保存観測で、試験全体43.88秒。公開料金、最大 mergeset、Linux whole-node 性能は別の未完項目である。
+
+
+`f5be87db0` の[複数パスと物理 carrier scanner 回帰](../../../evidence/palw/tokenizer-registration-native-multipass-functional-2026-11-11.json)が通過した。実69操作と最大 raw 259操作を、fee処理2回・その巻き戻し2回・owned observed rehearsal 2回・確定fold 1回で再生し、共有 Finish cache と費用・root・journal の一致を確認した。論理 RAM/DB 各4 GiBを有効にし、物理 quotaは設けていない。別の scanner-only 試験はM=780のsource partitionを持ち、不正/未解決Finish carrierを各780件計上し、sourceの2件目と候補の781件目を原子的に拒否した。予約表のsource controls=1により同一DAAの合法Finishは最大1であり、物理source数をparser回数と同一視しない。これらはmacOS opt-level 0の機能検査で、実DAG/Roundの最大source集合やLinux最大candidateの性能認定ではない。
+
+
+[Linux native 2パス測定](../../../evidence/palw/tokenizer-registration-linux-native-2026-11-11/README.md)は、core `8a6923139`・tool `4d0aee958` の release binaryで計20プロセスが期待値と一致した。論理RAM/DB各4 GiBの5回では、実入力69操作のharness全体が2.38〜2.52秒・最大RSS47.14 MiB、8 MiB入力259操作が29.67〜31.29秒・96.69 MiBだった。fixture照合や追加root計算を含む全体時間と、Finish/parser・snapshotなど各APIの時間を別々に保存した。M=1、2 session、Finish1件の基準値であり、最大5パス・M=780候補、物理quota、公開料金/性能の適格性には昇格させない。後に発見した共通writerの一時予約返却修正はこのcoreに含まない。

@@ -1,0 +1,25 @@
+   Compiling misaka-tokenizer-registration-probe v1.1.0 (/root/t12-tokenizer-probe-8a6923139/tools/tokenizer-registration-probe)
+    Finished `release` profile [optimized] target(s) in 28m 36s
+	Command being timed: "nice -n10 ionice -c3 cargo build --locked --release -p misaka-tokenizer-registration-probe -j1 --message-format=json"
+	User time (seconds): 1670.94
+	System time (seconds): 56.57
+	Percent of CPU this job got: 100%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 28:36.52
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1284876
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 1466
+	Minor (reclaiming a frame) page faults: 3885294
+	Voluntary context switches: 8861
+	Involuntary context switches: 6017
+	Swaps: 0
+	File system inputs: 402760
+	File system outputs: 391832
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0

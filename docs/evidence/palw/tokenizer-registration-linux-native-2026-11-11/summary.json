@@ -1,0 +1,144 @@
+{
+  "schema": "palw-tokenizer-linux-native-summary-v1",
+  "date": "2026-11-11",
+  "coreSourceCommit": "8a69231393ee636cc311f7ddaaca29afae185c43",
+  "toolSourceCommit": "4d0aee958075f2e010094fa46f6668316647ba96",
+  "runnerSourceCommit": "368a0f3ccde092d1e3d7645b57c4c09fcc13f2b1",
+  "binarySha256": "2424a46d2db9f7704bc5f2601dbfe4d889e3747d34665795e19b2df5e1cd49d1",
+  "releaseBuildCommand": "CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/root/t12-tokenizer-probe-8a6923139/target /usr/bin/time -v nice -n10 ionice -c3 cargo build --locked --release -p misaka-tokenizer-registration-probe -j1 --message-format=json",
+  "buildArtifactsLocalFile": "/tmp/t12-tokenizer-linux-native-4d0aee958/native-build-r2-artifacts.jsonl",
+  "buildArtifactsSha256": "32f0f6ce0e3c57379b0d9d77bf893f50780584074f9a7707c855b0a631c2b785",
+  "buildHost": "5.104.81.23",
+  "measurementHost": "95.111.236.186",
+  "observations": [
+    {
+      "mode": "native-default",
+      "case": "actual",
+      "samples": 5,
+      "actions": 69,
+      "firstWallSeconds": 2.66,
+      "minimumHarnessWallSeconds": 2.34,
+      "maximumHarnessWallSeconds": 2.66,
+      "maximumProcessRssKiB": 45328,
+      "phaseRangeMs": {
+        "finish_cold_fee_rehearsal_ns": [
+          218.988633,
+          253.602727
+        ],
+        "finish_cached_fold_ns": [
+          11.787701,
+          12.665709
+        ],
+        "snapshot_restore_ns": [
+          25.841689,
+          42.472848
+        ]
+      },
+      "snapshotBytes": 4601264,
+      "journalBytes": 5489979,
+      "initialRoot": "57a9a3f0ade777462f48e3a43f574003cec0500caa35361eb9d4c6d2ce9f3bfa1a490c8f6f508d7f67c8725bb7faff50e00ad5419cd08e083f8fa61e98c66ab7",
+      "finalRoot": "044b0b978fa16c3060d7584105fc248550ace93e108ba927a7a9a5dcfa97dcfe1daed7861516c97e906cd94ceefea2fdf0188d9cbb6cdb84ecfd2791e7387a40",
+      "manifestSha256": "38a08cad60e038685d48bc485d1b679db91ca23d60b22cc8590133db54b4317b"
+    },
+    {
+      "mode": "native-default",
+      "case": "maximum_raw",
+      "samples": 5,
+      "actions": 259,
+      "firstWallSeconds": 30.24,
+      "minimumHarnessWallSeconds": 29.48,
+      "maximumHarnessWallSeconds": 30.24,
+      "maximumProcessRssKiB": 78420,
+      "phaseRangeMs": {
+        "finish_cold_fee_rehearsal_ns": [
+          76.185936,
+          79.163731
+        ],
+        "finish_cached_fold_ns": [
+          44.503322,
+          51.576826
+        ],
+        "snapshot_restore_ns": [
+          94.567487,
+          130.918073
+        ]
+      },
+      "snapshotBytes": 18188793,
+      "journalBytes": 21705513,
+      "initialRoot": "9621e9e08243096a131a3ea50e2635ec8c8939b556c25879e66bd8b8bfb9da302babe75e4f9c92f7db62710f4c12f9c8316a712d565b9dc1dd22a3aed461e590",
+      "finalRoot": "340cb1a57ac3c5d4396018f76031d1a9282cb95ab0568fe8514853efa03ddf3e848d3658bba8637f49a225110587cf188b5a4a9829adbc0b3474e73de6ae5dab",
+      "manifestSha256": "1080abead4192744eb8662b41c6fb41a98494c0c6ea46a15ce0b7a5eeff130ad"
+    },
+    {
+      "mode": "native-logical4g",
+      "case": "actual",
+      "samples": 5,
+      "actions": 69,
+      "firstWallSeconds": 2.44,
+      "minimumHarnessWallSeconds": 2.38,
+      "maximumHarnessWallSeconds": 2.52,
+      "maximumProcessRssKiB": 48272,
+      "phaseRangeMs": {
+        "finish_cold_fee_rehearsal_ns": [
+          226.045754,
+          235.62604
+        ],
+        "finish_cached_fold_ns": [
+          12.580155,
+          14.996392
+        ],
+        "snapshot_restore_ns": [
+          31.063474,
+          45.79593
+        ]
+      },
+      "snapshotBytes": 4601264,
+      "journalBytes": 5489979,
+      "initialRoot": "57a9a3f0ade777462f48e3a43f574003cec0500caa35361eb9d4c6d2ce9f3bfa1a490c8f6f508d7f67c8725bb7faff50e00ad5419cd08e083f8fa61e98c66ab7",
+      "finalRoot": "044b0b978fa16c3060d7584105fc248550ace93e108ba927a7a9a5dcfa97dcfe1daed7861516c97e906cd94ceefea2fdf0188d9cbb6cdb84ecfd2791e7387a40",
+      "manifestSha256": "38a08cad60e038685d48bc485d1b679db91ca23d60b22cc8590133db54b4317b"
+    },
+    {
+      "mode": "native-logical4g",
+      "case": "maximum_raw",
+      "samples": 5,
+      "actions": 259,
+      "firstWallSeconds": 29.67,
+      "minimumHarnessWallSeconds": 29.67,
+      "maximumHarnessWallSeconds": 31.29,
+      "maximumProcessRssKiB": 99012,
+      "phaseRangeMs": {
+        "finish_cold_fee_rehearsal_ns": [
+          76.268478,
+          113.614077
+        ],
+        "finish_cached_fold_ns": [
+          45.628264,
+          55.843292
+        ],
+        "snapshot_restore_ns": [
+          136.315599,
+          165.438777
+        ]
+      },
+      "snapshotBytes": 18188793,
+      "journalBytes": 21705513,
+      "initialRoot": "9621e9e08243096a131a3ea50e2635ec8c8939b556c25879e66bd8b8bfb9da302babe75e4f9c92f7db62710f4c12f9c8316a712d565b9dc1dd22a3aed461e590",
+      "finalRoot": "340cb1a57ac3c5d4396018f76031d1a9282cb95ab0568fe8514853efa03ddf3e848d3658bba8637f49a225110587cf188b5a4a9829adbc0b3474e73de6ae5dab",
+      "manifestSha256": "1080abead4192744eb8662b41c6fb41a98494c0c6ea46a15ce0b7a5eeff130ad"
+    }
+  ],
+  "nativePassesPerAction": 2,
+  "feeRollbackPassesPerAction": 1,
+  "journalUndoRedoRoundTripsPerAction": 1,
+  "limitations": [
+    "Reference host shared with node, six Broadwell vCPUs and 12,247,512 KiB RAM. Five fresh-process samples are not p99 or cold disk/cache guarantees.",
+    "Mixed but explicitly pinned production core and measurement-tool revisions; all fees/roots/journal sizes match original exported oracles. Later local work meter and candidate scratch fix are not in this core.",
+    "First build reused the old parser-only binary due to file timestamp freshness. Preserved stale-attempt log; after touching the changed tool files the actual release relink took 28m36s and produced the distinct recorded binary.",
+    "Harness wall/RSS includes input loading, fixture oracles and extra state-root checks; per-phase timers measure the named API calls.",
+    "Two signed sessions on M=1 with one eventual Finish; maximum_raw is space-padded small-vocabulary JSON, not maximum raw/vocab/EOG simultaneously. Parser stress combinations are separately recorded.",
+    "Two native passes, one fee rollback and one journal undo/redo; not five-pass maximum candidate, actual UTXO/node/P2P or physical RocksDB/quota.",
+    "Logical limits 4 GiB RAM and DB are an explicit measurement envelope; physical resource admission false in all runs. Native-default also has logical admission false.",
+    "No public policy, fee, hardware minimum or activation adopted; no TFP1 quote/admission/Final or main push."
+  ]
+}
