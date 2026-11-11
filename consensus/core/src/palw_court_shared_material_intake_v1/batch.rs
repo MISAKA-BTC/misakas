@@ -771,8 +771,8 @@ pub(crate) fn repair_rooted_batch_slots_v1(
         return book.repair_missing_ordered_v1(ids, hard, edges);
     }
     let mut repairable = ids.clone();
-    if let Some((scope, target)) = route {
-        exclude_inactive_batch_route_v1(claim, scope, target, ids, edges, &mut repairable)?;
+    if let Some((scope, target, plain_output)) = route {
+        exclude_inactive_batch_route_v1(claim, scope, target, plain_output, ids, edges, &mut repairable)?;
         let key = Key::CourtBatchNumericalReceipt(claim);
         if let Some(row) = state.staged_court_row_v1(&key) {
             let Row::CourtBatchNumericalReceipt(receipt) = row else { return Err(InvalidState) };
@@ -786,6 +786,23 @@ pub(crate) fn repair_rooted_batch_slots_v1(
             }
             let (verification, _) = admission::batch_numerical_service_ids_v1(claim, scope).map_err(|_| InvalidState)?;
             if book.assigned_daa(&verification) != Some(receipt.at.daa_score) || !repairable.remove(&verification) {
+                return Err(InvalidState);
+            }
+        }
+        let key = Key::CourtBatchPlainOutputReceiptV2(claim);
+        if let Some(row) = state.staged_court_row_v1(&key) {
+            let Row::CourtBatchPlainOutputReceiptV2(receipt) = row else { return Err(InvalidState) };
+            receipt.check(&key).map_err(|_| InvalidState)?;
+            let signed = &receipt.receipt.signed;
+            if !plain_output
+                || signed.scope != scope
+                || target != crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1::PlainOutputFullIds
+                || state.court_shared_initial_notice_v1(claim).is_none_or(|(_, key)| *key != Key::CourtSharedQuery(signed.notice))
+            {
+                return Err(InvalidState);
+            }
+            let control = plain_output::batch_plain_output_control_id_v2(claim, scope).map_err(|_| InvalidState)?;
+            if book.assigned_daa(&control) != Some(receipt.receipt.at.daa_score) || !repairable.remove(&control) {
                 return Err(InvalidState);
             }
         }
@@ -918,7 +935,7 @@ pub(crate) fn repair_rooted_batch_slots_v1(
 fn selected_batch_repair_route_v1(
     state: &PalwChainStateV2,
     claim: Hash64,
-) -> Result<Option<(Hash64, crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1)>, ServiceRefusal> {
+) -> Result<Option<(Hash64, crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1, bool)>, ServiceRefusal> {
     use crate::palw_court_shared_tir_state_v1 as shared;
     let Some((_, key)) = state.court_shared_initial_notice_v1(claim) else { return Ok(None) };
     let Ok(context) = shared::context(state, claim) else { return Ok(None) };
@@ -929,7 +946,7 @@ fn selected_batch_repair_route_v1(
     let target = crate::palw_batch_court_v1::rooted::checked_initial_notice_target_v1(state, context, notice, notice.request_id)
         .map_err(|_| ServiceRefusal::InvalidState)?
         .ok_or(ServiceRefusal::InvalidState)?;
-    Ok(Some((context.scope_id, target)))
+    Ok(Some((context.scope_id, target, context.plain_batch_output_v2())))
 }
 
 /// The common terminal and non-Batch obligations stay repairable. Keep the
@@ -938,6 +955,7 @@ fn exclude_inactive_batch_route_v1(
     claim: Hash64,
     scope: Hash64,
     target: crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1,
+    plain: bool,
     owned: &std::collections::BTreeSet<[u8; 64]>,
     edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
     repairable: &mut std::collections::BTreeSet<[u8; 64]>,
@@ -951,13 +969,21 @@ fn exclude_inactive_batch_route_v1(
         return Err(InvalidState);
     }
     let stop = match parents.as_slice() {
-        [_] if matches!(target, BatchNoticeTargetV1::Numerical { .. }) => return Ok(()),
+        [_] if !plain && matches!(target, BatchNoticeTargetV1::Numerical { .. }) => return Ok(()),
         [first, second] if *first == numerical && *second != numerical => *second,
         [first, second] if *second == numerical && *first != numerical => *first,
         _ => return Err(InvalidState),
     };
     let numerical_open = batch_open_packet_v1(claim, scope, 0).map_err(|_| InvalidState)?.as_bytes();
-    let stop_open = batch_open_packet_v1(claim, scope, constraint_stop::BATCH_STOP_ORDINAL_V1).map_err(|_| InvalidState)?.as_bytes();
+    let plain_control = plain_output::batch_plain_output_control_id_v2(claim, scope).map_err(|_| InvalidState)?;
+    if plain && stop != plain_control
+        || matches!(target, BatchNoticeTargetV1::PlainOutputFullIds) && !plain
+        || matches!(target, BatchNoticeTargetV1::StopFullIds) && plain
+    {
+        return Err(InvalidState);
+    }
+    let ids_ordinal = if plain { plain_output::BATCH_PLAIN_OUTPUT_ORDINAL_V2 } else { constraint_stop::BATCH_STOP_ORDINAL_V1 };
+    let stop_open = batch_open_packet_v1(claim, scope, ids_ordinal).map_err(|_| InvalidState)?.as_bytes();
     let mut pending = Vec::with_capacity(owned.len());
     let mut ancestors = |root| {
         let mut seen = std::collections::BTreeSet::from([root]);
@@ -988,7 +1014,7 @@ fn exclude_inactive_batch_route_v1(
     }
     let (active, inactive) = match target {
         BatchNoticeTargetV1::Numerical { .. } => (numerical_route, stop_route),
-        BatchNoticeTargetV1::StopFullIds => (stop_route, numerical_route),
+        BatchNoticeTargetV1::StopFullIds | BatchNoticeTargetV1::PlainOutputFullIds => (stop_route, numerical_route),
     };
     for id in inactive.difference(&active) {
         repairable.remove(id);
@@ -1407,15 +1433,23 @@ mod tests {
         assert_eq!(book.repair_missing_ordered_v1(&owned, 25, &edges), Err(ServiceRefusal::DeadlineExhausted));
         assert_eq!(book, original);
         let mut selected = owned.clone();
-        exclude_inactive_batch_route_v1(claim, scope, BatchNoticeTargetV1::Numerical { leaf: 0 }, &owned, &edges, &mut selected)
-            .unwrap();
+        exclude_inactive_batch_route_v1(
+            claim,
+            scope,
+            BatchNoticeTargetV1::Numerical { leaf: 0 },
+            false,
+            &owned,
+            &edges,
+            &mut selected,
+        )
+        .unwrap();
         assert!(selected.contains(&terminal) && selected.contains(&unrelated));
         assert!(!selected.contains(&stop_open) && !selected.contains(&stop));
         assert_eq!(book.repair_missing_ordered_v1(&selected, 25, &edges), Ok(1));
         assert_eq!(book.assigned_daa(&finish), Some(17));
         assert_eq!(book.assigned_daa(&stop_open), original.assigned_daa(&stop_open));
         let mut selected = owned.clone();
-        exclude_inactive_batch_route_v1(claim, scope, BatchNoticeTargetV1::StopFullIds, &owned, &edges, &mut selected).unwrap();
+        exclude_inactive_batch_route_v1(claim, scope, BatchNoticeTargetV1::StopFullIds, false, &owned, &edges, &mut selected).unwrap();
         assert!(!selected.contains(&numerical_open) && !selected.contains(&finish) && !selected.contains(&verify));
         assert!(selected.contains(&stop_open) && selected.contains(&stop) && selected.contains(&terminal));
     }

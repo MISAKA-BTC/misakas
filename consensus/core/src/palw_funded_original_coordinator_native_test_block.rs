@@ -522,6 +522,22 @@
                 let installed = crate::palw_court_shared_tir_state_v1::context(&accepted.state, claim).unwrap();
                 assert!(installed.batch_notice_only_v1());
                 assert_eq!(installed.hard_daa, ctx.daa_score + 10_000);
+                let mut wrong = installed.clone();
+                wrong.version = crate::palw_court_shared_material_intake_v1::batch::plain_output::BATCH_PLAIN_OUTPUT_CONTEXT_VERSION_V2;
+                assert!(wrong.check_context(&accepted.state).is_err(), "a version byte cannot upgrade a legacy service binding");
+                use crate::palw_batch_court_v1::carriage::{
+                    BatchPlainOutputTerminalV2, BatchPlainOutputWireV2, encode_batch_plain_output_payload_v2,
+                    quote_batch_plain_output_terminal_v2,
+                };
+                let terminal_wire = BatchPlainOutputWireV2::Terminal(BatchPlainOutputTerminalV2 { claim, receipt_digest: h(17) });
+                let payload = encode_batch_plain_output_payload_v2(&terminal_wire).unwrap();
+                let unchanged = accepted.state.state_root();
+                assert!(matches!(
+                    accepted.apply_batch_plain_output_payload_v2(&ctx, &payload),
+                    Err(PalwStateV2Error::CarriageInconsistent(why)) if why.contains("V2-capable original")
+                ));
+                assert!(quote_batch_plain_output_terminal_v2(&accepted.state, claim).is_err());
+                assert_eq!(accepted.state.state_root(), unchanged);
                 assert_eq!(accepted.state.court_service_row_v3_v1(), Some(&batch_book));
                 assert_eq!(accepted.state.funded_escrows_v1()[&checked.consent().terms.id_v1()].funding_outpoint, batch_pairing.outpoint());
                 assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());

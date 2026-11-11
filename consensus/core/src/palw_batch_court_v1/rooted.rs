@@ -459,16 +459,16 @@ fn check_notice_route_v1(
 ) -> Result<(), String> {
     use crate::palw_court_shared_material_intake_v1::batch::plain_output::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
     use crate::palw_court_shared_material_intake_v1::{BATCH_STOP_ORDINAL_V1, batch_stop_full_ids_range_v1};
-    use shared::BatchNoticeTargetV1::{Numerical, StopFullIds};
+    use shared::BatchNoticeTargetV1::{Numerical, PlainOutputFullIds, StopFullIds};
     match target {
         None => Ok(()),
         Some(Numerical { .. }) if !matches!(ordinal, BATCH_STOP_ORDINAL_V1 | BATCH_PLAIN_OUTPUT_ORDINAL_V2) => Ok(()),
-        Some(StopFullIds) if ordinal == BATCH_STOP_ORDINAL_V1 => {
+        Some(target @ (StopFullIds | PlainOutputFullIds)) if ordinal == target.first_open_ordinal() => {
             let frame =
                 crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
             let range = batch_stop_full_ids_range_v1(claim, frame.original_v1().decode_tokens_executed)?;
             if ranges != [range] {
-                return Err("Batch Stop notice requires its canonical FullIds range".into());
+                return Err("Batch FullIds notice requires its canonical range".into());
             }
             Ok(())
         }

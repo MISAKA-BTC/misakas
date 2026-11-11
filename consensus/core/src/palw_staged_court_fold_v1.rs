@@ -1380,6 +1380,84 @@ impl TransitionBuilder<'_> {
         }
     }
 
+    /// The versioned transport must first establish the carrier's UTXO
+    /// authority and retention debit. No BCT1 handoff may enter this writer.
+    #[allow(dead_code)]
+    pub(super) fn apply_batch_plain_output_payload_v2(
+        &mut self,
+        at: &PalwBlockContextV2,
+        payload: &[u8],
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_batch_court_v1::carriage::{BatchPlainOutputWireV2 as Wire, decode_batch_plain_output_payload_v2};
+        use crate::palw_court_shared_material_intake_v1::batch::{
+            admission::batch_numerical_service_ids_v1,
+            plain_output::{batch_plain_output_control_id_v2, plain_output_context_v2},
+        };
+        let refuse = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
+        let wire = decode_batch_plain_output_payload_v2(payload)
+            .map_err(|why| PalwStateV2Error::CarriageInconsistent(why.to_string()))?
+            .ok_or_else(|| refuse("plain Batch Output requires BCT2 framing"))?;
+        let claim = match &wire {
+            Wire::Verify(control) => control.claim,
+            Wire::Terminal(control) => control.claim,
+        };
+        let context = plain_output_context_v2(&self.state, claim).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let rules = self
+            .extras
+            .native_court_rules_v1
+            .filter(|rules| {
+                self.extras.batch_court_active_v1
+                    && rules.tir_active
+                    && &rules.at == at
+                    && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+            })
+            .ok_or_else(|| refuse("plain Batch Output requires active native rules at the accepting point"))?;
+        rules.check().map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let service =
+            self.state.court_service_row_v3_v1().ok_or_else(|| refuse("plain Batch Output requires a causal service book"))?;
+        context.check_binding(&service.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let binding = service.state.claims.get(&claim).ok_or_else(|| refuse("plain Batch Output lost its service binding"))?;
+        let packet = match &wire {
+            Wire::Verify(_) => batch_plain_output_control_id_v2(claim, context.scope_id),
+            Wire::Terminal(_) => batch_numerical_service_ids_v1(claim, context.scope_id).map(|(_, terminal)| terminal),
+        }
+        .map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("plain Batch Output service identity: {why:?}")))?;
+        let carrier_bytes = payload.len() as u64;
+        let cost = service
+            .state
+            .book
+            .packet(&packet)
+            .filter(|slot| {
+                binding.packet_ids.contains(&packet)
+                    && service.state.book.assigned_daa(&packet) == Some(at.daa_score)
+                    && slot.cost.controls == 1
+                    && slot.cost.work != 0
+                    && slot.cost.bytes >= carrier_bytes
+                    && carrier_bytes <= rules.court.max_close_bytes()
+            })
+            .map(|slot| slot.cost)
+            .ok_or_else(|| refuse("plain Batch Output lacks the funded slot for this carrier"))?;
+        match wire {
+            Wire::Verify(control) => self.install_batch_plain_output_receipt_v2(at, control, carrier_bytes, cost),
+            Wire::Terminal(control) => {
+                let key = PalwStagedCourtKeyV1::CourtBatchPlainOutputReceiptV2(claim);
+                let Some(PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(row)) = self.state.staged_court_row_v1(&key) else {
+                    return Err(refuse("plain Batch Output terminal has no accepted receipt"));
+                };
+                row.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                let receipt = row.receipt.clone();
+                super::palw_tir_public_fold_v1::apply_batch_plain_output_terminal_v2(
+                    self,
+                    &receipt,
+                    &receipt.control_rules,
+                    &rules,
+                    control.receipt_digest,
+                    receipt.control_cost,
+                )
+            }
+        }
+    }
+
     fn batch_numerical_rules_v1(
         &self,
         at: &PalwBlockContextV2,

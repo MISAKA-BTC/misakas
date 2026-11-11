@@ -96,18 +96,23 @@ pub enum BatchCourtWireV1 {
 
 /// Separate carriage for the V2 plain Output controls. BCT1 keeps its wire
 /// tags and never accepts these controls. Decoding alone grants no authority.
+pub use crate::palw_court_shared_material_intake_v1::batch::plain_output::{
+    BatchPlainOutputTerminalQuoteV2, BatchPlainOutputVerifyQuoteV2, PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2, SignedBatchPlainOutputV2,
+    quote_batch_plain_output_terminal_v2, quote_batch_plain_output_verify_v2,
+};
+
 pub(crate) const BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2: &[u8; 4] = b"BCT2";
 pub(crate) const BATCH_PLAIN_OUTPUT_WIRE_HEADER_BYTES_V2: u64 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[allow(dead_code)]
-pub(crate) enum BatchPlainOutputWireV2 {
-    Verify(crate::palw_court_shared_material_intake_v1::batch::plain_output::SignedBatchPlainOutputV2),
+pub enum BatchPlainOutputWireV2 {
+    Verify(SignedBatchPlainOutputV2),
     Terminal(BatchPlainOutputTerminalV2),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub(crate) struct BatchPlainOutputTerminalV2 {
+pub struct BatchPlainOutputTerminalV2 {
     pub claim: Hash64,
     pub receipt_digest: Hash64,
 }
@@ -125,9 +130,15 @@ impl BatchPlainOutputWireV2 {
     }
 }
 
-#[allow(dead_code)]
-pub(crate) fn decode_batch_plain_output_payload_v2(payload: &[u8]) -> io::Result<Option<BatchPlainOutputWireV2>> {
-    use crate::palw_court_shared_material_intake_v1::batch::plain_output::SignedBatchPlainOutputV2;
+/// Encode the fixed-size BCT2 wire without changing the BCT1 namespace.
+pub fn encode_batch_plain_output_payload_v2(wire: &BatchPlainOutputWireV2) -> io::Result<Vec<u8>> {
+    check_batch_plain_output_wire_v2(wire)?;
+    let mut payload = BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2.to_vec();
+    wire.serialize(&mut payload)?;
+    Ok(payload)
+}
+
+pub fn decode_batch_plain_output_payload_v2(payload: &[u8]) -> io::Result<Option<BatchPlainOutputWireV2>> {
     let Some(body) = payload.strip_prefix(BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2) else {
         return Ok(None);
     };
@@ -141,7 +152,13 @@ pub(crate) fn decode_batch_plain_output_payload_v2(payload: &[u8]) -> io::Result
         return Err(refused("invalid BCT2 plain Output control length"));
     }
     let wire = borsh::from_slice(body)?;
-    match &wire {
+    check_batch_plain_output_wire_v2(&wire)?;
+    Ok(Some(wire))
+}
+
+fn check_batch_plain_output_wire_v2(wire: &BatchPlainOutputWireV2) -> io::Result<()> {
+    let refused = |why| io::Error::new(io::ErrorKind::InvalidData, why);
+    match wire {
         BatchPlainOutputWireV2::Verify(control) if control.version != 2 => {
             return Err(refused("invalid BCT2 plain Output signature version"));
         }
@@ -150,7 +167,7 @@ pub(crate) fn decode_batch_plain_output_payload_v2(payload: &[u8]) -> io::Result
         }
         _ => {}
     }
-    Ok(Some(wire))
+    Ok(())
 }
 
 pub(crate) const BATCH_VERIFY_NUMERICAL_TAG_V1: u8 = 3;

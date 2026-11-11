@@ -129,7 +129,8 @@ fn request_inner(
     // Batch originals do not take that per-claim serial cursor. Duplicate shared requests still coalesce above, and material
     // intake stays non-exclusive. The reserved public graph is checked against the 6,880 DAA after the latest legal first notice.
     let service = if batch_notice {
-        let target = shared::BatchNoticeTargetV1::from_request(set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
+        let target =
+            shared::BatchNoticeTargetV1::from_request(set.request_at(intent.ordinal).map_err(refused)?, c).map_err(refused)?;
         check_batch_notice_open_slot_v1(&b.state, c, ctx.daa_score, target.first_open_ordinal()).map_err(refused)?;
         None
     } else {

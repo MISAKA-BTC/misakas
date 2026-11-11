@@ -1,10 +1,16 @@
 //! Prospective plain TFP1 output control and replay against accepted FullIds.
 
+mod quote;
+pub use quote::{
+    BatchPlainOutputTerminalQuoteV2, BatchPlainOutputVerifyQuoteV2, quote_batch_plain_output_terminal_v2,
+    quote_batch_plain_output_verify_v2,
+};
+
 use super::{BatchResponsePositionV1, Stage, admission::batch_numerical_service_ids_v1};
 use crate::{Hash64, palw_batch_court_v1::BatchCourtErrorV1, palw_court_service_v1::ServiceCost};
 
-/// Reserved context version. The existing context constructor and validator
-/// do not recognize it; an adopted native planner must establish authority.
+/// The plain Batch branch uses a separate context. Its constructor checks
+/// the already funded graph and the original's accepted tokenizer.
 pub(crate) const BATCH_PLAIN_OUTPUT_CONTEXT_VERSION_V2: u16 = 3;
 
 pub(crate) fn plain_output_context_v2(
@@ -21,13 +27,13 @@ pub(crate) fn plain_output_context_v2(
 /// The plain Output/Stop branch needs FullIds even without a numerical leaf.
 pub(crate) const BATCH_PLAIN_OUTPUT_ORDINAL_V2: u64 = u64::MAX - 1;
 pub(crate) const PLAIN_OUTPUT_SIGNATURE_BYTES_V2: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
-pub(crate) const PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2: &[u8] = b"misaka-palw/batch-plain-output/v2/mldsa87";
+pub const PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2: &[u8] = b"misaka-palw/batch-plain-output/v2/mldsa87";
 
 /// Canonical signed operands for the prospective FullIds branch. Outer
 /// carriage and the accepted-state writer are separate from this codec.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[allow(dead_code)]
-pub(crate) struct SignedBatchPlainOutputV2 {
+pub struct SignedBatchPlainOutputV2 {
     pub version: u16,
     pub claim: Hash64,
     pub scope: Hash64,
@@ -44,7 +50,7 @@ impl SignedBatchPlainOutputV2 {
     // Version, six digests, bond outpoint, and a fixed-width signature.
     pub(crate) const BYTES: u64 = 2 + 6 * 64 + (64 + 4) + PLAIN_OUTPUT_SIGNATURE_BYTES_V2 as u64;
 
-    pub(crate) fn signing_message_v2(&self, network: Hash64) -> Result<Hash64, String> {
+    pub fn signing_message_v2(&self, network: Hash64) -> Result<Hash64, String> {
         if self.version != 2
             || [network, self.claim, self.scope, self.source, self.notice, self.policy, self.material, self.filer.0.transaction_id]
                 .contains(&Hash64::default())
@@ -73,7 +79,7 @@ impl SignedBatchPlainOutputV2 {
         )
     }
 
-    pub(crate) fn verify_signature_v2(&self, network: Hash64, pubkey: &[u8]) -> Result<(), String> {
+    pub fn verify_signature_v2(&self, network: Hash64, pubkey: &[u8]) -> Result<(), String> {
         if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
             pubkey,
             self.signing_message_v2(network)?.as_byte_slice(),
@@ -327,7 +333,7 @@ fn verify_rooted_batch_plain_output_v2(
     crate::palw_tir_objective_v1::adjudicate_original_output_stop_v1(state, frame, &source, &authenticated).map_err(E::Decode)
 }
 
-pub(super) fn batch_plain_output_control_id_v2(claim: Hash64, scope: Hash64) -> Result<[u8; 64], BatchCourtErrorV1> {
+pub(crate) fn batch_plain_output_control_id_v2(claim: Hash64, scope: Hash64) -> Result<[u8; 64], BatchCourtErrorV1> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(
         b"misaka-palw/batch-plain-output/v2",
         &(claim, scope, BATCH_PLAIN_OUTPUT_ORDINAL_V2),
@@ -506,13 +512,14 @@ mod tests {
 
         use crate::palw_batch_court_v1::carriage::{
             BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2, BatchPlainOutputTerminalV2, BatchPlainOutputWireV2, decode_batch_court_payload_v1,
-            decode_batch_plain_output_payload_v2,
+            decode_batch_plain_output_payload_v2, encode_batch_plain_output_payload_v2,
         };
         let verify = BatchPlainOutputWireV2::Verify(signed.clone());
         let terminal = BatchPlainOutputWireV2::Terminal(BatchPlainOutputTerminalV2 { claim: h(1), receipt_digest: h(12) });
         for control in [verify, terminal] {
             let mut payload = BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2.to_vec();
             payload.extend(borsh::to_vec(&control).unwrap());
+            assert_eq!(encode_batch_plain_output_payload_v2(&control).unwrap(), payload);
             assert_eq!(decode_batch_plain_output_payload_v2(&payload).unwrap(), Some(control));
             assert!(decode_batch_court_payload_v1(&payload).unwrap().is_none());
             assert!(decode_batch_plain_output_payload_v2(&payload[..payload.len() - 1]).is_err());

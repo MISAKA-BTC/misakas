@@ -169,11 +169,15 @@ impl SharedTirContextV1 {
     pub(crate) const BATCH_NOTICE_ONLY_VERSION_V1: u16 = 2;
 
     pub(crate) fn batch_notice_only_v1(&self) -> bool {
-        self.version == Self::BATCH_NOTICE_ONLY_VERSION_V1
+        self.version == Self::BATCH_NOTICE_ONLY_VERSION_V1 || self.plain_batch_output_v2()
+    }
+
+    pub(crate) fn plain_batch_output_v2(&self) -> bool {
+        self.version == crate::palw_court_shared_material_intake_v1::batch::plain_output::BATCH_PLAIN_OUTPUT_CONTEXT_VERSION_V2
     }
 
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if !matches!(self.version, 1 | Self::BATCH_NOTICE_ONLY_VERSION_V1)
+        if !(self.version == 1 || self.batch_notice_only_v1())
             || *key != Key::CourtSharedContext(self.claim)
             || self.queries == 0
             || self.original_accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) != Some(self.hard_daa)
@@ -184,11 +188,24 @@ impl SharedTirContextV1 {
     }
     pub(crate) fn check_binding(&self, service: &crate::palw_court_service_state_v2::CourtServiceStateV2) -> Result<(), String> {
         let b = service.claims.get(&self.claim).ok_or("shared context lost original service binding")?;
-        if self.profile_id != shared_native_profile_id_v1(service.profile_id)
+        if (!self.plain_batch_output_v2() && self.profile_id != shared_native_profile_id_v1(service.profile_id))
             || (self.allocation_id, self.source_id, self.original_accepted_daa, self.hard_daa)
                 != (b.allocation_id, b.source_id, b.original_accepted_daa, b.hard_deadline_daa)
         {
             return Err("shared context substitutes service namespace/original scope".into());
+        }
+        if self.plain_batch_output_v2() {
+            use crate::palw_court_shared_material_intake_v1::batch::plain_output::{
+                BATCH_PLAIN_OUTPUT_ORDINAL_V2, batch_plain_output_control_id_v2,
+            };
+            let open =
+                crate::palw_batch_court_v1::rooted::batch_open_packet_v1(self.claim, self.scope_id, BATCH_PLAIN_OUTPUT_ORDINAL_V2)?
+                    .as_bytes();
+            let control = batch_plain_output_control_id_v2(self.claim, self.scope_id)
+                .map_err(|error| format!("plain Output service identity: {error:?}"))?;
+            if ![open, control].iter().all(|id| b.packet_ids.contains(id) && service.book.packet(id).is_some()) {
+                return Err("plain Output context lacks native service reservations".into());
+            }
         }
         Ok(())
     }
@@ -202,6 +219,12 @@ impl SharedTirContextV1 {
             != (self.allocation_id, self.source_id, self.rules_id, self.original_accepted_daa, self.material_until_daa)
         {
             return Err("shared context substitutes retained original".into());
+        }
+        if self.plain_batch_output_v2() {
+            let expected = plain_batch_profile_v2(state, self.claim, frame)?;
+            if self.profile_id != expected {
+                return Err("plain Output context substitutes the accepted tokenizer or native profile".into());
+            }
         }
         let record = state.tir_class_v1(&frame.original_v1().job.class_id).ok_or("shared original class is absent")?;
         let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
@@ -269,6 +292,43 @@ impl SharedTirContextV1 {
 /// or relay, so a coalition holding every owner slot cannot change, consume or pre-empt it: the closed request universe
 /// (`queries`: every legal coordinate of every branch the source admits) is fixed at acceptance. Data identity only.
 pub fn derive_shared_tir_context_v1(state: &PalwChainStateV2, claim: Hash64) -> Result<SharedTirContextV1, String> {
+    derive_shared_tir_context_versioned_v2(state, claim, 1)
+}
+
+/// Derive a context only for an accepted original with its final funded V2
+/// graph installed. This does not authorize installing the frame or book.
+#[allow(dead_code)]
+pub(crate) fn derive_plain_batch_tir_context_v2(state: &PalwChainStateV2, claim: Hash64) -> Result<SharedTirContextV1, String> {
+    derive_shared_tir_context_versioned_v2(
+        state,
+        claim,
+        crate::palw_court_shared_material_intake_v1::batch::plain_output::BATCH_PLAIN_OUTPUT_CONTEXT_VERSION_V2,
+    )
+}
+
+fn plain_batch_profile_v2(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+) -> Result<Hash64, String> {
+    let job = &frame.original_v1().job;
+    if job.tail.is_some() || job.is_constraint() || job.is_prefix_state() {
+        return Err("plain Output context requires a plain original".into());
+    }
+    let service = state.court_service_state_v1().ok_or("plain Output context requires a native service profile")?;
+    let registration = crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(state, claim)?
+        .ok_or("plain Output context requires its accepted tokenizer registration")?;
+    crate::palw_court_shared_tir_stream_v1::stream_digest(
+        b"misaka-palw/shared-tir-plain-batch-profile/v2",
+        &(service.profile_id, registration.record_id_v1()),
+    )
+}
+
+fn derive_shared_tir_context_versioned_v2(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    version: u16,
+) -> Result<SharedTirContextV1, String> {
     let service = state.court_service_state_v1().ok_or("shared frontier: no court service book")?;
     let binding = service.claims.get(&claim).ok_or("shared frontier: original has no service binding")?;
     let frame =
@@ -284,10 +344,11 @@ pub fn derive_shared_tir_context_v1(state: &PalwChainStateV2, claim: Hash64) -> 
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, record.facts.class_id)
         .ok_or("shared frontier: registered layout absent")?;
     let source = frame.source_v1(record, layout, frame.descriptor_v1().maximum_leaves)?;
-    let profile_id = shared_native_profile_id_v1(service.profile_id);
+    let profile_id =
+        if version == 1 { shared_native_profile_id_v1(service.profile_id) } else { plain_batch_profile_v2(state, claim, frame)? };
     let set = TirSharedRequestSetV1::new(frame, &source, profile_id)?;
     let c = SharedTirContextV1 {
-        version: 1,
+        version,
         claim,
         allocation_id: p.allocation_id,
         source_id: p.source_id,
@@ -300,6 +361,9 @@ pub fn derive_shared_tir_context_v1(state: &PalwChainStateV2, claim: Hash64) -> 
         material_until_daa: p.terms.material_until_daa,
     };
     c.check(&Key::CourtSharedContext(claim))?;
+    if c.plain_batch_output_v2() {
+        c.check_binding(service)?;
+    }
     Ok(c)
 }
 /// F03b2: `Q` in packets for a (derived or installed) context — every coordinate of every branch at its maximum size.
@@ -320,13 +384,18 @@ pub(crate) fn context(state: &PalwChainStateV2, claim: Hash64) -> Result<&Shared
 pub(crate) enum BatchNoticeTargetV1 {
     Numerical { leaf: u64 },
     StopFullIds,
+    PlainOutputFullIds,
 }
 
 impl BatchNoticeTargetV1 {
-    pub(crate) fn from_request(request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1) -> Result<Self, String> {
+    pub(crate) fn from_request(
+        request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1,
+        context: &SharedTirContextV1,
+    ) -> Result<Self, String> {
         use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as Request;
         match request {
             Request::StepLeaf { index } => Ok(Self::Numerical { leaf: index }),
+            Request::Ids { offset: 0 } if context.plain_batch_output_v2() => Ok(Self::PlainOutputFullIds),
             Request::Ids { offset: 0 } => Ok(Self::StopFullIds),
             _ => Err("Batch initial notice must name a numerical leaf or Stop FullIds".into()),
         }
@@ -336,6 +405,9 @@ impl BatchNoticeTargetV1 {
         match self {
             Self::Numerical { .. } => 0,
             Self::StopFullIds => crate::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1,
+            Self::PlainOutputFullIds => {
+                crate::palw_court_shared_material_intake_v1::batch::plain_output::BATCH_PLAIN_OUTPUT_ORDINAL_V2
+            }
         }
     }
 }
@@ -424,7 +496,7 @@ impl SharedTirQueryV1 {
         // Historical requester identity was checked at acceptance. A requester
         // exiting later must not invalidate public data or transfer it to an owner.
         if c.batch_notice_only_v1() {
-            return BatchNoticeTargetV1::from_request(set.request_at(self.ordinal)?).map(Some);
+            return BatchNoticeTargetV1::from_request(set.request_at(self.ordinal)?, c).map(Some);
         }
         Ok(None)
     }
