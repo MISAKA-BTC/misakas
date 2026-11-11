@@ -1,4 +1,5 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
+pub(crate) mod protected;
 use super::numerical_verification::NumericalBatchReplayBudgetV1;
 use super::plain_output::{
     BATCH_PLAIN_OUTPUT_ORDINAL_V2, BatchPlainOutputReceiptV2, PlainBatchOutputV2, batch_plain_output_control_id_v2,

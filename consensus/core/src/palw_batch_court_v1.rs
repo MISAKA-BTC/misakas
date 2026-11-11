@@ -13,9 +13,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
 pub mod carriage;
-pub mod plain_output_local_work;
 pub mod fold_order;
+pub mod plain_output_local_work;
 pub mod plain_output_transport;
+pub(crate) mod protected_cases;
 pub(crate) mod rooted;
 
 pub const MAX_BATCH_RANGES_V1: usize = 64;
@@ -88,6 +89,20 @@ impl BatchCourtWindowV1 {
         check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<u64, BatchCourtErrorV1> {
+        self.reserve_latest_notice_many_with_v2(book, graph, std::slice::from_ref(&terminal), recovery_daa, check_assignments, reserve)
+    }
+
+    /// Internal common-pool kernel. The protected-case caller additionally
+    /// proves graph separation; legacy callers supply exactly one terminal.
+    fn reserve_latest_notice_many_with_v2(
+        self,
+        book: &mut ServiceReservations,
+        graph: &[CausalServicePacketV1],
+        terminals: &[[u8; 64]],
+        recovery_daa: u64,
+        check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<u64, BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, Reservation, Window};
         self.check()?;
         let latest_notice = self.claim_accepted_daa.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
@@ -97,6 +112,9 @@ impl BatchCourtWindowV1 {
         let service_before = case_end.checked_sub(recovery_daa).ok_or(Window)?;
         if self.challenge_opened_daa != latest_notice || recovery_daa == 0 || first_service >= service_before {
             return Err(Window);
+        }
+        if terminals.is_empty() || terminals.len() > graph.len() {
+            return Err(CaseGraph);
         }
         let bytes = latest_notice_workspace_bytes_v1(book, graph).map_err(BatchCourtErrorV1::LocalResource)?;
         let _workspace = reserve(bytes).map_err(BatchCourtErrorV1::LocalResource)?;
@@ -110,8 +128,13 @@ impl BatchCourtWindowV1 {
                 return Err(CaseGraph);
             }
         }
-        let mut visited = BTreeSet::from([terminal]);
-        let mut pending = vec![terminal];
+        let mut visited = BTreeSet::new();
+        for &terminal in terminals {
+            if !visited.insert(terminal) {
+                return Err(CaseGraph);
+            }
+        }
+        let mut pending = terminals.to_vec();
         while let Some(id) = pending.pop() {
             let node = nodes.get(&id).ok_or(CaseGraph)?;
             for predecessor in &node.predecessors {
@@ -136,16 +159,33 @@ impl BatchCourtWindowV1 {
         // edges are the order; the retired 306,108 localization span is not a fallback.
         crate::palw_batch_public_budget_v1::check_reserved_public_graph_v1(NOTICE_WINDOW_DAA, &slots, recovery_daa)
             .map_err(budget_refusal)?;
+        drop(slots);
 
-        let saved = book.clone();
-        book.reserve_causal_checked_v1(graph, service_before, |candidate| check_assignments(candidate, &nodes))
-            .map_err(Reservation)?;
-        let terminal_daa = book.assigned_daa(&terminal).expect("successful case reservation assigns its terminal");
-        let scheduled = terminal_daa.checked_sub(latest_notice).and_then(|span| span.checked_add(recovery_daa)).ok_or(Clock)?;
-        if let Err(refusal) = crate::palw_batch_public_budget_v1::check_scheduled_public_span_v1(scheduled) {
-            *book = saved;
-            return Err(budget_refusal(refusal));
+        let mut terminal_daa = None;
+        let mut span_refusal = None;
+        let reservation = book.reserve_causal_checked_v1(graph, service_before, |candidate| {
+            check_assignments(candidate, &nodes)?;
+            let last = terminals.iter().try_fold(0u64, |last, terminal| {
+                candidate.assigned_daa(terminal).map(|at| last.max(at)).ok_or(ServiceRefusal::InvalidState)
+            })?;
+            let scheduled = last
+                .checked_sub(latest_notice)
+                .and_then(|span| span.checked_add(recovery_daa))
+                .ok_or(ServiceRefusal::InvalidInterval)?;
+            if let Err(refusal) = crate::palw_batch_public_budget_v1::check_scheduled_public_span_v1(scheduled) {
+                span_refusal = Some(budget_refusal(refusal));
+                return Err(ServiceRefusal::DeadlineExhausted);
+            }
+            terminal_daa = Some(last);
+            Ok(())
+        });
+        // Check the final span inside the candidate, before the scheduler's
+        // atomic commit. No extra full-book rollback copy is needed.
+        if let Some(refusal) = span_refusal {
+            return Err(refusal);
         }
+        reservation.map_err(Reservation)?;
+        let terminal_daa = terminal_daa.expect("successful reservation checked every terminal");
         Ok(terminal_daa - self.claim_accepted_daa + recovery_daa + 1)
     }
 }
@@ -183,6 +223,18 @@ fn latest_notice_workspace_bytes_v1(book: &ServiceReservations, graph: &[CausalS
     q.vec_v1::<Id>(nodes)?; // reachability worklist
     // Every child vector may grow independently from its minimum capacity.
     q.exact_v1::<Id>(edges.checked_mul(2).and_then(|n| n.checked_add(nodes.checked_mul(8)?)).ok_or_else(overflow)?)?;
+    // The public-span preflight materializes its own slots and dependency
+    // traversal before the native scheduler. Account it explicitly rather
+    // than relying on incidental slack in the scheduler's typed envelopes.
+    q.vec_v1::<crate::palw_batch_public_budget_v1::PublicSharedSlotV1>(nodes)?;
+    q.exact_v1::<Id>(edges)?; // cloned slot predecessor lists
+    let preflight_node = btree_node_envelope_bytes_v1::<Id, usize>() + btree_node_envelope_bytes_v1::<usize, ()>(); // transient duplicate-parent set
+    q.add_v1(nodes.checked_mul(preflight_node as u64).ok_or_else(overflow)?)?;
+    q.vec_v1::<Vec<usize>>(nodes)?;
+    q.vec_v1::<usize>(nodes)?; // indegree
+    q.vec_v1::<usize>(nodes)?; // ready worklist
+    q.vec_v1::<u64>(nodes)?; // earliest starts
+    q.exact_v1::<usize>(edges.checked_mul(2).and_then(|n| n.checked_add(nodes.checked_mul(8)?)).ok_or_else(overflow)?)?;
     Ok(q.bytes_v1())
 }
 
