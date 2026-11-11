@@ -376,7 +376,7 @@ impl PlainBatchOutputV2 {
             control_daa,
         })
     }
-    fn full_ids_bound_v2(
+    pub(super) fn full_ids_bound_v2(
         original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
     ) -> Result<u64, BatchCourtErrorV1> {

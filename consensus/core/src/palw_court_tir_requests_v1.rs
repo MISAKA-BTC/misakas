@@ -19,6 +19,35 @@ fn add(a: u64, b: u64) -> Result<u64, String> {
 fn mul(a: u64, b: u64) -> Result<u64, String> {
     a.checked_mul(b).ok_or_else(|| "shared request count overflow".into())
 }
+
+/// Recover the existing TraceTile ordinal directly from native source geometry.
+/// This supplies no accepted scope, supplier role or funded request authority.
+pub(crate) fn source_trace_tile_target_v1(
+    source: &Source,
+    row: u32,
+    tile: u32,
+) -> Result<
+    (
+        crate::palw_court_shared_material_intake_v1::MaterialTargetV1,
+        crate::palw_tir_public_source_v1::PalwTirPublicUnitBoundV1,
+    ),
+    String,
+> {
+    let request = Request::TraceTile { row, tile };
+    let bound = source.unit_bound_v1(&request)?;
+    let geometry = Geometry::new(
+        source.leaf_count_v1(),
+        u64::from(source.decode_count_v1()),
+        u64::from(source.vocab_v1()),
+        source.supports_tiled_trace_v1(),
+    )?;
+    let start = geometry.families[..5].iter().try_fold(0, |sum, count| add(sum, *count))?;
+    let ordinal = add(start, add(mul(u64::from(row), geometry.tiles)?, u64::from(tile))?)?;
+    if geometry.at(ordinal)? != request {
+        return Err("shared TraceTile ordinal roundtrip differs".into());
+    }
+    Ok((crate::palw_court_shared_material_intake_v1::MaterialTargetV1::Unit { ordinal }, bound))
+}
 fn nodes(n: u64) -> Result<u64, String> {
     (1..=height(n)).try_fold(0, |sum, level| add(sum, width(n, level).ok_or("shared tree geometry")?))
 }
