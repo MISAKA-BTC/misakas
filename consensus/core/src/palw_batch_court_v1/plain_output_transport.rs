@@ -90,7 +90,10 @@ impl BatchPlainOutputTransportV2 {
         claim: crate::Hash64,
         terminal: bool,
     ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_state_v2::PalwStateV2Error> {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1, NativeHeapV1, TirNativeRequestsV1};
+        use crate::palw_native_resource_v1::{
+            NativeCoverageV1, NativeDecodeErrorV1, NativeHeapV1, TirNativeRequestsV1, native_logical_admission_enabled_v1,
+            native_resource_admission_enabled_v1, reserve_native_pending_requests_v1,
+        };
         use crate::palw_state_v2::PalwStateV2Error::{CarriageInconsistent as Refused, NativeResource};
         use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
         let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
@@ -105,37 +108,52 @@ impl BatchPlainOutputTransportV2 {
                 NativeDecodeErrorV1::Resource(why) => NativeResource(why),
             })?;
         let count = u64::from(frame.original_v1().decode_tokens_executed);
-        let mut q = TirNativeRequestsV1::new();
-        q.add_v1(source).map_err(NativeResource)?;
-        // Authenticated ID owner, the trace-root hash writer, and the
-        // canonical Output commitment writer (two digests and one vector).
-        q.exact_v1::<u32>(count).map_err(NativeResource)?;
-        q.vec_v1::<u32>(count).map_err(NativeResource)?;
-        q.vec_v1::<u32>(count.checked_add(33).ok_or_else(|| Refused("plain Output ID writer bound overflows".into()))?)
-            .map_err(NativeResource)?;
+        let overflow = || NativeResource(NativeCoverageV1::overflow::<Self>("plain Output hash workspace"));
+        let context_bytes = borsh::object_length(&frame.header_v1().job_context).map_err(|why| Refused(why.to_string()))? as u64;
+        let id_bytes = count.checked_mul(std::mem::size_of::<u32>() as u64).ok_or_else(overflow)?;
+        // Both canonical writers start at 512 and may own two buffers
+        // during geometric growth. The Output stream writes two hashes,
+        // a four-byte ID count and the exact token IDs.
+        let writer_pair =
+            |bytes: u64| bytes.max(512).checked_next_power_of_two().and_then(|capacity| capacity.checked_mul(2)).ok_or_else(overflow);
+        let context_writer = writer_pair(context_bytes)?;
+        let output_writer = writer_pair(id_bytes.checked_add(2 * 64 + 4).ok_or_else(overflow)?)?;
+        // The borrowed Source and Output writers have no internal lease,
+        // including when optional native admission is enabled.
+        let mut scratch = TirNativeRequestsV1::new();
+        scratch.add_v1(source).map_err(NativeResource)?;
+        scratch.add_v1(context_writer.max(output_writer)).map_err(NativeResource)?;
+        let unowned = scratch.bytes_v1();
+        let mut total = TirNativeRequestsV1::new();
+        total.add_v1(unowned).map_err(NativeResource)?;
+        // The trace authentication has its own ID hash and context writer
+        // scratch. It is separate from the retained authenticated ID Vec.
+        total.add_v1(id_bytes).map_err(NativeResource)?;
+        total.add_v1(context_writer).map_err(NativeResource)?;
+        total.exact_v1::<u32>(count).map_err(NativeResource)?;
         if terminal {
-            // The final settlement independently reconstructs the source and
-            // IDS while owning the rechecked evidence and a copied frame.
-            q.add_v1(source).map_err(NativeResource)?;
-            q.exact_v1::<u32>(count).map_err(NativeResource)?;
-            q.exact_v1::<u32>(count).map_err(NativeResource)?;
-            q.exact_v1::<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1>(1).map_err(NativeResource)?;
+            // Final settlement constructs a second Source, authenticates
+            // its IDs and retains the rechecked evidence and copied frame.
+            total.add_v1(source).map_err(NativeResource)?;
+            total.exact_v1::<u32>(count).map_err(NativeResource)?;
+            total.exact_v1::<u32>(count).map_err(NativeResource)?;
+            total.exact_v1::<crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1>(1).map_err(NativeResource)?;
+            total.exact_v1::<crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1>(1).map_err(NativeResource)?;
             let memory = frame.native_heap_v1("plain Output terminal frame");
-            q.add_v1(memory.bytes().ok_or(NativeResource(memory))?).map_err(NativeResource)?;
+            total.add_v1(memory.bytes().ok_or(NativeResource(memory))?).map_err(NativeResource)?;
         }
-        let requests = q.bytes_v1();
+        let requests = total.bytes_v1();
         if requests > self.maximum_workspace_per_carrier {
-            return Err(Refused("plain Output replay exceeds its typed workspace envelope".into()));
+            return Err(NativeResource(NativeCoverageV1::unsupported::<Self>(
+                "plain Output replay workspace",
+                "typed workspace exceeds its native bound",
+            )));
         }
-        // The existing replay already leases the authenticated IDs, the
-        // terminal Source/evidence, and its copied Frame. Cover the borrowed
-        // Source constructor and its canonical writer for this call's scope.
-        let unowned = count
-            .checked_add(33)
-            .and_then(|words| words.checked_mul(8))
-            .and_then(|writer| source.checked_add(writer))
-            .ok_or_else(|| Refused("plain Output replay owner bound overflows".into()))?;
-        crate::palw_native_resource_v1::reserve_native_requests_v1(unowned).map_err(NativeResource)
+        // Legacy replay helpers lease their owned values only when an
+        // optional native capability is armed. BCT2 always admits the
+        // process workspace, keeping its scratch leased through replay.
+        let outer = if native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1() { unowned } else { requests };
+        reserve_native_pending_requests_v1(outer).map_err(NativeResource)
     }
 
     pub fn fingerprint_v2(self) -> crate::Hash64 {

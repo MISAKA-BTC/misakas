@@ -1278,3 +1278,5 @@ fn exercise_funded_tokenizer_registration(check_reservations: bool) {
 }
 
 include!("palw_tokenizer_registration_measurement.rs");
+
+include!("palw_batch_plain_output_native_tests_v2.rs");

@@ -9098,7 +9098,9 @@ impl<'a> TransitionBuilder<'a> {
             )));
         }
         if requests > maximum_prefix_bytes {
-            return Err(PalwStateV2Error::CarriageInconsistent("plain Output rollback prefix exceeds its native bound".into()));
+            return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "plain Output rollback", "candidate prefix exceeds its native bound",
+            )));
         }
         let lease = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
         let saved = (

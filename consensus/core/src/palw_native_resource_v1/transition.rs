@@ -1,7 +1,7 @@
 //! Fresh transition construction owner. Every admitted growth request must be
 //! derived at its concrete writer before allocation. This module does not turn
 //! a post-construction measurement into permission to allocate.
-use super::retained::{tracked_value_requests_v1, value_requests_v1};
+use super::retained::{tracked_value_requests_v1, typed_value_requests_v1, value_requests_v1};
 use super::*;
 use crate::palw_state_v2::{PalwChainStateV2, PalwStateDeltaV2};
 
@@ -35,7 +35,7 @@ impl NativeTransitionReservationV1 {
     pub(crate) fn copy_parent_for_plain_output_v2(
         parent: &PalwChainStateV2,
     ) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
-        let requests = value_requests_v1(parent)?;
+        let requests = typed_value_requests_v1(parent)?;
         let lease = super::reserve_native_pending_requests_v1(requests)?;
         let state = parent.clone();
         if let Some(lease) = &lease {

@@ -795,7 +795,18 @@ pub(crate) fn palw_tir_public_tokenizer_frame_fixture_v1() -> (
     Vec<u8>,
     crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
 ) {
-    tests::tokenizer_frame()
+    tests::tokenizer_frame(None)
+}
+
+#[cfg(test)]
+pub(crate) fn palw_tir_public_tokenizer_frame_lying_output_fixture_v2(output_root: Hash64) -> (
+    PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+    Vec<u8>,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+) {
+    tests::tokenizer_frame(Some(output_root))
 }
 
 /// All four supplier roles on an actual re-executed Prefix corpus, with a
@@ -1457,7 +1468,7 @@ mod tests {
         (frame, semantics, table)
     }
 
-    pub(super) fn tokenizer_frame() -> (
+    pub(super) fn tokenizer_frame(output_root: Option<Hash64>) -> (
         super::PalwTirPublicFrameFixtureV1,
         crate::palw_class_semantics_v1::PalwClassSemanticsV1,
         crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
@@ -1559,7 +1570,7 @@ mod tests {
             tokenizer_key_events: Some(eof.key_event_upper_bound_v1()),
             prefix_state_relation: None,
         };
-        let fx = frame_from_execution_with_material(x, job, 1, None, Some(&semantics), Some(&eof));
+        let fx = frame_from_execution_with_material(x, job, 1, output_root, Some(&semantics), Some(&eof));
         assert!(
             fx.frame
                 .plan_v1()
