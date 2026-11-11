@@ -56,7 +56,7 @@ impl PreparedTfp1PublicOriginalV1 {
     /// Restore the association from the literal paired transaction on the
     /// executing branch. Settled funding is allowed here: only installation
     /// needs the fresh escrow. A detached signed companion is insufficient.
-    fn rooted_link_v1(&self, state: &PalwChainStateV2) -> Result<Tfp1PublicOriginalLinkV1, ContractError> {
+    pub(super) fn rooted_link_v1(&self, state: &PalwChainStateV2) -> Result<Tfp1PublicOriginalLinkV1, ContractError> {
         let pairing = self.pairing.ok_or(ContractError::Scope)?;
         let row = state.public_tfp1_original_link_v1(self.obligation.facts.claim)?.ok_or(ContractError::Scope)?;
         if row.original != self.companion.original
@@ -330,6 +330,10 @@ impl Tfp1PublicOriginalLinkV1 {
 
     pub(crate) fn original_v1(&self) -> OriginalId {
         self.original
+    }
+
+    pub(crate) fn source_v1(&self) -> Hash64 {
+        self.source
     }
 
     pub(crate) fn carrier_v1(&self) -> AcceptedMaterial {

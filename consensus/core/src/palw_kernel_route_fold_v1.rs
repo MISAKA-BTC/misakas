@@ -270,6 +270,9 @@ impl TransitionBuilder<'_> {
         if table == crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1 {
             return Err(PalwStateV2Error::KernelRouteRefused("TFP1 link requires its paired native writer".into()));
         }
+        if table == crate::palw_positive_contract_v2::PUBLIC_MANIFEST_PAID_TABLE_V1 {
+            return Err(PalwStateV2Error::KernelRouteRefused("paid ManifestRequest requires its native writer".into()));
+        }
         self.apply_kernel_row_authorized_v1(table, key, new)
     }
 
@@ -293,6 +296,73 @@ impl TransitionBuilder<'_> {
         let bytes = Some(borsh::to_vec(row).expect("fixed TFP1 link serialization"));
         self.reserve_kernel_row_write_v1(table, &key, &bytes, false)?;
         self.apply_kernel_row_authorized_v1(table, key.to_vec(), bytes)
+    }
+
+    /// Paired pending-case and paid-rank installation at the current accepted
+    /// prefix. The full transport owner must keep the resulting fee deduction
+    /// in the same disposable Round/UTXO candidate as these rows.
+    pub(super) fn install_paid_manifest_request_v1(
+        &mut self,
+        point: &PalwBlockContextV2,
+        prepared: &crate::palw_positive_contract_v2::tfp1_original::manifest_request::PreparedPaidManifestRequestV1,
+        handoff: &mut crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ValidatedManifestRequestCarrierV1,
+    ) -> Result<u64, PalwStateV2Error> {
+        use crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ManifestRequestCarrierErrorV1;
+        use crate::palw_positive_contract_v2::{PUBLIC_MANIFEST_PAID_TABLE_V1, PUBLIC_PENDING_MANIFEST_TABLE_V1};
+        let carrier_error = |why| match why {
+            ManifestRequestCarrierErrorV1::Resource(coverage) => PalwStateV2Error::NativeResource(coverage),
+            other => refused(format!("invalid paid ManifestRequest carrier: {other:?}")),
+        };
+        handoff.request_at_v1(prepared.carrier_v1()).map_err(carrier_error)?;
+        let Some((pending, paid)) = prepared
+            .storage_rows_at_v1(&self.state, point)
+            .map_err(|why| refused(format!("invalid paid ManifestRequest prefix: {why:?}")))?
+        else {
+            return Ok(0);
+        };
+        let pending_key = prepared.pending_key_v1();
+        let paid_key = paid.key_v1();
+        let mut quote = crate::palw_state_v2::native_writers::NativeWriteQuoteV1::new("paired paid ManifestRequest");
+        quote.exact::<u8>((pending_key.len() + paid_key.len()) as u64)?.encoded(pending)?.encoded(paid)?.slots(2)?;
+        self.admit_native_write_v1(quote)?;
+        let pending_bytes = Some(borsh::to_vec(pending).expect("fixed pending manifest serialization"));
+        let paid_bytes = Some(borsh::to_vec(paid).expect("fixed paid manifest serialization"));
+        self.reserve_kernel_row_write_v1(PUBLIC_PENDING_MANIFEST_TABLE_V1, &pending_key, &pending_bytes, false)?;
+        self.reserve_kernel_row_write_v1(PUBLIC_MANIFEST_PAID_TABLE_V1, &paid_key, &paid_bytes, false)?;
+        // Every state write can fail on its context/index hooks. Restore both
+        // rows and all journals together. The external fee ledger is changed
+        // only as the final fallible action; allocation failure preserves it.
+        // Own this temporary clone only for this attempt. A rejected sequence
+        // must not retain one whole-state reservation per failed request.
+        // Replacing the clone with bounded local undo is still a production
+        // profile resource requirement, not implied by this temporary lease.
+        let checkpoint_bytes =
+            crate::palw_native_resource_v1::native_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
+        let _checkpoint_owner = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(checkpoint_bytes)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let saved = (
+            self.state.clone(),
+            self.entries.len(),
+            crate::palw_court_observation_v1::checkpoint_v1(),
+            palw_claim_local_object_spans_v2::checkpoint(self),
+        );
+        if let Some(owner) = &_checkpoint_owner {
+            owner.materialized_v1();
+        }
+        let result = (|| {
+            self.apply_kernel_row_authorized_v1(PUBLIC_PENDING_MANIFEST_TABLE_V1, pending_key.to_vec(), pending_bytes)?;
+            paid.check_state_at_v1(&self.state, point)
+                .map_err(|why| refused(format!("invalid paid ManifestRequest reference: {why:?}")))?;
+            self.apply_kernel_row_authorized_v1(PUBLIC_MANIFEST_PAID_TABLE_V1, paid_key.to_vec(), paid_bytes)?;
+            handoff
+                .allocate_charge_v1(prepared.carrier_v1(), prepared.charge_purpose_v1(), prepared.charge_sompi_v1())
+                .map_err(carrier_error)?;
+            Ok(prepared.charge_sompi_v1())
+        })();
+        if result.is_err() {
+            self.restore(saved);
+        }
+        result
     }
 
     fn apply_kernel_row_authorized_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {

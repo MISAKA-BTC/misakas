@@ -119,7 +119,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
     check_companion_booking_parity(projection, &terms, fixture, at, notice, case, &empty_book, maximum_packets);
 
     let bytes = super::super::manifest_carrier::MANIFEST_REQUEST_CARRIER_BYTES_V1 as u64;
-    let retained = misaka_palw_positive_contract::public_one_honest::PendingManifestCaseRecordV1::WIRE_BYTES as u64;
+    let retained = InitialMaterialRequestPlanV1::minimum_retained_bytes_v1();
     let initial_cost = ServiceCost { bytes, work: bytes, io: retained, controls: 1 };
     let initial_plan = InitialMaterialRequestPlanV1::new_v1(at.daa_score, notice, initial_cost, retained).unwrap();
     let with_initial = terms.with_initial_request_v2(initial_plan).unwrap();

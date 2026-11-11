@@ -40,6 +40,7 @@ impl ManifestRequestCarrierScopeV1 {
 pub(crate) struct ManifestRequestCarrierContextV1 {
     pub(crate) scope: ManifestRequestCarrierScopeV1,
     pub(crate) at: PalwBlockContextV2,
+    pub(crate) carrier_block: Hash64,
     pub(crate) accepted_ordinal: usize,
     pub(crate) carrier: TransactionId,
 }
@@ -116,6 +117,7 @@ impl ValidatedManifestRequestCarrierV1 {
     pub(crate) fn prepare_v1(
         validated: &ValidatedTransaction<'_>,
         preceding_fee: u64,
+        carrier_block: Hash64,
         at: PalwBlockContextV2,
         accepted_ordinal: usize,
     ) -> Result<Option<Self>, ManifestRequestCarrierErrorV1> {
@@ -126,6 +128,9 @@ impl ValidatedManifestRequestCarrierV1 {
         };
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE {
             return Err(Decode("ManifestRequest carrier uses another subnetwork"));
+        }
+        if carrier_block == Hash64::default() {
+            return Err(ManifestRequestCarrierErrorV1::Context);
         }
 
         let input_set = (tx.inputs.len() as u64)
@@ -141,7 +146,7 @@ impl ValidatedManifestRequestCarrierV1 {
             budget.allocate_v1(prior.as_bytes(), preceding_fee).map_err(Fee)?;
         }
         Ok(Some(Self {
-            context: ManifestRequestCarrierContextV1 { scope, at, accepted_ordinal, carrier },
+            context: ManifestRequestCarrierContextV1 { scope, at, carrier_block, accepted_ordinal, carrier },
             request: *request,
             budget: NativeRetainedV1::from_owner_reserved_v1(budget, fee_owner),
             charged: false,
@@ -284,13 +289,13 @@ mod tests {
         wrong_subnet.subnetwork_id = SUBNETWORK_ID_NATIVE;
         wrong_subnet.finalize();
         assert!(matches!(
-            ValidatedManifestRequestCarrierV1::prepare_v1(&populated(&wrong_subnet, 20), 0, point(), 0),
+            ValidatedManifestRequestCarrierV1::prepare_v1(&populated(&wrong_subnet, 20), 0, point().block, point(), 0),
             Err(ManifestRequestCarrierErrorV1::Decode(_))
         ));
         let mut stale = tx();
         stale.outputs[0].value += 1;
         assert!(matches!(
-            ValidatedManifestRequestCarrierV1::prepare_v1(&populated(&stale, 19), 0, point(), 0),
+            ValidatedManifestRequestCarrierV1::prepare_v1(&populated(&stale, 19), 0, point().block, point(), 0),
             Err(ManifestRequestCarrierErrorV1::Fee(CarrierFeeRefusalV1::StaleTransactionId))
         ));
     }
@@ -302,21 +307,23 @@ mod tests {
         let validated = populated(&tx, 20);
         let at = point();
         assert!(matches!(
-            ValidatedManifestRequestCarrierV1::prepare_v1(&populated(&tx, 21), 0, at, 2),
+            ValidatedManifestRequestCarrierV1::prepare_v1(&populated(&tx, 21), 0, at.block, at, 2),
             Err(Fee(CarrierFeeRefusalV1::ValidatedFeeMismatch))
         ));
         assert!(matches!(
-            ValidatedManifestRequestCarrierV1::prepare_v1(&validated, 21, at, 2),
+            ValidatedManifestRequestCarrierV1::prepare_v1(&validated, 21, at.block, at, 2),
             Err(Fee(CarrierFeeRefusalV1::InsufficientFee))
         ));
-        let mut handoff = ValidatedManifestRequestCarrierV1::prepare_v1(&validated, 8, at, 2).unwrap().unwrap();
-        let expected = ManifestRequestCarrierContextV1 { scope: scope(), at, accepted_ordinal: 2, carrier: tx.id() };
+        let mut handoff = ValidatedManifestRequestCarrierV1::prepare_v1(&validated, 8, at.block, at, 2).unwrap().unwrap();
+        let expected =
+            ManifestRequestCarrierContextV1 { scope: scope(), at, carrier_block: at.block, accepted_ordinal: 2, carrier: tx.id() };
         assert_eq!(handoff.context_v1(), expected);
         assert_eq!(handoff.request_at_v1(&expected).unwrap(), &request());
         assert_eq!(handoff.remaining_fee_v1(), 12);
 
         let purpose = Hash64::from_u64_word(99);
         for wrong in [
+            ManifestRequestCarrierContextV1 { carrier_block: purpose, ..expected },
             ManifestRequestCarrierContextV1 { at: PalwBlockContextV2 { block: purpose, ..at }, ..expected },
             ManifestRequestCarrierContextV1 { at: PalwBlockContextV2 { daa_score: at.daa_score + 1, ..at }, ..expected },
             ManifestRequestCarrierContextV1 { at: PalwBlockContextV2 { blue_score: at.blue_score + 1, ..at }, ..expected },

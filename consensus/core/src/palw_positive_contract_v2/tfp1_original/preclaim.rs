@@ -69,6 +69,10 @@ impl DrawnBatchPreclaimTermsV1 {
     pub(crate) fn obligation_v1(&self) -> Tfp1PublicOriginalObligationV1 {
         self.obligation
     }
+
+    pub(super) fn initial_request_v1(&self) -> Option<InitialMaterialRequestPlanV1> {
+        self.initial_request
+    }
 }
 
 pub(super) fn drawn_scope_v1(

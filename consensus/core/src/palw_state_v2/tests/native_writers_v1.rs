@@ -950,3 +950,126 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     assert_eq!(no_capacity.state, state);
     restored
 }
+
+/// Exercise the paid writer on the caller's rooted draw and booked packet.
+/// The fixture's handoff factory supplies the same validated UTXO carrier.
+pub(crate) fn exercise_paid_manifest_writer_v1(
+    parent: PalwChainStateV2,
+    at: PalwBlockContextV2,
+    params: &PalwStateParamsV2,
+    prepared: &crate::palw_positive_contract_v2::tfp1_original::manifest_request::PreparedPaidManifestRequestV1,
+    make_handoff: impl Fn() -> crate::palw_positive_contract_v2::tfp1_original::manifest_carrier::ValidatedManifestRequestCarrierV1,
+) -> PalwChainStateV2 {
+    use crate::palw_positive_contract_v2::{PUBLIC_MANIFEST_PAID_TABLE_V1, PUBLIC_PENDING_MANIFEST_TABLE_V1};
+
+    let (pending, paid) = prepared.storage_rows_at_v1(&parent, &at).unwrap().unwrap();
+    let paid_key = paid.key_v1();
+    let paid_bytes = borsh::to_vec(paid).unwrap();
+    let pending_key = prepared.pending_key_v1();
+    let charge = prepared.charge_sompi_v1();
+    assert!(charge > 0);
+
+    let extras = PalwTransitionExtrasV1::default();
+    let mut failed = TransitionBuilder::new(&parent, params, false, false, false, false, &extras);
+    assert!(failed.write_kernel_row(PUBLIC_MANIFEST_PAID_TABLE_V1, paid_key.to_vec(), Some(paid_bytes.clone())).is_err());
+    assert!(failed.write_kernel_row_encoded_v1(PUBLIC_MANIFEST_PAID_TABLE_V1, &paid_key, Some(paid)).is_err());
+    assert!(failed.entries.is_empty());
+    assert_eq!(failed.state, parent);
+
+    let mut precharged = make_handoff();
+    let other_purpose = if prepared.charge_purpose_v1() == h64(1) { h64(2) } else { h64(1) };
+    precharged.allocate_charge_v1(prepared.carrier_v1(), other_purpose, 1).unwrap();
+    let remaining = precharged.remaining_fee_v1();
+    let failure = failed.install_paid_manifest_request_v1(&at, prepared, &mut precharged).unwrap_err();
+    assert!(matches!(failure, PalwStateV2Error::KernelRouteRefused(reason) if reason.contains("DuplicateAllocation")));
+    assert_eq!(precharged.remaining_fee_v1(), remaining);
+    assert!(failed.entries.is_empty(), "fee failure must rewind the entire writer journal");
+    assert_eq!(failed.state, parent, "fee failure must rewind both rows");
+
+    let mut legacy = TransitionBuilder::new(&parent, params, false, false, false, false, &extras);
+    legacy.write_kernel_row_encoded_v1(PUBLIC_PENDING_MANIFEST_TABLE_V1, &pending_key, Some(pending)).unwrap();
+    let legacy_prefix = legacy.state.clone();
+    let legacy_journal_len = legacy.entries.len();
+    assert_ne!(legacy_journal_len, 0);
+    let mut legacy_handoff = make_handoff();
+    let legacy_remaining = legacy_handoff.remaining_fee_v1();
+    assert!(matches!(
+        legacy.install_paid_manifest_request_v1(&at, prepared, &mut legacy_handoff),
+        Err(PalwStateV2Error::KernelRouteRefused(_))
+    ));
+    assert_eq!(legacy_handoff.remaining_fee_v1(), legacy_remaining);
+    assert_eq!(legacy.entries.len(), legacy_journal_len);
+    assert_eq!(legacy.state, legacy_prefix);
+    assert!(!legacy.state.kernel_route().unwrap().aux.contains_key(&(PUBLIC_MANIFEST_PAID_TABLE_V1, paid_key.to_vec())));
+
+    let mut builder = TransitionBuilder::new(&parent, params, false, false, false, false, &extras);
+    let mut handoff = make_handoff();
+    let before = handoff.remaining_fee_v1();
+    assert_eq!(builder.install_paid_manifest_request_v1(&at, prepared, &mut handoff).unwrap(), charge);
+    assert_eq!(handoff.remaining_fee_v1(), before - charge);
+    assert!(prepared.storage_rows_at_v1(&builder.state, &at).unwrap().is_none());
+
+    let rows = &builder.state.kernel_route().unwrap().aux;
+    assert_eq!(rows.get(&(PUBLIC_MANIFEST_PAID_TABLE_V1, paid_key.to_vec())), Some(&paid_bytes));
+    assert!(rows.contains_key(&(PUBLIC_PENDING_MANIFEST_TABLE_V1, pending_key.to_vec())));
+    let journal_len = builder.entries.len();
+    assert_eq!(
+        builder
+            .entries
+            .iter()
+            .filter(|entry| matches!(
+                entry,
+                PalwDeltaEntryV2::KernelRouteRow {
+                    table: PUBLIC_MANIFEST_PAID_TABLE_V1 | PUBLIC_PENDING_MANIFEST_TABLE_V1,
+                    old: None,
+                    new: Some(_),
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+    assert_eq!(builder.install_paid_manifest_request_v1(&at, prepared, &mut handoff).unwrap(), 0);
+    assert_eq!(handoff.remaining_fee_v1(), before - charge);
+    let mut duplicate = make_handoff();
+    assert_eq!(duplicate.remaining_fee_v1(), before);
+    assert_eq!(builder.install_paid_manifest_request_v1(&at, prepared, &mut duplicate).unwrap(), 0);
+    assert_eq!(duplicate.remaining_fee_v1(), before);
+    assert_eq!(builder.entries.len(), journal_len);
+
+    let previous = builder.state.last_point;
+    assert_ne!(previous, Some(at), "the fixture must exercise an unadvanced prefix");
+    builder.entries.push(PalwDeltaEntryV2::LastPoint { old: previous, new: Some(at) });
+    builder.state.last_point = Some(at);
+    builder.state.validate_public_verification_rows_v1().unwrap();
+    let delta = PalwStateDeltaV2 { point: at, entries: builder.entries.clone() };
+    let replayed = apply_delta_v2(&parent, &delta, params).unwrap();
+    assert_eq!(replayed.state_root(), builder.state.state_root());
+    let reverted = revert_delta_v2(&replayed, &delta, params).unwrap();
+    assert_eq!(reverted.state_root(), parent.state_root());
+
+    let encoded = borsh::to_vec(&PalwStateCarriageV2::from_state(&replayed)).unwrap();
+    crate::palw_native_resource_v1::preflight_native_carriage_v1(&encoded[..], encoded.len() as u64).unwrap();
+    let restored =
+        borsh::from_slice::<PalwStateCarriageV2>(&encoded).unwrap().into_state(params, Some(replayed.state_root())).unwrap();
+    assert_eq!(restored.state_root(), replayed.state_root());
+    assert!(prepared.storage_rows_at_v1(&restored, &at).unwrap().is_none());
+    restored
+}
+
+/// Seed only the test's already booked service opportunity. The PMR1
+/// preparer and writer still perform the native binding and fee checks.
+pub(crate) fn seed_manifest_service_book_v1(
+    state: &mut PalwChainStateV2,
+    service: crate::palw_court_service_release_v1::CourtServiceRowV3,
+) {
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
+
+    service.check().unwrap();
+    service.state.check_context(state).unwrap();
+    let key = PalwStagedCourtKeyV1::CourtService;
+    assert!(!state.staged_courts.contains_key(&key));
+    let row = PalwStagedCourtRowV1::CourtServiceV3(Box::new(service).into());
+    palw_staged_court_fold_v1::update_indices(state, key, None, Some(&row));
+    state.staged_courts.insert(key, row);
+}

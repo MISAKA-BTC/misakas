@@ -51,6 +51,7 @@ pub(crate) const PUBLIC_DRAW_TABLE_V1: u8 = 201;
 pub(crate) const PUBLIC_REPLAY_APPROVAL_TABLE_V1: u8 = 202;
 pub(crate) const PUBLIC_COURT_RECORD_TABLE_V1: u8 = 203;
 pub(crate) const PUBLIC_TFP1_LINK_TABLE_V1: u8 = 204;
+pub(crate) const PUBLIC_MANIFEST_PAID_TABLE_V1: u8 = 205;
 
 pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
     matches!(
@@ -62,6 +63,7 @@ pub(crate) fn is_public_verification_table_v1(table: u8) -> bool {
             | PUBLIC_REPLAY_APPROVAL_TABLE_V1
             | PUBLIC_COURT_RECORD_TABLE_V1
             | PUBLIC_TFP1_LINK_TABLE_V1
+            | PUBLIC_MANIFEST_PAID_TABLE_V1
     )
 }
 
@@ -74,6 +76,7 @@ pub(crate) fn check_public_verification_row_v1(table: u8, key: &[u8], bytes: &[u
         PUBLIC_REPLAY_APPROVAL_TABLE_V1 => PublicReplayApprovalRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_COURT_RECORD_TABLE_V1 => PublicOriginalCourtRecordV1::decode_row(key, bytes).map(|_| ()),
         PUBLIC_TFP1_LINK_TABLE_V1 => tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes).map(|_| ()),
+        PUBLIC_MANIFEST_PAID_TABLE_V1 => tfp1_original::manifest_paid::PaidManifestRequestRowV1::decode_row(key, bytes).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -1333,6 +1336,8 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             PUBLIC_COURT_RECORD_TABLE_V1 => self.decode_public_court_row_v1(key, bytes).map(|_| ()),
             PUBLIC_TFP1_LINK_TABLE_V1 => tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes)
                 .and_then(|row| row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)),
+            PUBLIC_MANIFEST_PAID_TABLE_V1 => tfp1_original::manifest_paid::PaidManifestRequestRowV1::decode_row(key, bytes)
+                .and_then(|row| row.check_state_at_v1(self, self.last_point().ok_or(ContractError::Scope)?)),
             _ => Err(ContractError::NonCanonical),
         };
         result.map_err(|error| {
@@ -1343,7 +1348,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     pub(crate) fn validate_public_verification_rows_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
         let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
         for ((table, key), bytes) in
-            route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_TFP1_LINK_TABLE_V1 + 1, Vec::new()))
+            route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_MANIFEST_PAID_TABLE_V1 + 1, Vec::new()))
         {
             self.validate_public_verification_row_v1(*table, key, bytes)?;
         }
@@ -1355,22 +1360,32 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         entries: &[crate::palw_state_v2::PalwDeltaEntryV2],
         revert: bool,
     ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
-        use crate::palw_state_v2::PalwDeltaEntryV2;
+        use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateV2Error};
+        use tfp1_original::manifest_paid::PaidManifestRequestRowV1;
         let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
+        let mut check_all = false;
         for entry in entries {
             let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else { continue };
             if !is_public_verification_table_v1(*table) {
                 continue;
             }
+            if *table == PUBLIC_MANIFEST_PAID_TABLE_V1 && !revert {
+                let bytes = new.as_deref().ok_or(PalwStateV2Error::DeltaMismatch("paid ManifestRequest journal is insert-only"))?;
+                let point =
+                    self.last_point().ok_or(PalwStateV2Error::DeltaMismatch("paid ManifestRequest insert has no accepting point"))?;
+                PaidManifestRequestRowV1::decode_row(key, bytes)
+                    .and_then(|row| row.check_insert_at_v1(point))
+                    .map_err(|_| PalwStateV2Error::DeltaMismatch("paid ManifestRequest insert has another accepting point"))?;
+            }
             if (if revert { old } else { new }).is_none() {
                 // A removed row could leave surviving records without a parent.
-                return self.validate_public_verification_rows_v1();
+                check_all = true;
             }
-            if let Some(bytes) = route.aux.get(&(*table, key.clone())) {
+            if !check_all && let Some(bytes) = route.aux.get(&(*table, key.clone())) {
                 self.validate_public_verification_row_v1(*table, key, bytes)?;
             }
         }
-        Ok(())
+        if check_all { self.validate_public_verification_rows_v1() } else { Ok(()) }
     }
 
     /// Check the public verification rows at this exact native state point.

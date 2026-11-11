@@ -980,6 +980,10 @@ impl PendingManifestCaseRecordV1 {
         self.origin
     }
 
+    pub fn request_digest(&self) -> Digest {
+        self.request_digest
+    }
+
     pub fn check_admission(
         &self,
         accepted_at: u64,

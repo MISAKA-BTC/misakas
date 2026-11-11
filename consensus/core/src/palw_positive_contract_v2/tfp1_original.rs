@@ -3,6 +3,8 @@
 //! signature, and does not authenticate an accepted carrier or reserve slots.
 
 pub(crate) mod manifest_carrier;
+pub(crate) mod manifest_paid;
+pub(crate) mod manifest_request;
 pub(crate) mod native_link;
 pub(crate) mod preclaim;
 
@@ -721,6 +723,16 @@ mod tests {
                 .unwrap();
         let request_case_id = request.case_id(&companion, request_context.claimant).unwrap();
         let request_wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
+        manifest_request::exercise_paid_request_v1(
+            &paired,
+            &companion_only,
+            &drawn,
+            &draw,
+            &request_context,
+            &request_wire,
+            request_point,
+            &link_params,
+        );
         let pending = paired
             .companion_v1()
             .prepare_drawn_manifest_storage_record(admission_reservation, &draw, &request_wire, &request_context)

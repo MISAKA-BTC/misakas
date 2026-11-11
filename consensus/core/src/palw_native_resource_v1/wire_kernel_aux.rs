@@ -365,6 +365,9 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             }
             crate::palw_positive_contract_v2::tfp1_original::native_link::Tfp1PublicOriginalLinkV1::scan_native_wire_v1(frame)?
         }
+        crate::palw_positive_contract_v2::PUBLIC_MANIFEST_PAID_TABLE_V1 => {
+            crate::palw_positive_contract_v2::tfp1_original::manifest_paid::PaidManifestRequestRowV1::scan_row_v1(k, frame)?
+        }
         crate::palw_positive_contract_v2::PUBLIC_COURT_RECORD_TABLE_V1 => {
             use crate::palw_positive_contract_v2::PublicOriginalCourtRecordV1;
             if k.len() != PublicOriginalCourtRecordV1::KEY_BYTES {

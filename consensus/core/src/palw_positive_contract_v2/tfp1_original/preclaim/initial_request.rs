@@ -17,6 +17,14 @@ pub(crate) struct InitialMaterialRequestPlanV1 {
 }
 
 impl InitialMaterialRequestPlanV1 {
+    pub(crate) fn minimum_retained_bytes_v1() -> u64 {
+        (PendingManifestCaseRecordV1::WIRE_BYTES + super::super::manifest_paid::PaidManifestRequestRowV1::WIRE_BYTES) as u64
+    }
+
+    pub(crate) fn retained_bytes_v1(&self) -> u64 {
+        self.retained_bytes
+    }
+
     pub(crate) fn new_v1(
         accepted_daa: u64,
         notice: FirstNoticeDemand,
@@ -44,7 +52,7 @@ impl InitialMaterialRequestPlanV1 {
             || service.work < carrier_bytes
             || service.io < retained_bytes
             || service.controls != 1
-            || retained_bytes < PendingManifestCaseRecordV1::WIRE_BYTES as u64
+            || retained_bytes < Self::minimum_retained_bytes_v1()
             || retained_bytes > service.bytes
         {
             return Err(DeliveryCost);
@@ -112,7 +120,7 @@ mod tests {
             missing_material_detected_by: a + 3_119,
             material_request_inclusion_daa: 1,
         };
-        let retained = PendingManifestCaseRecordV1::WIRE_BYTES as u64;
+        let retained = InitialMaterialRequestPlanV1::minimum_retained_bytes_v1();
         let bytes = super::super::super::manifest_carrier::MANIFEST_REQUEST_CARRIER_BYTES_V1 as u64;
         let cost = ServiceCost { bytes, work: bytes, io: retained, controls: 1 };
         let plan = InitialMaterialRequestPlanV1::new_v1(a, notice, cost, retained).unwrap();
