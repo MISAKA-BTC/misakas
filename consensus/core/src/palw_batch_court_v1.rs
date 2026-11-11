@@ -13,7 +13,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
 pub mod carriage;
+pub mod plain_output_local_work;
 pub mod fold_order;
+pub mod plain_output_transport;
 pub(crate) mod rooted;
 
 pub const MAX_BATCH_RANGES_V1: usize = 64;

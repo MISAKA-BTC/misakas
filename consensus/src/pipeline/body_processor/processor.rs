@@ -72,6 +72,8 @@ pub struct BlockBodyProcessor {
     pub(super) palw_exec_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// RFC-0051: cap each physical source body before it can enter a mergeset.
+    pub(super) palw_batch_plain_output_v2:
+        Option<kaspa_consensus_core::palw_batch_court_v1::plain_output_transport::BatchPlainOutputTransportV2>,
     pub(super) palw_tokenizer_registration_v1: Option<kaspa_consensus_core::config::params::TokenizerRegistrationFenceV1>,
 
     // Stores
@@ -139,6 +141,7 @@ impl BlockBodyProcessor {
             palw_round_lane: params.palw_execution_lane_fence().map(|lane| lane.activation),
             palw_lane_accept_parents_first: params.palw_lane_accept_parents_first_fence(),
             palw_exec_v2: params.palw_exec_payload_v2_fence(),
+            palw_batch_plain_output_v2: params.palw_batch_plain_output_v2_fence(),
             palw_tokenizer_registration_v1: params.palw_tokenizer_registration_v1_fence().copied(),
 
             statuses_store: storage.statuses_store.clone(),

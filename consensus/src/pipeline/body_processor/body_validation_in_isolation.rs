@@ -28,6 +28,12 @@ impl BlockBodyProcessor {
             )
             .map_err(RuleError::PalwTokenizerRegistrationServiceExceeded)?;
         }
+        if let Some(policy) = self.palw_batch_plain_output_v2.filter(|policy| policy.active_at(block.header.daa_score)) {
+            let mut meter = policy.source_meter_v2();
+            for tx in block.transactions.iter() {
+                meter.charge_v2(tx).map_err(|why| RuleError::PalwBatchPlainOutputServiceExceeded(why.into()))?;
+            }
+        }
         self.check_duplicate_transactions(block)?;
         self.check_block_double_spends(block)?;
         self.check_no_chained_transactions(block)?;

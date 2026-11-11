@@ -6,9 +6,11 @@ use super::{
 use crate::palw_batch_court_v1::{
     BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
     carriage::{
-        BATCH_CONVICT_NUMERICAL_TAG_V1, BATCH_COURT_CARRIER_MAGIC_V1, BATCH_STOP_WIRE_OVERHEAD_V1, BATCH_VERIFY_NUMERICAL_TAG_V1,
-        BatchCourtWireV1, BatchMaterialControlV1, batch_stop_wire_shape_v1, decode_batch_court_payload_v1,
+        BATCH_CONVICT_NUMERICAL_TAG_V1, BATCH_COURT_CARRIER_MAGIC_V1, BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2,
+        BATCH_STOP_WIRE_OVERHEAD_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1, BatchMaterialControlV1, BatchPlainOutputWireV2,
+        batch_stop_wire_shape_v1, decode_batch_court_payload_v1, decode_batch_plain_output_payload_v2,
     },
+    plain_output_transport::BatchPlainOutputTransportV2,
 };
 use crate::palw_court_carrier_fee_v1::CarrierFeeBudgetV1;
 use crate::palw_native_resource_v1::{
@@ -129,12 +131,39 @@ impl PreparedBatchCarrierV1 {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum PreparedBatchWireV2 {
+    Legacy(PreparedBatchCarrierV1),
+    PlainOutput { wire: BatchPlainOutputWireV2, bytes: u64, rent: u64 },
+}
+
+impl crate::palw_native_resource_v1::NativeHeapV1 for PreparedBatchWireV2 {
+    fn native_heap_v1(&self, component: &str) -> NativeCoverageV1 {
+        match self {
+            Self::Legacy(carrier) => carrier.native_heap_v1(component),
+            Self::PlainOutput { wire: BatchPlainOutputWireV2::Verify(control), .. } => control.native_heap_v1(component),
+            Self::PlainOutput { wire: BatchPlainOutputWireV2::Terminal(control), .. } => {
+                control.claim.native_heap_v1(component).add::<Self>(control.receipt_digest.native_heap_v1(component), component)
+            }
+        }
+    }
+}
+
+/// Use the same retained-control byte charge as the original reservation.
+fn plain_output_storage_rent_v2(wire: &BatchPlainOutputWireV2) -> Result<u64, String> {
+    use super::batch::plain_output::BatchPlainOutputReceiptV2;
+    match wire {
+        BatchPlainOutputWireV2::Verify(_) => storage_rent_for_bytes_v1(BatchPlainOutputReceiptV2::ROOTED_MAX_BYTES),
+        BatchPlainOutputWireV2::Terminal(_) => Ok(0),
+    }
+}
+
 /// Ephemeral handoff for a ruleset that has accepted a Batch transaction.
 /// The UTXO walk constructs it before dropping the input view. The Court
 /// fold consumes it at the same accepting point without retaining UTXOs.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ValidatedBatchCarrierV1 {
-    batch: PreparedBatchCarrierV1,
+    batch: PreparedBatchWireV2,
     budget: CarrierFeeBudgetV1,
     at: PalwBlockContextV2,
     accepted_ordinal: usize,
@@ -161,47 +190,79 @@ impl ValidatedBatchCarrierV1 {
         self.accepted_ordinal
     }
 
+    pub fn is_plain_output_v2(&self) -> bool {
+        matches!(self.batch, PreparedBatchWireV2::PlainOutput { .. })
+    }
+
     pub fn prepare_at_ordinal_v1(
         validated: &ValidatedTransaction<'_>,
         preceding_fee: u64,
         at: PalwBlockContextV2,
         accepted_ordinal: usize,
     ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
-        Self::prepare_reserved_v1(validated, preceding_fee, at, accepted_ordinal, reserve_native_pending_requests_v1)
+        Self::prepare_at_ordinal_versioned_v2(validated, preceding_fee, at, accepted_ordinal, None)
     }
 
+    pub fn prepare_at_ordinal_versioned_v2(
+        validated: &ValidatedTransaction<'_>,
+        preceding_fee: u64,
+        at: PalwBlockContextV2,
+        accepted_ordinal: usize,
+        plain_output: Option<BatchPlainOutputTransportV2>,
+    ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
+        Self::prepare_reserved_v2(validated, preceding_fee, at, accepted_ordinal, plain_output, reserve_native_pending_requests_v1)
+    }
+
+    #[cfg(test)]
     fn prepare_reserved_v1(
         validated: &ValidatedTransaction<'_>,
         preceding_fee: u64,
         at: PalwBlockContextV2,
         accepted_ordinal: usize,
+        reserve: impl FnMut(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
+        Self::prepare_reserved_v2(validated, preceding_fee, at, accepted_ordinal, None, reserve)
+    }
+
+    fn prepare_reserved_v2(
+        validated: &ValidatedTransaction<'_>,
+        preceding_fee: u64,
+        at: PalwBlockContextV2,
+        accepted_ordinal: usize,
+        plain_output: Option<BatchPlainOutputTransportV2>,
         mut reserve: impl FnMut(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
         use NativeDecodeErrorV1::{Decode, Resource};
         if validated.tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
             return Ok(None);
         }
-        let Some(body) = validated.tx.payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else {
-            return Ok(None);
-        };
+        let payload = &validated.tx.payload;
         let mut q = TirNativeRequestsV1::new();
-        let kind = body.first().copied();
-        if matches!(kind, Some(0 | 1 | BATCH_VERIFY_NUMERICAL_TAG_V1)) {
-            q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(Resource)?;
-        }
-        match kind {
-            // The bounded decoder may reserve a declared length before discovering
-            // truncated data. Quote the codec maximum, never the unread suffix.
-            Some(0) => q.exact_v1::<BatchRangeV1>(MAX_BATCH_RANGES_V1 as u64),
-            Some(1) => q.exact_v1::<u8>(u64::from(MAX_BATCH_PART_BYTES_V1)),
-            Some(2) => {
-                batch_stop_wire_shape_v1(&validated.tx.payload).map_err(|why| Decode(why.to_string()))?;
-                q.exact_v1::<u8>(validated.tx.payload.len() as u64 - BATCH_STOP_WIRE_OVERHEAD_V1)
+        let plain_policy =
+            plain_output.filter(|policy| policy.active_at(at.daa_score) && payload.starts_with(BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2));
+        let plain = plain_policy.is_some();
+        if !plain {
+            let Some(body) = validated.tx.payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else {
+                return Ok(None);
+            };
+            let kind = body.first().copied();
+            if matches!(kind, Some(0 | 1 | BATCH_VERIFY_NUMERICAL_TAG_V1)) {
+                q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(Resource)?;
             }
-            Some(BATCH_VERIFY_NUMERICAL_TAG_V1 | BATCH_CONVICT_NUMERICAL_TAG_V1) => Ok(()),
-            _ => return Err(Decode("unknown Batch Court carrier kind".into())),
+            match kind {
+                // The bounded decoder may reserve a declared length before discovering
+                // truncated data. Quote the codec maximum, never the unread suffix.
+                Some(0) => q.exact_v1::<BatchRangeV1>(MAX_BATCH_RANGES_V1 as u64),
+                Some(1) => q.exact_v1::<u8>(u64::from(MAX_BATCH_PART_BYTES_V1)),
+                Some(2) => {
+                    batch_stop_wire_shape_v1(&validated.tx.payload).map_err(|why| Decode(why.to_string()))?;
+                    q.exact_v1::<u8>(validated.tx.payload.len() as u64 - BATCH_STOP_WIRE_OVERHEAD_V1)
+                }
+                Some(BATCH_VERIFY_NUMERICAL_TAG_V1 | BATCH_CONVICT_NUMERICAL_TAG_V1) => Ok(()),
+                _ => return Err(Decode("unknown Batch Court carrier kind".into())),
+            }
+            .map_err(Resource)?;
         }
-        .map_err(Resource)?;
         q.exact_v1::<NativeRetainedV1<Self>>(1).map_err(Resource)?;
         q.add_v1((std::mem::size_of::<[usize; 2]>() + std::mem::align_of::<NativeRetainedV1<Self>>()) as u64).map_err(Resource)?;
         q.add_v1(btree_node_envelope_bytes_v1::<crate::TransactionId, SharedValidatedBatchCarrierV1>() as u64).map_err(Resource)?;
@@ -212,13 +273,32 @@ impl ValidatedBatchCarrierV1 {
         for _ in 0..3 {
             q.vec_v1::<(usize, SharedValidatedBatchCarrierV1)>(1).map_err(Resource)?;
         }
-        let lease = reserve(q.bytes_v1()).map_err(Resource)?;
+        let retained = q.bytes_v1();
         let scratch = (validated.tx.inputs.len() as u64)
             .checked_mul(btree_node_envelope_bytes_v1::<(crate::TransactionId, u32), ()>() as u64)
             .ok_or_else(|| Resource(NativeCoverageV1::overflow::<Self>("Batch fee input set")))?;
+        if plain_policy
+            .is_some_and(|policy| retained.checked_add(scratch).is_none_or(|need| need > policy.maximum_workspace_per_carrier))
+        {
+            return Err(Decode("plain Output carrier exceeds its typed workspace envelope".into()));
+        }
+        let lease = reserve(retained).map_err(Resource)?;
         let _scratch = if scratch == 0 { None } else { reserve(scratch).map_err(Resource)? };
-        let batch = PreparedBatchCarrierV1::decode_v1(validated.tx)?
-            .ok_or_else(|| Decode("validated Batch carrier lost its payload".into()))?;
+        let batch = if plain {
+            if !validated.tx.id_is_current() {
+                return Err(Decode("plain Output carrier transaction identity is stale".into()));
+            }
+            let wire = decode_batch_plain_output_payload_v2(payload)
+                .map_err(|why| Decode(why.to_string()))?
+                .ok_or_else(|| Decode("validated plain Output carrier lost its payload".into()))?;
+            let rent = plain_output_storage_rent_v2(&wire).map_err(Decode)?;
+            PreparedBatchWireV2::PlainOutput { wire, bytes: payload.len() as u64, rent }
+        } else {
+            PreparedBatchWireV2::Legacy(
+                PreparedBatchCarrierV1::decode_v1(validated.tx)?
+                    .ok_or_else(|| Decode("validated Batch carrier lost its payload".into()))?,
+            )
+        };
         let fee_error = |err| Decode(format!("Batch native carrier fee: {err:?}"));
         let mut budget = CarrierFeeBudgetV1::from_validated_v1(validated).map_err(fee_error)?;
         if preceding_fee != 0 {
@@ -231,20 +311,45 @@ impl ValidatedBatchCarrierV1 {
     }
 
     pub fn fee_v1(&self) -> MaterialBatchCarrierFeeV1 {
-        self.batch.split_v1(self.budget.remaining_v1())
+        let remaining = self.budget.remaining_v1();
+        match &self.batch {
+            PreparedBatchWireV2::Legacy(batch) => batch.split_v1(remaining),
+            PreparedBatchWireV2::PlainOutput { rent, .. } => MaterialBatchCarrierFeeV1::split(*rent, remaining),
+        }
     }
 
     pub(crate) fn wire_at_v1(&self, at: &PalwBlockContextV2) -> Result<&BatchCourtWireV1, String> {
         if self.at != *at {
             return Err("Batch carrier accepting point differs from its UTXO handoff".into());
         }
-        Ok(self.batch.wire_v1())
+        match &self.batch {
+            PreparedBatchWireV2::Legacy(batch) => Ok(batch.wire_v1()),
+            PreparedBatchWireV2::PlainOutput { .. } => Err("BCT2 cannot enter the BCT1 dispatcher".into()),
+        }
+    }
+
+    pub(crate) fn plain_output_at_v2(&self, at: &PalwBlockContextV2) -> Result<Option<(&BatchPlainOutputWireV2, u64)>, String> {
+        if self.at != *at {
+            return Err("Batch carrier accepting point differs from its UTXO handoff".into());
+        }
+        match &self.batch {
+            PreparedBatchWireV2::Legacy(_) => Ok(None),
+            PreparedBatchWireV2::PlainOutput { wire, bytes, .. } => {
+                if !self.fee_v1().pays_storage_rent_v1() {
+                    return Err("plain Batch Output carrier has insufficient receipt storage rent".into());
+                }
+                Ok(Some((wire, *bytes)))
+            }
+        }
     }
 
     /// Rehearsal and the final fold use an independent debit projection over
     /// the same immutable UTXO fact. The full payload is never cloned here.
     pub(crate) fn storage_debit_v1(&self, request_root: Option<Hash64>) -> Result<Option<MaterialBatchStorageDebitV1>, String> {
-        if matches!(&self.batch.wire, BatchCourtWireV1::Stop(_)) {
+        let PreparedBatchWireV2::Legacy(batch) = &self.batch else {
+            return Err("plain Output carrier has no legacy Batch debit".into());
+        };
+        if matches!(&batch.wire, BatchCourtWireV1::Stop(_)) {
             if request_root.is_some() || !self.fee_v1().pays_storage_rent_v1() {
                 return Err("Batch Stop carrier has insufficient storage rent or an unexpected Begin request root".into());
             }
@@ -252,11 +357,11 @@ impl ValidatedBatchCarrierV1 {
             // withholds this rent from the native fee; there is no Begin ledger.
             return Ok(None);
         }
-        if self.batch.storage_rent.is_some() != request_root.is_some() {
+        if batch.storage_rent.is_some() != request_root.is_some() {
             return Err("Batch storage rent handoff requires the accepted request root for Begin".into());
         }
         match request_root {
-            Some(root) => self.batch.allocate_v1(&mut self.budget.clone(), root, self.at),
+            Some(root) => batch.allocate_v1(&mut self.budget.clone(), root, self.at),
             None => Ok(None),
         }
     }
@@ -278,6 +383,25 @@ pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) 
         Some(batch) => batch.split_v1(available_fee),
         None => MaterialBatchCarrierFeeV1::split(0, available_fee),
     })
+}
+
+/// BCT2 mirrors BCT1 Stop: a syntactically valid Verify withholds its
+/// fixed receipt rent before the court decision, including when the writer
+/// later refuses the claim or sees a duplicate. Terminal retains no receipt.
+pub(crate) fn material_batch_plain_output_carrier_fee_v2(
+    carrier: &Transaction,
+    available_fee: u64,
+) -> Result<Option<MaterialBatchCarrierFeeV1>, String> {
+    if carrier.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return Ok(None);
+    }
+    let Some(wire) = decode_batch_plain_output_payload_v2(&carrier.payload).map_err(|why| why.to_string())? else {
+        return Ok(None);
+    };
+    if !carrier.id_is_current() {
+        return Err("plain Output carrier transaction identity is stale".into());
+    }
+    Ok(Some(MaterialBatchCarrierFeeV1::split(plain_output_storage_rent_v2(&wire)?, available_fee)))
 }
 
 /// One storage debit allocated from the same native budget as other costs.
@@ -364,6 +488,75 @@ mod tests {
             ValidatedBatchCarrierV1::prepare_reserved_v1(validated, 1, at, 0, |bytes| limited.reserve_requests_v1(bytes, 0).map(Some));
         assert!(matches!(blocked, Err(NativeDecodeErrorV1::Resource(_))));
         assert_eq!(limited.outstanding(), (0, 0), "the first reservation rolls back on scratch refusal");
+    }
+
+    #[test]
+    fn bct2_fixed_receipt_rent_matches_native_handoff_on_refusal_and_retry() {
+        use crate::config::params::ForkActivation;
+        use crate::palw_batch_court_v1::carriage::{
+            BatchPlainOutputTerminalV2, SignedBatchPlainOutputV2, encode_batch_plain_output_payload_v2,
+        };
+        let h = Hash64::from_u64_word;
+        let at = PalwBlockContextV2 { block: h(12), daa_score: 20, blue_score: 21, subsidy: 0 };
+        let policy = BatchPlainOutputTransportV2 {
+            activation: ForkActivation::new(20),
+            maximum_source_blocks: 2,
+            maximum_source_controls: 1,
+            maximum_work_per_pass: 1,
+            maximum_io_per_pass: 1,
+            maximum_workspace_per_carrier: 256 * 1024,
+            maximum_prefix_bytes: 1024 * 1024,
+            maximum_prefix_work_per_byte: 1,
+        };
+        let verify = BatchPlainOutputWireV2::Verify(SignedBatchPlainOutputV2 {
+            version: 2,
+            claim: h(1),
+            scope: h(2),
+            source: h(3),
+            notice: h(4),
+            policy: h(5),
+            material: h(6),
+            filer: PalwBondKeyV2(TransactionOutpoint::new(h(7), 0)),
+            // Framing admits this payment. Native adjudication would refuse
+            // the signature, but upfront storage rent still has one debit.
+            signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        });
+        let rent = plain_output_storage_rent_v2(&verify).unwrap();
+        assert!(rent > 0);
+        let terminal = BatchPlainOutputWireV2::Terminal(BatchPlainOutputTerminalV2 { claim: h(1), receipt_digest: h(8) });
+        for (index, wire, due, available) in [(0, &verify, rent, rent - 1), (1, &verify, rent, rent + 7), (2, &terminal, 0, 7)] {
+            let tx = Transaction::new(
+                0,
+                vec![TransactionInput::new(TransactionOutpoint::new(h(9), index), vec![], 0, 0)],
+                vec![TransactionOutput::new(10, ScriptPublicKey::default())],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                encode_batch_plain_output_payload_v2(wire).unwrap(),
+            );
+            let preceding = 2;
+            let native = ValidatedTransaction::new(
+                PopulatedTransaction::new(&tx, vec![UtxoEntry::new(10 + available + preceding, ScriptPublicKey::default(), 0, false)]),
+                available + preceding,
+            );
+            assert!(ValidatedBatchCarrierV1::prepare_at_ordinal_v1(&native, preceding, at, 0).unwrap().is_none());
+            let prior = PalwBlockContextV2 { daa_score: 19, ..at };
+            assert!(
+                ValidatedBatchCarrierV1::prepare_at_ordinal_versioned_v2(&native, preceding, prior, 0, Some(policy))
+                    .unwrap()
+                    .is_none()
+            );
+            let actual =
+                ValidatedBatchCarrierV1::prepare_at_ordinal_versioned_v2(&native, preceding, at, index as usize, Some(policy))
+                    .unwrap()
+                    .unwrap();
+            let projected = material_batch_plain_output_carrier_fee_v2(&tx, available).unwrap().unwrap();
+            assert_eq!(actual.fee_v1(), projected);
+            assert_eq!((projected.required_storage_rent, projected.collectible_fee), (due, available.saturating_sub(due)));
+            assert!(actual.wire_at_v1(&at).is_err());
+            assert!(actual.plain_output_at_v2(&prior).is_err());
+            assert_eq!(actual.plain_output_at_v2(&at).is_ok(), available >= due);
+        }
     }
 
     #[test]

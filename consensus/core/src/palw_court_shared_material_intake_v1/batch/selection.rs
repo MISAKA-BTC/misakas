@@ -159,7 +159,7 @@ mod tests {
     };
 
     #[test]
-    fn plain_selection_source_geometry_matches_complete_legacy_dependencies() {
+    fn bct2_plain_selection_source_geometry_matches_complete_legacy_dependencies() {
         for fixture in [
             crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 2),
             crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_two_tile_v1(),

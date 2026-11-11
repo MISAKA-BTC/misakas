@@ -514,12 +514,24 @@ impl VirtualStateProcessor {
         };
         let batch_point = self.palw_v2_template_point(&virtual_state);
         let batch_active = self.palw_lifecycle_kind_fences.batch_court_in_force_at(batch_point.daa_score);
+        let plain_output = self
+            .palw_lifecycle_kind_fences
+            .batch_plain_output_v2_at(virtual_state.daa_score)
+            .filter(|policy| policy.active_at(batch_point.daa_score));
         let batch_slot_due = |tx: &Transaction| {
-            use kaspa_consensus_core::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1;
-            if !batch_active
-                || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-                || !tx.payload.starts_with(BATCH_COURT_CARRIER_MAGIC_V1)
-            {
+            use kaspa_consensus_core::palw_batch_court_v1::carriage::{
+                BATCH_COURT_CARRIER_MAGIC_V1, BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2,
+            };
+            if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+                return true;
+            }
+            if plain_output.is_some() && tx.payload.starts_with(BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2) {
+                return prepared.checked.is_ok()
+                    && prepared.state.as_ref().is_some_and(|(_, state)| {
+                        kaspa_consensus_core::palw_state_v2::palw_batch_plain_output_template_slot_v2(state, tx, &batch_point).is_ok()
+                    });
+            }
+            if !batch_active || !tx.payload.starts_with(BATCH_COURT_CARRIER_MAGIC_V1) {
                 return true;
             }
             prepared.checked.is_ok()
@@ -538,8 +550,12 @@ impl VirtualStateProcessor {
                 kaspa_consensus_core::palw_tokenizer_registration_carriage_v1::TokenizerRegistrationSourceWorkV1::new(*policy)
                     .expect("validated tokenizer source policy")
             });
+        let mut plain_output_budget = plain_output.map(|policy| policy.source_meter_v2());
         let mut tokenizer_deferred_ids = std::collections::HashSet::new();
-        let mut tokenizer_room_for = |tx: &Transaction| tokenizer_budget.as_mut().is_none_or(|meter| meter.charge_v1(tx).is_ok());
+        let mut tokenizer_room_for = |tx: &Transaction| {
+            tokenizer_budget.as_mut().is_none_or(|meter| meter.charge_v1(tx).is_ok())
+                && plain_output_budget.as_mut().is_none_or(|meter| meter.charge_v2(tx).is_ok())
+        };
         let results = self.validate_block_template_transactions_in_parallel(&txs, &virtual_state, &virtual_utxo_view);
         for (tx, res) in txs.iter().zip(results) {
             match res {

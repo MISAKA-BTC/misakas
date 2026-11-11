@@ -32,6 +32,8 @@ impl<T: Display + Clone> Display for TwoDimVecDisplay<T> {
 pub enum RuleError {
     #[error("TKR1 physical candidate service budget exceeded: {0}")]
     PalwTokenizerRegistrationServiceExceeded(String),
+    #[error("BCT2 physical service exceeded: {0}")]
+    PalwBatchPlainOutputServiceExceeded(String),
 
     /// This node is stopping between virtual transactions. No peer/block verdict.
     #[error("local consensus is exiting; virtual resolution was not completed")]

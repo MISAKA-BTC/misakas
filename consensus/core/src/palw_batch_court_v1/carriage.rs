@@ -101,7 +101,7 @@ pub use crate::palw_court_shared_material_intake_v1::batch::plain_output::{
     quote_batch_plain_output_terminal_v2, quote_batch_plain_output_verify_v2,
 };
 
-pub(crate) const BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2: &[u8; 4] = b"BCT2";
+pub const BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2: &[u8; 4] = b"BCT2";
 pub(crate) const BATCH_PLAIN_OUTPUT_WIRE_HEADER_BYTES_V2: u64 = 5;
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]

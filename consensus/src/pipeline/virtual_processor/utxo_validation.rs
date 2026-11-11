@@ -804,8 +804,19 @@ impl VirtualStateProcessor {
     /// The amount the recipient can actually collect, shared by Round fee
     /// admission, template preflight and the final coinbase reward calculation.
     pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
+        self.palw_collectible_transaction_fee_with_source_v2(tx, fee, bond_burned, daa, daa)
+    }
+
+    pub(super) fn palw_collectible_transaction_fee_with_source_v2(
+        &self,
+        tx: &Transaction,
+        fee: u64,
+        bond_burned: u64,
+        daa: u64,
+        source_daa: u64,
+    ) -> u64 {
         let remaining = self.palw_fee_before_batch_v1(tx, fee, bond_burned, daa);
-        self.palw_lifecycle_kind_fences.batch_court_collectible_fee_v1(tx, remaining, daa).unwrap_or(remaining)
+        self.palw_lifecycle_kind_fences.batch_collectible_fee_with_source_v2(tx, remaining, daa, source_daa).unwrap_or(remaining)
     }
 
     /// Calculates UTXO state and transaction acceptance data relative to the selected parent state
@@ -1187,15 +1198,16 @@ impl VirtualStateProcessor {
 
             // TKR fee effects are evaluated on a body-local branch. The
             // ordinary fold still owns Part acceptance and every other lane.
-            let tokenizer_source_active = if tokenizer_prefix.is_some() {
-                let source_daa = self
-                    .headers_store
+            let plain_accepting = self.palw_lifecycle_kind_fences.batch_plain_output_v2_at(pov_daa_score);
+            let source_daa = if tokenizer_prefix.is_some() || plain_accepting.is_some() {
+                self.headers_store
                     .get_daa_score(merged_block)
-                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("tokenizer source activation", &why.to_string()))?;
-                self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(source_daa).is_some()
+                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("native carrier source activation", &why.to_string()))?
             } else {
-                false
+                pov_daa_score
             };
+            let tokenizer_source_active = self.palw_lifecycle_kind_fences.tokenizer_registration_v1_at(source_daa).is_some();
+            let plain_source = plain_accepting.filter(|policy| policy.active_at(source_daa));
             let tokenizer_trial = tokenizer_prefix
                 .as_deref_mut()
                 .filter(|_| tokenizer_source_active)
@@ -1206,8 +1218,13 @@ impl VirtualStateProcessor {
                                 filter.burn_owed(validated.tx).saturating_add(filter.escrow_burned(validated.tx, &validated.entries))
                             })
                             .unwrap_or(0);
-                        let remaining =
-                            self.palw_collectible_transaction_fee_v1(validated.tx, validated.calculated_fee, burned, pov_daa_score);
+                        let remaining = self.palw_collectible_transaction_fee_with_source_v2(
+                            validated.tx,
+                            validated.calculated_fee,
+                            burned,
+                            pov_daa_score,
+                            source_daa,
+                        );
                         Ok(validated.calculated_fee - remaining)
                     })
                 })
@@ -1233,7 +1250,13 @@ impl VirtualStateProcessor {
                     let burned = bond_filter
                         .map(|filter| filter.burn_owed(tx.tx).saturating_add(filter.escrow_burned(tx.tx, &tx.entries)))
                         .unwrap_or(0);
-                    let before_relay = self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score);
+                    let before_relay = self.palw_collectible_transaction_fee_with_source_v2(
+                        tx.tx,
+                        tx.calculated_fee,
+                        burned,
+                        pov_daa_score,
+                        source_daa,
+                    );
                     let fees = match_relay(first_ordinal + offset, merged_block, tx.tx, tx.calculated_fee, burned, before_relay)?;
                     let ordinary_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
                     let tip = tokenizer_trial
@@ -1497,18 +1520,20 @@ impl VirtualStateProcessor {
                 let mut batch_fee = None;
                 if let Some(point) = ctx.palw_batch_accepting_point_v1
                     && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
-                    && validated_tx
+                    && (validated_tx
                         .tx
                         .payload
                         .starts_with(kaspa_consensus_core::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1)
+                        || plain_source.is_some()
+                            && validated_tx
+                                .tx
+                                .payload
+                                .starts_with(kaspa_consensus_core::palw_batch_court_v1::carriage::BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2))
                 {
                     let fee = validated_tx.calculated_fee;
                     let remaining = self.palw_fee_before_batch_v1(validated_tx.tx, fee, owed, pov_daa_score);
-                    match kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1::prepare_at_ordinal_v1(
-                        validated_tx,
-                        fee - remaining,
-                        point,
-                        accepted_ordinal,
+                    match kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1::prepare_at_ordinal_versioned_v2(
+                        validated_tx, fee - remaining, point, accepted_ordinal, plain_source,
                     ) {
                         Ok(Some(handoff)) => {
                             batch_fee = Some(handoff.fee_v1().collectible_fee);
@@ -1521,8 +1546,13 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
-                let before_relay =
-                    self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
+                let before_relay = self.palw_collectible_transaction_fee_with_source_v2(
+                    validated_tx.tx,
+                    validated_tx.calculated_fee,
+                    owed,
+                    pov_daa_score,
+                    source_daa,
+                );
                 let fees =
                     match_relay(accepted_ordinal, merged_block, validated_tx.tx, validated_tx.calculated_fee, owed, before_relay)?;
                 applied_relay_debits += usize::from(fees.is_some());

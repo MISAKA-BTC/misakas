@@ -14,6 +14,7 @@ use self::{
 };
 use kaspa_consensus_core::{
     block::TemplateTransactionSelector,
+    palw_batch_court_v1::plain_output_local_work::BatchPlainOutputLocalWorkV2,
     palw_tokenizer_registration_carriage_v1::TokenizerRegistrationLocalWorkV1,
     tx::{MutableTransaction, TransactionId, TransactionOutpoint},
 };
@@ -55,6 +56,7 @@ pub(crate) struct Mempool {
     accepted_transactions: AcceptedTransactions,
     counters: Arc<MiningCounters>,
     tokenizer_registration_work: Mutex<TokenizerRegistrationLocalWorkV1>,
+    batch_plain_output_work: Mutex<BatchPlainOutputLocalWorkV2>,
 }
 
 impl Mempool {
@@ -65,7 +67,8 @@ impl Mempool {
         // Follow the existing H1 process burst/refill convention in full
         // TKR1 source partitions. These are uncalibrated node-local limits.
         let tokenizer_registration_work = Mutex::new(TokenizerRegistrationLocalWorkV1::new(512, 64));
-        Self { config, transaction_pool, orphan_pool, accepted_transactions, counters, tokenizer_registration_work }
+        let batch_plain_output_work = Mutex::new(BatchPlainOutputLocalWorkV2::new(512, 64));
+        Self { config, transaction_pool, orphan_pool, accepted_transactions, counters, tokenizer_registration_work, batch_plain_output_work }
     }
 
     pub(crate) fn get_transaction(&self, transaction_id: &TransactionId, query: TransactionQuery) -> Option<MutableTransaction> {

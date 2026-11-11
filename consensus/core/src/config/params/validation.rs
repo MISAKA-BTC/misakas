@@ -385,6 +385,7 @@ impl Params {
         self.validate_palw_staged_public_court_v1()?;
         self.validate_palw_staged_route_extensions_v1()?;
         self.validate_palw_batch_court_v1()?;
+        self.validate_palw_batch_plain_output_v2()?;
         // **The cross-lane G14 gates** (`crate::palw_g14_gates_v1`): G-18's legacy-filer prerequisite of the staged court, and the
         // arm-readiness record of every gated fence (G-10, N4, G-01 option (b), the reward liability horizon).
         self.validate_palw_g14_gates_in_v1(records)?;
@@ -3029,6 +3030,23 @@ impl Params {
                     "a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it",
                 ));
             }
+        }
+        Ok(())
+    }
+
+    pub fn validate_palw_batch_plain_output_v2(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error::InvalidParams;
+        if self.palw_batch_plain_output_v2.is_none_or(|policy| policy.activation == ForkActivation::never()) {
+            return Ok(());
+        }
+        let policy = self
+            .palw_batch_plain_output_v2_fence()
+            .ok_or(InvalidParams("BCT2 requires BCT1 and tokenizer transport at or before its fence"))?;
+        policy.candidate_bounds_v2().map_err(InvalidParams)?;
+        let sources =
+            self.tokenizer_registration_source_blocks_bound_v1().map_err(|_| InvalidParams("BCT2 source geometry is invalid"))?;
+        if policy.maximum_source_blocks < sources {
+            return Err(InvalidParams("BCT2 policy understates its source-block bound"));
         }
         Ok(())
     }

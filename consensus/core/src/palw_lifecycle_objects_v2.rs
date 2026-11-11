@@ -1912,6 +1912,7 @@ pub struct PalwLifecycleKindFencesV1 {
     )>,
     funding_relay_frame_cap_v2: Option<(crate::config::params::ForkActivation, u64)>,
     batch_court_v1: Option<crate::config::params::ForkActivation>,
+    batch_plain_output_v2: Option<crate::palw_batch_court_v1::plain_output_transport::BatchPlainOutputTransportV2>,
     tokenizer_registration_v1: Option<crate::config::params::TokenizerRegistrationFenceV1>,
 }
 
@@ -1991,6 +1992,33 @@ impl PalwLifecycleKindFencesV1 {
             .map(|split| split.collectible_fee)
     }
 
+    pub fn batch_plain_output_v2_at(
+        &self,
+        daa: u64,
+    ) -> Option<crate::palw_batch_court_v1::plain_output_transport::BatchPlainOutputTransportV2> {
+        self.batch_plain_output_v2.filter(|policy| policy.active_at(daa))
+    }
+
+    pub fn batch_collectible_fee_with_source_v2(
+        &self,
+        tx: &Transaction,
+        remaining: u64,
+        accepting_daa: u64,
+        source_daa: u64,
+    ) -> Option<u64> {
+        if self.batch_plain_output_v2_at(accepting_daa).is_some()
+            && self.batch_plain_output_v2_at(source_daa).is_some()
+            && tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+            && tx.payload.starts_with(crate::palw_batch_court_v1::carriage::BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2)
+        {
+            return crate::palw_court_shared_material_intake_v1::material_batch_plain_output_carrier_fee_v2(tx, remaining)
+                .ok()
+                .flatten()
+                .map(|split| split.collectible_fee);
+        }
+        self.batch_court_collectible_fee_v1(tx, remaining, accepting_daa)
+    }
+
     pub fn tokenizer_registration_v1_at(
         &self,
         daa: u64,
@@ -2008,6 +2036,14 @@ impl PalwLifecycleKindFencesV1 {
     }
 
     fn validate_batch_court_shape_v1(&self, payload: &[u8], daa: u64) -> Result<bool, PalwLifecycleTxError> {
+        if payload.starts_with(crate::palw_batch_court_v1::carriage::BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2) {
+            if self.batch_plain_output_v2_at(daa).is_none() {
+                return Ok(false);
+            }
+            return crate::palw_batch_court_v1::carriage::decode_batch_plain_output_payload_v2(payload)
+                .map(|wire| wire.is_some())
+                .map_err(|_| PalwLifecycleTxError::Undecodable);
+        }
         if !self.batch_court_in_force_at(daa) {
             return Ok(false);
         }
@@ -2037,6 +2073,7 @@ impl crate::config::params::Params {
             .fold(
                 PalwLifecycleKindFencesV1 {
                     batch_court_v1: self.palw_batch_court_v1_fence(),
+                    batch_plain_output_v2: self.palw_batch_plain_output_v2_fence(),
                     tokenizer_registration_v1: self.palw_tokenizer_registration_v1_fence().copied(),
                     ..Default::default()
                 },

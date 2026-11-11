@@ -29,6 +29,23 @@ impl NativeTransitionReservationV1 {
         construction.grow_v1(crate::palw_exec_v2_verify::PALW_EXEC_APPROVAL_KEY_BYTES_V1 as u64)?;
         Ok((value, construction))
     }
+    /// BCT2 needs the existing typed prefix bound even when optional
+    /// logical snapshot quotas are off. Carry the pending lease with the
+    /// state so an owned terminal can price its checkpoint without a walk.
+    pub(crate) fn copy_parent_for_plain_output_v2(
+        parent: &PalwChainStateV2,
+    ) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
+        let requests = value_requests_v1(parent)?;
+        let lease = super::reserve_native_pending_requests_v1(requests)?;
+        let state = parent.clone();
+        if let Some(lease) = &lease {
+            lease.materialized_v1();
+        }
+        let mut construction = Self { lease, requests };
+        construction.grow_v1(crate::palw_exec_v2_verify::PALW_EXEC_APPROVAL_KEY_BYTES_V1 as u64)?;
+        Ok((state, construction))
+    }
+
     /// Move the complete existing reservation with its state. No global heap
     /// walk or clone is needed; any later writer must reserve its own growth.
     pub(crate) fn take_state_v1(owner: NativeChainStateV1) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {

@@ -2123,12 +2123,13 @@ pub(super) fn apply_batch_plain_output_terminal_v2(
     let _frame_lease =
         crate::palw_native_resource_v1::reserve_native_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
     let frame = frame.clone();
-    let saved = b.try_checkpoint()?;
-    if let Err(error) = apply_conviction_v1(b, &terminal_rules.at, &frame, filer, &evidence) {
-        b.restore(saved);
-        return Err(error);
-    }
-    Ok(())
+    let policy = b
+        .extras
+        .batch_plain_output_transport_v2
+        .ok_or_else(|| refused("plain Batch Output terminal lacks its native transport budget"))?;
+    b.with_bounded_plain_output_checkpoint_v2(policy.maximum_prefix_bytes, |builder| {
+        apply_conviction_v1(builder, &terminal_rules.at, &frame, filer, &evidence)
+    })
 }
 
 /// **G14 R7: one in-order part of a staged conviction witness** — the split carriage of a witness larger than one control, never

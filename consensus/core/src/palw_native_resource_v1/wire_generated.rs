@@ -112,6 +112,7 @@ impl NativeWireScanV1 for crate::palw_batch_court_v1::BatchRangeAuthenticationV1
     }
 }
 wire_struct!(crate::palw_batch_court_v1::BatchRangeV1; crate::Hash64, u32, crate::palw_batch_court_v1::BatchRangeAuthenticationV1);
+wire_struct!(crate::palw_batch_court_v1::plain_output_transport::BatchPlainOutputTransportV2; crate::config::params::ForkActivation, u64, u64, u64, u64, u64, u64, u64);
 wire_struct!(crate::palw_batch_licence_v1::PalwBatchLicenceEntryV1; crate::Hash64, crate::Hash64, Vec<crate::palw_batch_licence_v1::PalwBatchSeatReceiptV1>);
 wire_struct!(crate::palw_batch_licence_v1::PalwBatchSeatReceiptV1; u8, u16, crate::palw_panel_v2::PalwReceiptVerdictV2, crate::palw_verification_v2::PalwSegmentMaskV2, u64, u32, Vec<crate::Hash64>);
 wire_struct!(crate::palw_batch_licence_v1::PalwSeatWindowRootV1; crate::palw_state_v2::PalwBondKeyV2, u64, u64, crate::Hash64, u32, Vec<u8>, Vec<crate::Hash64>);

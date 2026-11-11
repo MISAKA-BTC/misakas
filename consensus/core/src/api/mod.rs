@@ -436,6 +436,15 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Local BCT2 worst-carrier intake allowance under the active transport.
+    /// Does not read accepted PALW state or authenticate a court request.
+    fn batch_plain_output_local_charge_v2(
+        &self,
+        _transaction: &Transaction,
+    ) -> Option<crate::palw_batch_court_v1::plain_output_local_work::BatchPlainOutputLocalChargeV2> {
+        None
+    }
+
     /// **What a `ConsensusV2` block producer must read from chain state** — see
     /// [`crate::palw_producer_v2`] for why it is one derived answer rather than the ingredients.
     ///

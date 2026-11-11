@@ -17,6 +17,38 @@ use kaspa_consensus_core::{
 };
 use kaspa_core::{debug, info, warn};
 
+#[cfg(test)]
+mod plain_output_local_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_batch_court_v1::plain_output_local_work::{
+        BatchPlainOutputLocalChargeV2, BatchPlainOutputLocalWorkV2, plain_output_local_charge_v2,
+    };
+
+    #[test]
+    fn bct2_mempool_backpressure_precedes_validation_and_is_retryable() {
+        struct ChargeOnly;
+        impl ConsensusApi for ChargeOnly {
+            fn batch_plain_output_local_charge_v2(&self, tx: &Transaction) -> Option<BatchPlainOutputLocalChargeV2> {
+                plain_output_local_charge_v2(tx)
+            }
+            // All other ConsensusApi defaults panic, so this checks that no
+            // mass/UTXO/state/replay lookup occurs after local exhaustion.
+        }
+        let pool = Mempool::new(
+            std::sync::Arc::new(crate::mempool::config::Config::build_default(1_000, true, 480_000)),
+            std::sync::Arc::new(crate::MiningCounters::default()),
+        );
+        *pool.batch_plain_output_work.lock() = BatchPlainOutputLocalWorkV2::new(0, 0);
+        let tx = Transaction::new(0, vec![], vec![], 0, kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0,
+            b"BCT2\xff".to_vec());
+        for _ in 0..2 {
+            let result = pool.pre_validate_and_populate_transaction(&ChargeOnly, MutableTransaction::from_tx(tx.clone()), RbfPolicy::Forbidden);
+            assert!(matches!(result, Err(RuleError::LocalBatchPlainOutputWorkThrottled)));
+        }
+        assert!(RuleError::LocalBatchPlainOutputWorkThrottled.is_local_native_retry_v1());
+    }
+}
+
 impl Mempool {
     pub(crate) fn pre_validate_and_populate_transaction(
         &self,
@@ -26,6 +58,11 @@ impl Mempool {
     ) -> RuleResult<TransactionPreValidation> {
         // Charge newly submitted carriers before duplicate/standardness
         // checks. Revalidation and template selection have separate limits.
+        if let Some(charge) = consensus.batch_plain_output_local_charge_v2(&transaction.tx)
+            && !self.batch_plain_output_work.lock().charge_v2(charge, std::time::Instant::now())
+        {
+            return Err(RuleError::LocalBatchPlainOutputWorkThrottled);
+        }
         if let Some(charge) = consensus.tokenizer_registration_local_charge_v1(&transaction.tx) {
             self.tokenizer_registration_work.lock().charge_v1(charge, std::time::Instant::now()).map_err(|why| match why {
                 TokenizerRegistrationLocalWorkRefusalV1::Throttled => RuleError::LocalTokenizerRegistrationWorkThrottled,

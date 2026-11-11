@@ -39,6 +39,7 @@ pub use batch::native_ranges::quote_numerical_batch_open_v1;
 pub use batch::numerical_verification::{NumericalBatchReplayBudgetV1, NumericalBatchReplayProfileV1};
 pub use batch::{BatchResponsePartSlotV1, BatchResponseQuoteV1, quote_batch_response_v1};
 mod storage_rent;
+pub(crate) use storage_rent::material_batch_plain_output_carrier_fee_v2;
 pub use storage_rent::{
     MaterialBatchCarrierFeeV1, MaterialBatchStorageDebitV1, SharedValidatedBatchCarrierV1, ValidatedBatchCarrierV1,
     material_batch_carrier_fee_v1, material_batch_storage_rent_v1,

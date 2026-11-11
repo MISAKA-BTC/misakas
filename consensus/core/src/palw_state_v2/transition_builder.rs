@@ -62,8 +62,13 @@ impl<'a> TransitionBuilder<'a> {
         da_court: bool,
         extras: &'a PalwTransitionExtrasV1,
     ) -> Result<Self, PalwStateV2Error> {
-        let (state, native_reservation) = crate::palw_native_resource_v1::NativeTransitionReservationV1::copy_parent_v1(parent)
-            .map_err(PalwStateV2Error::NativeResource)?;
+        use crate::palw_native_resource_v1::NativeTransitionReservationV1;
+        let (state, native_reservation) = if extras.batch_plain_output_transport_v2.is_some() {
+            NativeTransitionReservationV1::copy_parent_for_plain_output_v2(parent)
+        } else {
+            NativeTransitionReservationV1::copy_parent_v1(parent)
+        }
+        .map_err(PalwStateV2Error::NativeResource)?;
         Ok(Self::from_native_parts_v1(
             state,
             native_reservation,
@@ -9080,6 +9085,38 @@ impl<'a> TransitionBuilder<'a> {
             palw_claim_local_object_spans_v2::checkpoint(self),
         ))
     }
+    /// BCT2's rollback state copy is charged until settlement returns.
+    pub(super) fn with_bounded_plain_output_checkpoint_v2<T>(
+        &mut self,
+        maximum_prefix_bytes: u64,
+        apply: impl FnOnce(&mut Self) -> Result<T, PalwStateV2Error>,
+    ) -> Result<T, PalwStateV2Error> {
+        let requests = self.native_reservation.requests_v1();
+        if !self.native_reservation.is_tracking_v1() || requests == 0 {
+            return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "plain Output rollback", "candidate prefix has no audited native owner",
+            )));
+        }
+        if requests > maximum_prefix_bytes {
+            return Err(PalwStateV2Error::CarriageInconsistent("plain Output rollback prefix exceeds its native bound".into()));
+        }
+        let lease = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
+        let saved = (
+            self.state.clone(),
+            self.entries.len(),
+            crate::palw_court_observation_v1::checkpoint_v1(),
+            palw_claim_local_object_spans_v2::checkpoint(self),
+        );
+        if let Some(lease) = &lease {
+            lease.materialized_v1();
+        }
+        let result = apply(self);
+        if result.is_err() {
+            self.restore(saved);
+        }
+        result
+    }
+
     pub(super) fn restore(
         &mut self,
         checkpoint: (

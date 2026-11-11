@@ -24,6 +24,12 @@ impl VirtualStateProcessor {
         let has_book = parent.staged_court_row_v1(&PalwStagedCourtKeyV1::TokenizerRegistrationBook).is_some();
         let mut meter = TokenizerRegistrationCandidateWorkV1::new(*policy, has_book)
             .map_err(RuleError::PalwTokenizerRegistrationServiceExceeded)?;
+        let mut output_meter = self
+            .palw_lifecycle_kind_fences
+            .batch_plain_output_v2_at(daa)
+            .map(|policy| policy.candidate_meter_v2())
+            .transpose()
+            .map_err(|why| RuleError::PalwBatchPlainOutputServiceExceeded(why.into()))?;
         let ordered = self.acceptance_ordered_mergeset_without_selected_parent(&ctx.ghostdag_data, daa);
         let mut present = false;
         for block in std::iter::once(ctx.selected_parent()).chain(ordered.iter().copied()) {
@@ -45,6 +51,11 @@ impl VirtualStateProcessor {
                 ))
             })?;
             for tx in transactions.iter() {
+                if let Some(meter) = output_meter.as_mut()
+                    && self.palw_lifecycle_kind_fences.batch_plain_output_v2_at(source_daa).is_some()
+                {
+                    meter.charge_v2(tx).map_err(|why| RuleError::PalwBatchPlainOutputServiceExceeded(why.into()))?;
+                }
                 present |= tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && tx.payload.starts_with(TOKENIZER_REGISTRATION_CARRIER_MAGIC_V1);
                 meter

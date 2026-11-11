@@ -608,7 +608,13 @@ impl VirtualStateProcessor {
                     .iter()
                     .map(|input| burned.get(&input.previous_outpoint).copied().unwrap_or(0))
                     .fold(0u64, u64::saturating_add);
-                sum.checked_add(self.palw_collectible_transaction_fee_v1(tx, *fee, bond_burned, point.daa_score))
+                sum.checked_add(self.palw_collectible_transaction_fee_with_source_v2(
+                    tx,
+                    *fee,
+                    bond_burned,
+                    point.daa_score,
+                    source_daa,
+                ))
             })
             .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the collectible fee overflows".into()))?;
         let income = |tip| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
@@ -743,7 +749,7 @@ impl VirtualStateProcessor {
             if validated.calculated_fee != gross {
                 return Ok(None);
             }
-            let tx_tip = self.palw_collectible_transaction_fee_v1(tx, gross, bond_burn, point.daa_score);
+            let tx_tip = self.palw_collectible_transaction_fee_with_source_v2(tx, gross, bond_burn, point.daa_score, source_daa);
             let body = [(validated, physical_index)];
             let trial =
                 prefix.trial_body(&body, ordinal, |_| Ok(gross - tx_tip)).map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
@@ -900,6 +906,14 @@ impl VirtualStateProcessor {
                 policy,
             )
             .map_err(RuleError::PalwTokenizerRegistrationServiceExceeded)?;
+        }
+        if round.is_some()
+            && let Some(policy) = self.palw_lifecycle_kind_fences.batch_plain_output_v2_at(daa_window.daa_score)
+        {
+            let mut meter = policy.source_meter_v2();
+            for tx in template.block.transactions.iter().skip(1) {
+                meter.charge_v2(tx).map_err(|why| RuleError::PalwBatchPlainOutputServiceExceeded(why.into()))?;
+            }
         }
         if let (Some(round), Some(params)) = (round, self.palw_state_params_v2.as_ref())
             && params.bond_budget_active_at(virtual_state.daa_score)

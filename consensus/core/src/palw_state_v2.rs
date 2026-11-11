@@ -14915,6 +14915,60 @@ pub fn palw_v2_apply_one_batch_carrier_retained_v1(
     )
 }
 
+/// Rehearse one BCT2 control on the already prepared ordered prefix. A
+/// refused control retains the same prefix. Terminal has its own checkpoint
+/// for the court settlement and Verify writes only after every pure check.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_plain_batch_output_owned_v2(
+    base: crate::palw_native_resource_v1::NativeChainStateV1,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    carrier: &crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<(crate::palw_native_resource_v1::NativeChainStateV1, Option<String>), PalwStateV2Error> {
+    if !carrier.is_plain_output_v2() {
+        return Err(PalwStateV2Error::DeltaMismatch("owned plain Output rehearsal received BCT1"));
+    }
+    let (state, reservation) = crate::palw_native_resource_v1::NativeTransitionReservationV1::take_state_v1(base)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let previous_requests = reservation.requests_v1();
+    let mut builder = TransitionBuilder::from_native_parts_v1(
+        state,
+        reservation,
+        params,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    );
+    builder.claim_local_lock_point_v6 = params.claim_local_settlement_active_at(ctx.daa_score).then_some(*ctx);
+    builder.claim_local_gc_defer_v3 = true;
+    builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
+    let refused = match builder.apply_batch_court_carrier_v1(ctx, carrier) {
+        Ok(()) => {
+            settle_rehearsal_builder_v1(&mut builder, ctx)?;
+            None
+        }
+        Err(error @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_))) => return Err(error),
+        Err(error) => {
+            if !builder.entries.is_empty() {
+                return Err(PalwStateV2Error::DeltaMismatch("refused plain Output retained an unexpected journal change"));
+            }
+            Some(error.to_string())
+        }
+    };
+    if builder.entries.is_empty() {
+        builder.entries = Vec::new();
+        builder.native_reservation.restore_requests_v1(previous_requests).map_err(PalwStateV2Error::NativeResource)?;
+    }
+    Ok((builder.native_reservation.finish_state_envelope_v1(builder.state), refused))
+}
+
 /// Rehearse TKR1 from an accepted prefix with the original parent retained
 /// separately. A refused Finish may consume an attempt: keep the returned state.
 #[allow(clippy::too_many_arguments)]
@@ -15006,6 +15060,38 @@ pub fn palw_v2_apply_one_tokenizer_registration_owned_v1(
     }
     let next = builder.native_reservation.finish_state_envelope_v1(builder.state);
     Ok((next, fee, refusal))
+}
+
+/// BCT2 slot selection hint. Actual accepted processing checks funding,
+/// notice, signature, evidence and the original at the exact accepting point.
+pub fn palw_batch_plain_output_template_slot_v2(
+    state: &PalwChainStateV2,
+    tx: &crate::tx::Transaction,
+    at: &PalwBlockContextV2,
+) -> Result<(), String> {
+    use crate::palw_batch_court_v1::carriage::{BatchPlainOutputWireV2, decode_batch_plain_output_payload_v2};
+    use crate::palw_court_shared_material_intake_v1::batch::{
+        admission::batch_numerical_service_ids_v1,
+        plain_output::{batch_plain_output_control_id_v2, plain_output_context_v2},
+    };
+    let wire = decode_batch_plain_output_payload_v2(&tx.payload).map_err(|why| why.to_string())?.ok_or("no BCT2 control")?;
+    let (claim, verify) = match wire {
+        BatchPlainOutputWireV2::Verify(control) => (control.claim, true),
+        BatchPlainOutputWireV2::Terminal(control) => (control.claim, false),
+    };
+    let context = plain_output_context_v2(state, claim)?;
+    let service = state.court_service_state_v1().ok_or("plain Output has no native service book")?;
+    context.check_binding(service)?;
+    let id = if verify {
+        batch_plain_output_control_id_v2(claim, context.scope_id)
+    } else {
+        batch_numerical_service_ids_v1(claim, context.scope_id).map(|(_, terminal)| terminal)
+    }
+    .map_err(|why| format!("{why:?}"))?;
+    if service.book.assigned_daa(&id) != Some(at.daa_score) {
+        return Err("plain Output control is outside its assigned slot".into());
+    }
+    Ok(())
 }
 
 /// Read-only block-template filter for reserved Batch Court slots.
@@ -21763,6 +21849,7 @@ pub struct PalwTransitionExtrasV1 {
     pub staged_tir_route_active: bool,
     /// Prospective BCT1 gate, resolved by the block processor.
     pub batch_court_active_v1: bool,
+    pub batch_plain_output_transport_v2: Option<crate::palw_batch_court_v1::plain_output_transport::BatchPlainOutputTransportV2>,
     /// Native-resolved replay ceilings, pinned to the original service profile.
     pub batch_numerical_profile_v1: Option<crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1>,
     /// The accepted UTXO facts, in accepted carrier order. The index is the

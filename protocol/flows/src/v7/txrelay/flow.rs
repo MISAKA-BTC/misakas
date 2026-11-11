@@ -5,6 +5,7 @@ use crate::{
 };
 use kaspa_consensus_core::{
     palw_tokenizer_registration_carriage_v1::TokenizerRegistrationLocalWorkV1,
+    palw_batch_court_v1::plain_output_local_work::BatchPlainOutputLocalWorkV2,
     tx::{Transaction, TransactionId},
 };
 use kaspa_consensusmanager::ConsensusProxy;
@@ -61,6 +62,8 @@ pub struct RelayTransactionsFlow {
     palw_carriers_held_back: u64,
     tokenizer_registration_work: TokenizerRegistrationLocalWorkV1,
     tokenizer_registration_held_back: u64,
+    batch_plain_output_work: BatchPlainOutputLocalWorkV2,
+    batch_plain_output_held_back: u64,
 }
 
 /// Holds the state information for whether we will throttle tx relay or not
@@ -98,6 +101,11 @@ impl RelayTransactionsFlow {
                 super::palw_carriers::PALW_PEER_CARRIERS_PER_SEC_V1,
             ),
             tokenizer_registration_held_back: 0,
+            batch_plain_output_work: BatchPlainOutputLocalWorkV2::new(
+                super::palw_carriers::PALW_PEER_CARRIER_BURST_V1,
+                super::palw_carriers::PALW_PEER_CARRIERS_PER_SEC_V1,
+            ),
+            batch_plain_output_held_back: 0,
         }
     }
 
@@ -227,6 +235,7 @@ impl RelayTransactionsFlow {
     ) -> Result<(), ProtocolError> {
         let mut transactions: Vec<Transaction> = Vec::with_capacity(requests.len());
         let mut tokenizer_held = 0u64;
+        let mut plain_output_held = 0u64;
         for request in requests {
             let response = self.read_response().await?;
             let transaction_id = response.transaction_id();
@@ -237,6 +246,12 @@ impl RelayTransactionsFlow {
                 )));
             }
             if let Response::Transaction(transaction) = response {
+                if let Some(charge) = consensus.with_consensus_api_v1(|api| api.batch_plain_output_local_charge_v2(&transaction))
+                    && !self.batch_plain_output_work.charge_v2(charge, std::time::Instant::now())
+                {
+                    plain_output_held += 1;
+                    continue;
+                }
                 if let Some(charge) = consensus.with_consensus_api_v1(|api| api.tokenizer_registration_local_charge_v1(&transaction))
                     && self.tokenizer_registration_work.charge_v1(charge, std::time::Instant::now()).is_err()
                 {
@@ -244,6 +259,13 @@ impl RelayTransactionsFlow {
                     continue;
                 }
                 transactions.push(transaction);
+            }
+        }
+        if plain_output_held != 0 {
+            let previous = self.batch_plain_output_held_back;
+            self.batch_plain_output_held_back = previous.saturating_add(plain_output_held);
+            if previous == 0 || previous / 100 != self.batch_plain_output_held_back / 100 {
+                warn!("Peer {} has {} BCT2 carrier(s) withheld by the local relay work limit", self.router, self.batch_plain_output_held_back);
             }
         }
         if tokenizer_held != 0 {

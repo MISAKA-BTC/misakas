@@ -12,6 +12,8 @@ pub enum RuleError {
     LocalNativeStateContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
     #[error("local tokenizer registration admission work exhausted; retry later")]
     LocalTokenizerRegistrationWorkThrottled,
+    #[error("local plain Output admission work exhausted; retry later")]
+    LocalBatchPlainOutputWorkThrottled,
     #[error("tokenizer registration carrier exceeds its active source work partition")]
     RejectTokenizerRegistrationSourceWork,
     /// A consensus transaction rule error
@@ -202,6 +204,7 @@ impl RuleError {
             Self::LocalNativeCapacityUnavailable(_)
                 | Self::LocalNativeStateContextUnavailable(_)
                 | Self::LocalTokenizerRegistrationWorkThrottled
+                | Self::LocalBatchPlainOutputWorkThrottled
         )
     }
 }

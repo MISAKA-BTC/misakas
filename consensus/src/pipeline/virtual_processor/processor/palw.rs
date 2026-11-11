@@ -2522,9 +2522,11 @@ impl VirtualStateProcessor {
                 // The core additionally requires V3 context, its rooted
                 // graph/profile and accepted FullIds. The legacy fence alone
                 // grants neither a BCT2 request nor transport authority.
-                extras
-                    .native_court_rules_v1
-                    .filter(|rules| extras.batch_court_active_v1 && extras.tir_public_network_domain_v1 == Some(rules.network_domain))
+                extras.native_court_rules_v1.filter(|rules| {
+                    extras.batch_court_active_v1
+                        && extras.batch_plain_output_transport_v2.is_some_and(|policy| policy.active_at(daa_score))
+                        && extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+                })
             },
         );
         doc["acceptedParentRoot"] = prepared.authenticated_root_v1().unwrap_or_else(|| state.state_root()).to_string().into();

@@ -1339,6 +1339,20 @@ impl TransitionBuilder<'_> {
         if !self.extras.batch_court_active_v1 {
             return Err(PalwStateV2Error::CarriageInconsistent("Batch Court is dormant".into()));
         }
+        if let Some((wire, bytes)) = carrier.plain_output_at_v2(at).map_err(PalwStateV2Error::CarriageInconsistent)? {
+            if self.extras.batch_plain_output_transport_v2.is_none_or(|policy| !policy.active_at(at.daa_score)) {
+                return Err(PalwStateV2Error::CarriageInconsistent("plain Batch Output transport is dormant".into()));
+            }
+            let previous = self.native_reservation.requests_v1();
+            let previous_journal = (self.entries.len(), self.entries.capacity());
+            let result = self.apply_batch_plain_output_wire_v2(at, wire, bytes);
+            if previous_journal == (self.entries.len(), self.entries.capacity())
+                && !matches!(&result, Err(PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_)))
+            {
+                self.native_reservation.restore_requests_v1(previous).map_err(PalwStateV2Error::NativeResource)?;
+            }
+            return result;
+        }
         let wire = carrier.wire_at_v1(at).map_err(PalwStateV2Error::CarriageInconsistent)?;
         let mut request_root = None;
         if let BatchCourtWireV1::Respond(control) = wire
@@ -1382,22 +1396,31 @@ impl TransitionBuilder<'_> {
 
     /// The versioned transport must first establish the carrier's UTXO
     /// authority and retention debit. No BCT1 handoff may enter this writer.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn apply_batch_plain_output_payload_v2(
         &mut self,
         at: &PalwBlockContextV2,
         payload: &[u8],
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_batch_court_v1::carriage::{BatchPlainOutputWireV2 as Wire, decode_batch_plain_output_payload_v2};
+        let wire = crate::palw_batch_court_v1::carriage::decode_batch_plain_output_payload_v2(payload)
+            .map_err(|why| PalwStateV2Error::CarriageInconsistent(why.to_string()))?
+            .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("plain Batch Output requires BCT2 framing".into()))?;
+        self.apply_batch_plain_output_wire_v2(at, &wire, payload.len() as u64)
+    }
+
+    fn apply_batch_plain_output_wire_v2(
+        &mut self,
+        at: &PalwBlockContextV2,
+        wire: &crate::palw_batch_court_v1::carriage::BatchPlainOutputWireV2,
+        carrier_bytes: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_batch_court_v1::carriage::BatchPlainOutputWireV2 as Wire;
         use crate::palw_court_shared_material_intake_v1::batch::{
             admission::batch_numerical_service_ids_v1,
             plain_output::{batch_plain_output_control_id_v2, plain_output_context_v2},
         };
         let refuse = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
-        let wire = decode_batch_plain_output_payload_v2(payload)
-            .map_err(|why| PalwStateV2Error::CarriageInconsistent(why.to_string()))?
-            .ok_or_else(|| refuse("plain Batch Output requires BCT2 framing"))?;
-        let claim = match &wire {
+        let claim = match wire {
             Wire::Verify(control) => control.claim,
             Wire::Terminal(control) => control.claim,
         };
@@ -1422,7 +1445,6 @@ impl TransitionBuilder<'_> {
             Wire::Terminal(_) => batch_numerical_service_ids_v1(claim, context.scope_id).map(|(_, terminal)| terminal),
         }
         .map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("plain Batch Output service identity: {why:?}")))?;
-        let carrier_bytes = payload.len() as u64;
         let cost = service
             .state
             .book
@@ -1437,8 +1459,14 @@ impl TransitionBuilder<'_> {
             })
             .map(|slot| slot.cost)
             .ok_or_else(|| refuse("plain Batch Output lacks the funded slot for this carrier"))?;
+        if self.extras.batch_plain_output_transport_v2.is_some_and(|policy| !policy.admits_slot_v2(cost)) {
+            return Err(refuse("plain Batch Output slot exceeds the physical transport envelope"));
+        }
+        let _workspace = self.extras.batch_plain_output_transport_v2
+            .map(|policy| policy.reserve_replay_workspace_v2(&self.state, claim, matches!(wire, Wire::Terminal(_))))
+            .transpose()?;
         match wire {
-            Wire::Verify(control) => self.install_batch_plain_output_receipt_v2(at, control, carrier_bytes, cost),
+            Wire::Verify(control) => self.install_batch_plain_output_receipt_v2(at, control.clone(), carrier_bytes, cost),
             Wire::Terminal(control) => {
                 let key = PalwStagedCourtKeyV1::CourtBatchPlainOutputReceiptV2(claim);
                 let Some(PalwStagedCourtRowV1::CourtBatchPlainOutputReceiptV2(row)) = self.state.staged_court_row_v1(&key) else {
@@ -2043,7 +2071,9 @@ impl TransitionBuilder<'_> {
                 let old = match self.state.staged_court_row_v1(&key) {
                     Some(PalwStagedCourtRowV1::CourtSharedStream(old)) => Some(old.as_ref()),
                     None => None,
-                    _ => return Err(PalwStateV2Error::CarriageInconsistent("shared stream foreign key".into())),
+                    _ => {
+                        return Err(PalwStateV2Error::CarriageInconsistent("shared stream foreign key".into()));
+                    }
                 };
                 s.check_advance(&self.state, old).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
@@ -2074,7 +2104,9 @@ impl TransitionBuilder<'_> {
                             return Err(PalwStateV2Error::CarriageInconsistent("shared opening/data cannot be replaced".into()));
                         }
                     }
-                    Some(_) => return Err(PalwStateV2Error::CarriageInconsistent("shared query key contains foreign row".into())),
+                    Some(_) => {
+                        return Err(PalwStateV2Error::CarriageInconsistent("shared query key contains foreign row".into()));
+                    }
                     None => {}
                 }
             }
@@ -3408,7 +3440,9 @@ fn artifact_inventory_control_v1(
                 b.write_staged_row_v1(key, Some(PalwStagedCourtRowV1::ArtifactInventoryOpen(row)))?;
             }
         }
-        _ => return Err(stage_refused(movement.claim, "not an artifact inventory action")),
+        _ => {
+            return Err(stage_refused(movement.claim, "not an artifact inventory action"));
+        }
     }
     Ok(())
 }
@@ -3533,7 +3567,9 @@ fn selected_control_v1(
         Action::SelectedEventCollect { coordinate, demand_id } => {
             Some(session.collect_v1(ctx.daa_score, *coordinate, *demand_id).map_err(|e| stage_refused(movement.claim, e))?)
         }
-        _ => return Err(stage_refused(movement.claim, "not a selected source action")),
+        _ => {
+            return Err(stage_refused(movement.claim, "not a selected source action"));
+        }
     };
     bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
     if let Some(unpaid) = unpaid.filter(|set| !set.is_empty()) {
@@ -3662,7 +3698,9 @@ fn native_selected_control_v1(
         Action::SelectedEventCollect { coordinate, demand_id } => {
             Some(session.collect_v1(ctx.daa_score, *coordinate, *demand_id).map_err(|e| stage_refused(movement.claim, e))?)
         }
-        _ => return Err(stage_refused(movement.claim, "not a native selected source action")),
+        _ => {
+            return Err(stage_refused(movement.claim, "not a native selected source action"));
+        }
     };
     bundle.check_v1().map_err(|e| stage_refused(movement.claim, e))?;
     if let Some(unpaid) = unpaid.filter(|set| !set.is_empty()) {

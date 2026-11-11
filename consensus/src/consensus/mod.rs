@@ -1358,6 +1358,14 @@ impl ConsensusApi for Consensus {
         )
     }
 
+    fn batch_plain_output_local_charge_v2(
+        &self,
+        transaction: &Transaction,
+    ) -> Option<kaspa_consensus_core::palw_batch_court_v1::plain_output_local_work::BatchPlainOutputLocalChargeV2> {
+        self.config.params.palw_lifecycle_kind_fences_v1().batch_plain_output_v2_at(self.get_virtual_daa_score())?;
+        kaspa_consensus_core::palw_batch_court_v1::plain_output_local_work::plain_output_local_charge_v2(transaction)
+    }
+
     fn palw_producer_facts_v2(
         &self,
         class_id: kaspa_hashes::Hash64,

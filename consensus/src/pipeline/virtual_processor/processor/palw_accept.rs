@@ -1370,6 +1370,39 @@ impl VirtualStateProcessor {
                 }
                 AcceptedNativeCourtItemV1::Batch(handoff) => {
                     let extras = self.palw_transition_extras_for_rehearsal_v1(point, &[], &fee_extras);
+                    if handoff.is_plain_output_v2() {
+                        let (next, refused) = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_plain_batch_output_owned_v2(
+                            folded,
+                            state_params,
+                            point,
+                            handoff,
+                            self.palw_unavailable_abstains_at(point.daa_score),
+                            self.palw_capability_bound_at(point.daa_score),
+                            self.palw_uncertified_weightless_at(point.daa_score),
+                            self.palw_da_court_at(point.daa_score),
+                            &extras,
+                        )
+                        .map_err(|why| match why {
+                            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => {
+                                PalwLocalTransitionFaultV1::Resource(why)
+                            }
+                            kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why) => {
+                                PalwLocalTransitionFaultV1::Context(why)
+                            }
+                            why => kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "plain Output rehearsal",
+                                &why.to_string(),
+                            )
+                            .into(),
+                        })?;
+                        folded = next;
+                        if let Some(why) = refused {
+                            info!("Block {block}: a plain Batch Output carrier was dropped, and the block stands: {why}");
+                        } else {
+                            accepted_batch.push((accepted.len(), handoff.clone()));
+                        }
+                        continue;
+                    }
                     match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
                         &folded,
                         state_params,
@@ -2851,6 +2884,7 @@ impl VirtualStateProcessor {
                 .map(|_| kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
             staged_tir_route_active: self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(daa_score)),
             batch_court_active_v1: self.palw_lifecycle_kind_fences.batch_court_in_force_at(daa_score),
+            batch_plain_output_transport_v2: self.palw_lifecycle_kind_fences.batch_plain_output_v2_at(daa_score),
             // Same replay budget the funded schedule carries while this fence is in force.
             // The service id is the one the adopted profile writes into the rooted book.
             // Accepted carriers are attached later, on this same extras value.
