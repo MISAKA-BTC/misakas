@@ -6,7 +6,7 @@ use crate::{
     Hash64,
     palw_court_shared_tir_stream_v1::stream_digest,
     palw_freeprompt_v3::{PALW_FP_COMMITMENT_TX_MAX_BYTES, PalwFreePromptCommitmentV3},
-    palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_pending_requests_v1},
+    palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, reserve_native_pending_requests_v1},
     palw_positive_contract_v2::PublicTfp1HfArtifactV1,
     palw_prompt_ids_v1::{PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1, prompt_ids_form_id_v1},
     palw_staged_court_state_v1::palw_staged_tir_layout_v1,
@@ -64,6 +64,29 @@ impl From<ContractError> for InitialSupplyErrorV1 {
     }
 }
 
+/// Identity helpers serialize FP, context and layout sequentially. Reserve
+/// their largest writer, including geometric growth, before invoking them.
+/// A retained Source/class allocation is not pending serialization scratch.
+pub(super) fn reserve_identity_writers_v3(
+    fp: &PalwFreePromptCommitmentV3,
+    source: &PalwTirPublicSourceV1,
+    class: &PalwTirClassV1,
+) -> Result<Option<NativeDemandLeaseV1>, InitialSupplyErrorV1> {
+    let fp_bytes = borsh::object_length(fp).map_err(|_| ContractError::NonCanonical)?;
+    let job = &source.header_v1().job_context;
+    if fp_bytes > PALW_FP_COMMITMENT_TX_MAX_BYTES || job.network_id.len() > crate::palw_v2::PALW_V2_MAX_NETWORK_ID_BYTES {
+        return Err(ContractError::Budget.into());
+    }
+    let context_bytes = borsh::object_length(job).map_err(|_| ContractError::NonCanonical)?;
+    let layout_bytes = borsh::object_length(&class.layout).map_err(|_| ContractError::NonCanonical)?;
+    let bytes = PalwTirPublicSourceV1::native_identity_writer_requests_v3(fp_bytes.max(context_bytes).max(layout_bytes) as u64)
+        .map_err(|error| match error {
+            NativeDecodeErrorV1::Resource(coverage) => InitialSupplyErrorV1::LocalResource(coverage),
+            NativeDecodeErrorV1::Decode(_) => InitialSupplyErrorV1::Contract(ContractError::NonCanonical),
+        })?;
+    reserve_native_pending_requests_v1(bytes).map_err(InitialSupplyErrorV1::LocalResource)
+}
+
 /// All members are raw geometry, independent of tariffs and worker inference
 /// speed. InputTokens counts one complete raw vector conservatively even if
 /// the ordinary worker obtains it by re-encoding the supplied prompt. A
@@ -76,6 +99,7 @@ pub(crate) struct PublicTfp1InitialSupplyV1 {
     hf_content_root: Digest,
     hf_chunk_bytes: u32,
     input_tokens: Digest,
+    execution_rules_content: Digest,
     tokenizer_registration: Hash64,
     prompt_form: PalwPromptIdsFormV1,
     body_bytes: [u64; MaterialScope::COUNT],
@@ -158,14 +182,7 @@ impl PublicTfp1InitialSupplyV1 {
         // Legacy FP/job/context hashes and HF's class check temporarily
         // serialize their preimages. Quote from the actual bounded inputs
         // before calling those paths; no model data are cloned or parsed.
-        let fp_bytes = borsh::object_length(fp).map_err(|_| ContractError::NonCanonical)? as u64;
-        let context_bytes = borsh::object_length(job).map_err(|_| ContractError::NonCanonical)? as u64;
-        let layout_bytes = borsh::object_length(layout).map_err(|_| ContractError::NonCanonical)? as u64;
-        let mut requests = TirNativeRequestsV1::new();
-        for bytes in [fp_bytes, context_bytes, layout_bytes] {
-            requests.vec_v1::<u8>(bytes.max(1024)).map_err(LocalResource)?;
-        }
-        let _hash_scratch = reserve_native_pending_requests_v1(requests.bytes_v1()).map_err(LocalResource)?;
+        let _hash_scratch = reserve_identity_writers_v3(fp, source, class)?;
         let facts = NativeTfp1PublicOriginalFactsV1::derive_v1(fp, source)?;
         let (claim, source_id, _) = facts.native_identity_v1();
 
@@ -179,6 +196,14 @@ impl PublicTfp1InitialSupplyV1 {
             return Err(ContractError::Scope.into());
         }
         let hf_entry = hf.entry_v1();
+        let rules = super::super::tfp1_material::native_ordinary_tfp1_rules_material_v1(
+            fp,
+            source,
+            class,
+            prompt_form,
+            ManifestScopeRules { codec: tir_ordinary_tfp1_rules_material_codec_v1(), max_bytes: 512, chunk_bytes: 512 },
+        )?
+        .0;
 
         let (tokenizer, _) =
             palw_rooted_tokenizer_for_original_at_clocks_v3(parent, extras, candidate_daa, candidate_blue_score, fp, header)
@@ -223,6 +248,7 @@ impl PublicTfp1InitialSupplyV1 {
             hf_content_root: hf_entry.content_root,
             hf_chunk_bytes: hf_entry.chunk_bytes,
             input_tokens: Digest(job.prompt_token_ids_hash.as_bytes()),
+            execution_rules_content: rules.content_root,
             tokenizer_registration: tokenizer.record_id_v1(),
             prompt_form,
             body_bytes,
@@ -281,6 +307,14 @@ impl PublicTfp1InitialSupplyV1 {
             }
             if entry.total_bytes != self.body_bytes_v1(scope) || !self.chunk_fits_v1(scope, entry.chunk_bytes) {
                 return Err(ContractError::Budget.into());
+            }
+            let expected_content = match scope {
+                MaterialScope::Artifact => self.hf_content_root,
+                MaterialScope::ExecutionRules => self.execution_rules_content,
+                _ => entry.subject,
+            };
+            if entry.content_root != expected_content {
+                return Err(ContractError::Identity.into());
             }
         }
         // The InputTokens codecs count raw u32 values, not opening frames.
@@ -629,6 +663,7 @@ pub(crate) mod tests {
             }),
         };
         manifest.entries[MaterialScope::Artifact as usize] = hf.entry_v1();
+        manifest.entries[MaterialScope::ExecutionRules as usize].content_root = supply.execution_rules_content;
         manifest.entries[MaterialScope::Prompt as usize] = misaka_palw_positive_contract::public_one_honest::prompt_text_material_v1(
             scope.ruleset,
             "fixture prompt",
@@ -770,6 +805,7 @@ pub(crate) mod tests {
             }),
         };
         manifest.entries[MaterialScope::Artifact as usize] = hf.entry_v1();
+        manifest.entries[MaterialScope::ExecutionRules as usize].content_root = supply.execution_rules_content;
         manifest.entries[MaterialScope::Prompt as usize] = prompt_entry;
         let checked = |mut original: OriginalCommit, body: &ManifestV1, limits: &[ManifestScopeRules; MaterialScope::COUNT]| {
             let total_limit = supply.payload_bytes + 1;
@@ -792,9 +828,9 @@ pub(crate) mod tests {
                 Err(InitialSupplyErrorV1::Contract(ContractError::Budget))
             );
         }
-        for scope in [MaterialScope::Artifact, MaterialScope::InputTokens, MaterialScope::Prompt] {
+        for scope in MATERIAL_SCOPES {
             let mut changed = manifest.clone();
-            changed.entries[scope as usize].content_root = tag;
+            changed.entries[scope as usize].content_root.0[0] ^= 1;
             let (id, changed) = checked(original.clone(), &changed, &limits);
             assert_eq!(
                 supply.check_manifest_v1(id, &changed, prompt.as_bytes()),
@@ -851,6 +887,7 @@ pub(crate) mod tests {
             hf_content_root: Digest([4; 64]),
             hf_chunk_bytes: 450,
             input_tokens: Digest([6; 64]),
+            execution_rules_content: Digest([7; 64]),
             tokenizer_registration: Hash64::from_u64_word(5),
             prompt_form: PalwPromptIdsFormV1::MerkleV1,
             body_bytes,

@@ -16,17 +16,12 @@
 pub(super) fn prepare_protected_original_candidate_v2(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
+    claim: Hash64,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
-    source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
-    admission: &crate::palw_positive_contract_v2::PublicOriginalAdmissionV1<'_>,
-    reservation: &crate::palw_positive_contract_v2::PublicOriginalReservationV1<'_>,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    projection: &crate::palw_court_shared_material_intake_v1::batch::plain_output::projection::PlainBatchOriginalProjectionV2,
-    terms: &crate::palw_positive_contract_v2::tfp1_original::preclaim::ProtectedBatchPreclaimTermsV1,
-    policy: crate::palw_positive_contract_v2::tfp1_original::funding::Tfp1FundingPolicyV1,
-    maximum_leaves: u64,
-    maximum_packets: usize,
-    price: impl FnMut(
+    policy: &crate::palw_positive_contract_v2::tfp1_original::native_plan::Tfp1NativePlanningPolicyV3<'_>,
+    mut price: impl FnMut(
         crate::palw_court_shared_material_intake_v1::batch::admission::BatchDeliveryV1,
         u64,
     ) -> Result<crate::palw_court_service_v1::ServiceCost, String>,
@@ -36,13 +31,13 @@ pub(super) fn prepare_protected_original_candidate_v2(
         PublicTfp1FrameV1,
         tfp1_original::{
             funding::admission::Tfp1ProtectedFundingAdmissionErrorV1,
+            native_plan::NativeTfp1OriginalPlanV3,
             service_booking::{PreparedProtectedServiceBookingV1, ProtectedServiceBookingErrorV1},
         },
     };
 
-    // This is a native-derived identity, rechecked against the literal FP by
-    // the material/funding entrance below. Avoid an unleased FP re-encoding.
-    let claim = terms.obligation_v1().facts_v1().native_identity_v1().0;
+    // The object dispatcher supplies its actual claim key. Native planning
+    // rederives it from the literal FP before any candidate can be installed.
     if b.paired_original_checkpoint_claim != Some(claim) || b.tfp1_original_prefix.is_some() || b.state.claim(&claim).is_some() {
         return Err(refused("protected original planning requires its fresh paired checkpoint"));
     }
@@ -62,9 +57,32 @@ pub(super) fn prepare_protected_original_candidate_v2(
             crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
         ));
     }
-    if accepted.origin_v1() != reservation.origin || pairing.public_companion_v3().is_none() {
+    if !pairing.envelope().is_protected_v2() || pairing.public_companion_v3().is_none() {
         return Err(refused("protected original literal carrier differs from native acceptance"));
     }
+    let prompt = pairing.public_prompt_bytes_v3().ok_or_else(|| refused("protected original has no literal prompt"))?;
+    let descriptor = pairing.public_hf_descriptor_bytes_v2().ok_or_else(|| refused("protected original has no HF reference"))?;
+    let plan = NativeTfp1OriginalPlanV3::derive_v3(
+        parent,
+        extras,
+        b.params,
+        ctx.daa_score,
+        ctx.blue_score,
+        original,
+        header,
+        prompt_form,
+        prompt,
+        descriptor,
+        policy,
+        &mut price,
+    )
+    .map_err(protected_native_plan_error_v3)?;
+    if plan.terms_v3().obligation_v1().facts_v1().native_identity_v1().0 != claim {
+        return Err(refused("protected original plan changes the actual object claim"));
+    }
+    let admission = plan.admission_v3(original, prompt).map_err(protected_native_plan_error_v3)?;
+    let reservation = plan.actual_v3(accepted.origin_v1()).map_err(protected_native_plan_error_v3)?;
+    let source = plan.source_v3();
     let class = parent
         .tir_class_v1(&original.job.class_id)
         .ok_or_else(|| refused("protected original class is absent from its accepted parent"))?;
@@ -80,23 +98,24 @@ pub(super) fn prepare_protected_original_candidate_v2(
             original,
             source,
             pairing,
-            reservation,
-            projection,
-            terms,
+            &reservation,
+            plan.projection_v3(),
+            plan.terms_v3(),
             &mut candidate_book,
-            maximum_packets,
-            price,
-            policy,
+            policy.maximum_packets,
+            &mut price,
+            policy.funding,
         )
         .map_err(|error| match error {
             Tfp1ProtectedFundingAdmissionErrorV1::LocalResource(coverage) => PalwStateV2Error::NativeResource(coverage),
             other => refused(format!("protected original material/reservation/funding refused: {other:?}")),
         })?;
-    let frame = PublicTfp1FrameV1::prepare_with_native_service_v3(&prepared, original, source, class, ctx, maximum_leaves, &booking)
-        .map_err(|error| match error {
-        NativeDecodeErrorV1::Resource(coverage) => PalwStateV2Error::NativeResource(coverage),
-        NativeDecodeErrorV1::Decode(other) => refused(format!("protected original frame refused: {other:?}")),
-    })?;
+    let frame =
+        PublicTfp1FrameV1::prepare_with_native_service_v3(&prepared, original, source, class, ctx, policy.maximum_leaves, &booking)
+            .map_err(|error| match error {
+                NativeDecodeErrorV1::Resource(coverage) => PalwStateV2Error::NativeResource(coverage),
+                NativeDecodeErrorV1::Decode(other) => refused(format!("protected original frame refused: {other:?}")),
+            })?;
     let service =
         PreparedProtectedServiceBookingV1::prepare_v1(&b.state, &frame, &booking, candidate_book).map_err(|error| match error {
             ProtectedServiceBookingErrorV1::LocalResource(coverage) => PalwStateV2Error::NativeResource(coverage),
@@ -109,8 +128,15 @@ pub(super) fn prepare_protected_original_candidate_v2(
         service,
         &funding,
         pairing,
-        admission,
-        reservation,
+        &admission,
+        &reservation,
     )?;
     Ok(OriginalAdmissionV1::Protected(installation))
+}
+
+fn protected_native_plan_error_v3(error: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwStateV2Error {
+    match error {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(coverage) => PalwStateV2Error::NativeResource(coverage),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
+    }
 }

@@ -86,26 +86,54 @@ pub fn public_ordinary_tfp1_rules_material_v1(
     prompt_form: PalwPromptIdsFormV1,
     rules: ManifestScopeRules,
 ) -> Result<(ManifestEntryV1, [u8; 512]), ContractError> {
+    ordinary_tfp1_rules_material_v1(fp, source, class, Some(program), prompt_form, rules)
+}
+
+/// A native Source already validated the registered program in
+/// `PalwTirStepSpaceV1::new`, including the exact primitive-set ID, and
+/// authenticated the legacy tiled logits scheme. Recheck the supplied
+/// class's program and layout identity against that Source.
+pub(super) fn native_ordinary_tfp1_rules_material_v1(
+    fp: &PalwFreePromptCommitmentV3,
+    source: &PalwTirPublicSourceV1,
+    class: &PalwTirClassV1,
+    prompt_form: PalwPromptIdsFormV1,
+    rules: ManifestScopeRules,
+) -> Result<(ManifestEntryV1, [u8; 512]), ContractError> {
+    ordinary_tfp1_rules_material_v1(fp, source, class, None, prompt_form, rules)
+}
+
+fn ordinary_tfp1_rules_material_v1(
+    fp: &PalwFreePromptCommitmentV3,
+    source: &PalwTirPublicSourceV1,
+    class: &PalwTirClassV1,
+    program: Option<&misaka_palw_tir::TirProgramV1>,
+    prompt_form: PalwPromptIdsFormV1,
+    rules: ManifestScopeRules,
+) -> Result<(ManifestEntryV1, [u8; 512]), ContractError> {
     super::tfp1_original::NativeTfp1PublicOriginalFactsV1::derive_v1(fp, source)?;
     let header = source.header_v1();
     let job = &header.job_context;
     require_cold_tfp1_v1(fp, job)?;
+    let prim_set = misaka_palw_tir::prim::PRIM_SET_ID_V1;
+    let logits_scheme = crate::palw_step_refute::tiled_logits_scheme_id_v1().as_bytes();
     if !source.supports_tiled_trace_v1()
-        || program.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1().as_bytes()
-        || program.prim_set_id != crate::palw_tir_v1::palw_tir_prim_set_id_v1().as_bytes()
+        || program.is_some_and(|program| program.logits_scheme_id != logits_scheme || program.prim_set_id != prim_set)
         || job.trace_scheme_id != crate::palw_v2::trace_scheme_id_v2()
     {
         return Err(ContractError::UnsupportedProfile);
     }
     let graph = class_program_v1(class, job, header.artifact_root)?;
-    if stream_digest(PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1, program).map_err(|_| ContractError::NonCanonical)? != graph {
-        return Err(ContractError::Scope);
+    if let Some(program) = program {
+        if stream_digest(PALW_TIR_GRAPH_IR_ROOT_DOMAIN_V1, program).map_err(|_| ContractError::NonCanonical)? != graph {
+            return Err(ContractError::Scope);
+        }
     }
     let mut bytes = [0; 512];
     for (part, field) in bytes.chunks_exact_mut(64).zip([
         graph.as_bytes(),
-        program.prim_set_id,
-        program.logits_scheme_id,
+        prim_set,
+        logits_scheme,
         job.trace_scheme_id.as_bytes(),
         job.cu_ruleset_id.as_bytes(),
         fp_job_id_v3(&fp.job).as_bytes(),

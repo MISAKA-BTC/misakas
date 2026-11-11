@@ -10,6 +10,7 @@ pub(crate) mod manifest_paid;
 pub(crate) mod manifest_request;
 pub(crate) mod native_frame;
 pub(crate) mod native_link;
+pub(crate) mod native_plan;
 pub(crate) mod preclaim;
 pub(crate) mod service_booking;
 pub(crate) mod service_graph;
@@ -441,7 +442,10 @@ impl PublicOriginalAdmissionV1<'_> {
         carrier_material::MaterialPairingErrorV2,
     > {
         super::require_current_public_origin_v1(reservation.origin, point)?;
-        let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, reservation)?;
+        let prepared = {
+            let _hash_scratch = initial_supply::reserve_identity_writers_v3(fp, source, self.class)?;
+            self.prepare_tfp1_pairing_v1(pairing, obligation, reservation)?
+        };
         let signed = SignedPublicOriginalV1::decode(pairing.public_companion_v3().ok_or(ContractError::Scope)?)?;
         let (hf, supply) = self.check_tfp1_candidate_material_v3(
             parent,
@@ -479,29 +483,15 @@ impl PublicOriginalAdmissionV1<'_> {
         reservation: &PublicOriginalProspectiveReservationV2<'_>,
     ) -> Result<(super::PublicTfp1HfArtifactV1, initial_supply::PublicTfp1InitialSupplyV1), carrier_material::MaterialPairingErrorV2>
     {
-        use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_pending_requests_v1};
-        use carrier_material::MaterialPairingErrorV2::LocalResource;
         if self.job != &source.header_v1().job_context {
             return Err(ContractError::Scope.into());
         }
         super::tfp1_material::require_cold_tfp1_v1(fp, &source.header_v1().job_context)?;
-        let fp_bytes = borsh::object_length(fp).map_err(|_| ContractError::NonCanonical)?;
-        if fp_bytes > crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES {
-            return Err(ContractError::Budget.into());
-        }
         // The legacy FP/context/class identity helpers serialize temporary
         // preimages. Own those buffers before calling them, as the native
         // initial-supply planner does. Fixed manifest/descriptor decode and
         // contract hashes themselves have no dynamically sized allocation.
-        let mut requests = TirNativeRequestsV1::new();
-        for bytes in [
-            fp_bytes,
-            borsh::object_length(&source.header_v1().job_context).map_err(|_| ContractError::NonCanonical)?,
-            borsh::object_length(&self.class.layout).map_err(|_| ContractError::NonCanonical)?,
-        ] {
-            requests.vec_v1::<u8>((bytes as u64).max(1024)).map_err(LocalResource)?;
-        }
-        let _hash_scratch = reserve_native_pending_requests_v1(requests.bytes_v1()).map_err(LocalResource)?;
+        let _hash_scratch = initial_supply::reserve_identity_writers_v3(fp, source, self.class)?;
         if NativeTfp1PublicOriginalFactsV1::derive_v1(fp, source)? != obligation.facts {
             return Err(ContractError::Scope.into());
         }
@@ -661,6 +651,10 @@ mod tests {
         };
         let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
         let (entry, bytes) = ordinary_rules(&program, form, rules).unwrap();
+        assert_eq!(
+            super::super::tfp1_material::native_ordinary_tfp1_rules_material_v1(original, &source, &binding.class, form, rules),
+            Ok((entry, bytes))
+        );
         assert_eq!(entry.total_bytes, 512);
         assert_eq!(&bytes[..64], &binding.class.graph_ir_root().as_bytes());
         assert_eq!(&bytes[5 * 64..6 * 64], &crate::palw_freeprompt_v3::fp_job_id_v3(&original.job).as_bytes());

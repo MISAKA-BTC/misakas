@@ -9,13 +9,32 @@ use crate::{
     Hash64,
     palw_court_shared_tir_stream_v1::stream_digest,
     palw_fp_constraint_job_v1::{PalwTokenTableEogOpeningV1, PalwTokenTableOpeningV1},
-    palw_freeprompt_v3::{PalwFreePromptCommitmentV3, fp_claim_id_v3},
-    palw_native_resource_v1::{NativeDecodeErrorV1, TirNativeRequestsV1, reserve_native_pending_requests_v1},
+    palw_freeprompt_v3::{PALW_FP_COMMITMENT_TX_MAX_BYTES, PalwFreePromptCommitmentV3, fp_claim_id_v3},
+    palw_native_resource_v1::{NativeDecodeErrorV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_pending_requests_v1},
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_ids_form_id_v1, prompt_ids_tile_count_v1, prompt_token_ids_match_v1},
     palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwTransitionExtrasV1},
     palw_tir_public_source_v1::{PalwTirPublicAuthenticatedIdsV1, PalwTirPublicSourceV1},
-    palw_tokenizer_rendering_v2::{palw_rooted_claim_tokenizer_v1, palw_rooted_tokenizer_for_original_v2},
+    palw_tokenizer_rendering_v2::{palw_rooted_claim_tokenizer_v1, palw_rooted_tokenizer_for_original_at_clocks_v3},
+    palw_v2::{PALW_V2_MAX_NETWORK_ID_BYTES, PalwJobContextV2},
 };
+
+pub(super) fn reserve_original_hash_writers_v2(
+    original: &PalwFreePromptCommitmentV3,
+    context: &PalwJobContextV2,
+) -> Result<Option<NativeDemandLeaseV1>, NativeDecodeErrorV1<String>> {
+    use NativeDecodeErrorV1::{Decode, Resource};
+    let original_bytes = borsh::object_length(original).map_err(|why| Decode(why.to_string()))?;
+    if original_bytes > PALW_FP_COMMITMENT_TX_MAX_BYTES || context.network_id.len() > PALW_V2_MAX_NETWORK_ID_BYTES {
+        return Err(Decode("ordinary Batch original identity exceeds native wire bounds".into()));
+    }
+    let context_bytes = borsh::object_length(context).map_err(|why| Decode(why.to_string()))?;
+    // Claim and job hashes serialize sequentially, and the job fits within
+    // the commitment preimage. The context's CanonicalWriter has the same
+    // field widths as Borsh. The existing bound covers simultaneous old/new
+    // buffers during growth of any one of these writers.
+    let requests = PalwTirPublicSourceV1::native_identity_writer_requests_v3(original_bytes.max(context_bytes) as u64)?;
+    reserve_native_pending_requests_v1(requests).map_err(Resource)
+}
 
 /// Bounds on native operands, before material and control framing. FullIds
 /// is the same body booked by plain Output. The separate literal prompt and
@@ -66,6 +85,37 @@ impl PlainBatchTokenizerV2 {
         source: &PalwTirPublicSourceV1,
         prompt_form: PalwPromptIdsFormV1,
     ) -> Result<Self, String> {
+        Self::derive_at_clocks_v2(parent, extras, at.daa_score, at.blue_score, original, source, prompt_form).map_err(|error| {
+            match error {
+                NativeDecodeErrorV1::Decode(why) => why,
+                NativeDecodeErrorV1::Resource(coverage) => coverage.to_string(),
+            }
+        })
+    }
+
+    pub(crate) fn derive_at_clocks_v2(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        candidate_daa: u64,
+        candidate_blue_score: u64,
+        original: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        prompt_form: PalwPromptIdsFormV1,
+    ) -> Result<Self, NativeDecodeErrorV1<String>> {
+        let _identity_scratch = reserve_original_hash_writers_v2(original, &source.header_v1().job_context)?;
+        Self::derive_with_hash_writers_v2(parent, extras, candidate_daa, candidate_blue_score, original, source, prompt_form)
+            .map_err(NativeDecodeErrorV1::Decode)
+    }
+
+    fn derive_with_hash_writers_v2(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        candidate_daa: u64,
+        candidate_blue_score: u64,
+        original: &PalwFreePromptCommitmentV3,
+        source: &PalwTirPublicSourceV1,
+        prompt_form: PalwPromptIdsFormV1,
+    ) -> Result<Self, String> {
         let full_ids_body_bytes = PlainBatchOutputV2::full_ids_bound_v2(original, source)
             .map_err(|why| format!("ordinary tokenizer branch changes the original or Source: {why:?}"))?;
         let header = source.header_v1();
@@ -76,8 +126,9 @@ impl PlainBatchTokenizerV2 {
         {
             return Err("ordinary tokenizer branch changes the original prompt operands".into());
         }
-        let (row, openings) = palw_rooted_tokenizer_for_original_v2(parent, extras, at, original, header)
-            .ok_or("ordinary tokenizer branch requires an earlier authenticated registration on the native parent")?;
+        let (row, openings) =
+            palw_rooted_tokenizer_for_original_at_clocks_v3(parent, extras, candidate_daa, candidate_blue_score, original, header)
+                .ok_or("ordinary tokenizer branch requires an earlier authenticated registration on the native parent")?;
         if openings.full_ids_body_bytes != Some(full_ids_body_bytes) {
             return Err("ordinary tokenizer branch differs from plain Output FullIds".into());
         }
@@ -143,7 +194,7 @@ impl PlainBatchTokenizerV2 {
             source,
             registration,
             branch,
-            acceptance_clocks: (at.daa_score, at.blue_score),
+            acceptance_clocks: (candidate_daa, candidate_blue_score),
             prompt_form,
             prompt_ids_root,
             vocab,

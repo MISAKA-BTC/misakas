@@ -20,6 +20,16 @@ Panel人数・全工程の物理容量・料金・署名branchの本番設定に
 
 今回のコード変更は **実装済み・Rust検証未実行**。方針書§1に従い通し接続後にbuild/testを実行する。公開配備・署名送信は行っていない。取得可否証明やMinerのモデル重み配信義務は追加しない。同一claimのPanel/Final・当選権利消費・対応ブロック生成は引き続き未達。
 
+### 親状態から署名前の計算・署名後の保存準備まで（2026-11-12、未検証）
+
+[native planner](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/native_plan.rs)で、親状態・元FP/header・literal prompt・HF固定参照・明示policyから、Source、登録tokenizer、Selection、初回資料量、相対サービス義務を一度組み立てる入口を追加した。prospective DAA/blueだけで計算でき、架空の受理blockを作らない。続いてpublisher由来のmanifest entriesとnative metadataからcompanion/manifestを束縛し、同じ資料検査・予約・資金計算へ渡す。生成した署名対象は公開RPCの応答ではなく、内部の未署名候補である。
+
+unsigned quoteはplannerが保持する同じ親・extras・prompt形式を使い、親のservice bookを複製して計算する。別の親やcallerの予約表を公開入口から渡せない。signed側の[coordinator](../../../../consensus/core/src/palw_protected_original_coordinator_v2.rs)も同じplannerを呼び、実carrierのprompt/descriptor・実受理clockから再導出し、現在のordered prefixのbookで予約し直して既存の一括保存準備へ進む。TFO3 protected envelopeを明示要求し、旧pledge envelopeを新受付へ混入させない。
+
+接続中に、manifestのsubject/sizeが正しくてもcontent rootを差し替えられ、後段replayで初めて拒否する不足を修正した。[共通資料検査](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/initial_supply.rs)で全scopeのnativeに決まるcontent rootを照合する。ExecutionRulesはCU rules IDとは異なる512-byte資料のrootなので、[既存replayと共有する生成処理](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_material.rs)を使用する。FP/context/layoutのhash用一時メモリも生成前に予約し、保持済みSourceの予約をその代替にしない。
+
+[既存登録fixtureへ接続した回帰コード](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/native_plan/tests.rs)には、署名前のmanifest/資金計算、別clock・各scopeのroot/Trace量・prompt差替え拒否、見積もり前後のbook不変を追加した。fixtureの容量・価格・未実装graph用の識別値は公開presetではない。Rustは方針書§1に従い**未検証**。全late request/repair/有限精算のgraph、本番policy resolverとG14/FpTokenizer分岐、RPC/Studio新版は残っており、公開quote成功・同一claim受付・Panel/Final・当選権利消費・対応block受理は未達。モデル取得証明やMinerの重み配信義務は追加しない。
+
 ### 実受付候補から保存準備への接続（2026-11-12、未検証）
 
 [新coordinator](../../../../consensus/core/src/palw_protected_original_coordinator_v2.rs)を追加した。nativeに所有されたoriginal parentと実UTXO handoffを照合し、現在のordered prefixの予約表を複製して、前項までのmaterial/funding入口→専用frame→service保存候補→history/escrowを持つ`OriginalAdmissionV1::Protected`へ接続する。quoteの候補bookやcallerが選んだ予約IDは受け取らない。返すのは保存準備であり、関数内でclaimや残高を保存しない。

@@ -13,7 +13,7 @@ use crate::{
                 plain_tokenizer::PlainTokenizerBatchBudgetV2,
             },
             native_ranges::{NumericalBatchProjectionV1, numerical_batch_projection_v1},
-            plain_tokenizer::PlainBatchTokenizerV2,
+            plain_tokenizer::{PlainBatchTokenizerV2, reserve_original_hash_writers_v2},
         },
     },
     palw_freeprompt_v3::{PalwFreePromptCommitmentV3, fp_claim_id_v3},
@@ -90,6 +90,12 @@ impl PlainBatchProspectiveOriginalTermsV2 {
 
 #[allow(dead_code)]
 impl PlainBatchOriginalProjectionV2 {
+    /// Borrow the exact authenticated source while the projection owns its
+    /// native allocation lease.
+    pub(crate) fn source_v1(&self) -> &PalwTirPublicSourceV1 {
+        &self.source
+    }
+
     /// Claim-specific Trace payload, excluding transport/opening overhead.
     /// This is a lower bound on a protected replay opportunity, not its full
     /// service quote. It never includes HF model weights.
@@ -114,8 +120,42 @@ impl PlainBatchOriginalProjectionV2 {
         verify_cost: ServiceCost,
         verify_daa: u64,
     ) -> Result<Self, NativeDecodeErrorV1<String>> {
+        Self::derive_at_clocks_v2(
+            parent,
+            extras,
+            at.daa_score,
+            at.blue_score,
+            original,
+            header,
+            prompt,
+            maximum_leaves,
+            cover,
+            maximum_ranges,
+            verify_cost,
+            verify_daa,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn derive_at_clocks_v2(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        candidate_daa: u64,
+        candidate_blue_score: u64,
+        original: &PalwFreePromptCommitmentV3,
+        header: &PalwPublicTirBindingHeaderV1,
+        prompt: PalwPromptIdsFormV1,
+        maximum_leaves: u64,
+        cover: StreamingParameterCoverBudgetV1,
+        maximum_ranges: usize,
+        verify_cost: ServiceCost,
+        verify_daa: u64,
+    ) -> Result<Self, NativeDecodeErrorV1<String>> {
         use NativeDecodeErrorV1::Decode;
-        let claim = fp_claim_id_v3(original);
+        let claim = {
+            let _identity_scratch = reserve_original_hash_writers_v2(original, &header.job_context)?;
+            fp_claim_id_v3(original)
+        };
         let class = original.job.class_id;
         crate::palw_tir_container_v1::palw_tir_bound_container_v1(parent, class)
             .ok_or_else(|| Decode("plain Batch original has no accepted container".into()))?;
@@ -133,18 +173,30 @@ impl PlainBatchOriginalProjectionV2 {
             original.trace_root,
             maximum_leaves,
         )?;
-        let tokenizer = PlainBatchTokenizerV2::derive_v2(parent, extras, at, original, &source, prompt).map_err(Decode)?;
-        let original_facts = NativeTfp1PublicOriginalFactsV1::derive_v1(original, &source)
-            .map_err(|why| Decode(format!("plain Batch TFP1 facts: {why:?}")))?;
-        let output =
-            PlainBatchOutputV2::derive_v2(original, &source, verify_cost, verify_daa).map_err(|why| Decode(format!("{why:?}")))?;
+        let tokenizer = PlainBatchTokenizerV2::derive_at_clocks_v2(
+            parent,
+            extras,
+            candidate_daa,
+            candidate_blue_score,
+            original,
+            &source,
+            prompt,
+        )?;
+        let (original_facts, output) = {
+            let _identity_scratch = reserve_original_hash_writers_v2(original, &header.job_context)?;
+            let facts = NativeTfp1PublicOriginalFactsV1::derive_v1(original, &source)
+                .map_err(|why| Decode(format!("plain Batch TFP1 facts: {why:?}")))?;
+            let output =
+                PlainBatchOutputV2::derive_v2(original, &source, verify_cost, verify_daa).map_err(|why| Decode(format!("{why:?}")))?;
+            (facts, output)
+        };
         let numeric = numerical_batch_projection_v1(claim, prompt, &source, record, layout, cover, maximum_ranges)?;
         Ok(Self {
             claim,
             source,
             original_facts,
             tokenizer,
-            acceptance_clocks: (at.daa_score, at.blue_score),
+            acceptance_clocks: (candidate_daa, candidate_blue_score),
             prompt,
             numeric,
             output,
@@ -158,7 +210,7 @@ impl PlainBatchOriginalProjectionV2 {
     /// notice/row/repair consumers before enabling the complete profile.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_native_selection_v3(
-        mut self,
+        self,
         parent: &PalwChainStateV2,
         extras: &PalwTransitionExtrasV1,
         params: &PalwStateParamsV2,
@@ -166,29 +218,57 @@ impl PlainBatchOriginalProjectionV2 {
         original: &PalwFreePromptCommitmentV3,
         policy: PlainSelectionBudgetV3,
     ) -> Result<Self, NativeDecodeErrorV1<String>> {
+        self.with_native_selection_at_clocks_v3(parent, extras, params, at.daa_score, at.blue_score, original, policy)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_native_selection_at_clocks_v3(
+        mut self,
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        params: &PalwStateParamsV2,
+        candidate_daa: u64,
+        candidate_blue_score: u64,
+        original: &PalwFreePromptCommitmentV3,
+        policy: PlainSelectionBudgetV3,
+    ) -> Result<Self, NativeDecodeErrorV1<String>> {
         use NativeDecodeErrorV1::Decode;
         if self.selection.is_some()
-            || self.acceptance_clocks != (at.daa_score, at.blue_score)
-            || self.claim != fp_claim_id_v3(original)
+            || self.acceptance_clocks != (candidate_daa, candidate_blue_score)
             || parent.claim(&self.claim).is_some()
         {
             return Err(Decode("Selection projection substitutes original or prospective clocks".into()));
         }
+        {
+            let _identity_scratch = reserve_original_hash_writers_v2(original, &self.source.header_v1().job_context)?;
+            if self.claim != fp_claim_id_v3(original) {
+                return Err(Decode("Selection projection substitutes original or prospective clocks".into()));
+            }
+        }
         // The legacy helper has a conservative sentinel for absent registry.
         // A new profile must require actual native role data, not price that
         // sentinel as if it described a real custody population.
-        if !params.panel_v3_rule_at(at.daa_score) && extras.model_registry.is_none() {
+        if !params.panel_v3_rule_at(candidate_daa) && extras.model_registry.is_none() {
             return Err(Decode("Selection projection has no native custody policy".into()));
         }
-        let tokenizer = PlainBatchTokenizerV2::derive_v2(parent, extras, at, original, &self.source, self.prompt).map_err(Decode)?;
+        let tokenizer = PlainBatchTokenizerV2::derive_at_clocks_v2(
+            parent,
+            extras,
+            candidate_daa,
+            candidate_blue_score,
+            original,
+            &self.source,
+            self.prompt,
+        )?;
         if tokenizer != self.tokenizer {
             return Err(Decode("Selection projection changes the authenticated parent tokenizer registration".into()));
         }
-        let roles = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(at.daa_score, params, extras)
+        let roles = crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(candidate_daa, params, extras)
             .map_err(|why| Decode(format!("Selection native custody: {why:?}")))?;
         let record = parent.tir_class_v1(&original.job.class_id).ok_or_else(|| Decode("Selection class absent".into()))?;
         let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(parent, original.job.class_id)
             .ok_or_else(|| Decode("Selection layout absent".into()))?;
+        let _identity_scratch = reserve_original_hash_writers_v2(original, &self.source.header_v1().job_context)?;
         self.selection = Some(PlainSelectionBranchV3::derive_v3(original, &self.source, record, layout, roles, policy)?);
         Ok(self)
     }
@@ -479,11 +559,12 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
             terminal_daa: 4,
         },
     };
-    let derive = |at: &PalwBlockContextV2| {
-        PlainBatchOriginalProjectionV2::derive_v2(
+    let derive = |daa, blue| {
+        PlainBatchOriginalProjectionV2::derive_at_clocks_v2(
             parent,
             extras,
-            at,
+            daa,
+            blue,
             fixture.frame.original_v1(),
             fixture.frame.header_v1(),
             PalwPromptIdsFormV1::Flat,
@@ -499,14 +580,15 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
             tokenizer_budget.verification,
             1,
         )
-        .unwrap()
     };
     let quote_price = |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
     let altered_price = |_, bytes| Ok(ServiceCost { bytes, work: 2, io: 1, controls: 1 });
     let profile = Hash64::from_u64_word(830);
     let a = Hash64::from_u64_word(831);
     let b = Hash64::from_u64_word(832);
-    let projection = derive(at);
+    let projection = derive(at.daa_score, at.blue_score).unwrap();
+    assert_eq!(projection.source_v1().header_v1(), fixture.frame.header_v1());
+    assert!(derive(at.daa_score, parent.last_point().unwrap().blue_score).is_err());
     let terms_for = |projection: &PlainBatchOriginalProjectionV2, daa: u64| {
         projection.compile_prospective_original_terms_v2(profile, daa + 11_000, costs, tokenizer_budget, storage, quote_price).unwrap()
     };
@@ -532,7 +614,7 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
         projection.reserve_before_allocation_v2(&mut unchanged, a, &terms, altered_price),
         Err(BatchCourtErrorV1::CaseGraph)
     ));
-    let rebased = derive(&PalwBlockContextV2 { blue_score: at.blue_score + 1, ..*at });
+    let rebased = derive(at.daa_score, at.blue_score + 1).unwrap();
     assert!(matches!(rebased.reserve_before_allocation_v2(&mut unchanged, a, &terms, quote_price), Err(BatchCourtErrorV1::CaseGraph)));
     assert_eq!(unchanged, original_book);
     let rebased_terms = terms_for(&rebased, at.daa_score);
@@ -574,14 +656,23 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
         maximum_ranges_per_role: 512,
         maximum_material_visits: 1_000_000,
     };
-    let make_selection = |extras: &PalwTransitionExtrasV1| {
-        derive(at).with_native_selection_v3(parent, extras, params, at, fixture.frame.original_v1(), selection_policy)
+    let make_selection = |extras: &PalwTransitionExtrasV1, blue| {
+        derive(at.daa_score, at.blue_score).unwrap().with_native_selection_at_clocks_v3(
+            parent,
+            extras,
+            params,
+            at.daa_score,
+            blue,
+            fixture.frame.original_v1(),
+            selection_policy,
+        )
     };
-    let selected = make_selection(&selection_extras).unwrap();
+    let selected = make_selection(&selection_extras, at.blue_score).unwrap();
+    assert!(make_selection(&selection_extras, at.blue_score + 1).is_err());
     assert_eq!(selected.selection.as_ref().unwrap().role_count_v3(), 3);
     let mut absent_policy = selection_extras.clone();
     absent_policy.model_registry = None;
-    assert!(make_selection(&absent_policy).is_err());
+    assert!(make_selection(&absent_policy, at.blue_score).is_err());
     let selection_costs = NativeBatchDeliveryCostsV1 {
         terminal: ServiceCost {
             bytes: 2_000_000,
@@ -645,5 +736,16 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
         fixture,
         at,
         true,
+    );
+    crate::palw_positive_contract_v2::tfp1_original::native_plan::tests::exercise_native_plan_v3(
+        parent,
+        &selection_extras,
+        params,
+        at,
+        fixture,
+        selection_policy,
+        selection_costs,
+        tokenizer_budget,
+        storage,
     );
 }
