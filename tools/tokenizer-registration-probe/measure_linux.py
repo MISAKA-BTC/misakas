@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run prepared parser cases in fresh processes; preserve all raw evidence."""
+"""Run prepared tokenizer measurements in fresh processes; preserve raw evidence."""
 import argparse
 import hashlib
 import json
@@ -39,19 +39,25 @@ def main():
     parser.add_argument("cases", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--source-commit", required=True)
-    parser.add_argument("--mode", choices=("parser", "native"), default="parser")
+    parser.add_argument("--core-source-commit", help="Core revision when reusing an identified release library")
+    parser.add_argument("--mode", choices=("parser", "native", "native-multipass", "scanner"), default="parser")
+    parser.add_argument("--source-count", type=int, default=780, choices=range(1, 781))
     parser.add_argument("--repetitions", type=int, default=5, choices=range(1, 101))
     args = parser.parse_args()
     binary, cases, output = args.binary.resolve(), args.cases.resolve(), args.output.resolve()
     output.mkdir()  # Existing evidence is never overwritten.
     record = {
-        "schema": "palw-tokenizer-parser-linux-measurement-v1",
+        "schema": "palw-tokenizer-linux-measurement-v2",
         "sourceCommit": args.source_commit,
+        "coreSourceCommit": args.core_source_commit or args.source_commit,
+        "sourceCommitScope": "measurement tool; core separately identified" if args.core_source_commit else "entire source",
         "binarySha256": digest(binary),
         "runnerSha256": digest(Path(__file__)),
         "before": observation(),
         "runs": [],
-        "scope": ("Parser" if args.mode == "parser" else "Native replay of seeded accepted-parent bundles")
+        "scope": {"parser": "Parser", "native": "Two-pass native replay of seeded accepted-parent bundles",
+                  "native-multipass": "Five-pass native replay of seeded accepted-parent bundles",
+                  "scanner": "Source/candidate scanner only; no native fold or parser"}[args.mode]
                  + "; shared host, default affinity, nice 10. Not complete native service qualification.",
         "mode": args.mode,
         "publicProfileSelected": False,
@@ -59,9 +65,13 @@ def main():
     }
     env = dict(os.environ, LC_ALL="C")
     jobs = [(case, case, ["run", str(cases), case, str(args.repetitions)]) for case in CASES]
-    if args.mode == "native":
-        jobs = [(case, f"{case}-{iteration}", ["native-run", str(cases / case)])
+    if args.mode in ("native", "native-multipass"):
+        command = "native-run" if args.mode == "native" else "native-run-multipass"
+        jobs = [(case, f"{case}-{iteration}", [command, str(cases / case)])
                 for case in ("actual", "maximum_raw") for iteration in range(args.repetitions)]
+    elif args.mode == "scanner":
+        jobs = [("actual", f"scanner-{iteration}", ["native-scan-max", str(cases / "actual"), str(args.source_count)])
+                for iteration in range(args.repetitions)]
     for case, name, arguments in jobs:
         command = ["/usr/bin/time", "-v", "-o", str(output / (name + ".time")),
                    "nice", "-n", "10", str(binary), *arguments]
