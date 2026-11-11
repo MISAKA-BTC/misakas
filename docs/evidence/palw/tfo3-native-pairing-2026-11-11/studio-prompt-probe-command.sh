@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+rustc --edition 2024 --crate-name studio_prompt_probe -C debuginfo=0 -C strip=symbols -L dependency=/tmp/misaka-public-contract-test.fd7edK/debug/deps --extern borsh=/tmp/misaka-public-contract-test.fd7edK/debug/deps/libborsh-e82fef55f5aafded.rlib --extern kaspa_consensus_core=/tmp/misaka-public-contract-test.fd7edK/debug/deps/libkaspa_consensus_core-df4a68e53e7d5eff.rlib --extern misaka_palw_base0=/tmp/misaka-public-contract-test.fd7edK/debug/deps/libmisaka_palw_base0-12cb1d1e4d9faaee.rlib /tmp/t12-studio-prompt-binding-probe-20261111.rs -o /tmp/t12-studio-prompt-probe-20261111
+/tmp/t12-studio-prompt-probe-20261111 /tmp/misaka-studio-tfp1-native.k1U16c/job.frame /tmp/misaka-studio-tfp1-native.k1U16c/worker-result.frame /Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json

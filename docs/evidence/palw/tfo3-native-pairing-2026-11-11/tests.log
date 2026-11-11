@@ -1,0 +1,128 @@
+
+FILTER tfo3_
+
+running 4 tests
+test palw_tir_funded_original_envelope_v3::tests::tfo3_total_stays_within_existing_funded_original_ceiling ... ok
+test palw_tir_funded_original_envelope_v3::tests::tfo3_preserves_literal_tfo1_tfo2_and_companion_bytes ... ok
+test palw_tir_funded_original_envelope_v3::tests::tfo3_pairing_pins_the_actual_transaction_and_companion_for_each_outer_view ... ok
+test palw_tir_funded_original_envelope_v3::tests::tfo3_refuses_malformed_without_falling_through ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6004 filtered out; finished in 0.22s
+
+
+FILTER tfp1_public_original_pairs_exact_native_identity_before_and_after_signing
+
+running 1 test
+test palw_positive_contract_v2::tfp1_original::tests::tfp1_public_original_pairs_exact_native_identity_before_and_after_signing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6007 filtered out; finished in 0.40s
+
+
+FILTER palw_tir_funded_original_envelope_v1::
+
+running 6 tests
+test palw_tir_funded_original_envelope_v1::tests::bounded_decoding_rejects_lengths_versions_tails_and_identity_substitution ... ok
+test palw_tir_funded_original_envelope_v1::native_scan_tests::funded_original_unframed_native_scanner_bounds_and_retained_codec ... ok
+test palw_tir_funded_original_envelope_v1::tests::roundtrip_preserves_literal_legacy_original_claim_and_signatures ... ok
+test palw_tir_funded_original_envelope_v1::tests::accounting_outer_keeps_actual_funding_identity_and_rejects_fee_output_substitution ... ok
+test palw_tir_funded_original_envelope_v1::tests::new_framing_never_downgrades_to_legacy_even_when_malformed_or_truncated ... ok
+test palw_tir_funded_original_envelope_v1::tests::actual_own_output_and_once_only_fee_are_bound_to_the_identical_carrier ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6002 filtered out; finished in 0.14s
+
+
+FILTER palw_tir_funded_original_envelope_v2::
+
+running 2 tests
+test palw_tir_funded_original_envelope_v2::signature_alias_tests::tfo2_wire_v3_preserves_legacy_bytes_and_reserves_expanded_signature_memory ... ok
+test palw_tir_funded_original_envelope_v2::signature_alias_tests::tfo2_wire_v3_alias_restores_both_exact_signatures_and_checks_both_authorities ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6006 filtered out; finished in 0.26s
+
+
+FILTER funded_escrow_provisional_lock_names_only_a_paired_tfo1_own_output
+
+running 1 test
+test palw_funded_escrow_v1::tests::funded_escrow_provisional_lock_names_only_a_paired_tfo1_own_output ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6007 filtered out; finished in 0.00s
+
+
+FILTER g14_native_funded_batch_candidate_v1
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_native_funded_batch_candidate_v1 has been running for over 60 seconds
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_native_funded_batch_candidate_v1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6007 filtered out; finished in 83.55s
+
+
+FILTER family_supplier_ordinary_native_original_and_financial_transitions
+
+running 1 test
+[family-native-acceptance-clock] birth=100 x3Hard=Some(400) courtClockV2From=Some(0) nativeHard=10100 collect=3115 nativeMaterial=20100 requiredMaterial=20100
+native family calendar role=ParameterAndPrompt native_span=4 targets=1 transfers=3 holding=12 total=15 first=100 hard=10100 ttl=720
+native family target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 maxbytes=28 transfers=3
+native family calendar role=SemanticTable native_span=4 targets=1 transfers=3 holding=11 total=14 first=100 hard=10100 ttl=720
+native family target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 maxbytes=98 transfers=3
+native family calendar role=TokenizerArtifact native_span=4 targets=1 transfers=3 holding=11 total=14 first=100 hard=10100 ttl=720
+native family target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd maxbytes=69 transfers=3
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions has been running for over 60 seconds
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[family-finance-geometry] role=ParameterAndPrompt targets=1 materialPackets=3 retainedBytes=14480 fullJournalBytes=62656 queryHeapBytes=13150
+[family-finance-geometry] role=TokenizerArtifact targets=1 materialPackets=3 retainedBytes=14480 fullJournalBytes=62656 queryHeapBytes=13150
+[family-finance-geometry] role=SemanticTable targets=1 materialPackets=3 retainedBytes=14480 fullJournalBytes=62656 queryHeapBytes=13150
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[independent-draft-complete-quote] birth=7580 bookPackets=7486 bookHeap=63608536 bookBytes=3635557 localWorkspace=261705258 oldHolding=10876 ownHolding=6 transfers=2 oldReserve=Err(NoCapacity) ownReserve=Ok(())
+[independent-draft-native-calendar] earliestBirth=102 selectedBirth=7580 span=4 TTL=720 hard=10100 existingPackets=7486
+[independent-draft-warmed-complete-calendar] birth=7580 first=7584 holding=6 packets=8 reserve=Ok(())
+[independent-draft-complete-quote] birth=7588 bookPackets=7494 bookHeap=63673944 bookBytes=3639205 localWorkspace=261974186 oldHolding=10888 ownHolding=6 transfers=2 oldReserve=Err(NoCapacity) ownReserve=Ok(())
+[independent-draft-complete-quote] birth=8309 bookPackets=7502 bookHeap=63739352 bookBytes=3642853 localWorkspace=262243114 oldHolding=10899 ownHolding=6 transfers=2 oldReserve=Err(NoCapacity) ownReserve=Ok(())
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=116 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=3 familyHolding=12 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+[native-family-temporal-capacity] claim=fd92acd6361a6f0ab829ae1830051bdec52bc9f90c68b021b783a95d45697551d72e3d9a55b9bfcf272ef3366497685c2709602af2abf7b67cfb997b2e0fbdfb materialBarrier=140 earliestOriginalSource=Some(10100) earliestSigner=Some(934) familyTransfers=9 familyHolding=34 nativeBudget=ServiceCost { bytes: 34000, work: 13, io: 1, controls: 1 }
+[native-family-target-window] role=ParameterAndPrompt target=6d1e7e54526c5f00addeb5ec2934ead7a89378e2be13f9ea6abd827790d174204f8adcb7705ad23d556a6194786b76a183ce8b6d4b649fbf5836cbe8e35e1f22 first=104 stride=4 transfers=3 finish=112 afterFinish=116
+[native-family-target-window] role=SemanticTable target=b2c36105f513b92c49d337a832a407ff768de3fdaf82afedeb4ae95a2e1b9fe0d6d99ba76d09efa7a2fe3a63c52d7823c049174cf3e43cbcd693422677439ab9 first=116 stride=4 transfers=3 finish=124 afterFinish=128
+[native-family-target-window] role=TokenizerArtifact target=680d89dbec629ded9fc094322eaa8867a3b2adcf8b6043b9678255ecef90f60f485b82b37193d4c843e89f0ca68604a9d5c6ab5310ac51573f46c803037a00bd first=128 stride=4 transfers=3 finish=136 afterFinish=140
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6007 filtered out; finished in 352.72s
+

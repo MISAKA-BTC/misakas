@@ -1,0 +1,4 @@
+
+thread 'main' (1844261) panicked at /tmp/t12-studio-prompt-binding-probe-20261111.rs:15:122:
+called `Result::unwrap()` on an `Err` value: WorkerResultMismatch("the returned job does not bind the returned token ids")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -1,0 +1,18 @@
+{
+  "base": "7bee42e55e32db6945bfebd0372a429dfb608e2f",
+  "files": {
+    "consensus/core/src/lib.rs": "a05b9dce2ea448d2a179b8cfd56aeeaa0ddf9fc017ad9b86ea8dd8853c926185",
+    "consensus/core/src/palw_funded_escrow_v1.rs": "b3e3d0b23eeb198c6aa40f92ec65519ab3acac921a7a1de1b3aeca16e559a213",
+    "consensus/core/src/palw_funded_original_coordinator_fold_v1.rs": "6127d17431823ff6ecb0266d608e811253e13d18c8f89b45fd8d73adcfefce65",
+    "consensus/core/src/palw_funded_original_coordinator_native_test_block.rs": "84f9871165cb317b0b0cdaa3cd2f07314fa656c34cc4e315395b50b79fc875de",
+    "consensus/core/src/palw_funded_original_coordinator_v1.rs": "894998a87b223e854ed8e32803e7fb17cca5f7fb10e72c554f86f805e02c867b",
+    "consensus/core/src/palw_positive_contract_v2/tfp1_original.rs": "e662bb1ba9132d9563029ece8ed3be2cfbdc71a1abaa04aca15200ae0cd81cc5",
+    "consensus/core/src/palw_tir_funded_original_envelope_v1.rs": "278d1d56f3dcdeebbf2f852f2fd5d5c339ef9c65063423e0afac7bfb45b10d89",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "4a427556cf0ff949d76c67cf0b31acd97c3993bd045d4dfb6c27f6acd2c93153",
+    "consensus/core/src/palw_tir_public_source_v1.rs": "f0d9b7b4260da34f37dd9be97abc7c2223d7220bc30c5d4d680b31056fa1326a",
+    "consensus/src/pipeline/virtual_processor/processor/palw_accept.rs": "109954e73c3a53e80420cc819f49600d08dc12aa9e38aa96841d964aca9a88a7",
+    "consensus/src/pipeline/virtual_processor/utxo_validation.rs": "78085a2cacc0b2270ef5e69f925dc1ced42d9d91871d564e41b21fd613b6291b",
+    "consensus/src/processes/transaction_validator/tx_validation_in_isolation.rs": "9aa5128cd82f436f6f1c476d0c636d0830adc62ca4500cbc3e6c7731415d4d53",
+    "consensus/core/src/palw_tir_funded_original_envelope_v3.rs": "5fc3c86e47d1e44599059feb4aad43a11e02abcbb4590e0336d8692d146d4705"
+  }
+}

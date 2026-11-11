@@ -1,0 +1,9 @@
+
+running 4 tests
+test palw_tir_funded_original_envelope_v3::tests::tfo3_total_stays_within_existing_funded_original_ceiling ... ok
+test palw_tir_funded_original_envelope_v3::tests::tfo3_preserves_literal_tfo1_tfo2_and_companion_bytes ... ok
+test palw_tir_funded_original_envelope_v3::tests::tfo3_pairing_pins_the_actual_transaction_and_companion_for_each_outer_view ... ok
+test palw_tir_funded_original_envelope_v3::tests::tfo3_refuses_malformed_without_falling_through ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6004 filtered out; finished in 0.22s
+

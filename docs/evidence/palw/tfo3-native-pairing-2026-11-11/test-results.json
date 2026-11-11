@@ -1,0 +1,41 @@
+{
+  "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-698db0d76a225778",
+  "binary_sha256": "22889979e4807df6c262239acf333d74bfcd6acaf52156c9cec303a54f7c7f7f",
+  "results": [
+    {
+      "filter": "tfo3_",
+      "exit": 0,
+      "elapsed_seconds": 3.329
+    },
+    {
+      "filter": "tfp1_public_original_pairs_exact_native_identity_before_and_after_signing",
+      "exit": 0,
+      "elapsed_seconds": 0.428
+    },
+    {
+      "filter": "palw_tir_funded_original_envelope_v1::",
+      "exit": 0,
+      "elapsed_seconds": 0.171
+    },
+    {
+      "filter": "palw_tir_funded_original_envelope_v2::",
+      "exit": 0,
+      "elapsed_seconds": 0.287
+    },
+    {
+      "filter": "funded_escrow_provisional_lock_names_only_a_paired_tfo1_own_output",
+      "exit": 0,
+      "elapsed_seconds": 0.03
+    },
+    {
+      "filter": "g14_native_funded_batch_candidate_v1",
+      "exit": 0,
+      "elapsed_seconds": 83.582
+    },
+    {
+      "filter": "family_supplier_ordinary_native_original_and_financial_transitions",
+      "exit": 0,
+      "elapsed_seconds": 352.749
+    }
+  ]
+}

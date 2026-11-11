@@ -1,0 +1,107 @@
+{
+  "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-698db0d76a225778",
+  "binary_sha256": "22889979e4807df6c262239acf333d74bfcd6acaf52156c9cec303a54f7c7f7f",
+  "results": [
+    {
+      "filter": "tfo3_",
+      "exit": 0,
+      "elapsed_seconds": 3.329,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "filter": "tfp1_public_original_pairs_exact_native_identity_before_and_after_signing",
+      "exit": 0,
+      "elapsed_seconds": 0.428,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "filter": "palw_tir_funded_original_envelope_v1::",
+      "exit": 0,
+      "elapsed_seconds": 0.171,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "filter": "palw_tir_funded_original_envelope_v2::",
+      "exit": 0,
+      "elapsed_seconds": 0.287,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "filter": "funded_escrow_provisional_lock_names_only_a_paired_tfo1_own_output",
+      "exit": 0,
+      "elapsed_seconds": 0.03,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "filter": "g14_native_funded_batch_candidate_v1",
+      "exit": 0,
+      "elapsed_seconds": 83.582,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "filter": "family_supplier_ordinary_native_original_and_financial_transitions",
+      "exit": 0,
+      "elapsed_seconds": 352.749,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "tests_passed": 16,
+  "source_commit": "8d3eb0a6e",
+  "scope": "local transport and preparation, not complete native paired admission",
+  "core_rpc_build": {
+    "passed": true,
+    "duration": "4m 28s"
+  },
+  "node_check": {
+    "passed": true,
+    "duration": "58.48s"
+  },
+  "public_quote_or_admission": false,
+  "activation": false,
+  "main_push": false,
+  "documentation_checks": {
+    "passed": false,
+    "existing_issue_counter_unchanged": true,
+    "current_issue_counter_sha256": "f47503d7ffeb46801258b72a5535bb2e0dbf74f62b5776057ca1cd3e8873e577",
+    "new_evidence_link_issues": 0,
+    "issue_occurrences_relative_to_existing_baseline": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  },
+  "artifacts_sha256": {
+    "adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd",
+    "build.log": "6cb1c8a91d9ef8ae5cc82cb8dda1a2b742f3f072e2a180415ca12d597b3f291f",
+    "consensus-check.log": "958f08e0b543c43591ac99473837565590aaca14e87c6308228d9660af684b18",
+    "docs-check.log": "caed4ae875952170a8c293db85b4a576a5e782bf3c11b4716f29954c1d70b6d6",
+    "intermediate-carrier-build.log": "736f5bbabb6d064a9ce8406c62438a56434655aecce7f5392a6afacc61dda564",
+    "intermediate-carrier-tests.log": "b86b4dd835aff4728c76d6505d87921b670192187d6891add3f38c2ddbf9f6b1",
+    "intermediate-native-test.log": "e5542294032aa15de03fed2b5e164351aec9d4371f742f836a480ae515c3e91c",
+    "intermediate-prompt-build.log": "3579f482ecd2eb2c2b650153996fcb9bedd61048add128b48b0ae9f89b00f0b9",
+    "intermediate-prompt-test.log": "2abed1b835ce1e96d2bef7d1c7f1f9c2f6deb7b10ef56a9b7e110d9531c8d606",
+    "rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "studio-job.frame": "68dc6a0d70aef7835e5f28f9c0b676b4c169298487ff9824909505f1a6a69abb",
+    "studio-prompt-initial.log": "abfabc774af3b4ea0f806b3d67aab1455aa6acb3bcffd847143a48ee1a6696f5",
+    "studio-prompt-probe-command.sh": "99909a292595a7967adcaf9878a05083283127fa07df4562f3ce4ec5a73e255d",
+    "studio-prompt-probe.rs": "b862365c2902bcad8c2df9095ab3b926a1b563c23525789c4e0dadc5d70e6915",
+    "studio-prompt-verified.log": "6e3774985964023bf713c247b65b720e6d72e2aac339ecbade0e455591b2a9f0",
+    "studio-trace-scheme.log": "6608d4bcc83b6e8d18ff4e5d4aeea7c6c8fbc3e52a28bb04e6d90ec34c5ad0b8",
+    "studio-worker-result.frame": "e2577967c1c08517ef98a788c075a5a618346d76c25171ff53ab9d67a3b953d8",
+    "tests.log": "f8c3d6391cd94a00e61aa92f6cfd6174e5b34cbea7cd51332952e3911440e51c"
+  }
+}
