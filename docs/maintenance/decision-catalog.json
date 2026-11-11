@@ -2120,6 +2120,22 @@
       "title": "RFC-0050 — 公開資料とモデル未保有の一人検証",
       "topic": "Verification / court",
       "status": "Accepted design / 公開資料・モデル未保有の一人検証、未有効化"
+    },
+    {
+      "kind": "rfc",
+      "number": "0054",
+      "path": "docs/rfc/0054-public-t12-original-admission-profile.md",
+      "title": "RFC-0054 — 公開T12 original受付profileの具体案",
+      "topic": "Consensus / architecture",
+      "status": "Draft / 未採択・未有効化"
+    },
+    {
+      "kind": "adr",
+      "number": "0222",
+      "path": "docs/adr/0222-public-t12-original-admission-profile.md",
+      "title": "ADR-0222 — 公開T12 original受付profileの提案を分離する",
+      "topic": "Consensus / architecture",
+      "status": "Draft / 未採択・未有効化"
     }
   ]
 }

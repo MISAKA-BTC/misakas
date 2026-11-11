@@ -329,6 +329,18 @@
       "kind": "adr",
       "id": "ADR-0221",
       "path": "docs/adr/0221-additional-model-burn-pause.md"
+    },
+    {
+      "kind": "rfc",
+      "id": "RFC-0054",
+      "path": "docs/rfc/0054-public-t12-original-admission-profile.md",
+      "status": "DRAFT_NOT_ADOPTED"
+    },
+    {
+      "kind": "adr",
+      "id": "ADR-0222",
+      "path": "docs/adr/0222-public-t12-original-admission-profile.md",
+      "status": "DRAFT_NOT_ADOPTED"
     }
   ],
   "editorial_date": "2026-11-09",

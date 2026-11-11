@@ -6,6 +6,7 @@
 
 ## Consensus / architecture
 
+- [RFC-0054 — 公開T12 original受付profileの具体案](0054-public-t12-original-admission-profile.md)
 - [RFC-0001 — PALW 推論サーフェスの欠落機能 — 決定論的な生成制御・サービング・入力拡張の設計](0001-palw-inference-surface-gaps.md)
 - [RFC-0005 — PALW VM（不採用）](0005-palw-ml-vm.md)
 - [RFC-0008 — PALW EXEC lane — claim-backed work slices and transaction execution](0008-palw-claim-backed-consensus-blocks.md)

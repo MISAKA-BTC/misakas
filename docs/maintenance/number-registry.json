@@ -137,6 +137,15 @@
       "adopted_by": "user",
       "status": "ADOPTED_DESIGN_NOT_ACTIVATED",
       "audit": "Current checkout and git log --all path audit found no previous RFC0053/ADR0221; unfetched refs not audited."
+    },
+    {
+      "date": "2026-11-12",
+      "rfc": "0054",
+      "rfc_path": "docs/rfc/0054-public-t12-original-admission-profile.md",
+      "adr": "0222",
+      "adr_path": "docs/adr/0222-public-t12-original-admission-profile.md",
+      "status": "DRAFT_NOT_ADOPTED",
+      "audit": "Current checkout and git log --all path audit found no previous RFC0054/ADR0222; unfetched refs not audited."
     }
   ]
 }

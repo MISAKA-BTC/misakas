@@ -62,3 +62,4 @@
 | RFC-0051 | [受付前 tokenizer 資料の有料搬送と native 登録](0051-funded-preclaim-tokenizer-registration.md) | Accepted design / 有料 tokenizer 登録、未有効化 |
 | RFC-0052 | [Hugging Face固定モデル取得とclaim固有資料の分離](0052-hugging-face-model-acquisition-and-claim-materials.md) | 取得認定はRFC-0053で置換、資料分離は維持／未有効化 |
 | RFC-0053 | [追加モデルのburn停止・解除](0053-additional-model-burn-pause.md) | Accepted design / 未有効化 |
+| RFC-0054 | [公開T12 original受付profileの具体案](0054-public-t12-original-admission-profile.md) | Draft / 未採択・未有効化 |

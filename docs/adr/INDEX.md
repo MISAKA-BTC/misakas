@@ -225,3 +225,4 @@
 | ADR-0219 | [受付前 tokenizer 資料の有料 native 登録案](0219-funded-preclaim-tokenizer-registration.md) | Accepted / 有料 tokenizer 登録、未有効化 |
 | ADR-0220 | [Hugging Face固定モデル取得とclaim固有資料の分離](0220-hugging-face-model-acquisition-and-claim-materials.md) | 取得認定はADR-0221で置換、資料分離は維持／未有効化 |
 | ADR-0221 | [取得可否認定を追加モデルのburn停止へ置換](0221-additional-model-burn-pause.md) | Accepted design / 未有効化 |
+| ADR-0222 | [公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md) | Draft / 未採択・未有効化 |

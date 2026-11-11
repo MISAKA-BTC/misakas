@@ -6,6 +6,7 @@
 
 ## Consensus / architecture
 
+- [ADR-0222 — 公開T12 original受付profileの提案を分離する](0222-public-t12-original-admission-profile.md)
 - [ADR-0005 — Mass / DoS policy for ML-DSA P2PKH transactions](0005-mass-policy.md)
 - [ADR-0007 — Layered PoW (Layer 0 quantum-resistant finalizer + Layer 1 ASIC-hard tag)](0007-layered-pow.md)
 - [ADR-0009 — DNS Probabilistic Finality Overlay](0009-dns-probabilistic-finality.md)

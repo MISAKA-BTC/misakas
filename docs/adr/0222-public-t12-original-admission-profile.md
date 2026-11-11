@@ -1,0 +1,28 @@
+# ADR-0222 — 公開T12 original受付profileの提案を分離する
+
+Status: **Draft / NOT_ADOPTED_NOT_ACTIVATED**
+Date: 2026-11-12
+RFC: [RFC-0054](../rfc/0054-public-t12-original-admission-profile.md)
+Candidate values: [公開T12初期設定候補](../design/palw/integration/public-t12-profile-candidate-2026-11-12.md)
+
+## 提案する判断
+
+未確定のprofileについてユーザーから具体案作成を依頼された。新profileのanchorに基づく署名scope、byte-DAA保存料金、受付枠の占有・解放を、数値表だけで暗黙に採用せずRFC-0054のレビュー対象とする。現在は未採択であり、ユーザーの依頼・ゴール再開・文書commitを承認記録に代用しない。
+
+目的はStudioの同一claimを公開T12の受付入口からFinal・当選権利消費・ブロック受理へつなぐこと。旧値や任意hashで受付だけを許可すると、その先の資金・予約・署名契約が不足し得る。一方、未確定の公開値を理由に本経路への接続を放置することもしない。既存設計への実装は継続し、変更候補は明示した引数と版に分離する。
+
+## 採用理由の候補と不採用案
+
+原FPのanchorを使うscopeは署名時に実在し、実包含時には現在のcanonical prefixから再検査できる。保存をbyte-DAAで計上する案は保持期間を価格へ反映するが、既存flat価格との差を精算まで実装する必要がある。同時1件は初期の評価対象を限定し、全claimの停止や安全性保証を意味しない。
+
+旧料金・旧容量の無検証流用、quote時の架空AcceptedOrigin、旧forkのburnの持越しは採らない。モデル取得証明・モデル審査・Minerによる重み全量配信を必要条件として戻さない。RFC-0053のburn停止、PRINCIPLES、claim単位の独立承認と局所courtを維持する。
+
+## レビュー・採択・残余リスク
+
+数値案とRFC/ADRの整合性について既存コードとの照合レビューを実施し、original feeに含む保存費の二重計上を避ける表記へ修正した。残件を含む最終設計レビュー・明示採択は未完了。承認者・採択日は未記入。変更対象は新profileだけで、既存RFC/ADRの規範置換はまだない。
+
+採択前の残件は署名encoding、将来carrierの資金/精算対応、第三者枠の競合規則、原notice末までの資料要求・後続検査の予約である。実装・測定の残件は最大合法混合負荷での容量、資本の十分性、全writerの原子性と回復、同一公開claimのFinal・権利消費・block受理である。価格候補に経済的安全性の実証はない。
+
+採択するときはRFC-0054と数値案の対象を明記する。公開有効化は全値と移行条件を別に確認する。旧claimの再解釈や現行presetの無断変更は行わない。設計凍結の例外として現行規範の変更が必要となる場合は、対象節・理由・明示承認を追記する。
+
+番号は現在checkoutと取得済みlocal refsのpath履歴でRFC-0054/ADR-0222が未使用であることを確認した。未取得remote refsは未監査。統合RFC20冊・ADR50冊を増やすものではなく、post-consolidationのDraftとして登録する。
