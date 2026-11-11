@@ -20,6 +20,8 @@
 
 ## 接続上の残件
 
+後続読解による訂正: 以下の期限前Selection固定という接続案は、受理済みMaterialRequestの継続と初回noticeを区別できていなかった。[同一資料caseの継続予約](../selection-material-continuation-2026-11-11/README.md)を現行の接続方針とする。期限前の初回要求と、同じcaseの取得後行指定を分ける。以下は`5910e7ac4`時点の見立てとして残す。
+
 この認証値はaccepted noticeでも支払済みservice権限でもない。writerは実行中prefixからcaseを再導出し、standing・実費・割当DAA・rankごとの一回性・保存とrollbackを検査する必要がある。
 
 現在の[共通Batch予約](../../../../consensus/core/src/palw_batch_court_v1.rs)は元notice期限の翌DAA以降にOpen等を配置する。そのOpenを期限内Selection noticeの代替にしない。先行ManifestRequestとSelection noticeの同時受理、または期限前の因果関係を持つ予約と受理を、実費・共同checkpointとともに接続することが次の実装箇所である。全量モデル配信やHF取得可否の裁定は追加しない。

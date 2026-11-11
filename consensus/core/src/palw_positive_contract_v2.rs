@@ -670,19 +670,47 @@ impl PreparedDrawnPublicManifestCaseV1 {
         state: &crate::palw_state_v2::PalwChainStateV2,
         point: &crate::palw_state_v2::PalwBlockContextV2,
     ) -> Result<Option<([u8; PendingManifestCaseRecordV1::KEY_BYTES], &PendingManifestCaseRecordV1)>, ContractError> {
+        self.storage_row_at_points_v1(state, point, state.last_point().ok_or(ContractError::Scope)?)
+    }
+
+    /// Validate the request in the active native fold before its last-point
+    /// marker advances. Original admission and draw must already be rooted.
+    /// The caller must separately verify the paid carrier and booked slot.
+    pub(crate) fn storage_row_at_v1(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; PendingManifestCaseRecordV1::KEY_BYTES], &PendingManifestCaseRecordV1)>, ContractError> {
+        let last = state.last_point().ok_or(ContractError::Scope)?;
+        if point != last && (point.blue_score <= last.blue_score || point.daa_score < last.daa_score) {
+            return Err(ContractError::Scope);
+        }
+        self.storage_row_at_points_v1(state, point, point)
+    }
+
+    fn storage_row_at_points_v1(
+        &self,
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        accepting_point: &crate::palw_state_v2::PalwBlockContextV2,
+        observation_point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<Option<([u8; PendingManifestCaseRecordV1::KEY_BYTES], &PendingManifestCaseRecordV1)>, ContractError> {
         let row = &self.row;
         let original = row.original();
-        require_current_public_origin_v1(row.origin(), point)?;
+        require_current_public_origin_v1(row.origin(), accepting_point)?;
         if state.public_original_admission_record_v1(original)? != Some(self.admission)
             || state.public_draw_record_v1(original)? != Some(self.draw)
         {
             return Err(ContractError::Scope);
         }
-        state.check_public_pending_manifest_record_v1(row)?;
-        if let Some(existing) = state.public_pending_manifest_record_v1(original, self.case)? {
+        state.check_public_pending_manifest_record_at_v1(row, observation_point)?;
+        let key = PendingManifestCaseRecordV1::key(original, self.case);
+        let route = state.kernel_route_state_v1().ok_or(ContractError::Scope)?;
+        if let Some(bytes) = route.aux.get(&(PUBLIC_PENDING_MANIFEST_TABLE_V1, key.to_vec())) {
+            let existing = PendingManifestCaseRecordV1::decode_row(&key, bytes)?;
+            state.check_public_pending_manifest_record_at_v1(&existing, observation_point)?;
             return if existing == *row { Ok(None) } else { Err(ContractError::Scope) };
         }
-        Ok(Some((PendingManifestCaseRecordV1::key(original, self.case), row)))
+        Ok(Some((key, row)))
     }
 }
 
@@ -1586,13 +1614,16 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         bytes: &[u8],
     ) -> Result<PendingManifestCaseRecordV1, ContractError> {
         let row = PendingManifestCaseRecordV1::decode_row(key, bytes)?;
-        self.check_public_pending_manifest_record_v1(&row)?;
+        self.check_public_pending_manifest_record_at_v1(&row, self.last_point().ok_or(ContractError::Scope)?)?;
         Ok(row)
     }
 
-    fn check_public_pending_manifest_record_v1(&self, row: &PendingManifestCaseRecordV1) -> Result<(), ContractError> {
+    fn check_public_pending_manifest_record_at_v1(
+        &self,
+        row: &PendingManifestCaseRecordV1,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), ContractError> {
         let admission = self.public_original_admission_record_v1(row.original())?.ok_or(ContractError::Scope)?;
-        let point = self.last_point().ok_or(ContractError::Scope)?;
         if row.material() != admission.manifest_material {
             return Err(ContractError::Scope);
         }

@@ -770,6 +770,7 @@ mod tests {
                 &fixture.layout,
                 roles,
                 PlainSelectionBudgetV3 {
+                    continuation: crate::palw_court_shared_material_intake_v1::batch::admission::plain_selection::SelectionContinuationBudgetV3::test_only_v3(),
                     verification: ServiceCost { bytes: 1_000_000, work: 5_000_000, io: 5_000_000, controls: 1 },
                     verification_daa: 1,
                     workspace_bytes: 128_000_000,

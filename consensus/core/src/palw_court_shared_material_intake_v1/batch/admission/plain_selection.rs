@@ -21,8 +21,42 @@ use borsh::BorshSerialize;
 
 const FIRST_SELECTION_DEMAND_ORDINAL_V3: u64 = 1 << 63;
 
+/// Continuation of a timely material case, after its full inspection and
+/// localization. This never opens a new case after the initial notice window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
+pub(crate) struct SelectionContinuationBudgetV3 {
+    pub ready_offset_daa: u64,
+    pub bind: ServiceCost,
+    pub bind_daa: u64,
+    pub open_daa: u64,
+    pub provider_wait_daa: u64,
+    pub begin_daa: u64,
+    pub parts_daa: u64,
+    pub finish_daa: u64,
+}
+
+#[cfg(test)]
+impl SelectionContinuationBudgetV3 {
+    pub(crate) fn test_only_v3() -> Self {
+        let bytes = crate::palw_court_shared_material_intake_v1::batch::selection::notice::SignedSelectionNoticeV3::BYTES;
+        Self {
+            // Test schedule: 3120 + 1000 delivery + 1000 inspection +
+            // 1000 localization. Production derives this from its schedule.
+            ready_offset_daa: 6121,
+            bind: ServiceCost { bytes, work: bytes, io: bytes, controls: 1 },
+            bind_daa: 1,
+            open_daa: 1,
+            provider_wait_daa: 1,
+            begin_daa: 1,
+            parts_daa: 8,
+            finish_daa: 1,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
 pub(crate) struct PlainSelectionBudgetV3 {
+    pub continuation: SelectionContinuationBudgetV3,
     pub verification: ServiceCost,
     pub verification_daa: u64,
     pub workspace_bytes: u64,
@@ -146,6 +180,15 @@ impl PlainSelectionBranchV3 {
             .map_err(|_| BatchCourtErrorV1::CaseGraph)
     }
 
+    pub(crate) fn binding_id_v3(&self, claim: Hash64, scope: Hash64) -> Result<[u8; 64], BatchCourtErrorV1> {
+        if claim != self.claim || claim == Hash64::default() || scope == Hash64::default() {
+            return Err(BatchCourtErrorV1::CaseGraph);
+        }
+        stream_digest(b"misaka-palw/selection-case-target-binding/v3", &(claim, scope, self.identity_v3()?))
+            .map(|id| id.as_bytes())
+            .map_err(|_| BatchCourtErrorV1::CaseGraph)
+    }
+
     pub(crate) fn check_terminal_v3(&self, base: ServiceCost, total: ServiceCost) -> Result<(), BatchCourtErrorV1> {
         self.budget.check_terminal_v3(base, total)
     }
@@ -189,7 +232,18 @@ impl PlainSelectionBudgetV3 {
 
     fn check_v3(self, bounds: SelectionTerminalBoundsV2) -> Result<(), BatchCourtErrorV1> {
         let (work, io, workspace) = Self::service_floors_v3(bounds)?;
-        if self.verification_daa == 0
+        let continuation = self.continuation;
+        let notice_bytes = crate::palw_court_shared_material_intake_v1::batch::selection::notice::SignedSelectionNoticeV3::BYTES;
+        if continuation.ready_offset_daa <= crate::palw_court_policy_v1::NOTICE_WINDOW_DAA
+            || [continuation.bind_daa, continuation.open_daa, continuation.provider_wait_daa,
+                continuation.begin_daa, continuation.parts_daa, continuation.finish_daa].contains(&0)
+            // Inner wire/storage floors only. The production native price must
+            // also cover the outer carrier, signature work and receipt row.
+            || continuation.bind.controls != 1
+            || continuation.bind.bytes < notice_bytes
+            || continuation.bind.work < notice_bytes
+            || continuation.bind.io < notice_bytes
+            || self.verification_daa == 0
             || self.maximum_dependencies == 0
             || self.maximum_ranges_per_role == 0
             || self.maximum_material_visits == 0
@@ -233,6 +287,7 @@ mod tests {
         let (work, io, workspace_bytes) = PlainSelectionBudgetV3::service_floors_v3(bounds).unwrap();
         let verification = ServiceCost { bytes: bounds.signed_control_bytes, work, io, controls: 1 };
         let budget = PlainSelectionBudgetV3 {
+            continuation: SelectionContinuationBudgetV3::test_only_v3(),
             verification,
             verification_daa: 1,
             workspace_bytes,
@@ -256,14 +311,35 @@ mod tests {
         assert_ne!(branch.identity_v3().unwrap(), derive(1, budget).unwrap().identity_v3().unwrap());
         let longer = PlainSelectionBudgetV3 { verification_daa: 2, ..budget };
         assert_ne!(branch.identity_v3().unwrap(), derive(2, longer).unwrap().identity_v3().unwrap());
+        let later = PlainSelectionBudgetV3 {
+            continuation: SelectionContinuationBudgetV3 {
+                ready_offset_daa: budget.continuation.ready_offset_daa + 1,
+                ..budget.continuation
+            },
+            ..budget
+        };
+        assert_ne!(branch.identity_v3().unwrap(), derive(2, later).unwrap().identity_v3().unwrap());
         let scope = Hash64::from_u64_word(2);
         assert!(branch.verification_id_v3(Hash64::default(), scope).is_err());
+        assert_ne!(branch.binding_id_v3(branch.claim, scope).unwrap(), branch.verification_id_v3(branch.claim, scope).unwrap());
         assert_ne!(
             branch.verification_id_v3(branch.claim, scope).unwrap(),
             branch.verification_id_v3(branch.claim, Hash64::from_u64_word(3)).unwrap()
         );
 
         for short in [
+            PlainSelectionBudgetV3 { continuation: SelectionContinuationBudgetV3 { bind_daa: 0, ..budget.continuation }, ..budget },
+            PlainSelectionBudgetV3 {
+                continuation: SelectionContinuationBudgetV3 {
+                    bind: ServiceCost { bytes: budget.continuation.bind.bytes - 1, ..budget.continuation.bind },
+                    ..budget.continuation
+                },
+                ..budget
+            },
+            PlainSelectionBudgetV3 {
+                continuation: SelectionContinuationBudgetV3 { ready_offset_daa: 3_120, ..budget.continuation },
+                ..budget
+            },
             PlainSelectionBudgetV3 { maximum_proof_bytes: bounds.proof_bytes - 1, ..budget },
             PlainSelectionBudgetV3 { workspace_bytes: workspace_bytes - 1, ..budget },
             PlainSelectionBudgetV3 { verification: ServiceCost { work: work - 1, ..verification }, ..budget },

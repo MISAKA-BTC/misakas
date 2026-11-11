@@ -12,6 +12,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
     projected: PlainBatchProspectiveOriginalTermsV2,
     fixture: &PalwTirPublicFrameFixtureV1,
     at: &PalwBlockContextV2,
+    late_selection: bool,
 ) {
     assert!(projected.matches_acceptance_v2(at.daa_score, at.blue_score));
     assert_eq!(projected.obligation_v2().facts_v1().native_identity_v1().0, fixture.frame.plan_v1().original_claim);
@@ -93,6 +94,27 @@ pub(crate) fn exercise_preclaim_booking_v1(
 
     assert!(reserve_drawn_v1(original, projection, &terms, short, &mut unchanged, maximum_packets, price).is_err());
     assert_eq!(unchanged, empty_book);
+
+    if late_selection {
+        // The native schedule, not an early fixture's knowledge of the row,
+        // decides when the target-binding opportunity can begin. Moving
+        // localization later must refuse the whole protected reservation.
+        for changed in [
+            MaterialCaseDemand { localization_daa: case.localization_daa + 1_000, ..case },
+            MaterialCaseDemand { filing_daa: 1, ..case },
+            // test_only_v3 ends delivery at localized_by + 13; the
+            // signed Verify carrier files one DAA later. Completing the
+            // ranges alone must not count as timely evidence filing.
+            MaterialCaseDemand { filing_daa: 13, ..case },
+        ] {
+            let schedule = VerificationSchedule::new(clock, notice, changed).unwrap();
+            assert!(matches!(
+                reserve_drawn_v1(original, projection, &terms, schedule, &mut unchanged, maximum_packets, price),
+                Err(BatchCourtErrorV1::Reservation(ServiceRefusal::DeadlineExhausted))
+            ));
+            assert_eq!(unchanged, empty_book, "late binding/delivery refusal cannot leave a sibling rank reserved");
+        }
+    }
 
     check_companion_booking_parity(projection, &terms, fixture, at, notice, case, &empty_book, maximum_packets);
 }

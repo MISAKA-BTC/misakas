@@ -580,6 +580,18 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
             .unwrap();
     let wire = borsh::to_vec(&SignedManifestRequestV1 { request, key, signature: *signature.as_ref() }).unwrap();
     let pending = prepared.prepare_drawn_manifest_storage_record(Digest([2; 64]), &draw, &wire, &request_context).unwrap();
+    assert_eq!(drawn.last_point(), Some(&draw_point));
+    assert!(pending.storage_row(&drawn, &vote_point).is_err());
+    let (pending_key, pending_row) = pending.storage_row_at_v1(&drawn, &vote_point).unwrap().unwrap();
+    assert_eq!(pending_key, misaka_palw_positive_contract::public_one_honest::PendingManifestCaseRecordV1::key(original, case));
+    assert_eq!(pending_row.origin(), origin);
+    for wrong_point in [
+        PalwBlockContextV2 { block: h64(5), ..vote_point },
+        PalwBlockContextV2 { daa_score: vote_point.daa_score + 1, ..vote_point },
+        PalwBlockContextV2 { blue_score: vote_point.blue_score + 1, ..vote_point },
+    ] {
+        assert_eq!(pending.storage_row_at_v1(&drawn, &wrong_point), Err(misaka_palw_positive_contract::ContractError::Scope),);
+    }
     let case_extras = PalwTransitionExtrasV1 {
         kernel_route: extras.kernel_route.clone(),
         public_drawn_manifest_cases: vec![pending.clone(), pending],
@@ -589,6 +601,14 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
         apply_palw_transition_v2_with_extras(&drawn, &params, &vote_point, &[], None, false, false, false, false, &case_extras)
             .unwrap();
     assert!(with_case.public_pending_manifest_record_v1(original, case).unwrap().is_some());
+    // Ordered same-block intake can encounter its own already-installed row
+    // before LastPoint advances. The explicit-point lookup must be idempotent
+    // there too, without making an ordinary parent snapshot accept a future row.
+    let mut same_prefix = with_case.clone();
+    same_prefix.last_point = Some(draw_point);
+    let prepared_case = &case_extras.public_drawn_manifest_cases[0];
+    assert_eq!(prepared_case.storage_row_at_v1(&same_prefix, &vote_point), Ok(None));
+    assert!(prepared_case.storage_row(&same_prefix, &vote_point).is_err());
     assert_eq!(apply_delta_v2(&drawn, &case_delta, &params).unwrap(), with_case);
     assert_eq!(revert_delta_v2(&with_case, &case_delta, &params).unwrap(), drawn);
     let restored_case = PalwStateCarriageV2::from_state(&with_case).into_state(&params, Some(with_case.state_root())).unwrap();

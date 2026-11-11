@@ -525,7 +525,13 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
     assert_eq!(rebased_terms.resource_id_v2(), terms.resource_id_v2());
     rebased.reserve_before_allocation_v2(&mut unchanged, a, &rebased_terms, quote_price).unwrap();
     assert_eq!(unchanged, first_book);
-    crate::palw_positive_contract_v2::tfp1_original::preclaim::tests::exercise_preclaim_booking_v1(&projection, terms, fixture, at);
+    crate::palw_positive_contract_v2::tfp1_original::preclaim::tests::exercise_preclaim_booking_v1(
+        &projection,
+        terms,
+        fixture,
+        at,
+        false,
+    );
 
     // Explicit local custody policy. The branch derives its role count from
     // this native input, never from the selected-claimant rescue count.
@@ -542,6 +548,9 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
         bond_maturity: None,
     });
     let selection_policy = PlainSelectionBudgetV3 {
+        continuation:
+            crate::palw_court_shared_material_intake_v1::batch::admission::plain_selection::SelectionContinuationBudgetV3::test_only_v3(
+            ),
         verification: ServiceCost { bytes: 1_000_000, work: 5_000_000, io: 5_000_000, controls: 1 },
         verification_daa: 1,
         workspace_bytes: 128 << 20,
@@ -579,6 +588,23 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
     assert!(selected_quote.service.bytes > first.service.bytes);
     assert!(selected_quote.retained_payload_bytes > first.retained_payload_bytes);
     let branch = selected.selection.as_ref().unwrap();
+    let binding = branch.binding_id_v3(selected.claim, a).unwrap();
+    let bind_node = graph.iter().find(|node| node.packet.id == binding).unwrap();
+    assert_eq!(bind_node.packet.cost, selection_policy.continuation.bind);
+    assert_eq!(bind_node.packet.release_daa, at.daa_score + selection_policy.continuation.ready_offset_daa);
+    assert!(bind_node.packet.release_daa > at.daa_score + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA);
+    for role in 0..branch.role_count_v3() {
+        let mut index = 0;
+        while let Ok(ordinal) = branch.demand_ordinal_v3(role, index) {
+            let id = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(selected.claim, a, ordinal).unwrap().as_bytes();
+            let open = graph.iter().find(|node| node.packet.id == id).unwrap();
+            assert_eq!(open.predecessors, vec![binding]);
+            assert!(open.packet.release_daa >= bind_node.packet.service_before);
+            assert!(booked.assigned_daa(&binding).unwrap() < booked.assigned_daa(&id).unwrap());
+            index += 1;
+        }
+        assert!(index > 0);
+    }
     let verification = branch.verification_id_v3(selected.claim, a).unwrap();
     let node = graph.iter().find(|node| node.packet.id == verification).unwrap();
     assert!(!node.predecessors.is_empty());
@@ -603,5 +629,6 @@ pub(crate) fn exercise_batch_booking_before_allocation_v2(
         selected_terms,
         fixture,
         at,
+        true,
     );
 }

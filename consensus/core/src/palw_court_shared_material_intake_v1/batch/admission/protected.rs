@@ -137,23 +137,51 @@ impl CompiledBatchAdmissionV1 {
             }
             Ok(())
         };
+        let terminal_deadline = schedule.terminal_by().checked_sub(self.recovery_daa).ok_or(ServiceRefusal::DeadlineExhausted)?;
+        // Selection Verify carries the signed local evidence itself. Its
+        // canonical filing must precede filed_by, even though Terminal can
+        // recheck and settle that retained evidence later.
+        let selection_filing_deadline = schedule.filed_by().min(terminal_deadline);
+        let late_delivery =
+            |id: &[u8; 64]| self.late_selection.as_ref().is_some_and(|selection| selection.deliveries.binary_search(id).is_ok());
+        let late_verification = |id: &[u8; 64]| self.late_selection.as_ref().is_some_and(|selection| selection.verification == *id);
+        if let Some(selection) = &self.late_selection {
+            let bind = candidate.packet(&selection.bind).ok_or(ServiceRefusal::InvalidState)?;
+            // A material case can discover the row at the latest legal
+            // localization boundary. Earlier reservation would erase its
+            // continuation right even if an easy fixture already knew it.
+            if bind.release_daa <= schedule.localized_by() {
+                return Err(ServiceRefusal::DeadlineExhausted);
+            }
+            check(&selection.bind, schedule.filed_by())?;
+            for id in &selection.deliveries {
+                check(id, schedule.filed_by())?;
+            }
+            check(&selection.verification, selection_filing_deadline)?;
+        }
         for (_, finish, _) in &self.spans {
-            check(finish, schedule.material_ready_by())?;
+            check(finish, if late_delivery(finish) { schedule.filed_by() } else { schedule.material_ready_by() })?;
         }
         // A verification may also retain an archive record. Storage ownership
         // never changes it into a later filing-only stage.
         for id in &self.inspection_packets {
-            check(id, schedule.inspection_by())?;
+            check(id, if late_verification(id) { selection_filing_deadline } else { schedule.inspection_by() })?;
         }
         for node in &self.graph {
             if node.packet.id != self.terminal && !self.controls.iter().any(|control| control.packet == node.packet.id) {
-                check(&node.packet.id, schedule.inspection_by())?;
+                let deadline = if late_delivery(&node.packet.id) {
+                    schedule.filed_by()
+                } else if late_verification(&node.packet.id) {
+                    selection_filing_deadline
+                } else {
+                    schedule.inspection_by()
+                };
+                check(&node.packet.id, deadline)?;
             }
         }
         for control in &self.controls {
-            check(&control.packet, schedule.filed_by())?;
+            check(&control.packet, if late_verification(&control.packet) { selection_filing_deadline } else { schedule.filed_by() })?;
         }
-        let terminal_deadline = schedule.terminal_by().checked_sub(self.recovery_daa).ok_or(ServiceRefusal::DeadlineExhausted)?;
         check(&self.terminal, terminal_deadline)
     }
 }

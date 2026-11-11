@@ -165,6 +165,24 @@ struct DeliveryWindowsV1 {
     parts: Range<u64>,
     finish: Range<u64>,
     authenticated_finish: Option<AuthenticatedFinishV2>,
+    selection: Option<SelectionDeliveryWindowsV3>,
+}
+
+struct SelectionDeliveryWindowsV3 {
+    first_ordinal: u64,
+    last_ordinal: u64,
+    bind: [u8; 64],
+    verification: [u8; 64],
+    open: Range<u64>,
+    begin: Range<u64>,
+    parts: Range<u64>,
+    finish: Range<u64>,
+}
+
+impl SelectionDeliveryWindowsV3 {
+    fn contains(&self, ordinal: u64) -> bool {
+        (self.first_ordinal..=self.last_ordinal).contains(&ordinal)
+    }
 }
 
 /// Semantic material may become immutable only after the shared FullIds has
@@ -179,7 +197,20 @@ struct AuthenticatedFinishV2 {
 }
 
 impl DeliveryWindowsV1 {
-    fn response(&self, index: usize, last: usize) -> &Range<u64> {
+    fn open(&self, ordinal: u64) -> &Range<u64> {
+        self.selection.as_ref().filter(|selection| selection.contains(ordinal)).map_or(&self.open, |selection| &selection.open)
+    }
+
+    fn response(&self, ordinal: u64, index: usize, last: usize) -> &Range<u64> {
+        if let Some(selection) = self.selection.as_ref().filter(|selection| selection.contains(ordinal)) {
+            return if index == 0 {
+                &selection.begin
+            } else if index == last {
+                &selection.finish
+            } else {
+                &selection.parts
+            };
+        }
         if index == 0 {
             &self.begin
         } else if index == last {
@@ -446,6 +477,7 @@ fn compile_native_batch_delivery_with_output_v2(
         parts: take_service_window_v1(&mut cursor, timing.parts_daa, before)?,
         finish: take_service_window_v1(&mut cursor, timing.finish_daa, before)?,
         authenticated_finish: None,
+        selection: None,
     };
     if let Some((_, budget)) = tokenizer {
         windows.authenticated_finish = Some(AuthenticatedFinishV2 {
@@ -476,8 +508,35 @@ fn compile_native_batch_delivery_with_output_v2(
     let output_window = output.map(|output| take_service_window_v1(&mut cursor, output.control_daa, before)).transpose()?;
     let tokenizer_window =
         tokenizer.map(|(_, budget)| take_service_window_v1(&mut cursor, budget.verification_daa, before)).transpose()?;
-    let selection_window =
-        selection.map(|branch| take_service_window_v1(&mut cursor, branch.budget.verification_daa, before)).transpose()?;
+    let mut selection_binding_window = None;
+    let selection_window = if let Some(branch) = selection {
+        let continuation = branch.budget.continuation;
+        // MaterialRequest already opened the case before notice expiry. Its
+        // later row can be known only after inspection/localization. Preserve
+        // that wait in the immutable packet windows, including during repair.
+        cursor = cursor.max(a.checked_add(continuation.ready_offset_daa).ok_or(Clock)?);
+        selection_binding_window = Some(take_service_window_v1(&mut cursor, continuation.bind_daa, before)?);
+        let open = take_service_window_v1(&mut cursor, continuation.open_daa, before)?;
+        cursor = cursor.checked_add(continuation.provider_wait_daa).ok_or(Clock)?;
+        let selection_windows = SelectionDeliveryWindowsV3 {
+            first_ordinal: branch.demand_ordinal_v3(0, 0)?,
+            last_ordinal: branch.demand_ordinal_v3(0, 0)?.checked_add(selection_demands as u64 - 1).ok_or(CaseGraph)?,
+            bind: branch.binding_id_v3(claim, scope)?,
+            verification: branch.verification_id_v3(claim, scope)?,
+            open,
+            begin: take_service_window_v1(&mut cursor, continuation.begin_daa, before)?,
+            parts: take_service_window_v1(&mut cursor, continuation.parts_daa, before)?,
+            finish: take_service_window_v1(&mut cursor, continuation.finish_daa, before)?,
+        };
+        let expires = storage.draft_expires_v1(selection_windows.begin.start, hard, shape.material_until_daa).map_err(|_| Window)?;
+        if selection_windows.finish.end > expires {
+            return Err(Window);
+        }
+        windows.selection = Some(selection_windows);
+        Some(take_service_window_v1(&mut cursor, branch.budget.verification_daa, before)?)
+    } else {
+        None
+    };
     let terminal_window = take_service_window_v1(&mut cursor, timing.terminal_daa, before)?;
     let packet = |id, cost, window: &Range<u64>| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
     let demand_count = super::native_ranges::partition_maximums_v1(shape.maximums).count();
@@ -490,14 +549,15 @@ fn compile_native_batch_delivery_with_output_v2(
         + 2 * usize::from(stop.is_some())
         + usize::from(output.is_some())
         + usize::from(tokenizer.is_some())
-        + usize::from(selection.is_some());
+        + 2 * usize::from(selection.is_some());
     if demand_count == 0 || demand_capacity > costs.maximum_packets {
         return Err(CaseGraph);
     }
     let mut q = TirNativeRequestsV1::new();
+    let retained_control_capacity = 2 + usize::from(selection.is_some());
     q.vec_v1::<MaximumBatchDemandV1>(demand_capacity as u64).map_err(LocalResource)?;
     q.vec_v1::<CausalServicePacketV1>(control_nodes as u64).map_err(LocalResource)?;
-    q.vec_v1::<BatchRetainedControlV1>(2).map_err(LocalResource)?;
+    q.vec_v1::<BatchRetainedControlV1>(retained_control_capacity as u64).map_err(LocalResource)?;
     q.vec_v1::<[u8; 64]>(
         2 + (tokenizer_demands + selection_demands + usize::from(tokenizer.is_some()) + usize::from(selection.is_some())) as u64,
     )
@@ -558,7 +618,7 @@ fn compile_native_batch_delivery_with_output_v2(
         });
         graph[1].predecessors.push(control);
     }
-    let mut retained_controls = Vec::with_capacity(2);
+    let mut retained_controls = Vec::with_capacity(retained_control_capacity);
     retained_controls.extend(retained);
     if let Some((branch, window)) = selection.zip(selection_window) {
         // Numerical ordinals grow from zero; Output/Tokenizer grow down from
@@ -570,6 +630,14 @@ fn compile_native_batch_delivery_with_output_v2(
             return Err(CaseGraph);
         }
         let control = branch.verification_id_v3(claim, scope)?;
+        let binding = branch.binding_id_v3(claim, scope)?;
+        let binding_window = selection_binding_window.as_ref().ok_or(CaseGraph)?;
+        graph.push(CausalServicePacketV1 {
+            packet: packet(binding, branch.budget.continuation.bind, binding_window),
+            predecessors: vec![],
+        });
+        retained_controls
+            .push(BatchRetainedControlV1 { packet: binding, payload_bytes: super::selection::notice::SignedSelectionNoticeV3::BYTES });
         for role in 0..branch.envelope.roles_v2() {
             for (index, range_maximums) in branch.envelope.demands_per_role_v2().enumerate() {
                 demands.push(MaximumBatchDemandV1 {
@@ -722,10 +790,26 @@ impl BatchAdmissionV1<'_> {
             // Extra causal edge and Vec growth for each semantic Finish.
             bytes = bytes.checked_add((ranges as u64).checked_mul(128).ok_or(DeliveryCost)?).ok_or(DeliveryCost)?;
         }
+        let mut late_selection = windows.and_then(|windows| windows.selection.as_ref()).map(|selection| LateSelectionPacketsV3 {
+            bind: selection.bind,
+            verification: selection.verification,
+            deliveries: Vec::new(),
+        });
+        if late_selection.is_some() {
+            let mut extra = TirNativeRequestsV1::new();
+            extra.vec_v1::<[u8; 64]>(packets as u64).map_err(BatchCourtErrorV1::LocalResource)?;
+            // One additional Bind parent per Selection Open; predecessor
+            // vectors below reserve their full length before copying/pushing.
+            extra.exact_v1::<[u8; 64]>(self.demands.len() as u64).map_err(BatchCourtErrorV1::LocalResource)?;
+            bytes = bytes.checked_add(extra.bytes_v1()).ok_or(DeliveryCost)?;
+        }
         let mut inspection_memory = TirNativeRequestsV1::new();
         inspection_memory.vec_v1::<[u8; 64]>(self.demands.len() as u64).map_err(BatchCourtErrorV1::LocalResource)?;
         bytes = bytes.checked_add(inspection_memory.bytes_v1()).ok_or(DeliveryCost)?;
         let lease = reserve(bytes).map_err(BatchCourtErrorV1::LocalResource)?;
+        if let Some(selection) = &mut late_selection {
+            selection.deliveries = Vec::with_capacity(packets);
+        }
         let native_nodes: BTreeMap<_, _> = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index)).collect();
         let terminal = *native_nodes.get(&self.terminal).ok_or(CaseGraph)?;
         if native_nodes.len() != graph.len() {
@@ -763,10 +847,18 @@ impl BatchAdmissionV1<'_> {
             if open_cost.bytes < bytes || open_cost.work == 0 || open_cost.controls != 1 {
                 return Err(DeliveryCost);
             }
-            let open_window = windows.map_or(first..before, |windows| windows.open.clone());
+            let open_window = windows.map_or(first..before, |windows| windows.open(demand.ordinal).clone());
+            let selection_delivery =
+                windows.and_then(|windows| windows.selection.as_ref()).filter(|selection| selection.contains(demand.ordinal));
+            let mut predecessors = Vec::with_capacity(demand.predecessors.len() + usize::from(selection_delivery.is_some()));
+            predecessors.extend_from_slice(demand.predecessors);
+            if let Some(selection) = selection_delivery {
+                predecessors.push(selection.bind);
+                late_selection.as_mut().ok_or(CaseGraph)?.deliveries.push(open);
+            }
             graph.push(CausalServicePacketV1 {
                 packet: ServicePacket { id: open, release_daa: open_window.start, service_before: open_window.end, cost: open_cost },
-                predecessors: demand.predecessors.to_vec(),
+                predecessors,
             });
             let verification = native_nodes[&demand.verification];
             verifications.insert(demand.verification);
@@ -797,7 +889,7 @@ impl BatchAdmissionV1<'_> {
                 if let Some(windows) = windows {
                     let last = response.len() - 1;
                     for (index, node) in response.iter_mut().enumerate() {
-                        let window = windows.response(index, last);
+                        let window = windows.response(demand.ordinal, index, last);
                         node.packet.release_daa = window.start;
                         node.packet.service_before = window.end;
                     }
@@ -819,12 +911,18 @@ impl BatchAdmissionV1<'_> {
                     }
                 }
                 let finish = response[response.len() - 1].packet.id;
+                if selection_delivery.is_some() {
+                    late_selection.as_mut().ok_or(CaseGraph)?.deliveries.extend(response.iter().map(|node| node.packet.id));
+                }
                 graph[verification].predecessors.push(finish);
                 spans.push((response[0].packet.id, finish, maximum));
                 graph.append(&mut response);
             }
         }
         let inspection_packets = verifications.iter().copied().collect::<Vec<_>>();
+        if let Some(selection) = &mut late_selection {
+            selection.deliveries.sort_unstable();
+        }
         let terminal_predecessors = &mut graph[terminal].predecessors;
         for predecessor in terminal_predecessors.iter() {
             verifications.remove(predecessor);
@@ -863,6 +961,7 @@ impl BatchAdmissionV1<'_> {
                 spans,
                 controls: self.retained_controls.to_vec(),
                 inspection_packets,
+                late_selection,
                 relative_graph_id,
                 service,
                 retained_payload_bytes,
@@ -891,6 +990,7 @@ pub(crate) struct CompiledBatchAdmissionV1 {
     spans: Vec<([u8; 64], [u8; 64], u64)>,
     controls: Vec<BatchRetainedControlV1>,
     inspection_packets: Vec<[u8; 64]>,
+    late_selection: Option<LateSelectionPacketsV3>,
     relative_graph_id: Hash64,
     service: ServiceCost,
     retained_payload_bytes: u64,
@@ -899,6 +999,14 @@ pub(crate) struct CompiledBatchAdmissionV1 {
     retained_numerical_fault_bytes: u64,
     retained_numerical_fault_byte_daa: u64,
     numerical_fault_storage_rent_sompi: u64,
+}
+
+/// These are evidence-filing deliveries of an already-open material case,
+/// after localization; they are not its initial inspection prerequisites.
+struct LateSelectionPacketsV3 {
+    bind: [u8; 64],
+    verification: [u8; 64],
+    deliveries: Vec<[u8; 64]>,
 }
 
 impl CompiledBatchAdmissionV1 {
@@ -929,6 +1037,7 @@ impl CompiledBatchAdmissionV1 {
             spans,
             controls,
             inspection_packets: _,
+            late_selection: _,
             relative_graph_id,
             service,
             retained_payload_bytes,
