@@ -1,5 +1,6 @@
 //! **ADR-0173 §4 — the node's fetch hook for a root it does not hold** (lane MU). When a class has a root in force (a line's current
-//! version, a preview, a superseded root inside its grace) or is a `Candidate` and this node holds no bundle for it, the node asks an
+//! version, a preview, a superseded root inside its grace), is a `Candidate`, or a live accepted TFP1 needs replay and this node
+//! holds no matching bundle, the node asks an
 //! operator-configured external command (`--palw-root-fetch-cmd`) to fetch it into the drop directory (`--palw-root-drop-dir`,
 //! default `--palw-improve-artifact-dir`); when the command exits 0 the directory is scanned and a bundle whose `(class, root)` is
 //! wanted joins the node's holdings, so the readiness duty proves it next tick.
@@ -27,6 +28,8 @@ pub(crate) enum PalwRootWantKindV1 {
     InForceRoot,
     /// The registered root of a class in `Candidate`.
     Candidate,
+    /// The accepted original of a live TFP1 frame an eligible verifier is inspecting.
+    AcceptedTfp1Replay,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -109,13 +112,19 @@ pub(crate) fn palw_root_fetch_argv_v1(
     Some(argv)
 }
 
+struct RunningRootFetchV1 {
+    want: PalwRootWantV1,
+    child: std::process::Child,
+}
+
 /// What the hook remembers between ticks.
 #[derive(Default)]
 pub(crate) struct PalwRootFetchStateV1 {
     last_run: BTreeMap<(Hash64, Hash64), Instant>,
-    running: BTreeMap<(Hash64, Hash64), std::process::Child>,
-    /// Files already scanned (path, mtime): a file that was not the wanted bundle is not opened again until it changes.
-    scanned: BTreeSet<(PathBuf, Option<std::time::SystemTime>)>,
+    running: BTreeMap<(Hash64, Hash64), RunningRootFetchV1>,
+    /// Remember recognized identities from a scan for another want. A later
+    /// caller needing one of those identities must be able to open the file.
+    scanned: BTreeMap<PathBuf, (Option<std::time::SystemTime>, BTreeSet<(Hash64, Hash64)>)>,
 }
 
 pub(crate) enum PalwRootFetchEventV1 {
@@ -139,23 +148,29 @@ impl PalwRootFetchStateV1 {
     ) -> Vec<PalwRootFetchEventV1> {
         let mut events = Vec::new();
         let mut done = Vec::new();
-        for (key, child) in self.running.iter_mut() {
-            match child.try_wait() {
+        for (key, running) in self.running.iter_mut() {
+            match running.child.try_wait() {
                 Ok(None) => {}
                 Ok(Some(status)) => done.push((*key, status.success(), format!("exit {status}"))),
                 Err(e) => done.push((*key, false, e.to_string())),
             }
         }
-        for ((class_id, root), ok, why) in done {
-            self.running.remove(&(class_id, root));
-            let want = PalwRootWantV1 { class_id, root, kind: PalwRootWantKindV1::InForceRoot };
-            events.push(if ok { PalwRootFetchEventV1::Finished(want) } else { PalwRootFetchEventV1::Failed(want, why) });
+        for (key, ok, why) in done {
+            let running = self.running.remove(&key).expect("finished fetch was tracked");
+            events.push(if ok {
+                PalwRootFetchEventV1::Finished(running.want)
+            } else {
+                PalwRootFetchEventV1::Failed(running.want, why)
+            });
         }
+        self.last_run.retain(|_, at| now.saturating_duration_since(*at) < PALW_ROOT_FETCH_RETRY_V1);
         let (Some(cmd), Some(drop_dir)) = (cmd, drop_dir) else { return events };
+        let replay_running = self.running.values().any(|run| run.want.kind == PalwRootWantKindV1::AcceptedTfp1Replay);
         for want in wants {
             let key = (want.class_id, want.root);
             if self.running.contains_key(&key)
-                || self.last_run.get(&key).is_some_and(|at| now.duration_since(*at) < PALW_ROOT_FETCH_RETRY_V1)
+                || self.last_run.contains_key(&key)
+                || (replay_running && want.kind == PalwRootWantKindV1::AcceptedTfp1Replay)
             {
                 continue;
             }
@@ -169,7 +184,7 @@ impl PalwRootFetchStateV1 {
                 .spawn()
             {
                 Ok(child) => {
-                    self.running.insert(key, child);
+                    self.running.insert(key, RunningRootFetchV1 { want: *want, child });
                     events.push(PalwRootFetchEventV1::Started(*want));
                 }
                 Err(e) => events.push(PalwRootFetchEventV1::Failed(*want, e.to_string())),
@@ -179,9 +194,9 @@ impl PalwRootFetchStateV1 {
         events
     }
 
-    /// **Scan the drop directory for a wanted bundle.** `open` loads one file and says which `(class, root)` it declares and holds
-    /// (`None`: not a bundle this build reads). A file is opened once per mtime. Returns the loaded holdings whose `(class, root)` is
-    /// wanted — a bundle that declares another class or roots to another root is not taken.
+    /// Scan the drop directory and take only holdings whose exact pair is
+    /// wanted. For an unchanged
+    /// file, a previous mismatch is cached until a caller asks for its observed pair.
     pub(crate) fn ingest<T>(
         &mut self,
         dir: &Path,
@@ -191,21 +206,35 @@ impl PalwRootFetchStateV1 {
         let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
         let mut files: Vec<PathBuf> = read.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_file()).collect();
         files.sort();
+        self.scanned.retain(|path, _| files.binary_search(path).is_ok());
+        let wanted = |class_id, root| wants.iter().any(|w| w.class_id == class_id && w.root == root);
         let mut taken = Vec::new();
+        let mut taken_pairs = BTreeSet::new();
         for path in files {
-            let key = (path.clone(), std::fs::metadata(&path).and_then(|m| m.modified()).ok());
-            if self.scanned.contains(&key) {
+            let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            if self
+                .scanned
+                .get(&path)
+                .is_some_and(|(previous, ids)| *previous == modified && !ids.iter().any(|&(class_id, root)| wanted(class_id, root)))
+            {
                 continue;
             }
+            let mut recognized = BTreeSet::new();
             let mut matched = false;
             for (class_id, root, holding) in open(&path) {
-                if wants.iter().any(|w| w.class_id == class_id && w.root == root) {
-                    taken.push(holding);
+                if wanted(class_id, root) {
+                    if taken_pairs.insert((class_id, root)) {
+                        taken.push(holding);
+                    }
                     matched = true;
+                } else {
+                    recognized.insert((class_id, root));
                 }
             }
-            if !matched {
-                self.scanned.insert(key);
+            if matched {
+                self.scanned.remove(&path);
+            } else {
+                self.scanned.insert(path, (modified, recognized));
             }
         }
         taken
@@ -344,5 +373,61 @@ mod tests {
             "and the root is a proof duty target of the readiness loop"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn accepted_tfp1_fetch_is_single_flight_and_completion_preserves_the_original_want() {
+        let first = PalwRootWantV1 { class_id: h(1), root: h(10), kind: PalwRootWantKindV1::AcceptedTfp1Replay };
+        let second = PalwRootWantV1 { class_id: h(2), root: h(20), ..first };
+        let mut state = PalwRootFetchStateV1::default();
+        let dir = Path::new("/tmp");
+        let now = Instant::now();
+        let mut child = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        assert!(child.try_wait().unwrap().is_none());
+        state.running.insert((first.class_id, first.root), RunningRootFetchV1 { want: first, child });
+        assert!(state.tick(Some("true"), Some(dir), &[first, second], now).is_empty());
+        let mut running = state.running.remove(&(first.class_id, first.root)).unwrap();
+        running.child.kill().unwrap();
+        running.child.wait().unwrap();
+
+        // A failure for the same exact pair in readiness and accepted replay
+        // shares a cooldown. It must not block a different eligible root.
+        let readiness_first = PalwRootWantV1 { kind: PalwRootWantKindV1::InForceRoot, ..first };
+        let events = state.tick(Some("/nonexistent/palw-fetch"), Some(dir), &[readiness_first], now);
+        assert!(matches!(events.as_slice(), [PalwRootFetchEventV1::Failed(want, _)] if *want == readiness_first));
+        let events = state.tick(Some("true"), Some(dir), &[first, second], now);
+        assert!(matches!(events.as_slice(), [PalwRootFetchEventV1::Started(want)] if *want == second));
+        // A readiness tick can reap a command started by the accepted replay.
+        // Its completion must retain the exact pair and original want kind.
+        let mut finished = Vec::new();
+        for _ in 0..200 {
+            finished = state.tick(None, Some(dir), &[], now);
+            if !finished.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(matches!(finished.as_slice(), [PalwRootFetchEventV1::Finished(want)] if *want == second));
+    }
+
+    #[test]
+    fn a_scan_for_readiness_does_not_hide_an_exact_bundle_from_later_accepted_replay() {
+        let replay = PalwRootWantV1 { class_id: h(3), root: h(30), kind: PalwRootWantKindV1::AcceptedTfp1Replay };
+        let readiness = PalwRootWantV1 { root: h(31), kind: PalwRootWantKindV1::InForceRoot, ..replay };
+        let dir = std::env::temp_dir().join(format!("palw-root-fetch-cross-want-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("published.palwtir"), b"bundle").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let mut open = |_: &Path| {
+            calls.set(calls.get() + 1);
+            vec![(replay.class_id, replay.root, "exact held bundle")]
+        };
+        let mut state = PalwRootFetchStateV1::default();
+        assert!(state.ingest(&dir, &[readiness], &mut open).is_empty());
+        assert!(state.ingest(&dir, &[readiness], &mut open).is_empty());
+        assert_eq!(calls.get(), 1);
+        assert_eq!(state.ingest(&dir, &[replay], &mut open), ["exact held bundle"]);
+        assert_eq!(calls.get(), 2);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

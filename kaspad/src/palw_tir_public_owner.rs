@@ -100,7 +100,7 @@ pub(crate) const PALW_TIR_PUBLIC_OWNER_ROUND_V1: u32 = u32::MAX - 28;
 const PALW_TIR_PUBLIC_OWNER_CASES_V1: usize = 2;
 /// Demands one case may issue (on top of the native turn and logical-unit budgets).
 const PALW_TIR_PUBLIC_OWNER_DEMANDS_V1: u32 = 256;
-/// A frame judged not worth pursuing (agreeing replay, no model, no kept input) is looked at again after this many DAA.
+/// An agreeing replay or an unavailable input without a configured acquisition route is revisited after this many DAA.
 const PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1: u64 = 3_600;
 /// The sparse cone builder's per-probe allocation (operational, not a native certificate).
 const PALW_TIR_PUBLIC_OWNER_COPY_BYTES_V1: u64 = 64 << 20;
@@ -858,18 +858,33 @@ impl PalwPanelService {
             }
             true
         });
+        let mut missing_roots = Vec::new();
         for step in steps {
             let result: Result<(), String> = async {
                 match step {
                     OwnerStepV1::Replay { claim, allocation_id, source_id, header, job, prompt, original_output_root, vocab } => {
                         let class = header.job_context.shape_profile_id;
-                        let backend: Arc<dyn PalwExecutionBackendV1> = match self.resolve_backend(session, class, header.artifact_root) {
-                            Ok(backend) => Arc::from(backend),
-                            Err(_) => {
-                                book.skipped.insert(claim, now.saturating_add(PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1));
-                                return Ok(());
-                            }
-                        };
+                        let backend: Arc<dyn PalwExecutionBackendV1> =
+                            match self.resolve_backend_for_claim_v1(session, class, header.artifact_root, Some(claim)) {
+                                Ok(backend) => Arc::from(backend),
+                                Err(_) => {
+                                    if self.config.root_fetch_cmd.is_some()
+                                        && self.config.root_drop_dir.is_some()
+                                        && self.backends().tir_entry_v1(class, header.artifact_root).is_none()
+                                    {
+                                        // Keep discovery live while the configured exact-root
+                                        // fetch runs. A miss is neither a finding nor a vote.
+                                        missing_roots.push(crate::palw_root_fetch::PalwRootWantV1 {
+                                            class_id: class,
+                                            root: header.artifact_root,
+                                            kind: crate::palw_root_fetch::PalwRootWantKindV1::AcceptedTfp1Replay,
+                                        });
+                                    } else {
+                                        book.skipped.insert(claim, now.saturating_add(PALW_TIR_PUBLIC_OWNER_SKIP_DAA_V1));
+                                    }
+                                    return Ok(());
+                                }
+                            };
                         let prompt = if prompt.is_empty()
                             && job.prompt_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_CANONICAL
                         {
@@ -1018,6 +1033,11 @@ impl PalwPanelService {
             if let Err(why) = result {
                 debug!("[{PALW_PANEL}] TIR owner step remains pending: {why}");
             }
+        }
+        if !missing_roots.is_empty() {
+            // Pass all eligible misses in discovery order so an earlier root
+            // in retry backoff cannot block the next one from starting.
+            self.root_fetch_hook_v1(&missing_roots);
         }
     }
 }

@@ -5887,7 +5887,7 @@ impl PalwPanelService {
     /// to a receipt).
     /// **ADR-0173 §4: the root-fetch hook** — reap and start fetch commands for the roots this tick found no bundle for, and take a
     /// bundle that arrived in the drop directory into the holdings (the next tick proves it). Node policy only: a failure is a log line.
-    fn root_fetch_hook_v1(&self, missing: &[crate::palw_root_fetch::PalwRootWantV1]) {
+    pub(crate) fn root_fetch_hook_v1(&self, missing: &[crate::palw_root_fetch::PalwRootWantV1]) {
         use crate::palw_root_fetch::PalwRootFetchEventV1 as Ev;
         let mut state = self.root_fetch.lock().unwrap();
         let events = state.tick(
@@ -5896,13 +5896,13 @@ impl PalwPanelService {
             missing,
             std::time::Instant::now(),
         );
-        let mut scan = false;
+        let mut completed = Vec::new();
         for event in events {
             match event {
                 Ev::Started(w) => info!("[{PALW_PANEL}] root fetch started for class {} root {}", w.class_id, w.root),
                 Ev::Finished(w) => {
                     info!("[{PALW_PANEL}] root fetch finished for class {} root {}", w.class_id, w.root);
-                    scan = true;
+                    completed.push(w);
                 }
                 Ev::Failed(w, why) => warn!(
                     "[{PALW_PANEL}] ROOT_BUNDLE_MISSING: the fetch for class {} root {} failed ({why}); not a seat for it (no penalty follows)",
@@ -5912,12 +5912,19 @@ impl PalwPanelService {
         }
         // A bundle may also be dropped by hand: scan whenever something is wanted.
         let Some(dir) = self.config.root_drop_dir.as_deref() else { return };
-        if missing.is_empty() && !scan {
+        if missing.is_empty() && completed.is_empty() {
             return;
         }
+        // Readiness and accepted replay share this queue. A tick for one can
+        // reap a child started by the other, so retain the completed exact want.
+        completed.extend_from_slice(missing);
         let backends = self.backends();
+        completed.retain(|want| backends.tir_entry_v1(want.class_id, want.root).is_none());
+        if completed.is_empty() {
+            return;
+        }
         let sdk = backends.sdk();
-        let taken = state.ingest(dir, missing, &mut |path| {
+        let taken = state.ingest(dir, &completed, &mut |path| {
             let loaded = crate::palw_backends::load_class_holdings_v1(
                 "root-fetch",
                 sdk,
