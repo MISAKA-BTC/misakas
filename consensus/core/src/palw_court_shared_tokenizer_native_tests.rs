@@ -553,6 +553,7 @@ fn verified_tokenizer_registration_root_replay_and_carriage_require_native_conte
 #[test]
 fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     use crate::palw_constraint_stream_court_v1::canonical_replay::Material as _;
+    use crate::palw_court_shared_material_intake_v1::batch::plain_tokenizer::PlainBatchTokenizerV2;
     use crate::palw_court_shared_tir_builder_store_v1::{
         constraint_stop::RootedStopMaterialV1, constraint_terminal::ConstraintMaterialV1,
     };
@@ -594,6 +595,40 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     b.install_verified_tokenizer_registration_v1(&registration_parent, registration_point, pins, &raw, &eog).unwrap();
     let key = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
     let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let at = PalwBlockContextV2 {
+        daa_score: registration_point.daa_score + 1,
+        blue_score: registration_point.blue_score + 1,
+        ..registration_point
+    };
+    let original = fx.frame.original_v1();
+    let form = crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat;
+    let derive =
+        |state: &PalwChainStateV2, at: &PalwBlockContextV2, original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3| {
+            PlainBatchTokenizerV2::derive_v2(state, &extras, at, original, &source, form)
+        };
+    assert!(derive(&registration_parent, &at, original).is_err(), "EOF-only parent cannot authorize reuse");
+    assert!(derive(&b.state, &at, original).is_err(), "unaccepted in-flight registration cannot authorize reuse");
+    b.state.last_point = Some(registration_point);
+    assert!(derive(&b.state, &PalwBlockContextV2 { daa_score: registration_point.daa_score, ..at }, original).is_err());
+    assert!(derive(&b.state, &PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at }, original).is_err());
+    let branch = derive(&b.state, &at, original).unwrap();
+    crate::palw_court_shared_material_intake_v1::batch::admission::plain_tokenizer::check_compiled_tokenizer_fixture_v2(
+        &branch, original, &source,
+    );
+    let rebased =
+        derive(&b.state, &PalwBlockContextV2 { daa_score: at.daa_score + 1, blue_score: at.blue_score + 1, ..at }, original).unwrap();
+    assert_eq!(branch.branch_id_v2(), rebased.branch_id_v2());
+    assert!(branch.matches_acceptance_v2(at.daa_score));
+    assert!(!branch.matches_acceptance_v2(at.daa_score + 1));
+    assert!(rebased.matches_acceptance_v2(at.daa_score + 1));
+    let mut foreign_original = original.clone();
+    foreign_original.trace_root = Hash64::from_u64_word(991);
+    assert!(derive(&b.state, &at, &foreign_original).is_err());
+    branch.check_replayed_input_ids_v2(&fx.execution.prompt).unwrap();
+    let mut foreign_prompt = fx.execution.prompt.clone();
+    foreign_prompt[0] = (foreign_prompt[0] + 1) % source.vocab_v1();
+    assert!(branch.check_replayed_input_ids_v2(&foreign_prompt).is_err());
+
     let rows = crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
     let ids = source.retain_complete_ids_v1(rows, &fx.execution.generated).unwrap();
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());
@@ -603,6 +638,15 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(&accepted, claim).is_err());
     assert!(crate::palw_tokenizer_rendering_v2::palw_original_tokenizer_registration_for_fold_v2(&accepted, claim).unwrap().is_some());
     accepted.last_point = accepted_point;
+
+    let renderings: Vec<_> = ids.ids_v1().iter().map(|&id| table.opening_of(id).unwrap()).collect();
+    assert!(borsh::object_length(&(&eog, &renderings)).unwrap() as u64 <= branch.bounds_v2().opening_material_bytes);
+    assert_eq!(branch.bounds_v2().eog_opening_bytes, borsh::object_length(&eog).unwrap() as u64);
+    branch.verify_output_openings_v2(&accepted, &source, &ids, &renderings, &eog).unwrap();
+    assert!(branch.verify_output_openings_v2(&accepted, &source, &ids, &renderings[..renderings.len() - 1], &eog).is_err());
+    let mut other_renderings = renderings.clone();
+    other_renderings[0] = table.opening_of((ids.ids_v1()[0] + 1) % source.vocab_v1()).unwrap();
+    assert!(branch.verify_output_openings_v2(&accepted, &source, &ids, &other_renderings, &eog).is_err());
 
     let verifier = palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().unwrap();
     let id = ids.ids_v1()[0];
@@ -618,6 +662,7 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(replay_view.rendering(wrong_id.id).is_none());
     let mut bad_eog = eog.clone();
     bad_eog.ids[0] = 0;
+    assert!(branch.verify_output_openings_v2(&accepted, &source, &ids, &renderings, &bad_eog).is_err());
     assert!(RootedStopMaterialV1::new(ConstraintMaterialV1 { eog: &bad_eog, ..material }, &verifier).is_err());
     let mut bad_rendering = opening;
     bad_rendering.rendering = Some(b"unregistered".to_vec());
@@ -629,6 +674,7 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
         crate::palw_step_refute::tiled_logits_rows_root_v1(&other.execution.binding.job_context, &other.execution.rows).unwrap();
     let other_ids = other_source.retain_complete_ids_v1(other_rows, &other.execution.generated).unwrap();
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &other_ids).is_err());
+    assert!(branch.verify_output_openings_v2(&accepted, &source, &other_ids, &renderings, &eog).is_err());
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &other_source, &ids).is_err());
     accepted.claims.get_mut(&claim).unwrap().accepted_daa = registration_point.daa_score;
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());

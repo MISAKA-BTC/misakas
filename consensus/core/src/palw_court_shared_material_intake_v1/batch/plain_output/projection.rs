@@ -8,9 +8,10 @@ use crate::{
         batch::{
             admission::{
                 BatchAdmissionQuoteV1, BatchDeliveryV1, CompiledBatchAdmissionV1, NativeBatchDeliveryCostsV1,
-                NativeBatchDeliveryShapeV1, compile_native_batch_plain_output_v2,
+                NativeBatchDeliveryShapeV1, compile_native_batch_plain_tokenizer_v2, plain_tokenizer::PlainTokenizerBatchBudgetV2,
             },
             native_ranges::{NumericalBatchProjectionV1, numerical_batch_projection_v1},
+            plain_tokenizer::PlainBatchTokenizerV2,
         },
     },
     palw_freeprompt_v3::{PalwFreePromptCommitmentV3, fp_claim_id_v3},
@@ -18,7 +19,7 @@ use crate::{
     palw_positive_contract_v2::tfp1_original::{NativeTfp1PublicOriginalFactsV1, Tfp1PublicOriginalObligationV1},
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
     palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    palw_state_v2::{PalwChainStateV2, PalwTransitionExtrasV1},
+    palw_state_v2::{PalwBlockContextV2, PalwChainStateV2, PalwTransitionExtrasV1},
     palw_tir_public_source_v1::{PalwTirPublicSourceV1, parameter_cover_v1::StreamingParameterCoverBudgetV1},
 };
 
@@ -30,7 +31,7 @@ pub(crate) struct PlainBatchOriginalProjectionV2 {
     claim: Hash64,
     source: NativeRetainedV1<PalwTirPublicSourceV1>,
     original_facts: NativeTfp1PublicOriginalFactsV1,
-    registration: Hash64,
+    tokenizer: PlainBatchTokenizerV2,
     accepted_daa: u64,
     prompt: PalwPromptIdsFormV1,
     numeric: NativeRetainedV1<NumericalBatchProjectionV1>,
@@ -43,7 +44,7 @@ impl PlainBatchOriginalProjectionV2 {
     pub(crate) fn derive_v2(
         parent: &PalwChainStateV2,
         extras: &PalwTransitionExtrasV1,
-        accepted_daa: u64,
+        at: &PalwBlockContextV2,
         original: &PalwFreePromptCommitmentV3,
         header: &PalwPublicTirBindingHeaderV1,
         prompt: PalwPromptIdsFormV1,
@@ -61,14 +62,6 @@ impl PlainBatchOriginalProjectionV2 {
         if parent.claim(&claim).is_some() || parent.class(&class).is_none_or(|class| class.artifact_root != header.artifact_root) {
             return Err(Decode("plain Batch original substitutes accepted claim or artifact".into()));
         }
-        let registration = crate::palw_tokenizer_rendering_v2::palw_rooted_tokenizer_opening_bounds_v1(
-            parent,
-            extras,
-            accepted_daa,
-            original,
-            header,
-        )
-        .ok_or_else(|| Decode("plain Batch original requires an earlier authenticated tokenizer registration".into()))?;
         let record = parent.tir_class_v1(&class).ok_or_else(|| Decode("plain Batch original class absent".into()))?;
         let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(parent, class)
             .ok_or_else(|| Decode("plain Batch original layout absent".into()))?;
@@ -80,12 +73,13 @@ impl PlainBatchOriginalProjectionV2 {
             original.trace_root,
             maximum_leaves,
         )?;
+        let tokenizer = PlainBatchTokenizerV2::derive_v2(parent, extras, at, original, &source, prompt).map_err(Decode)?;
         let original_facts = NativeTfp1PublicOriginalFactsV1::derive_v1(original, &source)
             .map_err(|why| Decode(format!("plain Batch TFP1 facts: {why:?}")))?;
         let output =
             PlainBatchOutputV2::derive_v2(original, &source, verify_cost, verify_daa).map_err(|why| Decode(format!("{why:?}")))?;
         let numeric = numerical_batch_projection_v1(claim, prompt, &source, record, layout, cover, maximum_ranges)?;
-        Ok(Self { claim, source, original_facts, registration: registration.registration_id, accepted_daa, prompt, numeric, output })
+        Ok(Self { claim, source, original_facts, tokenizer, accepted_daa: at.daa_score, prompt, numeric, output })
     }
 
     fn compile_v2(
@@ -93,6 +87,7 @@ impl PlainBatchOriginalProjectionV2 {
         scope: Hash64,
         material_until_daa: u64,
         costs: NativeBatchDeliveryCostsV1,
+        tokenizer_budget: PlainTokenizerBatchBudgetV2,
         storage: MaterialIntakeScheduleV1,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
@@ -103,20 +98,26 @@ impl PlainBatchOriginalProjectionV2 {
             material_until_daa,
             maximums: self.numeric.maximums_v1(),
         };
-        compile_native_batch_plain_output_v2(shape, &self.output, costs, storage, price)
+        compile_native_batch_plain_tokenizer_v2(shape, &self.output, &self.tokenizer, tokenizer_budget, costs, storage, price)
     }
 
     fn resource_id_v2(&self, relative_graph: Hash64) -> Result<Hash64, BatchCourtErrorV1> {
         crate::palw_court_shared_tir_stream_v1::stream_digest(
-            b"misaka-palw/plain-batch-original-resource/v2",
-            &(self.claim, self.source.source_id_v1(), self.registration, relative_graph),
+            b"misaka-palw/plain-batch-original-resource/tokenizer-v2",
+            &(self.claim, self.source.source_id_v1(), self.tokenizer.branch_id_v2(), relative_graph),
         )
         .map_err(|_| BatchCourtErrorV1::CaseGraph)
     }
 
     fn profile_id_v2(&self, service_profile: Hash64) -> Result<Hash64, BatchCourtErrorV1> {
-        crate::palw_court_shared_tir_state_v1::plain_batch_profile_id_v2(service_profile, self.registration)
-            .map_err(|_| BatchCourtErrorV1::CaseGraph)
+        if service_profile == Hash64::default() {
+            return Err(BatchCourtErrorV1::CaseGraph);
+        }
+        crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/plain-batch-tokenizer-profile/v2",
+            &(service_profile, self.tokenizer.branch_id_v2()),
+        )
+        .map_err(|_| BatchCourtErrorV1::CaseGraph)
     }
 
     fn original_terms_v2(
@@ -136,15 +137,16 @@ impl PlainBatchOriginalProjectionV2 {
         service_profile: Hash64,
         material_until_daa: u64,
         costs: NativeBatchDeliveryCostsV1,
+        tokenizer_budget: PlainTokenizerBatchBudgetV2,
         storage: MaterialIntakeScheduleV1,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<(Hash64, Tfp1PublicOriginalObligationV1), BatchCourtErrorV1> {
         let provisional_scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
-            b"misaka-palw/plain-batch-prospective-scope/v2",
-            &(self.claim, self.source.source_id_v1(), self.registration),
+            b"misaka-palw/plain-batch-prospective-scope/tokenizer-v2",
+            &(self.claim, self.source.source_id_v1(), self.tokenizer.branch_id_v2()),
         )
         .map_err(|_| BatchCourtErrorV1::CaseGraph)?;
-        let compiled = self.compile_v2(provisional_scope, material_until_daa, costs, storage, price)?;
+        let compiled = self.compile_v2(provisional_scope, material_until_daa, costs, tokenizer_budget, storage, price)?;
         self.original_terms_v2(self.profile_id_v2(service_profile)?, compiled.relative_graph_id_v1())
     }
 
@@ -159,6 +161,7 @@ impl PlainBatchOriginalProjectionV2 {
         resource_id: Hash64,
         obligation: Tfp1PublicOriginalObligationV1,
         costs: NativeBatchDeliveryCostsV1,
+        tokenizer_budget: PlainTokenizerBatchBudgetV2,
         storage: MaterialIntakeScheduleV1,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
@@ -176,7 +179,7 @@ impl PlainBatchOriginalProjectionV2 {
             profile,
         )
         .map_err(|_| BatchCourtErrorV1::CaseGraph)?;
-        let compiled = self.compile_v2(scope, plan.terms.material_until_daa, costs, storage, price)?;
+        let compiled = self.compile_v2(scope, plan.terms.material_until_daa, costs, tokenizer_budget, storage, price)?;
         if self.original_terms_v2(profile, compiled.relative_graph_id_v1())? != (resource_id, obligation) {
             return Err(BatchCourtErrorV1::CaseGraph);
         }

@@ -1228,6 +1228,35 @@ pub(crate) fn palw_rooted_tokenizer_opening_bounds_v1(
 ) -> Option<PalwRootedTokenizerOpeningBoundsV1> {
     let class = original.job.class_id;
     let row = palw_rooted_tokenizer_registration_v1(state, extras, class, candidate_daa)?;
+    rooted_tokenizer_opening_bounds_for_original_v2(state, row, original, header)
+}
+
+/// Bind an ordinary prospective original to an already accepted registration
+/// on its native parent. Both clocks must strictly follow the registration.
+pub(crate) fn palw_rooted_tokenizer_for_original_v2<'a>(
+    parent: &'a PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    at: &crate::palw_state_v2::PalwBlockContextV2,
+    original: &PalwFreePromptCommitmentV3,
+    header: &PalwPublicTirBindingHeaderV1,
+) -> Option<(&'a PalwRootedTokenizerRegistrationRowV1, PalwRootedTokenizerOpeningBoundsV1)> {
+    if parent.last_point()?.blue_score >= at.blue_score {
+        return None;
+    }
+    let row = palw_rooted_tokenizer_registration_v1(parent, extras, original.job.class_id, at.daa_score)?;
+    if row.point.blue_score >= at.blue_score {
+        return None;
+    }
+    Some((row, rooted_tokenizer_opening_bounds_for_original_v2(parent, row, original, header)?))
+}
+
+fn rooted_tokenizer_opening_bounds_for_original_v2(
+    state: &PalwChainStateV2,
+    row: &PalwRootedTokenizerRegistrationRowV1,
+    original: &PalwFreePromptCommitmentV3,
+    header: &PalwPublicTirBindingHeaderV1,
+) -> Option<PalwRootedTokenizerOpeningBoundsV1> {
+    let class = original.job.class_id;
     let record = state.tir_class_v1(&class)?;
     let facts = row.facts_v1();
     if !row.semantics.well_formed_for(&class, &header.artifact_root)

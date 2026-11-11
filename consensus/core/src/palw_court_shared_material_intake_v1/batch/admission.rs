@@ -1,9 +1,11 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
+pub(crate) mod plain_tokenizer;
 pub(crate) mod protected;
 use super::numerical_verification::NumericalBatchReplayBudgetV1;
 use super::plain_output::{
     BATCH_PLAIN_OUTPUT_ORDINAL_V2, BatchPlainOutputReceiptV2, PlainBatchOutputV2, batch_plain_output_control_id_v2,
 };
+use super::plain_tokenizer::PlainBatchTokenizerV2;
 use super::{BatchResponsePositionV1, MaterialIntakeScheduleV1, PART, Stage};
 use super::{constraint_stop::ConstraintStopBatchOperandsV1, native_ranges::NumericalBatchEnvelopeV1};
 use crate::{
@@ -16,6 +18,7 @@ use crate::{
         reserve_native_requests_v1,
     },
 };
+use plain_tokenizer::{PlainTokenizerBatchBudgetV2, TOKENIZER_DEMAND_ORDINAL_V2, material_ranges_v2, tokenizer_verification_id_v2};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
@@ -159,6 +162,18 @@ struct DeliveryWindowsV1 {
     begin: Range<u64>,
     parts: Range<u64>,
     finish: Range<u64>,
+    authenticated_finish: Option<AuthenticatedFinishV2>,
+}
+
+/// Semantic material may become immutable only after the shared FullIds has
+/// been authenticated. A later phase funds that check at Finish, independently
+/// of the subsequent case verification. This is prospective grammar only.
+struct AuthenticatedFinishV2 {
+    first_ordinal: u64,
+    last_ordinal: u64,
+    predecessor: [u8; 64],
+    window: Range<u64>,
+    authentication: ServiceCost,
 }
 
 impl DeliveryWindowsV1 {
@@ -273,7 +288,7 @@ pub(crate) fn compile_native_batch_plain_output_v2(
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
-    compile_native_batch_delivery_with_output_v2(shape, None, Some(output), costs, storage, cost)
+    compile_native_batch_delivery_with_output_v2(shape, None, Some(output), None, costs, storage, cost)
 }
 
 /// Compile the relative graph without trying a provisional packet namespace
@@ -286,13 +301,31 @@ pub(crate) fn compile_native_batch_delivery_shape_v1(
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
 ) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
-    compile_native_batch_delivery_with_output_v2(shape, stop, None, costs, storage, cost)
+    compile_native_batch_delivery_with_output_v2(shape, stop, None, None, costs, storage, cost)
 }
 
+/// The registered-tokenizer extension is a separate prospective grammar.
+/// Its semantic bodies are not MaterialTargetV1 targets; the old runtime
+/// cannot install this graph. Complete original admission remains separate.
+#[allow(dead_code)]
+pub(crate) fn compile_native_batch_plain_tokenizer_v2(
+    shape: NativeBatchDeliveryShapeV1<'_>,
+    output: &PlainBatchOutputV2,
+    tokenizer: &PlainBatchTokenizerV2,
+    tokenizer_budget: PlainTokenizerBatchBudgetV2,
+    costs: NativeBatchDeliveryCostsV1,
+    storage: MaterialIntakeScheduleV1,
+    cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<NativeRetainedV1<CompiledBatchAdmissionV1>, BatchCourtErrorV1> {
+    compile_native_batch_delivery_with_output_v2(shape, None, Some(output), Some((tokenizer, tokenizer_budget)), costs, storage, cost)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn compile_native_batch_delivery_with_output_v2(
     shape: NativeBatchDeliveryShapeV1<'_>,
     stop: Option<(&ConstraintStopBatchOperandsV1, ServiceCost, ServiceCost)>,
     output: Option<&PlainBatchOutputV2>,
+    tokenizer: Option<(&PlainBatchTokenizerV2, PlainTokenizerBatchBudgetV2)>,
     costs: NativeBatchDeliveryCostsV1,
     storage: MaterialIntakeScheduleV1,
     cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
@@ -303,6 +336,11 @@ fn compile_native_batch_delivery_with_output_v2(
         || scope == Hash64::default()
         || stop.is_some_and(|(operands, _, _)| !operands.matches_original_v1(claim, scope))
         || output.is_some_and(|operands| operands.claim != claim || stop.is_some())
+        || tokenizer.is_some_and(|(branch, _)| {
+            !branch.matches_claim_v2(claim)
+                || !branch.matches_acceptance_v2(shape.accepted_daa)
+                || output.is_none_or(|output| output.full_ids_range != [branch.bounds_v2().full_ids_body_bytes])
+        })
         || shape.maximums.is_empty()
         || shape.maximums.len() > costs.maximum_packets
         || shape.maximums.iter().any(|&bytes| !(1..=super::MATERIAL_PIPELINED_MAX_BYTES).contains(&bytes))
@@ -316,6 +354,12 @@ fn compile_native_batch_delivery_with_output_v2(
     {
         return Err(DeliveryCost);
     }
+    if let Some((branch, budget)) = tokenizer {
+        budget.check_v2(branch.bounds_v2())?;
+        budget.check_terminal_v2(numerical_verification, costs.terminal)?;
+    }
+    let tokenizer_ranges = tokenizer.map(|(branch, _)| material_ranges_v2(branch)).transpose()?;
+    let tokenizer_demands = tokenizer_ranges.as_ref().map_or(0, |ranges| super::native_ranges::partition_maximums_v1(ranges).count());
     let a = shape.accepted_daa;
     let hard = a.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
     let notice = a.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
@@ -332,14 +376,28 @@ fn compile_native_batch_delivery_with_output_v2(
         return Err(Window);
     }
     cursor = cursor.checked_add(timing.provider_wait_daa).ok_or(Clock)?;
-    let windows = DeliveryWindowsV1 {
+    let mut windows = DeliveryWindowsV1 {
         open,
         begin: take_service_window_v1(&mut cursor, timing.begin_daa, before)?,
         parts: take_service_window_v1(&mut cursor, timing.parts_daa, before)?,
         finish: take_service_window_v1(&mut cursor, timing.finish_daa, before)?,
+        authenticated_finish: None,
     };
+    if let Some((_, budget)) = tokenizer {
+        windows.authenticated_finish = Some(AuthenticatedFinishV2 {
+            first_ordinal: TOKENIZER_DEMAND_ORDINAL_V2
+                .checked_sub((tokenizer_demands as u64).checked_sub(1).ok_or(CaseGraph)?)
+                .ok_or(CaseGraph)?,
+            last_ordinal: TOKENIZER_DEMAND_ORDINAL_V2,
+            predecessor: BatchResponsePositionV1 { demand_ordinal: BATCH_PLAIN_OUTPUT_ORDINAL_V2, range_index: 0 }
+                .packet_id(claim, scope, Stage::Finish)
+                .map_err(|_| CaseGraph)?,
+            window: take_service_window_v1(&mut cursor, timing.finish_daa, before)?,
+            authentication: budget.verification,
+        });
+    }
     let expires = storage.draft_expires_v1(windows.begin.start, hard, shape.material_until_daa).map_err(|_| Window)?;
-    if windows.finish.end > expires {
+    if windows.authenticated_finish.as_ref().map_or(windows.finish.end, |finish| finish.window.end) > expires {
         return Err(Window);
     }
     let verification_window = take_service_window_v1(&mut cursor, timing.verification_daa, before)?;
@@ -352,19 +410,21 @@ fn compile_native_batch_delivery_with_output_v2(
     let numerical_fault_storage_rent_sompi = storage.rent_for_bytes_v1(retained_numerical_fault_bytes).map_err(|_| DeliveryCost)?;
     let stop_window = stop.map(|_| take_service_window_v1(&mut cursor, timing.stop_daa, before)).transpose()?;
     let output_window = output.map(|output| take_service_window_v1(&mut cursor, output.control_daa, before)).transpose()?;
+    let tokenizer_window =
+        tokenizer.map(|(_, budget)| take_service_window_v1(&mut cursor, budget.verification_daa, before)).transpose()?;
     let terminal_window = take_service_window_v1(&mut cursor, timing.terminal_daa, before)?;
     let packet = |id, cost, window: &Range<u64>| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
     let demand_count = super::native_ranges::partition_maximums_v1(shape.maximums).count();
-    let extra_branches = usize::from(stop.is_some() || output.is_some());
+    let extra_branches = usize::from(stop.is_some() || output.is_some()) + tokenizer_demands;
     let demand_capacity = demand_count.checked_add(extra_branches).ok_or(CaseGraph)?;
-    let control_nodes = 2 + 2 * usize::from(stop.is_some()) + usize::from(output.is_some());
+    let control_nodes = 2 + 2 * usize::from(stop.is_some()) + usize::from(output.is_some()) + usize::from(tokenizer.is_some());
     if demand_count == 0 || demand_capacity > costs.maximum_packets {
         return Err(CaseGraph);
     }
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<MaximumBatchDemandV1>(demand_capacity as u64).map_err(LocalResource)?;
     q.vec_v1::<CausalServicePacketV1>(control_nodes as u64).map_err(LocalResource)?;
-    q.vec_v1::<[u8; 64]>(2).map_err(LocalResource)?;
+    q.vec_v1::<[u8; 64]>(2 + (tokenizer_demands + usize::from(tokenizer.is_some())) as u64).map_err(LocalResource)?;
     let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(LocalResource)?;
     let mut demands = Vec::with_capacity(demand_capacity);
     demands.extend(super::native_ranges::partition_maximums_v1(shape.maximums).enumerate().map(|(ordinal, range_maximums)| {
@@ -401,6 +461,25 @@ fn compile_native_batch_delivery_with_output_v2(
         graph.push(CausalServicePacketV1 { packet: packet(control, output.control_cost, &window), predecessors: vec![] });
         graph[1].predecessors.push(control);
         retained = Some(BatchRetainedControlV1 { packet: control, payload_bytes: BatchPlainOutputReceiptV2::ROOTED_MAX_BYTES });
+    }
+    if let Some(((branch, budget), window)) = tokenizer.zip(tokenizer_window) {
+        let control = tokenizer_verification_id_v2(claim, scope, branch)?;
+        let ranges = tokenizer_ranges.as_ref().ok_or(CaseGraph)?;
+        for (index, range_maximums) in super::native_ranges::partition_maximums_v1(ranges).enumerate() {
+            let ordinal = TOKENIZER_DEMAND_ORDINAL_V2.checked_sub(index as u64).ok_or(CaseGraph)?;
+            demands.push(MaximumBatchDemandV1 { ordinal, range_maximums, predecessors: &[], verification: control });
+        }
+        // Share the authenticated FullIds material, without requiring a
+        // separate actor to file Output first. Compile also adds every new
+        // semantic range's Finish dependency.
+        let full_ids_finish = BatchResponsePositionV1 { demand_ordinal: BATCH_PLAIN_OUTPUT_ORDINAL_V2, range_index: 0 }
+            .packet_id(claim, scope, Stage::Finish)
+            .map_err(|_| CaseGraph)?;
+        graph.push(CausalServicePacketV1 {
+            packet: packet(control, budget.verification, &window),
+            predecessors: vec![full_ids_finish],
+        });
+        graph[1].predecessors.push(control);
     }
     let plan = BatchAdmissionV1 {
         claim,
@@ -534,7 +613,11 @@ impl BatchAdmissionV1<'_> {
             }
         }
 
-        let bytes = expansion_workspace_v1(&graph, self.demands, packets, ranges).map_err(BatchCourtErrorV1::LocalResource)?;
+        let mut bytes = expansion_workspace_v1(&graph, self.demands, packets, ranges).map_err(BatchCourtErrorV1::LocalResource)?;
+        if windows.is_some_and(|windows| windows.authenticated_finish.is_some()) {
+            // Extra causal edge and Vec growth for each semantic Finish.
+            bytes = bytes.checked_add((ranges as u64).checked_mul(128).ok_or(DeliveryCost)?).ok_or(DeliveryCost)?;
+        }
         let lease = reserve(bytes).map_err(BatchCourtErrorV1::LocalResource)?;
         let native_nodes: BTreeMap<_, _> = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index)).collect();
         let terminal = *native_nodes.get(&self.terminal).ok_or(CaseGraph)?;
@@ -594,6 +677,22 @@ impl BatchAdmissionV1<'_> {
                         let window = windows.response(index, last);
                         node.packet.release_daa = window.start;
                         node.packet.service_before = window.end;
+                    }
+                    if let Some(ordered) = windows
+                        .authenticated_finish
+                        .as_ref()
+                        .filter(|ordered| (ordered.first_ordinal..=ordered.last_ordinal).contains(&demand.ordinal))
+                    {
+                        let finish = &mut response[last];
+                        finish.predecessors.push(ordered.predecessor);
+                        finish.packet.release_daa = ordered.window.start;
+                        finish.packet.service_before = ordered.window.end;
+                        // Both semantic ranges conservatively receive the full
+                        // tokenizer allowance. No signature/wire budget is
+                        // substituted: the delivery price remains additive.
+                        finish.packet.cost.work =
+                            finish.packet.cost.work.checked_add(ordered.authentication.work).ok_or(DeliveryCost)?;
+                        finish.packet.cost.io = finish.packet.cost.io.checked_add(ordered.authentication.io).ok_or(DeliveryCost)?;
                     }
                 }
                 let finish = response[response.len() - 1].packet.id;
