@@ -242,3 +242,6 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 
 
 `7c6f9cf2e` の[差分回帰2件](../../../evidence/palw/tokenizer-registration-differential-regression-2026-11-11.json)で、全 table の一括 verifier と従来の逐次 JSON court primitive を同じ raw commitment に対して比較した。3種類の小さな table の全 ID を、1・7・65,536 bytesの断片と途中 codec 復元で検査し、rendering と key-event 数が一致した。上限を1下げた work、重複キー/ID、不正 merge、途中 EOF、末尾不正入力の拒否と、独立した EOG opening の認証も確認した。小さな機能 corpus の結果であり、全入力の同値性、旧署名契約の置換、実 tokenizer 全 ID の逐次 replay、公開受付を意味しない。
+
+
+`db9db6bec` の[実 RocksDB 保存・GC 試験](../../../evidence/palw/tokenizer-registration-physical-db-functional-2026-11-11.json)が成功した。共有する前提チェーンから、TKR1 を登録する DB と同じ時刻・ブロック数の空取引 DB を進めた。DAA 136 の raw GC 後に Part/session/book は消え、検査済み登録行と元の body/journal は保持された。強制 flush・compaction・DB close/reopen 後も同じ結果で、最大観測 WAL は登録側15,853,876 bytes、比較側6,891,785 bytes、compaction 後の全ファイル長は3,022,325 / 2,729,517 bytesだった。これは圧縮しやすい空白で埋めた64 KiB入力、macOS opt-level 0の保存機能観測であり、実 tokenizer の保存上限や Linux 性能・公開単価には外挿しない。通常の履歴を raw GC の副作用で削除していない。

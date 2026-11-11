@@ -1,0 +1,473 @@
+{
+  "schema": "palw-tokenizer-registration-physical-db-functional-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "db9db6bec16aeb608ebba623da7ffbbf759e10bc",
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "profile": "macOS test; core and consensus opt-level 0; functional storage observation",
+  "log": "/tmp/t12-tokenizer-physical-db-measurement.log",
+  "logSha256": "28abc402d6f329ae05d29937448f237e0e6936fc24ce50747821bb109a5fab7d",
+  "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus-5d5050182ad43097",
+  "binarySha256": "024e94917f1ae32c76f34dc2f5008562d42df449eb3696aa74d5f2593498e64b",
+  "databaseRoot": "/tmp/t12-tokenizer-physical-db.ylustw/observed",
+  "command": "TKR_DB_MEASUREMENT_DIR=/tmp/t12-tokenizer-physical-db.ylustw/observed /usr/bin/time -l /tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus-5d5050182ad43097 measure_tokenizer_registration_rocksdb_history_and_gc --ignored --nocapture",
+  "result": {
+    "passed": 1,
+    "failed": 0,
+    "testSeconds": 8.39,
+    "externalWallSeconds": 8.44,
+    "maxResidentBytes": 222494720
+  },
+  "relatedRegression": {
+    "log": "/tmp/t12-tokenizer-physical-db-build-tests-r2.log",
+    "sha256": "992ad88a5f9716fdfb5cf2618a533497a202f4886376e1a77ddae70be743d156",
+    "nodePassed": 2,
+    "cliPassed": 1
+  },
+  "samples": [
+    {
+      "control": {
+        "daa": 76,
+        "db": {
+          "allocatedFileBytes": 1748992,
+          "fileBytes": 1732006,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 0
+        },
+        "stateRoot": "9bc8dcb6466f318b1cc04773a1a123ef49887464f224230af4b05249a444afe893f1cb0dbca757483971613831f98eddbb8c5ec3a488fbf03697f1bc18fbbdf4",
+        "tip": "ed419465e75b36ed90408e28eaa2865e09a7251fdb81658271ff043471ac1f72f3ecc3c840e7f77ed9c1a265b30bce6a953dc2d2ce3b847ca67e7c4a4fcec3ce"
+      },
+      "phase": {
+        "classId": "048dafca369d7f4d3468a9bdee38f2272300f7d311b7d78dabbed49a7ec56f2d419fc6e069de8dd7860d477e1207c66be548fabae4f8e4a9f832de0b76d365cc",
+        "flushNs": [
+          15680292,
+          13827834
+        ],
+        "openId": "c2f993b9e579442eb4b523956f46a6a11daef116eb7c077eee798d0864f62b1b206290be4cc3146ff6f0cd0ff3b9fb5571f238b1c2a7c9bbe8a095a3cdef5dd3",
+        "policyId": "cc177cafea5bfe8ce7c1deb758edf62a27a5fb144f8687ea592a440aedcf407a34579d1b84e4a39260c727e8ae7a76e7d73a91b723c602e3b1658d063be0903d",
+        "rawBytes": 65536,
+        "rawShape": "synthetic JSON with trailing whitespace",
+        "tokenizerId": "8d2bf512fefa647fd4cbfd7d4732a876b05ae78857edeb9155985c8dee5acaf51a186fd31739cc1b5bc46cde79b544f9c69b7a8e419dd113501a679140ec6d70"
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "baseline_flushed",
+      "workload": {
+        "daa": 76,
+        "db": {
+          "allocatedFileBytes": 1753088,
+          "fileBytes": 1735292,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 0
+        },
+        "stateRoot": "9bc8dcb6466f318b1cc04773a1a123ef49887464f224230af4b05249a444afe893f1cb0dbca757483971613831f98eddbb8c5ec3a488fbf03697f1bc18fbbdf4",
+        "tip": "ed419465e75b36ed90408e28eaa2865e09a7251fdb81658271ff043471ac1f72f3ecc3c840e7f77ed9c1a265b30bce6a953dc2d2ce3b847ca67e7c4a4fcec3ce"
+      }
+    },
+    {
+      "control": {
+        "daa": 77,
+        "db": {
+          "allocatedFileBytes": 1871872,
+          "fileBytes": 1854127,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 1050624,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 122121
+        },
+        "stateRoot": "71c94b0813bc8f24fecdd12fa42c15257aa4e248a18cd12ae61230701cab6638d050d2f07485314236f5cd3facfa61a2103ffd63d9ad0387dcbc6ab5c2b44112",
+        "tip": "e246b28d0293bef226aa9a57be4cd77d9ae1bdd51830f1bc53d9e62c1302ad1c47d3a2a05567cf73b91cc1c76f482248818d550408968814848203bbff8f5064"
+      },
+      "phase": {
+        "acceptedRegistrationChargeSompi": 14580713,
+        "controlFoldNs": 12661792,
+        "controlSourceNs": 15725333,
+        "foldNs": 43022125,
+        "sourceNs": 35620708
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "open_accepted",
+      "workload": {
+        "daa": 77,
+        "db": {
+          "allocatedFileBytes": 1908736,
+          "fileBytes": 1887498,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 1050624,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 152206
+        },
+        "stateRoot": "668591d124a9624c9f0c96f068bc2b58486ff4bdbd424d4b8500514fc23c4e2a0671097eac1757746a905c008fc30c374c5a59ad479f7ca9bf94be4ec2e180c8",
+        "tip": "31f51b9652c27eb8bd67e7082192135e919a4cf4899471e29213575dd069a7f19dce4d96db3f498bd23442a47746ae58baba726e96d18d19a3a0ef847baa1e45"
+      }
+    },
+    {
+      "control": {
+        "daa": 78,
+        "db": {
+          "allocatedFileBytes": 2064384,
+          "fileBytes": 2045653,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 1050624,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 313647
+        },
+        "stateRoot": "9b560d922e49fa5ed41a3659ce26b6963b1fa05ecd163aca1e6894e957b8b4462923819de463d66d97098d4ffdf70ad6a5d85e17044177ea30a47c9b71744bf4",
+        "tip": "9a4387bfdb04b0107fb246b3cc25b40c985d2e1698a3d34cf3e0e103f201f583756d9560ff1726ea1bae361c8118917be1bad9d964af8124aa8c25e0d5f1bfe2"
+      },
+      "phase": {
+        "controlFoldNs": 15384375,
+        "controlSourceNs": 12846958,
+        "foldNs": 44020500,
+        "sourceNs": 25111541
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "part_accepted",
+      "workload": {
+        "daa": 78,
+        "db": {
+          "allocatedFileBytes": 2355200,
+          "fileBytes": 2335863,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 1050624,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 600571
+        },
+        "stateRoot": "fba897ffb66f40a4ad05dfbfb87c4a665f650f30ae50226b22114f7d00f8a90ec7b9ac0742c449695b081b52efbb84fe7194936fc58533578ccb3c077e5d3c06",
+        "tip": "3709a0b71d2bbe6a62f4147ac95746d581fc6783cf93ab09037f294948904dd076e3690106d9194895a39510193117110a66a033a4fd86f6c3ab960addf94d8f"
+      }
+    },
+    {
+      "control": {
+        "daa": 79,
+        "db": {
+          "allocatedFileBytes": 2187264,
+          "fileBytes": 2167781,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 1050624,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 435775
+        },
+        "stateRoot": "d50e70be3f0584082b1ff0c1b956e92bcd1fd107c4b1f7093b1c4ecc1f888577dc5bf33c044501fae69177f6a296a62646e7818e1bf022306ba46505e27f2264",
+        "tip": "8f14daa04ee9863597b9d3b717c30e965a67135d019fae3e00c2d91124409b438dc4588dea04a61201cf3991c8f8f280149bc46a6fd15c2b42ea2139aac41d10"
+      },
+      "phase": {
+        "history": {
+          "bookBorshBytes": 797,
+          "foldDeltaBorshBytes": [
+            8002,
+            83189,
+            16458
+          ],
+          "partBorshBytes": 70602,
+          "sessionBorshBytes": 6243,
+          "sourceBodyStoreBytes": [
+            13237,
+            78296,
+            12964
+          ]
+        },
+        "timing": {
+          "controlFoldNs": 15527375,
+          "controlSourceNs": 12811125,
+          "foldNs": 52861375,
+          "sourceNs": 38801875
+        }
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "finish_accepted",
+      "workload": {
+        "daa": 79,
+        "db": {
+          "allocatedFileBytes": 2666496,
+          "fileBytes": 2646475,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 1050624,
+          "rocksdbLiveDataEstimateBytes": 1688768,
+          "rocksdbLiveSstBytes": 1688768,
+          "rocksdbTotalSstBytes": 1688768,
+          "sstFileBytes": 1688768,
+          "walFileBytes": 911183
+        },
+        "stateRoot": "819f0c66ce987c465c0947773e501091f66bf34675968e0233f4a53a0077003f1c58870983195eb53186106d621d6a4c14769017ab38f16a82ba2445059eb12d",
+        "tip": "3a5cd08bb2215d109d11c79bd3aad36b3b7fe27631cb94c17836c14acf4e4cd7445e7f3936073cecb0b40069c30ecfea0cdb5ac85ab9f35c61eef391f41cba87"
+      }
+    },
+    {
+      "control": {
+        "daa": 79,
+        "db": {
+          "allocatedFileBytes": 1880064,
+          "fileBytes": 1861150,
+          "files": 9,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 124394,
+          "rocksdbLiveSstBytes": 1813162,
+          "rocksdbTotalSstBytes": 1813162,
+          "sstFileBytes": 1813162,
+          "walFileBytes": 0
+        },
+        "stateRoot": "d50e70be3f0584082b1ff0c1b956e92bcd1fd107c4b1f7093b1c4ecc1f888577dc5bf33c044501fae69177f6a296a62646e7818e1bf022306ba46505e27f2264",
+        "tip": "8f14daa04ee9863597b9d3b717c30e965a67135d019fae3e00c2d91124409b438dc4588dea04a61201cf3991c8f8f280149bc46a6fd15c2b42ea2139aac41d10"
+      },
+      "phase": {
+        "flushNs": [
+          3447042,
+          1735875
+        ]
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "finish_flushed",
+      "workload": {
+        "daa": 79,
+        "db": {
+          "allocatedFileBytes": 2179072,
+          "fileBytes": 2158627,
+          "files": 10,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 417869,
+          "rocksdbLiveSstBytes": 2106637,
+          "rocksdbTotalSstBytes": 2106637,
+          "sstFileBytes": 2106637,
+          "walFileBytes": 0
+        },
+        "stateRoot": "819f0c66ce987c465c0947773e501091f66bf34675968e0233f4a53a0077003f1c58870983195eb53186106d621d6a4c14769017ab38f16a82ba2445059eb12d",
+        "tip": "3a5cd08bb2215d109d11c79bd3aad36b3b7fe27631cb94c17836c14acf4e4cd7445e7f3936073cecb0b40069c30ecfea0cdb5ac85ab9f35c61eef391f41cba87"
+      }
+    },
+    {
+      "control": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 8716288,
+          "fileBytes": 8639905,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 7342080,
+          "rocksdbLiveDataEstimateBytes": 1691178,
+          "rocksdbLiveSstBytes": 1691178,
+          "rocksdbTotalSstBytes": 1691178,
+          "sstFileBytes": 1691178,
+          "walFileBytes": 6891785
+        },
+        "stateRoot": "9377aedb47179b03fd801088bac4f3ebaeb746d1e103f834b91a2b9285f62f6be6e6311219c7026df92f979bd20181aa288ced1d3aefaf6eda29cee7ca015de8",
+        "tip": "7c37636610b63b8fbbb158ed256e7a32218098d71392575426e63a1c4f0bc1d35830aa260e70f507aa716b1e231130e70bc96965bd91e641ecc63235bbc1a1f5"
+      },
+      "phase": {
+        "controlFoldNs": 18645958,
+        "foldNs": 24772875,
+        "gcDeltaBorshBytes": 78057,
+        "history": {
+          "bookBorshBytes": null,
+          "foldDeltaBorshBytes": [
+            8002,
+            83189,
+            16458
+          ],
+          "partBorshBytes": null,
+          "sessionBorshBytes": null,
+          "sourceBodyStoreBytes": [
+            13237,
+            78296,
+            12964
+          ]
+        }
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "material_gc",
+      "workload": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 18857984,
+          "fileBytes": 17894141,
+          "files": 9,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 17600904,
+          "rocksdbLiveDataEstimateBytes": 1984188,
+          "rocksdbLiveSstBytes": 1984188,
+          "rocksdbTotalSstBytes": 1984188,
+          "sstFileBytes": 1984188,
+          "walFileBytes": 15853876
+        },
+        "stateRoot": "3ff91ca8cd5422eba6d4d29168b2558a87dfbb5d615ffa758e7e602d3e8e986f4b3974886d2a076e276796cfb446786736fef0e20e65eeab7e02e679fdbe173e",
+        "tip": "b81a2d9c011d6898d20841f8d30c17a32fadfb0bfa28dd07a01ead872ca808bc1f4020117b6105322ac54b6d498cf891aaccf58b8ad31976122ced59890a4ad0"
+      }
+    },
+    {
+      "control": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 2826240,
+          "fileBytes": 2812667,
+          "files": 9,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 1691178,
+          "rocksdbLiveSstBytes": 2751024,
+          "rocksdbTotalSstBytes": 2751024,
+          "sstFileBytes": 2751024,
+          "walFileBytes": 0
+        },
+        "stateRoot": "9377aedb47179b03fd801088bac4f3ebaeb746d1e103f834b91a2b9285f62f6be6e6311219c7026df92f979bd20181aa288ced1d3aefaf6eda29cee7ca015de8",
+        "tip": "7c37636610b63b8fbbb158ed256e7a32218098d71392575426e63a1c4f0bc1d35830aa260e70f507aa716b1e231130e70bc96965bd91e641ecc63235bbc1a1f5"
+      },
+      "phase": {
+        "flushNs": [
+          14601292,
+          11106541
+        ]
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "material_gc_flushed",
+      "workload": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 3203072,
+          "fileBytes": 3184916,
+          "files": 9,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 1984188,
+          "rocksdbLiveSstBytes": 3123406,
+          "rocksdbTotalSstBytes": 3123406,
+          "sstFileBytes": 3123406,
+          "walFileBytes": 0
+        },
+        "stateRoot": "3ff91ca8cd5422eba6d4d29168b2558a87dfbb5d615ffa758e7e602d3e8e986f4b3974886d2a076e276796cfb446786736fef0e20e65eeab7e02e679fdbe173e",
+        "tip": "b81a2d9c011d6898d20841f8d30c17a32fadfb0bfa28dd07a01ead872ca808bc1f4020117b6105322ac54b6d498cf891aaccf58b8ad31976122ced59890a4ad0"
+      }
+    },
+    {
+      "control": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 2748416,
+          "fileBytes": 2729517,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 2662654,
+          "rocksdbLiveSstBytes": 2662654,
+          "rocksdbTotalSstBytes": 2662654,
+          "sstFileBytes": 2662654,
+          "walFileBytes": 0
+        },
+        "stateRoot": "9377aedb47179b03fd801088bac4f3ebaeb746d1e103f834b91a2b9285f62f6be6e6311219c7026df92f979bd20181aa288ced1d3aefaf6eda29cee7ca015de8",
+        "tip": "7c37636610b63b8fbbb158ed256e7a32218098d71392575426e63a1c4f0bc1d35830aa260e70f507aa716b1e231130e70bc96965bd91e641ecc63235bbc1a1f5"
+      },
+      "phase": {
+        "compactNs": [
+          25669083,
+          23842667
+        ]
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "material_gc_compacted",
+      "workload": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 3039232,
+          "fileBytes": 3022325,
+          "files": 8,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 2955593,
+          "rocksdbLiveSstBytes": 2955593,
+          "rocksdbTotalSstBytes": 2955593,
+          "sstFileBytes": 2955593,
+          "walFileBytes": 0
+        },
+        "stateRoot": "3ff91ca8cd5422eba6d4d29168b2558a87dfbb5d615ffa758e7e602d3e8e986f4b3974886d2a076e276796cfb446786736fef0e20e65eeab7e02e679fdbe173e",
+        "tip": "b81a2d9c011d6898d20841f8d30c17a32fadfb0bfa28dd07a01ead872ca808bc1f4020117b6105322ac54b6d498cf891aaccf58b8ad31976122ced59890a4ad0"
+      }
+    },
+    {
+      "control": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 2793472,
+          "fileBytes": 2768429,
+          "files": 10,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 2662654,
+          "rocksdbLiveSstBytes": 2662654,
+          "rocksdbTotalSstBytes": 2662654,
+          "sstFileBytes": 2662654,
+          "walFileBytes": 36
+        },
+        "stateRoot": "9377aedb47179b03fd801088bac4f3ebaeb746d1e103f834b91a2b9285f62f6be6e6311219c7026df92f979bd20181aa288ced1d3aefaf6eda29cee7ca015de8",
+        "tip": "7c37636610b63b8fbbb158ed256e7a32218098d71392575426e63a1c4f0bc1d35830aa260e70f507aa716b1e231130e70bc96965bd91e641ecc63235bbc1a1f5"
+      },
+      "phase": {
+        "controlReopenNs": 7149584,
+        "reopenNs": 7629458
+      },
+      "scope": "isolated selected-source node storage",
+      "stage": "database_reopen",
+      "workload": {
+        "daa": 136,
+        "db": {
+          "allocatedFileBytes": 3084288,
+          "fileBytes": 3061242,
+          "files": 10,
+          "filesDisappearedDuringSample": 0,
+          "rocksdbAllMemtablesBytes": 2048,
+          "rocksdbLiveDataEstimateBytes": 2955593,
+          "rocksdbLiveSstBytes": 2955593,
+          "rocksdbTotalSstBytes": 2955593,
+          "sstFileBytes": 2955593,
+          "walFileBytes": 36
+        },
+        "stateRoot": "3ff91ca8cd5422eba6d4d29168b2558a87dfbb5d615ffa758e7e602d3e8e986f4b3974886d2a076e276796cfb446786736fef0e20e65eeab7e02e679fdbe173e",
+        "tip": "b81a2d9c011d6898d20841f8d30c17a32fadfb0bfa28dd07a01ead872ca808bc1f4020117b6105322ac54b6d498cf891aaccf58b8ad31976122ced59890a4ad0"
+      }
+    }
+  ],
+  "assertions": [
+    "Workload and empty-body control share authenticated prerequisite chain; paired blocks have identical DAA, blue score and timestamp.",
+    "Real signed UTXO TKR1 Open/Part/Finish accepted; Complete registration retained after raw/session/book GC.",
+    "Original source body rows and fold journals have identical sizes after GC, forced flush/compaction and DB close/reopen.",
+    "Cold DB open recovers same state root and registered row; OS cache is not dropped."
+  ],
+  "limitations": [
+    "Single 65,536-byte synthetic JSON padded with highly compressible spaces. Not representative of actual tokenizer storage, maximum size, incompressible data, full candidate/mergeset or concurrent registrations.",
+    "Sequential samples of actual RocksDB files and properties; background activity possible. Not atomic cross-DB snapshots, physical write-amplification bounds or full disk-quota enforcement.",
+    "GC is native raw lifecycle, not DAG pruning. Ordinary bodies and undo journals intentionally remain.",
+    "Forced flush/compaction are explicit test operations, not a claim about automatic reclamation timing.",
+    "No public fee/profile adoption, deployment, registration, TFP1 quote, Final or main push."
+  ]
+}
