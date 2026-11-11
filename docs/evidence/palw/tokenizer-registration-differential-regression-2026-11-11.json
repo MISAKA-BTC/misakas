@@ -1,0 +1,32 @@
+{
+  "schema": "palw-tokenizer-registration-differential-regression-v1",
+  "date": "2026-11-11",
+  "sourceCommit": "7c6f9cf2ebc739afc097afed9246d00f03ddd075",
+  "command": "CARGO_TARGET_DIR=/tmp/misaka-public-contract-test.fd7edK CARGO_INCREMENTAL=0 cargo --config 'profile.dev.package.kaspa-consensus-core.opt-level=0' test --locked -p kaspa-consensus-core --lib tokenizer_registration_differential -j 2 -- --nocapture",
+  "passed": 2,
+  "failed": 0,
+  "runSeconds": 1.89,
+  "buildSeconds": 177,
+  "log": "/tmp/t12-tokenizer-differential-tests-r2.log",
+  "logSha256": "e297104a57b1c4d71a6e98a00b5dff6f66f8daf833fb49cfcb33043442df588e",
+  "binary": "/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08",
+  "binarySha256": "d23b5279c0d0690c6e1bcaa8815dd1eec7b2724bdb5a1f44ddc545f628686a89",
+  "profile": "macOS dev/test, core opt-level 0; functional, not timing qualification",
+  "tests": [
+    "tokenizer_registration_differential_invalid_json_and_authenticated_eof",
+    "tokenizer_registration_differential_rendering_eog_and_key_work"
+  ],
+  "scope": [
+    "Rooted all-table verifier and existing sequential JSON court primitive consume the same raw commitment.",
+    "All IDs of three small tables: added override, holes, absent/non-byte rendering, byte alphabet and surrogate-pair literal; chunk sizes 1, 7 and 65536, with state codec restart at every step.",
+    "Exact native key-event count succeeds on both paths; one less rejects or yields WorkBoundExceeded.",
+    "Duplicated decoded object key, duplicate vocabulary/added ID, invalid merge, premature EOF and trailing garbage refuse on both paths.",
+    "Wrong raw identity never establishes a sequential verdict.",
+    "EOG is independently authenticated by registered table, not selected by JSON; substituted EOG and wrong table rendering are rejected."
+  ],
+  "limitations": [
+    "Small deterministic corpus; not exhaustive parser equivalence or actual-tokenizer all-ID sequential replay.",
+    "Compares JSON/rendering semantics only; does not equate signed moves, transport, price, timing, claim or original admission.",
+    "No production code change, public activation, transaction, TFP1 quote or Final."
+  ]
+}

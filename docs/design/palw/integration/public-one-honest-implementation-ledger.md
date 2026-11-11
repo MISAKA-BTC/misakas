@@ -239,3 +239,6 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 
 
 [Linux release parser 計測](../../../evidence/palw/tokenizer-registration-linux-parser-2026-11-11/README.md)では、source `8a6923139` の通常 release binary を6 vCPU Broadwell / RAM約12 GBの参照ホストで実行し、8ケース×5回が期待結果で終了した。実入力は201.81〜250.16 ms、最大 raw/vocab/EOG ケースは814.00〜1165.11 msだった。最大観測 RSS は key-heavy ケースの89.98 MiB。入力生成を別プロセスに分け、toolchain・binary/input hash・全コマンド・time の原文を保存した。共有ホスト上の少数サンプルによる parser 単体値であり、native 処理、最大 mergeset、物理 DB、公開1 BPS・登録料の資格測定とは区別する。
+
+
+`7c6f9cf2e` の[差分回帰2件](../../../evidence/palw/tokenizer-registration-differential-regression-2026-11-11.json)で、全 table の一括 verifier と従来の逐次 JSON court primitive を同じ raw commitment に対して比較した。3種類の小さな table の全 ID を、1・7・65,536 bytesの断片と途中 codec 復元で検査し、rendering と key-event 数が一致した。上限を1下げた work、重複キー/ID、不正 merge、途中 EOF、末尾不正入力の拒否と、独立した EOG opening の認証も確認した。小さな機能 corpus の結果であり、全入力の同値性、旧署名契約の置換、実 tokenizer 全 ID の逐次 replay、公開受付を意味しない。
