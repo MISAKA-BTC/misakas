@@ -3,6 +3,7 @@
 //! signature, and does not authenticate an accepted carrier or reserve slots.
 
 pub(crate) mod native_link;
+pub(crate) mod preclaim;
 
 use super::{
     PreparedPublicOriginalV1, PublicOriginalAdmissionV1, PublicOriginalReservationV1, public_original_service_contract_id_v1,
@@ -132,6 +133,20 @@ impl Tfp1PublicOriginalObligationV1 {
         public_original_service_contract_id_v1(self.obligation, budget)
     }
 
+    /// Final physical namespaces can be computed after constructing the
+    /// companion, before signing or admitting it. They are deliberately not
+    /// inputs to the relative resource graph that the companion commits.
+    fn batch_scope_v1(self, original: misaka_palw_positive_contract::public_one_honest::OriginalId) -> Result<Hash64, ContractError> {
+        if original.0 == Digest([0; 64]) {
+            return Err(ContractError::Scope);
+        }
+        stream_digest(
+            b"misaka-palw/tfp1-public-original-batch/v1",
+            &(self.facts.claim, self.facts.source, original, self.profile, self.resource, self.obligation),
+        )
+        .map_err(|_| ContractError::NonCanonical)
+    }
+
     pub(crate) fn check_companion_v1(self, companion: &OriginalCommit, budget: &AggregateBudget) -> Result<(), ContractError> {
         let facts = self.facts;
         if companion.execution != Digest(facts.job_context.as_bytes())
@@ -170,6 +185,13 @@ struct PairedTfp1CarrierV1 {
 
 #[allow(dead_code)]
 impl PreparedTfp1PublicOriginalV1 {
+    /// A prebookable selected-bond rank, not the later logical CaseId. The
+    /// actual draw normalizes its members to these ranks. A first claimant
+    /// cannot choose a new physical namespace or take another rank's slots.
+    pub(crate) fn drawn_batch_reservation_scope_v1(&self, rank: u64) -> Result<Hash64, ContractError> {
+        preclaim::drawn_scope_v1(self.obligation, self.companion.original, rank, self.companion.rescue.max_drawn_bonds)
+    }
+
     pub(crate) fn companion_v1(&self) -> &PreparedPublicOriginalV1 {
         &self.companion
     }
@@ -194,7 +216,8 @@ impl PublicOriginalAdmissionV1<'_> {
         reservation: &PublicOriginalReservationV1<'_>,
     ) -> Result<(), ContractError> {
         self.check_tfp1_link_v1(companion, obligation, reservation)?;
-        self.check_original_metadata_v1(companion)
+        self.check_original_metadata_v1(companion)?;
+        self.check_reservation_v1(companion, reservation).map(|_| ())
     }
 
     fn check_tfp1_link_v1(
@@ -719,6 +742,11 @@ mod tests {
         let rooted = paired.rooted_drawn_batch_case_v1(&with_case, &draw, &request_wire, &request_context).unwrap();
         assert_eq!((rooted.claim_v1(), rooted.source_v1()), (facts.claim, facts.source));
         assert_ne!(rooted.scope_v1(), rooted.case_scope_v1());
+        let prebooked_scope = companion_only.drawn_batch_reservation_scope_v1(0).unwrap();
+        assert_eq!(rooted.reservation_scope_v1(), prebooked_scope);
+        assert_ne!(rooted.reservation_scope_v1(), rooted.case_scope_v1());
+        assert_eq!(companion_only.drawn_batch_reservation_scope_v1(1), Err(ContractError::Budget));
+        assert_eq!(paired.drawn_batch_reservation_scope_v1(u64::MAX), Err(ContractError::Budget));
         assert_eq!(rooted.case_v1().case_id_v1(), request_case_id);
         assert_eq!(rooted.case_v1().opportunity_v1().rescue_reservation_v1(), member.rescue_reservation);
         assert!(companion_only.rooted_drawn_batch_case_v1(&with_case, &draw, &request_wire, &request_context).is_err());

@@ -1686,13 +1686,12 @@ impl PublicOriginalAdmissionV1<'_> {
         Ok(prepared)
     }
 
-    pub fn prepare(
+    /// Shared unsigned/signed reservation validation; no signature or state write.
+    fn check_reservation_v1(
         &self,
         original: &OriginalCommit,
-        key: &[u8; PUBKEY_BYTES],
-        signature: &[u8; SIGNATURE_BYTES],
         reservation: &PublicOriginalReservationV1<'_>,
-    ) -> Result<PreparedPublicOriginalV1, ContractError> {
+    ) -> Result<(u64, RemainingCapacity, VerificationSchedule), ContractError> {
         let manifest_payload_bytes = self
             .manifest_scope_limits
             .iter()
@@ -1717,6 +1716,17 @@ impl PublicOriginalAdmissionV1<'_> {
         if original.service_contract != public_original_service_contract_id_v1(reservation.service_obligation, reservation.budget) {
             return Err(ContractError::Scope);
         }
+        Ok((manifest_payload_bytes, capacity, schedule))
+    }
+
+    pub fn prepare(
+        &self,
+        original: &OriginalCommit,
+        key: &[u8; PUBKEY_BYTES],
+        signature: &[u8; SIGNATURE_BYTES],
+        reservation: &PublicOriginalReservationV1<'_>,
+    ) -> Result<PreparedPublicOriginalV1, ContractError> {
+        let (manifest_payload_bytes, capacity, schedule) = self.check_reservation_v1(original, reservation)?;
         let original_id = self.authenticate(original, key, signature)?;
         Ok(PreparedPublicOriginalV1 {
             original: original_id,

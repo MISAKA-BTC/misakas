@@ -798,8 +798,25 @@ pub(crate) fn palw_tir_public_tokenizer_frame_fixture_v1() -> (
     tests::tokenizer_frame(None)
 }
 
+/// Fix the real companion signer before execution, hashing and source capture.
+/// This does not add native FP signature/payment admission to the fixture.
 #[cfg(test)]
-pub(crate) fn palw_tir_public_tokenizer_frame_lying_output_fixture_v2(output_root: Hash64) -> (
+pub(crate) fn palw_tir_public_tokenizer_frame_with_executor_fixture_v1(
+    key: &[u8],
+) -> (
+    PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+    Vec<u8>,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+) {
+    tests::tokenizer_frame_with_executor(None, Some(key))
+}
+
+#[cfg(test)]
+pub(crate) fn palw_tir_public_tokenizer_frame_lying_output_fixture_v2(
+    output_root: Hash64,
+) -> (
     PalwTirPublicFrameFixtureV1,
     crate::palw_class_semantics_v1::PalwClassSemanticsV1,
     crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
@@ -1468,7 +1485,22 @@ mod tests {
         (frame, semantics, table)
     }
 
-    pub(super) fn tokenizer_frame(output_root: Option<Hash64>) -> (
+    pub(super) fn tokenizer_frame(
+        output_root: Option<Hash64>,
+    ) -> (
+        super::PalwTirPublicFrameFixtureV1,
+        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+        Vec<u8>,
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+    ) {
+        tokenizer_frame_with_executor(output_root, None)
+    }
+
+    pub(super) fn tokenizer_frame_with_executor(
+        output_root: Option<Hash64>,
+        executor: Option<&[u8]>,
+    ) -> (
         super::PalwTirPublicFrameFixtureV1,
         crate::palw_class_semantics_v1::PalwClassSemanticsV1,
         crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
@@ -1485,6 +1517,9 @@ mod tests {
             tokenizer_id: tokenizer,
         };
         let (_, _, mut job, _) = crate::palw_prefix_family_court_v1::tests::qualified_prefix_case_for_tests_v1(false, false);
+        if let Some(key) = executor {
+            job.executor_pubkey = key.to_vec();
+        }
         job.version = PALW_FP_V3_VERSION;
         job.tail = None;
         job.decode = None;

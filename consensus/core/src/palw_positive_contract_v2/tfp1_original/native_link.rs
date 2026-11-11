@@ -90,12 +90,16 @@ impl PreparedTfp1PublicOriginalV1 {
         let case = self.companion.rooted_drawn_batch_case_v1(state, draw, bytes, context)?;
         // This namespace is specific to the new PublicOriginal profile. Do
         // not relabel a legacy first-notice or shared-context packet with it.
-        let scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
-            b"misaka-palw/tfp1-public-original-batch/v1",
-            &(link.claim, link.source, link.original, link.profile, link.resource, link.obligation),
-        )
-        .map_err(|_| ContractError::NonCanonical)?;
-        Ok(RootedTfp1DrawnBatchCaseV1 { claim: link.claim, source: link.source, scope, case_scope: case.case_scope_v1(scope)?, case })
+        let scope = self.obligation.batch_scope_v1(link.original)?;
+        let reservation_scope = self.drawn_batch_reservation_scope_v1(case.opportunity_v1().index_v1())?;
+        Ok(RootedTfp1DrawnBatchCaseV1 {
+            claim: link.claim,
+            source: link.source,
+            scope,
+            case_scope: case.case_scope_v1(scope)?,
+            reservation_scope,
+            case,
+        })
     }
 
     pub(crate) fn prepare_native_link_v1(
@@ -144,6 +148,7 @@ pub(crate) struct RootedTfp1DrawnBatchCaseV1 {
     source: Hash64,
     scope: Hash64,
     case_scope: Hash64,
+    reservation_scope: Hash64,
     case: crate::palw_positive_contract_v2::protected_batch_case::RootedDrawnBatchCaseV1,
 }
 
@@ -159,6 +164,9 @@ impl RootedTfp1DrawnBatchCaseV1 {
     }
     pub(crate) fn case_scope_v1(&self) -> Hash64 {
         self.case_scope
+    }
+    pub(crate) fn reservation_scope_v1(&self) -> Hash64 {
+        self.reservation_scope
     }
     pub(crate) fn case_v1(&self) -> crate::palw_positive_contract_v2::protected_batch_case::RootedDrawnBatchCaseV1 {
         self.case

@@ -560,7 +560,10 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
     use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, palw_rooted_claim_tokenizer_v1};
 
-    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let companion_key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_with_executor_fixture_v1(
+        companion_key.verification_key.as_ref(),
+    );
     let (mut accepted, params, mut extras) = world(&fx, &fx.frame);
     let claim = fx.frame.plan_v1().original_claim;
     let class = semantics.class_id;
@@ -612,6 +615,9 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(derive(&b.state, &PalwBlockContextV2 { daa_score: registration_point.daa_score, ..at }, original).is_err());
     assert!(derive(&b.state, &PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at }, original).is_err());
     let branch = derive(&b.state, &at, original).unwrap();
+    crate::palw_court_shared_material_intake_v1::batch::plain_output::projection::exercise_batch_booking_before_allocation_v2(
+        &b.state, &extras, &at, &fx,
+    );
     crate::palw_court_shared_material_intake_v1::batch::admission::plain_tokenizer::check_compiled_tokenizer_fixture_v2(
         &branch, original, &source,
     );

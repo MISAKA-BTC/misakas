@@ -792,6 +792,10 @@ pub(crate) struct CompiledBatchAdmissionV1 {
 }
 
 impl CompiledBatchAdmissionV1 {
+    pub(crate) fn packet_count_v1(&self) -> usize {
+        self.graph.len()
+    }
+
     pub(crate) fn relative_graph_id_v1(&self) -> Hash64 {
         self.relative_graph_id
     }

@@ -12,6 +12,17 @@ impl CompiledBatchAdmissionV1 {
         book: &mut ServiceReservations,
         maximum_packets: usize,
     ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+        Self::reserve_protected_checked_v2(cases, book, maximum_packets, |_, _| Ok(()))
+    }
+
+    /// The native owner's signed allowance is checked against every assigned
+    /// quote before the shared candidate book is committed.
+    pub(crate) fn reserve_protected_checked_v2(
+        cases: &[(Hash64, &Self)],
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        check: impl FnOnce(&[BatchAdmissionQuoteV1], &ServiceReservations) -> Result<(), ServiceRefusal>,
+    ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, LocalResource};
         let first = cases.first().ok_or(CaseGraph)?.1;
         if cases.len() > maximum_packets
@@ -103,9 +114,42 @@ impl CompiledBatchAdmissionV1 {
                 for (payload, fault) in [(4, 7), (5, 8), (6, 9)] {
                     totals[payload].checked_add(totals[fault]).ok_or(ServiceRefusal::InvalidBudget)?;
                 }
-                Ok(())
+                check(&quotes, candidate)
             })?;
         Ok((NativeRetainedV1::from_owner_reserved_v1(quotes, owner), graph))
+    }
+
+    /// Match this graph's actual assignments AND legal repair windows to the
+    /// companion's promises before committing any of its protected ranks.
+    /// This checks only stages present in this graph; it is not a substitute
+    /// for the full profile's first-notice, localization or defense graphs.
+    pub(crate) fn check_public_original_schedule_v1(
+        &self,
+        candidate: &ServiceReservations,
+        schedule: misaka_palw_positive_contract::public_one_honest::VerificationSchedule,
+    ) -> Result<(), ServiceRefusal> {
+        let check = |id: &[u8; 64], deadline: u64| {
+            let packet = candidate.packet(id).ok_or(ServiceRefusal::InvalidState)?;
+            let assigned = candidate.assigned_daa(id).ok_or(ServiceRefusal::InvalidState)?;
+            let latest = packet.service_before.checked_sub(1).ok_or(ServiceRefusal::InvalidInterval)?;
+            if assigned > deadline || latest > deadline {
+                return Err(ServiceRefusal::DeadlineExhausted);
+            }
+            Ok(())
+        };
+        for (_, finish, _) in &self.spans {
+            check(finish, schedule.material_ready_by())?;
+        }
+        for node in &self.graph {
+            if node.packet.id != self.terminal && !self.controls.iter().any(|control| control.packet == node.packet.id) {
+                check(&node.packet.id, schedule.inspection_by())?;
+            }
+        }
+        for control in &self.controls {
+            check(&control.packet, schedule.filed_by())?;
+        }
+        let terminal_deadline = schedule.terminal_by().checked_sub(self.recovery_daa).ok_or(ServiceRefusal::DeadlineExhausted)?;
+        check(&self.terminal, terminal_deadline)
     }
 }
 
@@ -175,6 +219,15 @@ mod tests {
         }
         let (_, owner) = quotes.into_parts_v1();
         assert!(owner.is_some());
+        let mut refused = initial.clone();
+        assert!(
+            CompiledBatchAdmissionV1::reserve_protected_checked_v2(&[(h(100), &a), (h(101), &b)], &mut refused, 14, |quotes, _| {
+                assert_eq!(quotes.len(), 2);
+                Err(ServiceRefusal::InvalidBudget)
+            },)
+            .is_err()
+        );
+        assert_eq!(refused, initial, "signed allowance refusal must precede every book write");
         let mut reversed = initial.clone();
         CompiledBatchAdmissionV1::reserve_protected_v2(&[(h(101), &b), (h(100), &a)], &mut reversed, 14).unwrap();
         assert_eq!(book, reversed);
