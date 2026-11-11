@@ -62,7 +62,8 @@ pub(crate) fn exercise_preclaim_booking_v1(
     }
     let maximum_packets = width.checked_mul(rescue.max_drawn_bonds as usize).unwrap();
     let mut booked = empty_book.clone();
-    let (quotes, graph) = reserve_drawn_v1(original, projection, &terms, schedule, &mut booked, maximum_packets, price).unwrap();
+    let (quotes, graph) =
+        reserve_drawn_v1(original, projection, &terms, schedule, u64::MAX, &mut booked, maximum_packets, price).unwrap();
     assert_ne!(scope(0), scope(1));
     assert_eq!(quotes.len(), 2);
     assert_eq!(graph.len(), maximum_packets);
@@ -75,7 +76,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
 
     let mut unchanged = empty_book.clone();
     assert!(matches!(
-        reserve_drawn_v1(original, projection, &terms, schedule, &mut unchanged, maximum_packets - 1, price),
+        reserve_drawn_v1(original, projection, &terms, schedule, u64::MAX, &mut unchanged, maximum_packets - 1, price),
         Err(BatchCourtErrorV1::CaseGraph)
     ));
     assert_eq!(unchanged, empty_book);
@@ -89,7 +90,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
         let understated =
             DrawnBatchPreclaimTermsV1::new_v1(projected, ProtectedRescueDemand { per_drawn_bond: capacity, ..rescue }).unwrap();
         assert!(matches!(
-            reserve_drawn_v1(original, projection, &understated, schedule, &mut unchanged, maximum_packets, |_, _| {
+            reserve_drawn_v1(original, projection, &understated, schedule, u64::MAX, &mut unchanged, maximum_packets, |_, _| {
                 panic!("an allowance smaller than native Trace reached graph compilation")
             }),
             Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
@@ -104,12 +105,12 @@ pub(crate) fn exercise_preclaim_booking_v1(
     .unwrap();
     assert_ne!(underfunded.obligation_v1(), terms.obligation_v1());
     assert!(matches!(
-        reserve_drawn_v1(original, projection, &underfunded, schedule, &mut unchanged, maximum_packets, price),
+        reserve_drawn_v1(original, projection, &underfunded, schedule, u64::MAX, &mut unchanged, maximum_packets, price),
         Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
     ));
     assert_eq!(unchanged, empty_book);
 
-    assert!(reserve_drawn_v1(original, projection, &terms, short, &mut unchanged, maximum_packets, price).is_err());
+    assert!(reserve_drawn_v1(original, projection, &terms, short, u64::MAX, &mut unchanged, maximum_packets, price).is_err());
     assert_eq!(unchanged, empty_book);
 
     if late_selection {
@@ -126,7 +127,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
         ] {
             let schedule = VerificationSchedule::new(clock, notice, changed).unwrap();
             assert!(matches!(
-                reserve_drawn_v1(original, projection, &terms, schedule, &mut unchanged, maximum_packets, price),
+                reserve_drawn_v1(original, projection, &terms, schedule, u64::MAX, &mut unchanged, maximum_packets, price),
                 Err(BatchCourtErrorV1::Reservation(ServiceRefusal::DeadlineExhausted))
             ));
             assert_eq!(unchanged, empty_book, "late binding/delivery refusal cannot leave a sibling rank reserved");
@@ -145,7 +146,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
     let complete_cap = maximum_packets + rescue.max_drawn_bonds as usize;
     let mut complete_book = empty_book.clone();
     let (complete_quotes, complete_graph) =
-        reserve_drawn_v1(original, projection, &with_initial, schedule, &mut complete_book, complete_cap, price).unwrap();
+        reserve_drawn_v1(original, projection, &with_initial, schedule, u64::MAX, &mut complete_book, complete_cap, price).unwrap();
     assert_eq!(complete_graph.len(), complete_cap);
     for (rank, quote) in complete_quotes.iter().enumerate() {
         let scope = drawn_scope_v1(with_initial.obligation, original, rank as u64, rescue.max_drawn_bonds).unwrap();
@@ -160,7 +161,7 @@ pub(crate) fn exercise_preclaim_booking_v1(
         assert!(complete_graph.iter().any(|node| node.predecessors.contains(&request.packet.id)));
     }
     let mut refused = empty_book.clone();
-    assert!(reserve_drawn_v1(original, projection, &with_initial, schedule, &mut refused, complete_cap - 1, price).is_err());
+    assert!(reserve_drawn_v1(original, projection, &with_initial, schedule, u64::MAX, &mut refused, complete_cap - 1, price).is_err());
     assert_eq!(refused, empty_book);
     check_companion_booking_parity(projection, &with_initial, fixture, at, notice, case, &empty_book, complete_cap);
 
@@ -206,7 +207,7 @@ fn check_companion_booking_parity(
         .unwrap();
     let job = &binding.job_context;
     let d = Digest([85; 64]);
-    let scope = ChainScope { network: d, ruleset: d, branch: d };
+    let scope = ChainScope { network: Digest(fp.job.network_domain.as_bytes()), ruleset: d, branch: d };
     let mut limits = [ManifestScopeRules { codec: d, max_bytes: 1, chunk_bytes: 1 }; MaterialScope::COUNT];
     let prompt_rules = ManifestScopeRules { codec: prompt_text_material_codec_v1(), max_bytes: 64, chunk_bytes: 64 };
     let initial_rules = ManifestScopeRules { codec: tir_cold_initial_state_codec_v1(), max_bytes: 128, chunk_bytes: 128 };
@@ -222,6 +223,15 @@ fn check_companion_booking_parity(
     let prompt = prompt_text_material_v1(scope.ruleset, "fixture prompt", prompt_rules).unwrap().subject;
     let initial_supply = terms.rescue.per_drawn_bond;
     let capacity = initial_supply.checked_add(terms.rescue.total().unwrap()).unwrap();
+    // Derive the signed storage floor from the native graph, not a fee
+    // fixture. All other profile duties still need additional funding.
+    let price = |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
+    let schedule = VerificationSchedule::new(OriginalClock::new(at.daa_score).unwrap(), notice, case).unwrap();
+    let mut priced_book = empty_book.clone();
+    let (priced, _) =
+        reserve_drawn_v1(OriginalId(d), projection, terms, schedule, u64::MAX, &mut priced_book, maximum_packets, price).unwrap();
+    let fee_floor = drawn_storage_fee_v1(&priced).unwrap();
+    assert!(fee_floor > 0);
     let budget = AggregateBudget {
         rounds: 1,
         unique_source_bytes: 100_000_000,
@@ -229,25 +239,32 @@ fn check_companion_booking_parity(
         additional_work: capacity.additional_work,
         retained_bytes: capacity.retained_bytes,
         retention_until: terms.projected.material_until_daa_v2(),
-        fee: 1,
+        fee: fee_floor,
         witness_attempts: 1,
     };
     let obligation = terms.obligation_v1();
     let service_contract = obligation.service_contract_v1(&budget);
-    let admission = PublicOriginalAdmissionV1 {
+    let source = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_v1(
+        &fixture.record,
+        &fixture.layout,
+        frame.header_v1(),
+        fp.execution_root,
+        fp.trace_root,
+        fixture.rules.maximum_leaves,
+    )
+    .unwrap();
+    let policy = super::super::Tfp1PublicAdmissionPolicyV1 {
         scope,
-        job,
-        class: &binding.class,
-        artifact: binding.artifact_root,
-        miner: principal(&key),
-        prompt,
-        initial_state,
-        dependencies,
-        service_contract,
         max_manifest_bytes: ManifestV1::WIRE_BYTES,
         manifest_scope_limits: &limits,
         manifest_total_limit: 64 + 128 + 68 + MaterialScope::COUNT as u64 - 3,
     };
+    let admission =
+        PublicOriginalAdmissionV1::from_native_tfp1_v1(fp, &source, &binding.class, policy, b"fixture prompt", obligation, &budget)
+            .unwrap();
+    assert_eq!(admission.initial_state, initial_state);
+    assert_eq!(admission.dependencies, dependencies);
+    assert_eq!(admission.prompt, prompt);
     let usage = AggregateUsage::default();
     let reservation = PublicOriginalReservationV1 {
         origin: AcceptedOrigin {
@@ -297,7 +314,6 @@ fn check_companion_booking_parity(
     };
     let signed = sign_companion(&companion);
     let prepared = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();
-    let price = |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
     let mut unsigned_book = empty_book.clone();
     let (unsigned_quotes, unsigned_graph) = admission
         .reserve_tfp1_drawn_batch_candidate_v1(&companion, &reservation, projection, terms, &mut unsigned_book, maximum_packets, price)
@@ -308,6 +324,47 @@ fn check_companion_booking_parity(
     assert_eq!(unsigned_quotes, signed_quotes);
     assert_eq!(unsigned_graph, signed_graph);
     assert_eq!(unsigned_book, signed_book);
+
+    assert_eq!(drawn_storage_fee_v1(&unsigned_quotes).unwrap(), fee_floor);
+    // An exact budget succeeds above; one missing unit or one already spent
+    // unit must reject both paths without leaving any rank booked.
+    for already_used in [false, true] {
+        let tight_budget = AggregateBudget { fee: fee_floor - u64::from(!already_used), ..budget };
+        let tight_usage = AggregateUsage { fee: u64::from(already_used), ..usage };
+        let tight_admission = PublicOriginalAdmissionV1::from_native_tfp1_v1(
+            fp,
+            &source,
+            &binding.class,
+            policy,
+            b"fixture prompt",
+            obligation,
+            &tight_budget,
+        )
+        .unwrap();
+        let tight_companion = OriginalCommit { service_contract: tight_admission.service_contract, ..companion.clone() };
+        let tight_reservation = PublicOriginalReservationV1 { usage: &tight_usage, budget: &tight_budget, ..reservation };
+        let tight_signed = sign_companion(&tight_companion);
+        let tight_prepared = tight_admission.prepare_tfp1_signed_bytes_v1(&tight_signed, obligation, &tight_reservation).unwrap();
+        let mut refused = empty_book.clone();
+        assert!(matches!(
+            tight_admission.reserve_tfp1_drawn_batch_candidate_v1(
+                &tight_companion,
+                &tight_reservation,
+                projection,
+                terms,
+                &mut refused,
+                maximum_packets,
+                price,
+            ),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(&refused, empty_book);
+        assert!(matches!(
+            tight_prepared.reserve_drawn_batch_candidates_v1(projection, terms, &mut refused, maximum_packets, price,),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(&refused, empty_book);
+    }
 
     let mut unchanged = empty_book.clone();
     if terms.initial_request.is_some() && notice.material_request_inclusion_daa > 1 {

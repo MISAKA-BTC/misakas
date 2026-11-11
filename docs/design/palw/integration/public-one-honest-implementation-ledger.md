@@ -350,3 +350,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[受付保存境界](../../../evidence/palw/tfp1-admission-checkpoint-2026-11-11/README.md)は **実装中・Rust検証未実行**。実FreePrompt dispatcherのpaired保存とcourt観測の保存を一つにし、funded mapだけの候補も保護対象にする。型付きstateコピーは同じcheckerの一時予約で所有し、失敗時state/journalと観測・prefixを戻す。TFO3全plannerからの一括install、G14全枝費用/予約/期限、FpTokenizerと公開同一claimの受付/Final/権利消費/blockは未完。モデル取得証明なし。
 
 2026-11-11 の[宣言索引の原子的保存](../../../evidence/palw/accepted-declaration-atomic-commit-2026-11-11/README.md)は **実装中・Rust検証未実行**。ノードの単体rehearsalからclass宣言の永続writeを除き、成功した実foldのdeltaと照合して、UTXO/PALWと同じDB batchへ移した。全prefix候補再演の破棄前に必要な副作用除去であり、候補filterの置換やG14完全plannerの完成ではない。公開同一claimの受付/Final/権利消費/blockは未証明。モデル取得証明なし。
+
+2026-11-11 の[native受付条件と保存費用下限](../../../evidence/palw/tfp1-native-admission-fee-floor-2026-11-11/README.md)は **実装中・Rust検証未実行**。FP/Source/classと明示policyから受付identityを生成する共通constructorを追加し、unsigned/signedの共通予約で全選出rankの保存費用を既使用分を含む署名fee上限へ照合する。費用不足ではbookを確定しない。constructorの本番resolver、全工程planner、実資金・受付本経路は未接続。公開同一claimの受付/Final/権利消費/blockは未証明。モデル取得証明なし。

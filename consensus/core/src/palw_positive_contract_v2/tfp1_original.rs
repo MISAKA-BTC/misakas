@@ -27,6 +27,7 @@ use misaka_palw_positive_contract::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NativeTfp1PublicOriginalFactsV1 {
+    network: Hash64,
     claim: Hash64,
     source: Hash64,
     job_context: Hash64,
@@ -71,6 +72,7 @@ impl NativeTfp1PublicOriginalFactsV1 {
         }
         let key = original.job.executor_pubkey.as_slice().try_into().map_err(|_| ContractError::Identity)?;
         Ok(Self {
+            network: original.job.network_domain,
             claim,
             source,
             job_context: header.job_context.context_hash(),
@@ -109,6 +111,70 @@ impl NativeTfp1PublicOriginalFactsV1 {
         )
         .map_err(|_| ContractError::NonCanonical)?;
         Ok(Tfp1PublicOriginalObligationV1 { facts: self, profile, resource, obligation: Digest(obligation.as_bytes()) })
+    }
+}
+
+/// Explicit native policy inputs. The owner resolves scope and limits from
+/// its active rules; neither a companion nor a manifest may choose them.
+/// In particular, this adapter does not invent a branch from the accepting
+/// block, nor select manifest ceilings from a test fixture.
+#[derive(Clone, Copy)]
+pub(crate) struct Tfp1PublicAdmissionPolicyV1<'a> {
+    pub scope: misaka_palw_positive_contract::identity::ChainScope,
+    pub max_manifest_bytes: u32,
+    pub manifest_scope_limits: &'a [misaka_palw_positive_contract::public_one_honest::ManifestScopeRules; MaterialScope::COUNT],
+    pub manifest_total_limit: u64,
+}
+
+impl<'a> PublicOriginalAdmissionV1<'a> {
+    /// Derive expected identities before either unsigned quote or signed
+    /// intake. The prompt is the literal prospective/actual carrier bytes.
+    /// This does not authenticate the FP/payer, prove branch ancestry, choose
+    /// a public profile, or reserve any of its service/funding obligations.
+    pub(crate) fn from_native_tfp1_v1(
+        original: &PalwFreePromptCommitmentV3,
+        source: &'a PalwTirPublicSourceV1,
+        class: &'a crate::palw_tir_class_v1::PalwTirClassV1,
+        policy: Tfp1PublicAdmissionPolicyV1<'a>,
+        prompt_bytes: &[u8],
+        obligation: Tfp1PublicOriginalObligationV1,
+        budget: &AggregateBudget,
+    ) -> Result<Self, ContractError> {
+        let facts = NativeTfp1PublicOriginalFactsV1::derive_v1(original, source)?;
+        if facts != obligation.facts || policy.scope.network != Digest(facts.network.as_bytes()) {
+            return Err(ContractError::Scope);
+        }
+        misaka_palw_positive_contract::public_one_honest::ManifestV1::fetch_size(policy.max_manifest_bytes)?;
+        if policy.manifest_total_limit < MaterialScope::COUNT as u64
+            || policy.manifest_scope_limits.iter().any(|rule| rule.max_bytes == 0 || rule.chunk_bytes == 0)
+        {
+            return Err(ContractError::Budget);
+        }
+        let prompt = std::str::from_utf8(prompt_bytes).map_err(|_| ContractError::NonCanonical)?;
+        let prompt =
+            prompt_text_material_v1(policy.scope.ruleset, prompt, policy.manifest_scope_limits[MaterialScope::Prompt as usize])?
+                .subject;
+        let cold = super::public_tfp1_cold_material_v1(
+            original,
+            source,
+            class,
+            policy.manifest_scope_limits[MaterialScope::InitialState as usize],
+            policy.manifest_scope_limits[MaterialScope::Dependencies as usize],
+        )?;
+        Ok(Self {
+            scope: policy.scope,
+            job: &source.header_v1().job_context,
+            class,
+            artifact: facts.artifact,
+            miner: facts.miner,
+            prompt,
+            initial_state: cold.initial_state.0.subject,
+            dependencies: cold.dependencies.0.subject,
+            service_contract: obligation.service_contract_v1(budget),
+            max_manifest_bytes: policy.max_manifest_bytes,
+            manifest_scope_limits: policy.manifest_scope_limits,
+            manifest_total_limit: policy.manifest_total_limit,
+        })
     }
 }
 
@@ -153,6 +219,7 @@ impl Tfp1PublicOriginalObligationV1 {
     pub(crate) fn check_companion_v1(self, companion: &OriginalCommit, budget: &AggregateBudget) -> Result<(), ContractError> {
         let facts = self.facts;
         if companion.execution != Digest(facts.job_context.as_bytes())
+            || companion.scope.network != Digest(facts.network.as_bytes())
             || companion.output != Digest(facts.output.as_bytes())
             // The native Trace codec names the aggregate execution root;
             // its inner logits root remains bound by Source and obligation.
@@ -175,6 +242,9 @@ impl Tfp1PublicOriginalObligationV1 {
 pub(crate) struct PreparedTfp1PublicOriginalV1 {
     companion: PreparedPublicOriginalV1,
     obligation: Tfp1PublicOriginalObligationV1,
+    /// Usage from the same pre-write admission inputs as the signed budget.
+    /// Replaying the intake must rederive it; booking cannot reset it to zero.
+    fee_used: u64,
     pairing: Option<PairedTfp1CarrierV1>,
 }
 
@@ -327,7 +397,7 @@ impl PublicOriginalAdmissionV1<'_> {
         let signed = SignedPublicOriginalV1::decode(bytes)?;
         self.check_tfp1_link_v1(&signed.original, obligation, reservation)?;
         let companion = self.prepare(&signed.original, &signed.key, &signed.signature, reservation)?;
-        Ok(PreparedTfp1PublicOriginalV1 { companion, obligation, pairing: None })
+        Ok(PreparedTfp1PublicOriginalV1 { companion, obligation, fee_used: reservation.usage.fee, pairing: None })
     }
 }
 
@@ -370,7 +440,7 @@ mod tests {
         let resource = Hash64::from_u64_word(2);
         let obligation = facts.service_obligation_v1(profile, resource).unwrap();
         let d = Digest([4; 64]);
-        let scope = ChainScope { network: d, ruleset: d, branch: d };
+        let scope = ChainScope { network: Digest(original.job.network_domain.as_bytes()), ruleset: d, branch: d };
         let binding = frame
             .header_v1()
             .resolve_registered_layout_v1(&fixture.record, &fixture.layout, original.execution_root, fixture.rules.maximum_leaves)
@@ -441,20 +511,44 @@ mod tests {
         prefix.job.version = 11;
         assert_eq!(super::super::tfp1_material::require_cold_tfp1_v1(&prefix, job), Err(ContractError::UnsupportedProfile));
         let prompt = prompt_text_material_v1(scope.ruleset, prompt_text, limits[MaterialScope::Prompt as usize]).unwrap().subject;
-        let admission = PublicOriginalAdmissionV1 {
+        let policy = Tfp1PublicAdmissionPolicyV1 {
             scope,
-            job,
-            class: &binding.class,
-            artifact: facts.artifact,
-            miner: facts.miner,
-            prompt,
-            initial_state: cold.initial_state.0.subject,
-            dependencies: cold.dependencies.0.subject,
-            service_contract: obligation.service_contract_v1(&budget),
             max_manifest_bytes: ManifestV1::WIRE_BYTES,
             manifest_scope_limits: &limits,
             manifest_total_limit: 64 + 128 + 68 + MaterialScope::COUNT as u64 - 3,
         };
+        let admission = PublicOriginalAdmissionV1::from_native_tfp1_v1(
+            original,
+            &source,
+            &binding.class,
+            policy,
+            prompt_text.as_bytes(),
+            obligation,
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(admission.prompt, prompt);
+        assert_eq!(admission.initial_state, cold.initial_state.0.subject);
+        assert_eq!(admission.dependencies, cold.dependencies.0.subject);
+        let derive = |policy, bytes: &[u8], class| {
+            PublicOriginalAdmissionV1::from_native_tfp1_v1(original, &source, class, policy, bytes, obligation, &budget).err()
+        };
+        assert_eq!(derive(policy, &[0xff], &binding.class), Some(ContractError::NonCanonical));
+        assert_eq!(
+            derive(
+                Tfp1PublicAdmissionPolicyV1 { scope: ChainScope { network: Digest([99; 64]), ..scope }, ..policy },
+                prompt_text.as_bytes(),
+                &binding.class,
+            ),
+            Some(ContractError::Scope)
+        );
+        assert_eq!(
+            derive(Tfp1PublicAdmissionPolicyV1 { manifest_total_limit: 0, ..policy }, prompt_text.as_bytes(), &binding.class),
+            Some(ContractError::Budget)
+        );
+        let mut foreign_class = binding.class.clone();
+        foreign_class.tokenizer_id = Hash64::from_u64_word(999);
+        assert_eq!(derive(policy, prompt_text.as_bytes(), &foreign_class), Some(ContractError::Scope));
         let mut reservation = PublicOriginalReservationV1 {
             origin: AcceptedOrigin {
                 accepting_block: NativeHash64([1; 64]),
@@ -530,6 +624,16 @@ mod tests {
             borsh::to_vec(&SignedPublicOriginalV1 { original, key, signature: *signature.as_ref() }).unwrap()
         };
         assert_eq!(admission.check_tfp1_candidate_v1(&companion, obligation, &reservation), Ok(()));
+        // Repeating a foreign network in both expected inputs and a correctly
+        // re-signed companion cannot substitute for the native FP network.
+        let foreign_scope = ChainScope { network: Digest([99; 64]), ..scope };
+        let foreign_admission = PublicOriginalAdmissionV1 { scope: foreign_scope, ..admission };
+        let foreign_companion = OriginalCommit { scope: foreign_scope, ..companion.clone() };
+        assert_eq!(foreign_admission.check_tfp1_candidate_v1(&foreign_companion, obligation, &reservation), Err(ContractError::Scope));
+        assert_eq!(
+            foreign_admission.prepare_tfp1_signed_bytes_v1(&sign(foreign_companion), obligation, &reservation),
+            Err(ContractError::Scope)
+        );
         // Even a caller repeating the candidate's invented roots cannot
         // replace the native cold-state/dependency identities.
         let placeholder = PublicOriginalAdmissionV1 { initial_state: d, dependencies: d, ..admission };

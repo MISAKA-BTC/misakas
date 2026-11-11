@@ -119,7 +119,8 @@ impl PublicOriginalAdmissionV1<'_> {
                 schedule,
             )?;
         }
-        reserve_drawn_v1(companion.id(), projection, terms, schedule, book, maximum_packets, price)
+        let fee_remaining = reservation.budget.fee.checked_sub(reservation.usage.fee).ok_or(BatchCourtErrorV1::CaseGraph)?;
+        reserve_drawn_v1(companion.id(), projection, terms, schedule, fee_remaining, book, maximum_packets, price)
     }
 }
 
@@ -145,7 +146,17 @@ impl PreparedTfp1PublicOriginalV1 {
         if let Some(plan) = terms.initial_request {
             plan.check_schedule_v1(origin.accepted_daa, self.companion.material_request_ready_by, self.companion.schedule)?;
         }
-        reserve_drawn_v1(self.companion.original, projection, terms, self.companion.schedule, book, maximum_packets, price)
+        let fee_remaining = self.companion.budget.fee.checked_sub(self.fee_used).ok_or(BatchCourtErrorV1::CaseGraph)?;
+        reserve_drawn_v1(
+            self.companion.original,
+            projection,
+            terms,
+            self.companion.schedule,
+            fee_remaining,
+            book,
+            maximum_packets,
+            price,
+        )
     }
 }
 
@@ -164,11 +175,25 @@ fn exact_vec<T>(count: usize) -> Result<Vec<T>, BatchCourtErrorV1> {
     Ok(values)
 }
 
+/// Storage charges already priced by the native compiled graph. This is a
+/// lower bound on the whole original's fee commitment: other roles, initial
+/// supply and non-storage charges must be added by the complete planner.
+/// Comparing a ceiling here neither burns funds nor charges them twice.
+fn drawn_storage_fee_v1(quotes: &[BatchAdmissionQuoteV1]) -> Result<u64, ServiceRefusal> {
+    quotes.iter().try_fold(0u64, |sum, quote| {
+        sum.checked_add(quote.carrier_storage_rent_sompi)
+            .and_then(|sum| sum.checked_add(quote.numerical_fault_storage_rent_sompi))
+            .ok_or(ServiceRefusal::InvalidBudget)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn reserve_drawn_v1(
     original: OriginalId,
     projection: &PlainBatchOriginalProjectionV2,
     terms: &DrawnBatchPreclaimTermsV1,
     schedule: VerificationSchedule,
+    fee_remaining: u64,
     book: &mut ServiceReservations,
     maximum_packets: usize,
     mut price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
@@ -239,6 +264,12 @@ fn reserve_drawn_v1(
         |quotes, candidate| {
             if quotes.len() != count {
                 return Err(ServiceRefusal::InvalidState);
+            }
+            // All ranks, PMR carriers and Node-produced fault storage share
+            // the signed original fee ceiling. Check before publishing any
+            // of this candidate's physical reservations to the caller book.
+            if drawn_storage_fee_v1(quotes)? > fee_remaining {
+                return Err(ServiceRefusal::InvalidBudget);
             }
             for (rank, quote) in quotes.iter().enumerate() {
                 cases[rank].1.check_public_original_schedule_v1(candidate, schedule)?;
