@@ -221,16 +221,49 @@ impl<'a> TirSharedRequestSetV1<'a> {
     /// Identity of the complete closed source-query universe, not a funded
     /// admission certificate. Existing per-query IDs remain unchanged.
     pub fn scope_id(&self) -> Result<Hash64, String> {
-        let bytes = borsh::to_vec(&(
-            1u16,
+        Self::scope_with_total_v1(
+            self.source,
             self.claim,
             self.allocation,
             self.native_rules,
             self.shared_profile,
-            self.source.source_id_v1(),
             self.geometry.total,
-        ))
-        .map_err(|e| e.to_string())?;
+        )
+    }
+
+    /// The same scope calculation without the Frame. An accepted context
+    /// must still reproduce these inputs from its immutable Frame and book.
+    pub(crate) fn scope_from_native_inputs_v2(
+        source: &Source,
+        claim: Hash64,
+        allocation: Hash64,
+        native_rules: Hash64,
+        shared_profile: Hash64,
+    ) -> Result<(Hash64, u64), String> {
+        if [claim, allocation, native_rules, shared_profile, source.source_id_v1()].contains(&Hash64::default()) {
+            return Err("shared scope lacks native identity".into());
+        }
+        let total = Geometry::new(
+            source.leaf_count_v1(),
+            u64::from(source.decode_count_v1()),
+            u64::from(source.vocab_v1()),
+            source.supports_tiled_trace_v1(),
+        )?
+        .total;
+        let scope = Self::scope_with_total_v1(source, claim, allocation, native_rules, shared_profile, total)?;
+        Ok((scope, total))
+    }
+
+    fn scope_with_total_v1(
+        source: &Source,
+        claim: Hash64,
+        allocation: Hash64,
+        native_rules: Hash64,
+        shared_profile: Hash64,
+        total: u64,
+    ) -> Result<Hash64, String> {
+        let bytes = borsh::to_vec(&(1u16, claim, allocation, native_rules, shared_profile, source.source_id_v1(), total))
+            .map_err(|e| e.to_string())?;
         Ok(Hash64::from_bytes(
             blake2b_simd::Params::new()
                 .hash_length(64)

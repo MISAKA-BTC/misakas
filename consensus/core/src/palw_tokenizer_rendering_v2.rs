@@ -984,7 +984,9 @@ pub struct PalwRootedTokenizerRegistrationRowV1 {
 }
 
 impl PalwRootedTokenizerRegistrationRowV1 {
-    pub(crate) fn registration_point_v1(&self) -> crate::palw_state_v2::PalwBlockContextV2 { self.point }
+    pub(crate) fn registration_point_v1(&self) -> crate::palw_state_v2::PalwBlockContextV2 {
+        self.point
+    }
 
     pub(crate) fn derive(
         parent: &PalwChainStateV2,
@@ -1294,6 +1296,22 @@ pub(crate) fn palw_claim_tokenizer_registration_v1(
     state: &PalwChainStateV2,
     claim_id: Hash64,
 ) -> Result<Option<&PalwRootedTokenizerRegistrationRowV1>, String> {
+    let Some(row) = palw_original_tokenizer_registration_for_fold_v2(state, claim_id)? else { return Ok(None) };
+    let claim = state.claim(&claim_id).ok_or("rooted claim tokenizer lost its claim")?;
+    let accepted = state.last_point().ok_or("rooted claim tokenizer has no accepted snapshot")?;
+    if claim.accepted_daa > accepted.daa_score || claim.accepted_blue_score > accepted.blue_score {
+        return Err("rooted claim tokenizer acceptance point changed".into());
+    }
+    Ok(Some(row))
+}
+
+/// An in-flight original may have written its claim row while the builder's
+/// last point still names its parent. The tokenizer itself must already
+/// belong to that parent and strictly precede both of the claim's clocks.
+pub(crate) fn palw_original_tokenizer_registration_for_fold_v2(
+    state: &PalwChainStateV2,
+    claim_id: Hash64,
+) -> Result<Option<&PalwRootedTokenizerRegistrationRowV1>, String> {
     let Some(claim) = state.claim(&claim_id) else { return Ok(None) };
     let Some(semantics) = state.claim_semantics_v1(&claim_id) else { return Ok(None) };
     let key = PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(claim.class_id, semantics.commitment());
@@ -1306,9 +1324,8 @@ pub(crate) fn palw_claim_tokenizer_registration_v1(
     if row.point.daa_score >= claim.accepted_daa || row.point.blue_score >= claim.accepted_blue_score {
         return Ok(None);
     }
-    let accepted = state.last_point().ok_or("rooted claim tokenizer has no accepted snapshot")?;
-    if row.key() != key || claim.accepted_daa > accepted.daa_score || claim.accepted_blue_score > accepted.blue_score {
-        return Err("rooted claim tokenizer record or acceptance point changed".into());
+    if row.key() != key {
+        return Err("rooted claim tokenizer key changed".into());
     }
     row.check_context(state)?;
     Ok(Some(row.as_ref()))

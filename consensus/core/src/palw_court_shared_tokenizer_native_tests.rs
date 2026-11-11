@@ -599,6 +599,11 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());
     accepted.staged_courts.insert(key, b.state.staged_court_row_v1(&key).unwrap().clone());
 
+    let accepted_point = accepted.last_point.replace(registration_point);
+    assert!(crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(&accepted, claim).is_err());
+    assert!(crate::palw_tokenizer_rendering_v2::palw_original_tokenizer_registration_for_fold_v2(&accepted, claim).unwrap().is_some());
+    accepted.last_point = accepted_point;
+
     let verifier = palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().unwrap();
     let id = ids.ids_v1()[0];
     let opening = table.opening_of(id).unwrap();
@@ -627,6 +632,7 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &other_source, &ids).is_err());
     accepted.claims.get_mut(&claim).unwrap().accepted_daa = registration_point.daa_score;
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());
+    assert!(crate::palw_tokenizer_rendering_v2::palw_original_tokenizer_registration_for_fold_v2(&accepted, claim).unwrap().is_none());
     accepted.claims.get_mut(&claim).unwrap().accepted_daa = fx.frame.plan_v1().terms.accepted_daa;
     accepted.staged_courts.remove(&eof_key);
     assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).is_err());

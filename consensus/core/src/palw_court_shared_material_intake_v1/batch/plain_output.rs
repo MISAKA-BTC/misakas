@@ -1,5 +1,6 @@
 //! Prospective plain TFP1 output control and replay against accepted FullIds.
 
+pub(crate) mod projection;
 mod quote;
 pub use quote::{
     BatchPlainOutputTerminalQuoteV2, BatchPlainOutputVerifyQuoteV2, quote_batch_plain_output_terminal_v2,

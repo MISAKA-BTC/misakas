@@ -413,6 +413,12 @@
                     };
                     use crate::palw_batch_court_v1::rooted::batch_open_packet_v1;
                     let scope = streamed_envelope.scope_v1();
+                    let plan = req.frame_v1().plan_v1();
+                    let profile = crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(base_book.state.profile_id);
+                    let (before_frame_scope, _) = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::scope_from_native_inputs_v2(
+                        req.geometry.source_v1(), claim, plan.allocation_id, plan.rules_id, profile,
+                    ).unwrap();
+                    assert_eq!(before_frame_scope, scope);
                     let output = PlainBatchOutputV2::derive_v2(
                         req.frame_v1().original_v1(), req.geometry.source_v1(), cost(8_192), 16,
                     ).unwrap();

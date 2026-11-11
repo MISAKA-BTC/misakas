@@ -316,11 +316,18 @@ fn plain_batch_profile_v2(
         return Err("plain Output context requires a plain original".into());
     }
     let service = state.court_service_state_v1().ok_or("plain Output context requires a native service profile")?;
-    let registration = crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(state, claim)?
+    let registration = crate::palw_tokenizer_rendering_v2::palw_original_tokenizer_registration_for_fold_v2(state, claim)?
         .ok_or("plain Output context requires its accepted tokenizer registration")?;
+    plain_batch_profile_id_v2(service.profile_id, registration.record_id_v1())
+}
+
+pub(crate) fn plain_batch_profile_id_v2(service_profile: Hash64, registration: Hash64) -> Result<Hash64, String> {
+    if [service_profile, registration].contains(&Hash64::default()) {
+        return Err("plain Output profile lacks service or tokenizer identity".into());
+    }
     crate::palw_court_shared_tir_stream_v1::stream_digest(
         b"misaka-palw/shared-tir-plain-batch-profile/v2",
-        &(service.profile_id, registration.record_id_v1()),
+        &(service_profile, registration),
     )
 }
 
