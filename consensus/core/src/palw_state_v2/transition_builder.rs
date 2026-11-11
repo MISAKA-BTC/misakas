@@ -1002,6 +1002,36 @@ impl<'a> TransitionBuilder<'a> {
         if let Some(claim) = &new {
             super::palw_claim_local_prefix_financial_archive_v4::on_terminal_v4(self, key, claim)?;
         }
+        // **ADR-0062 SA-1: the accuser's stake comes back HERE**, for the reason `write_court`
+        // gives about the challenger's — one site that every door already passes through.
+        //
+        // `DefaultDisputed` is the first phase in this ruleset that holds a SECOND bond's
+        // reservation, and a claim leaves it by more doors than the DA session's own sweep: the
+        // disclosure arm resumes it, a `CourtClosed { ExecutorGuilty }` on a session that was
+        // already open voids it, and so does `ProducerDefaulted` wherever ADR-0065 D4 is not
+        // armed. None of those knows what an accusation cost — `release_for_claim` gives back
+        // what the PRODUCER put up — and a release each of them had to remember is a release one
+        // of them eventually will not.
+        //
+        // Left behind, the accuser's sompi are state the fold WRITES and cannot READ BACK:
+        // `assert_internal_consistency` rebuilds this ledger from the claims, so the next
+        // `load_tip` refuses the snapshot the chain just wrote, on every node at once.
+        //
+        // Only when the claim STOPS being disputed — a rewrite that leaves the phase in place
+        // must not give the stake back while the session is still open. Saturating for the reason
+        // the challenger's release is: a ledger that cannot go negative is worth more here than
+        // an error nobody can clear.
+        // Record it before replacing the claim and indexes so a resource
+        // refusal leaves no claim mutation without a matching journal row.
+        if let Some(previous) = self.state.claims.get(&key)
+            && let PalwClaimPhaseV2::DefaultDisputed { accuser, accuser_exposure, .. } = &previous.phase
+            && !matches!(new.as_ref().map(|record| &record.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
+        {
+            let (accuser, accuser_exposure) = (*accuser, *accuser_exposure);
+            let held = self.state.reserved_exposure.get(&accuser).copied().unwrap_or(0);
+            let back = held.saturating_sub(accuser_exposure);
+            self.write_exposure(accuser, if back == 0 { None } else { Some(back) })?;
+        }
         let old = self.state.replace_claim_row_v2(key, new.clone());
         // ADR-0160 F-W: the bond's staged weight, held reservation and capped term follow the record.
         self.weight_cap_on_write(old.as_ref(), new.as_ref());
@@ -1051,34 +1081,6 @@ impl<'a> TransitionBuilder<'a> {
         // the row with it: the write is recorded as a delta entry like any other, so a reorg that
         // undoes the commitment undoes its row and the credit is recomputed on the new chain.
         let _ = &old;
-        // **ADR-0062 SA-1: the accuser's stake comes back HERE**, for the reason `write_court`
-        // gives about the challenger's — one site that every door already passes through.
-        //
-        // `DefaultDisputed` is the first phase in this ruleset that holds a SECOND bond's
-        // reservation, and a claim leaves it by more doors than the DA session's own sweep: the
-        // disclosure arm resumes it, a `CourtClosed { ExecutorGuilty }` on a session that was
-        // already open voids it, and so does `ProducerDefaulted` wherever ADR-0065 D4 is not
-        // armed. None of those knows what an accusation cost — `release_for_claim` gives back
-        // what the PRODUCER put up — and a release each of them had to remember is a release one
-        // of them eventually will not.
-        //
-        // Left behind, the accuser's sompi are state the fold WRITES and cannot READ BACK:
-        // `assert_internal_consistency` rebuilds this ledger from the claims, so the next
-        // `load_tip` refuses the snapshot the chain just wrote, on every node at once.
-        //
-        // Only when the claim STOPS being disputed — a rewrite that leaves the phase in place
-        // must not give the stake back while the session is still open. Saturating for the reason
-        // the challenger's release is: a ledger that cannot go negative is worth more here than
-        // an error nobody can clear.
-        if let Some(previous) = &old
-            && let PalwClaimPhaseV2::DefaultDisputed { accuser, accuser_exposure, .. } = &previous.phase
-            && !matches!(new.as_ref().map(|record| &record.phase), Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
-        {
-            let (accuser, accuser_exposure) = (*accuser, *accuser_exposure);
-            let held = self.state.reserved_exposure.get(&accuser).copied().unwrap_or(0);
-            let back = held.saturating_sub(accuser_exposure);
-            self.write_exposure(accuser, if back == 0 { None } else { Some(back) })?;
-        }
         self.entries.push(PalwDeltaEntryV2::Claim { key, old, new });
         Ok(())
     }
@@ -8869,6 +8871,21 @@ impl<'a> TransitionBuilder<'a> {
         if new_claim != old_claim && new_claim.is_some() {
             self.reserve_index_members_v1::<(Hash64, Hash64), ()>(1, "native claim court session index")?;
         }
+        // Legacy challengers recover their exposure when the court closes.
+        // The refund and the court have separate journal entries. Reserve
+        // both before mutation, and record the refund before replacing the
+        // session so a refused refund cannot leave unjournaled indexes.
+        if new.is_none()
+            && self.params.rcore_plus_from_daa().is_none()
+            && let Some(previous) = self.state.court_sessions.get(&key)
+            && let Some(claim) = self.state.claims.get(&previous.claim)
+        {
+            let challenger = previous.challenger_bond;
+            let held = self.state.reserved_exposure.get(&challenger).copied().unwrap_or(0);
+            let back = held.saturating_sub(claim.reserved);
+            self.reserve_journal_slots_v1(2, "native legacy court refund and removal")?;
+            self.write_exposure(challenger, (back != 0).then_some(back))?;
+        }
         let old = match &new {
             Some(record) => self.state.court_sessions.insert(key, record.clone()),
             None => self.state.court_sessions.remove(&key),
@@ -8890,28 +8907,6 @@ impl<'a> TransitionBuilder<'a> {
             // The old DAA is the exact stored key, even when the
             // class/claim has changed since scheduling the session.
             self.state.replace_court_deadline_v2(key, None);
-            // **The challenger's stake comes back HERE**, so reserve and release are one pair in
-            // one place. Opening a court charges the challenger the claim's own `reserved`; five
-            // different sites remove a session — two sweeps, a close, a retirement, a re-open —
-            // and a release each of them had to remember is a release one of them eventually will
-            // not. The claim is still present at every removal (`retire_claim` closes its sessions
-            // before it drops the claim), and a session whose claim is somehow gone had nothing
-            // countable to give back.
-            //
-            // Only on a REMOVAL. `write_court` is also how a session is rewritten in place — the
-            // abandoned-ladder refresh re-indexes the same session under the backstop — and giving
-            // the stake back there would release it without the session ending, so a challenger
-            // would hold an open court for free after one refresh.
-            // ADR-0152 A-6: past `palw_rcore_plus` a court's stake never entered `reserved_exposure`
-            // (`reserve_challenger_v1`), so nothing comes back out of it.
-            if new.is_none()
-                && self.params.rcore_plus_from_daa().is_none()
-                && let Some(claim) = self.state.claims.get(&previous.claim)
-            {
-                let held = self.state.reserved_exposure.get(&previous.challenger_bond).copied().unwrap_or(0);
-                let back = held.saturating_sub(claim.reserved);
-                self.write_exposure(previous.challenger_bond, if back == 0 { None } else { Some(back) })?;
-            }
         }
         if let Some(record) = &new {
             *self.state.open_courts_by_claim.entry(record.claim).or_insert(0) += 1;

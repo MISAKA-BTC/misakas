@@ -514,3 +514,67 @@ fn bct2_terminal_owns_nested_court_archive_rollback() {
     assert_eq!(b.state.court_end_archive_v1(id).unwrap().session, session);
     assert!(!b.plain_output_terminal_checkpoint_active_v2);
 }
+
+#[test]
+fn bct2_inverse_prerequisite_reserves_legacy_court_refund_and_removal_together() {
+    use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
+    let fx = palw_tir_public_frame_fixture_v1(None, 4);
+    let frame = &fx.frame;
+    let (state, params, extras) = world(&fx, frame);
+    let params = params.with_rcore_plus_mirrors(None, 12_900, Vec::new());
+    let claim = frame.plan_v1().original_claim;
+    let record = state.claim(&claim).unwrap();
+    let challenger = outsider();
+    let opened = record.accepted_daa + 1;
+    let ladder = PalwBisectLadderV1::open_at_named_leaf(
+        &claim,
+        &record.trace_root,
+        &crate::palw_court_v2::court_party_id_v2(&challenger),
+        &crate::palw_court_v2::court_party_id_v2(&record.bond),
+        PalwBisectSpaceV1::StepLeaves,
+        frame.header_v1().step_leaf_count,
+        FORGED_LEAF as u64,
+        opened,
+        opened + 1,
+    )
+    .unwrap();
+    let session = ladder.session_id();
+    let mut setup = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    setup.state.reserved_exposure.insert(challenger, record.reserved + 7);
+    setup
+        .write_court(
+            session,
+            Some(PalwCourtSessionStateV2 {
+                claim,
+                challenger_bond: challenger,
+                opened_daa: opened,
+                deadline_daa: opened + 3,
+                ladder,
+                dissection: None,
+            }),
+        )
+        .unwrap();
+    let state = setup.state;
+
+    let mut candidate = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    // A previously admitted prefix owns two journal slots and already uses
+    // one. No additional allocation can be admitted during this attempt.
+    candidate.entries = Vec::with_capacity(2);
+    candidate.entries.push(PalwDeltaEntryV2::Exposure { key: challenger, old: None, new: Some(record.reserved + 7) });
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
+    candidate.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+    assert!(matches!(candidate.write_court(session, None), Err(PalwStateV2Error::NativeResource(_))));
+    assert_eq!(candidate.state, state);
+    assert_eq!(candidate.entries.len(), 1);
+
+    let mut retry = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    retry.write_court(session, None).unwrap();
+    assert_eq!(retry.state.reserved_exposure(&challenger), 7);
+    assert!(retry.state.court_session(&session).is_none());
+    assert!(matches!(
+        retry.entries.as_slice(),
+        [PalwDeltaEntryV2::Exposure { key, .. }, PalwDeltaEntryV2::Court { key: removed, .. }]
+        if *key == challenger && *removed == session
+    ));
+}
