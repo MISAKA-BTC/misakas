@@ -1,10 +1,19 @@
 #[test]
 fn bct2_paid_plain_output_verify_receipt_and_fault_terminal() {
+    exercise_bct2_paid_plain_output_v2("bct2_paid_plain_output_verify_receipt_and_fault_terminal", true);
+}
+
+#[test]
+fn bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal() {
+    exercise_bct2_paid_plain_output_v2("bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal", false);
+}
+
+fn exercise_bct2_paid_plain_output_v2(test_name: &str, faults: bool) {
     use crate::config::params::ForkActivation;
     use crate::palw_native_resource_v1::{native_logical_admission_enabled_v1, native_resource_admission_enabled_v1};
     const CHILD: &str = "MISAKA_TEST_BCT2_DEFAULT_PROCESS_OWNER";
     if std::env::var_os(CHILD).is_none() {
-        let name = format!("{}::bct2_paid_plain_output_verify_receipt_and_fault_terminal", module_path!());
+        let name = format!("{}::{test_name}", module_path!());
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", name.split_once("::").unwrap().1, "--nocapture", "--test-threads=1"])
             .env(CHILD, "1")
@@ -17,8 +26,9 @@ fn bct2_paid_plain_output_verify_receipt_and_fault_terminal() {
     use crate::palw_batch_court_v1::{
         carriage::{
             BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1,
-            BatchPlainOutputWireV2, PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2, encode_batch_plain_output_payload_v2,
-            quote_batch_plain_output_full_ids_open_v2, quote_batch_plain_output_terminal_v2, quote_batch_plain_output_verify_v2,
+            BatchPlainOutputTerminalV2, BatchPlainOutputWireV2, PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2,
+            encode_batch_plain_output_payload_v2, quote_batch_plain_output_full_ids_open_v2, quote_batch_plain_output_terminal_v2,
+            quote_batch_plain_output_verify_v2,
         },
         plain_output_transport::BatchPlainOutputTransportV2,
     };
@@ -33,7 +43,7 @@ fn bct2_paid_plain_output_verify_receipt_and_fault_terminal() {
         batch::{
             admission::{
                 CompiledBatchAdmissionV1, NativeBatchDeliveryCostsV1, NativeBatchDeliveryShapeV1, NativeBatchDeliveryTimingV1,
-                compile_native_batch_plain_output_v2,
+                batch_numerical_service_ids_v1, compile_native_batch_plain_output_v2,
             },
             numerical_verification::NumericalBatchReplayBudgetV1,
             plain_output::{BATCH_PLAIN_OUTPUT_ORDINAL_V2, PlainBatchOutputV2, batch_plain_output_control_id_v2},
@@ -45,7 +55,9 @@ fn bct2_paid_plain_output_verify_receipt_and_fault_terminal() {
     use crate::palw_court_tir_requests_v1::TirSharedRequestSetV1;
     use crate::palw_history_custody_v1::{PALW_HISTORY_PLEDGE_CONTEXT_V1, PalwHistoryCustodyPledgeV1};
     use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
-    use crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_lying_output_fixture_v2;
+    use crate::palw_tir_public_claim_v1::{
+        palw_tir_public_tokenizer_frame_fixture_v1, palw_tir_public_tokenizer_frame_lying_output_fixture_v2,
+    };
     use crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1;
     use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicResponseV1};
     use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, palw_original_tokenizer_registration_for_fold_v2};
@@ -54,10 +66,14 @@ fn bct2_paid_plain_output_verify_receipt_and_fault_terminal() {
         ValidatedTransaction,
     };
 
-    // Seed a tiny actual original with a false commitment fixed before the
-    // original is built. Class and custody setup use the native fixture. The
-    // tokenizer and all Batch controls below go through their normal writers.
-    let (fx, semantics, eof, raw, table) = palw_tir_public_tokenizer_frame_lying_output_fixture_v2(h(0xBC72));
+    // The fixture fixes the output commitment before building the original.
+    // Class and custody use native fixture setup. The tokenizer and every
+    // Batch control below go through their normal writers.
+    let (fx, semantics, eof, raw, table) = if faults {
+        palw_tir_public_tokenizer_frame_lying_output_fixture_v2(h(0xBC72))
+    } else {
+        palw_tir_public_tokenizer_frame_fixture_v1()
+    };
     let frame = &fx.frame;
     let plan = frame.plan_v1();
     let a = plan.terms.accepted_daa;
@@ -343,11 +359,36 @@ fn bct2_paid_plain_output_verify_receipt_and_fault_terminal() {
     else {
         panic!("successful Verify must root the receipt")
     };
-    assert!(matches!(row.receipt.verdict, crate::palw_tir_objective_v1::PalwTirOutputStopVerdictV1::OutputRootFault));
-    let terminal = quote_batch_plain_output_terminal_v2(&builder.state, claim).unwrap();
-    assert_eq!(terminal.control.receipt_digest, row.receipt.digest_v2().unwrap());
-    let terminal_at = at(frame, terminal.slot_daa - a);
+    use crate::palw_tir_objective_v1::PalwTirOutputStopVerdictV1;
     use crate::palw_user_views_v1::palw_batch_plain_output_terminal_quote_json_v2 as terminal_view;
+    let receipt_digest = row.receipt.digest_v2().unwrap();
+    if !faults {
+        assert_eq!(row.receipt.verdict, PalwTirOutputStopVerdictV1::Holds);
+        assert!(quote_batch_plain_output_terminal_v2(&builder.state, claim).is_err());
+        let (_, terminal) = batch_numerical_service_ids_v1(claim, scope).unwrap();
+        let slot = builder.state.court_service_state_v1().unwrap().book.assigned_daa(&terminal).unwrap();
+        let terminal_at = at(frame, slot - a);
+        assert!(terminal_view(&builder.state, claim, slot, |_| Some(rules_at(terminal_at)))["terminal"].is_null());
+
+        let control = BatchPlainOutputTerminalV2 { claim, receipt_digest };
+        let payload = encode_batch_plain_output_payload_v2(&BatchPlainOutputWireV2::Terminal(control)).unwrap();
+        let carrier = funded_carrier(terminal_at, payload, 7);
+        let next = PalwTransitionExtrasV1 { native_court_rules_v1: Some(rules_at(terminal_at)), ..extras.clone() };
+        let mut candidate = TransitionBuilder::new(&builder.state, &params, false, false, false, false, &next);
+        assert!(matches!(
+            candidate.apply_batch_court_carrier_v1(&terminal_at, &carrier),
+            Err(PalwStateV2Error::CarriageInconsistent(why)) if why.contains("contains no fault")
+        ));
+        assert_eq!(candidate.state.state_root(), builder.state.state_root());
+        assert!(candidate.entries.is_empty());
+        assert!(matches!(candidate.state.claim(&claim).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        return;
+    }
+
+    assert_eq!(row.receipt.verdict, PalwTirOutputStopVerdictV1::OutputRootFault);
+    let terminal = quote_batch_plain_output_terminal_v2(&builder.state, claim).unwrap();
+    assert_eq!(terminal.control.receipt_digest, receipt_digest);
+    let terminal_at = at(frame, terminal.slot_daa - a);
     let quote = terminal_view(&builder.state, claim, verify_at.daa_score, |_| Some(rules_at(terminal_at)));
     assert_eq!(quote["terminal"]["assignedDaa"].as_u64(), Some(terminal.slot_daa));
     assert_eq!(quote["acceptanceConfirmed"].as_bool(), Some(false));
