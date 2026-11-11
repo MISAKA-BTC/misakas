@@ -3,8 +3,8 @@
 pub(crate) mod projection;
 mod quote;
 pub use quote::{
-    BatchPlainOutputTerminalQuoteV2, BatchPlainOutputVerifyQuoteV2, quote_batch_plain_output_terminal_v2,
-    quote_batch_plain_output_verify_v2,
+    BatchPlainOutputTerminalQuoteV2, BatchPlainOutputVerifyQuoteV2, quote_batch_plain_output_full_ids_open_v2,
+    quote_batch_plain_output_terminal_v2, quote_batch_plain_output_verify_v2,
 };
 
 use super::{BatchResponsePositionV1, Stage, admission::batch_numerical_service_ids_v1};
@@ -26,7 +26,7 @@ pub(crate) fn plain_output_context_v2(
 }
 
 /// The plain Output/Stop branch needs FullIds even without a numerical leaf.
-pub(crate) const BATCH_PLAIN_OUTPUT_ORDINAL_V2: u64 = u64::MAX - 1;
+pub const BATCH_PLAIN_OUTPUT_ORDINAL_V2: u64 = u64::MAX - 1;
 pub(crate) const PLAIN_OUTPUT_SIGNATURE_BYTES_V2: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 pub const PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2: &[u8] = b"misaka-palw/batch-plain-output/v2/mldsa87";
 

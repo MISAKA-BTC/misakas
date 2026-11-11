@@ -135,3 +135,24 @@ pub fn quote_batch_plain_output_terminal_v2(
     let control = BatchPlainOutputTerminalV2 { claim, receipt_digest: row.receipt.digest_v2()? };
     Ok(BatchPlainOutputTerminalQuoteV2 { control, slot_daa })
 }
+
+/// Canonical BCT1 FullIds demand for an accepted V2 plain Output notice.
+/// Source geometry and the accepted notice, not caller lengths, define it.
+pub fn quote_batch_plain_output_full_ids_open_v2(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    notice: Hash64,
+) -> Result<(u32, crate::palw_batch_court_v1::carriage::SignedBatchDemandV1), String> {
+    let context = plain_output_context_v2(state, claim)?;
+    let source = context.source(state)?;
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("plain Output original absent")?;
+    let bytes = super::PlainBatchOutputV2::full_ids_bound_v2(frame.original_v1(), &source).map_err(|why| format!("{why:?}"))?;
+    let count = source.decode_count_v1();
+    let range = super::super::constraint_stop::batch_stop_full_ids_range_v1(claim, count)?;
+    if u64::from(range.bytes) != bytes {
+        return Err("plain Output FullIds bound differs from the canonical response".into());
+    }
+    let open =
+        crate::palw_batch_court_v1::carriage::quote_batch_open_v1(state, claim, notice, BATCH_PLAIN_OUTPUT_ORDINAL_V2, vec![range])?;
+    Ok((count, open))
+}

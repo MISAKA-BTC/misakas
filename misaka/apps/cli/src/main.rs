@@ -1791,6 +1791,22 @@ enum PalwCmd {
         #[arg(long)]
         out: std::path::PathBuf,
     },
+    /// Open the canonical FullIds demand for an accepted plain Output notice.
+    BatchOpenPlainOutput {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        notice: String,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
     /// Sign and fund plain Output verification at its booked DAA.
     BatchVerifyPlainOutput {
         #[command(flatten)]
@@ -3866,6 +3882,9 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::BatchPreparePlainOutput { key, bond, claim, notice, out }) => {
             Box::pin(async move { palw_batch::prepare_plain_output_v2(ctx, &key.source(), &bond, &claim, &notice, &out).await })
         }
+        Command::Palw(PalwCmd::BatchOpenPlainOutput { key, bond, claim, notice, submit, maximum_fee_sompi }) => Box::pin(async move {
+            palw_batch::open_plain_output_v2(ctx, &key.source(), &bond, &claim, &notice, submit, maximum_fee_sompi).await
+        }),
         Command::Palw(PalwCmd::BatchVerifyPlainOutput { key, bond, claim, notice, submit, maximum_fee_sompi }) => {
             Box::pin(async move {
                 palw_batch::verify_plain_output_v2(ctx, &key.source(), &bond, &claim, &notice, submit, maximum_fee_sompi).await

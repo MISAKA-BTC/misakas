@@ -37,6 +37,7 @@ pub(crate) mod batch;
 pub use batch::constraint_stop::{BATCH_STOP_ORDINAL_V1, batch_stop_full_ids_range_v1};
 pub use batch::native_ranges::quote_numerical_batch_open_v1;
 pub use batch::numerical_verification::{NumericalBatchReplayBudgetV1, NumericalBatchReplayProfileV1};
+pub use batch::plain_output::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
 pub use batch::{BatchResponsePartSlotV1, BatchResponseQuoteV1, quote_batch_response_v1};
 mod storage_rent;
 pub use storage_rent::material_batch_plain_output_carrier_fee_v2;

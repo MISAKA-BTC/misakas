@@ -106,6 +106,89 @@ pub(crate) async fn prepare_plain_output_v2(
     Ok(())
 }
 
+fn checked_plain_full_ids_open(
+    view: &serde_json::Value,
+    claim: Hash64,
+    notice: Hash64,
+    signer: PalwBondKeyV2,
+    network: Hash64,
+    now: u64,
+) -> Result<SignedBatchDemandV1, CliError> {
+    use kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
+    if view["version"] != 2
+        || view["kind"] != "palwBatchPlainOutputFullIdsOpen"
+        || view["claimId"] != claim.to_string()
+        || view["noticeId"] != notice.to_string()
+        || view["ordinal"] != BATCH_PLAIN_OUTPUT_ORDINAL_V2.to_string()
+        || view["networkDomain"] != network.to_string()
+        || view["nowDaa"] != now
+        || !view["error"].is_null()
+        || ["tipBlock", "acceptedParentRoot"]
+            .iter()
+            .any(|field| view[*field].as_str().and_then(|s| s.parse::<Hash64>().ok()).is_none_or(|id| id == Hash64::default()))
+    {
+        return Err(refused("the node returned no matching authenticated plain Output FullIds quote"));
+    }
+    let count = view["fullIdsCount"]
+        .as_u64()
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| refused("plain Output quote omitted its generated ID count"))?;
+    let ranges = vec![batch_stop_full_ids_range_v1(claim, count).map_err(refused)?];
+    let quote: OpenQuote = serde_json::from_value(view["open"].clone()).map_err(|err| refused(err.to_string()))?;
+    let open = quote.checked_open(claim, notice, BATCH_PLAIN_OUTPUT_ORDINAL_V2, signer, ranges)?;
+    checked_send_slot(now, open.demand.opened_daa, false)?;
+    Ok(open)
+}
+
+pub(crate) async fn open_plain_output_v2(
+    ctx: &Ctx,
+    key_source: &KeySource,
+    bond: &str,
+    claim: &str,
+    notice: &str,
+    submit: bool,
+    maximum_fee: Option<u64>,
+) -> CliResult {
+    use kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
+    let claim = crate::palw_user::parse_hash("claim", claim)?;
+    let notice = crate::palw_user::parse_hash("notice", notice)?;
+    let (nv, key, signer) = crate::palw_user::bond_signer_v1(ctx, key_source, bond).await?;
+    let network = crate::bond::network_domain(&nv);
+    let request = GetPalwCourtStateRequest {
+        claim_hex: claim.to_string(),
+        batch_open: format!("{notice}/plain-output-full-ids"),
+        batch_ordinal: BATCH_PLAIN_OUTPUT_ORDINAL_V2.to_string(),
+        ..Default::default()
+    };
+    let (now, raw) = read_plain_quote(&nv, request.clone()).await?;
+    let view: serde_json::Value = serde_json::from_str(&raw).map_err(|err| refused(err.to_string()))?;
+    let mut open = checked_plain_full_ids_open(&view, claim, notice, signer, network, now)?;
+    let slot = open.demand.opened_daa;
+    checked_send_slot(now, slot, submit)?;
+    let message = open.signing_message_v1(network).map_err(refused)?;
+    open.signature = key.sign_with_context(message.as_byte_slice(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1).to_vec();
+    let (tx, fee, rent) = fund_control(&nv, &key, &BatchCourtWireV1::Open(open), maximum_fee).await?;
+    if read_plain_quote(&nv, request).await? != (now, raw) {
+        return Err(refused("plain Output FullIds accepted state or reservation changed before submission; retry"));
+    }
+    if submit {
+        nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|err| refused(err.to_string()))?;
+    }
+    println!(
+        "{}",
+        serde_json::json!({
+            "submitted": submit, "acceptanceConfirmed": false, "txid": tx.id().to_string(),
+            "claimId": claim.to_string(), "noticeId": notice.to_string(),
+            "ordinal": BATCH_PLAIN_OUTPUT_ORDINAL_V2.to_string(), "assignedDaa": slot,
+            "observedDaa": now, "feeSompi": fee, "storageRentSompi": rent,
+            "requestRoot": view["open"]["requestRoot"], "tipBlock": view["tipBlock"],
+            "acceptedParentRoot": view["acceptedParentRoot"],
+        })
+    );
+    let _ = nv.client.disconnect().await;
+    Ok(())
+}
+
 fn checked_terminal(
     view: &serde_json::Value,
     claim: Hash64,
@@ -279,6 +362,71 @@ async fn read_plain_quote(nv: &NodeView, query: GetPalwCourtStateRequest) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_output_full_ids_quote_uses_canonical_range_and_reserved_ordinal() {
+        use kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
+        let h = Hash64::from_u64_word;
+        let claim = h(1);
+        let notice = h(2);
+        let network = h(3);
+        let signer = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(4), 0));
+        let range = batch_stop_full_ids_range_v1(claim, 5).unwrap();
+        let demand = BatchDemandV1 {
+            case_id: h(6),
+            case_window: BatchCourtWindowV1 {
+                claim_accepted_daa: 10,
+                challenge_opened_daa: 20,
+                collect_until_daa: 100,
+                material_until_daa: 100,
+            },
+            opened_daa: 30,
+            response_deadline_daa: 40,
+            maximum_bytes: u64::from(range.bytes),
+            part_bytes: MAX_BATCH_PART_BYTES_V1,
+            ranges: vec![range.clone()],
+        };
+        let view = serde_json::json!({
+            "version": 2, "kind": "palwBatchPlainOutputFullIdsOpen", "claimId": claim.to_string(),
+            "noticeId": notice.to_string(), "networkDomain": network.to_string(), "fullIdsCount": 5,
+            "nowDaa": 20, "tipBlock": h(7).to_string(), "acceptedParentRoot": h(8).to_string(), "error": null,
+            "ordinal": BATCH_PLAIN_OUTPUT_ORDINAL_V2.to_string(),
+            "open": {
+                "wireVersion": 1, "scopeId": h(9).to_string(), "signer": bond_text(signer),
+                "requestRoot": demand.checked_request_root_v1().unwrap().to_string(), "caseId": h(6).to_string(),
+                "originalAcceptedDaa": "10", "noticeDaa": "20", "collectUntilDaa": "100", "materialUntilDaa": "100",
+                "openedDaa": "30", "responseDeadlineDaa": "40", "partBytes": MAX_BATCH_PART_BYTES_V1,
+                "maximumBytes": range.bytes,
+                "ranges": [{"id": range.id.to_string(), "bytes": range.bytes, "authentication": "whole-range"}],
+            }
+        });
+        let check = |value: &serde_json::Value| checked_plain_full_ids_open(value, claim, notice, signer, network, 20);
+        let open = check(&view).unwrap();
+        assert_eq!(open.demand, demand);
+        assert_eq!(open.ordinal, BATCH_PLAIN_OUTPUT_ORDINAL_V2);
+        for field in ["claimId", "noticeId", "networkDomain", "tipBlock", "acceptedParentRoot"] {
+            let mut bad = view.clone();
+            bad[field] = Hash64::default().to_string().into();
+            assert!(check(&bad).is_err(), "substituted {field}");
+        }
+        for count in [0, 6, u64::MAX] {
+            let mut bad = view.clone();
+            bad["fullIdsCount"] = count.into();
+            assert!(check(&bad).is_err());
+        }
+        let mut bad = view.clone();
+        bad["ordinal"] = u64::MAX.to_string().into();
+        assert!(check(&bad).is_err());
+        bad = view.clone();
+        bad["open"]["ranges"][0]["authentication"] = "chunk".into();
+        assert!(check(&bad).is_err());
+        bad = view.clone();
+        bad["open"]["signer"] = "different".into();
+        assert!(check(&bad).is_err());
+        bad = view;
+        bad["nowDaa"] = 31.into();
+        assert!(checked_plain_full_ids_open(&bad, claim, notice, signer, network, 31).is_err());
+    }
 
     #[test]
     fn plain_output_terminal_requires_fault_parent_network_and_exact_send_slot() {

@@ -2495,9 +2495,15 @@ impl VirtualStateProcessor {
     /// Import/virtual changes during reconstruction require a fresh read.
     pub fn palw_batch_plain_output_quote_v2_impl(
         &self,
-        claim: kaspa_consensus_core::Hash64,
-        terminal: bool,
+        query_target: kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1,
     ) -> Result<Option<(u64, Option<String>)>, String> {
+        use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1 as Target;
+        let claim = match &query_target {
+            Target::BatchVerifyPlainOutputV2 { claim }
+            | Target::BatchTerminalPlainOutputV2 { claim }
+            | Target::BatchPlainOutputFullIdsOpenV2 { claim, .. } => *claim,
+            _ => return Err("different plain Output quote purpose".into()),
+        };
         let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
         let captured = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?;
         let prepared = self.prepare_template_parent_v1(&captured).map_err(|e| format!("plain Output parent unavailable: {e:?}"))?;
@@ -2524,21 +2530,34 @@ impl VirtualStateProcessor {
                     && extras.tir_public_network_domain_v1 == Some(rules.network_domain)
             })
         };
-        let mut doc = if terminal {
-            kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_terminal_quote_json_v2(
-                state,
-                claim,
-                captured.daa_score,
-                rules_at,
-            )
-        } else {
-            kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_verify_quote_json_v2(
-                state,
-                params,
-                claim,
-                captured.daa_score,
-                rules_at,
-            )
+        let mut doc = match query_target {
+            Target::BatchTerminalPlainOutputV2 { .. } => {
+                kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_terminal_quote_json_v2(
+                    state,
+                    claim,
+                    captured.daa_score,
+                    rules_at,
+                )
+            }
+            Target::BatchVerifyPlainOutputV2 { .. } => {
+                kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_verify_quote_json_v2(
+                    state,
+                    params,
+                    claim,
+                    captured.daa_score,
+                    rules_at,
+                )
+            }
+            Target::BatchPlainOutputFullIdsOpenV2 { notice, .. } => {
+                kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_full_ids_open_json_v2(
+                    state,
+                    claim,
+                    notice,
+                    captured.daa_score,
+                    rules_at,
+                )
+            }
+            _ => unreachable!("quote purpose checked above"),
         };
         doc["acceptedParentRoot"] = prepared.authenticated_root_v1().unwrap_or_else(|| state.state_root()).to_string().into();
         let current = self.virtual_stores.read();

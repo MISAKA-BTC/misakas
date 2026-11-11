@@ -98,7 +98,7 @@ pub enum BatchCourtWireV1 {
 /// tags and never accepts these controls. Decoding alone grants no authority.
 pub use crate::palw_court_shared_material_intake_v1::batch::plain_output::{
     BatchPlainOutputTerminalQuoteV2, BatchPlainOutputVerifyQuoteV2, PLAIN_OUTPUT_SIGNATURE_CONTEXT_V2, SignedBatchPlainOutputV2,
-    quote_batch_plain_output_terminal_v2, quote_batch_plain_output_verify_v2,
+    quote_batch_plain_output_full_ids_open_v2, quote_batch_plain_output_terminal_v2, quote_batch_plain_output_verify_v2,
 };
 
 pub const BATCH_PLAIN_OUTPUT_CARRIER_MAGIC_V2: &[u8; 4] = b"BCT2";

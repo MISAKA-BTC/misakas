@@ -6365,7 +6365,14 @@ fn palw_batch_quote_target(
             .then_some(PalwCourtTargetV1::BatchStopFullIdsOpen { claim, notice })
             .ok_or_else(invalid);
     }
-    if ordinal == BATCH_STOP_ORDINAL_V1 {
+    if selection == "plain-output-full-ids" {
+        return (ordinal == kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_PLAIN_OUTPUT_ORDINAL_V2)
+            .then_some(PalwCourtTargetV1::BatchPlainOutputFullIdsOpenV2 { claim, notice })
+            .ok_or_else(invalid);
+    }
+    if ordinal == BATCH_STOP_ORDINAL_V1
+        || ordinal == kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_PLAIN_OUTPUT_ORDINAL_V2
+    {
         return Err(invalid());
     }
     let ordinal = usize::try_from(ordinal).map_err(|_| invalid())?;
@@ -6417,6 +6424,12 @@ fn numerical_batch_open_selector_is_bounded_and_exclusive() {
         request.batch_open = format!("{notice}/{selection}");
         assert!(palw_batch_quote_target(&request).is_err());
     }
+    request.batch_open = format!("{notice}/plain-output-full-ids");
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_ordinal = (u64::MAX - 1).to_string();
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchPlainOutputFullIdsOpenV2 { .. })));
+    request.batch_open = format!("{notice}/1/full-ids=1");
+    assert!(palw_batch_quote_target(&request).is_err());
     request.batch_open = "stop".into();
     assert!(palw_batch_quote_target(&request).is_err());
     request.batch_ordinal.clear();

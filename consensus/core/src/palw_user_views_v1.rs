@@ -368,6 +368,7 @@ pub enum PalwCourtTargetV1 {
     BatchVerifyNumerical { claim: Hash64 },
     BatchVerifyPlainOutputV2 { claim: Hash64 },
     BatchTerminalPlainOutputV2 { claim: Hash64 },
+    BatchPlainOutputFullIdsOpenV2 { claim: Hash64, notice: Hash64 },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -389,7 +390,8 @@ pub fn palw_court_state_json_v1(
         PalwCourtTargetV1::BatchStop { .. }
         | PalwCourtTargetV1::BatchVerifyNumerical { .. }
         | PalwCourtTargetV1::BatchVerifyPlainOutputV2 { .. }
-        | PalwCourtTargetV1::BatchTerminalPlainOutputV2 { .. } => return None,
+        | PalwCourtTargetV1::BatchTerminalPlainOutputV2 { .. }
+        | PalwCourtTargetV1::BatchPlainOutputFullIdsOpenV2 { .. } => return None,
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
             return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
         }
@@ -623,6 +625,40 @@ pub fn palw_batch_plain_output_terminal_quote_json_v2(
         "tipBlock": state.last_point().map(|point| point.block.to_string()),
         "claimId": claim.to_string(), "terminal": terminal, "error": error,
         "acceptanceConfirmed": false,
+    })
+}
+
+/// Quote only the FullIds range selected by an accepted plain Output notice.
+pub fn palw_batch_plain_output_full_ids_open_json_v2(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    notice: Hash64,
+    now: u64,
+    rules_at: impl FnOnce(u64) -> Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>,
+) -> Value {
+    use crate::palw_court_shared_material_intake_v1::BATCH_PLAIN_OUTPUT_ORDINAL_V2;
+    let result = (|| -> Result<_, String> {
+        let (count, open) = crate::palw_batch_court_v1::carriage::quote_batch_plain_output_full_ids_open_v2(state, claim, notice)?;
+        if now > open.demand.opened_daa {
+            return Err("plain Output FullIds Open slot has passed".into());
+        }
+        let rules = rules_at(open.demand.opened_daa).ok_or("plain Output transport is not active at its Open slot")?;
+        rules.check()?;
+        if rules.at.daa_score != open.demand.opened_daa || !rules.tir_active {
+            return Err("plain Output Open rules differ from its booked slot".into());
+        }
+        Ok((count, batch_open_body_json_v1(&open)?, rules.network_domain))
+    })();
+    let (count, open, network, error) = match result {
+        Ok((count, open, network)) => (Some(count), open, Some(network.to_string()), None),
+        Err(error) => (None, Value::Null, None, Some(error)),
+    };
+    json!({
+        "version": 2, "kind": "palwBatchPlainOutputFullIdsOpen", "nowDaa": now,
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "claimId": claim.to_string(), "noticeId": notice.to_string(),
+        "ordinal": BATCH_PLAIN_OUTPUT_ORDINAL_V2.to_string(), "fullIdsCount": count,
+        "open": open, "networkDomain": network, "error": error, "acceptanceConfirmed": false,
     })
 }
 
