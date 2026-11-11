@@ -5,6 +5,7 @@
 pub(crate) mod manifest_carrier;
 pub(crate) mod manifest_paid;
 pub(crate) mod manifest_request;
+pub(crate) mod native_frame;
 pub(crate) mod native_link;
 pub(crate) mod preclaim;
 
@@ -60,8 +61,28 @@ impl NativeTfp1PublicOriginalFactsV1 {
         claim: Hash64,
         source: Hash64,
     ) -> Result<Self, ContractError> {
+        Self::from_native_header_with_hashes_v1(
+            original,
+            header,
+            claim,
+            source,
+            || Ok(palw_fp_job_pin_v1(original)),
+            || header.job_context.context_hash(),
+        )
+    }
+
+    /// The caller derives these identities from the exact same native inputs.
+    /// The protected frame uses allocation-free canonical encoders.
+    fn from_native_header_with_hashes_v1(
+        original: &PalwFreePromptCommitmentV3,
+        header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        claim: Hash64,
+        source: Hash64,
+        original_job_pin: impl FnOnce() -> Result<Hash64, ContractError>,
+        job_context: impl FnOnce() -> Hash64,
+    ) -> Result<Self, ContractError> {
         if original.job.class_id != header.job_context.shape_profile_id
-            || palw_fp_job_pin_v1(original) != palw_fp_job_pin_of_context_v1(&header.job_context)
+            || original_job_pin()? != palw_fp_job_pin_of_context_v1(&header.job_context)
             || original.execution_root != header.committed_execution_root
             || original.trace_root != header.full_logits_trace_root
             || original.work_leaves != header.step_leaf_count
@@ -75,7 +96,7 @@ impl NativeTfp1PublicOriginalFactsV1 {
             network: original.job.network_domain,
             claim,
             source,
-            job_context: header.job_context.context_hash(),
+            job_context: job_context(),
             artifact: header.artifact_root,
             execution_root: original.execution_root,
             output: original.output_root,
@@ -826,6 +847,38 @@ mod tests {
         assert_ne!(prefix.root_v1(), foreign_prefix.root_v1());
         let linked = exercise_tfp1_link_writer_v1(link_state.clone(), link_point, history, prefix, foreign_prefix, &link_params);
         let paired = admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).unwrap();
+        let protected_state = crate::palw_state_v2::tests::native_writers_v1::exercise_public_tfp1_frame_writer_v1(
+            link_state.clone(),
+            link_point,
+            &link_params,
+            facts.claim,
+            companion.id(),
+            budget.retention_until,
+            |state| {
+                let prefix = crate::palw_state_v2::tests::native_writers_v1::tfp1_history_prefix_fixture_v1(
+                    state,
+                    &link_params,
+                    &link_point,
+                    &pairing,
+                );
+                let frame = native_frame::PublicTfp1FrameV1::prepare_v1(
+                    &paired,
+                    original,
+                    &source,
+                    &fixture.record,
+                    &link_point,
+                    admission_reservation,
+                    budget.retention_until,
+                    fixture.rules.maximum_leaves,
+                )
+                .unwrap();
+                let history = admission
+                    .prepare_tfp1_history_v1(&link_point, &pairing, obligation, &reservation, admission_reservation, &prefix)
+                    .unwrap();
+                (frame, history, prefix)
+            },
+        );
+        assert_eq!(admission.restore_tfp1_pairing_v1(&protected_state, &pairing, &reservation).unwrap(), paired);
         assert_eq!(admission.restore_tfp1_pairing_v1(&linked, &pairing, &reservation).unwrap(), paired);
         assert!(admission.restore_tfp1_pairing_v1(&link_state, &pairing, &reservation).is_err());
         let companion_only = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &reservation).unwrap();

@@ -352,3 +352,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[宣言索引の原子的保存](../../../evidence/palw/accepted-declaration-atomic-commit-2026-11-11/README.md)は **実装中・Rust検証未実行**。ノードの単体rehearsalからclass宣言の永続writeを除き、成功した実foldのdeltaと照合して、UTXO/PALWと同じDB batchへ移した。全prefix候補再演の破棄前に必要な副作用除去であり、候補filterの置換やG14完全plannerの完成ではない。公開同一claimの受付/Final/権利消費/blockは未証明。モデル取得証明なし。
 
 2026-11-11 の[native受付条件と保存費用下限](../../../evidence/palw/tfp1-native-admission-fee-floor-2026-11-11/README.md)は **実装中・Rust検証未実行**。FP/Source/classと明示policyから受付identityを生成する共通constructorを追加し、unsigned/signedの共通予約で全選出rankの保存費用を既使用分を含む署名fee上限へ照合する。費用不足ではbookを確定しない。constructorの本番resolver、全工程planner、実資金・受付本経路は未接続。公開同一claimの受付/Final/権利消費/blockは未証明。モデル取得証明なし。
+
+2026-11-11 の[TFO3専用frameと四行保存](../../../evidence/palw/tfp1-dedicated-frame-atomic-storage-2026-11-11/README.md)は **実装中・Rust検証未実行**。旧allocation/モデルDAを持たない独立frameと明示版204を追加し、frame/198/204/206の隣接保存・局所巻戻し・snapshot/delta整合を接続。claim/class/旧frame単独変更の再検査も追加した。完全G14 planner、claim/book/escrowを含む受付本経路、court consumer、有限releaseは未完。公開同一claimの受付/Final/権利消費/blockは未証明。モデル取得証明なし。

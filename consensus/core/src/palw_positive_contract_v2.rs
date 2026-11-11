@@ -9,6 +9,7 @@ mod tfp1_hf_artifact;
 mod tfp1_material;
 pub use tfp1_hf_artifact::PublicTfp1HfArtifactV1;
 pub(crate) mod tfp1_original;
+pub use tfp1_original::native_frame::PublicTfp1FrameV1;
 
 pub use tfp1_material::{PublicTfp1ColdMaterialV1, public_ordinary_tfp1_rules_material_v1, public_tfp1_cold_material_v1};
 
@@ -1307,6 +1308,7 @@ impl From<ContractError> for PublicReplayApprovalLookupErrorV1 {
 fn check_tfp1_admission_journal_v1(
     entries: &[crate::palw_state_v2::PalwDeltaEntryV2],
     first: usize,
+    preceding: Option<&crate::palw_state_v2::PalwDeltaEntryV2>,
 ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
     use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateV2Error};
     let mismatch = || PalwStateV2Error::DeltaMismatch("TFP1 admission/link/history are not one insertion unit");
@@ -1322,6 +1324,30 @@ fn check_tfp1_admission_journal_v1(
     let link = tfp1_original::native_link::Tfp1PublicOriginalLinkV1::decode_row(key, bytes).map_err(|_| mismatch())?;
     let (key, bytes) = read(2, PUBLIC_TFP1_HISTORY_TABLE_V1)?;
     let history = Tfp1OriginalHistoryBoundaryV1::decode_row(key, bytes).map_err(|_| mismatch())?;
+    if link.uses_public_frame_v1() {
+        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        let Some(PalwDeltaEntryV2::StagedCourtSeed {
+            key: Key::PublicTfp1FrameV1(claim),
+            old: None,
+            new: Some(Row::PublicTfp1FrameV1(frame)),
+        }) = preceding
+        else {
+            return Err(mismatch());
+        };
+        if *claim != link.claim_v1() || frame.material_until_daa_v1() != admission.budget.retention_until {
+            return Err(mismatch());
+        }
+        link.check_public_frame_record_v1(frame).map_err(|_| mismatch())?;
+    } else if matches!(
+        preceding,
+        Some(PalwDeltaEntryV2::StagedCourtSeed {
+            key: crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::PublicTfp1FrameV1(_),
+            ..
+        })
+    ) {
+        return Err(mismatch());
+    }
+    let before_first_write = if link.uses_public_frame_v1() { first.checked_sub(1).ok_or_else(mismatch)? } else { first };
     if admission.original != link.original_v1()
         || admission.original != history.original
         || admission.carrier != link.carrier_v1()
@@ -1329,7 +1355,7 @@ fn check_tfp1_admission_journal_v1(
         || admission.reservation != link.reservation_v1()
         || link.claim_v1() != history.claim
         || link.source_v1() != history.source
-        || usize::try_from(history.before_delta_end).ok().is_none_or(|end| end > first)
+        || usize::try_from(history.before_delta_end).ok().is_none_or(|end| end > before_first_write)
     {
         return Err(mismatch());
     }
@@ -1403,7 +1429,35 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         })
     }
 
+    fn validate_public_tfp1_frame_link_v1(&self, claim: Hash64) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error;
+        if self
+            .public_tfp1_frame_v1(claim)
+            .map_err(|_| PalwStateV2Error::CarriageInconsistent("invalid public TFP1 frame".into()))?
+            .is_none()
+        {
+            return Ok(());
+        }
+        let link = self
+            .public_tfp1_original_link_v1(claim)
+            .map_err(|_| PalwStateV2Error::CarriageInconsistent("invalid public TFP1 frame link".into()))?;
+        if !link.is_some_and(|link| link.uses_public_frame_v1()) {
+            return Err(PalwStateV2Error::CarriageInconsistent("orphan public TFP1 frame".into()));
+        }
+        Ok(())
+    }
+
+    fn validate_public_tfp1_frames_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        // A frame without the paired link/history is not a valid final
+        // state, including snapshots that omit the entire kernel route.
+        for (claim, _) in self.public_tfp1_frame_rows_v1() {
+            self.validate_public_tfp1_frame_link_v1(claim)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate_public_verification_rows_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        self.validate_public_tfp1_frames_v1()?;
         let Some(route) = self.kernel_route_state_v1() else { return Ok(()) };
         for ((table, key), bytes) in
             route.aux.range((PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, Vec::new())..(PUBLIC_TFP1_HISTORY_TABLE_V1 + 1, Vec::new()))
@@ -1422,7 +1476,54 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         use tfp1_original::manifest_paid::PaidManifestRequestRowV1;
         let route = self.kernel_route_state_v1();
         let mut check_all = false;
+        let mut check_frames = false;
         for (index, entry) in entries.iter().enumerate() {
+            use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+            match entry {
+                PalwDeltaEntryV2::Claim { key, .. } => self.validate_public_tfp1_frame_link_v1(*key)?,
+                // Class changes can affect many frames. Validate the dedicated
+                // frame range once per delta, not once per class or per claim.
+                PalwDeltaEntryV2::TirClass { old, new, .. } if old != new => check_frames = true,
+                _ => {}
+            }
+            if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry {
+                if let Key::TirClaim(claim) = key {
+                    self.validate_public_tfp1_frame_link_v1(*claim)?;
+                }
+                if matches!(key, Key::PublicTfp1FrameV1(_))
+                    || matches!(old, Some(Row::PublicTfp1FrameV1(_)))
+                    || matches!(new, Some(Row::PublicTfp1FrameV1(_)))
+                {
+                    // New immutable frames have no standalone update/delete.
+                    // The forward journal is one frame + 198/204/206 unit;
+                    // rollback validates that same unit before removing it.
+                    let first = index.checked_add(1).ok_or(PalwStateV2Error::DeltaMismatch("TFP1 frame journal index"))?;
+                    check_tfp1_admission_journal_v1(
+                        entries
+                            .get(first..)
+                            .and_then(|tail| tail.get(..3))
+                            .ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 frame journal"))?,
+                        first,
+                        Some(entry),
+                    )?;
+                    let (Key::PublicTfp1FrameV1(claim), None, Some(Row::PublicTfp1FrameV1(frame))) = (key, old, new) else {
+                        return Err(PalwStateV2Error::DeltaMismatch("public TFP1 frame journal is insert-only"));
+                    };
+                    frame.check_structure_v1(*claim).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                    if !revert {
+                        let link = self
+                            .public_tfp1_original_link_v1(*claim)
+                            .map_err(|_| PalwStateV2Error::DeltaMismatch("public TFP1 frame/link mismatch"))?
+                            .ok_or(PalwStateV2Error::DeltaMismatch("public TFP1 frame has no link"))?;
+                        if !link.uses_public_frame_v1() {
+                            return Err(PalwStateV2Error::DeltaMismatch("public TFP1 frame has a legacy link"));
+                        }
+                    } else {
+                        check_all = true;
+                    }
+                }
+                continue;
+            }
             let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else { continue };
             if !is_public_verification_table_v1(*table) {
                 continue;
@@ -1439,6 +1540,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                         .and_then(|tail| tail.get(..3))
                         .ok_or(PalwStateV2Error::DeltaMismatch("incomplete TFP1 admission journal"))?,
                     first,
+                    first.checked_sub(1).and_then(|index| entries.get(index)),
                 )?;
             }
             if *table == PUBLIC_MANIFEST_PAID_TABLE_V1 && !revert {
@@ -1466,7 +1568,13 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                 self.validate_public_verification_row_v1(*table, key, bytes)?;
             }
         }
-        if check_all { self.validate_public_verification_rows_v1() } else { Ok(()) }
+        if check_all {
+            self.validate_public_verification_rows_v1()
+        } else if check_frames {
+            self.validate_public_tfp1_frames_v1()
+        } else {
+            Ok(())
+        }
     }
 
     /// Check the public verification rows at this exact native state point.
@@ -1767,6 +1875,21 @@ impl crate::palw_state_v2::PalwChainStateV2 {
         let record = PublicOriginalAdmissionRecordV1::decode_row(&key.1, bytes)?;
         record.check_state_point(self.last_point().ok_or(ContractError::Scope)?)?;
         Ok(Some(record))
+    }
+
+    /// Structurally checked immutable context. This getter deliberately does
+    /// not read aux 204: paired installation writes the frame before its link.
+    /// Use the link/history restore for accepted authority.
+    pub(crate) fn public_tfp1_frame_v1(&self, claim: Hash64) -> Result<Option<&PublicTfp1FrameV1>, ContractError> {
+        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        match self.staged_court_row_v1(&Key::PublicTfp1FrameV1(claim)) {
+            None => Ok(None),
+            Some(Row::PublicTfp1FrameV1(frame)) => {
+                frame.check_structure_v1(claim).map_err(|_| ContractError::Scope)?;
+                Ok(Some(frame))
+            }
+            _ => Err(ContractError::Scope),
+        }
     }
 
     /// A rooted link never substitutes for restoring the literal companion,

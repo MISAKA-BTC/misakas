@@ -17,7 +17,8 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_positive_contract::{ContractError, identity::Digest, public_one_honest::OriginalId};
 
-const VERSION: u16 = 1;
+const LEGACY_FRAME_VERSION: u16 = 1;
+const PUBLIC_FRAME_VERSION: u16 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub(crate) struct Tfp1PublicOriginalLinkV1 {
@@ -25,6 +26,9 @@ pub(crate) struct Tfp1PublicOriginalLinkV1 {
     claim: Hash64,
     source: Hash64,
     execution_root: Hash64,
+    // Version 1: legacy allocation/rules/resource, byte-for-byte unchanged.
+    // Version 2: dedicated frame identity/profile/resource. Never infer the
+    // version from which frame happens to exist in the current snapshot.
     fp_allocation: Hash64,
     fp_rules: Hash64,
     fp_resource: Hash64,
@@ -162,8 +166,7 @@ impl PublicOriginalAdmissionV1<'_> {
         let history = crate::palw_tfp1_original_history_v1::rooted_tfp1_original_history_v1(state, pairing.claim())?
             .ok_or(ContractError::Scope)?;
         history.check_admission_inputs_v1(self, inputs)?;
-        let frame = palw_tir_public_claim_v1(state, link.claim).ok_or(ContractError::Scope)?;
-        let facts = link.check_frame(state, frame)?;
+        let facts = link.check_frame_at_v1(state, state.last_point().ok_or(ContractError::Scope)?)?;
         let obligation = facts.service_obligation_v1(link.profile, link.resource)?;
         let prepared = self.prepare_tfp1_pairing_v1(pairing, obligation, inputs)?;
         // Includes the literal companion digest, original rescue capacities,
@@ -192,8 +195,7 @@ impl PreparedTfp1PublicOriginalV1 {
         {
             return Err(ContractError::Scope);
         }
-        let frame = palw_tir_public_claim_v1(state, row.claim).ok_or(ContractError::Scope)?;
-        if row.check_frame(state, frame)? != self.obligation.facts {
+        if row.check_frame_at_v1(state, state.last_point().ok_or(ContractError::Scope)?)? != self.obligation.facts {
             return Err(ContractError::Scope);
         }
         Ok(row)
@@ -251,16 +253,22 @@ impl PreparedTfp1PublicOriginalV1 {
         require_current_public_origin_v1(carrier.origin, point)?;
         let claim = self.obligation.facts.claim;
         check_paired_escrow(state, point, claim, pairing)?;
-        let frame = palw_tir_public_claim_v1(state, claim).ok_or(ContractError::Scope)?;
-        let plan = frame.plan_v1();
+        let (version, fp_allocation, fp_rules, fp_resource) = match state.public_tfp1_frame_v1(claim)? {
+            Some(frame) => (PUBLIC_FRAME_VERSION, frame.identity_v1(), frame.profile_v1(), frame.resource_v1()),
+            None => {
+                let frame = palw_tir_public_claim_v1(state, claim).ok_or(ContractError::Scope)?;
+                let plan = frame.plan_v1();
+                (LEGACY_FRAME_VERSION, plan.allocation_id, plan.rules_id, plan.resource_plan_id)
+            }
+        };
         let row = Tfp1PublicOriginalLinkV1 {
-            version: VERSION,
+            version,
             claim,
             source: self.obligation.facts.source,
             execution_root: self.obligation.facts.execution_root,
-            fp_allocation: plan.allocation_id,
-            fp_rules: plan.rules_id,
-            fp_resource: plan.resource_plan_id,
+            fp_allocation,
+            fp_rules,
+            fp_resource,
             original: admission.original,
             carrier,
             literal_fp: pairing.literal_fp,
@@ -270,7 +278,7 @@ impl PreparedTfp1PublicOriginalV1 {
             resource: self.obligation.resource,
         };
         row.check_shape(&claim.as_bytes())?;
-        if row.check_frame(state, frame)? != self.obligation.facts {
+        if row.check_frame_at_v1(state, point)? != self.obligation.facts {
             return Err(ContractError::Scope);
         }
         Ok(PreparedTfp1PublicOriginalLinkV1 { row, admission, pairing })
@@ -376,7 +384,7 @@ impl Tfp1PublicOriginalLinkV1 {
     }
 
     fn check_shape(&self, key: &[u8]) -> Result<(), ContractError> {
-        if self.version != VERSION || key != self.claim.as_byte_slice() {
+        if !matches!(self.version, LEGACY_FRAME_VERSION | PUBLIC_FRAME_VERSION) || key != self.claim.as_byte_slice() {
             return Err(ContractError::Identity);
         }
         if [
@@ -419,6 +427,61 @@ impl Tfp1PublicOriginalLinkV1 {
         Ok(admission)
     }
 
+    fn check_frame_at_v1(
+        &self,
+        state: &PalwChainStateV2,
+        point: &PalwBlockContextV2,
+    ) -> Result<NativeTfp1PublicOriginalFactsV1, ContractError> {
+        match self.version {
+            LEGACY_FRAME_VERSION => {
+                if state.public_tfp1_frame_v1(self.claim)?.is_some() {
+                    return Err(ContractError::Scope);
+                }
+                let frame = palw_tir_public_claim_v1(state, self.claim).ok_or(ContractError::Scope)?;
+                self.check_frame(state, frame)
+            }
+            PUBLIC_FRAME_VERSION => {
+                let frame = state.public_tfp1_frame_v1(self.claim)?.ok_or(ContractError::Scope)?;
+                frame.check_state_at_v1(state, point)?;
+                self.check_public_frame_record_v1(frame)
+            }
+            _ => Err(ContractError::NonCanonical),
+        }
+    }
+
+    /// Fixed journal-unit cross-reference, also usable while reverting after
+    /// the frame and link are absent from the resulting state.
+    pub(crate) fn check_public_frame_record_v1(
+        &self,
+        frame: &crate::palw_positive_contract_v2::PublicTfp1FrameV1,
+    ) -> Result<NativeTfp1PublicOriginalFactsV1, ContractError> {
+        if self.version != PUBLIC_FRAME_VERSION {
+            return Err(ContractError::Scope);
+        }
+        if frame.source_v1() != self.source
+            || frame.original_id_v1() != self.original
+            || frame.origin_v1() != self.carrier.origin
+            || frame.identity_v1() != self.fp_allocation
+            || frame.profile_v1() != self.fp_rules
+            || frame.resource_v1() != self.fp_resource
+            || frame.profile_v1() != self.profile
+            || frame.resource_v1() != self.resource
+            || frame.obligation_v1() != self.obligation
+            || frame.reservation_v1() != self.admission_reservation
+        {
+            return Err(ContractError::Scope);
+        }
+        let facts = frame.native_facts_v1()?;
+        if facts.native_identity_v1() != (self.claim, self.source, self.execution_root) {
+            return Err(ContractError::Scope);
+        }
+        Ok(facts)
+    }
+
+    pub(crate) fn uses_public_frame_v1(&self) -> bool {
+        self.version == PUBLIC_FRAME_VERSION
+    }
+
     fn check_frame(
         &self,
         state: &PalwChainStateV2,
@@ -459,9 +522,14 @@ impl Tfp1PublicOriginalLinkV1 {
 
     pub(crate) fn check_state_at_v1(&self, state: &PalwChainStateV2, point: &PalwBlockContextV2) -> Result<(), ContractError> {
         self.check_shape(&self.claim.as_bytes())?;
-        let frame = palw_tir_public_claim_v1(state, self.claim).ok_or(ContractError::Scope)?;
-        self.check_frame(state, frame)?;
-        self.admission_at(state, point)?;
+        self.check_frame_at_v1(state, point)?;
+        let admission = self.admission_at(state, point)?;
+        if self.uses_public_frame_v1()
+            && state.public_tfp1_frame_v1(self.claim)?.ok_or(ContractError::Scope)?.material_until_daa_v1()
+                != admission.budget.retention_until
+        {
+            return Err(ContractError::Scope);
+        }
         Ok(())
     }
 

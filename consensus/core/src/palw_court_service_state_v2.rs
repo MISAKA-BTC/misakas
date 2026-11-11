@@ -367,6 +367,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             Key::Claim(_)
                 | Key::Owner(..)
                 | Key::TirClaim(_)
+                | Key::PublicTfp1FrameV1(_)
                 | Key::TirAcquisition(..)
                 | Key::TirPreparation(..)
                 | Key::TirWitness(..)
@@ -383,9 +384,11 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             {
                 Some(*claim)
             }
-            Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
-                Some(*claim)
-            }
+            Key::PublicTfp1FrameV1(claim)
+            | Key::TirClaim(claim)
+            | Key::TirAcquisition(claim, ..)
+            | Key::TirPreparation(claim, ..)
+            | Key::TirWitness(claim, ..) => Some(*claim),
             Key::CourtSharedContext(claim) | Key::CourtSharedIds(claim) | Key::CourtSharedRoot(claim, _) => Some(*claim),
             // RFC-0032 A canonical material is held like other shared original data;
             // incomplete drafts/parts are not (they leave at their own TTL).

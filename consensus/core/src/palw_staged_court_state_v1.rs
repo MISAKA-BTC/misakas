@@ -124,6 +124,8 @@ pub enum PalwStagedCourtKeyV1 {
     TokenizerRegistrationSession(Hash64),
     TokenizerRegistrationPart(Hash64, u32),
     TokenizerRegistrationBook,
+    /// New public-original context, separate from legacy allocation/custody. Appended key 39.
+    PublicTfp1FrameV1(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -198,6 +200,8 @@ pub enum PalwStagedCourtRowV1 {
     TokenizerRegistrationSession(Box<crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationSessionV1>),
     TokenizerRegistrationPart(PalwSharedCourtV1<crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationPartRowV1>),
     TokenizerRegistrationBook(PalwSharedCourtV1<crate::palw_tokenizer_registration_state_v1::TokenizerRegistrationBookV1>),
+    /// Immutable native TFO3 context; appended row 46. Does not grant admission.
+    PublicTfp1FrameV1(PalwSharedCourtV1<crate::palw_positive_contract_v2::PublicTfp1FrameV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -242,7 +246,8 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtBatchPlainOutputReceiptV2(_)
             | Self::TokenizerRegistrationSession(_)
             | Self::TokenizerRegistrationPart(_)
-            | Self::TokenizerRegistrationBook(_) => None,
+            | Self::TokenizerRegistrationBook(_)
+            | Self::PublicTfp1FrameV1(_) => None,
             _ => Some(self),
         }
     }
@@ -288,7 +293,8 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtBatchPlainOutputReceiptV2(_)
             | Self::TokenizerRegistrationSession(_)
             | Self::TokenizerRegistrationPart(_)
-            | Self::TokenizerRegistrationBook(_) => None,
+            | Self::TokenizerRegistrationBook(_)
+            | Self::PublicTfp1FrameV1(_) => None,
             _ => Some(self),
         }
     }
@@ -408,6 +414,7 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::TirAcceptedBody(hash), Self::TirAcceptedBody(row)) => row.check_structure_v1(*hash),
             (PalwStagedCourtKeyV1::TirPreparation(..), Self::TirPreparation(row)) => row.check_structure_v1(key),
             (PalwStagedCourtKeyV1::TirClaim(..), Self::TirClaim(frame)) => frame.check_structure_v1(key),
+            (PalwStagedCourtKeyV1::PublicTfp1FrameV1(claim), Self::PublicTfp1FrameV1(frame)) => frame.check_structure_v1(*claim),
             (PalwStagedCourtKeyV1::TirWitness(claim, filer), Self::TirWitness(row)) => row.check_structure_v1(*claim, *filer),
             // The container opening itself is checked at registration. The
             // retained row must stay readable with its native fixed bounds.

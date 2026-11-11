@@ -4701,6 +4701,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 Ok(sum)
             }
             38 => Ok(NativeWireShapeV1::default()),
+            39 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -5033,6 +5034,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV
                 > as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            46 => <crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_positive_contract_v2::PublicTfp1FrameV1> as NativeWireScanV1>::scan_native_wire_v1(reader),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

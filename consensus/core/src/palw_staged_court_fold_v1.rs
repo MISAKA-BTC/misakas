@@ -15,6 +15,7 @@ pub(super) fn staged_legacy_alias_subject_v2(key: PalwStagedCourtKeyV1) -> Optio
         | TirAcceptedBody(id)
         | TirPreparation(id, _)
         | TirClaim(id)
+        | PublicTfp1FrameV1(id)
         | TirWitness(id, _)
         | CourtDutyClock(id)
         | CourtSharedContext(id)
@@ -192,6 +193,14 @@ impl PalwChainStateV2 {
         };
         self.staged_courts.range((start, std::ops::Bound::Unbounded)).map_while(|(key, row)| match key {
             PalwStagedCourtKeyV1::Claim(claim) => Some((*claim, row)),
+            _ => None,
+        })
+    }
+    /// Dedicated new-profile range; snapshot checks do not walk unrelated
+    /// owner/court material. Values still need their exact variant checked.
+    pub(crate) fn public_tfp1_frame_rows_v1(&self) -> impl Iterator<Item = (Hash64, &PalwStagedCourtRowV1)> {
+        self.staged_courts.range(PalwStagedCourtKeyV1::PublicTfp1FrameV1(Hash64::default())..).map_while(|(key, row)| match key {
+            PalwStagedCourtKeyV1::PublicTfp1FrameV1(claim) => Some((*claim, row)),
             _ => None,
         })
     }
@@ -1243,6 +1252,81 @@ impl TransitionBuilder<'_> {
         self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService, Some(row))
     }
 
+    /// Install the dedicated frame and its 198/204/206 journal as one unit.
+    /// The enclosing original checkpoint owns claim/book/escrow and their
+    /// payment checks. This writer grants no complete-profile capability.
+    pub(super) fn install_public_tfp1_original_frame_v1(
+        &mut self,
+        point: &PalwBlockContextV2,
+        frame: crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_positive_contract_v2::PublicTfp1FrameV1>,
+        history: crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1OriginalHistoryV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let refused = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
+        if !self.native_writers_tracking_v1() {
+            return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                crate::palw_positive_contract_v2::PublicTfp1FrameV1,
+            >(
+                "public TFP1 frame writer", "missing tracked native construction owner"
+            )));
+        }
+        self.reject_positive_claim_alias_v2(frame.claim_v1())?;
+        self.reject_positive_job_alias_v2(frame.claim_v1())?;
+        crate::palw_positive_contract_v2::require_current_public_origin_v1(frame.origin_v1(), point)
+            .map_err(|_| refused("public TFP1 frame has another accepting point"))?;
+        frame.check_state_at_v1(&self.state, point).map_err(|_| refused("public TFP1 frame changes the native claim"))?;
+        let key = PalwStagedCourtKeyV1::PublicTfp1FrameV1(frame.claim_v1());
+        let due = frame.material_until_daa_v1();
+        let hold = (frame.producer_v1(), due, key);
+        if self.state.staged_courts.contains_key(&key)
+            || self.state.staged_due.contains(&(due, key))
+            || self.state.staged_holds.contains(&hold)
+        {
+            return Err(refused("public TFP1 frame requires a fresh insertion"));
+        }
+        // Both Box -> Arc conversion and the journal's shared handle are
+        // covered before allocation. The frame's original deep-copy ticket
+        // remains alive until the native map/journal ownership is established.
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("public TFP1 frame shared ownership");
+        quote.exact::<crate::palw_positive_contract_v2::PublicTfp1FrameV1>(2)?.exact::<usize>(4)?;
+        self.admit_native_write_v1(quote)?;
+        let (frame, _frame_owner) = frame.into_parts_v1();
+        let new = Some(PalwStagedCourtRowV1::PublicTfp1FrameV1(Box::new(frame).into()));
+        self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "paired public TFP1 frame")?;
+        self.reserve_staged_indices_v1(&key, &new)?;
+        let first = self.entries.len();
+        let row = new.as_ref().expect("new public frame");
+        self.state.staged_courts.insert(key, row.clone());
+        update_indices(&mut self.state, key, None, Some(row));
+        self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new });
+        let result = history
+            .finalize_v1(&self.state, point)
+            .map_err(|_| refused("public TFP1 frame/link/history mismatch"))
+            .and_then(|prepared| self.install_public_tfp1_original_v1(point, &prepared));
+        if result.is_err() {
+            // The inner three-row writer restores its own suffix. The only
+            // remaining inverse is this insertion and two fixed memberships;
+            // rollback never allocates or clones the whole chain state.
+            if self.entries.len() != first + 1
+                || !matches!(self.entries.get(first), Some(PalwDeltaEntryV2::StagedCourtSeed {
+                    key: entry_key, old: None, new: Some(row @ PalwStagedCourtRowV1::PublicTfp1FrameV1(_))
+                }) if *entry_key == key && self.state.staged_courts.get(&key) == Some(row))
+                || !self.state.staged_due.contains(&(due, key))
+                || !self.state.staged_holds.contains(&hold)
+            {
+                return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                    crate::palw_positive_contract_v2::PublicTfp1FrameV1,
+                >(
+                    "public TFP1 frame inverse", "unexpected journal effects"
+                )));
+            }
+            self.entries.pop();
+            self.state.staged_courts.remove(&key);
+            self.state.staged_due.remove(&(due, key));
+            self.state.staged_holds.remove(&hold);
+        }
+        result
+    }
+
     /// Only the paid registration fold and its expiry sweep call this writer.
     /// Validate and reserve every dependent write before changing any row.
     pub(super) fn commit_tokenizer_rows_v1(
@@ -1462,7 +1546,9 @@ impl TransitionBuilder<'_> {
         if self.extras.batch_plain_output_transport_v2.is_some_and(|policy| !policy.admits_slot_v2(cost)) {
             return Err(refuse("plain Batch Output slot exceeds the physical transport envelope"));
         }
-        let _workspace = self.extras.batch_plain_output_transport_v2
+        let _workspace = self
+            .extras
+            .batch_plain_output_transport_v2
             .map(|policy| policy.reserve_replay_workspace_v2(&self.state, claim, matches!(wire, Wire::Terminal(_))))
             .transpose()?;
         match wire {
@@ -1915,6 +2001,11 @@ impl TransitionBuilder<'_> {
             )
         ) {
             return Err(PalwStateV2Error::CarriageInconsistent("tokenizer registration requires its paid native writer".into()));
+        }
+        if matches!(key, PalwStagedCourtKeyV1::PublicTfp1FrameV1(_))
+            || matches!(&new, Some(PalwStagedCourtRowV1::PublicTfp1FrameV1(_)))
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("public TFP1 frame requires complete paired admission".into()));
         }
         self.check_archive_progress_write_v1(&key, new.as_ref())?;
         self.check_material_intake_write_v1(&key, new.as_ref())?;
@@ -4658,6 +4749,12 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::TirPreparation(row) => (row.preparation.contract_v1().material_until_daa, Vec::new()),
         // A staged witness leaves at the frame's door close; it holds no bond (its filer is not liable on the claim).
         PalwStagedCourtRowV1::TirWitness(row) => (row.until_daa, Vec::new()),
+        PalwStagedCourtRowV1::PublicTfp1FrameV1(frame) => {
+            if key != PalwStagedCourtKeyV1::PublicTfp1FrameV1(frame.claim_v1()) {
+                return (0, Vec::new());
+            }
+            (frame.material_until_daa_v1(), vec![(frame.producer_v1(), frame.material_until_daa_v1(), key)])
+        }
         PalwStagedCourtRowV1::TirClaim(frame) => {
             if key != frame.key_v1() {
                 return (0, Vec::new());
@@ -4998,6 +5095,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
                     | PalwStagedCourtKeyV1::TokenizerRegistrationSession(..)
                     | PalwStagedCourtKeyV1::TokenizerRegistrationPart(..)
                     | PalwStagedCourtKeyV1::TokenizerRegistrationBook
+                    | PalwStagedCourtKeyV1::PublicTfp1FrameV1(_)
             ) && !b.state.court_service_holds_material_v1(key)
         })
         .take(64)
