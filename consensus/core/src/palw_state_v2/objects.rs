@@ -4114,59 +4114,19 @@ fn apply_object_batch_10_v1(
                     },
                 );
             }
-            // **N4 (REQ-N4-1, `palw_public_evidence_reward_v1`)**: past the fence a free-prompt claim whose required evidence cannot be
-            // public — `PanelDa` prompt ids, FP Job V5 images / source ids — takes no new reward or Final weight, so it is not taken
-            // at all (as G14-for-rewards refuses a class off the onboarded path). Evaluation claims (above) earn nothing and are not
-            // asked. Below the fence `None`, and a claim accepted before it keeps its old ruleset to its end (REQ-N4-2).
-            if let Some(why) = crate::palw_ruling_fences_v1::palw_public_evidence_reward_refusal_v1(
+            // Quote and actual intake ask the same public-evidence, container
+            // and G14 conditions before pricing or writing. Actual intake also
+            // requires the transaction-paired original; an unsigned quote does
+            // not stand in for that carrier or its funding authentication.
+            palw_tir_public_fold_v1::check_original_public_entry_v1(
+                &builder.state,
                 builder.params,
+                builder.extras,
                 ctx.daa_score,
+                *class_id,
                 public_job.as_deref(),
-            ) {
-                return Err(PalwStateV2Error::ClassNotRewardable {
-                    class: *class_id,
-                    code: crate::palw_ruling_fences_v1::PALW_N4_NONPUBLIC_EVIDENCE_CODE_V1,
-                    why: why.to_string(),
-                });
-            }
-            // **G14 G-03: past `palw_tir_public_conviction_v1` a TIR original takes its ORIGINAL frame or nothing.** A commitment on
-            // a registered TIR class without its transaction-paired `TFP1` is refused here, before anything is priced or written —
-            // so no frameless TIR claim reaches a reward, weight or credit (it cannot route around the one public conviction door).
-            // `Ok` below the fence and for every non-TIR class: byte-identical there.
-            palw_tir_public_fold_v1::require_original_frame_v1(builder, *claim_id, *class_id)?;
-            // **RFC-0002 02-A: past `palw_tir_container_identity_v1` a TIR original's class must be bound to its `PALWART3`
-            // container** (tag 175), so the operands a court opens under the class's artifact root are the inner inventory of a
-            // registered container. Refused at the same door as G-03, before anything is priced or written. `Ok` below the fence and
-            // for every non-TIR class.
-            if builder.extras.tir_container_identity_active
-                && builder.state.tir_class_v1(class_id).is_some()
-                && crate::palw_tir_container_v1::palw_tir_bound_container_v1(&builder.state, *class_id).is_none()
-            {
-                return Err(PalwStateV2Error::ClassNotRewardable {
-                    class: *class_id,
-                    code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
-                    why: "past palw_tir_container_identity_v1 a TIR original's class must be bound to its PALWART3 container".into(),
-                });
-            }
-            // **G-01 option (b) / G-05 (`palw_g14_route_required_v1`)**: past the fence a free-prompt claim whose job needs a G14
-            // route that is not armed (selection: the TIR public frame on THIS commitment; constraint / prefix / tokenizer: the staged
-            // court with its legacy filer; never for non-public evidence) is not taken — no reward, weight or credit; its carrier pays
-            // the ordinary fee. The route is read from the fence state, so the job regains reward once its route is armed. `None`
-            // below the fence (every shipped network) and for a claim accepted before it.
-            if let Some((code, why)) = crate::palw_g14_gates_v1::palw_g14_route_fp_refusal_v1(
-                builder.params,
-                ctx.daa_score,
-                public_job.as_deref(),
-                builder.extras.tir_public_originals.contains_key(claim_id),
-                // Lane FPTOK: the class registered the raw tokenizer material its tokenizer court recomputes against.
-                builder
-                    .state
-                    .class_semantics
-                    .get(class_id)
-                    .is_some_and(|s| s.raw_tokenizer_bytes.is_some() && s.tokenizer_key_events.is_some()),
-            ) {
-                return Err(PalwStateV2Error::ClassNotRewardable { class: *class_id, code, why });
-            }
+                Some(*claim_id),
+            )?;
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));

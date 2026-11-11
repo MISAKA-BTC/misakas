@@ -342,16 +342,21 @@ pub const PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1: &str = "G03_FRAMELESS_TIR_ORI
 /// The fence is read from the params (`tir_public_conviction_active`), not from whether the route's rules resolved at this block:
 /// a block where they do not resolve refuses every TIR original (fail-closed), framed or not. `Ok` below the fence and for every
 /// non-TIR class (A-2: nothing is judged there).
-pub(super) fn require_original_frame_v1(b: &TransitionBuilder<'_>, claim: Hash64, class_id: Hash64) -> Result<(), PalwStateV2Error> {
-    if b.extras.tir_funded_originals.get(&claim).is_some_and(|pair| pair.envelope().is_protected_v2()) {
+pub(super) fn require_original_frame_v1(
+    base: &PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    claim: Hash64,
+    class_id: Hash64,
+) -> Result<(), PalwStateV2Error> {
+    if extras.tir_funded_originals.get(&claim).is_some_and(|pair| pair.envelope().is_protected_v2()) {
         // This explicit wire version does not carry a legacy TFP1 pledge.
         // Dispatch to the protected-profile gate rather than requesting a
         // synthetic legacy frame. An unconfigured planner still refuses it.
-        return check_paired_original_profile_v1(b.extras, claim);
+        return check_paired_original_profile_v1(extras, claim);
     }
-    if !b.extras.tir_public_conviction_active
-        || b.state.tir_class_v1(&class_id).is_none()
-        || b.extras.tir_public_originals.contains_key(&claim)
+    if !extras.tir_public_conviction_active
+        || base.tir_class_v1(&class_id).is_none()
+        || extras.tir_public_originals.contains_key(&claim)
     {
         return Ok(());
     }
@@ -360,6 +365,58 @@ pub(super) fn require_original_frame_v1(b: &TransitionBuilder<'_>, claim: Hash64
         code: PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1,
         why: "past palw_tir_public_conviction_v1 a TIR Free Prompt original must carry its paired TFP1 frame".into(),
     })
+}
+
+/// The public portion of the ORIGINAL admission door, shared by the actual
+/// FP fold and the unsigned quote. `paired_claim` is present only at actual
+/// intake, where the literal carrier is required. The quote checks whether a
+/// prospective frame can route; it never authenticates a carrier or reserves
+/// funds. Evaluation claims use their separate, rewardless admission path.
+///
+/// Keep this order identical to the signed door: N4, paired frame, container,
+/// then G14. In particular a protected companion still needs its own complete
+/// planner; a prospective legacy route must not authorize its admission.
+pub(super) fn check_original_public_entry_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    class: Hash64,
+    original: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+    paired_claim: Option<Hash64>,
+) -> Result<(), PalwStateV2Error> {
+    if let Some(why) = crate::palw_ruling_fences_v1::palw_public_evidence_reward_refusal_v1(params, now_daa, original) {
+        return Err(PalwStateV2Error::ClassNotRewardable {
+            class,
+            code: crate::palw_ruling_fences_v1::PALW_N4_NONPUBLIC_EVIDENCE_CODE_V1,
+            why: why.to_string(),
+        });
+    }
+    if let Some(claim) = paired_claim {
+        require_original_frame_v1(base, extras, claim, class)?;
+    }
+    let tir = base.tir_class_v1(&class).is_some();
+    if tir && extras.tir_container_identity_active && crate::palw_tir_container_v1::palw_tir_bound_container_v1(base, class).is_none()
+    {
+        return Err(PalwStateV2Error::ClassNotRewardable {
+            class,
+            code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
+            why: "past palw_tir_container_identity_v1 a TIR original's class must be bound to its PALWART3 container".into(),
+        });
+    }
+    // Actual FP intake also gates non-TIR classes. The TIR quote preserves its
+    // non-TIR no-plan behavior; it does not advertise their other routes.
+    if paired_claim.is_some() || tir {
+        let framed = paired_claim.is_none_or(|claim| extras.tir_public_originals.contains_key(&claim));
+        let tokenizer_material =
+            base.class_semantics_v1(&class).is_some_and(|s| s.raw_tokenizer_bytes.is_some() && s.tokenizer_key_events.is_some());
+        if let Some((code, why)) =
+            crate::palw_g14_gates_v1::palw_g14_route_fp_refusal_v1(params, now_daa, original, framed, tokenizer_material)
+        {
+            return Err(PalwStateV2Error::ClassNotRewardable { class, code, why });
+        }
+    }
+    Ok(())
 }
 
 /// The new companion must be dispatched before any legacy frame/source or
@@ -665,23 +722,7 @@ pub fn palw_tir_public_original_quote_with_diagnostics_v1(
     if original.job.tail.is_some() && !params.family_supplier_active_at(now_daa) {
         return Ok(None);
     }
-    let class = original.job.class_id;
-    if base.tir_class_v1(&class).is_some() {
-        if extras.tir_container_identity_active && crate::palw_tir_container_v1::palw_tir_bound_container_v1(base, class).is_none() {
-            return Err(PalwStateV2Error::ClassNotRewardable {
-                class,
-                code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
-                why: "the TIR class has no accepted PALWART3 container binding".into(),
-            });
-        }
-        let tokenizer_material =
-            base.class_semantics_v1(&class).is_some_and(|s| s.raw_tokenizer_bytes.is_some() && s.tokenizer_key_events.is_some());
-        if let Some((code, why)) =
-            crate::palw_g14_gates_v1::palw_g14_route_fp_refusal_v1(params, now_daa, Some(original), true, tokenizer_material)
-        {
-            return Err(PalwStateV2Error::ClassNotRewardable { class, code, why });
-        }
-    }
+    check_original_public_entry_v1(base, params, extras, now_daa, original.job.class_id, Some(original), None)?;
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     let quoted = original_plan_mode_v4(&builder, now_daa, original, header, false, diagnostics.as_deref_mut());
     if let Some(Some(breakdown)) = diagnostics
@@ -9204,7 +9245,7 @@ pub(crate) mod conviction_e2e_tests {
         assert!(!g03(&super::super::objects::apply_object(&mut b, &at(&frame, 0), &fx.object)));
         // The rule itself, by its three inputs.
         let b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-        assert!(g03(&require_original_frame_v1(&b, claim_id, frame.descriptor_v1().class_id)));
+        assert!(g03(&require_original_frame_v1(&b.state, b.extras, claim_id, frame.descriptor_v1().class_id)));
         let mut paired = extras.clone();
         let envelope = crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1 {
             version: 1,
@@ -9217,7 +9258,7 @@ pub(crate) mod conviction_e2e_tests {
         paired.tir_public_originals.insert(claim_id, envelope);
         let b = TransitionBuilder::new(&state, &params, false, false, false, false, &paired);
         assert!(
-            require_original_frame_v1(&b, claim_id, frame.descriptor_v1().class_id).is_ok(),
+            require_original_frame_v1(&b.state, b.extras, claim_id, frame.descriptor_v1().class_id).is_ok(),
             "a paired original reaches its frame"
         );
     }

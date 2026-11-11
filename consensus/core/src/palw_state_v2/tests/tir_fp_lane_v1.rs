@@ -348,6 +348,42 @@ fn tir_fp_lane_is_closed_below_the_fence_and_frameless_past_it() {
     ));
 }
 
+/// The pre-signing RPC's native quote and the real object fold must reject
+/// nonpublic evidence at the same door. A quote is read-only and cannot grant
+/// the paired-frame exception, even when the other route checks would pass.
+#[test]
+fn tir_original_quote_and_actual_intake_share_public_evidence_conditions() {
+    use crate::palw_ruling_fences_v1::PALW_N4_NONPUBLIC_EVIDENCE_CODE_V1;
+    let l = lane(false);
+    let params = l.p.clone().with_public_evidence_reward_from_daa(Some(AT_DAA));
+    let root = l.state.state_root();
+    let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(original), .. } = &l.object else { unreachable!() };
+    assert!(palw_tir_public_original_quote_v1(&l.state, &params, &l.extras, AT_DAA, original, &l.envelope.header).unwrap().is_some());
+    assert!(apply_derived(&l.state, &params, &at(), std::slice::from_ref(&l.object), &l.extras).is_ok());
+
+    let mut private_object = l.object.clone();
+    let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(private), .. } = &mut private_object else { unreachable!() };
+    private.job.privacy_mode = crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PANEL_DA;
+    // No forged/re-signed frame is required: this refusal precedes the
+    // missing-frame and unbound-container checks at the real intake door.
+    let mut extras = l.extras.clone();
+    extras.tir_public_originals.clear();
+    extras.tir_container_identity_active = true;
+    let quote = palw_tir_public_original_quote_v1(&l.state, &params, &extras, AT_DAA, private, &l.envelope.header).unwrap_err();
+    assert!(matches!(&quote, PalwStateV2Error::ClassNotRewardable { code, .. } if *code == PALW_N4_NONPUBLIC_EVIDENCE_CODE_V1));
+    let actual = apply_derived(&l.state, &params, &at(), &[private_object], &extras).unwrap_err();
+    assert_eq!(quote, actual);
+    assert_eq!(l.state.state_root(), root, "neither quote nor failed intake publishes state");
+
+    // A successful unsigned quote still does not waive the signed carrier.
+    extras.tir_container_identity_active = false;
+    assert!(palw_tir_public_original_quote_v1(&l.state, &params, &extras, AT_DAA, original, &l.envelope.header).unwrap().is_some());
+    assert!(matches!(
+        apply_derived(&l.state, &params, &at(), std::slice::from_ref(&l.object), &extras).unwrap_err(),
+        PalwStateV2Error::ClassNotRewardable { code, .. } if code == PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1
+    ));
+}
+
 /// **RFC-0002 02-A: past `palw_tir_container_identity_v1` the lane takes only a class bound to its `PALWART3` container.** The framed
 /// original of an unbound class is refused at G-03's door (`TIR_CLASS_CONTAINER_UNBOUND`); the registrant's binding (tag 175) folds,
 /// folds again as nothing, and a binding to another container is refused (immutable); the same original is then admitted. Below the
