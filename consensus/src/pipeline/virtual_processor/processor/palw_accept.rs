@@ -3445,7 +3445,9 @@ impl VirtualStateProcessor {
             if accounting && (!answer_armed || answer_view.is_none()) {
                 return false;
             }
-            let funded_answer = answer_view.is_some_and(|view| view.inner.starts_with(b"TFO1") || view.inner.starts_with(b"TFO2"));
+            let funded_answer = answer_view.is_some_and(|view| {
+                kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_payload_v1(view.inner)
+            });
             if !funded_answer && !kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1(tx) {
                 return true;
             }

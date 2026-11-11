@@ -26,10 +26,59 @@ pub struct PalwTirFundedOriginalEnvelopeV1 {
 /// Classification only, deliberately independent of decode success or any
 /// activation fence. A truncated TFO1 framing cannot fall back to legacy FP.
 pub fn is_funded_original_carrier_v1(tx: &Transaction) -> bool {
-    tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-        && ([PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1, crate::palw_tir_funded_original_envelope_v2::MAGIC]
-            .iter()
-            .any(|magic| tx.payload.starts_with(*magic) || (!tx.payload.is_empty() && magic.starts_with(&tx.payload))))
+    tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT && is_funded_original_payload_v1(&tx.payload)
+}
+
+/// Classification includes malformed/truncated recognized versions. Never
+/// extract their TFP1 as a fallback after funded dispatch refuses them.
+pub fn is_funded_original_payload_v1(payload: &[u8]) -> bool {
+    [
+        PALW_TIR_FUNDED_ORIGINAL_MAGIC_V1,
+        crate::palw_tir_funded_original_envelope_v2::MAGIC,
+        crate::palw_tir_funded_original_envelope_v3::MAGIC,
+    ]
+    .iter()
+    .any(|magic| payload.starts_with(*magic) || (!payload.is_empty() && magic.starts_with(payload)))
+}
+
+/// Exact borrowed funded payload of the actual transaction. Native callers
+/// separately resolve FPR2/FPA1 activation; unwrapping grants no authority.
+pub(crate) fn actual_funded_payload_v1(tx: &Transaction) -> Result<&[u8], String> {
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+        return Err("funded original subnetwork".into());
+    }
+    let outer = if tx.payload.starts_with(b"FPR2") {
+        crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload)
+            .map_err(|_| "invalid FPR2 funded carrier")?
+    } else {
+        tx.payload.as_slice()
+    };
+    let payload = if outer.starts_with(b"FPA1") {
+        crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize)
+            .ok_or("invalid FPA1 funded carrier")?
+            .inner
+    } else {
+        outer
+    };
+    if !is_funded_original_payload_v1(payload) {
+        return Err("no recognized funded original payload".into());
+    }
+    Ok(payload)
+}
+
+/// Strip only the new, structurally checked companion wrapper. Old TFO2
+/// suppliers remain intact for their existing decoder and authority checks.
+pub(crate) fn funded_inner_payload_v3(payload: &[u8]) -> Result<&[u8], String> {
+    match crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::classify_v3(payload) {
+        Some(view) => Ok(view?.funded_original_v3()),
+        None => Ok(payload),
+    }
+}
+
+/// Structural view across supported funded wrappers; it does not authenticate
+/// a PublicOriginal companion or admit its underlying FP object.
+pub fn decode_funded_original_carrier_v3(payload: &[u8]) -> Result<PalwTirFundedOriginalEnvelopeV1, String> {
+    crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(funded_inner_payload_v3(payload)?)
 }
 fn invalid(why: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, why.into())
@@ -123,19 +172,7 @@ impl PalwTirFundedOriginalEnvelopeV1 {
     /// outside the signed terms; there is no funding-txid self-reference.
     pub fn inspect_carrier_v1<'a>(&self, tx: &'a Transaction) -> Result<ActualCarrierFundingV1<'a>, String> {
         let literal = self.encode_v1()?;
-        let outer = if tx.payload.starts_with(b"FPR2") {
-            crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload)
-                .map_err(|_| "invalid FPR2 funded carrier")?
-        } else {
-            tx.payload.as_slice()
-        };
-        let payload = if outer.starts_with(b"FPA1") {
-            crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize)
-                .ok_or("invalid FPA1 funded carrier")?
-                .inner
-        } else {
-            outer
-        };
+        let payload = funded_inner_payload_v3(actual_funded_payload_v1(tx)?)?;
         let family = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
             Some(crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?)
         } else {
@@ -154,6 +191,9 @@ impl PalwTirFundedOriginalEnvelopeV1 {
 }
 
 #[cfg(test)]
+pub(crate) use tests::envelope as funded_original_transport_fixture_v1;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::palw_court_original_escrow_v1::FundingTermsV1;
@@ -166,7 +206,7 @@ mod tests {
     }
     /// Synthetic transport fields only: signatures are deliberately not valid
     /// consent, and UTXO entries in these tests are not native acceptance proof.
-    pub(super) fn envelope() -> PalwTirFundedOriginalEnvelopeV1 {
+    pub(crate) fn envelope() -> PalwTirFundedOriginalEnvelopeV1 {
         let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_fixture_v1();
         let fp = crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
             version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,

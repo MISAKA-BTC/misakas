@@ -89,7 +89,7 @@ fn palw_funded_original_candidate_inner_v1(
             return Invalid("accounting carrier framing");
         };
         if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-            || !(view.inner.starts_with(b"TFO1") || view.inner.starts_with(b"TFO2"))
+            || !crate::palw_tir_funded_original_envelope_v1::is_funded_original_payload_v1(view.inner)
         {
             return Invalid("accounting carrier does not contain TFO1");
         }
@@ -99,7 +99,7 @@ fn palw_funded_original_candidate_inner_v1(
     };
     if (prefix
         && (tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
-            || !(payload.starts_with(b"TFO1") || payload.starts_with(b"TFO2"))))
+            || !crate::palw_tir_funded_original_envelope_v1::is_funded_original_payload_v1(payload)))
         || (!prefix && !accounting && !is_funded_original_carrier_v1(tx))
         || !tx.id_is_current()
     {
@@ -125,9 +125,12 @@ fn palw_funded_original_candidate_inner_v1(
     if input.checked_sub(output) != Some(validated.calculated_fee) {
         return Invalid("actual input/output fee differs from native validation");
     }
-    let Ok(envelope) = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload) else {
+    let Ok(envelope) = crate::palw_tir_funded_original_envelope_v1::decode_funded_original_carrier_v3(payload) else {
         return Invalid("funded original bounded codec");
     };
+    if payload.starts_with(crate::palw_tir_funded_original_envelope_v3::MAGIC) {
+        return Missing("TFO3 complete protected public-original profile and paired installation are not configured");
+    }
     let terms = &envelope.funding.terms;
     if terms.network_domain != network || daa < terms.accept_from_daa || daa > terms.accept_until_daa {
         return Invalid("funding network or actual acceptance interval");

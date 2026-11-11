@@ -522,6 +522,32 @@
                 assert!(super::super::apply_object(&mut refused, &ctx, &object).is_err());
                 assert_eq!(refused.state.state_root(), before);
                 let funded_extras = batch_extras(&batch_pairing);
+                // The same genuinely signed FP/payer bytes wrapped with a
+                // companion must not enter the legacy funded profile. The
+                // opaque companion is deliberately unauthenticated here;
+                // no public profile or companion acceptance is claimed.
+                {
+                    use crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3;
+                    let companion = [0u8; misaka_palw_positive_contract::public_one_honest::SignedPublicOriginalV1::WIRE_BYTES];
+                    let mut paired_tx = batch_carrier.clone();
+                    paired_tx.payload = PalwTirFundedOriginalEnvelopeV3::from_parts_v3(&batch_carrier.payload, b"native carrier prompt", &companion)
+                        .unwrap().encode_v3().unwrap();
+                    paired_tx.finalize();
+                    let paired = palw_funded_original_pairing_v1(&paired_tx).unwrap();
+                    assert_eq!(paired.outpoint().transaction_id, paired_tx.id());
+                    let paired_extras = batch_extras(&paired);
+                    let mut rejected = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &paired_extras).unwrap();
+                    let before = rejected.state.state_root();
+                    let entries = rejected.entries.len();
+                    let prepared = prepare_paired_original_v1(&rejected, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
+                    assert!(matches!(coordinate_funded_original_v1(&rejected, &ctx, claim, prepared),
+                        Err(FundedOriginalRefusalV1::Missing(PalwFundedOriginalMissingV1::PublicOriginalProfile))));
+                    let why = super::super::apply_object(&mut rejected, &ctx, &object).unwrap_err();
+                    assert!(matches!(why, PalwStateV2Error::CarriageInconsistent(ref why) if why.contains("PublicOriginalProfile")), "{why:?}");
+                    assert_eq!(rejected.state.state_root(), before);
+                    assert_eq!(rejected.entries.len(), entries);
+                    assert!(rejected.state.claim(&claim).is_none());
+                }
                 let mut accepted = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &funded_extras).unwrap();
                 super::super::apply_object(&mut accepted, &ctx, &object).unwrap();
                 assert_eq!(accepted.state.claim(&claim).unwrap().accepted_block, ctx.block);

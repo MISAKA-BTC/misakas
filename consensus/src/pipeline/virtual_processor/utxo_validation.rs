@@ -734,8 +734,8 @@ impl VirtualStateProcessor {
             // G14 item 1 (RFC-0035 A): a TFO1 carrier burns its literal TFP1's declared rent exactly as that TFP1 carrier would, so
             // the coordinator's native rent check (`prepare_paired_original_v1`) reads a burn that actually happened. Refused or
             // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
-            if payload.starts_with(b"TFO1") || payload.starts_with(b"TFO2") {
-                return kaspa_consensus_core::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)
+            if kaspa_consensus_core::palw_tir_funded_original_envelope_v1::is_funded_original_payload_v1(payload) {
+                return kaspa_consensus_core::palw_tir_funded_original_envelope_v1::decode_funded_original_carrier_v3(payload)
                     .and_then(|envelope| envelope.original_v1())
                     .map(|original| original.declared_rent_sompi)
                     .unwrap_or(0);
@@ -1454,7 +1454,7 @@ impl VirtualStateProcessor {
                             &validated_tx.tx.payload,
                             u32::MAX as usize,
                         )
-                        .is_some_and(|v| v.inner.starts_with(b"TFO1"));
+                        .is_some_and(|v| v.inner.starts_with(b"TFO1") || v.inner.starts_with(b"TFO3"));
                     let prefix_funded =
                         self.palw_state_params_v2.as_ref().is_some_and(|p| p.claim_local_settlement_active_at(accepting_daa))
                             && validated_tx.tx.payload.starts_with(b"FPR2")

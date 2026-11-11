@@ -48,6 +48,8 @@ pub enum PalwFundedOriginalMissingV1 {
     /// capital) are not adopted.
     AdmissionSchedule,
     BatchSchedule,
+    /// Complete protected PublicOriginal profile and atomic paired installer.
+    PublicOriginalProfile,
 }
 
 /// Bit for each role contract a schedule adopts (test-only values; see [`PalwFundedOriginalScheduleV1`]).
@@ -289,6 +291,11 @@ pub struct PalwFundedOriginalPairingV1 {
     outpoint: TransactionOutpoint,
     suppliers: Vec<crate::palw_court_family_supplier_v1::SignedFamilySupplierV1>,
     semantic_table: Option<Vec<u8>>,
+    /// Borrowed from carrier.payload by offset after literal outer matching.
+    /// Never a separately supplied companion or a duplicated heap buffer.
+    public_companion: Option<std::ops::Range<usize>>,
+    public_prompt: Option<std::ops::Range<usize>>,
+    public_source: Option<Hash64>,
 }
 
 impl PalwFundedOriginalPairingV1 {
@@ -306,6 +313,18 @@ impl PalwFundedOriginalPairingV1 {
     }
     pub fn semantic_table_v2(&self) -> Option<&[u8]> {
         self.semantic_table.as_deref()
+    }
+    pub fn public_companion_v3(&self) -> Option<&[u8]> {
+        self.public_companion.as_ref().map(|range| &self.carrier.payload[range.clone()])
+    }
+    /// Exact UTF-8 bytes from the same transaction, before any rendering or
+    /// tokenizer transformation. Presence does not authenticate the prompt.
+    pub fn public_prompt_bytes_v3(&self) -> Option<&[u8]> {
+        self.public_prompt.as_ref().map(|range| &self.carrier.payload[range.clone()])
+    }
+    /// Header identity from the actual TFP1, not payer-declared source terms.
+    pub(crate) fn public_source_id_v3(&self) -> Option<Hash64> {
+        self.public_source
     }
     /// The literal original's claim the payer's terms bind.
     pub fn claim(&self) -> Hash64 {
@@ -335,6 +354,21 @@ pub fn palw_funded_original_answer_pairing_v1(tx: &Transaction) -> Result<PalwFu
     palw_funded_original_pairing_payload_v1(tx, view.inner)
 }
 pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8]) -> Result<PalwFundedOriginalPairingV1, String> {
+    let actual = crate::palw_tir_funded_original_envelope_v1::actual_funded_payload_v1(tx)?;
+    if payload != actual {
+        return Err("funded pairing substitutes the actual carrier's full literal payload".into());
+    }
+    let public = crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::classify_v3(actual).transpose()?;
+    // The view borrows both slices from this actual transaction. Retain
+    // offsets into its clone, without allocating additional body buffers.
+    let actual_range = |bytes: &[u8]| -> Result<std::ops::Range<usize>, String> {
+        let start = (bytes.as_ptr() as usize).checked_sub(tx.payload.as_ptr() as usize).ok_or("public material origin")?;
+        let end = start.checked_add(bytes.len()).filter(|end| *end <= tx.payload.len()).ok_or("public material range")?;
+        Ok(start..end)
+    };
+    let public_companion = public.as_ref().map(|view| actual_range(view.companion_bytes_v3())).transpose()?;
+    let public_prompt = public.as_ref().map(|view| actual_range(view.prompt_bytes_v3())).transpose()?;
+    let payload = public.as_ref().map_or(actual, |view| view.funded_original_v3());
     let (suppliers, semantic_table) = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
         let decoded = crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?;
         (decoded.suppliers, decoded.semantic_table)
@@ -343,10 +377,22 @@ pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8])
     };
     let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)?;
     let original = envelope.original_v1()?;
+    let public_source =
+        public.as_ref().map(|_| crate::palw_tir_public_source_v1::public_source_header_id_v1(&original.header)).transpose()?;
     let claim = original.original_fp_v1()?.claim_id();
     if claim != envelope.funding.terms.claim || original.pledge.claim != claim {
         return Err("TFO1 terms, pledge and literal original name different claims".into());
     }
     let outpoint = envelope.inspect_carrier_v1(tx)?.outpoint();
-    Ok(PalwFundedOriginalPairingV1 { carrier: tx.clone(), envelope, claim, outpoint, suppliers, semantic_table })
+    Ok(PalwFundedOriginalPairingV1 {
+        carrier: tx.clone(),
+        envelope,
+        claim,
+        outpoint,
+        suppliers,
+        semantic_table,
+        public_companion,
+        public_prompt,
+        public_source,
+    })
 }

@@ -16,7 +16,7 @@ use misaka_palw_positive_contract::{
     ContractError,
     identity::{Digest, PrincipalId, principal},
     messages::AggregateBudget,
-    public_one_honest::{OriginalCommit, SignedPublicOriginalV1},
+    public_one_honest::{MaterialScope, OriginalCommit, SignedPublicOriginalV1, prompt_text_material_v1},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,6 +186,40 @@ impl PublicOriginalAdmissionV1<'_> {
         Ok(())
     }
 
+    /// Bind the exact public prompt to native scope and codec limits. This
+    /// authenticates byte identity only; text-to-token validation is separate
+    /// reserved work using the registered raw tokenizer.
+    pub(crate) fn check_tfp1_prompt_bytes_v1(&self, bytes: &[u8]) -> Result<(), ContractError> {
+        let text = std::str::from_utf8(bytes).map_err(|_| ContractError::NonCanonical)?;
+        let entry = prompt_text_material_v1(self.scope.ruleset, text, self.manifest_scope_limits[MaterialScope::Prompt as usize])?;
+        if entry.subject != self.prompt {
+            return Err(ContractError::Scope);
+        }
+        Ok(())
+    }
+
+    /// Prepare from the actual TFO3 transaction, never a separately donated
+    /// signed companion or prompt. The immutable native claim and accepted
+    /// transaction origin must match the same reservation. Native FP/payer
+    /// signature checks, complete service reservation and atomic installation
+    /// remain the accepting owner's responsibilities.
+    pub(crate) fn prepare_tfp1_pairing_v1(
+        &self,
+        pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        obligation: Tfp1PublicOriginalObligationV1,
+        reservation: &PublicOriginalReservationV1<'_>,
+    ) -> Result<PreparedTfp1PublicOriginalV1, ContractError> {
+        if pairing.claim() != obligation.facts.claim
+            || pairing.public_source_id_v3() != Some(obligation.facts.source)
+            || pairing.envelope().funding.terms.source_id != obligation.facts.source
+            || pairing.carrier().id().as_bytes() != reservation.origin.carrier_transaction.0
+        {
+            return Err(ContractError::Scope);
+        }
+        self.check_tfp1_prompt_bytes_v1(pairing.public_prompt_bytes_v3().ok_or(ContractError::Scope)?)?;
+        self.prepare_tfp1_signed_bytes_v1(pairing.public_companion_v3().ok_or(ContractError::Scope)?, obligation, reservation)
+    }
+
     /// Verify an actual signed companion after the native TFP1 planner
     /// rederives the same obligation. The accepting owner must still bind
     /// both literal signed bodies and the real accepted transaction/event.
@@ -258,22 +292,29 @@ mod tests {
             fee: 1,
             witness_attempts: 1,
         };
-        let limits = [ManifestScopeRules { codec: d, max_bytes: 1, chunk_bytes: 1 }; MaterialScope::COUNT];
+        let prompt_text = "Studio の prompt\n";
+        let mut limits = [ManifestScopeRules { codec: d, max_bytes: 1, chunk_bytes: 1 }; MaterialScope::COUNT];
+        limits[MaterialScope::Prompt as usize] = ManifestScopeRules {
+            codec: misaka_palw_positive_contract::public_one_honest::prompt_text_material_codec_v1(),
+            max_bytes: 64,
+            chunk_bytes: 64,
+        };
+        let prompt = prompt_text_material_v1(scope.ruleset, prompt_text, limits[MaterialScope::Prompt as usize]).unwrap().subject;
         let admission = PublicOriginalAdmissionV1 {
             scope,
             job,
             class: &binding.class,
             artifact: facts.artifact,
             miner: facts.miner,
-            prompt: d,
+            prompt,
             initial_state: d,
             dependencies: d,
             service_contract: obligation.service_contract_v1(&budget),
             max_manifest_bytes: ManifestV1::WIRE_BYTES,
             manifest_scope_limits: &limits,
-            manifest_total_limit: MaterialScope::COUNT as u64,
+            manifest_total_limit: 64 + MaterialScope::COUNT as u64 - 1,
         };
-        let reservation = PublicOriginalReservationV1 {
+        let mut reservation = PublicOriginalReservationV1 {
             origin: AcceptedOrigin {
                 accepting_block: NativeHash64([1; 64]),
                 carrier_block: NativeHash64([2; 64]),
@@ -319,7 +360,7 @@ mod tests {
             registered_class: Digest(job.shape_profile_id.as_bytes()),
             artifact: Digest(facts.artifact.as_bytes()),
             program: Digest(fixture.record.graph_ir_root.as_bytes()),
-            prompt: d,
+            prompt,
             input_tokens: Digest(job.prompt_token_ids_hash.as_bytes()),
             tokenizer: Digest(job.tokenizer_id.as_bytes()),
             execution_rules: Digest(job.cu_ruleset_id.as_bytes()),
@@ -346,6 +387,95 @@ mod tests {
         assert_eq!(prepared.accepted_companion_v1().origin, reservation.origin);
         assert_eq!(prepared.obligation_v1(), obligation);
         assert_eq!(prepared.obligation_v1().facts_v1().native_identity_v1(), (facts.claim, facts.source, facts.execution_root));
+        // Companion signatures are real. Funding is deliberately a structural
+        // fixture, not evidence of payment or native FP admission.
+        let mut funded = crate::palw_tir_funded_original_envelope_v1::funded_original_transport_fixture_v1();
+        let fp = crate::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 {
+            version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            commitment: original.clone(),
+            prompt_token_ids: fixture.execution.prompt.clone(),
+            signature: vec![7; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let literal = crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1::new_v1(
+            borsh::to_vec(&fp).unwrap(),
+            frame.header_v1().clone(),
+            frame.custody_v1().pledge_v1().clone(),
+            frame.plan_v1().terms.plan.rent_sompi,
+        )
+        .unwrap();
+        funded.funding.terms.claim = fp.claim_id();
+        funded.funding.terms.job_identity = literal.pledge.job_identity;
+        funded.funding.terms.execution_root = original.execution_root;
+        funded.funding.terms.source_id = facts.source;
+        funded.original_envelope = literal.encode_v1().unwrap();
+        let signed: [u8; SignedPublicOriginalV1::WIRE_BYTES] = sign(companion.clone()).try_into().unwrap();
+        let pair_carrier = |funded: &crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1, prompt: &[u8]| {
+            let inner = funded.encode_v1().unwrap();
+            use crate::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
+            let payload =
+                crate::palw_tir_funded_original_envelope_v3::PalwTirFundedOriginalEnvelopeV3::from_parts_v3(&inner, prompt, &signed)
+                    .unwrap()
+                    .encode_v3()
+                    .unwrap();
+            let tx = Transaction::new(
+                0,
+                vec![TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(99), 0), vec![], 0, 0)],
+                vec![
+                    TransactionOutput::new(1, ScriptPublicKey::default()),
+                    TransactionOutput::new(
+                        funded.funding.terms.funding_amount_sompi,
+                        crate::mldsa87_primitives::p2pkh_mldsa87_spk(
+                            &kaspa_hashes::blake2b_512_address_payload(&funded.payer_pubkey).as_bytes(),
+                        ),
+                    ),
+                ],
+                0,
+                crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT,
+                0,
+                payload,
+            );
+            crate::palw_funded_original_coordinator_v1::palw_funded_original_pairing_v1(&tx).unwrap()
+        };
+        let pairing = pair_carrier(&funded, prompt_text.as_bytes());
+        assert_eq!(admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation), Err(ContractError::Scope));
+        reservation.origin.carrier_transaction = NativeHash64(pairing.carrier().id().as_bytes());
+        assert!(admission.prepare_tfp1_pairing_v1(&pairing, obligation, &reservation).is_ok());
+        // A valid transaction with a changed literal prompt cannot borrow the
+        // same signed companion, even after its new actual txid is supplied.
+        let foreign_prompt = pair_carrier(&funded, b"different text");
+        reservation.origin.carrier_transaction = NativeHash64(foreign_prompt.carrier().id().as_bytes());
+        assert_eq!(admission.prepare_tfp1_pairing_v1(&foreign_prompt, obligation, &reservation), Err(ContractError::Scope));
+        // The header contains facts outside the FP commitment, including
+        // artifact identity. A fresh txid and the same FP claim cannot replace
+        // that Source while retaining the original signed companion.
+        let mut foreign_header = literal.clone();
+        foreign_header.header.artifact_root = Hash64::from_u64_word(987);
+        assert_eq!(foreign_header.original_fp_v1().unwrap().claim_id(), facts.claim);
+        let mut foreign_source = funded.clone();
+        foreign_source.original_envelope = foreign_header.encode_v1().unwrap();
+        let substituted_source = crate::palw_tir_public_source_v1::public_source_header_id_v1(&foreign_header.header).unwrap();
+        assert_ne!(substituted_source, facts.source);
+        for payer_source in [facts.source, substituted_source] {
+            foreign_source.funding.terms.source_id = payer_source;
+            let foreign_pair = pair_carrier(&foreign_source, prompt_text.as_bytes());
+            reservation.origin.carrier_transaction = NativeHash64(foreign_pair.carrier().id().as_bytes());
+            assert_eq!(admission.prepare_tfp1_pairing_v1(&foreign_pair, obligation, &reservation), Err(ContractError::Scope));
+        }
+        let mut foreign_payer = funded.clone();
+        foreign_payer.funding.terms.source_id = substituted_source;
+        let foreign_pair = pair_carrier(&foreign_payer, prompt_text.as_bytes());
+        reservation.origin.carrier_transaction = NativeHash64(foreign_pair.carrier().id().as_bytes());
+        assert_eq!(admission.prepare_tfp1_pairing_v1(&foreign_pair, obligation, &reservation), Err(ContractError::Scope));
+        let historical_source_hash = blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka-palw/tir-public-source/v1")
+            .hash(&borsh::to_vec(&literal.header).unwrap());
+        assert_eq!(facts.source.as_byte_slice(), historical_source_hash.as_bytes());
+        assert_eq!(admission.check_tfp1_prompt_bytes_v1(&[0xff]), Err(ContractError::NonCanonical));
+        assert_eq!(admission.check_tfp1_prompt_bytes_v1(&[b'a'; 65]), Err(ContractError::Budget));
+        let different_scope = PublicOriginalAdmissionV1 { scope: ChainScope { ruleset: Digest([99; 64]), ..scope }, ..admission };
+        assert_eq!(different_scope.check_tfp1_prompt_bytes_v1(prompt_text.as_bytes()), Err(ContractError::Scope));
+
         let header = source.header_v1();
         let index = crate::palw_tir_court_v1::PublicOriginalTraceIndexV1 {
             full_logits_trace_root: header.full_logits_trace_root,

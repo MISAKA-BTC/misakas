@@ -52,6 +52,11 @@ impl TransactionValidator {
         } else {
             outer
         };
+        if kaspa_consensus_core::palw_tir_funded_original_envelope_v3::recognizes_v3(payload) {
+            // No released profile resolves the complete paired admission yet.
+            // Never return its stripped inner as an ordinary legacy FP door.
+            return Err(invalid());
+        }
         if payload.starts_with(b"TFP1") {
             if !active(self.palw_tir_public_conviction_fence) {
                 return Err(invalid());

@@ -225,6 +225,14 @@ pub struct PalwTirPublicSourceV1 {
 fn hash(domain: &[u8], bytes: &[u8]) -> Hash64 {
     Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(bytes).as_bytes().try_into().expect("64"))
 }
+/// Exact existing Source identity, without copying the serialized header.
+/// Identity alone does not validate registration, geometry or availability.
+pub(crate) fn public_source_header_id_v1(
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+) -> Result<Hash64, String> {
+    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/tir-public-source/v1", header)
+}
+
 fn height(count: u64) -> u8 {
     if count <= 1 { 0 } else { (64 - (count - 1).leading_zeros()) as u8 }
 }
@@ -356,7 +364,7 @@ impl PalwTirPublicSourceV1 {
             .checked_mul(4)
             .filter(|n| *n <= LEAF_BYTES as u64)
             .ok_or("TIR native leaf geometry exceeds original format")?;
-        let source_id = hash(b"misaka-palw/tir-public-source/v1", &borsh::to_vec(header).map_err(|e| e.to_string())?);
+        let source_id = public_source_header_id_v1(header)?;
         let job = verified.space.job_shape(&header.job_context).map_err(|e| e.to_string())?;
         let window_value_bytes = (1..=RUN as u64)
             .map(|count| {

@@ -1270,6 +1270,7 @@ pub mod palw_native_budget_binding_v1;
 pub mod palw_native_closed_facts_v1;
 pub mod palw_nested_row_stream_v1;
 pub mod palw_tir_funded_original_envelope_v2;
+pub mod palw_tir_funded_original_envelope_v3;
 pub mod palw_verifier_fee_consent_v1;
 pub mod palw_verifier_watch_v1;
 

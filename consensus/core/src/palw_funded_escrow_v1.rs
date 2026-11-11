@@ -708,7 +708,7 @@ pub fn palw_tfo1_provisional_lock_v1(tx: &Transaction) -> Option<TransactionOutp
     if !is_funded_original_carrier_v1(tx) {
         return None;
     }
-    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(&tx.payload).ok()?;
+    let envelope = crate::palw_tir_funded_original_envelope_v1::decode_funded_original_carrier_v3(&tx.payload).ok()?;
     envelope.inspect_carrier_v1(tx).ok().map(|facts| facts.outpoint())
 }
 
@@ -738,7 +738,7 @@ pub fn palw_wrapped_tfo1_provisional_lock_v1(
     } else {
         payload
     };
-    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload).ok()?;
+    let envelope = crate::palw_tir_funded_original_envelope_v1::decode_funded_original_carrier_v3(payload).ok()?;
     envelope.inspect_carrier_v1(tx).ok().map(|facts| facts.outpoint())
 }
 
