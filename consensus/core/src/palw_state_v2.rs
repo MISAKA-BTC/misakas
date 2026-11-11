@@ -11024,6 +11024,7 @@ pub struct PalwChainStateV2 {
     claims: BTreeMap<Hash64, PalwClaimStateV2>,
     // Derived nonzero job identities, including claims retained after termination.
     claims_by_job: BTreeSet<(Hash64, Hash64)>,
+    aggregate_live_claims_by_bond: BTreeSet<(PalwBondKeyV2, Hash64)>,
     panels: BTreeMap<Hash64, PalwPanelStateV2>,
     court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
@@ -24728,6 +24729,11 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
         .map(|(id, claim)| (claim.accepted_blue_score, *id))
         .collect();
     state.work_ids = state.claims.iter().filter_map(|(id, claim)| claim.work_id.map(|w| (w, *id))).collect();
+    state.aggregate_live_claims_by_bond = state
+        .claims
+        .iter()
+        .filter_map(|(id, row)| PalwChainStateV2::aggregate_live_claim_bond_v1(row).map(|bond| (bond, *id)))
+        .collect();
     // Both built into locals first: the deadline key is a function of the WHOLE state since
     // ADR-0082 C-5 (a session's class decides whether its terminal ladder still owes a root
     // claim), so it cannot be computed into `state.court_deadlines` while `state` is borrowed.
@@ -26876,6 +26882,7 @@ impl PalwStateCarriageV2 {
             capabilities: self.capabilities,
             claims: self.claims,
             claims_by_job,
+            aggregate_live_claims_by_bond: BTreeSet::new(),
             pending_payouts: self.pending_payouts,
             certified_families: self.certified_families,
             fp_certified_families: self.fp_certified_families,

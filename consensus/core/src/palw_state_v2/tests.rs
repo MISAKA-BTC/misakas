@@ -19529,10 +19529,12 @@ fn every_held_court_arm_of_the_fold_reads_the_claims_class_ladder() {
     let source = crate::palw_state_v2::palw_state_v2_fold_source_v1();
     // The tests live in `palw_state_v2/tests.rs` (split out 2026-10-12); the fold file ends at the module declaration.
     let fold = &source[..source.find("\n#[cfg(test)]\npub(crate) mod tests;").expect("the tests follow the fold")];
+    let (_, batch) = fold.split_once("\nfn apply_object_batch_02_v1(").expect("held court object handlers");
+    let (batch, _) = batch.split_once("\nfn apply_object_batch_03_v1(").expect("next object batch");
     let arm = |name: &str| {
-        let at = fold.find(&format!("PalwConsensusObjectV2::{name} {{")).unwrap_or_else(|| panic!("{name}'s arm"));
-        let end = at + fold[at..].find("\n        PalwConsensusObjectV2::").unwrap_or(fold.len() - at);
-        &fold[at..end]
+        let at = batch.find(&format!("PalwConsensusObjectV2::{name} {{")).unwrap_or_else(|| panic!("{name}'s arm"));
+        let end = at + batch[at..].find("\n        PalwConsensusObjectV2::").unwrap_or(batch.len() - at);
+        &batch[at..end]
     };
     for name in ["ShardCourtAccused", "CheckpointAccused", "MaterialDisclosedHeld"] {
         assert!(arm(name).contains("builder.state.class_step_ladder_v1(&claim.class_id, ladder)"), "{name} reads the claim's ladder");
@@ -31597,6 +31599,21 @@ mod capacity_liability_v1 {
                 let f = *b.state.bond_freezes.get(&producer).expect("frozen");
                 assert_eq!((f.since_daa, f.offence_key, f.final_), (180, key, intent), "{what}");
                 if intent {
+                    let mut expected_order = ids.clone();
+                    expected_order.sort_unstable();
+                    let journal_order = b.entries.iter().filter_map(|entry| match entry {
+                        PalwDeltaEntryV2::Claim {
+                            key,
+                            new: Some(PalwClaimStateV2 {
+                                phase: PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::AggregateForfeit, .. },
+                                ..
+                            }),
+                            ..
+                        } => Some(*key),
+                        _ => None,
+                    }).collect::<Vec<_>>();
+                    assert_eq!(journal_order, expected_order, "{what}: claim ID order is preserved");
+                    assert!(b.state.aggregate_live_claims_v1(producer).next().is_none());
                     assert_eq!(b.state.bonds[&producer].collateral, 0, "{what}: the posted collateral, whole");
                     assert_eq!(f.forfeited_sompi, 10_000_000, "{what}: what it took");
                     for id in &ids {
@@ -31683,6 +31700,34 @@ mod rcore_v22_skeleton {
             settled_at_final: 4,
             matured_at: None,
         }
+    }
+
+    #[test]
+    fn aggregate_vesting_lookup_preserves_old_journal_order() {
+        let producer = bond_key(1);
+        let a = h64(0xB01);
+        let b = h64(0xB02);
+        let other = h64(0xB03);
+        let mut state = PalwChainStateV2::genesis();
+        state.vesting.insert(a, PalwVestingRowV1 { expiry_daa: 3_061, ..vesting_row(a) });
+        state.vesting.insert(b, vesting_row(b));
+        state.vesting.insert(other, PalwVestingRowV1 { producer_bond: bond_key(3), ..vesting_row(other) });
+        state.rebuild_vesting_indices();
+        let mut old_order = [a, b];
+        old_order.sort_unstable();
+        assert_ne!(state.vesting_rows_of_payee(&producer).map(|row| row.claim_id).collect::<Vec<_>>(), old_order);
+
+        let params = params();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut candidate = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        candidate.rekey_frozen_rows_v1(producer, 3_062).unwrap();
+        let observed = candidate.entries.iter().filter_map(|entry| match entry {
+            PalwDeltaEntryV2::Vesting { key, .. } => Some(*key),
+            _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(observed, old_order);
+        assert_eq!(candidate.state.vesting[&other], state.vesting[&other]);
+        assert!(candidate.state.vesting_indices_are_consistent());
     }
 
     fn da_session() -> crate::palw_da_rcore_v1::PalwDaSessionV1 {

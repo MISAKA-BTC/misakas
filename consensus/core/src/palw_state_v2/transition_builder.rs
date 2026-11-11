@@ -871,6 +871,12 @@ impl<'a> TransitionBuilder<'a> {
             claim.job_identity != ZERO_HASH64 && self.state.claims.get(&key).is_none_or(|old| old.job_identity != claim.job_identity)
         });
         self.reserve_index_members_v1::<(Hash64, Hash64), ()>(u64::from(new_job_membership), "native claim job index")?;
+        let old_aggregate = self.state.claims.get(&key).and_then(PalwChainStateV2::aggregate_live_claim_bond_v1);
+        let new_aggregate = new.as_ref().and_then(PalwChainStateV2::aggregate_live_claim_bond_v1);
+        self.reserve_index_members_v1::<(PalwBondKeyV2, Hash64), ()>(
+            u64::from(new_aggregate.is_some() && new_aggregate != old_aggregate),
+            "native aggregate live claim index",
+        )?;
         if new.is_none() {
             super::palw_claim_local_execution_cohort_archive_v15::release_current_before_removal_v15(self, key, slots)?;
         }
@@ -3366,33 +3372,49 @@ impl<'a> TransitionBuilder<'a> {
         key: Hash64,
         kind: crate::palw_offence_v1::PalwOffenceKindV1,
     ) -> Result<u64, PalwStateV2Error> {
-        let live: Vec<(Hash64, PalwClaimStateV2)> = self
-            .state
-            .claims
-            .iter()
-            .filter(|(_, claim)| {
-                claim.bond == bond
-                    && matches!(
-                        claim.phase,
-                        PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. }
-                    )
-            })
-            .map(|(id, claim)| (*id, claim.clone()))
-            .collect();
+        use super::native_writers::NativeWriteQuoteV1;
+        // Snapshot the same pre-mutation rows in claim-ID order. Their
+        // owners cover only this producer's aggregate cascade.
+        let mut quote = NativeWriteQuoteV1::new("aggregate live claims");
+        let mut count = 0;
+        for (_, claim) in self.state.aggregate_live_claims_v1(bond) {
+            quote.copy(claim)?;
+            count += 1;
+        }
+        quote.exact::<(Hash64, PalwClaimStateV2)>(count)?;
+        let live_owner = quote.reserve_scratch_v1()?;
+        let mut live = Vec::with_capacity(count as usize);
+        live.extend(self.state.aggregate_live_claims_v1(bond).map(|(id, claim)| (id, claim.clone())));
+        if let Some(lease) = &live_owner {
+            lease.materialized_v1();
+        }
         for (id, claim) in live {
-            let held: Vec<PalwHeldForfeitV1> = self.state.held_forfeits_of_claim(&id).map(|(_, record)| record.clone()).collect();
+            let mut quote = NativeWriteQuoteV1::new("aggregate held forfeits");
+            let mut count = 0;
+            for (_, record) in self.state.held_forfeits_of_claim(&id) {
+                quote.copy(record)?;
+                count += 1;
+            }
+            quote.exact::<PalwHeldForfeitV1>(count)?;
+            let held_owner = quote.reserve_scratch_v1()?;
+            let mut held = Vec::with_capacity(count as usize);
+            held.extend(self.state.held_forfeits_of_claim(&id).map(|(_, record)| record.clone()));
+            if let Some(lease) = &held_owner {
+                lease.materialized_v1();
+            }
             self.void_claim(id, &claim, now_daa, PalwVoidReasonV2::AggregateForfeit)?;
             self.refund_held_forfeits_v1(&held)?;
         }
+        drop(live_owner);
         let collateral = self.state.bonds.get(&bond).map(|record| record.collateral).unwrap_or(0);
         let mut taken = self.slash_bond(bond, u128::from(collateral))?;
-        let produced: Vec<Hash64> =
-            self.state.vesting.iter().filter(|(_, row)| row.producer_bond == bond).map(|(id, _)| *id).collect();
-        for id in produced {
-            taken = taken.saturating_add(self.burn_vesting_producer_leg_v1(id, bond, key, kind)?);
+        {
+            let (produced, _owner) = self.ordered_vesting_claims_v1(bond, |row| row.producer_bond == bond)?;
+            for id in produced {
+                taken = taken.saturating_add(self.burn_vesting_producer_leg_v1(id, bond, key, kind)?);
+            }
         }
-        let sat: Vec<Hash64> =
-            self.state.vesting.iter().filter(|(_, row)| row.seats.iter().any(|(seat, _)| *seat == bond)).map(|(id, _)| *id).collect();
+        let (sat, _owner) = self.ordered_vesting_claims_v1(bond, |row| row.seats.iter().any(|(seat, _)| *seat == bond))?;
         for id in sat {
             taken = taken.saturating_add(self.burn_vesting_seat_legs_v1(id, bond, key)?);
         }
@@ -3464,14 +3486,32 @@ impl<'a> TransitionBuilder<'a> {
     /// the lift. Its seat legs in other producers' rows are not held (holding them would hold the
     /// honest producer's row): a tier freeze keeps the producer's value, which is what a correlated
     /// fraud found inside the window burns.
+    fn ordered_vesting_claims_v1(
+        &self,
+        bond: PalwBondKeyV2,
+        select: impl Fn(&crate::palw_vesting_v1::PalwVestingRowV1) -> bool,
+    ) -> Result<(Vec<Hash64>, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>), PalwStateV2Error> {
+        let select = &select;
+        let matching = || self.state.vesting_rows_of_payee(&bond).filter(move |row| select(row));
+        let count = matching().count();
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("aggregate vesting payee selection");
+        quote.exact::<Hash64>(count as u64)?;
+        let owner = quote.reserve_scratch_v1()?;
+        let mut ids = Vec::with_capacity(count);
+        ids.extend(matching().map(|row| row.claim_id));
+        // The payee index orders by maturity and expiry. Preserve the
+        // original claim-ID order of the vesting journals and notices.
+        ids.sort_unstable();
+        if let Some(lease) = &owner {
+            lease.materialized_v1();
+        }
+        Ok((ids, owner))
+    }
+
     pub(super) fn rekey_frozen_rows_v1(&mut self, bond: PalwBondKeyV2, lift_daa: u64) -> Result<(), PalwStateV2Error> {
-        let rows: Vec<Hash64> = self
-            .state
-            .vesting
-            .iter()
-            .filter(|(_, row)| row.producer_bond == bond && row.matured_at.is_none() && row.expiry_daa < lift_daa)
-            .map(|(id, _)| *id)
-            .collect();
+        let (rows, _owner) = self.ordered_vesting_claims_v1(bond, |row| {
+            row.producer_bond == bond && row.matured_at.is_none() && row.expiry_daa < lift_daa
+        })?;
         for id in rows {
             if let Some(row) = self.state.vesting.get(&id).cloned() {
                 self.write_vesting(id, Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: lift_daa, ..row }))?;

@@ -11,8 +11,23 @@ impl PalwChainStateV2 {
         self.claims_by_job.range((job, ZERO_HASH64)..=(job, last)).next().is_some()
     }
 
+    pub(super) fn aggregate_live_claim_bond_v1(row: &PalwClaimStateV2) -> Option<PalwBondKeyV2> {
+        matches!(
+            row.phase,
+            PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } | PalwClaimPhaseV2::ReceiptLicensed { .. }
+        )
+        .then_some(row.bond)
+    }
+
+    pub(super) fn aggregate_live_claims_v1(&self, bond: PalwBondKeyV2) -> impl Iterator<Item = (Hash64, &PalwClaimStateV2)> + '_ {
+        self.aggregate_live_claims_by_bond
+            .range((bond, ZERO_HASH64)..=(bond, Hash64::from_bytes([u8::MAX; 64])))
+            .map(|&(_, id)| (id, &self.claims[&id]))
+    }
+
     pub(super) fn replace_claim_row_v2(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Option<PalwClaimStateV2> {
         let new_job = new.as_ref().map(|row| row.job_identity).filter(|job| *job != ZERO_HASH64);
+        let new_aggregate = new.as_ref().and_then(Self::aggregate_live_claim_bond_v1);
         let old = match new {
             Some(row) => self.claims.insert(key, row),
             None => self.claims.remove(&key),
@@ -24,6 +39,15 @@ impl PalwChainStateV2 {
             }
             if let Some(job) = new_job {
                 self.claims_by_job.insert((job, key));
+            }
+        }
+        let old_aggregate = old.as_ref().and_then(Self::aggregate_live_claim_bond_v1);
+        if old_aggregate != new_aggregate {
+            if let Some(bond) = old_aggregate {
+                self.aggregate_live_claims_by_bond.remove(&(bond, key));
+            }
+            if let Some(bond) = new_aggregate {
+                self.aggregate_live_claims_by_bond.insert((bond, key));
             }
         }
         old
@@ -44,6 +68,7 @@ impl PalwChainStateV2 {
             pending_payouts: BTreeMap::new(),
             claims: BTreeMap::new(),
             claims_by_job: BTreeSet::new(),
+            aggregate_live_claims_by_bond: BTreeSet::new(),
             panels: BTreeMap::new(),
             court_sessions: BTreeMap::new(),
             epoch_counters: BTreeMap::new(),
@@ -4425,6 +4450,18 @@ impl PalwChainStateV2 {
                     row.expires_daa
                 )));
             }
+        }
+        let mut aggregate_live = 0;
+        for (id, claim) in &self.claims {
+            if let Some(bond) = Self::aggregate_live_claim_bond_v1(claim) {
+                aggregate_live += 1;
+                if !self.aggregate_live_claims_by_bond.contains(&(bond, *id)) {
+                    return Err(PalwStateV2Error::CarriageInconsistent("aggregate live claim index differs".into()));
+                }
+            }
+        }
+        if aggregate_live != self.aggregate_live_claims_by_bond.len() {
+            return Err(PalwStateV2Error::CarriageInconsistent("aggregate live claim index differs".into()));
         }
         if self.court_sessions_by_claim.len() != self.court_sessions.len()
             || self.court_sessions.iter().any(|(id, session)| !self.court_sessions_by_claim.contains(&(session.claim, *id)))

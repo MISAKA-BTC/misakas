@@ -179,6 +179,7 @@ const RESTORE_INDEX_FIELDS_V1: &[&str] = &[
     ".improvement_opt_in_expiries",
     ".improvement_licence_expiries",
     ".improvement_eval_claims",
+    ".aggregate_live_claims_by_bond",
     ".deadlines",
     ".deadlines_by_claim",
     ".unresolved",
