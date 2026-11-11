@@ -2,6 +2,7 @@
 //! PublicOneHonest companion. The binding is available before either
 //! signature, and does not authenticate an accepted carrier or reserve slots.
 
+pub(crate) mod manifest_carrier;
 pub(crate) mod native_link;
 pub(crate) mod preclaim;
 

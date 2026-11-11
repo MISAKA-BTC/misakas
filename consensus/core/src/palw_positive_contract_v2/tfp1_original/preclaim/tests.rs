@@ -117,6 +117,42 @@ pub(crate) fn exercise_preclaim_booking_v1(
     }
 
     check_companion_booking_parity(projection, &terms, fixture, at, notice, case, &empty_book, maximum_packets);
+
+    let bytes = super::super::manifest_carrier::MANIFEST_REQUEST_CARRIER_BYTES_V1 as u64;
+    let retained = misaka_palw_positive_contract::public_one_honest::PendingManifestCaseRecordV1::WIRE_BYTES as u64;
+    let initial_cost = ServiceCost { bytes, work: bytes, io: retained, controls: 1 };
+    let initial_plan = InitialMaterialRequestPlanV1::new_v1(at.daa_score, notice, initial_cost, retained).unwrap();
+    let with_initial = terms.with_initial_request_v2(initial_plan).unwrap();
+    assert_ne!(with_initial.obligation_v1(), terms.obligation_v1());
+    assert_ne!(with_initial.relative_graph, terms.relative_graph);
+    let complete_cap = maximum_packets + rescue.max_drawn_bonds as usize;
+    let mut complete_book = empty_book.clone();
+    let (complete_quotes, complete_graph) =
+        reserve_drawn_v1(original, projection, &with_initial, schedule, &mut complete_book, complete_cap, price).unwrap();
+    assert_eq!(complete_graph.len(), complete_cap);
+    for (rank, quote) in complete_quotes.iter().enumerate() {
+        let scope = drawn_scope_v1(with_initial.obligation, original, rank as u64, rescue.max_drawn_bonds).unwrap();
+        let request = initial_plan.request_v1(quote.claim, scope, at.daa_score).unwrap();
+        assert_eq!(complete_book.assigned_daa(&request.packet.id), Some(schedule.first_material_request_by()));
+        assert_eq!(quote.relative_graph_id, with_initial.relative_graph);
+        assert_eq!(quote.service.bytes, quotes[rank].service.bytes + initial_cost.bytes);
+        assert_eq!(quote.service.work, quotes[rank].service.work + initial_cost.work);
+        assert_eq!(quote.service.controls, quotes[rank].service.controls + 1);
+        assert_eq!(quote.retained_payload_bytes, quotes[rank].retained_payload_bytes + retained);
+        assert!(quote.carrier_storage_rent_sompi > quotes[rank].carrier_storage_rent_sompi);
+        assert!(complete_graph.iter().any(|node| node.predecessors.contains(&request.packet.id)));
+    }
+    let mut refused = empty_book.clone();
+    assert!(reserve_drawn_v1(original, projection, &with_initial, schedule, &mut refused, complete_cap - 1, price).is_err());
+    assert_eq!(refused, empty_book);
+    check_companion_booking_parity(projection, &with_initial, fixture, at, notice, case, &empty_book, complete_cap);
+
+    // A wider request interval permits two different readiness floors with
+    // the same deadline. Signed and unsigned paths must bind both ends.
+    let wide_notice = FirstNoticeDemand { material_request_inclusion_daa: 2, ..notice };
+    let wide_plan = InitialMaterialRequestPlanV1::new_v1(at.daa_score, wide_notice, initial_cost, retained).unwrap();
+    let wide_terms = terms.with_initial_request_v2(wide_plan).unwrap();
+    check_companion_booking_parity(projection, &wide_terms, fixture, at, wide_notice, case, &empty_book, complete_cap);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -257,6 +293,39 @@ fn check_companion_booking_parity(
     assert_eq!(unsigned_book, signed_book);
 
     let mut unchanged = empty_book.clone();
+    if terms.initial_request.is_some() && notice.material_request_inclusion_daa > 1 {
+        let later_notice = FirstNoticeDemand {
+            missing_material_detected_by: notice.missing_material_detected_by + 1,
+            material_request_inclusion_daa: notice.material_request_inclusion_daa - 1,
+            ..notice
+        };
+        let clock = OriginalClock::new(at.daa_score).unwrap();
+        assert_eq!(
+            VerificationSchedule::new(clock, notice, case).unwrap(),
+            VerificationSchedule::new(clock, later_notice, case).unwrap(),
+            "a deadline-only comparison cannot distinguish these reservations",
+        );
+        let later_reservation = PublicOriginalReservationV1 { notice: later_notice, ..reservation };
+        let later_prepared = admission.prepare_tfp1_signed_bytes_v1(&signed, obligation, &later_reservation).unwrap();
+        assert!(matches!(
+            admission.reserve_tfp1_drawn_batch_candidate_v1(
+                &companion,
+                &later_reservation,
+                projection,
+                terms,
+                &mut unchanged,
+                maximum_packets,
+                price,
+            ),
+            Err(BatchCourtErrorV1::CaseGraph)
+        ));
+        assert_eq!(&unchanged, empty_book);
+        assert!(matches!(
+            later_prepared.reserve_drawn_batch_candidates_v1(projection, terms, &mut unchanged, maximum_packets, price),
+            Err(BatchCourtErrorV1::Window)
+        ));
+        assert_eq!(&unchanged, empty_book);
+    }
     let wrong_blue = PublicOriginalReservationV1 {
         origin: AcceptedOrigin { accepted_blue_score: at.blue_score + 1, ..reservation.origin },
         ..reservation

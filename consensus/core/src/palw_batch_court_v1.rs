@@ -103,6 +103,22 @@ impl BatchCourtWindowV1 {
         check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<u64, BatchCourtErrorV1> {
+        self.reserve_initial_request_many_with_v3(book, graph, terminals, &[], recovery_daa, check_assignments, reserve)
+    }
+
+    /// A timely initial request and its post-notice continuation share one
+    /// atomic scheduler candidate. Initial IDs are sorted and disjoint from
+    /// terminal IDs; the protected owner authenticates each rank's request.
+    fn reserve_initial_request_many_with_v3(
+        self,
+        book: &mut ServiceReservations,
+        graph: &[CausalServicePacketV1],
+        terminals: &[[u8; 64]],
+        initial_requests: &[[u8; 64]],
+        recovery_daa: u64,
+        check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<u64, BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, Reservation, Window};
         self.check()?;
         let latest_notice = self.claim_accepted_daa.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
@@ -113,7 +129,11 @@ impl BatchCourtWindowV1 {
         if self.challenge_opened_daa != latest_notice || recovery_daa == 0 || first_service >= service_before {
             return Err(Window);
         }
-        if terminals.is_empty() || terminals.len() > graph.len() {
+        if terminals.is_empty()
+            || terminals.len() > graph.len()
+            || initial_requests.windows(2).any(|pair| pair[0] >= pair[1])
+            || terminals.iter().any(|id| initial_requests.binary_search(id).is_ok())
+        {
             return Err(CaseGraph);
         }
         let bytes = latest_notice_workspace_bytes_v1(book, graph).map_err(BatchCourtErrorV1::LocalResource)?;
@@ -121,12 +141,23 @@ impl BatchCourtWindowV1 {
 
         let mut nodes = BTreeMap::new();
         for node in graph {
-            if node.packet.release_daa < first_service || node.packet.service_before > service_before {
+            let initial = initial_requests.binary_search(&node.packet.id).is_ok();
+            let valid_window = if initial {
+                node.predecessors.is_empty()
+                    && node.packet.release_daa > self.claim_accepted_daa
+                    && node.packet.service_before <= first_service
+            } else {
+                node.packet.release_daa >= first_service && node.packet.service_before <= service_before
+            };
+            if !valid_window {
                 return Err(Window);
             }
             if nodes.insert(node.packet.id, node).is_some() {
                 return Err(CaseGraph);
             }
+        }
+        if initial_requests.iter().any(|id| !nodes.contains_key(id)) {
+            return Err(CaseGraph);
         }
         let mut visited = BTreeSet::new();
         for &terminal in terminals {
@@ -148,11 +179,19 @@ impl BatchCourtWindowV1 {
         }
         let slots = graph
             .iter()
+            .filter(|node| initial_requests.binary_search(&node.packet.id).is_err())
             .map(|node| crate::palw_batch_public_budget_v1::PublicSharedSlotV1 {
                 id: node.packet.id,
                 slot_daa: 1,
                 material_ready_daa: node.packet.release_daa - first_service,
-                predecessors: node.predecessors.clone(),
+                // These parents have finished before the post-notice span.
+                // Keep them in the actual scheduler graph, but do not charge
+                // their occupied DAA a second time inside the 6880 remainder.
+                predecessors: {
+                    let mut parents = Vec::with_capacity(node.predecessors.len());
+                    parents.extend(node.predecessors.iter().filter(|id| initial_requests.binary_search(id).is_err()).copied());
+                    parents
+                },
             })
             .collect::<Vec<_>>();
         // One submission slot per packet. Material-ready offsets and dependency

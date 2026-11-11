@@ -60,6 +60,9 @@ pub(crate) struct PlainBatchProspectiveOriginalTermsV2 {
 
 #[allow(dead_code)]
 impl PlainBatchProspectiveOriginalTermsV2 {
+    pub(crate) fn accepted_daa_v2(&self) -> u64 {
+        self.acceptance_clocks.0
+    }
     pub(crate) fn matches_acceptance_v2(&self, daa: u64, blue: u64) -> bool {
         self.acceptance_clocks == (daa, blue)
     }

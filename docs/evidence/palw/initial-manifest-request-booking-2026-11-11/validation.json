@@ -1,0 +1,16 @@
+{
+  "status": "IMPLEMENTATION_IN_PROGRESS",
+  "rust_build_test": "NOT_RUN",
+  "rust_reason": "Vertical implementation phase; original plan defers build and test until integration.",
+  "rustfmt": "PASS",
+  "git_diff_check": "PASS",
+  "docs_errors": 973,
+  "docs_error_digest": "f47503d7ffeb46801258b72a5535bb2e0dbf74f62b5776057ca1cd3e8873e577",
+  "docs_error_set_unchanged": true,
+  "rfc_historical_errors": 7,
+  "adr_historical_errors": 87,
+  "public_probe": "NOT_RUN",
+  "deployment": "NOT_RUN",
+  "same_claim_admission": "NOT_PROVEN",
+  "winning_right_consumption_and_corresponding_block": "NOT_PROVEN"
+}

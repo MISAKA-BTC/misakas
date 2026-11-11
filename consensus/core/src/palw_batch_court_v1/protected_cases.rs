@@ -4,7 +4,7 @@
 use super::{BatchCourtErrorV1 as Error, BatchCourtWindowV1};
 use crate::{
     Hash64,
-    palw_court_service_v1::{ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1},
+    palw_court_service_v1::{ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1},
     palw_native_resource_v1::{
         NativeCoverageV1, NativeRetainedV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1, reserve_native_pending_requests_v1,
     },
@@ -42,19 +42,36 @@ pub(crate) fn reserve_independent_batch_cases_v2(
     maximum_packets: usize,
     check_assignments: impl FnOnce(&ServiceReservations) -> Result<(), ServiceRefusal>,
 ) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), Error> {
+    reserve_independent_batch_cases_with_requests_v3(window, book, cases, None, recovery_daa, maximum_packets, check_assignments)
+}
+
+/// Exactly one pre-notice request per protected continuation. The native
+/// owner derives the request identity, timing, price and authenticated rank.
+pub(crate) fn reserve_independent_batch_cases_with_requests_v3(
+    window: BatchCourtWindowV1,
+    book: &mut ServiceReservations,
+    cases: &[BatchCaseGraphV2<'_>],
+    requests: Option<&[ServicePacket]>,
+    recovery_daa: u64,
+    maximum_packets: usize,
+    check_assignments: impl FnOnce(&ServiceReservations) -> Result<(), ServiceRefusal>,
+) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), Error> {
     if cases.is_empty() || cases.len() > maximum_packets {
         return Err(Error::CaseGraph);
     }
-    let nodes = cases.iter().try_fold(0usize, |sum, case| {
+    if requests.is_some_and(|requests| requests.len() != cases.len()) {
+        return Err(Error::CaseGraph);
+    }
+    let nodes = cases.iter().try_fold(requests.map_or(0, |requests| requests.len()), |sum, case| {
         if case.opportunity == Hash64::default() || case.graph.is_empty() {
             return Err(Error::CaseGraph);
         }
         sum.checked_add(case.graph.len()).filter(|sum| *sum <= maximum_packets).ok_or(Error::CaseGraph)
     })?;
-    let edges = cases
-        .iter()
-        .flat_map(|case| case.graph)
-        .try_fold(0u64, |sum, node| sum.checked_add(node.predecessors.len() as u64).ok_or(Error::CaseGraph))?;
+    let edges = cases.iter().flat_map(|case| case.graph).try_fold(0u64, |sum, node| {
+        let count = node.predecessors.len() as u64 + u64::from(requests.is_some() && node.predecessors.is_empty());
+        sum.checked_add(count).ok_or(Error::CaseGraph)
+    })?;
     let mut owned = TirNativeRequestsV1::new();
     owned.exact_v1::<Vec<CausalServicePacketV1>>(1).map_err(Error::LocalResource)?;
     owned.exact_v1::<CausalServicePacketV1>(nodes as u64).map_err(Error::LocalResource)?;
@@ -62,6 +79,7 @@ pub(crate) fn reserve_independent_batch_cases_v2(
     let owner = reserve_native_pending_requests_v1(owned.bytes_v1()).map_err(Error::LocalResource)?;
     let mut scratch = TirNativeRequestsV1::new();
     scratch.vec_v1::<[u8; 64]>(cases.len() as u64).map_err(Error::LocalResource)?;
+    scratch.vec_v1::<[u8; 64]>(requests.map_or(0, |requests| requests.len()) as u64).map_err(Error::LocalResource)?;
     scratch
         .exact_v1::<u8>(
             (nodes as u64)
@@ -74,9 +92,17 @@ pub(crate) fn reserve_independent_batch_cases_v2(
     let mut opportunities = BTreeMap::new();
     let mut membership = BTreeMap::new();
     let mut terminals = exact_vec(cases.len())?;
+    let mut initial_ids = exact_vec(requests.map_or(0, |requests| requests.len()))?;
     for (index, case) in cases.iter().enumerate() {
         if opportunities.insert(case.opportunity, ()).is_some() {
             return Err(Error::CaseGraph);
+        }
+        if let Some(requests) = requests {
+            let id = requests[index].id;
+            if membership.insert(id, index).is_some() {
+                return Err(Error::CaseGraph);
+            }
+            initial_ids.push(id);
         }
         for node in case.graph {
             if membership.insert(node.packet.id, index).is_some() {
@@ -93,10 +119,15 @@ pub(crate) fn reserve_independent_batch_cases_v2(
         }
     }
     let mut graph = exact_vec(nodes)?;
-    for case in cases {
+    for (index, case) in cases.iter().enumerate() {
+        if let Some(requests) = requests {
+            graph.push(CausalServicePacketV1 { packet: requests[index].clone(), predecessors: Vec::new() });
+        }
         for node in case.graph {
-            let mut predecessors = exact_vec(node.predecessors.len())?;
+            let initial = requests.filter(|_| node.predecessors.is_empty()).map(|requests| requests[index].id);
+            let mut predecessors = exact_vec(node.predecessors.len() + usize::from(initial.is_some()))?;
             predecessors.extend_from_slice(&node.predecessors);
+            predecessors.extend(initial);
             graph.push(CausalServicePacketV1 { packet: node.packet.clone(), predecessors });
         }
     }
@@ -104,10 +135,12 @@ pub(crate) fn reserve_independent_batch_cases_v2(
     for node in &mut graph {
         node.predecessors.sort_unstable();
     }
-    let required = window.reserve_latest_notice_many_with_v2(
+    initial_ids.sort_unstable();
+    let required = window.reserve_initial_request_many_with_v3(
         book,
         &graph,
         &terminals,
+        &initial_ids,
         recovery_daa,
         |candidate, _| check_assignments(candidate),
         reserve_native_pending_requests_v1,
@@ -211,6 +244,68 @@ mod tests {
             Err(Error::Reservation(ServiceRefusal::InvalidBudget))
         ));
         assert_eq!(refused, saved, "a late native assignment check commits neither case");
+    }
+
+    #[test]
+    fn initial_requests_and_late_cases_share_one_atomic_pool() {
+        let (a, b) = (graph(1), graph(11));
+        let request = |id| ServicePacket { id: [id; 64], release_daa: 20, service_before: 21, cost: UNIT };
+        let requests = [request(101), request(102)];
+        let cases = [case(1, &a), case(2, &b)];
+        let mut together = book();
+        let (required, combined) =
+            reserve_independent_batch_cases_with_requests_v3(window(), &mut together, &cases, Some(&requests), 1, 8, |_| Ok(()))
+                .unwrap();
+        assert_eq!(required, NOTICE_WINDOW_DAA + 5, "early DAA is not charged again after notice");
+        assert_eq!(combined.len(), 8);
+        for (index, nodes) in [&a, &b].iter().enumerate() {
+            assert_eq!(together.assigned_daa(&requests[index].id), Some(20));
+            let root = combined.iter().find(|node| node.packet.id == nodes[0].packet.id).unwrap();
+            assert_eq!(root.predecessors, vec![requests[index].id]);
+        }
+        together.check_causal_v1(&combined).unwrap();
+        let mut reversed = book();
+        reserve_independent_batch_cases_with_requests_v3(
+            window(),
+            &mut reversed,
+            &[case(2, &b), case(1, &a)],
+            Some(&[requests[1].clone(), requests[0].clone()]),
+            1,
+            8,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(together, reversed);
+
+        // An existing early obligation competes in the same physical pool.
+        let mut occupied = book();
+        occupied.reserve_causal_v1(&[CausalServicePacketV1 { packet: request(103), predecessors: vec![] }], 21).unwrap();
+        let saved = occupied.clone();
+        assert!(
+            reserve_independent_batch_cases_with_requests_v3(window(), &mut occupied, &cases, Some(&requests), 1, 8, |_| Ok(()))
+                .is_err()
+        );
+        assert_eq!(occupied, saved);
+
+        let mut candidate = book();
+        let saved = candidate.clone();
+        assert!(
+            reserve_independent_batch_cases_with_requests_v3(window(), &mut candidate, &cases, Some(&requests), 1, 8, |_| Err(
+                ServiceRefusal::InvalidBudget
+            ))
+            .is_err()
+        );
+        assert_eq!(candidate, saved, "late funding refusal must undo both early requests too");
+        let mut late = requests.clone();
+        late[0].release_daa = window().challenge_opened_daa + 1;
+        late[0].service_before = late[0].release_daa + 1;
+        for (prefix, cap) in [(&late[..], 8), (&requests[..1], 8), (&requests[..], 7)] {
+            assert!(
+                reserve_independent_batch_cases_with_requests_v3(window(), &mut candidate, &cases, Some(prefix), 1, cap, |_| Ok(()))
+                    .is_err()
+            );
+            assert_eq!(candidate, saved);
+        }
     }
 
     #[test]

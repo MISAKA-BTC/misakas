@@ -2,8 +2,34 @@
 //! expiry and retained-control checks. The caller still authenticates the
 //! complete selected/outsider/defense opportunity set before compilation.
 use super::*;
-use crate::palw_batch_court_v1::protected_cases::{BatchCaseGraphV2, reserve_independent_batch_cases_v2};
+use crate::palw_batch_court_v1::protected_cases::{BatchCaseGraphV2, reserve_independent_batch_cases_with_requests_v3};
 use crate::palw_native_resource_v1::reserve_native_pending_requests_v1;
+
+pub(crate) struct BatchInitialRequestV1 {
+    pub packet: ServicePacket,
+    pub retained_bytes: u64,
+}
+
+pub(crate) fn manifest_request_packet_id_v1(claim: Hash64, reservation_scope: Hash64) -> Result<[u8; 64], BatchCourtErrorV1> {
+    if claim == Hash64::default() || reservation_scope == Hash64::default() {
+        return Err(BatchCourtErrorV1::CaseGraph);
+    }
+    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/tfp1-manifest-request-service/v1", &(claim, reservation_scope))
+        .map(|id| id.as_bytes())
+        .map_err(|_| BatchCourtErrorV1::CaseGraph)
+}
+
+impl BatchInitialRequestV1 {
+    pub(crate) fn relative_graph_id_v1(&self, continuation: Hash64, accepted_daa: u64) -> Result<Hash64, BatchCourtErrorV1> {
+        let after = self.packet.release_daa.checked_sub(accepted_daa).ok_or(BatchCourtErrorV1::Clock)?;
+        let before = self.packet.service_before.checked_sub(accepted_daa).ok_or(BatchCourtErrorV1::Clock)?;
+        crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/batch-initial-request-funding-graph/v1",
+            &(continuation, after, before, self.packet.cost, self.retained_bytes),
+        )
+        .map_err(|_| BatchCourtErrorV1::CaseGraph)
+    }
+}
 
 impl CompiledBatchAdmissionV1 {
     #[allow(dead_code)]
@@ -23,6 +49,16 @@ impl CompiledBatchAdmissionV1 {
         maximum_packets: usize,
         check: impl FnOnce(&[BatchAdmissionQuoteV1], &ServiceReservations) -> Result<(), ServiceRefusal>,
     ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+        Self::reserve_protected_with_requests_v3(cases, None, book, maximum_packets, check)
+    }
+
+    pub(crate) fn reserve_protected_with_requests_v3(
+        cases: &[(Hash64, &Self)],
+        requests: Option<&[BatchInitialRequestV1]>,
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        check: impl FnOnce(&[BatchAdmissionQuoteV1], &ServiceReservations) -> Result<(), ServiceRefusal>,
+    ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, LocalResource};
         let first = cases.first().ok_or(CaseGraph)?.1;
         if cases.len() > maximum_packets
@@ -32,25 +68,47 @@ impl CompiledBatchAdmissionV1 {
         {
             return Err(CaseGraph);
         }
+        if let Some(requests) = requests {
+            if requests.len() != cases.len() {
+                return Err(CaseGraph);
+            }
+            for ((opportunity, case), request) in cases.iter().zip(requests) {
+                if case.scope != *opportunity
+                    || request.packet.id != manifest_request_packet_id_v1(case.claim, *opportunity)?
+                    || request.retained_bytes == 0
+                    || request.retained_bytes > request.packet.cost.bytes
+                {
+                    return Err(CaseGraph);
+                }
+            }
+        }
         let hard = first.window.claim_accepted_daa.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
-        let mut requests = TirNativeRequestsV1::new();
-        requests.exact_v1::<Vec<BatchAdmissionQuoteV1>>(1).map_err(LocalResource)?;
-        requests.vec_v1::<BatchAdmissionQuoteV1>(cases.len() as u64).map_err(LocalResource)?;
-        let owner = reserve_native_pending_requests_v1(requests.bytes_v1()).map_err(LocalResource)?;
+        let mut quote_memory = TirNativeRequestsV1::new();
+        quote_memory.exact_v1::<Vec<BatchAdmissionQuoteV1>>(1).map_err(LocalResource)?;
+        quote_memory.vec_v1::<BatchAdmissionQuoteV1>(cases.len() as u64).map_err(LocalResource)?;
+        let owner = reserve_native_pending_requests_v1(quote_memory.bytes_v1()).map_err(LocalResource)?;
         let mut scratch = TirNativeRequestsV1::new();
         scratch.vec_v1::<BatchCaseGraphV2<'_>>(cases.len() as u64).map_err(LocalResource)?;
+        scratch.vec_v1::<ServicePacket>(requests.map_or(0, |requests| requests.len()) as u64).map_err(LocalResource)?;
         let _scratch_owner = reserve_native_pending_requests_v1(scratch.bytes_v1()).map_err(LocalResource)?;
         let graphs = cases
             .iter()
             .map(|(opportunity, case)| BatchCaseGraphV2 { opportunity: *opportunity, graph: &case.graph, terminal: case.terminal })
             .collect::<Vec<_>>();
+        let initial = requests.map(|requests| requests.iter().map(|request| request.packet.clone()).collect::<Vec<_>>());
         let mut quotes = Vec::new();
         // These are aggregate economic quantities, not a new service capacity.
         // Overflow must refuse the entire candidate before it commits.
         let mut totals = [0u64; 10];
-        let (_, graph) =
-            reserve_independent_batch_cases_v2(first.window, book, &graphs, first.recovery_daa, maximum_packets, |candidate| {
-                for (_, case) in cases {
+        let (_, graph) = reserve_independent_batch_cases_with_requests_v3(
+            first.window,
+            book,
+            &graphs,
+            initial.as_deref(),
+            first.recovery_daa,
+            maximum_packets,
+            |candidate| {
+                for (index, (_, case)) in cases.iter().enumerate() {
                     let mut retained = 0u64;
                     let mut account = |start, bytes: u64| {
                         let duration = case.window.material_until_daa.checked_sub(start).ok_or(ServiceRefusal::DeadlineExhausted)?;
@@ -73,6 +131,33 @@ impl CompiledBatchAdmissionV1 {
                     for control in &case.controls {
                         account(candidate.assigned_daa(&control.packet).ok_or(ServiceRefusal::InvalidState)?, control.payload_bytes)?;
                     }
+                    let mut service = case.service;
+                    let mut retained_payload_bytes = case.retained_payload_bytes;
+                    let mut carrier_storage_rent_sompi = case.carrier_storage_rent_sompi;
+                    let mut relative_graph_id = case.relative_graph_id;
+                    if let Some(requests) = requests {
+                        let request = &requests[index];
+                        account(
+                            candidate.assigned_daa(&request.packet.id).ok_or(ServiceRefusal::InvalidState)?,
+                            request.retained_bytes,
+                        )?;
+                        let cost = request.packet.cost;
+                        service = ServiceCost {
+                            bytes: service.bytes.checked_add(cost.bytes).ok_or(ServiceRefusal::InvalidBudget)?,
+                            work: service.work.checked_add(cost.work).ok_or(ServiceRefusal::InvalidBudget)?,
+                            io: service.io.checked_add(cost.io).ok_or(ServiceRefusal::InvalidBudget)?,
+                            controls: service.controls.checked_add(cost.controls).ok_or(ServiceRefusal::InvalidBudget)?,
+                        };
+                        retained_payload_bytes =
+                            retained_payload_bytes.checked_add(request.retained_bytes).ok_or(ServiceRefusal::InvalidBudget)?;
+                        let rent =
+                            case.storage.rent_for_bytes_v1(request.retained_bytes).map_err(|_| ServiceRefusal::InvalidBudget)?;
+                        carrier_storage_rent_sompi =
+                            carrier_storage_rent_sompi.checked_add(rent).ok_or(ServiceRefusal::InvalidBudget)?;
+                        relative_graph_id = request
+                            .relative_graph_id_v1(relative_graph_id, case.window.claim_accepted_daa)
+                            .map_err(|_| ServiceRefusal::InvalidState)?;
+                    }
                     let at = candidate.assigned_daa(&case.terminal).ok_or(ServiceRefusal::InvalidState)?;
                     let required = at
                         .checked_sub(case.window.claim_accepted_daa)
@@ -82,13 +167,13 @@ impl CompiledBatchAdmissionV1 {
                     let quote = BatchAdmissionQuoteV1 {
                         claim: case.claim,
                         scope: case.scope,
-                        relative_graph_id: case.relative_graph_id,
+                        relative_graph_id,
                         required_daa: case.required_daa.unwrap_or(required),
                         material_until_daa: case.window.material_until_daa,
-                        service: case.service,
-                        retained_payload_bytes: case.retained_payload_bytes,
+                        service,
+                        retained_payload_bytes,
                         retained_payload_byte_daa: retained,
-                        carrier_storage_rent_sompi: case.carrier_storage_rent_sompi,
+                        carrier_storage_rent_sompi,
                         retained_numerical_fault_bytes: case.retained_numerical_fault_bytes,
                         retained_numerical_fault_byte_daa: case.retained_numerical_fault_byte_daa,
                         numerical_fault_storage_rent_sompi: case.numerical_fault_storage_rent_sompi,
@@ -115,7 +200,8 @@ impl CompiledBatchAdmissionV1 {
                     totals[payload].checked_add(totals[fault]).ok_or(ServiceRefusal::InvalidBudget)?;
                 }
                 check(&quotes, candidate)
-            })?;
+            },
+        )?;
         Ok((NativeRetainedV1::from_owner_reserved_v1(quotes, owner), graph))
     }
 
@@ -296,6 +382,51 @@ mod tests {
         assert!(CompiledBatchAdmissionV1::reserve_protected_v2(&[(h(100), &a), (h(101), &b)], &mut book, 14).is_err());
         assert_eq!(book, initial);
         drop(b_owner);
+    }
+
+    #[test]
+    fn protected_initial_requests_bind_to_their_compiled_rank_before_reservation() {
+        let h = Hash64::from_u64_word;
+        let a = compiled(2);
+        let b = compiled(3);
+        let cases = [(h(2), &*a), (h(3), &*b)];
+        let request = |scope| BatchInitialRequestV1 {
+            packet: ServicePacket {
+                id: manifest_request_packet_id_v1(h(1), scope).unwrap(),
+                release_daa: 20,
+                service_before: 21,
+                cost: ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 },
+            },
+            retained_bytes: 1,
+        };
+        let initial = ServiceReservations::new(ServiceCost { bytes: 65536, work: 2, io: 2, controls: 2 }).unwrap();
+        let mut book = initial.clone();
+        let (_, graph) = CompiledBatchAdmissionV1::reserve_protected_with_requests_v3(
+            &cases,
+            Some(&[request(h(2)), request(h(3))]),
+            &mut book,
+            16,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        book.check_causal_v1(&graph).unwrap();
+        assert_eq!(book.assigned_daa(&request(h(2)).packet.id), Some(20));
+        assert_eq!(book.assigned_daa(&request(h(3)).packet.id), Some(20));
+
+        for (wrong_cases, wrong_requests) in
+            [(cases, [request(h(3)), request(h(2))]), ([(h(4), &*a), (h(3), &*b)], [request(h(4)), request(h(3))])]
+        {
+            let mut book = initial.clone();
+            let result = CompiledBatchAdmissionV1::reserve_protected_with_requests_v3(
+                &wrong_cases,
+                Some(&wrong_requests),
+                &mut book,
+                16,
+                |_, _| panic!("invalid protected rank reached the reservation candidate"),
+            );
+            assert!(matches!(result, Err(BatchCourtErrorV1::CaseGraph)));
+            assert_eq!(book, initial);
+        }
     }
 
     #[test]

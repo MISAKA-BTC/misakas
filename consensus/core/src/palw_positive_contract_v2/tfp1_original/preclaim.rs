@@ -1,6 +1,7 @@
 //! Allocation-independent planning shared by unsigned quote and signed intake.
 //! Selected-bond graphs are only part of a complete profile; this module does
 //! not authorize original admission, settlement or public activation.
+pub(crate) mod initial_request;
 use super::{PreparedTfp1PublicOriginalV1, Tfp1PublicOriginalObligationV1};
 use crate::{
     Hash64,
@@ -13,6 +14,7 @@ use crate::{
     palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1, TirNativeRequestsV1, reserve_native_pending_requests_v1},
     palw_positive_contract_v2::{PublicOriginalAdmissionV1, PublicOriginalReservationV1},
 };
+use initial_request::InitialMaterialRequestPlanV1;
 use misaka_palw_positive_contract::{
     ContractError,
     public_one_honest::{OriginalCommit, OriginalId, ProtectedRescueDemand, VerificationSchedule},
@@ -28,6 +30,8 @@ pub(crate) struct DrawnBatchPreclaimTermsV1 {
     projected: PlainBatchProspectiveOriginalTermsV2,
     rescue: ProtectedRescueDemand,
     obligation: Tfp1PublicOriginalObligationV1,
+    initial_request: Option<InitialMaterialRequestPlanV1>,
+    relative_graph: Hash64,
 }
 
 impl DrawnBatchPreclaimTermsV1 {
@@ -42,7 +46,24 @@ impl DrawnBatchPreclaimTermsV1 {
         )
         .map_err(|_| ContractError::NonCanonical)?;
         let obligation = (*projected.obligation_v2().facts_v1()).service_obligation_v1(projected.profile_id_v2(), resource)?;
-        Ok(Self { projected, rescue, obligation })
+        Ok(Self { projected, rescue, obligation, initial_request: None, relative_graph: projected.relative_graph_id_v2() })
+    }
+
+    pub(crate) fn with_initial_request_v2(mut self, plan: InitialMaterialRequestPlanV1) -> Result<Self, ContractError> {
+        let facts = *self.projected.obligation_v2().facts_v1();
+        let relative_graph = plan
+            .request_v1(facts.native_identity_v1().0, Hash64::from_u64_word(1), self.projected.accepted_daa_v2())
+            .and_then(|request| request.relative_graph_id_v1(self.projected.relative_graph_id_v2(), self.projected.accepted_daa_v2()))
+            .map_err(|_| ContractError::Budget)?;
+        let resource = crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/tfp1-drawn-batch-resource/v2",
+            &(self.projected.resource_id_v2(), relative_graph, self.rescue, plan),
+        )
+        .map_err(|_| ContractError::NonCanonical)?;
+        self.obligation = facts.service_obligation_v1(self.projected.profile_id_v2(), resource)?;
+        self.relative_graph = relative_graph;
+        self.initial_request = Some(plan);
+        Ok(self)
     }
 
     pub(crate) fn obligation_v1(&self) -> Tfp1PublicOriginalObligationV1 {
@@ -79,6 +100,7 @@ impl PublicOriginalAdmissionV1<'_> {
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<Booking, BatchCourtErrorV1> {
         if reservation.rescue != terms.rescue
+            || terms.initial_request.is_some_and(|plan| !plan.matches_notice_v1(reservation.origin.accepted_daa, reservation.notice))
             || !terms.projected.matches_acceptance_v2(reservation.origin.accepted_daa, reservation.origin.accepted_blue_score)
             || reservation.budget.retention_until < terms.projected.material_until_daa_v2()
         {
@@ -86,6 +108,13 @@ impl PublicOriginalAdmissionV1<'_> {
         }
         self.check_tfp1_candidate_v1(companion, terms.obligation, reservation).map_err(|_| BatchCourtErrorV1::CaseGraph)?;
         let schedule = self.check_reservation_v1(companion, reservation).map_err(|_| BatchCourtErrorV1::CaseGraph)?.2;
+        if let Some(plan) = terms.initial_request {
+            plan.check_schedule_v1(
+                reservation.origin.accepted_daa,
+                reservation.notice.draw_ready_by.max(reservation.notice.missing_material_detected_by),
+                schedule,
+            )?;
+        }
         reserve_drawn_v1(companion.id(), projection, terms, schedule, book, maximum_packets, price)
     }
 }
@@ -108,6 +137,9 @@ impl PreparedTfp1PublicOriginalV1 {
             || self.companion.budget.retention_until < terms.projected.material_until_daa_v2()
         {
             return Err(BatchCourtErrorV1::CaseGraph);
+        }
+        if let Some(plan) = terms.initial_request {
+            plan.check_schedule_v1(origin.accepted_daa, self.companion.material_request_ready_by, self.companion.schedule)?;
         }
         reserve_drawn_v1(self.companion.original, projection, terms, self.companion.schedule, book, maximum_packets, price)
     }
@@ -146,20 +178,25 @@ fn reserve_drawn_v1(
     // Compile only one graph until the entire set's structural cap is known.
     let first_scope = scope(0)?;
     let first = projection.compile_before_allocation_v2(first_scope, &terms.projected, &mut price)?;
-    let width = first.packet_count_v1();
+    let width = first.packet_count_v1().checked_add(usize::from(terms.initial_request.is_some())).ok_or(CaseGraph)?;
     if width == 0 || width.checked_mul(count).is_none_or(|n| n > maximum_packets) {
         return Err(CaseGraph);
     }
     let mut scratch = TirNativeRequestsV1::new();
     scratch.exact_v1::<(Hash64, NativeRetainedV1<CompiledBatchAdmissionV1>)>(count as u64).map_err(LocalResource)?;
     scratch.exact_v1::<(Hash64, &CompiledBatchAdmissionV1)>(count as u64).map_err(LocalResource)?;
+    if terms.initial_request.is_some() {
+        scratch
+            .exact_v1::<crate::palw_court_shared_material_intake_v1::batch::admission::protected::BatchInitialRequestV1>(count as u64)
+            .map_err(LocalResource)?;
+    }
     let _owner = reserve_native_pending_requests_v1(scratch.bytes_v1()).map_err(LocalResource)?;
     let mut compiled = exact_vec(count)?;
     compiled.push((first_scope, first));
     for rank in 1..count {
         let namespace = scope(rank)?;
         let next = projection.compile_before_allocation_v2(namespace, &terms.projected, &mut price)?;
-        if next.packet_count_v1() != width {
+        if next.packet_count_v1().checked_add(usize::from(terms.initial_request.is_some())) != Some(width) {
             return Err(CaseGraph);
         }
         compiled.push((namespace, next));
@@ -168,27 +205,47 @@ fn reserve_drawn_v1(
     for (namespace, graph) in &compiled {
         cases.push((*namespace, &**graph));
     }
+    let initial = if let Some(plan) = terms.initial_request {
+        let a = terms.projected.accepted_daa_v2();
+        // Both public entrypoints check the exact native readiness floor.
+        // The common kernel also binds the last slot to the original clock.
+        plan.check_deadline_v1(a, schedule)?;
+        let claim = terms.obligation.facts_v1().native_identity_v1().0;
+        let mut requests = exact_vec(count)?;
+        for (namespace, _) in &cases {
+            requests.push(plan.request_v1(claim, *namespace, a)?);
+        }
+        Some(requests)
+    } else {
+        None
+    };
     let allowance = terms.rescue.per_drawn_bond;
-    CompiledBatchAdmissionV1::reserve_protected_checked_v2(&cases, book, maximum_packets, |quotes, candidate| {
-        if quotes.len() != count {
-            return Err(ServiceRefusal::InvalidState);
-        }
-        for (rank, quote) in quotes.iter().enumerate() {
-            cases[rank].1.check_public_original_schedule_v1(candidate, schedule)?;
-            if quote.scope != cases[rank].0
-                || quote.relative_graph_id != terms.projected.relative_graph_id_v2()
-                || quote.service.bytes > allowance.transmitted_bytes
-                || quote.service.work > allowance.additional_work
-                || quote
-                    .retained_payload_bytes
-                    .checked_add(quote.retained_numerical_fault_bytes)
-                    .is_none_or(|bytes| bytes > allowance.retained_bytes)
-            {
-                return Err(ServiceRefusal::InvalidBudget);
+    CompiledBatchAdmissionV1::reserve_protected_with_requests_v3(
+        &cases,
+        initial.as_deref(),
+        book,
+        maximum_packets,
+        |quotes, candidate| {
+            if quotes.len() != count {
+                return Err(ServiceRefusal::InvalidState);
             }
-        }
-        Ok(())
-    })
+            for (rank, quote) in quotes.iter().enumerate() {
+                cases[rank].1.check_public_original_schedule_v1(candidate, schedule)?;
+                if quote.scope != cases[rank].0
+                    || quote.relative_graph_id != terms.relative_graph
+                    || quote.service.bytes > allowance.transmitted_bytes
+                    || quote.service.work > allowance.additional_work
+                    || quote
+                        .retained_payload_bytes
+                        .checked_add(quote.retained_numerical_fault_bytes)
+                        .is_none_or(|bytes| bytes > allowance.retained_bytes)
+                {
+                    return Err(ServiceRefusal::InvalidBudget);
+                }
+            }
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

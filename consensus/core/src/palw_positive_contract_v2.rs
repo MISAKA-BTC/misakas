@@ -227,6 +227,9 @@ pub struct PreparedPublicOriginalV1 {
     carrier: AcceptedMaterial,
     manifest_material: MaterialId,
     draw_ready_by: u64,
+    /// Native readiness floor retained for signed preclaim booking. The
+    /// deadline alone cannot distinguish late detection from a wider window.
+    material_request_ready_by: u64,
     initial_supply: RemainingCapacity,
     rescue: ProtectedRescueDemand,
     budget: AggregateBudget,
@@ -1092,6 +1095,7 @@ impl PublicOriginalAdmissionRecordV1 {
             carrier: row.carrier,
             manifest_material: row.manifest_material,
             draw_ready_by: draw_by,
+            material_request_ready_by: draw_by,
             initial_supply: row.initial_supply,
             rescue: row.rescue,
             budget: row.budget,
@@ -1769,6 +1773,7 @@ impl PublicOriginalAdmissionV1<'_> {
             },
             manifest_material: original.manifest_material_id(),
             draw_ready_by: reservation.notice.draw_ready_by,
+            material_request_ready_by: reservation.notice.draw_ready_by.max(reservation.notice.missing_material_detected_by),
             initial_supply: reservation.initial_supply,
             rescue: reservation.rescue,
             budget: *reservation.budget,
