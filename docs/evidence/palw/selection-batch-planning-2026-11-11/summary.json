@@ -1,0 +1,38 @@
+{
+  "base_commit": "80978f26af87e575970bce66c72787c67bc32011",
+  "files_sha256": {
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/selection.rs": "5fc47c64424f557ede984d73ba303cc3a492c954765b2082040c99a4c68d4a94",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/selection/delivery.rs": "1ce83bd386b36085edb89208902b60618876efe571172a8ef0c5d882fbeed575",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/selection/budget.rs": "c61f166897f5f47797d0082fee9ff7296a339c84ceaaa4429a69543a25c5dba6",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/plain_output.rs": "3147945d145f9edce2adf88a964337441e553153088acbe4aee83a369553070d"
+  },
+  "source_commit": "89e6bdb05e88cc9d959233bfcfa1d9acc5df2458",
+  "budget_commit": "9a26f27654d52ca01e5bd8ba740027f1d629f6b1",
+  "binary_sha256": "4bed0a5e1ec14e892c03c71d1257af291943decb771d58e6e7681339cb6d9c4e",
+  "tests_passed": 11,
+  "test_suites": {
+    "bct2": 10,
+    "signed_native_selection": 1,
+    "signed_native_selection_scenarios": 7
+  },
+  "logs_sha256": {
+    "build.log": "6cb1c8a91d9ef8ae5cc82cb8dda1a2b742f3f072e2a180415ca12d597b3f291f",
+    "bct2.log": "0e981c9a0dbfdf5d03dd81a5feb10e825312b1d53d92ed2ae770eece375bfa66",
+    "native.log": "434cf665044b78ae82b4976aee5604acca9e120babc7cd0249eb15faca9f15d3",
+    "docs-check.log": "1761c9f02fbb3915bd41806cd76cc7ba777ddd98016530cd2dca3fa8f3ccc075",
+    "rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd"
+  },
+  "public_quote_or_admission": false,
+  "complete_selection_booking": false,
+  "protected_case_capacity": false,
+  "activation": false,
+  "documentation_checks": {
+    "existing_issues_unchanged": true,
+    "new_issue_occurrences": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  }
+}

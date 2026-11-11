@@ -282,3 +282,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の [返金journal・Selection owner修正](../../../evidence/palw/batch-plain-output-rollback-holds-2026-11-11/README.md#refund-journal-and-ordinary-node-selection-ownership): `8b49e6192` / `64ce2db52` の合同13件が成功。claim/courtの返金をprimary/index変更より先に記録し、追加journal容量不足で途中のcourt削除を残さない。Selection descriptorは通常起動でも実予約を保持する。全terminal inverseと公開Selection/DA接続は未完。
 
 2026-11-11 の [単独archive inverse](../../../evidence/palw/batch-plain-output-rollback-holds-2026-11-11/README.md#standalone-archive-journal-inverse): `799429ab3` で変更したjournal旧行だけを用いてservice-bound CourtEnd archiveを復元する。署名付きprogress書き込み、3回の再試行、途中の資源不足、旧期限・索引・予約量の一致を含む17件が成功。BCT2全体のprefix copyと公開受付の未達は継続する。
+
+2026-11-11 の [Selection Batch資料・終端上限](../../../evidence/palw/selection-batch-planning-2026-11-11/README.md): `89e6bdb05` / `9a26f2765` で、canonicalな全行の資料上限、役割別range分割・照合、native入力からの署名control/証拠/archiveサイズと生の処理数量を追加。合同回帰11件が成功。共通予約・atomic終端・DA/defaultと保護caseは未接続。現行のclaim単位の最初のnotice排他をone-honestの保護枠と同一視せず、選出bond・第三者・防御の権利を保持することを次の接続条件にする。

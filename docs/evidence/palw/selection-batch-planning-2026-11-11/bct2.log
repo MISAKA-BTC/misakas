@@ -1,0 +1,33 @@
+
+running 10 tests
+test palw_batch_court_v1::plain_output_transport::tests::bct2_physical_meter_counts_duplicates_and_malformed_before_adjudication ... ok
+test palw_batch_court_v1::plain_output_local_work::tests::bct2_local_intake_charges_malformed_and_duplicates_and_refills_without_clock_reversal ... ok
+test palw_court_shared_material_intake_v1::storage_rent::tests::bct2_fixed_receipt_rent_matches_native_handoff_on_refusal_and_retry ... ok
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... 
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal ... 
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_inverse_prerequisite_reserves_legacy_court_refund_and_removal_together ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5999 filtered out; finished in 0.09s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... ok
+test palw_court_shared_material_intake_v1::batch::selection::delivery::tests::bct2_selection_delivery_covers_canonical_rows_and_distinct_roles ... ok
+test palw_court_shared_material_intake_v1::batch::selection::tests::bct2_plain_selection_source_geometry_matches_complete_legacy_dependencies ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5999 filtered out; finished in 0.32s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5999 filtered out; finished in 0.39s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... ok
+test palw_court_shared_material_intake_v1::batch::selection::budget::tests::bct2_selection_terminal_bounds_match_signed_and_archive_codecs ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 5990 filtered out; finished in 0.55s
+
