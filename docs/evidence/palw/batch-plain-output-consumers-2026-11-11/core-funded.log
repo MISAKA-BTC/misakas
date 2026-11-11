@@ -1,0 +1,7 @@
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_native_funded_batch_candidate_v1 has been running for over 60 seconds
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_native_funded_batch_candidate_v1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5987 filtered out; finished in 84.48s
+

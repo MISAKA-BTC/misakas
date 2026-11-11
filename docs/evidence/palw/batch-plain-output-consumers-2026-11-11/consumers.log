@@ -1,0 +1,522 @@
+   Compiling rand v0.8.6
+   Compiling log4rs v1.4.0
+   Compiling workflow-core v0.18.0
+   Compiling workflow-wasm v0.18.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/core)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/math)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/wasm/core)
+   Compiling tungstenite v0.23.0
+   Compiling workflow-task v0.18.0
+   Compiling tokio-tungstenite v0.23.1
+   Compiling workflow-websocket v0.18.0
+   Compiling workflow-rpc v0.18.0
+   Compiling workflow-http v0.18.0
+   Compiling workflow-dom v0.18.0
+   Compiling num v0.4.3
+   Compiling substrate-bn v0.6.0
+   Compiling aurora-engine-modexp v1.2.0
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/database)
+   Compiling revm-precompile v11.0.3
+   Compiling kaspa-utils-tower v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/utils/tower)
+   Compiling revm v14.0.3
+   Compiling kaspa-perf-monitor v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/metrics/perf_monitor)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/mining/errors)
+   Compiling kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/indexes/core)
+   Compiling kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/client)
+   Compiling kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/wasm)
+   Compiling kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/core)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/tir/lower)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/components/consensusmanager)
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/protocol/p2p)
+   Compiling kaspa-evm v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/evm/core)
+   Compiling misaka-palw v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/core)
+   Compiling misaka-palw-constraint v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/constraint)
+   Compiling kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/components/addressmanager)
+   Compiling kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/components/connectionmanager)
+   Compiling misaka-palw-derive v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/derive)
+   Compiling kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/protocol/mining)
+   Compiling kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/mining)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/endpoints)
+   Compiling kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/protocol/flows)
+   Compiling kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/wrpc/client)
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/sdk)
+   Compiling misaka-palw-extension v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/extension)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/palw/remote)
+   Compiling kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/indexes/utxoindex)
+   Compiling kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/rpc/service)
+   Compiling misaka-cli v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/misaka/apps/cli)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5m 12s
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_pq_validator_core-08a47097847446e6)
+
+running 1 test
+test rfc9_sighash_audit::batch_plain_output_funding_binds_both_controls_and_keeps_filer_separate ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out; finished in 0.16s
+
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_rpc_service-5784c6ef68310edb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 25 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka-c7e25f9f5ff7d621)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 285 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/misaka_palw_sdk-5b19a86950e163ca)
+
+running 3 tests
+test batch_plain_output_v2::tests::batch_plain_output_sdk_terminal_only_encodes_a_receipt_reference ... ok
+test batch_plain_output_v2::tests::batch_plain_output_sdk_rejects_invalid_inputs_and_bad_signer_responses ... ok
+test batch_plain_output_v2::tests::batch_plain_output_sdk_signature_binds_every_identity_and_purpose ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.16s
+
+     Running unittests src/bin/palw-attempt-exec.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_attempt_exec-860a04fe9815a46f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-class.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_class-f16232956379ab98)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-audit-fetch.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_audit_fetch-7932325cbef02489)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-audit-stream39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_audit_stream39-272b5413db35d877)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-final-audit39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_final_audit39-567519cc29731cb0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-receipt-anchors.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_receipt_anchors-5ab292631a17da77)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-receipt-audit.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_receipt_audit-34194e2c4c6936c8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-receipt-audit39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_receipt_audit39-58cc883473300c9f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-receipt-collect.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_receipt_collect-480480d582869269)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-receipt-live39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_receipt_live39-a6c4f279c9a71d4c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-redemption39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_redemption39-dc4b92bc4ac67d92)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-native-snapshot39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_native_snapshot39-01947b38d18bba75)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-q36-differential40.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_q36_differential40-29bd61d8bcd717ac)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-tir-equiv.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_tir_equiv-6666fa812bf1d46f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running unittests src/bin/palw-tir-fp-worker.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palw_tir_fp_worker-4fff3c147847dd2f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/adv_c4_conformance.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/adv_c4_conformance-d8348fad46ad1e4e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/bootstrap_check_snapshot.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/bootstrap_check_snapshot-2e2800a06077f5a3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/complete_check_snapshot.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/complete_check_snapshot-ebba1363a7873a10)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/corpus_preflight.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/corpus_preflight-1badc52e2003efda)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/court_readers_conformance.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/court_readers_conformance-5f15e88c2be9a538)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/coverage_p1_huihui_9b.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/coverage_p1_huihui_9b-cfaef609f7a5393e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/coverage_p1_huihui_refusals.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/coverage_p1_huihui_refusals-24772f4fbf0a564e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/coverage_p2_dsa.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/coverage_p2_dsa-68e63aeff2741349)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/direct_tir_registration.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/direct_tir_registration-2e43ce9199068fae)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/exec_v2_work_slice_subject.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/exec_v2_work_slice_subject-c1a3fb04caeca403)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/flat_candidate_v6.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/flat_candidate_v6-d40d23d831e06aa0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/flat_candidate_v9.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/flat_candidate_v9-3237b76384f257d2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/flat_root_locator_v9.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/flat_root_locator_v9-bca051593b3e88cb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/flat_snapshot_v6.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/flat_snapshot_v6-400136d7aca3d0d5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/flat_streamed_locator_v9.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/flat_streamed_locator_v9-9aee79eb2fbf5f4d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/flat_vector_v7.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/flat_vector_v7-eff40fb21fa966b0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/g14_registration_fixture.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/g14_registration_fixture-e8420b18e926ef56)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/gen_classifier_class.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/gen_classifier_class-590c3d25d81b9934)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/gen_drill_classes.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/gen_drill_classes-df328cec05e72eec)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/gen_embedding_e2e.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/gen_embedding_e2e-39fc89db1ab94cae)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/gen_sd3_class.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/gen_sd3_class-83c2b2cd488d4753)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/genesis8_coverage.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/genesis8_coverage-821dd9be0c57431c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/improve_cli.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_cli-c0f1d6c1040221cf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/improve_composite_lora.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_composite_lora-f59e888a9b6a7eb6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/improve_composite_node.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_composite_node-b56c374e44154bf5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/improve_composite_scale.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_composite_scale-223a096e273686ba)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/improve_composite_tools.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_composite_tools-eba32e8846681396)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/improve_door.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_door-85f82afd46dba50a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/improve_eval_exec.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_eval_exec-a0122a5cbe528993)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/improve_line_id.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/improve_line_id-581265f7279e6289)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/k2s_encoder_court.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/k2s_encoder_court-bca813da913f5616)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/kernel_params_cli.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kernel_params_cli-0dec15c58442a154)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/kernel_preflight_cli.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kernel_preflight_cli-10782a00c1d9b529)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/native_archive_v39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/native_archive_v39-a1cce3ef7f3a373a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/native_lifecycle_payload_v39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/native_lifecycle_payload_v39-4d06a65098e435bb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/native_producer_material_v39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/native_producer_material_v39-07a6ffc6836062a9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/onboarding_snapshot.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/onboarding_snapshot-22a3e4dfda9b5ed3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/operator_possession_signed.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/operator_possession_signed-aed73d1020aafc02)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/owning39_independent_filing.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/owning39_independent_filing-ec418d38094923c1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/palwart_pack.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/palwart_pack-fde94e5805d3f9e3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+
+     Running tests/preflight.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/preflight-65e518b0db3f2da7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.00s
+
+     Running tests/preflight_encoder_class.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/preflight_encoder_class-fa010d519d7cea45)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/preflight_image_class.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/preflight_image_class-0a57e4b717332f47)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/preflight_node_full_remote.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/preflight_node_full_remote-47a4e9ed41713889)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/preflight_pipeline_class.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/preflight_pipeline_class-c59e5a7fa781a077)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/real_native_decode_court.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/real_native_decode_court-6d9633c9aa41b529)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/runtime_pack.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/runtime_pack-a41b47d7b03e9b3a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests/runtime_pack_beacon.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/runtime_pack_beacon-ff2778ee2ea4abfa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+     Running tests/service_descriptor_signed.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/service_descriptor_signed-e4445987a87c8882)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/source_backed_complete_frontend28.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/source_backed_complete_frontend28-870c5c4908e9df2f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/source_backed_complete_frontend39.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/source_backed_complete_frontend39-d5bfe0879696b336)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/stream_root_budget.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/stream_root_budget-43e297c212ca38a2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/tir_close_range_real.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/tir_close_range_real-c559e9b886830fe0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/tir_container_binding.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/tir_container_binding-f9dd60c779558871)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/tir_drill_class_admission_fence2.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/tir_drill_class_admission_fence2-c9a121480a2bbb7b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/tir_registration_dispatch.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/tir_registration_dispatch-d8fe28ff6f05b4f5)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/tir_residency.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/tir_residency-9f559405449f9870)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+

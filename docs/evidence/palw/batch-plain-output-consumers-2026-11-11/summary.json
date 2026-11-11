@@ -1,0 +1,47 @@
+{
+  "sourceCommit": "a7b678d79dbd7f2f4a6ace0fe92e33cd1a2fe3e5",
+  "sourceClean": true,
+  "profile": "test; core opt-level=0; incremental=false",
+  "binaries": {
+    "kaspa_pq_validator_core-08a47097847446e6": "b300afb2e30fd2d406b4059aeda655a133826e46d2550c48234ddb464efe760f",
+    "kaspa_rpc_service-5784c6ef68310edb": "a3441c3b72365ea2ab52c9cd4981fa5c5b5cb551b9aaa5bba43d3bd9e1944e20",
+    "misaka-c7e25f9f5ff7d621": "5aac70591cca57334c75cda2fa6c6cd99c638671606aa89f6abac727081ee9d8",
+    "misaka_palw_sdk-5b19a86950e163ca": "538a79c527b4b977c9dafe7a05b1b814d838f735d31208e87c3b017e35aa7ada"
+  },
+  "schema": "palw-batch-plain-output-consumer-regression-v1",
+  "nodeFixCommit": "9f0bd5a74",
+  "passed": 8,
+  "failed": 0,
+  "nodeCheck": {
+    "initial": "unresolved serde_json macro; not a protocol/test failure",
+    "fix": "String.into(), no additional dependency",
+    "result": "PASS"
+  },
+  "tests": {
+    "sdk": 3,
+    "funding": 1,
+    "cli": 1,
+    "rpc": 1,
+    "core": 2
+  },
+  "workerStackBytes": 67108864,
+  "publicDeployment": false,
+  "publicAcceptanceConfirmed": false,
+  "scope": "macOS opt-level 0 functional checks. BCT2 public dispatch and full Selection/DA planner are incomplete; no public TFP1 quote, admission or Final demonstrated.",
+  "coreBinarySha256": "25637971c7a5ecc07b7b3aa1062cf5dc561ccda6598b2584964ec9e299fd51ed",
+  "logs": {
+    "consumers.log": "3703f210a3d26d65d1e34ad83f4727d591296fdb367396cd2e837f7b4a32ad06",
+    "cli.log": "502c8260482cbcec4ef5c2403202e89dbb13c43d9539eacde0b57d4e473da9f0",
+    "rpc.log": "871619d614a010bef4667dfc4206829853c0e9f84910c3241f9e221cfb5fa847",
+    "core-tokenizer.log": "a43f87f22917aa4412dd87caf35964a0183b8ba03c1405341fcdcc7c62222529",
+    "core-funded.log": "8016a6366a5546252b595b143c612ba39768f4fff8f1873522a22287f2ea2c26",
+    "node-check-before-fix.log": "e933c130f3cf01d1c1a13e7c4f94e343cc57e057e4a86cffcebd56605240729c",
+    "node-check-fixed.log": "d04bf8118b86b010a070ed39023c65c763bb908577ea6ba31b2ea4c2eaebecd1"
+  },
+  "documentationChecks": {
+    "docs": "FAIL; known unresolved reference baseline, unchanged",
+    "rfcIntegrity": "FAIL; 7 pre-existing original source byte mismatches",
+    "adrIntegrity": "FAIL; 89 pre-existing integrity findings",
+    "baselineUpdated": false
+  }
+}
