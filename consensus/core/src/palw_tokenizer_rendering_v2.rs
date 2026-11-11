@@ -1361,3 +1361,7 @@ pub(crate) fn palw_rooted_claim_tokenizer_v1<'a>(
 }
 
 include!("palw_native_resource_v1/private/palw_tokenizer_rendering_v2.rs");
+
+#[cfg(test)]
+#[path = "palw_tokenizer_rendering_differential_tests.rs"]
+mod differential_tests;
