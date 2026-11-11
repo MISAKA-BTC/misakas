@@ -1,0 +1,28 @@
+{
+  "base_commit": "31c918c3b745c784e2fa778c15d3107162b14b42",
+  "files_sha256": {
+    "consensus/core/src/palw_court_shared_selection_native_tests.rs": "5586ad2be52a9880a0c94b3e2e3486b82da4f80ec7d1c4a37ec36de6c154876f",
+    "consensus/core/src/palw_court_shared_selection_terminal_v1.rs": "3dcf9f013f833dc98264d0c3cea171b969a5866716eb92bac41d1a4e2d05e3be",
+    "consensus/core/src/palw_court_source_material_graph_v3.rs": "c6183dcd5b5d8d70de3268a2140484bdbce06694f5da5bf3a13e15fc8dc8bc1f"
+  },
+  "core_binary_sha256": "0c7ec69748ed5a814157e96bf37a83563426a65ee4a459c21e12660310503106",
+  "source_commit": "d2ec940a79273feadbb6ac7c49f9c5f0d2806b2c",
+  "tests_passed": 2,
+  "native_selection_cases": 7,
+  "logs_sha256": {
+    "build.log": "294588aa8017aba44bbda9df099e99a8159285a863397c036221e49cbf88036c",
+    "native-selection-tests.log": "3c3a1030802e8d25957ae04d82c163c1ef99bb84cc2f2e923f54bee7c24cc6f9",
+    "geometry-tests.log": "45a3c705b1b42cbdd7c07de6a77d9a4bd65780e0de0e83fd33a9c52ed67e0c4f",
+    "docs-check.log": "efc562af65e93b806a459b166aef34c8868af3df9527ed905e8beb1b990f7b65",
+    "rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd"
+  },
+  "documentation_checks": {
+    "existing_issues_unchanged": true,
+    "new_issue_occurrences": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  }
+}
