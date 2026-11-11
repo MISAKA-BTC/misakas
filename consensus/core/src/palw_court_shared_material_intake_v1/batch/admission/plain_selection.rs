@@ -6,7 +6,9 @@ use crate::{
     palw_batch_court_v1::BatchCourtErrorV1,
     palw_court_service_v1::ServiceCost,
     palw_court_shared_material_intake_v1::batch::selection::{
-        PlainBatchSelectionV2, budget::SelectionTerminalBoundsV2, delivery::SelectionBatchEnvelopeV2,
+        PlainBatchSelectionV2,
+        budget::SelectionTerminalBoundsV2,
+        delivery::{SelectionBatchEnvelopeV2, SelectionBatchRowV2},
     },
     palw_court_shared_tir_stream_v1::stream_digest,
     palw_freeprompt_v3::{PalwFreePromptCommitmentV3, fp_claim_id_v3},
@@ -41,6 +43,10 @@ pub(crate) struct PlainSelectionBranchV3 {
 }
 
 impl PlainSelectionBranchV3 {
+    pub(crate) fn claim_id_v3(&self) -> Hash64 {
+        self.claim
+    }
+
     /// Roles come from the native original custody contract. Each role gets
     /// the same complete shape for one selected row of one protected case.
     pub(crate) fn derive_v3(
@@ -82,6 +88,29 @@ impl PlainSelectionBranchV3 {
 
     pub(crate) fn source_v3(&self) -> Hash64 {
         self.source
+    }
+
+    /// Geometry check only. The notice owner authenticates the selected row;
+    /// the accepting writer must still check supplier standing and payment.
+    pub(in crate::palw_court_shared_material_intake_v1::batch) fn project_checked_demand_v3(
+        &self,
+        source: &PalwTirPublicSourceV1,
+        position: u32,
+        role: u64,
+        index: usize,
+        ordinal: u64,
+        ranges: &[crate::palw_batch_court_v1::BatchRangeV1],
+    ) -> Result<NativeRetainedV1<SelectionBatchRowV2>, NativeDecodeErrorV1<String>> {
+        // Reject a foreign role/ordinal before allocating the projected row.
+        let expected = self
+            .demand_ordinal_v3(role, index)
+            .map_err(|why| NativeDecodeErrorV1::Decode(format!("invalid Selection demand coordinate: {why:?}")))?;
+        if ordinal != expected {
+            return Err(NativeDecodeErrorV1::Decode("Selection demand substitutes its reserved role or ordinal".into()));
+        }
+        let row = self.envelope.project_row_v2(source, position, role)?;
+        self.envelope.check_demand_ranges_v2(&row, index, ranges)?;
+        Ok(row)
     }
 
     pub(crate) fn demand_ordinal_v3(&self, role: u64, index: usize) -> Result<u64, BatchCourtErrorV1> {

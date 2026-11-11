@@ -6,7 +6,7 @@ use super::{PreparedPublicDrawV1, PreparedPublicOriginalV1, PublicManifestClaima
 use crate::{Hash64, palw_court_shared_tir_stream_v1::stream_digest, palw_state_v2::PalwChainStateV2};
 use misaka_palw_positive_contract::{
     ContractError,
-    identity::Digest,
+    identity::{Digest, PrincipalId},
     public_one_honest::{CaseId, Claimant, ManifestRequestContext, OriginalId, PanelBond},
     reservations::RemainingCapacity,
 };
@@ -20,6 +20,7 @@ pub(crate) struct RootedDrawnBatchOpportunityV1 {
     original: OriginalId,
     draw: Digest,
     bond: PanelBond,
+    principal: PrincipalId,
     index: u64,
     rescue_reservation: Digest,
     capacity: RemainingCapacity,
@@ -27,6 +28,14 @@ pub(crate) struct RootedDrawnBatchOpportunityV1 {
 
 #[allow(dead_code)]
 impl RootedDrawnBatchOpportunityV1 {
+    pub(crate) fn bond_v1(&self) -> PanelBond {
+        self.bond
+    }
+
+    pub(crate) fn principal_v1(&self) -> PrincipalId {
+        self.principal
+    }
+
     pub(crate) fn index_v1(&self) -> u64 {
         self.index
     }
@@ -104,6 +113,7 @@ impl PreparedPublicOriginalV1 {
             original: self.original,
             draw: draw.draw,
             bond,
+            principal: member.principal,
             index,
             rescue_reservation: member.rescue_reservation,
             capacity: draw.per_bond,

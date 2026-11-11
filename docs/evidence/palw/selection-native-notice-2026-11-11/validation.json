@@ -1,0 +1,34 @@
+{
+  "status": "IMPLEMENTATION_IN_PROGRESS",
+  "rust_build": "NOT_RUN",
+  "rust_tests": "NOT_RUN",
+  "public_deploy": "NOT_RUN",
+  "studio_submission": "NOT_RUN",
+  "public_claim_admission": "NOT_PROVEN",
+  "same_claim_final": "NOT_PROVEN",
+  "winning_claim_right_consumption_and_block_generation": "NOT_PROVEN",
+  "rustfmt": "PASS",
+  "git_diff_check": "PASS",
+  "observed_public_daa": 21239,
+  "public_readback_from_previous_work": true,
+  "readback_sha256": {
+    "public-readback.jsonl": "e0e426f140981dd7c654880e2b22508c34ac54ca323f3e53e5d25da6b2416b16",
+    "binary.txt": "fb33c283d19f26db6a0f42cc85ae7ef8894ca75a81b4d550b80955d421b0eee9"
+  },
+  "baseline_updated": false,
+  "docs": {
+    "exit_code": 1,
+    "known_error_occurrences": 973,
+    "error_counter_sha256": "f47503d7ffeb46801258b72a5535bb2e0dbf74f62b5776057ca1cd3e8873e577",
+    "unchanged_from_previous": true
+  },
+  "rfc_integrity": {
+    "exit_code": 1,
+    "log_byte_identical_to_previous": true
+  },
+  "adr_integrity": {
+    "exit_code": 1,
+    "errors": 87,
+    "error_list_identical_to_previous": true
+  }
+}

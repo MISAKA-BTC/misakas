@@ -749,6 +749,146 @@ mod tests {
         assert_eq!(paired.drawn_batch_reservation_scope_v1(u64::MAX), Err(ContractError::Budget));
         assert_eq!(rooted.case_v1().case_id_v1(), request_case_id);
         assert_eq!(rooted.case_v1().opportunity_v1().rescue_reservation_v1(), member.rescue_reservation);
+        {
+            use crate::{
+                palw_batch_court_v1::{BatchRangeAuthenticationV1, BatchRangeV1},
+                palw_court_service_v1::ServiceCost,
+                palw_court_shared_material_intake_v1::batch::{
+                    admission::plain_selection::{PlainSelectionBranchV3, PlainSelectionBudgetV3},
+                    selection::{
+                        PlainBatchSelectionV2,
+                        notice::{SELECTION_NOTICE_SIGNATURE_CONTEXT_V3, SELECTION_NOTICE_VERSION_V3, SignedSelectionNoticeV3},
+                    },
+                },
+                palw_state_v2::{PalwBondKeyV2, PalwStateCarriageV2},
+            };
+            let roles = 2;
+            let branch = PlainSelectionBranchV3::derive_v3(
+                original,
+                &source,
+                &fixture.record,
+                &fixture.layout,
+                roles,
+                PlainSelectionBudgetV3 {
+                    verification: ServiceCost { bytes: 1_000_000, work: 5_000_000, io: 5_000_000, controls: 1 },
+                    verification_daa: 1,
+                    workspace_bytes: 128_000_000,
+                    maximum_proof_bytes: 1_000_000,
+                    maximum_dependencies: 64,
+                    maximum_ranges_per_role: 64,
+                    maximum_material_visits: 64 * u64::from(source.decode_count_v1()),
+                },
+            )
+            .unwrap();
+            let filer = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Hash64::from_bytes(bond.transaction.0), bond.index));
+            let network = Hash64::from_u64_word(1);
+            let mut notice = SignedSelectionNoticeV3 {
+                version: SELECTION_NOTICE_VERSION_V3,
+                network,
+                claim: facts.claim,
+                source: facts.source,
+                branch: branch.identity_v3().unwrap(),
+                case_scope: rooted.case_scope_v1(),
+                reservation_scope: rooted.reservation_scope_v1(),
+                position: 0,
+                beat: 0,
+                filer,
+                signature: [0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+            };
+            let sign = |notice: &mut SignedSelectionNoticeV3| {
+                notice.signature = *libcrux_ml_dsa::ml_dsa_87::sign(
+                    &pair.signing_key,
+                    notice.signing_message_v3().unwrap().as_byte_slice(),
+                    SELECTION_NOTICE_SIGNATURE_CONTEXT_V3,
+                    [36; 32],
+                )
+                .unwrap()
+                .as_ref();
+            };
+            sign(&mut notice);
+            // The earlier fixture roots a public draw, but never registered
+            // this drawn bond. A draw alone cannot authenticate the notice.
+            assert!(notice.authenticate_for_case_v3(network, &rooted, &branch, &source, &with_case).is_err());
+            // Explicit test-only bond fixture, restored through the native
+            // carriage. No paid registration or public acceptance is claimed.
+            let mut carriage = PalwStateCarriageV2::from_state(&with_case);
+            let mut native_bond = carriage.bonds.values().next().unwrap().clone();
+            native_bond.pubkey = key.to_vec();
+            carriage.bonds.insert(filer, native_bond);
+            let notice_state = carriage.into_state(&link_params, None).unwrap();
+            let notice_case = paired.rooted_drawn_batch_case_v1(&notice_state, &draw, &request_wire, &request_context).unwrap();
+            assert_eq!(notice_case, rooted);
+            let authenticated = notice.authenticate_for_case_v3(network, &notice_case, &branch, &source, &notice_state).unwrap();
+            let shape = PlainBatchSelectionV2::derive_v2(original, &source, roles, 64).unwrap();
+            let ranges_for_row = |position| {
+                let mut ranges = (0..shape.dependency_count_v2() / roles)
+                    .map(|group| {
+                        let material = shape.material_at_v2(&source, position, notice.beat, group * roles).unwrap();
+                        BatchRangeV1 {
+                            id: material.target.id_v1(facts.claim).unwrap(),
+                            bytes: u32::try_from(material.maximum_bytes).unwrap(),
+                            authentication: BatchRangeAuthenticationV1::WholeRange,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                ranges.sort_unstable_by_key(|range| range.id);
+                ranges
+            };
+            let ranges = ranges_for_row(notice.position);
+            let first = branch.demand_ordinal_v3(0, 0).unwrap();
+            let second = branch.demand_ordinal_v3(1, 0).unwrap();
+            // This tiny fixture fits in one partition. Identical material
+            // IDs still require each supplier's distinct reserved ordinal.
+            authenticated.project_demand_v3(0, 0, first, &ranges).unwrap();
+            authenticated.project_demand_v3(1, 0, second, &ranges).unwrap();
+            assert!(authenticated.project_demand_v3(1, 0, first, &ranges).is_err());
+            assert!(authenticated.project_demand_v3(0, 0, second, &ranges).is_err());
+            assert!(authenticated.project_demand_v3(roles, 0, first, &ranges).is_err());
+            assert!(authenticated.project_demand_v3(0, 0, first, &ranges[1..]).is_err());
+            assert!(source.decode_count_v1() > 1, "fixture must exercise a different valid row");
+            let other_row = ranges_for_row(1);
+            assert!(authenticated.project_demand_v3(0, 0, first, &other_row).is_err());
+            let mut substituted = ranges.clone();
+            substituted[0].id = Hash64::from_u64_word(990);
+            assert!(authenticated.project_demand_v3(0, 0, first, &substituted).is_err());
+            for coordinate in 0..7 {
+                let mut altered = notice.clone();
+                match coordinate {
+                    0 => altered.position = source.decode_count_v1(),
+                    1 => altered.beat = source.vocab_v1(),
+                    2 => altered.case_scope = Hash64::from_u64_word(991),
+                    3 => altered.reservation_scope = Hash64::from_u64_word(992),
+                    4 => altered.branch = Hash64::from_u64_word(993),
+                    5 => altered.source = Hash64::from_u64_word(994),
+                    6 => altered.filer.0.index += 1,
+                    _ => unreachable!(),
+                }
+                sign(&mut altered);
+                assert!(altered.authenticate_for_case_v3(network, &notice_case, &branch, &source, &notice_state).is_err());
+            }
+            assert!(
+                notice.authenticate_for_case_v3(Hash64::from_u64_word(995), &notice_case, &branch, &source, &notice_state).is_err()
+            );
+            // Even a correctly signed packet under a substituted native key
+            // cannot borrow the accepted draw's different principal.
+            let other = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([37; 32]);
+            let mut carriage = PalwStateCarriageV2::from_state(&notice_state);
+            carriage.bonds.get_mut(&filer).unwrap().pubkey = other.verification_key.as_ref().to_vec();
+            let substituted_state = carriage.into_state(&link_params, None).unwrap();
+            let mut altered = notice.clone();
+            altered.signature = *libcrux_ml_dsa::ml_dsa_87::sign(
+                &other.signing_key,
+                altered.signing_message_v3().unwrap().as_byte_slice(),
+                SELECTION_NOTICE_SIGNATURE_CONTEXT_V3,
+                [38; 32],
+            )
+            .unwrap()
+            .as_ref();
+            let substituted_case =
+                paired.rooted_drawn_batch_case_v1(&substituted_state, &draw, &request_wire, &request_context).unwrap();
+            assert!(matches!(altered.authenticate_for_case_v3(network, &substituted_case, &branch, &source, &substituted_state),
+                Err(why) if why == "Selection notice native key differs from its accepted draw principal"));
+        }
         assert!(companion_only.rooted_drawn_batch_case_v1(&with_case, &draw, &request_wire, &request_context).is_err());
         assert!(paired.rooted_drawn_batch_case_v1(&link_state, &draw, &request_wire, &request_context).is_err());
         let rolled_back = revert_delta_v2(&with_case, &case_delta, &link_params).unwrap();

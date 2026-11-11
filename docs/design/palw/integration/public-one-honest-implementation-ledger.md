@@ -316,3 +316,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 
 
 2026-11-11 の[Selection受付前共通予約](../../../evidence/palw/selection-preclaim-common-booking-2026-11-11/README.md)は **実装中・Rust検証未実行**。native custody役割数と元Source/親TKR1を照合し、任意1行を覆う全tile/FullIdsの役割別搬送、検査、終端再検査を数値/tokenizerと同じ保護枠予約へ接続した。新profile/resource identity、供給者別ordinal、保存を伴う検査のinspection期限と回帰コードを追加。case単位の行固定、支払/typed writer、原子的裁定・archive/回復、完全profileとStudio公開受理/Final/当選時権利消費・ブロック生成は未完。モデル全量配信を追加していない。
+
+2026-11-11 の[Selection署名・native case照合](../../../evidence/palw/selection-native-notice-2026-11-11/README.md)は **実装中・Rust検証未実行**。受理済みdrawのbond/principal、TFP1 claim/Source、logical caseとphysical rank、署名row/beatを照合し、指定行のcanonical資料rangeを供給者別ordinalへ接続した。鍵・行・scope・roleの差し替えを対象に回帰コードを追加。元notice期限前の実費付き共同受理、native保存/応答/終端、完全coordinator、公開受理/Final/当選時権利消費・ブロック生成は未完。保存した公開観測はDAA21239でG14_ROUTE_ABSENT(FpTokenizer)、quote不成立。実装採択や署名照合を公開受理の代替にしない。

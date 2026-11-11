@@ -4,6 +4,7 @@
 
 pub(crate) mod budget;
 pub(crate) mod delivery;
+pub(crate) mod notice;
 
 use super::plain_output::PlainBatchOutputV2;
 use crate::{
