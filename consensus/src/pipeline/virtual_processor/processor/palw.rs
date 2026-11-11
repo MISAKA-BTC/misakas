@@ -2493,9 +2493,10 @@ impl VirtualStateProcessor {
 
     /// Publish a signing request only from an authenticated selected parent.
     /// Import/virtual changes during reconstruction require a fresh read.
-    pub fn palw_batch_plain_output_verify_quote_v2_impl(
+    pub fn palw_batch_plain_output_quote_v2_impl(
         &self,
         claim: kaspa_consensus_core::Hash64,
+        terminal: bool,
     ) -> Result<Option<(u64, Option<String>)>, String> {
         let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
         let captured = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?;
@@ -2506,29 +2507,39 @@ impl VirtualStateProcessor {
         if *target != captured.ghostdag_data.selected_parent || parent.block != *target {
             return Err("plain Output parent differs from the selected parent".into());
         }
-        let mut doc = kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_verify_quote_json_v2(
-            state,
-            params,
-            claim,
-            captured.daa_score,
-            |daa_score| {
-                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                    block: kaspa_consensus_core::blockhash::ORIGIN,
-                    daa_score,
-                    blue_score: captured.ghostdag_data.blue_score,
-                    subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
-                };
-                let extras = self.palw_transition_extras_for(&point).into_legacy_extras();
-                // The core additionally requires V3 context, its rooted
-                // graph/profile and accepted FullIds. The legacy fence alone
-                // grants neither a BCT2 request nor transport authority.
-                extras.native_court_rules_v1.filter(|rules| {
-                    extras.batch_court_active_v1
-                        && extras.batch_plain_output_transport_v2.is_some_and(|policy| policy.active_at(daa_score))
-                        && extras.tir_public_network_domain_v1 == Some(rules.network_domain)
-                })
-            },
-        );
+        let rules_at = |daa_score| {
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: kaspa_consensus_core::blockhash::ORIGIN,
+                daa_score,
+                blue_score: captured.ghostdag_data.blue_score,
+                subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
+            };
+            let extras = self.palw_transition_extras_for(&point).into_legacy_extras();
+            // The core additionally requires V3 context, its rooted
+            // graph/profile and accepted FullIds. The legacy fence alone
+            // grants neither a BCT2 request nor transport authority.
+            extras.native_court_rules_v1.filter(|rules| {
+                extras.batch_court_active_v1
+                    && extras.batch_plain_output_transport_v2.is_some_and(|policy| policy.active_at(daa_score))
+                    && extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+            })
+        };
+        let mut doc = if terminal {
+            kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_terminal_quote_json_v2(
+                state,
+                claim,
+                captured.daa_score,
+                rules_at,
+            )
+        } else {
+            kaspa_consensus_core::palw_user_views_v1::palw_batch_plain_output_verify_quote_json_v2(
+                state,
+                params,
+                claim,
+                captured.daa_score,
+                rules_at,
+            )
+        };
         doc["acceptedParentRoot"] = prepared.authenticated_root_v1().unwrap_or_else(|| state.state_root()).to_string().into();
         let current = self.virtual_stores.read();
         let after = current.state.get().map_err(|e| e.to_string())?;

@@ -6350,6 +6350,13 @@ fn palw_batch_quote_target(
     if request.batch_open == "verify-plain-output-v2" {
         return request.batch_ordinal.is_empty().then_some(PalwCourtTargetV1::BatchVerifyPlainOutputV2 { claim }).ok_or_else(invalid);
     }
+    if request.batch_open == "convict-plain-output-v2" {
+        return request
+            .batch_ordinal
+            .is_empty()
+            .then_some(PalwCourtTargetV1::BatchTerminalPlainOutputV2 { claim })
+            .ok_or_else(invalid);
+    }
     let ordinal = palw_batch_view_ordinal(&request.batch_ordinal)?;
     let (notice, selection) = request.batch_open.split_once('/').ok_or_else(invalid)?;
     let notice = palw_user_view_hash64("notice", notice)?;
@@ -6418,11 +6425,20 @@ fn numerical_batch_open_selector_is_bounded_and_exclusive() {
     assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchVerifyNumerical { .. })));
     request.batch_open = "verify-plain-output-v2".into();
     assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchVerifyPlainOutputV2 { .. })));
-    request.batch_ordinal = "0".into();
-    assert!(palw_batch_quote_target(&request).is_err());
-    request.batch_ordinal.clear();
-    request.batch_target = "full-ids".into();
-    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_open = "convict-plain-output-v2".into();
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchTerminalPlainOutputV2 { .. })));
+    for selector in ["verify-plain-output-v2", "convict-plain-output-v2"] {
+        request.batch_open = selector.into();
+        request.batch_ordinal = "0".into();
+        assert!(palw_batch_quote_target(&request).is_err());
+        request.batch_ordinal.clear();
+        request.batch_target = "full-ids".into();
+        assert!(palw_batch_quote_target(&request).is_err());
+        request.batch_target.clear();
+        request.session_hex = notice.to_string();
+        assert!(palw_batch_quote_target(&request).is_err());
+        request.session_hex.clear();
+    }
 }
 
 /// `(available, found, now_daa, view_json)` of a consensus user-view answer (`None`: no PALW tip).

@@ -367,6 +367,7 @@ pub enum PalwCourtTargetV1 {
     BatchStop { claim: Hash64 },
     BatchVerifyNumerical { claim: Hash64 },
     BatchVerifyPlainOutputV2 { claim: Hash64 },
+    BatchTerminalPlainOutputV2 { claim: Hash64 },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -387,7 +388,8 @@ pub fn palw_court_state_json_v1(
         }
         PalwCourtTargetV1::BatchStop { .. }
         | PalwCourtTargetV1::BatchVerifyNumerical { .. }
-        | PalwCourtTargetV1::BatchVerifyPlainOutputV2 { .. } => return None,
+        | PalwCourtTargetV1::BatchVerifyPlainOutputV2 { .. }
+        | PalwCourtTargetV1::BatchTerminalPlainOutputV2 { .. } => return None,
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
             return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
         }
@@ -586,6 +588,40 @@ pub fn palw_batch_plain_output_verify_quote_json_v2(
         "version": 2, "kind": "palwBatchVerifyPlainOutput", "nowDaa": now,
         "tipBlock": state.last_point().map(|point| point.block.to_string()),
         "claimId": claim.to_string(), "verify": verify, "error": error,
+        "acceptanceConfirmed": false,
+    })
+}
+
+/// A fault terminal quote from the same authenticated parent as the Verify quote.
+/// A matching receipt is required; Holds never authorizes this operation.
+pub fn palw_batch_plain_output_terminal_quote_json_v2(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    now: u64,
+    rules_at: impl FnOnce(u64) -> Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>,
+) -> Value {
+    let result = (|| -> Result<Value, String> {
+        use crate::palw_batch_court_v1::carriage::quote_batch_plain_output_terminal_v2;
+        let quote = quote_batch_plain_output_terminal_v2(state, claim)?;
+        if now > quote.slot_daa {
+            return Err("plain Batch Output terminal slot has passed".into());
+        }
+        let rules = rules_at(quote.slot_daa).ok_or("plain Batch Output profile is not active at the reserved terminal slot")?;
+        Ok(json!({
+            "wireVersion": 2, "claimId": quote.control.claim.to_string(),
+            "receiptDigest": quote.control.receipt_digest.to_string(),
+            "networkDomain": rules.network_domain.to_string(), "assignedDaa": quote.slot_daa,
+            "priorFaultReceipt": true,
+        }))
+    })();
+    let (terminal, error) = match result {
+        Ok(terminal) => (terminal, None),
+        Err(error) => (Value::Null, Some(error)),
+    };
+    json!({
+        "version": 2, "kind": "palwBatchTerminalPlainOutput", "nowDaa": now,
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "claimId": claim.to_string(), "terminal": terminal, "error": error,
         "acceptanceConfirmed": false,
     })
 }

@@ -388,7 +388,7 @@ pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) 
 /// BCT2 mirrors BCT1 Stop: a syntactically valid Verify withholds its
 /// fixed receipt rent before the court decision, including when the writer
 /// later refuses the claim or sees a duplicate. Terminal retains no receipt.
-pub(crate) fn material_batch_plain_output_carrier_fee_v2(
+pub fn material_batch_plain_output_carrier_fee_v2(
     carrier: &Transaction,
     available_fee: u64,
 ) -> Result<Option<MaterialBatchCarrierFeeV1>, String> {
