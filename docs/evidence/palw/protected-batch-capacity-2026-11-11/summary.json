@@ -1,0 +1,96 @@
+{
+  "base_commit": "ab96854b84b430f90f7a4a3deae3b8ac42b1176d",
+  "files_sha256": {
+    "consensus/core/src/palw_batch_court_v1.rs": "ed53a3015d28b71cb9e8eaeeb5de8a1688daa1318d13d62a626153a19c6be46d",
+    "consensus/core/src/palw_batch_court_v1/protected_cases.rs": "3e9bfc2e80a1ca5e45c0fd2b70b382b95d6b71329b1dfea3275001b163d7372e",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/admission.rs": "0627fac946fcd8e5b1c8364b67e11ae1c4a1bdb3947877e1da39675ca13ba478",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/admission/protected.rs": "cf1e6e8b4727d39046efdd8ee0da1c1b63270616adab288a1f175c925dc82047",
+    "consensus/core/src/palw_positive_contract_v2.rs": "7ad491aac0035f7c88f3df7e83d4f51922aaed3c379ea3fae7f1522617c11a56",
+    "consensus/core/src/palw_positive_contract_v2/protected_batch_case.rs": "4906d8bf1b0322ff261226ff5fd976900e2a066be55be0490560fb30a6d3979d",
+    "consensus/core/src/palw_positive_contract_v2/tfp1_original.rs": "98bab2e2d667c684f76b5de1b4243e69e7c0b70198e961e3df2c5bc1f558f994",
+    "consensus/core/src/palw_state_v2/tests/native_writers_v1.rs": "1b241e8ebd9f8d12f26c8749dc4affc19612a29341bbfff9f10f8002f9a549a9",
+    "consensus/core/src/palw_court_shared_material_intake_v1/batch/plain_output/projection.rs": "21199fb0a8398bffa15167c108e3e4373c20c37cff5889032f5629db2fedb44b"
+  },
+  "binary_sha256": "701bbe3f58eb3f99750e425b20ec8170a9e9cb7cb714123720f8de97cad806d4",
+  "tests": [
+    {
+      "filter": "protected_",
+      "exit": 0,
+      "passed": 5,
+      "success": true
+    },
+    {
+      "filter": "tfp1_public_original_pairs_exact_native_identity_before_and_after_signing",
+      "exit": 0,
+      "passed": 1,
+      "success": true
+    },
+    {
+      "filter": "public_admission_row_round_trips_through_delta_and_snapshot",
+      "exit": 0,
+      "passed": 1,
+      "success": true
+    },
+    {
+      "filter": "palw_batch_court_v1::tests::",
+      "exit": 0,
+      "passed": 9,
+      "success": true
+    },
+    {
+      "filter": "palw_court_service_v1::causal::tests::",
+      "exit": 0,
+      "passed": 6,
+      "success": true
+    },
+    {
+      "filter": "maximum_graph_with_latest_notice_and_recovery_is_atomic_at_10000",
+      "exit": 0,
+      "passed": 1,
+      "success": true
+    },
+    {
+      "filter": "bct2_",
+      "exit": 0,
+      "passed": 10,
+      "success": true
+    },
+    {
+      "filter": "stored_public_admission_requires_manifest_capacity_for_initial_supply_and_rescue",
+      "exit": 0,
+      "passed": 1,
+      "success": true
+    }
+  ],
+  "tests_passed": 34,
+  "complete_test_run": true,
+  "source_commits": [
+    "ab96854b8",
+    "25bb3e81d",
+    "949a60f67"
+  ],
+  "public_quote_or_admission": false,
+  "complete_protected_dispatch": false,
+  "activation": false,
+  "main_push": false,
+  "documentation_checks": {
+    "passed": false,
+    "reported_diagnostics_unchanged": true,
+    "new_evidence_link_issues": 0,
+    "issue_occurrences_relative_to_existing_baseline": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89,
+    "current_issue_counter_sha256": "f47503d7ffeb46801258b72a5535bb2e0dbf74f62b5776057ca1cd3e8873e577"
+  },
+  "logs_sha256": {
+    "initial-tests.log": "192c7dbc738937df86598ac6dc1396766398b580023bcf6e4a025f5522aa7a2c",
+    "docs-check.log": "e65175802295858728f2a14ee593ae4d2be90b8fc1300306ba73e31e8c1d4526",
+    "rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "initial-build.log": "34dad53bded482eeac233138a5256fb0b73931334b94839e5c41667a74d8eb17",
+    "tests.log": "e1281a3611980f822bb6ba108b68a25ac0f023332bc40dcbf769d1ba488143f5",
+    "adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd",
+    "build.log": "34dad53bded482eeac233138a5256fb0b73931334b94839e5c41667a74d8eb17"
+  }
+}

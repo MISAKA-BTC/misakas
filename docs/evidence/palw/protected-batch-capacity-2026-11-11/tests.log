@@ -1,0 +1,108 @@
+
+FILTER protected_
+
+running 5 tests
+test palw_batch_court_v1::protected_cases::tests::protected_batch_cases_reject_foreign_edges_missing_terminals_and_omitted_nodes ... ok
+test palw_batch_court_v1::protected_cases::tests::protected_batch_cases_reserve_sum_capacity_atomically_without_a_common_terminal ... ok
+test palw_court_shared_material_intake_v1::batch::admission::protected::tests::protected_compiled_cases_check_every_draft_and_fee_before_atomic_commit ... ok
+test palw_tir_public_owned_v1::tests::protected_slots_require_original_authentication_and_all_wrong_signer_stale_or_wrong_bytes_fail_atomically ... ok
+test palw_tir_public_owned_v1::tests::protected_work_lane_exhaustion_does_not_spend_outside_owner_allocation ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 5999 filtered out; finished in 0.09s
+
+
+FILTER tfp1_public_original_pairs_exact_native_identity_before_and_after_signing
+
+running 1 test
+test palw_positive_contract_v2::tfp1_original::tests::tfp1_public_original_pairs_exact_native_identity_before_and_after_signing ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6003 filtered out; finished in 0.31s
+
+
+FILTER public_admission_row_round_trips_through_delta_and_snapshot
+
+running 1 test
+test palw_state_v2::tests::native_writers_v1::public_admission_row_round_trips_through_delta_and_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6003 filtered out; finished in 0.28s
+
+
+FILTER palw_batch_court_v1::tests::
+
+running 9 tests
+test palw_batch_court_v1::tests::a_timely_open_can_use_the_extended_window_without_renewing_its_end ... ok
+test palw_batch_court_v1::tests::bounded_codec_reopens_the_exact_branch_checkpoint ... ok
+test palw_batch_court_v1::tests::latest_notice_reserves_terminal_and_recovery_without_crossing_the_boundary ... ok
+test palw_batch_court_v1::tests::out_of_order_and_restart_have_same_verified_checkpoint ... ok
+test palw_batch_court_v1::tests::refuses_overbudget_identity_invalid_openings_conflicts_and_late_parts ... ok
+test palw_batch_court_v1::tests::reserves_parallel_parts_and_a_causal_whole_body_check ... ok
+test palw_batch_court_v1::tests::streamed_demand_root_preserves_the_signed_wire_identity ... ok
+test palw_batch_court_v1::tests::the_prospective_clock_preserves_over_target_and_overflow ... ok
+test palw_batch_court_v1::tests::whole_range_requires_its_native_verifier_even_across_checkpoint_restore ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 5995 filtered out; finished in 0.00s
+
+
+FILTER palw_court_service_v1::causal::tests::
+
+running 6 tests
+test palw_court_service_v1::causal::tests::causal_schedule_keeps_all_siblings_and_is_independent_of_input_order ... ok
+test palw_court_service_v1::causal::tests::existing_slots_are_preserved_and_a_join_waits_for_every_predecessor ... ok
+test palw_court_service_v1::causal::tests::insufficient_aggregate_capacity_rolls_back_already_assigned_roots ... ok
+test palw_court_service_v1::causal::tests::malformed_graphs_and_partial_capacity_failure_leave_the_book_unchanged ... ok
+test palw_court_service_v1::causal::tests::ordinary_edf_can_schedule_a_response_before_its_parent_but_causal_admission_refuses ... ok
+test palw_court_service_v1::causal::tests::repair_cannot_move_a_missing_parent_after_a_retained_child ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 5998 filtered out; finished in 0.00s
+
+
+FILTER maximum_graph_with_latest_notice_and_recovery_is_atomic_at_10000
+
+running 1 test
+test palw_court_shared_material_intake_v1::batch::admission::tests::maximum_graph_with_latest_notice_and_recovery_is_atomic_at_10000 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6003 filtered out; finished in 0.00s
+
+
+FILTER bct2_
+
+running 10 tests
+test palw_batch_court_v1::plain_output_local_work::tests::bct2_local_intake_charges_malformed_and_duplicates_and_refills_without_clock_reversal ... ok
+test palw_batch_court_v1::plain_output_transport::tests::bct2_physical_meter_counts_duplicates_and_malformed_before_adjudication ... ok
+test palw_court_shared_material_intake_v1::batch::selection::budget::tests::bct2_selection_terminal_bounds_match_signed_and_archive_codecs ... ok
+test palw_court_shared_material_intake_v1::batch::selection::delivery::tests::bct2_selection_delivery_covers_canonical_rows_and_distinct_roles ... ok
+test palw_court_shared_material_intake_v1::batch::selection::tests::bct2_plain_selection_source_geometry_matches_complete_legacy_dependencies ... ok
+test palw_court_shared_material_intake_v1::storage_rent::tests::bct2_fixed_receipt_rent_matches_native_handoff_on_refusal_and_retry ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_inverse_prerequisite_reserves_legacy_court_refund_and_removal_together ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal ... 
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6003 filtered out; finished in 0.30s
+
+ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... 
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6003 filtered out; finished in 0.36s
+
+ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... 
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6003 filtered out; finished in 0.07s
+
+ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 5994 filtered out; finished in 1.73s
+
+
+FILTER stored_public_admission_requires_manifest_capacity_for_initial_supply_and_rescue
+
+running 1 test
+test palw_positive_contract_v2::stored_public_admission_requires_manifest_capacity_for_initial_supply_and_rescue ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6003 filtered out; finished in 0.00s
+
