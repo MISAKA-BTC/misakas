@@ -5,6 +5,7 @@
 
 pub(crate) mod protected_batch_case;
 pub mod record;
+pub(crate) mod tfp1_original;
 
 use crate::palw_native_resource_v1::{
     NativeCoverageV1, NativeHeapV1, NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, native_struct, native_tuple_struct,
@@ -1715,6 +1716,12 @@ impl PublicOriginalAdmissionV1<'_> {
         key: &[u8; PUBKEY_BYTES],
         signature: &[u8; SIGNATURE_BYTES],
     ) -> Result<OriginalId, ContractError> {
+        self.check_original_metadata_v1(original)?;
+        original.authenticate(key, signature)?;
+        Ok(original.id())
+    }
+
+    fn check_original_metadata_v1(&self, original: &OriginalCommit) -> Result<(), ContractError> {
         ManifestV1::fetch_size(self.max_manifest_bytes)?;
         if self.manifest_total_limit < MaterialScope::COUNT as u64
             || self.manifest_scope_limits.iter().any(|scope| scope.max_bytes == 0 || scope.chunk_bytes == 0)
@@ -1731,9 +1738,7 @@ impl PublicOriginalAdmissionV1<'_> {
         {
             return Err(ContractError::Scope);
         }
-        check_public_original_execution_v1(original, self.job, self.class, self.artifact)?;
-        original.authenticate(key, signature)?;
-        Ok(original.id())
+        check_public_original_execution_v1(original, self.job, self.class, self.artifact)
     }
 }
 

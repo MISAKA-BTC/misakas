@@ -15,6 +15,7 @@ use crate::{
     },
     palw_freeprompt_v3::{PalwFreePromptCommitmentV3, fp_claim_id_v3},
     palw_native_resource_v1::{NativeDecodeErrorV1, NativeRetainedV1},
+    palw_positive_contract_v2::tfp1_original::{NativeTfp1PublicOriginalFactsV1, Tfp1PublicOriginalObligationV1},
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
     palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     palw_state_v2::{PalwChainStateV2, PalwTransitionExtrasV1},
@@ -28,6 +29,7 @@ use crate::{
 pub(crate) struct PlainBatchOriginalProjectionV2 {
     claim: Hash64,
     source: NativeRetainedV1<PalwTirPublicSourceV1>,
+    original_facts: NativeTfp1PublicOriginalFactsV1,
     registration: Hash64,
     accepted_daa: u64,
     prompt: PalwPromptIdsFormV1,
@@ -78,10 +80,12 @@ impl PlainBatchOriginalProjectionV2 {
             original.trace_root,
             maximum_leaves,
         )?;
+        let original_facts = NativeTfp1PublicOriginalFactsV1::derive_v1(original, &source)
+            .map_err(|why| Decode(format!("plain Batch TFP1 facts: {why:?}")))?;
         let output =
             PlainBatchOutputV2::derive_v2(original, &source, verify_cost, verify_daa).map_err(|why| Decode(format!("{why:?}")))?;
         let numeric = numerical_batch_projection_v1(claim, prompt, &source, record, layout, cover, maximum_ranges)?;
-        Ok(Self { claim, source, registration: registration.registration_id, accepted_daa, prompt, numeric, output })
+        Ok(Self { claim, source, original_facts, registration: registration.registration_id, accepted_daa, prompt, numeric, output })
     }
 
     fn compile_v2(
@@ -110,22 +114,38 @@ impl PlainBatchOriginalProjectionV2 {
         .map_err(|_| BatchCourtErrorV1::CaseGraph)
     }
 
+    fn profile_id_v2(&self, service_profile: Hash64) -> Result<Hash64, BatchCourtErrorV1> {
+        crate::palw_court_shared_tir_state_v1::plain_batch_profile_id_v2(service_profile, self.registration)
+            .map_err(|_| BatchCourtErrorV1::CaseGraph)
+    }
+
+    fn original_terms_v2(
+        &self,
+        profile: Hash64,
+        relative_graph: Hash64,
+    ) -> Result<(Hash64, Tfp1PublicOriginalObligationV1), BatchCourtErrorV1> {
+        let resource = self.resource_id_v2(relative_graph)?;
+        let obligation = self.original_facts.service_obligation_v1(profile, resource).map_err(|_| BatchCourtErrorV1::CaseGraph)?;
+        Ok((resource, obligation))
+    }
+
     /// Calculate the signature input before a final allocation scope exists.
     /// A successful compilation does not establish capacity or claim eligibility.
-    pub(crate) fn prospective_resource_id_v2(
+    pub(crate) fn prospective_original_terms_v2(
         &self,
+        service_profile: Hash64,
         material_until_daa: u64,
         costs: NativeBatchDeliveryCostsV1,
         storage: MaterialIntakeScheduleV1,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
-    ) -> Result<Hash64, BatchCourtErrorV1> {
+    ) -> Result<(Hash64, Tfp1PublicOriginalObligationV1), BatchCourtErrorV1> {
         let provisional_scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
             b"misaka-palw/plain-batch-prospective-scope/v2",
             &(self.claim, self.source.source_id_v1(), self.registration),
         )
         .map_err(|_| BatchCourtErrorV1::CaseGraph)?;
         let compiled = self.compile_v2(provisional_scope, material_until_daa, costs, storage, price)?;
-        self.resource_id_v2(compiled.relative_graph_id_v1())
+        self.original_terms_v2(self.profile_id_v2(service_profile)?, compiled.relative_graph_id_v1())
     }
 
     /// Both quote and fold must compile under the final scope before trying
@@ -137,6 +157,7 @@ impl PlainBatchOriginalProjectionV2 {
         plan: &crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
         service_profile: Hash64,
         resource_id: Hash64,
+        obligation: Tfp1PublicOriginalObligationV1,
         costs: NativeBatchDeliveryCostsV1,
         storage: MaterialIntakeScheduleV1,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
@@ -146,8 +167,7 @@ impl PlainBatchOriginalProjectionV2 {
         {
             return Err(BatchCourtErrorV1::CaseGraph);
         }
-        let profile = crate::palw_court_shared_tir_state_v1::plain_batch_profile_id_v2(service_profile, self.registration)
-            .map_err(|_| BatchCourtErrorV1::CaseGraph)?;
+        let profile = self.profile_id_v2(service_profile)?;
         let (scope, _) = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::scope_from_native_inputs_v2(
             &self.source,
             self.claim,
@@ -157,7 +177,7 @@ impl PlainBatchOriginalProjectionV2 {
         )
         .map_err(|_| BatchCourtErrorV1::CaseGraph)?;
         let compiled = self.compile_v2(scope, plan.terms.material_until_daa, costs, storage, price)?;
-        if self.resource_id_v2(compiled.relative_graph_id_v1())? != resource_id {
+        if self.original_terms_v2(profile, compiled.relative_graph_id_v1())? != (resource_id, obligation) {
             return Err(BatchCourtErrorV1::CaseGraph);
         }
         CompiledBatchAdmissionV1::reserve_v1(compiled, book)
