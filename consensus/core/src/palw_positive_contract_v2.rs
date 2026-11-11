@@ -3,6 +3,7 @@
 //! calling this adapter. Signatures here authenticate authors, not native
 //! admission, drawn membership, funding, deadlines or computation truth.
 
+pub(crate) mod protected_batch_case;
 pub mod record;
 
 use crate::palw_native_resource_v1::{
@@ -1022,6 +1023,12 @@ impl PublicOriginalAdmissionRecordV1 {
         let mut row = Self::storage_fixture(original.id(), origin);
         row.manifest_limits = manifest_limits;
         row.manifest_material = original.manifest_material_id();
+        // This fixture reserves two independent protected opportunities.
+        row.rescue.max_drawn_bonds = 2;
+        let capacity = row.initial_supply.checked_add(row.rescue.total().unwrap()).unwrap();
+        row.budget.transmitted_bytes = capacity.transmitted_bytes;
+        row.budget.additional_work = capacity.additional_work;
+        row.budget.retained_bytes = capacity.retained_bytes;
         let draw_by = row.deadlines[0];
         let schedule = VerificationSchedule::new(
             OriginalClock::new(origin.accepted_daa).unwrap(),
@@ -1046,7 +1053,7 @@ impl PublicOriginalAdmissionRecordV1 {
         let prepared = PreparedPublicOriginalV1 {
             original: row.original,
             schedule,
-            capacity: row.initial_supply.checked_add(row.rescue.total().unwrap()).unwrap(),
+            capacity,
             carrier: row.carrier,
             manifest_material: row.manifest_material,
             draw_ready_by: draw_by,
@@ -1063,37 +1070,6 @@ impl PublicOriginalAdmissionRecordV1 {
     #[cfg(test)]
     pub(crate) fn storage_admission_fixture(&self) -> PreparedPublicOriginalRecordV1 {
         PreparedPublicOriginalRecordV1(*self)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn storage_draw_fixture(
-        &self,
-        draw_point: crate::palw_state_v2::PalwBlockContextV2,
-        members: &[PublicDrawMemberV1],
-    ) -> PreparedPublicDrawV1 {
-        let beacon = Digest([5; 64]);
-        let full_scope = self.original.full_replay_scope(Digest([6; 64]));
-        let ordered_members = public_draw_members_digest_v1(members);
-        let draw = public_draw_id_v1(
-            self.original,
-            self.carrier.digest,
-            Digest(draw_point.block.as_bytes()),
-            beacon,
-            full_scope,
-            ordered_members,
-        );
-        PreparedPublicDrawV1 {
-            original: self.original,
-            admission_carrier: self.carrier,
-            draw,
-            beacon,
-            draw_point,
-            hard: OriginalClock::new(self.carrier.origin.accepted_daa).unwrap().hard(),
-            full_scope,
-            members: members.iter().map(|&member| ((member.bond.transaction, member.bond.index), member)).collect(),
-            ordered_members,
-            per_bond: self.rescue.per_drawn_bond,
-        }
     }
 
     pub(crate) fn decode_row(key: &[u8], bytes: &[u8]) -> Result<Self, ContractError> {

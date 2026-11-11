@@ -411,13 +411,11 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     let bond = PanelBond { transaction: Digest([8; 64]), index: 0 };
     let member = principal(&key);
     let other_bond = PanelBond { transaction: Digest([7; 64]), index: 0 };
-    let draw = row.storage_draw_fixture(
-        draw_point,
-        &[
-            PublicDrawMemberV1 { bond, principal: member, rescue_reservation: Digest([9; 64]) },
-            PublicDrawMemberV1 { bond: other_bond, principal: member, rescue_reservation: Digest([10; 64]) },
-        ],
-    );
+    let members = [
+        PublicDrawMemberV1 { bond, principal: member, rescue_reservation: Digest([9; 64]) },
+        PublicDrawMemberV1 { bond: other_bond, principal: member, rescue_reservation: Digest([10; 64]) },
+    ];
+    let draw = prepared.prepare_draw(Digest([5; 64]), draw_point, &members, Digest([6; 64])).unwrap();
     let draw_extras = PalwTransitionExtrasV1 {
         kernel_route: extras.kernel_route.clone(),
         public_draws: vec![draw.prepare_storage_record(), draw.prepare_storage_record()],
@@ -594,6 +592,72 @@ fn public_admission_row_round_trips_through_delta_and_snapshot() {
     assert_eq!(apply_delta_v2(&drawn, &case_delta, &params).unwrap(), with_case);
     assert_eq!(revert_delta_v2(&with_case, &case_delta, &params).unwrap(), drawn);
     let restored_case = PalwStateCarriageV2::from_state(&with_case).into_state(&params, Some(with_case.state_root())).unwrap();
+    // A first filer can bind only its own protected rank. The second bond
+    // retains its rank even if the same principal owns both distinct bonds.
+    let first_rank = prepared.rooted_drawn_batch_opportunity_v1(&drawn, &draw, bond).unwrap();
+    let other_rank = prepared.rooted_drawn_batch_opportunity_v1(&drawn, &draw, other_bond).unwrap();
+    assert_eq!((first_rank.index_v1(), other_rank.index_v1()), (1, 0));
+    assert_eq!(first_rank.rescue_reservation_v1(), request_context.reservation);
+    assert_eq!(first_rank.capacity_v1(), draw.rescue_capacity(bond).unwrap());
+    assert!(prepared.rooted_drawn_batch_opportunity_v1(&child, &draw, bond).is_err());
+    let foreign_draw = prepared.prepare_draw(Digest([12; 64]), draw_point, &members, Digest([6; 64])).unwrap();
+    assert!(prepared.rooted_drawn_batch_opportunity_v1(&drawn, &foreign_draw, bond).is_err());
+    assert!(prepared.rooted_drawn_batch_case_v1(&drawn, &draw, &wire, &request_context).is_err());
+    let first_case = prepared.rooted_drawn_batch_case_v1(&restored_case, &draw, &wire, &request_context).unwrap();
+    assert_eq!(first_case.case_id_v1(), case);
+    assert_eq!(first_case.opportunity_v1(), first_rank);
+    assert_eq!(prepared.rooted_drawn_batch_opportunity_v1(&restored_case, &draw, other_bond), Ok(other_rank));
+
+    // A distinct accepting block may have the same DAA. Both requests
+    // must fit the fixture's fixed first-request deadline at DAA 103.
+    let other_point = ctx(5, vote_point.daa_score, 5);
+    let other_context = ManifestRequestContext {
+        claimant: Claimant::DrawnBond(other_bond),
+        reservation: other_rank.rescue_reservation_v1(),
+        origin: AcceptedOrigin {
+            accepting_block: NativeHash64(other_point.block.as_bytes()),
+            accepted_daa: other_point.daa_score,
+            accepted_blue_score: other_point.blue_score,
+            carrier_block: NativeHash64(h64(12).as_bytes()),
+            carrier_transaction: NativeHash64(h64(13).as_bytes()),
+            ..origin
+        },
+        ..request_context
+    };
+    let other_request = prepared
+        .drawn_manifest_request(&draw, &commit, other_bond, other_context.inspection_scope, other_context.supply_obligation)
+        .unwrap();
+    let other_signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &other_request.signing_digest().0, MANIFEST_REQUEST_SIGN_CONTEXT, [3; 32])
+            .unwrap();
+    let other_wire = borsh::to_vec(&SignedManifestRequestV1 { request: other_request, key, signature: *other_signature.as_ref() })
+        .unwrap();
+    assert!(prepared.rooted_drawn_batch_case_v1(&restored_case, &draw, &other_wire, &other_context).is_err());
+    assert!(prepared.rooted_drawn_batch_case_v1(&restored_case, &draw, &wire, &other_context).is_err());
+    let other_pending = prepared.prepare_drawn_manifest_storage_record(Digest([2; 64]), &draw, &other_wire, &other_context).unwrap();
+    let (both_cases, other_delta) = apply_palw_transition_v2_with_extras(
+        &with_case,
+        &params,
+        &other_point,
+        &[],
+        None,
+        false,
+        false,
+        false,
+        false,
+        &PalwTransitionExtrasV1 { public_drawn_manifest_cases: vec![other_pending], ..draw_extras_without_votes.clone() },
+    )
+    .unwrap();
+    let other_case = prepared.rooted_drawn_batch_case_v1(&both_cases, &draw, &other_wire, &other_context).unwrap();
+    assert_eq!(other_case.opportunity_v1(), other_rank);
+    assert_ne!(first_case.case_id_v1(), other_case.case_id_v1());
+    assert_ne!(first_case.case_scope_v1(h64(14)).unwrap(), other_case.case_scope_v1(h64(14)).unwrap());
+    assert_eq!(prepared.rooted_drawn_batch_case_v1(&both_cases, &draw, &wire, &request_context), Ok(first_case));
+    let rolled_back = revert_delta_v2(&both_cases, &other_delta, &params).unwrap();
+    assert_eq!(rolled_back, with_case);
+    assert!(prepared.rooted_drawn_batch_case_v1(&rolled_back, &draw, &other_wire, &other_context).is_err());
+    assert_eq!(prepared.rooted_drawn_batch_opportunity_v1(&rolled_back, &draw, other_bond), Ok(other_rank));
+
     assert_eq!(
         fold_at(&restored_case, 6, clock.notice_until() + 1).public_final_replay_prerequisite_v1(&draw, 104, |_| panic!("case open")),
         Ok(PublicFinalReplayPrerequisiteV1::ManifestCasePending)
