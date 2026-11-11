@@ -23,6 +23,40 @@ use misaka_palw_positive_contract::{
 
 type Booking = (NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>);
 
+/// The checked protected reservation result. The original and obligation pin
+/// the quoted rents to their booking and both native allocation owners stay
+/// live for as long as those quotes and the packet graph can be read.
+pub(crate) struct ProtectedBatchBookingV1 {
+    original: OriginalId,
+    obligation: Tfp1PublicOriginalObligationV1,
+    accepted_daa: u64,
+    accepted_blue_score: u64,
+    quotes: NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>,
+    graph: NativeRetainedV1<Vec<CausalServicePacketV1>>,
+}
+
+impl ProtectedBatchBookingV1 {
+    pub(crate) fn original_v1(&self) -> OriginalId {
+        self.original
+    }
+
+    pub(crate) fn obligation_v1(&self) -> Tfp1PublicOriginalObligationV1 {
+        self.obligation
+    }
+
+    pub(crate) fn matches_acceptance_v1(&self, daa: u64, blue_score: u64) -> bool {
+        self.accepted_daa == daa && self.accepted_blue_score == blue_score
+    }
+
+    pub(crate) fn quotes_v1(&self) -> &[BatchAdmissionQuoteV1] {
+        self.quotes.as_slice()
+    }
+
+    pub(crate) fn graph_v1(&self) -> &[CausalServicePacketV1] {
+        self.graph.as_slice()
+    }
+}
+
 /// The signed resource identity includes the FULL promised rescue split,
 /// even though this partial compiler books only the selected-bond graphs.
 /// A full profile must add outsider/defense/Selection/recovery before success.
@@ -250,8 +284,9 @@ impl PublicOriginalAdmissionV1<'_> {
         book: &mut ServiceReservations,
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
-    ) -> Result<Booking, BatchCourtErrorV1> {
-        self.reserve_batch_candidate_v1(
+    ) -> Result<ProtectedBatchBookingV1, BatchCourtErrorV1> {
+        let original = companion.id();
+        let (quotes, graph) = self.reserve_batch_candidate_v1(
             companion,
             reservation,
             projection,
@@ -260,7 +295,15 @@ impl PublicOriginalAdmissionV1<'_> {
             book,
             maximum_packets,
             price,
-        )
+        )?;
+        Ok(ProtectedBatchBookingV1 {
+            original,
+            obligation: terms.obligation_v1(),
+            accepted_daa: reservation.origin.accepted_daa,
+            accepted_blue_score: reservation.origin.accepted_blue_score,
+            quotes,
+            graph,
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -317,8 +360,17 @@ impl PreparedTfp1PublicOriginalV1 {
         book: &mut ServiceReservations,
         maximum_packets: usize,
         price: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
-    ) -> Result<Booking, BatchCourtErrorV1> {
-        self.reserve_batch_candidates_v1(projection, &terms.0, BookingScopeV1::Protected, book, maximum_packets, price)
+    ) -> Result<ProtectedBatchBookingV1, BatchCourtErrorV1> {
+        let (quotes, graph) =
+            self.reserve_batch_candidates_v1(projection, &terms.0, BookingScopeV1::Protected, book, maximum_packets, price)?;
+        Ok(ProtectedBatchBookingV1 {
+            original: self.companion.original,
+            obligation: self.obligation,
+            accepted_daa: self.companion.carrier.origin.accepted_daa,
+            accepted_blue_score: self.companion.carrier.origin.accepted_blue_score,
+            quotes,
+            graph,
+        })
     }
 
     fn reserve_batch_candidates_v1(

@@ -447,7 +447,7 @@ fn check_companion_booking_parity(
         .unwrap();
     let mut protected_unsigned = protected_empty.clone();
     let mut protected_signed = protected_empty.clone();
-    let (unsigned_quotes, unsigned_graph) = protected_admission
+    let unsigned_booking = protected_admission
         .reserve_tfp1_protected_batch_candidate_v1(
             &protected_companion,
             &protected_reservation,
@@ -458,15 +458,70 @@ fn check_companion_booking_parity(
             price,
         )
         .unwrap();
-    let (signed_quotes, signed_graph) = protected_prepared
+    let signed_booking = protected_prepared
         .reserve_protected_batch_candidates_v1(projection, &protected, &mut protected_signed, protected_packet_cap, price)
         .unwrap();
-    assert_eq!(unsigned_quotes, signed_quotes);
-    assert_eq!(unsigned_graph, signed_graph);
+    assert_eq!(unsigned_booking.quotes_v1(), signed_booking.quotes_v1());
+    assert_eq!(unsigned_booking.graph_v1(), signed_booking.graph_v1());
+    for booking in [&unsigned_booking, &signed_booking] {
+        assert_eq!(booking.original_v1(), protected_companion.id());
+        assert_eq!(booking.obligation_v1(), protected_obligation);
+        assert!(booking.matches_acceptance_v1(at.daa_score, at.blue_score));
+        assert!(!booking.matches_acceptance_v1(at.daa_score + 1, at.blue_score));
+        assert!(!booking.matches_acceptance_v1(at.daa_score, at.blue_score + 1));
+    }
     assert_eq!(protected_unsigned, protected_signed);
     assert_ne!(protected_unsigned, protected_empty);
-    assert_eq!(unsigned_quotes.len(), terms.rescue.max_drawn_bonds as usize + 1);
+    assert_eq!(unsigned_booking.quotes_v1().len(), terms.rescue.max_drawn_bonds as usize + 1);
     assert!(protected.reservation_scope_v1(protected_companion.id(), ProtectedBatchRoleV1::Outsider, 0).is_err());
+
+    // Quote the same native graph under a budget that includes the separately
+    // resolved original fee. Payer consent is checked on the actual TFO3 output;
+    // future provider-carrier rent is not charged into that output twice.
+    let funding_budget = AggregateBudget { fee: protected_budget.fee + 7, ..protected_budget };
+    let funding_admission = PublicOriginalAdmissionV1::from_native_tfp1_v1(
+        fp,
+        &source,
+        &binding.class,
+        policy,
+        b"fixture prompt",
+        protected_obligation,
+        &funding_budget,
+    )
+    .unwrap();
+    let funding_companion = OriginalCommit { service_contract: funding_admission.service_contract, ..protected_companion };
+    let funding_reservation = PublicOriginalReservationV1 { budget: &funding_budget, ..protected_reservation };
+    let mut funding_book = protected_empty.clone();
+    let funding_booking = funding_admission
+        .reserve_tfp1_protected_batch_candidate_v1(
+            &funding_companion,
+            &funding_reservation,
+            projection,
+            &protected,
+            &mut funding_book,
+            protected_packet_cap,
+            price,
+        )
+        .unwrap();
+    super::super::funding::tests::exercise_funding_v1(
+        fixture,
+        &source,
+        &funding_admission,
+        &funding_reservation,
+        &funding_companion,
+        &protected,
+        &funding_booking,
+        super::super::funding::Tfp1FundingPolicyV1 {
+            profiles: [Hash64::from_u64_word(940), Hash64::from_u64_word(941), Hash64::from_u64_word(942), Hash64::from_u64_word(943)],
+            other_relative_graph: Hash64::from_u64_word(944),
+            original_fee_sompi: 7,
+            capital_floor_sompi: 11,
+        },
+        projection,
+        &protected_empty,
+        protected_packet_cap,
+        &sign_companion,
+    );
 
     // An exact budget succeeds above; one missing unit or one already spent
     // unit must reject both paths without leaving any rank booked.

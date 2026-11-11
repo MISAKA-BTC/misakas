@@ -615,6 +615,15 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(derive(&b.state, &PalwBlockContextV2 { daa_score: registration_point.daa_score, ..at }, original).is_err());
     assert!(derive(&b.state, &PalwBlockContextV2 { blue_score: registration_point.blue_score, ..at }, original).is_err());
     let branch = derive(&b.state, &at, original).unwrap();
+    crate::palw_positive_contract_v2::tfp1_original::initial_supply::tests::exercise_initial_supply_v1(
+        &b.state,
+        &extras,
+        &at,
+        original,
+        &source,
+        form,
+        raw.len(),
+    );
     crate::palw_court_shared_material_intake_v1::batch::plain_output::projection::exercise_batch_booking_before_allocation_v2(
         &b.state, &extras, &params, &at, &fx,
     );
