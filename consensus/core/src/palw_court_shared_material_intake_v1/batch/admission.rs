@@ -665,9 +665,25 @@ impl BatchAdmissionV1<'_> {
             verifications.insert(demand.verification);
             for (index, &maximum) in demand.range_maximums.iter().enumerate() {
                 let position = BatchResponsePositionV1 { demand_ordinal: demand.ordinal, range_index: index as u32 };
+                let tokenizer_response = windows
+                    .and_then(|windows| windows.authenticated_finish.as_ref())
+                    .is_some_and(|ordered| (ordered.first_ordinal..=ordered.last_ordinal).contains(&demand.ordinal));
                 let mut response = position
                     .reservation_graph_v1(self.claim, self.scope, maximum, first..before, |stage, bytes| {
-                        cost(BatchDeliveryV1::Response { position, stage, maximum_body_bytes: maximum }, bytes)
+                        let bytes = if tokenizer_response {
+                            let part_bytes = match stage {
+                                Stage::Part(offset) => maximum.checked_sub(offset).ok_or("tokenizer part offset")?.min(PART),
+                                _ => 0,
+                            };
+                            super::tokenizer_transport::tokenizer_response_wire_bytes_v2(stage, part_bytes)?.max(bytes)
+                        } else {
+                            bytes
+                        };
+                        let priced = cost(BatchDeliveryV1::Response { position, stage, maximum_body_bytes: maximum }, bytes)?;
+                        if priced.bytes < bytes {
+                            return Err("Batch response price omits its actual envelope".into());
+                        }
+                        Ok(priced)
                     })
                     .map_err(|_| DeliveryCost)?;
                 response[0].predecessors.push(open);

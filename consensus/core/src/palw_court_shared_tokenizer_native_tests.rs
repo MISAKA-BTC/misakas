@@ -625,6 +625,13 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     foreign_original.trace_root = Hash64::from_u64_word(991);
     assert!(derive(&b.state, &at, &foreign_original).is_err());
     branch.check_replayed_input_ids_v2(&fx.execution.prompt).unwrap();
+    use crate::palw_court_shared_material_intake_v1::batch::tokenizer_transport::{
+        TokenizerMaterialKindV2, exercise_tokenizer_transport_fixture_v2,
+    };
+    let input_body = branch.encode_input_material_v2(&fx.execution.prompt).unwrap();
+    let input_received = exercise_tokenizer_transport_fixture_v2(&branch, TokenizerMaterialKindV2::InputIds, &input_body);
+    let input_hash = crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&input_received);
+    assert_eq!(branch.decode_input_material_v2(&input_received, input_hash).unwrap().as_slice(), fx.execution.prompt);
     let mut foreign_prompt = fx.execution.prompt.clone();
     foreign_prompt[0] = (foreign_prompt[0] + 1) % source.vocab_v1();
     assert!(branch.check_replayed_input_ids_v2(&foreign_prompt).is_err());
@@ -643,6 +650,34 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
     assert!(borsh::object_length(&(&eog, &renderings)).unwrap() as u64 <= branch.bounds_v2().opening_material_bytes);
     assert_eq!(branch.bounds_v2().eog_opening_bytes, borsh::object_length(&eog).unwrap() as u64);
     branch.verify_output_openings_v2(&accepted, &source, &ids, &renderings, &eog).unwrap();
+    assert!(
+        branch.encode_opening_material_v2(&accepted, &source, &ids, &renderings, &eog).is_err(),
+        "off-state authenticated IDs are insufficient"
+    );
+    // This row is a codec fixture. It does not exercise paid FullIds intake.
+    let ids_key = Key::CourtSharedIds(claim);
+    accepted.staged_courts.insert(
+        ids_key,
+        Row::CourtSharedIds(Box::new(crate::palw_court_shared_tir_state_v1::SharedTirIdsV1 {
+            version: 1,
+            claim,
+            scope_id: Hash64::from_u64_word(901),
+            rows_root: rows,
+            ids: ids.ids_v1().to_vec(),
+            block: Hash64::from_u64_word(906),
+            accepted_daa: fx.frame.plan_v1().terms.accepted_daa,
+            material_until_daa: fx.frame.plan_v1().terms.material_until_daa,
+        })),
+    );
+    let opening_body = branch.encode_opening_material_v2(&accepted, &source, &ids, &renderings, &eog).unwrap();
+    let opening_received = exercise_tokenizer_transport_fixture_v2(&branch, TokenizerMaterialKindV2::OutputOpenings, &opening_body);
+    let opening_hash = crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&opening_received);
+    let decoded = branch.decode_opening_material_v2(&accepted, &source, &ids, &opening_received, opening_hash).unwrap();
+    assert_eq!(decoded.eog, eog);
+    assert_eq!(decoded.renderings, renderings);
+    let saved_ids = accepted.staged_courts.remove(&ids_key).unwrap();
+    assert!(branch.decode_opening_material_v2(&accepted, &source, &ids, &opening_received, opening_hash).is_err());
+    accepted.staged_courts.insert(ids_key, saved_ids);
     assert!(branch.verify_output_openings_v2(&accepted, &source, &ids, &renderings[..renderings.len() - 1], &eog).is_err());
     let mut other_renderings = renderings.clone();
     other_renderings[0] = table.opening_of((ids.ids_v1()[0] + 1) % source.vocab_v1()).unwrap();

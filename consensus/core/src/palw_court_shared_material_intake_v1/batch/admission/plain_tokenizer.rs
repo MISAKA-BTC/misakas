@@ -23,6 +23,8 @@ impl PlainTokenizerBatchBudgetV2 {
         let work = bounds
             .opening_material_bytes
             .checked_add(bounds.input_ids_body_bytes)
+            // Assembly and the typed decoder independently authenticate bytes.
+            .and_then(|n| n.checked_mul(2))
             .and_then(|n| n.checked_add(bounds.maximum_opening_hashes))
             .and_then(|n| n.checked_add(u64::from(bounds.input_ids_count)))
             .and_then(|n| n.checked_add(u64::from(bounds.rendering_openings)))
@@ -33,7 +35,29 @@ impl PlainTokenizerBatchBudgetV2 {
             .checked_add(bounds.input_ids_body_bytes)
             .and_then(|n| n.checked_add(bounds.opening_material_bytes))
             .ok_or(BatchCourtErrorV1::DeliveryCost)?;
-        let scratch = bounds.input_ids_scratch_bytes.max(bounds.eog_scratch_bytes);
+        // Reserve both decoded operand sets and their authentication scratch
+        // conservatively, including a combined Verify/Terminal consumer.
+        // Borrowed canonical bytes and shared FullIds have separate owners.
+        let input_workspace = u64::from(bounds.input_ids_count)
+            .checked_mul(4)
+            .and_then(|n| n.checked_add(std::mem::size_of::<Vec<u32>>() as u64))
+            .and_then(|n| n.checked_add(bounds.input_ids_scratch_bytes))
+            .ok_or(BatchCourtErrorV1::DeliveryCost)?;
+        let per_rendering = bounds
+            .maximum_rendering_siblings
+            .checked_mul(64)
+            .and_then(|n| n.checked_add(bounds.maximum_rendering_bytes))
+            .and_then(|n| n.checked_add(std::mem::size_of::<crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1>() as u64))
+            .ok_or(BatchCourtErrorV1::DeliveryCost)?;
+        let opening_workspace = per_rendering
+            .checked_mul(u64::from(bounds.rendering_openings))
+            .and_then(|n| n.checked_add(u64::from(bounds.eog_ids).checked_mul(4)?))
+            .and_then(|n| n.checked_add(bounds.eog_siblings.checked_mul(64)?))
+            .and_then(|n| n.checked_add(bounds.eog_scratch_bytes))
+            .and_then(|n| n.checked_add(std::mem::size_of::<crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1>() as u64))
+            .and_then(|n| n.checked_add(std::mem::size_of::<Vec<crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1>>() as u64))
+            .ok_or(BatchCourtErrorV1::DeliveryCost)?;
+        let scratch = input_workspace.checked_add(opening_workspace).ok_or(BatchCourtErrorV1::DeliveryCost)?;
         if self.verification_daa == 0
             || self.verification.controls != 1
             || self.verification.work < work
@@ -169,6 +193,10 @@ pub(crate) fn check_compiled_tokenizer_fixture_v2(
         assert!(book.assigned_daa(&full_ids_finish).unwrap() < book.assigned_daa(finish).unwrap());
         assert_eq!(semantic.packet.cost.work, budget.verification.work + 1);
         assert_eq!(semantic.packet.cost.io, budget.verification.io + 1);
+        assert_eq!(
+            semantic.packet.cost.bytes,
+            super::super::tokenizer_transport::tokenizer_response_wire_bytes_v2(Stage::Finish, 0).unwrap()
+        );
     }
     for predecessor in &node.predecessors {
         assert!(book.assigned_daa(predecessor).unwrap() < book.assigned_daa(&control).unwrap());
@@ -193,6 +221,15 @@ pub(crate) fn check_compiled_tokenizer_fixture_v2(
     wrong_output.full_ids_range[0] += 1;
     assert!(compile(&wrong_output, budget, costs).is_err());
     assert!(compile(&output, PlainTokenizerBatchBudgetV2 { workspace_bytes: 0, ..budget }, costs).is_err());
+    assert!(
+        compile(
+            &output,
+            PlainTokenizerBatchBudgetV2 { workspace_bytes: bounds.input_ids_scratch_bytes.max(bounds.eog_scratch_bytes), ..budget },
+            costs
+        )
+        .is_err(),
+        "hash scratch alone does not cover decoded operands"
+    );
     assert!(
         compile(
             &output,

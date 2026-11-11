@@ -2,6 +2,8 @@
 //! raw-to-table parser. This branch still needs the exact claim's input and
 //! output operands, their authentication and booked case execution.
 
+pub(crate) mod material;
+
 use super::plain_output::PlainBatchOutputV2;
 use crate::{
     Hash64,
@@ -147,6 +149,14 @@ impl PlainBatchTokenizerV2 {
             vocab,
             bounds,
         })
+    }
+
+    pub(crate) fn claim_id_v2(&self) -> Hash64 {
+        self.claim
+    }
+
+    pub(crate) fn source_id_v2(&self) -> Hash64 {
+        self.source
     }
 
     pub(crate) fn registration_id_v2(&self) -> Hash64 {

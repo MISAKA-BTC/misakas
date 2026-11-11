@@ -20,6 +20,7 @@ pub(crate) mod native_ranges;
 pub(crate) mod numerical_verification;
 pub(crate) mod plain_output;
 pub(crate) mod plain_tokenizer;
+pub(crate) mod tokenizer_transport;
 pub(crate) mod selection;
 
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
