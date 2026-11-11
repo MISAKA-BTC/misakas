@@ -307,6 +307,8 @@ courtの実供給率、1 DAA＝1秒を意味しない。仕事量→credit量の
 
 ## 2026-11-09 公開資料・一人の正直なPanelを前提とする新profile
 
+**2026-11-12 提案中:** ユーザーの「未確定なので具体案を作成する」という依頼に対する[公開T12初期設定候補](../design/palw/integration/public-t12-profile-candidate-2026-11-12.md)を追加した。Panel・工程期限・探索/資料上限・比較用価格・容量の測定方法を具体化したDraftであり、以下の未確定値を採択済みへ変更するものではない。runtime/preset/activationの変更も行っていない。
+
 採択根拠: ユーザーが、独立Panelに少なくとも一人の正直な参加者がいること、その人がモデルを事前保有しているとは限らないこと、promptと検証に必要な資料を公開供給する方針を明示し、この方針に基づくdocs改訂を指示した。[RFC-0050](../rfc/0050-public-materials-and-one-honest-panel.md)／[ADR-0218](../adr/0218-public-materials-and-one-honest-panel.md)。状態は **ADOPTED_DESIGN_NOT_ACTIVATED**。以下はlogical policyの新規定義であり、runtimeの定数名・wire ID・fence・有効化高さの割当ではない。
 
 ### 旧値と新しい意味の分離
