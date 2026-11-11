@@ -2527,8 +2527,7 @@ impl VirtualStateProcessor {
                     .filter(|rules| extras.batch_court_active_v1 && extras.tir_public_network_domain_v1 == Some(rules.network_domain))
             },
         );
-        doc["acceptedParentRoot"] =
-            serde_json::json!(prepared.authenticated_root_v1().unwrap_or_else(|| state.state_root()).to_string());
+        doc["acceptedParentRoot"] = prepared.authenticated_root_v1().unwrap_or_else(|| state.state_root()).to_string().into();
         let current = self.virtual_stores.read();
         let after = current.state.get().map_err(|e| e.to_string())?;
         if !Arc::ptr_eq(&captured, &after) {
