@@ -1,0 +1,41 @@
+
+running 17 tests
+test palw_batch_court_v1::plain_output_transport::tests::bct2_physical_meter_counts_duplicates_and_malformed_before_adjudication ... ok
+test palw_batch_court_v1::plain_output_local_work::tests::bct2_local_intake_charges_malformed_and_duplicates_and_refills_without_clock_reversal ... ok
+test palw_court_shared_material_intake_v1::storage_rent::tests::bct2_fixed_receipt_rent_matches_native_handoff_on_refusal_and_retry ... ok
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... 
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... 
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal ... test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_inverse_prerequisite_reserves_legacy_court_refund_and_removal_together ... ok
+[fix-a B-05w] void-closed sibling archive at material_until+1: present false, challenger exit-held false
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::audit_fixa_b05_a_void_closed_sibling_session_releases_the_challenger_after_material_until ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_complete_malformed_side_is_settled_once ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_fulfilled_close_keeps_raw_material_without_pending_charge ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5997 filtered out; finished in 0.11s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_terminal_owns_nested_court_archive_rollback ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_native_verdict_preserves_other_side ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_service_court_sweeps_skip_held_without_starving_cleanup ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_uncaptured_removal_retains_nominal_court_stake ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::archive_d3_the_per_block_pruner_waits_for_the_material_horizon_and_reorg_restores ... ok
+test palw_court_shared_material_intake_v1::batch::selection::tests::bct2_plain_selection_source_geometry_matches_complete_legacy_dependencies ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_streamed_fraud_keeps_complete_evidence ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5997 filtered out; finished in 0.35s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_holds_keeps_original_and_refuses_terminal ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5997 filtered out; finished in 0.41s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::bct2_paid_plain_output_verify_receipt_and_fault_terminal ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_archive_v5_replays_signed_bytes_without_state_or_money_changes ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 5981 filtered out; finished in 2.91s
+

@@ -280,3 +280,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の aggregate処理: `967a440b1` で[producer別live claim索引・既存vesting payee索引](../../../evidence/palw/batch-plain-output-rollback-holds-2026-11-11/README.md#aggregate-liability-lookup)を使うよう変更し、対象・順序・journal/revertを維持した回帰11件が成功した。旧source文字列検査のdispatcher誤検出も実handlerへの範囲限定で修正。全prefix cloneの除去と公開受付は未完。
 
 2026-11-11 の [返金journal・Selection owner修正](../../../evidence/palw/batch-plain-output-rollback-holds-2026-11-11/README.md#refund-journal-and-ordinary-node-selection-ownership): `8b49e6192` / `64ce2db52` の合同13件が成功。claim/courtの返金をprimary/index変更より先に記録し、追加journal容量不足で途中のcourt削除を残さない。Selection descriptorは通常起動でも実予約を保持する。全terminal inverseと公開Selection/DA接続は未完。
+
+2026-11-11 の [単独archive inverse](../../../evidence/palw/batch-plain-output-rollback-holds-2026-11-11/README.md#standalone-archive-journal-inverse): `799429ab3` で変更したjournal旧行だけを用いてservice-bound CourtEnd archiveを復元する。署名付きprogress書き込み、3回の再試行、途中の資源不足、旧期限・索引・予約量の一致を含む17件が成功。BCT2全体のprefix copyと公開受付の未達は継続する。

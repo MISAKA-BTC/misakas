@@ -1,0 +1,30 @@
+{
+  "source_commit": "799429ab323af196e7b097ad7c5303a207c6218c",
+  "source_files_sha256": {
+    "consensus/core/src/palw_court_end_archive_v1.rs": "c47dc462040771cf83f20f831c2189ab910045efcc212458cbd754796c07704d",
+    "consensus/core/src/palw_state_v2.rs": "381e7f957afd0adb5e9b6425d2fa73ccbd680312f1240156f70fc7eb194a351e",
+    "consensus/core/src/palw_state_v2/court_archive_inverse_v1.rs": "bbbb2de28c84b21830f64778523be09096be187d6f4c16ed15e360bf7f8ab422",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "63f86f609d57e1f10b2ceaeacf5df7ae7e6ab1aa2bb8cf5c4eefc6d6e1582bc7",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "33c177d6ff2486cc981071299ab6550a50c4d71b46cfbdb82ce76a495bae8d40"
+  },
+  "binary_sha256": "c635558d47f89ed7cfc83fe59ee38049576524b72edaded1de49a979ec086cd9",
+  "tests_passed": 17,
+  "logs_sha256": {
+    "archive-inverse-build.log": "6cb1c8a91d9ef8ae5cc82cb8dda1a2b742f3f072e2a180415ca12d597b3f291f",
+    "archive-inverse-tests.log": "90741f206fcf036617ff9a1e82ccfd6c4f8127f863a77939c4b51b03d5eb7a72",
+    "archive-inverse-docs-check.log": "96352f4eed94dbd42ae0d364acaad8b42d0055c79cd58ca2401ae75b4b2d1351",
+    "archive-inverse-rfc-check.log": "aa84cb283bb0bb3c44a2932d2ee647b292c1c211b90a0368ff5348c7a19640fa",
+    "archive-inverse-adr-check.log": "050aec03c0171ec18ad611ea8f3796fcbfee2b486e338539c8859cd89c50ebcd"
+  },
+  "standalone_archive_scoped_inverse": true,
+  "complete_bct2_terminal_scoped_inverse": false,
+  "public_activation_or_admission": false,
+  "documentation_checks": {
+    "existing_issues_unchanged": true,
+    "new_issue_occurrences": 930,
+    "missing_file_occurrences": 971,
+    "missing_heading_occurrences": 2,
+    "rfc_historical_failures": 7,
+    "adr_historical_failures": 89
+  }
+}

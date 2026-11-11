@@ -29,3 +29,9 @@ original/class/UTXO/予約graphは局所fixture。公開T12のquote・受付・F
 Selection adapterはoptional global flagに依存しないpending leaseを構築前に取り、保持する。依存先Vecの実capacityと予約capacityの一致、既存graphと同じhard deadline overflow拒否も追加した。既存の7ケースでconstructorの非空ownerとdependency ownerの正確なbytesを照合した。担当agentの独立レビューで、source/role/相対・絶対IDの一致と、dutyの一致が予約bookの一致を意味しない境界を再確認した。
 
 archiveだけの狭いinverseとBCT2全体のinverseは引き続き未完。Selectionの物理資料・program fill・証拠再検査の費用、公開予約・搬送はこのdescriptor ownerに含まれない。全prefix cloneの除去・公開quote成功・activationを主張しない。
+
+## Standalone archive journal inverse
+
+後続の `799429ab3` で単独のservice-bound CourtEnd archiveのinverseを実装した。[source・binary・ログのdigestと17件の回帰結果](archive-inverse-summary.json)。変更したjournal entryの旧payloadを戻し、court・claimの期限、逆索引、観測状態、実行scratchを復元する。archive/progress以外の書き込みやGC変更は想定外として資源エラーにする。
+
+署名済みnative archive fixtureでprogressを実際に書き、3回の復元を繰り返して予約量と旧期限が変化しないことを確認した。成功時の予約量より1 byte低い上限で途中失敗させ、元の状態へ戻ることも検査した。既存のarchive/reorg、BCT2 fault/Holdsを含め17件が成功した。BCT2 Terminal全体のclaim・bond・vesting等の処理には上限付きprefix copyが残る。公開quote・受付・Final・activationの証跡ではない。
