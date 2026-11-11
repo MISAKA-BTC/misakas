@@ -5,7 +5,8 @@ use std::{path::Path, sync::Arc};
 
 use super::{
     LegacyTfp1ReplayContextV1, PanelSourceErrorR1, PublicTraceAcquisitionV1, check_public_replay_trace_budget_v1,
-    checked_public_trace_entry_v1, legacy_tfp1_replay::check_legacy_tfp1_pairing_v1,
+    checked_public_trace_entry_v1,
+    legacy_tfp1_replay::{check_legacy_tfp1_pairing_v1, check_legacy_tfp1_trace_value_bytes_v1},
 };
 use crate::{
     evidence::fs::write_provider_chunk,
@@ -160,6 +161,7 @@ impl<'a> LegacyTfp1TracePublisherV1<'a> {
             step_merkle_root: header.step_merkle_root,
         };
         let trace = checked_public_trace_entry_v1(&signed.original, manifest)?;
+        let remaining_values = check_legacy_tfp1_trace_value_bytes_v1(source, trace)?;
         trace_index.check(&signed.original, limits.max_leaves).map_err(|_| PanelSourceErrorR1::Binding)?;
         let maximum_retained_trace_bytes = check_public_replay_trace_budget_v1(
             trace_index.step_leaf_count,
@@ -198,7 +200,7 @@ impl<'a> LegacyTfp1TracePublisherV1<'a> {
             limits,
             trace_index,
             value_cap,
-            remaining_values: trace.total_bytes - PublicOriginalTraceIndexV1::WIRE_BYTES as u64,
+            remaining_values,
             retained_bytes: 0,
             polls: 0,
             next: 0,

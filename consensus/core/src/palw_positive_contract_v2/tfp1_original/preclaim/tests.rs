@@ -80,6 +80,23 @@ pub(crate) fn exercise_preclaim_booking_v1(
     ));
     assert_eq!(unchanged, empty_book);
 
+    let trace_bytes = projection.public_trace_payload_bytes_v1().unwrap();
+    assert!(trace_bytes > crate::palw_tir_court_v1::PublicOriginalTraceIndexV1::WIRE_BYTES as u64);
+    for capacity in [
+        RemainingCapacity { transmitted_bytes: trace_bytes - 1, ..allowance },
+        RemainingCapacity { retained_bytes: trace_bytes - 1, ..allowance },
+    ] {
+        let understated =
+            DrawnBatchPreclaimTermsV1::new_v1(projected, ProtectedRescueDemand { per_drawn_bond: capacity, ..rescue }).unwrap();
+        assert!(matches!(
+            reserve_drawn_v1(original, projection, &understated, schedule, &mut unchanged, maximum_packets, |_, _| {
+                panic!("an allowance smaller than native Trace reached graph compilation")
+            }),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(unchanged, empty_book);
+    }
+
     let underfunded = DrawnBatchPreclaimTermsV1::new_v1(
         projected,
         ProtectedRescueDemand { per_drawn_bond: RemainingCapacity { additional_work: 1, ..allowance }, ..rescue },

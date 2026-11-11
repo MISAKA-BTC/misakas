@@ -90,6 +90,16 @@ impl PlainBatchProspectiveOriginalTermsV2 {
 
 #[allow(dead_code)]
 impl PlainBatchOriginalProjectionV2 {
+    /// Claim-specific Trace payload, excluding transport/opening overhead.
+    /// This is a lower bound on a protected replay opportunity, not its full
+    /// service quote. It never includes HF model weights.
+    pub(crate) fn public_trace_payload_bytes_v1(&self) -> Result<u64, BatchCourtErrorV1> {
+        self.source
+            .trace_value_bytes_v1()
+            .and_then(|bytes| bytes.checked_add(crate::palw_tir_court_v1::PublicOriginalTraceIndexV1::WIRE_BYTES as u64))
+            .ok_or(BatchCourtErrorV1::CaseGraph)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn derive_v2(
         parent: &PalwChainStateV2,

@@ -659,6 +659,65 @@ impl PalwTirStepSpaceV1 {
         lanes
     }
 
+    /// Raw committed lanes in `[0, min(a, positions))`, independent of tile
+    /// padding, leaf framing and Merkle openings. This sums geometry only;
+    /// no execution values are downloaded or recomputed. Work is bounded by
+    /// the already validated program, not by its number of positions/leaves.
+    pub fn running_lane_total_v1(&self, job: &PalwTirJobShapeV1, a: u32) -> u128 {
+        let a = a.min(job.positions);
+        let post = self.occurrences.len() - 1;
+        let mut mult = [0u128; misaka_palw_tir::program::MAX_BLOCKS];
+        for (i, (block, _)) in self.occurrences.iter().enumerate() {
+            if i != post {
+                mult[*block as usize] += 1;
+            }
+        }
+        let over = |commit: &CommitNodeV1, window: Option<u32>, lo: u32| {
+            if a <= lo {
+                return 0;
+            }
+            let count = u128::from(a - lo);
+            let elements = u128::from(commit.fixed_elements);
+            match (commit.has_h, window) {
+                (true, Some(window)) => {
+                    // Sum p+1 until the window fills, then its fixed width.
+                    // Mirror CommitNodeV1::elements' u64 saturation too.
+                    // u32 endpoints make both triangular terms fit in u128.
+                    if commit.fixed_elements == 0 {
+                        return 0;
+                    }
+                    let saturation = u32::try_from(u64::MAX / commit.fixed_elements).unwrap_or(u32::MAX);
+                    let cap = window.min(saturation);
+                    let hi = u128::from(a.min(cap));
+                    let low = u128::from(lo.min(cap));
+                    let rising = hi * (hi + 1) / 2 - low * (low + 1) / 2;
+                    let flat = u128::from(a - a.min(lo.max(cap)));
+                    rising.saturating_mul(elements).saturating_add(flat.saturating_mul(u128::from(commit.elements(u64::from(window)))))
+                }
+                _ => elements.saturating_mul(count),
+            }
+        };
+        let mut total = 0u128;
+        for (index, block) in self.blocks.iter().enumerate() {
+            for commit in &block.commits {
+                total = total.saturating_add(mult[index].saturating_mul(over(commit, block.window, 0)));
+            }
+        }
+        let post = &self.blocks[self.occurrences[post].0 as usize];
+        for commit in &post.commits {
+            total = total.saturating_add(over(commit, post.window, job.prefill.saturating_sub(1)));
+        }
+        let checkpoints = u128::from(a / self.layout.checkpoint_interval);
+        for state in &self.fixed {
+            total = total.saturating_add(checkpoints.saturating_mul(u128::from(state.elements)));
+        }
+        let history_rows = u128::from(a / self.layout.h_tile) * u128::from(self.layout.h_tile);
+        for state in &self.hist {
+            total = total.saturating_add(history_rows.saturating_mul(u128::from(state.elements)));
+        }
+        total
+    }
+
     /// `Σ_{p ∈ [lo, hi)} ⌈f · min(p + 1, W) / t⌉` for one committed node, in closed form.
     fn node_leaves_over(c: &CommitNodeV1, window: Option<u32>, lo: u64, hi: u64) -> u128 {
         if hi <= lo {
@@ -1189,6 +1248,57 @@ pub fn verify_tir_binding_v1(
 #[cfg(test)]
 mod native_step_space_inventory_tests_v1 {
     use super::*;
+
+    fn check_lane_totals(space: &PalwTirStepSpaceV1, context: &PalwJobContextV2, preimages: &[PalwStepTileLeafV1]) {
+        let job = space.job_shape(context).unwrap();
+        let mut direct = 0;
+        for a in 0..=job.positions {
+            assert_eq!(space.running_lane_total_v1(&job, a), direct, "prefix ending at {a}");
+            direct += space.lane_count_at_position_v1(&job, a);
+        }
+        let actual = preimages.iter().map(|leaf| leaf.values_le.len() as u128).sum::<u128>();
+        assert_eq!(space.running_lane_total_v1(&job, job.positions) * 4, actual);
+        assert_eq!(space.running_lane_total_v1(&job, u32::MAX) * 4, actual, "a prefix cannot extend past the job");
+    }
+
+    #[test]
+    fn closed_form_trace_lanes_match_raw_values_and_position_geometry() {
+        let tiny = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let space = PalwTirStepSpaceV1::new(&tiny.binding.class).unwrap();
+        check_lane_totals(&space, &tiny.binding.job_context, &tiny.preimages);
+        for committed in [false, true] {
+            let fixture = crate::palw_tir_public_claim_v1::palw_tir_public_fixed_history_frame_fixture_v1(
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                committed,
+            );
+            let execution = &fixture.execution;
+            let space = PalwTirStepSpaceV1::new(&execution.binding.class).unwrap();
+            check_lane_totals(&space, &execution.binding.job_context, &execution.preimages);
+        }
+    }
+
+    #[test]
+    fn closed_form_lane_sum_keeps_native_element_saturation() {
+        let tiny = crate::palw_tir_court_v1::test_support::tiny_execution(None);
+        let mut space = PalwTirStepSpaceV1::new(&tiny.binding.class).unwrap();
+        // Arithmetic boundary fixture only; these mutated private dimensions
+        // are not a new executable class or accepted model registration.
+        let job = PalwTirJobShapeV1 { prefill: 4, positions: 8 };
+        for elements in [0, 1, u64::MAX / 2, u64::MAX] {
+            for block in &mut space.blocks {
+                block.window = Some(3);
+                for commit in &mut block.commits {
+                    commit.has_h = true;
+                    commit.fixed_elements = elements;
+                }
+            }
+            for end in 0..=job.positions {
+                let direct = (0..end).map(|a| space.lane_count_at_position_v1(&job, a)).sum::<u128>();
+                assert_eq!(space.running_lane_total_v1(&job, end), direct);
+            }
+        }
+    }
+
     #[test]
     fn rfc40_source_export_generated_boundary_uses_actual_committed_positions() {
         let (name, program, params, tokens) =
@@ -1199,6 +1309,7 @@ mod native_step_space_inventory_tests_v1 {
         let space = PalwTirStepSpaceV1::new(&execution.binding.class).unwrap();
         let job = space.job_shape(context).unwrap();
         assert_eq!((job.prefill, job.positions), (4, 6));
+        check_lane_totals(&space, context, &execution.preimages);
         let k = job.positions;
         assert!(space.prefix_state_leaf_count_v1(context, k).is_none());
         assert!(space.prefix_state_leaf_v1(context, k, 0).is_none());

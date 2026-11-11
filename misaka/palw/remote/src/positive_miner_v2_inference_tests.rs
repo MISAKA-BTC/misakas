@@ -1315,16 +1315,25 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
             self.0.get(start..end).map(<[u8]>::to_vec).ok_or_else(|| "capture range out of bounds".into())
         }
     }
+    struct NoCaptureIo;
+    impl PalwOriginalCaptureReaderV1 for NoCaptureIo {
+        fn len_v1(&self) -> u64 {
+            panic!("wrong Trace declaration reached capture sizing")
+        }
+        fn read_v1(&self, _offset: u64, _length: u32) -> Result<Vec<u8>, String> {
+            panic!("wrong Trace declaration reached capture read")
+        }
+    }
     struct NoProviderIo;
     impl MaterialProvider for NoProviderIo {
         fn material_id(&self) -> String {
             "no fixture provider access".into()
         }
         fn get(&self, _path: &str, _max: usize) -> Result<Option<Vec<u8>>, ProviderError> {
-            panic!("unresolved HF context reached provider read")
+            panic!("invalid replay context reached provider read")
         }
         fn put(&self, _path: &str, _bytes: &[u8]) -> Result<(), ProviderError> {
-            panic!("unresolved HF context reached provider write")
+            panic!("invalid replay context reached provider write")
         }
     }
     #[derive(Default)]
@@ -1525,6 +1534,7 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
     let tiles: Vec<_> = (0..trace.step_leaf_count).map(|index| backend.step_opening(&run.outcome.material, index).unwrap()).collect();
     let trace_bytes =
         PublicOriginalTraceIndexV1::WIRE_BYTES as u64 + tiles.iter().map(|(_, tile)| tile.values_le.len() as u64).sum::<u64>();
+    assert_eq!(source.trace_value_bytes_v1(), Some(trace_bytes - PublicOriginalTraceIndexV1::WIRE_BYTES as u64));
     let program = TirMinerJobV2 { class: &class, context: ctx, prompt: &ids, prompt_form: form };
     let entry = |scope: MaterialScope, subject: Digest, total_bytes: u64| {
         let r = scope_rules(scope);
@@ -1585,6 +1595,63 @@ fn ordinary_tfp1_public_replay_and_trace_publisher_use_the_same_native_original(
         max_retained_trace_bytes: 1 << 20,
         max_leaves: maximum_leaves,
     };
+    for declared in [trace_bytes - 4, trace_bytes + 4] {
+        // A valid signature and canonical manifest can still declare a wrong
+        // Trace extent. Neither consumer may begin local I/O in this case.
+        let mut wrong_manifest = hf_manifest.clone();
+        wrong_manifest.entries[MaterialScope::Trace as usize].total_bytes = declared;
+        let mut wrong_original = signed.original.clone();
+        let encoded = wrong_original.bind_manifest(&wrong_manifest, &rules, 1 << 20, ManifestV1::WIRE_BYTES).unwrap();
+        let wrong_manifest = wrong_original
+            .authenticate_manifest(&encoded, ManifestV1::WIRE_BYTES)
+            .unwrap()
+            .decode(&wrong_original, &rules, 1 << 20)
+            .unwrap();
+        let signature = *libcrux_ml_dsa::ml_dsa_87::sign(&pair.signing_key, &wrong_original.id().0.0, ORIGINAL_SIGN_CONTEXT, [0; 32])
+            .unwrap()
+            .as_ref();
+        let wrong_signed = SignedPublicOriginalV1 { original: wrong_original, key, signature };
+        let wrong_context = LegacyTfp1ReplayContextV1 {
+            original: wrong_signed.original.id(),
+            companion_carrier: SignedPublicOriginalV1::carrier_digest(
+                &wrong_signed.original,
+                &wrong_signed.key,
+                &wrong_signed.signature,
+            ),
+            ..context
+        };
+        assert!(matches!(
+            LegacyTfp1TracePublisherV1::open_v1(
+                wrong_context,
+                &wrong_signed,
+                &wrong_manifest,
+                &backend,
+                Arc::new(NoCaptureIo),
+                &directory,
+                &provider.root,
+                41_000,
+                limits,
+                &mut admission,
+            ),
+            Err(PanelSourceErrorR1::Binding)
+        ));
+        assert_eq!(
+            check_legacy_tfp1_public_replay_v1::<()>(
+                &NoProviderIo,
+                wrong_context,
+                &wrong_signed,
+                &wrong_manifest,
+                &backend,
+                &directory,
+                LegacyTfp1ReplayLimitsV1 {
+                    max_input_output_bytes: 1 << 20,
+                    trace: PublicTraceAcquisitionV1 { max_tiles: maximum_leaves, max_wire_bytes: 1 << 20 },
+                },
+                |_| panic!("wrong Trace declaration reached replay reservation"),
+            ),
+            Err(PanelSourceErrorR1::Binding)
+        );
+    }
     let capture = Arc::new(Capture(run.outcome.material.clone()));
     for foreign in [
         LegacyTfp1ReplayContextV1 { source_id: h(99), ..context },

@@ -102,6 +102,7 @@ pub fn check_legacy_tfp1_public_replay_v1<ReplayLease>(
         return Err(PanelSourceErrorR1::Budget);
     }
     let trace = checked_public_trace_entry_v1(original, manifest)?;
+    check_legacy_tfp1_trace_value_bytes_v1(source, trace)?;
     check_public_replay_trace_budget_v1(source.leaf_count_v1(), trace.total_bytes, limits.trace)?;
 
     if let Some(material) = context.hf_artifact {
@@ -214,6 +215,18 @@ pub fn check_legacy_tfp1_public_replay_v1<ReplayLease>(
         }
         hashes.get((index - first) as usize).copied().ok_or(PanelSourceErrorR1::Binding)
     })
+}
+
+pub(super) fn check_legacy_tfp1_trace_value_bytes_v1(
+    source: &PalwTirPublicSourceV1,
+    trace: &ManifestEntryV1,
+) -> Result<u64, PanelSourceErrorR1> {
+    let values = source.trace_value_bytes_v1().ok_or(PanelSourceErrorR1::Budget)?;
+    let total = values.checked_add(PublicOriginalTraceIndexV1::WIRE_BYTES as u64).ok_or(PanelSourceErrorR1::Budget)?;
+    if trace.total_bytes != total {
+        return Err(PanelSourceErrorR1::Binding);
+    }
+    Ok(values)
 }
 
 fn material_rules_v1(manifest: &CheckedManifestV1, scope: MaterialScope) -> ManifestScopeRules {

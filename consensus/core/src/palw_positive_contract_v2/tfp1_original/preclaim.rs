@@ -178,6 +178,13 @@ fn reserve_drawn_v1(
     if count == 0 || count > maximum_packets {
         return Err(CaseGraph);
     }
+    // Both unsigned quote and signed intake use this native Source geometry.
+    // A caller's small manifest cap cannot understate the actual claim Trace.
+    // Other material, openings, fee and all-branch costs remain additional.
+    let trace_bytes = projection.public_trace_payload_bytes_v1()?;
+    if terms.rescue.per_drawn_bond.transmitted_bytes < trace_bytes || terms.rescue.per_drawn_bond.retained_bytes < trace_bytes {
+        return Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget));
+    }
     let scope = |rank| drawn_scope_v1(terms.obligation, original, rank as u64, count as u64).map_err(|_| CaseGraph);
     // Compile only one graph until the entire set's structural cap is known.
     let first_scope = scope(0)?;

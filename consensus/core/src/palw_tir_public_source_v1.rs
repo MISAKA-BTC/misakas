@@ -221,6 +221,7 @@ pub struct PalwTirPublicSourceV1 {
     window_value_bytes: Vec<u64>,
     /// G14 audit §11 (b): the most full step-leaf runs the cone of any leaf of this job needs (`cone_runs_bound_v1`).
     cone_runs: u64,
+    trace_value_bytes: Option<u64>,
 }
 fn hash(domain: &[u8], bytes: &[u8]) -> Hash64 {
     Hash64::from_bytes(blake2b_simd::Params::new().hash_length(64).key(domain).hash(bytes).as_bytes().try_into().expect("64"))
@@ -366,6 +367,8 @@ impl PalwTirPublicSourceV1 {
             .ok_or("TIR native leaf geometry exceeds original format")?;
         let source_id = public_source_header_id_v1(header)?;
         let job = verified.space.job_shape(&header.job_context).map_err(|e| e.to_string())?;
+        let trace_value_bytes =
+            verified.space.running_lane_total_v1(&job, job.positions).checked_mul(4).and_then(|bytes| u64::try_from(bytes).ok());
         let window_value_bytes = (1..=RUN as u64)
             .map(|count| {
                 let lanes = verified.space.maximum_window_lanes_v1(&job, count);
@@ -385,6 +388,7 @@ impl PalwTirPublicSourceV1 {
             source_id,
             window_value_bytes,
             cone_runs,
+            trace_value_bytes,
         })
     }
     pub fn source_id_v1(&self) -> Hash64 {
@@ -407,6 +411,11 @@ impl PalwTirPublicSourceV1 {
     }
     pub fn leaf_count_v1(&self) -> u64 {
         self.header.step_leaf_count
+    }
+    /// Exact raw four-byte values of the complete step trace, before index
+    /// and opening overhead. `None` means the total does not fit in `u64`.
+    pub fn trace_value_bytes_v1(&self) -> Option<u64> {
+        self.trace_value_bytes
     }
     pub fn decode_count_v1(&self) -> u32 {
         self.header.job_context.exact_decode_tokens
@@ -1530,6 +1539,15 @@ mod native_source_owner_tests_v1 {
             assert_eq!(retained.window_value_bytes, old.window_value_bytes);
             assert_eq!(retained.maximum_leaf_bytes, old.maximum_leaf_bytes);
             assert_eq!(retained.cone_runs, old.cone_runs);
+            let header = f.frame.header_v1();
+            let binding =
+                header.resolve_registered_layout_v1(&f.record, &f.layout, original.execution_root, f.rules.maximum_leaves).unwrap();
+            let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, f.rules.maximum_leaves).unwrap();
+            let raw_bytes = (0..header.step_leaf_count)
+                .map(|index| u64::from(verified.space.leaf_at(&header.job_context, index).unwrap().value_count) * 4)
+                .sum::<u64>();
+            assert_eq!(old.trace_value_bytes_v1(), Some(raw_bytes));
+            assert_eq!(retained.trace_value_bytes_v1(), Some(raw_bytes));
             assert!(PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, f.frame.header_v1()).unwrap() > 0);
             let mut wrong = f.record.clone();
             wrong.program_bytes = wrong.program_bytes.checked_add(1).unwrap();
