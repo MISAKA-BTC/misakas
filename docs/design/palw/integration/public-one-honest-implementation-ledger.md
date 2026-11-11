@@ -342,3 +342,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 2026-11-11 の[TFO3入口と実受理順](../../../evidence/palw/tfp1-entry-order-boundary-2026-11-11/README.md)は **実装中・Rust検証未実行**。新companionを旧frame/source見積もり前に型付き拒否し、同型だけを全prefix再演のordinary除外候補へ追加。Node literal sortは完全AcceptanceDataにないcarrierやoverflowを仮の末尾位置へ置かずlocal faultとする。正常TFO3 intake、候補filterの全prefix再演への置換、公開Final・当選時権利消費・blockは未完。
 
 2026-11-11 の[TFO3受付三行の一括保存](../../../evidence/palw/tfp1-atomic-original-records-2026-11-11/README.md)は **実装中・Rust検証未実行**。198/204/206を同一チェックポイントで保存し、実prefix・事前認証owner・LastPoint更新前の照合を接続。順/逆journalの三行整合と履歴cutを検査し、route headerが巻戻しで消える場合も検査を維持する。root計算のworkspaceも予約する。全stateコピーの局所undo化、完全profile planner、claim/frame/book/escrowとの本番一括受付、Node全候補filter・PMR以後は未完。公開同一claimの受付・Final・当選時権利消費・対応blockは未証明。
+
+2026-11-11 の[TFO3三行の局所undo](../../../evidence/palw/tfp1-local-insertion-undo-2026-11-11/README.md)は **実装中・Rust検証未実行**。三行writer内の全stateコピーを、固定lookupと最大三行journalの照合・逆順削除へ置換した。派生indexの追加時はinverse拡張を要求し、失敗後の保有buffer予約は維持する。途中容量不足と状態増加時のwriter増分を調べる回帰コードを追加。外側claim/frame/book/escrow checkpoint、完全予約policyと本番受付、公開Final・当選権利消費・blockは未完。

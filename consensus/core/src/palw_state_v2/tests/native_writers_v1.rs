@@ -944,6 +944,8 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     let mut missing_escrow = TransitionBuilder::new(&state, params, false, false, false, false, &extras);
     pin_prefix(&mut missing_escrow);
     missing_escrow.state.funded_escrows.values_mut().find(|escrow| escrow.claim == row.claim_v1()).unwrap().liability_open = false;
+    let first_row_checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
+    missing_escrow.native_reservation = NativeTransitionReservationV1::for_checker_v1(&first_row_checker);
     let failed_state = missing_escrow.state.clone();
     assert!(matches!(
         missing_escrow.install_public_tfp1_original_v1(&point, &prepared),
@@ -951,20 +953,59 @@ pub(crate) fn exercise_tfp1_link_writer_v1(
     ));
     assert!(missing_escrow.entries.is_empty(), "late link failure must rewind the earlier admission journal");
     assert_eq!(missing_escrow.state, failed_state);
+    let first_row_requests = first_row_checker.outstanding().0;
+    assert!(first_row_requests > 0);
     drop(missing_escrow);
+    assert_eq!(first_row_checker.outstanding(), (0, 0));
 
     let mut previous_state = state.clone();
     let previous_point = PalwBlockContextV2 { block: h64(998), blue_score: point.blue_score - 1, ..point };
     previous_state.last_point = Some(previous_point);
     let mut before_last_point = TransitionBuilder::new(&previous_state, params, false, false, false, false, &extras);
     pin_prefix(&mut before_last_point);
+    let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
+    before_last_point.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
     before_last_point.install_public_tfp1_original_v1(&point, &prepared).unwrap();
+    let required = checker.outstanding().0;
+    assert!(required > first_row_requests);
     before_last_point.tfp1_original_prefix = None;
     before_last_point.tfp1_history_journal_parent = None;
     before_last_point.install_public_tfp1_original_v1(&point, &prepared).unwrap();
     assert_eq!(before_last_point.entries.len(), 3);
     assert_eq!(before_last_point.state.last_point(), Some(&previous_point));
     drop(before_last_point);
+    assert_eq!(checker.outstanding(), (0, 0));
+
+    // One byte below the concrete writer's request lets it pass the first
+    // insertion and fail a later reservation. Both state and journal roll back.
+    let short_checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: required - 1, database_bytes: 0 });
+    let mut short = TransitionBuilder::new(&previous_state, params, false, false, false, false, &extras);
+    pin_prefix(&mut short);
+    short.native_reservation = NativeTransitionReservationV1::for_checker_v1(&short_checker);
+    assert!(matches!(short.install_public_tfp1_original_v1(&point, &prepared), Err(PalwStateV2Error::NativeResource(_))));
+    assert!(short_checker.outstanding().0 > first_row_requests, "failure followed the admission insertion");
+    assert!(short.entries.is_empty());
+    assert_eq!(short.state, previous_state);
+    assert_eq!(short.state.state_root(), previous_state.state_root());
+    drop(short);
+    assert_eq!(short_checker.outstanding(), (0, 0));
+
+    // Only this writer's incremental requests are compared. The fixture
+    // supplies the same sealed prefix and excludes its construction and hashing.
+    let mut larger_state = previous_state.clone();
+    for n in 1_000..1_032 {
+        assert!(larger_state.pending_payouts.insert(h64(n), PalwPayoutV2 { payload: h64(n), amount: 1 }).is_none());
+    }
+    assert_ne!(larger_state.state_root(), previous_state.state_root());
+    let larger_checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: required, database_bytes: 0 });
+    let mut larger = TransitionBuilder::new(&larger_state, params, false, false, false, false, &extras);
+    pin_prefix(&mut larger);
+    larger.native_reservation = NativeTransitionReservationV1::for_checker_v1(&larger_checker);
+    larger.install_public_tfp1_original_v1(&point, &prepared).unwrap();
+    assert_eq!(larger_checker.outstanding().0, required);
+    assert_eq!(larger.state.pending_payouts, larger_state.pending_payouts);
+    drop(larger);
+    assert_eq!(larger_checker.outstanding(), (0, 0));
 
     let mut builder = TransitionBuilder::new(&state, params, false, false, false, false, &extras);
     pin_prefix(&mut builder);

@@ -356,21 +356,7 @@ impl TransitionBuilder<'_> {
             return Err(refused("TFP1 original substitutes the live accepting prefix"));
         }
 
-        // Keep the typed rollback copy alive across all three writes. The
-        // production profile still needs bounded local undo before activation.
-        let checkpoint_bytes =
-            crate::palw_native_resource_v1::native_typed_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
-        let _checkpoint_owner = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(checkpoint_bytes)
-            .map_err(PalwStateV2Error::NativeResource)?;
-        let saved = (
-            self.state.clone(),
-            self.entries.len(),
-            crate::palw_court_observation_v1::checkpoint_v1(),
-            palw_claim_local_object_spans_v2::checkpoint(self),
-        );
-        if let Some(owner) = &_checkpoint_owner {
-            owner.materialized_v1();
-        }
+        let inverse = super::tfp1_original_inverse_v1::Tfp1OriginalInverseV1::prepare_v1(self, admission_key, key)?;
         let result = (|| {
             self.write_kernel_row_encoded_v1(PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, &admission_key, Some(admission_row))?;
             self.install_public_tfp1_link_v1(point, prepared.link_v1())?;
@@ -384,7 +370,7 @@ impl TransitionBuilder<'_> {
             self.apply_kernel_row_authorized_v1(PUBLIC_TFP1_HISTORY_TABLE_V1, key.to_vec(), bytes)
         })();
         if result.is_err() {
-            self.restore(saved);
+            inverse.restore_v1(self)?;
         }
         result
     }
@@ -511,6 +497,22 @@ impl TransitionBuilder<'_> {
             super::palw_claim_local_execution_cohort_census_v15::prepare_compact_writer_v15(self, table, &key, new.as_deref())?;
         let gc_update = super::palw_claim_local_context_gc_v3::prepare_writer_v3(self, table, &key, &new)?;
         let member_update = super::palw_monetary_material_scope_v8::prepare_writer_v8(self, table, &key, &new)?;
+        if matches!(
+            table,
+            crate::palw_positive_contract_v2::PUBLIC_ORIGINAL_ADMISSION_TABLE_V1
+                | crate::palw_positive_contract_v2::PUBLIC_TFP1_LINK_TABLE_V1
+                | crate::palw_tfp1_original_history_v1::PUBLIC_TFP1_HISTORY_TABLE_V1
+        ) && (cohort_update.is_some()
+            || compact_update.is_some()
+            || gc_update.is_some()
+            || member_update.is_some()
+            || crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table, &key)
+            || crate::palw_kernel_route_v1::is_positive_gate_c_schedule_row_v2(table, &key))
+        {
+            return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                "TFP1 original writer", "derived indexes require an extended insertion inverse",
+            )));
+        }
         let Some(kernel) = self.state.kernel_route.as_mut() else { return Ok(()) };
         let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
         if ledger_table {
