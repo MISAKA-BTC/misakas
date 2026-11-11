@@ -266,3 +266,5 @@ BCT2 consumer の[回帰8件とNodeビルド検査](../../../evidence/palw/batch
 
 
 `61adac48e` の[BCT2搬送・local受付回帰5件](../../../evidence/palw/batch-plain-output-transport-2026-11-11/README.md)とNode/mining/P2P build検査が成功した。source DAA gate、物理carrier集計、実UTXO handoff、所有状態を引き継ぐ仮実行・確定writer、固定receipt rent、peer/process別の再試行可能な負荷制限を接続した。Selectionの新しい受付前幾何は既存FullIds＋全row tile×roleと一致する。全public policyはNone。有効なBCT2からreceipt/Terminalまでの通し成功、Selection/DAのruntime、受付後の他状態の成長を含むterminal上限保証は未完で、公開適格性・TFP1受理を主張しない。
+
+2026-11-11 の固定 Linux ソース測定: [098da5e04 の全ソース release 記録](../../../evidence/palw/tokenizer-registration-linux-fixed-2026-11-11/README.md)に25プロセスのraw結果を保存した。論理RAM/DB各4 GiBで、M=780 native candidate（実入力9.51–10.20秒、8 MiB raw54.60–56.79秒）各5回、5-pass native replay各5回、物理carrier scanner5回が成功した。旧Finish再試行の予約蓄積による論理上限枯渇はこのモデルでは再現しない。共有ホスト・fixture・物理quotaなしの境界を明記し、公開1 BPS、TFP1受付、数値profile採択、有効化へ昇格させない。

@@ -1,0 +1,19 @@
+{
+  "sourceCommit": "098da5e04136e4e6c8050c0851bde81974990783",
+  "sourceArchiveSha256": "863f30e571cb17f3fd5234d2215ca2088e98b73a7d29fbc677df4bc6f50530f1",
+  "buildScriptSha256": "ef3a580e35e191146654df10402dcf96964d1bb8b94deedd309fcef51308dae2",
+  "runnerSha256": "3d5e29d5ba1e628b570d97b91156abcdffbd3c7cabd06790cb2a2ca4afa8e631",
+  "builder": "5.104.81.23",
+  "sourceDirectory": "/root/t12-tokenizer-probe-098da5e04",
+  "targetDirectory": "/root/t12-tokenizer-probe-8a6923139/target",
+  "profile": "release, pinned Rust 1.93.0, incremental=false, jobs=1, nice=10, ionice=idle",
+  "fixtureSourceCommit": "ebefd01526cefb705d60915d4096d5662b70416a",
+  "candidateFixtureArchiveSha256": "855c1cc7998b6c591a1439d24b437df1da794bf63b3551a04b4b7b6d98c2ff34",
+  "measurementHost": "95.111.236.186",
+  "publicDeployment": false,
+  "status": "measurement_complete",
+  "buildExitCode": 0,
+  "binarySha256": "ec865bddecf860369a199f2d8cadf23ce00242bfcccf5001da2c213cb45828a6",
+  "measurementExitCode": 0,
+  "measurementArchiveSha256": "254c92572d62336fcc0f68b6072c2421757d39ebe0e4bb2f07cc8048df6088ab"
+}
