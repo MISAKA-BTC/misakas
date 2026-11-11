@@ -158,6 +158,9 @@ impl TransitionBuilder<'_> {
             return Err(refusal("tokenizer carrier changes its native accepted parent or policy".into()));
         }
         let wire = handoff.wire_at_v1(&context, txid).map_err(refusal)?;
+        let previous_requests = self.native_reservation.requests_v1();
+        let previous_entries = self.entries.len();
+        let previous_capacity = self.entries.capacity();
         let result = self.fold_tokenizer_registration_v1(parent, &context, policy, txid, handoff, wire);
         let (inserted, rejected) = match result {
             Ok(id) => (id, None),
@@ -173,6 +176,13 @@ impl TransitionBuilder<'_> {
             None => None,
         };
         let fee = handoff.project_after_fold_v1(&context, txid, session).map_err(refusal)?;
+        if self.entries.len() == previous_entries && self.entries.capacity() == previous_capacity {
+            // The tokenizer writer journals every state change. With no new
+            // entries or journal allocation, only its temporary construction
+            // was charged. Release it even in a shared authoritative prefix.
+            // An unsuccessful Finish that persists an attempt adds an entry.
+            self.native_reservation.restore_requests_v1(previous_requests).map_err(PalwStateV2Error::NativeResource)?;
+        }
         Ok((fee, rejected))
     }
 

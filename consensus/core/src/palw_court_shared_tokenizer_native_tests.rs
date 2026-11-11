@@ -634,6 +634,28 @@ fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
 
 #[test]
 fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
+    exercise_funded_tokenizer_registration(false);
+}
+
+#[test]
+fn funded_tokenizer_registration_native_releases_no_op_reservations() {
+    use crate::palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1};
+    const CHILD: &str = "MISAKA_TEST_TKR_NO_OP_NATIVE_RESERVATION";
+    if std::env::var_os(CHILD).is_none() {
+        let name = format!("{}::funded_tokenizer_registration_native_releases_no_op_reservations", module_path!());
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name.split_once("::").unwrap().1, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 1 << 30, database_bytes: 0 }));
+    exercise_funded_tokenizer_registration(true);
+}
+
+fn exercise_funded_tokenizer_registration(check_reservations: bool) {
     use crate::palw_state_v2::{
         PalwBlockWorkV3, PalwDeltaEntryV2, PalwStateDeltaV2, PalwStateV2Error, TokenizerRegistrationFeeWorkingStateV1, apply_delta_v2,
         apply_palw_transition_retained_v7, palw_tokenizer_registration_open_quote_v1, palw_tokenizer_registration_status_v1,
@@ -1143,6 +1165,48 @@ fn funded_tokenizer_registration_native_open_parts_finish_and_expiry() {
     let (isolated, isolated_fee, isolated_refusal) = memo.scope_v1(|| rehearse_fee(&state, &handoff));
     assert_eq!(isolated_refusal, None);
     let (authoritative, _, _) = memo.scope_v1(|| actual(&state, &handoff, isolated_fee)).unwrap();
+    if check_reservations {
+        let mut builder = TransitionBuilder::try_new(&state, &params, false, false, false, false, &extras).unwrap();
+        let checkpoint = |builder: &TransitionBuilder<'_>| {
+            (builder.entries.len(), builder.entries.capacity(), builder.native_reservation.requests_v1())
+        };
+        assert!(builder.native_reservation.is_tracking_v1());
+        let original = checkpoint(&builder);
+        let TokenizerRegistrationWireV1::Finish(mut wrong_signature) = finish_wire.clone() else { unreachable!() };
+        wrong_signature.signature[0] ^= 1;
+        let wrong = prepare(&state, point, &TokenizerRegistrationWireV1::Finish(wrong_signature), 7);
+        for _ in 0..3 {
+            let (_, refusal) = builder.apply_tokenizer_registration_at_v1(&state, memo.parent_root_v1(), &point, &wrong).unwrap();
+            assert!(refusal.is_some());
+            assert_eq!(checkpoint(&builder), original);
+        }
+        let (completed_fee, refused) =
+            memo.scope_v1(|| builder.apply_tokenizer_registration_at_v1(&state, memo.parent_root_v1(), &point, &handoff).unwrap());
+        assert_eq!((completed_fee, refused), (isolated_fee, None));
+        let completed = checkpoint(&builder);
+        assert!(completed.0 > original.0 && completed.2 > original.2);
+        for _ in 0..3 {
+            let (duplicate_fee, refused) =
+                builder.apply_tokenizer_registration_at_v1(&state, memo.parent_root_v1(), &point, &handoff).unwrap();
+            assert_eq!((duplicate_fee, refused), (completed_fee, None));
+            assert_eq!(checkpoint(&builder), completed);
+        }
+        assert_eq!(builder.state.staged_court_row_v1(&registered), authoritative.staged_court_row_v1(&registered));
+
+        let mut failed = TransitionBuilder::try_new(&invalid_raw_branch, &params, false, false, false, false, &extras).unwrap();
+        let original = checkpoint(&failed);
+        let (_, refusal) = failed
+            .apply_tokenizer_registration_at_v1(
+                &invalid_raw_branch,
+                rejected_finish.context_v1().parent_root,
+                &point,
+                &rejected_finish,
+            )
+            .unwrap();
+        assert!(refusal.is_some());
+        let attempted = checkpoint(&failed);
+        assert!(attempted.0 > original.0 && attempted.2 > original.2);
+    }
     drop(memo);
     for key in [session_key, Key::TokenizerRegistrationBook, registered] {
         assert_eq!(isolated.staged_court_row_v1(&key), authoritative.staged_court_row_v1(&key));

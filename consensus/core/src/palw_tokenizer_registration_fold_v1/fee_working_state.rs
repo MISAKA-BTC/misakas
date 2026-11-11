@@ -104,13 +104,7 @@ impl TokenizerRegistrationFeeWorkingStateV1 {
             return Err(refusal("tokenizer fee carrier has no active body trial".into()));
         }
         let mut builder = self.take_builder(params, extras)?;
-        let previous_requests = builder.native_reservation.requests_v1();
-        let previous_entries = builder.entries.len();
-        let previous_capacity = builder.entries.capacity();
         let result = builder.apply_tokenizer_registration_at_v1(parent, parent_root, point, carrier);
-        if result.is_ok() && builder.entries.len() == previous_entries && builder.entries.capacity() == previous_capacity {
-            builder.native_reservation.restore_requests_v1(previous_requests).map_err(PalwStateV2Error::NativeResource)?;
-        }
         self.put_builder(builder);
         result
     }
