@@ -253,17 +253,180 @@ fn funded_journal_row_candidate_v1(
     Ok(Row::CourtServiceV3(Box::new(row).into()))
 }
 
-/// What the FP arm carries from the seam to the install: the ordinary TFP1 preparation, or the coordinated funded original.
+/// Inputs retained across the native claim writes and consumed inside the
+/// same paired checkpoint. Complete protected-profile planning is a separate
+/// intake prerequisite. This owner only prepares an installation.
+pub(super) struct PreparedProtectedOriginalInstallationV1 {
+    frame: crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_positive_contract_v2::PublicTfp1FrameV1>,
+    history: crate::palw_positive_contract_v2::tfp1_original::native_link::PreparedTfp1OriginalHistoryV1,
+    service: crate::palw_positive_contract_v2::tfp1_original::service_booking::PreparedProtectedServiceBookingV1,
+    escrow: crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1,
+    prefix: super::objects::Tfp1OriginalPrefixV1,
+}
+
+impl PreparedProtectedOriginalInstallationV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_v1(
+        b: &TransitionBuilder<'_>,
+        ctx: &PalwBlockContextV2,
+        frame: crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_positive_contract_v2::PublicTfp1FrameV1>,
+        service: crate::palw_positive_contract_v2::tfp1_original::service_booking::PreparedProtectedServiceBookingV1,
+        funding: &crate::palw_court_original_escrow_v1::PreparedEscrowFundingV1<'_>,
+        pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+        admission: &crate::palw_positive_contract_v2::PublicOriginalAdmissionV1<'_>,
+        reservation: &crate::palw_positive_contract_v2::PublicOriginalReservationV1<'_>,
+    ) -> Result<Self, PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_pending_requests_v1};
+        use crate::palw_positive_contract_v2::tfp1_original::service_graph::check_frame_service_graph_v2;
+        use misaka_palw_positive_contract::public_one_honest::{OriginalClock, SignedPublicOriginalV1};
+
+        let bad = || refused("protected original install inputs do not match the current paired acceptance");
+        let claim = frame.claim_v1();
+        let prefix = b.tfp1_original_prefix.ok_or_else(bad)?;
+        let accepted = pairing.history_inputs_v1().ok_or_else(bad)?;
+        let current_pairing = b.extras.tir_funded_originals.get(&claim).ok_or_else(bad)?;
+        if b.paired_original_checkpoint_claim != Some(claim)
+            || b.state.claim(&claim).is_some()
+            || prefix.claim_v1() != claim
+            || prefix.point_v1() != *ctx
+            || prefix.end_v1() != b.entries.len()
+            || b.tfp1_history_journal_parent != Some(prefix.parent_v1())
+            || current_pairing.carrier().id() != pairing.carrier().id()
+            || current_pairing.history_inputs_v1() != Some(accepted)
+            || pairing.claim() != claim
+            || accepted.origin_v1() != frame.origin_v1()
+            || reservation.origin != frame.origin_v1()
+            || admission.job != &frame.header_v1().job_context
+            || frame.service_graph_v2().is_none()
+            || service.claim_v1() != claim
+            || service.before_v1() != b.state.staged_court_row_v1(&Key::CourtService)
+        {
+            return Err(bad());
+        }
+        let binding = service.row_v1().state.claims.get(&claim).ok_or_else(bad)?;
+        check_frame_service_graph_v2(&frame, service.row_v1(), binding).map_err(|_| bad())?;
+        let literal = SignedPublicOriginalV1::decode(pairing.public_companion_v3().ok_or_else(bad)?).map_err(|_| bad())?;
+        if literal.original.id() != frame.original_id_v1() {
+            return Err(bad());
+        }
+
+        let terms = &funding.consent().terms;
+        let actual = funding.actual();
+        if funding.accepted_daa() != ctx.daa_score
+            || funding.consent() != &pairing.envelope().funding
+            || funding.payer_pubkey() != pairing.envelope().payer_pubkey.as_slice()
+            || terms.claim != claim
+            || terms.network_domain != frame.original_v1().job.network_domain
+            || terms.job_identity != crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&frame.header_v1().job_context)
+            || terms.execution_root != frame.original_v1().execution_root
+            || terms.source_id != frame.source_v1()
+            || terms.material_until_daa < frame.material_until_daa_v1()
+            || actual.outpoint() != pairing.outpoint()
+            || actual.output_index() != terms.funding_output_index
+            || Some(actual.output()) != pairing.carrier().outputs.get(terms.funding_output_index as usize)
+            || actual.output().value != terms.funding_amount_sompi
+        {
+            return Err(bad());
+        }
+        let hard =
+            OriginalClock::new(ctx.daa_score).map_err(|_| PalwStateV2Error::Overflow("protected original hard deadline"))?.hard();
+        let escrow = crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1::fresh_v1(
+            terms.id_v1(),
+            claim,
+            actual.outpoint(),
+            actual.output().value,
+            terms.payer_key_id,
+            terms.refund_payload,
+            ctx.daa_score,
+            hard,
+            true,
+        )
+        .map_err(|_| bad())?;
+        let obligation = frame
+            .native_facts_v1()
+            .and_then(|facts| facts.service_obligation_v1(frame.profile_v1(), frame.resource_v1()))
+            .map_err(|_| bad())?;
+        // Signed history authentication reuses the legacy context/class
+        // identity helpers, which serialize temporary hash preimages.
+        let mut requests = TirNativeRequestsV1::new();
+        for bytes in [borsh::object_length(admission.job), borsh::object_length(&admission.class.layout)] {
+            requests.vec_v1::<u8>((bytes.map_err(|_| bad())? as u64).max(1024)).map_err(PalwStateV2Error::NativeResource)?;
+        }
+        let _hash_scratch = reserve_native_pending_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+        let history = admission
+            .prepare_tfp1_history_v1(ctx, pairing, obligation, reservation, frame.reservation_v1(), &prefix)
+            .map_err(|_| bad())?;
+        Ok(Self { frame, history, service, escrow, prefix })
+    }
+}
+
+/// The preparation consumed by the FP arm's common installation point.
 pub(super) enum OriginalAdmissionV1 {
     Plain(PreparedOriginalFrameV1),
     Funded(Box<FundedOriginalPlanV1>),
+    Protected(PreparedProtectedOriginalInstallationV1),
 }
+
 impl OriginalAdmissionV1 {
-    pub(super) fn frame_v1(&self) -> &Frame {
+    fn legacy_frame_v1(&self) -> Option<&Frame> {
         match self {
-            Self::Plain(p) => p.frame_v1(),
-            Self::Funded(f) => f.requirements.geometry_v1().frame_v1(),
+            Self::Plain(p) => Some(p.frame_v1()),
+            Self::Funded(f) => Some(f.requirements.geometry_v1().frame_v1()),
+            Self::Protected(_) => None,
         }
+    }
+
+    pub(super) fn material_until_daa_v1(&self) -> u64 {
+        match self {
+            Self::Plain(p) => p.frame_v1().plan_v1().terms.material_until_daa,
+            Self::Funded(f) => f.requirements.geometry_v1().frame_v1().plan_v1().terms.material_until_daa,
+            Self::Protected(p) => p.frame.material_until_daa_v1(),
+        }
+    }
+
+    pub(super) fn retirement_material_v1(
+        &self,
+        id: Hash64,
+        claim: &PalwClaimStateV2,
+    ) -> Result<(Option<u64>, Option<u64>), PalwStateV2Error> {
+        let bad = || PalwStateV2Error::BondBudgetRefused("prepared original retirement source does not match native claim".into());
+        let claim_material = if let Self::Protected(p) = self {
+            let frame = &p.frame;
+            let origin = frame.origin_v1();
+            let fp = frame.original_v1();
+            if frame.claim_v1() != id
+                || origin.accepting_block.0 != claim.accepted_block.as_bytes()
+                || origin.accepted_daa != claim.accepted_daa
+                || origin.accepted_blue_score != claim.accepted_blue_score
+                || frame.producer_v1() != claim.bond
+                || !matches!(&claim.source, PalwClaimSourceV2::FreePrompt { .. })
+                || fp.job.class_id != claim.class_id
+                || fp.execution_root != claim.execution_root
+                || fp.trace_root != claim.trace_root
+                || fp.output_root != claim.output_root
+                || fp.work_leaves != claim.work_leaves
+                || crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&frame.header_v1().job_context) != claim.job_identity
+            {
+                return Err(bad());
+            }
+            None
+        } else {
+            let frame = self.legacy_frame_v1().ok_or_else(bad)?;
+            let plan = frame.plan_v1();
+            let fp = frame.original_v1();
+            if plan.original_claim != id
+                || plan.terms.accepted_daa != claim.accepted_daa
+                || frame.custody_v1().pledge_v1().producer != claim.bond
+                || fp.job.class_id != claim.class_id
+                || fp.execution_root != claim.execution_root
+                || fp.trace_root != claim.trace_root
+                || fp.output_root != claim.output_root
+            {
+                return Err(bad());
+            }
+            plan.semantic.as_ref().map(|s| s.terms.material_until_daa)
+        };
+        Ok((claim_material, Some(self.material_until_daa_v1())))
     }
 }
 
@@ -907,6 +1070,43 @@ pub(super) fn install_original_admission_v1(
 ) -> Result<(), PalwStateV2Error> {
     match admission {
         OriginalAdmissionV1::Plain(prepared) => install_prepared_original_v1(b, ctx, prepared, prompt),
+        OriginalAdmissionV1::Protected(plan) => {
+            use crate::palw_court_clock_v2::{
+                palw_claim_route_hard_v2, palw_court_clock_v2_governs, palw_court_clock_v2_reorg_retention,
+                palw_court_clock_v2_required_retention_with,
+            };
+
+            let PreparedProtectedOriginalInstallationV1 { frame, history, service, escrow, prefix } = plan;
+            let claim_id = frame.claim_v1();
+            if b.paired_original_checkpoint_claim != Some(claim_id)
+                || b.tfp1_original_prefix != Some(prefix)
+                || prefix.point_v1() != *ctx
+            {
+                return Err(refused("protected original must install in its accepting paired checkpoint"));
+            }
+            let claim = b.state.claim(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+            if palw_claim_route_hard_v2(b.params, claim).is_some_and(|hard| hard != escrow.hard_deadline_daa) {
+                return Err(refused("protected original changes the native dispute clock"));
+            }
+            if palw_court_clock_v2_governs(b.params, claim) {
+                let required = palw_court_clock_v2_required_retention_with(
+                    claim.accepted_daa,
+                    palw_da_disclose_window_daa_v1(b.params),
+                    palw_court_clock_v2_reorg_retention(b.extras.staged_public_court.as_ref()),
+                )
+                .map_err(|_| PalwStateV2Error::Overflow("protected original material horizon"))?;
+                if frame.material_until_daa_v1() < required {
+                    return Err(refused("protected original material expires before its native court obligation"));
+                }
+            }
+            // The new frame has no legacy custody/PanelDa path. Its literal
+            // carrier and authenticated manifest bind the retained input.
+            // The ordinary FP prompt row remains owned by the FP arm.
+            b.install_funded_escrow_v1(escrow)?;
+            b.install_public_tfp1_original_frame_v1(ctx, frame, history)?;
+            b.install_public_tfp1_service_booking_v1(ctx, service)?;
+            b.check_funded_original_court_admission_native_v2(claim_id, ctx.daa_score)
+        }
         OriginalAdmissionV1::Funded(plan) => {
             let FundedOriginalPlanV1 {
                 requirements,

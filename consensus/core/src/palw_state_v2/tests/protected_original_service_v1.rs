@@ -1,3 +1,6 @@
+use super::super::palw_tir_public_fold_v1::{
+    OriginalAdmissionV1, PreparedProtectedOriginalInstallationV1, install_original_admission_v1,
+};
 use super::*;
 use crate::{
     palw_court_original_escrow_v1::PreparedEscrowFundingV1,
@@ -104,24 +107,32 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
     )
     .unwrap();
     let frame_key = Key::PublicTfp1FrameV1(claim_id);
+    let retirement_params = params.clone().with_settlement_once_from(Some(0));
     let parent_root = parent.state_root();
     extras.tir_funded_originals.insert(claim_id, pairing.clone());
 
+    // The protected installer binds the authenticated manifest and literal
+    // carrier. This legacy-only prompt cache argument is unused in that arm.
+    let prompt_cache = PalwFpClaimPromptV1 {
+        prompt_tokens: 0,
+        prefix_root: Hash64::default(),
+        prompt_token_ids: Vec::new(),
+        expires_daa: 0,
+        consumed_state_root: Hash64::default(),
+        consumed_prefix_tokens: 0,
+    };
     for conviction_active in [false, true] {
         extras.tir_public_conviction_active = conviction_active;
         let mut builder = TransitionBuilder::try_new(&parent, &params, false, false, false, false, &extras).unwrap();
         builder.tfp1_history_journal_parent = Some(prior.block);
         assert!(builder.native_writers_tracking_v1());
 
-        let mut reached_service = false;
+        let mut reached_install = false;
         let result = super::super::objects::apply_with_native_checkpoint_v1(&mut builder, Some(claim_id), false, |builder| {
             let prefix = super::super::objects::capture_tfp1_prefix_v1(builder, at, claim_id)?;
             assert_eq!(prefix.root_v1(), parent_root);
             assert_eq!(prefix.end_v1(), 0);
             builder.tfp1_original_prefix = Some(prefix);
-            let history = admission
-                .prepare_tfp1_history_v1(at, pairing, prepared.obligation_v1(), &reservation, reservation_id, &prefix)
-                .unwrap();
             let frame = PublicTfp1FrameV1::prepare_with_service_v2(
                 prepared,
                 fixture.frame.original_v1(),
@@ -137,17 +148,45 @@ pub(crate) fn exercise_protected_original_service_writer_v1(
             let service =
                 PreparedProtectedServiceBookingV1::prepare_v1(&builder.state, &frame, booking, after_book.try_clone_v1().unwrap())
                     .unwrap();
+            let original = OriginalAdmissionV1::Protected(PreparedProtectedOriginalInstallationV1::prepare_v1(
+                builder,
+                at,
+                frame,
+                service,
+                funded,
+                pairing,
+                admission,
+                &reservation,
+            )?);
+            assert_eq!(original.material_until_daa_v1(), reservation.budget.retention_until);
+            {
+                // Use the same prospective reader as the FP budget path,
+                // with only the settlement-once fence armed for this check.
+                let retirement_reader = TransitionBuilder::try_new(&parent, &retirement_params, false, false, false, false, &extras)?;
+                let retirement = retirement_reader.prospective_retirement_v1(claim_id, &claim, Some(&original))?;
+                assert!(retirement.floor_v1(&retirement_params, claim_id, &claim)? >= reservation.budget.retention_until);
+
+                let mut foreign_origin = claim.clone();
+                foreign_origin.accepted_blue_score = prior.blue_score;
+                let mut foreign_root = claim.clone();
+                foreign_root.trace_root = h64(0x5101);
+                let mut short_retention = claim.clone();
+                short_retention.trace_retention_daa -= 1;
+                for changed in [&foreign_origin, &foreign_root, &short_retention] {
+                    assert!(matches!(
+                        retirement_reader.prospective_retirement_v1(claim_id, changed, Some(&original)),
+                        Err(PalwStateV2Error::BondBudgetRefused(_))
+                    ));
+                }
+            }
             builder.reserve_for_claim(&claim)?;
             builder.write_claim(claim_id, Some(claim.clone()))?;
-            builder.install_funded_escrow_v1(escrow)?;
-            builder.install_public_tfp1_original_frame_v1(at, frame, history)?;
             assert_eq!(builder.state.last_point(), Some(&prior));
             assert_eq!(builder.paired_original_checkpoint_claim, Some(claim_id));
-            assert_eq!(builder.state.funded_escrows_v1().get(&escrow.contract_id), Some(&escrow));
-            reached_service = true;
-            builder.install_public_tfp1_service_booking_v1(at, service)
+            reached_install = true;
+            install_original_admission_v1(builder, at, original, &prompt_cache)
         });
-        assert!(reached_service, "claim, escrow, frame and history must be written before attempting the service row: {result:?}");
+        assert!(reached_install, "the native claim must exist before the common original installer: {result:?}");
         assert!(builder.paired_original_checkpoint_claim.is_none());
         assert!(builder.tfp1_original_prefix.is_none());
 

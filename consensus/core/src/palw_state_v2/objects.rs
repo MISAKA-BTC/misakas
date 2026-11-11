@@ -4507,7 +4507,7 @@ fn apply_object_batch_10_v1(
             let staged_contract = if let Some(frame) = &tir_original {
                 // This is an ORIGINAL prospective allocation, not a repricing
                 // of an old claim or a second old required-family bundle.
-                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.frame_v1().plan_v1().terms.material_until_daa);
+                claim.trace_retention_daa = claim.trace_retention_daa.max(frame.material_until_daa_v1());
                 None
             } else {
                 Some(builder.prepare_staged_claim_for_budget_v1(*claim_id, &mut claim, public_job.as_deref())?)

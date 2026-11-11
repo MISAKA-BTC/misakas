@@ -2,6 +2,22 @@
 
 [実装方針書](public-one-honest-vertical-implementation-plan-2026-11-10.md) の I0 作業記録。出荷設定と公開ネットワークでの有効化はこの台帳の対象外。以下の既存コードは接続先であり、新 profile の検証結果は未取得。
 
+## 2026-11-12: 受付の一往復を優先する
+
+ユーザーの作業順修正を適用する。次の実装単位は **受付入口 → 共通条件 → 資金・予約 → 原子的保存 → 受付結果** の一往復とする。保存・復元の独立した強化を先行させず、この経路で必要になった修正を同じ作業へ含める。元の方針書は変更しない。コードの接続と動作確認は区別し、公開受付の達成は同じclaimのcanonical受理の読み戻しで判断する。
+
+| 段階 | 実際の入口・consumer | 現在の到達点と次の接続 |
+| --- | --- | --- |
+| 公開quote | [RPC request](../../../../rpc/core/src/model/message/palw_tir_original_quote.rs)、[RPC handler](../../../../rpc/service/src/service.rs) | 旧commitment/bindingだけを受け取る。新版のprompt・manifest・HF参照・companionを扱う版付き入口と、実受付と共通の計算が未接続。旧`planHex`の意味を変更しない |
+| 共通条件 | [core quote](../../../../consensus/core/src/palw_tir_public_fold_v1.rs)、[FreePrompt受付](../../../../consensus/core/src/palw_state_v2/objects.rs) | quoteと実受付の双方にFpTokenizer gateがある。TFO3はさらにprofile未設定で拒否される。完成済みtokenizer登録の読取りと全工程plannerを接続する |
+| 資金・予約 | [実UTXO前処理](../../../../consensus/src/pipeline/virtual_processor/processor/palw_accept.rs)、[保護予約と実資金の照合](../../../../consensus/core/src/palw_positive_contract_v2/tfp1_original/funding/admission.rs) | 実payer/outputの照合と候補bookは存在するが、本番policy resolverと呼出しが未接続。前処理の最低rentも同じ計算へ接続し、二重課金を防ぐ |
+| 原子的保存 | [受付coordinator](../../../../consensus/core/src/palw_funded_original_coordinator_fold_v1.rs) | 共通installに専用frame/history/service/escrowの分岐を追加。保持・退役consumerも接続。現時点の生成callerはfixtureであり、本番受付入口から到達したとは扱わない |
+| 受付結果 | 公開T12の同一claim・carrier・包含点・保存行 | 未取得。ローカルfixture、送信受付、別claim、恒久拒否を代用しない |
+
+Panel人数・全工程の物理容量・料金・署名branchの本番設定には、[パラメーター台帳](../../../governance/parameter-register.md)に残る未確定事項がある。旧T12の数値やtest fixtureを暗黙に採用せず、具体的な設定とその根拠を受付接続の作業内で解決する。共通installの追加だけでは、この不足や公開quote/受付を解消しない。
+
+今回のコード変更は **実装済み・Rust検証未実行**。方針書§1に従い通し接続後にbuild/testを実行する。公開配備・署名送信は行っていない。取得可否証明やMinerのモデル重み配信義務は追加しない。同一claimのPanel/Final・当選権利消費・対応ブロック生成は引き続き未達。
+
 ## 経路と接続先
 
 | 経路 | 既存の接続先 | 新 profile の残件 |

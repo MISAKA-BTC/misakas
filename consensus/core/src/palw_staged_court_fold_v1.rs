@@ -146,22 +146,7 @@ impl TransitionBuilder<'_> {
         let (claim_material, source_material) = if !self.params.settlement_once_active_at(claim.accepted_daa) {
             (None, None) // No new source checks under the historical ruleset.
         } else if let Some(original) = original {
-            let frame = original.frame_v1();
-            let plan = frame.plan_v1();
-            let fp = frame.original_v1();
-            if plan.original_claim != id
-                || plan.terms.accepted_daa != claim.accepted_daa
-                || frame.custody_v1().pledge_v1().producer != claim.bond
-                || fp.job.class_id != claim.class_id
-                || fp.execution_root != claim.execution_root
-                || fp.trace_root != claim.trace_root
-                || fp.output_root != claim.output_root
-            {
-                return Err(bad("prepared original retirement source does not match native claim"));
-            }
-            // install_original_v1 writes the frame/preparation source index and
-            // its existing semantic ClaimBundle, if any, atomically.
-            (plan.semantic.as_ref().map(|s| s.terms.material_until_daa), Some(plan.terms.material_until_daa))
+            original.retirement_material_v1(id, claim)?
         } else {
             (None, None)
         };
