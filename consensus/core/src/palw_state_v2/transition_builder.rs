@@ -8820,10 +8820,10 @@ impl<'a> TransitionBuilder<'a> {
             // transaction, which owns the entire court/DA/claim cascade.
             return self.write_court_archive_v1(key, new);
         }
-        let saved = self.try_checkpoint()?;
+        let saved = super::court_archive_inverse_v1::CourtArchiveInverseV1::prepare_v1(self, key)?;
         let result = self.write_court_archive_v1(key, new);
         if result.is_err() {
-            self.restore(saved);
+            saved.restore_v1(self)?;
         }
         result
     }

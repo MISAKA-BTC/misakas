@@ -7435,6 +7435,49 @@ mod conviction_e2e_tests {
                         &PalwConsensusObjectV2::CourtCloseChunk { session_id: id, side, index: 0, bytes: raw[..split].to_vec() },
                     )
                     .unwrap();
+                    if !forged && !held && !wrong_verdict {
+                        use super::super::court_archive_inverse_v1::CourtArchiveInverseV1;
+                        use crate::palw_native_resource_v1::{
+                            NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1,
+                        };
+                        let make_trial = |memory_bytes| {
+                            let mut trial = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
+                            trial.prepare_native_court_end_cause_v1(&at(&frame, 7), &correct).unwrap();
+                            let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes, database_bytes: 0 });
+                            trial.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+                            trial
+                        };
+                        let mut trial = make_trial(u64::MAX);
+                        let claim = frame.plan_v1().original_claim;
+                        let due = at(&frame, 40).daa_score;
+                        trial.state.insert_claim_deadline_v2(due, claim);
+                        let prior = trial.state.clone();
+                        let mut stable_requests = None;
+                        let mut completed_requests = None;
+                        for _ in 0..3 {
+                            let inverse = CourtArchiveInverseV1::prepare_v1(&trial, id).unwrap();
+                            trial.write_court(id, None).unwrap();
+                            assert!(trial.state.court_end_archive_v1(id).is_some());
+                            assert!(trial.state.court_archive_progress_v1(id, side).is_some());
+                            completed_requests.get_or_insert(trial.native_reservation.requests_v1());
+                            // Restore the exact old deadline after the local key moved.
+                            trial.state.remove_claim_deadline_v2(due, claim);
+                            trial.state.insert_claim_deadline_v2(due + 1, claim);
+                            inverse.restore_v1(&mut trial).unwrap();
+                            assert_eq!(trial.state, prior);
+                            assert!(trial.entries.is_empty());
+                            let requests = trial.native_reservation.requests_v1();
+                            assert_eq!(*stable_requests.get_or_insert(requests), requests);
+                        }
+                        // The last growth belongs to the native progress
+                        // writer, so the archive is already installed.
+                        let mut denied = make_trial(completed_requests.unwrap() - 1);
+                        denied.state.insert_claim_deadline_v2(due, claim);
+                        assert!(matches!(denied.write_court(id, None), Err(PalwStateV2Error::NativeResource(_))));
+                        assert_eq!(denied.state, prior);
+                        assert!(denied.entries.is_empty());
+                        assert!(denied.entries.capacity() > 0);
+                    }
                     super::super::objects::apply_object(&mut b, &at(&frame, 7), &correct).unwrap();
                     assert!(b.state.court_session(&id).is_none());
                     // Inspect an internal native event pair, without opening public

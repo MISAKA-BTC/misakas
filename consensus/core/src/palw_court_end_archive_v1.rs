@@ -232,7 +232,9 @@ impl PendingCourtArchiveV1 {
         self.check(&Key::CourtEndArchive(self.session_id))?;
         if state.court_session(&self.session_id).is_some()
             || state.tir_dissection_v1(&self.session_id).is_some()
-            || state.court_close_groups_iter().any(|((id, _), _)| *id == self.session_id)
+            || [PalwCourtSideV1::Challenger, PalwCourtSideV1::Executor]
+                .into_iter()
+                .any(|side| state.court_close_group(&self.session_id, side).is_some())
         {
             return Err("archived court still has active rows".into());
         }
