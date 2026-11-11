@@ -33,6 +33,12 @@ impl NativeTransitionReservationV1 {
     /// logical snapshot quotas are off. Carry the pending lease with the
     /// state so an owned terminal can price its checkpoint without a walk.
     pub(crate) fn copy_parent_for_plain_output_v2(parent: &PalwChainStateV2) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
+        Self::copy_parent_with_pending_owner_v1(parent)
+    }
+
+    /// Explicit ownership for protected TFP1 admission and its checkpoint,
+    /// independent of optional snapshot quotas or BCT2 configuration.
+    pub(crate) fn copy_parent_with_pending_owner_v1(parent: &PalwChainStateV2) -> Result<(PalwChainStateV2, Self), NativeCoverageV1> {
         let requests = typed_value_requests_v1(parent)?;
         let lease = super::reserve_native_pending_requests_v1(requests)?;
         let state = parent.clone();

@@ -191,6 +191,36 @@ pub(crate) fn exercise_funding_v1(
                     assert_eq!(accepted_booking.graph_v1(), booking.graph_v1());
                     assert_eq!(funded.actual().outpoint(), pairing.outpoint());
                     assert_ne!(&*book, empty_book);
+                    let native_frame = super::super::native_frame::PublicTfp1FrameV1::prepare_v1(
+                        prepared,
+                        fp,
+                        source,
+                        &fixture.record,
+                        &at,
+                        misaka_palw_positive_contract::identity::Digest([0x51; 64]),
+                        reservation.budget.retention_until,
+                        fixture.rules.maximum_leaves,
+                    )
+                    .unwrap();
+                    crate::palw_state_v2::tests::native_writers_v1::exercise_protected_service_candidate_v1(
+                        &native_frame,
+                        &accepted_booking,
+                        empty_book,
+                        &book,
+                    );
+                    crate::palw_state_v2::tests::protected_original_service_v1::exercise_protected_original_service_writer_v1(
+                        fixture,
+                        source,
+                        admission,
+                        reservation,
+                        pairing,
+                        prepared,
+                        &funded,
+                        &accepted_booking,
+                        empty_book,
+                        &book,
+                        &at,
+                    );
                     let before = (*book).clone();
                     let refused = prepared.reserve_and_prepare_protected_funding_v1(
                         fp,

@@ -13695,6 +13695,8 @@ impl PalwBondRegistrationIndexV1 {
 struct TransitionBuilder<'a> {
     tfp1_history_journal_parent: Option<Hash64>,
     tfp1_original_prefix: Option<objects::Tfp1OriginalPrefixV1>,
+    /// Only the object dispatcher sets this while owning the paired rollback.
+    paired_original_checkpoint_claim: Option<Hash64>,
     plain_output_terminal_checkpoint_active_v2: bool,
     assignment_materials: Vec<PositiveAssignmentAcceptedMaterialV2>,
     assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
@@ -14273,12 +14275,12 @@ pub fn palw_panel_room_read_v1(
 mod aux_sweep_workspace_v2;
 mod block_preparation;
 mod court_archive_inverse_v1;
-mod tfp1_original_inverse_v1;
 mod input_views;
 mod native_mutation;
 mod native_writers;
 mod row_writer;
 mod row_writers;
+mod tfp1_original_inverse_v1;
 mod transition_builder;
 mod vesting_workspace_v2;
 // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.

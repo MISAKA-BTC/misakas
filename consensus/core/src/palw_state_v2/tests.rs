@@ -4,8 +4,8 @@
 mod g14_model_panel_one_retention_v1;
 mod g14_model_panel_one_v1;
 mod kernel_route_locator_v1;
-mod owned_delta_replay_v1;
 mod ordered_prefix_v1;
+mod owned_delta_replay_v1;
 // Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
 mod claim_local_rewards_v1;
 mod claim_local_v1;
@@ -24,6 +24,7 @@ mod court_capacity_workspace_v2;
 mod court_deadline_workspace_v2;
 mod legacy_court_ingress_workspace_v2;
 pub(crate) mod native_writers_v1;
+pub(crate) mod protected_original_service_v1;
 mod row_writers_v1;
 mod vesting_workspace_v2;
 // G14 lane F03 (P0-2, T05 slice): unlinked colluding Sybil on the outside reservation.
@@ -31602,17 +31603,22 @@ mod capacity_liability_v1 {
                 if intent {
                     let mut expected_order = ids.clone();
                     expected_order.sort_unstable();
-                    let journal_order = b.entries.iter().filter_map(|entry| match entry {
-                        PalwDeltaEntryV2::Claim {
-                            key,
-                            new: Some(PalwClaimStateV2 {
-                                phase: PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::AggregateForfeit, .. },
+                    let journal_order = b
+                        .entries
+                        .iter()
+                        .filter_map(|entry| match entry {
+                            PalwDeltaEntryV2::Claim {
+                                key,
+                                new:
+                                    Some(PalwClaimStateV2 {
+                                        phase: PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::AggregateForfeit, .. },
+                                        ..
+                                    }),
                                 ..
-                            }),
-                            ..
-                        } => Some(*key),
-                        _ => None,
-                    }).collect::<Vec<_>>();
+                            } => Some(*key),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
                     assert_eq!(journal_order, expected_order, "{what}: claim ID order is preserved");
                     assert!(b.state.aggregate_live_claims_v1(producer).next().is_none());
                     assert_eq!(b.state.bonds[&producer].collateral, 0, "{what}: the posted collateral, whole");
@@ -31722,10 +31728,14 @@ mod rcore_v22_skeleton {
         let extras = PalwTransitionExtrasV1::default();
         let mut candidate = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
         candidate.rekey_frozen_rows_v1(producer, 3_062).unwrap();
-        let observed = candidate.entries.iter().filter_map(|entry| match entry {
-            PalwDeltaEntryV2::Vesting { key, .. } => Some(*key),
-            _ => None,
-        }).collect::<Vec<_>>();
+        let observed = candidate
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                PalwDeltaEntryV2::Vesting { key, .. } => Some(*key),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(observed, old_order);
         assert_eq!(candidate.state.vesting[&other], state.vesting[&other]);
         assert!(candidate.state.vesting_indices_are_consistent());

@@ -63,8 +63,12 @@ impl<'a> TransitionBuilder<'a> {
         extras: &'a PalwTransitionExtrasV1,
     ) -> Result<Self, PalwStateV2Error> {
         use crate::palw_native_resource_v1::NativeTransitionReservationV1;
-        let (state, native_reservation) = if extras.batch_plain_output_transport_v2.is_some() {
-            NativeTransitionReservationV1::copy_parent_for_plain_output_v2(parent)
+        let has_public_pairing = extras.tir_funded_originals.values().any(|pair| pair.public_companion_v3().is_some());
+        let (state, native_reservation) = if extras.batch_plain_output_transport_v2.is_some() || has_public_pairing {
+            // An actual TFO3 pairing requires the same native construction
+            // ownership as its four-row writer even before a public profile
+            // is enabled. Presence grants no acceptance permission.
+            NativeTransitionReservationV1::copy_parent_with_pending_owner_v1(parent)
         } else {
             NativeTransitionReservationV1::copy_parent_v1(parent)
         }
@@ -97,6 +101,7 @@ impl<'a> TransitionBuilder<'a> {
             native_reservation,
             tfp1_history_journal_parent: None,
             tfp1_original_prefix: None,
+            paired_original_checkpoint_claim: None,
             plain_output_terminal_checkpoint_active_v2: false,
             claim_local_gc_undo_v3: BTreeMap::new(),
             claim_local_gc_sequence_v3: 0,
@@ -756,9 +761,7 @@ impl<'a> TransitionBuilder<'a> {
             "native court_deadlines session re-index",
         )?;
         self.reserve_index_members_v1::<Hash64, u64>(
-            u64::from(
-                self.state.court_sessions.contains_key(&key.0) && !self.state.court_deadline_by_session.contains_key(&key.0),
-            ),
+            u64::from(self.state.court_sessions.contains_key(&key.0) && !self.state.court_deadline_by_session.contains_key(&key.0)),
             "native court deadline reverse re-index",
         )?;
         let old = match &new {
@@ -8830,11 +8833,7 @@ impl<'a> TransitionBuilder<'a> {
         result
     }
 
-    fn write_court_archive_v1(
-        &mut self,
-        key: Hash64,
-        new: Option<PalwCourtSessionStateV2>,
-    ) -> Result<(), PalwStateV2Error> {
+    fn write_court_archive_v1(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
         let pending = self.build_pending_court_archive_v1(key)?;
         self.write_court_inner_v1(key, new, true)?;
         self.write_staged_row_v1(
@@ -9161,15 +9160,18 @@ impl<'a> TransitionBuilder<'a> {
         let requests = self.native_reservation.requests_v1();
         if !self.native_reservation.is_tracking_v1() || requests == 0 {
             return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                "plain Output rollback", "candidate prefix has no audited native owner",
+                "plain Output rollback",
+                "candidate prefix has no audited native owner",
             )));
         }
         if requests > maximum_prefix_bytes {
             return Err(PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                "plain Output rollback", "candidate prefix exceeds its native bound",
+                "plain Output rollback",
+                "candidate prefix exceeds its native bound",
             )));
         }
-        let lease = crate::palw_native_resource_v1::reserve_native_pending_requests_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
+        let lease =
+            crate::palw_native_resource_v1::reserve_native_pending_requests_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
         let saved = (
             self.state.clone(),
             self.entries.len(),

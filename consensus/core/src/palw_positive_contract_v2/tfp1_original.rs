@@ -11,6 +11,7 @@ pub(crate) mod manifest_request;
 pub(crate) mod native_frame;
 pub(crate) mod native_link;
 pub(crate) mod preclaim;
+pub(crate) mod service_booking;
 
 use super::{
     PreparedPublicOriginalV1, PublicOriginalAdmissionV1, PublicOriginalReservationV1, public_original_service_contract_id_v1,

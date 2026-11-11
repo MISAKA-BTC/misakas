@@ -6,6 +6,54 @@
 use super::*;
 use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1, NativeTransitionReservationV1};
 
+/// Structural TFO3 recognition selects resource ownership even with the
+/// unrelated BCT2 transport disabled. It does not authorize public intake.
+pub(crate) fn exercise_public_pairing_construction_owner_v1(
+    pairing: &crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1,
+) {
+    let p = params();
+    let parent = PalwChainStateV2::genesis();
+    let mut extras = PalwTransitionExtrasV1::default();
+    assert!(extras.batch_plain_output_transport_v2.is_none());
+    extras.tir_funded_originals.insert(pairing.claim(), pairing.clone());
+    let builder = TransitionBuilder::try_new(&parent, &p, false, false, false, false, &extras).unwrap();
+    assert!(builder.native_writers_tracking_v1());
+    assert!(builder.native_reservation.requests_v1() > 0);
+    let copy = builder.native_reservation.reserve_checkpoint_copy_v1(&builder.state).unwrap();
+    assert!(copy.is_some());
+    assert_eq!(builder.state, parent);
+    assert!(builder.entries.is_empty());
+}
+
+pub(crate) fn exercise_protected_service_candidate_v1(
+    frame: &crate::palw_positive_contract_v2::PublicTfp1FrameV1,
+    booking: &crate::palw_positive_contract_v2::tfp1_original::preclaim::ProtectedBatchBookingV1,
+    before: &crate::palw_court_service_v1::ServiceReservations,
+    after: &crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_service_v1::ServiceReservations>,
+) {
+    use crate::palw_court_service_state_v2::{CourtServiceStateV2, court_service_profile_id_v2};
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    assert!(before.packets.is_empty(), "fixture seed has no unrelated claim authority");
+    let mut prefix = PalwChainStateV2::genesis();
+    let source_profile_id = h64(0x5100);
+    prefix.staged_courts.insert(
+        Key::CourtService,
+        Row::CourtService(
+            Box::new(CourtServiceStateV2 {
+                version: 2,
+                profile_id: court_service_profile_id_v2(source_profile_id),
+                source_profile_id,
+                book: before.clone(),
+                claims: BTreeMap::new(),
+            })
+            .into(),
+        ),
+    );
+    crate::palw_positive_contract_v2::tfp1_original::service_booking::tests::exercise_protected_service_booking_v1(
+        &prefix, frame, booking, after,
+    );
+}
+
 fn zero_capacity(builder: &mut TransitionBuilder<'_>) -> std::sync::Arc<NativeDemandCheckerV1> {
     let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 0, database_bytes: 0 });
     builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);

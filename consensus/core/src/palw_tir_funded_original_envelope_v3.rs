@@ -544,6 +544,7 @@ mod tests {
                 );
                 assert!(ids.insert(tx.id()));
                 let paired = palw_funded_original_pairing_payload_v1(&tx, &wire).unwrap();
+                crate::palw_state_v2::tests::native_writers_v1::exercise_public_pairing_construction_owner_v1(&paired);
                 assert_eq!(paired.carrier(), &tx);
                 assert_eq!(paired.envelope(), &base);
                 assert_eq!(paired.outpoint(), TransactionOutpoint::new(tx.id(), base.funding.terms.funding_output_index));

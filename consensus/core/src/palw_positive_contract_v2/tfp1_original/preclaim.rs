@@ -31,6 +31,7 @@ pub(crate) struct ProtectedBatchBookingV1 {
     obligation: Tfp1PublicOriginalObligationV1,
     accepted_daa: u64,
     accepted_blue_score: u64,
+    book_identity: Hash64,
     quotes: NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>,
     graph: NativeRetainedV1<Vec<CausalServicePacketV1>>,
 }
@@ -55,6 +56,57 @@ impl ProtectedBatchBookingV1 {
     pub(crate) fn graph_v1(&self) -> &[CausalServicePacketV1] {
         self.graph.as_slice()
     }
+
+    /// The receiving native owner must use the exact successful candidate,
+    /// including its capacity and physical assignments, not just an equal
+    /// packet graph rebooked against another prefix.
+    pub(crate) fn check_book_v1(&self, book: &ServiceReservations) -> Result<(), BatchCourtErrorV1> {
+        if self.book_identity != protected_book_identity_v1(book) {
+            return Err(BatchCourtErrorV1::CaseGraph);
+        }
+        Ok(())
+    }
+}
+
+/// A transient ownership seal, not a new wire ID or a service receipt. Use
+/// fixed scalar encodings and u64 collection counts so this infallible hash
+/// cannot fail after the scheduler has committed its candidate. No Vec or
+/// Borsh collection-length conversion is needed.
+fn protected_book_identity_v1(book: &ServiceReservations) -> Hash64 {
+    fn cost(h: &mut blake2b_simd::State, value: ServiceCost) {
+        for n in [value.bytes, value.work, value.io, value.controls] {
+            h.update(&n.to_le_bytes());
+        }
+    }
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka/tfp1/protected-book/v1").to_state();
+    cost(&mut h, book.budget);
+    h.update(&(book.remaining.len() as u64).to_le_bytes());
+    for (daa, capacity) in &book.remaining {
+        h.update(&daa.to_le_bytes());
+        cost(&mut h, *capacity);
+    }
+    h.update(&(book.assignments.len() as u64).to_le_bytes());
+    for (id, daa) in &book.assignments {
+        h.update(id);
+        h.update(&daa.to_le_bytes());
+    }
+    h.update(&(book.packets.len() as u64).to_le_bytes());
+    for (id, packet) in &book.packets {
+        h.update(id);
+        h.update(&packet.id);
+        h.update(&packet.release_daa.to_le_bytes());
+        h.update(&packet.service_before.to_le_bytes());
+        cost(&mut h, packet.cost);
+    }
+    h.update(&(book.supply.len() as u64).to_le_bytes());
+    for (daa, supply) in &book.supply {
+        h.update(&daa.to_le_bytes());
+        h.update(&supply.accepting_block);
+        cost(&mut h, supply.reserved);
+    }
+    h.update(&[u8::from(book.last_observed_daa.is_some())]);
+    h.update(&book.last_observed_daa.unwrap_or(0).to_le_bytes());
+    Hash64::from_bytes(h.finalize().as_bytes().try_into().expect("64-byte ownership seal"))
 }
 
 /// The signed resource identity includes the FULL promised rescue split,
@@ -301,6 +353,7 @@ impl PublicOriginalAdmissionV1<'_> {
             obligation: terms.obligation_v1(),
             accepted_daa: reservation.origin.accepted_daa,
             accepted_blue_score: reservation.origin.accepted_blue_score,
+            book_identity: protected_book_identity_v1(book),
             quotes,
             graph,
         })
@@ -368,6 +421,7 @@ impl PreparedTfp1PublicOriginalV1 {
             obligation: self.obligation,
             accepted_daa: self.companion.carrier.origin.accepted_daa,
             accepted_blue_score: self.companion.carrier.origin.accepted_blue_score,
+            book_identity: protected_book_identity_v1(book),
             quotes,
             graph,
         })

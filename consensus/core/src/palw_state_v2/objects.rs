@@ -100,7 +100,23 @@ fn apply_object_observed_v2(
     if !observes_court && !paired {
         return apply(builder);
     }
+    let paired_claim = match object {
+        PalwConsensusObjectV2::FreePromptCommitted { claim, .. } if paired => Some(*claim),
+        _ => None,
+    };
+    apply_with_native_checkpoint_v1(builder, paired_claim, observes_court, apply)
+}
 
+/// The native dispatcher owns the checkpoint for the whole object, including
+/// claim, escrow, original rows and service publication. Shared with storage
+/// regressions; callers cannot substitute a prepared profile for this owner.
+pub(super) fn apply_with_native_checkpoint_v1<'a>(
+    builder: &mut TransitionBuilder<'a>,
+    paired_claim: Option<Hash64>,
+    observes_court: bool,
+    apply: impl FnOnce(&mut TransitionBuilder<'a>) -> Result<(), PalwStateV2Error>,
+) -> Result<(), PalwStateV2Error> {
+    let paired = paired_claim.is_some();
     // A paired original has one checkpoint even when live court service
     // requires evidence. Nested dispatch still owns its own checkpoint.
     let copy_owner = if paired {
@@ -124,7 +140,12 @@ fn apply_object_observed_v2(
     };
     let previous_evidence = if observes_court { builder.court_end_evidence.clone() } else { None };
     let previous_prefix = if paired { builder.tfp1_original_prefix.take() } else { None };
+    let previous_paired_claim = builder.paired_original_checkpoint_claim;
+    if paired {
+        builder.paired_original_checkpoint_claim = paired_claim;
+    }
     let result = apply(builder);
+    builder.paired_original_checkpoint_claim = previous_paired_claim;
     if observes_court {
         builder.court_end_evidence = previous_evidence;
     }

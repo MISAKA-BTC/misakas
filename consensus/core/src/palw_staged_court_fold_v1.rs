@@ -1339,6 +1339,96 @@ impl TransitionBuilder<'_> {
         result
     }
 
+    /// Publish the prepared protected service row after the native claim,
+    /// escrow and four adjacent frame/history rows, inside the same original
+    /// checkpoint. This method adds no public-profile activation permission.
+    pub(super) fn install_public_tfp1_service_booking_v1(
+        &mut self,
+        point: &PalwBlockContextV2,
+        prepared: crate::palw_positive_contract_v2::tfp1_original::service_booking::PreparedProtectedServiceBookingV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_contract_v2::tfp1_original::service_booking::writer_scratch_requests_v1;
+        use crate::palw_positive_contract_v2::{PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, PUBLIC_TFP1_LINK_TABLE_V1};
+        use crate::palw_tfp1_original_history_v1::{PUBLIC_TFP1_HISTORY_TABLE_V1, Tfp1OriginalHistoryBoundaryV1};
+        let bad = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
+        let claim = prepared.claim_v1();
+        if self.paired_original_checkpoint_claim != Some(claim) || !self.native_writers_tracking_v1() {
+            return Err(bad("protected service publication requires the owning paired checkpoint"));
+        }
+        if self.state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtService) != prepared.before_v1() {
+            return Err(bad("protected service book changed after native reservation"));
+        }
+        let frame = self
+            .state
+            .public_tfp1_frame_v1(claim)
+            .map_err(|_| bad("protected service publication has an invalid frame"))?
+            .ok_or_else(|| bad("protected service publication has no accepted frame"))?;
+        crate::palw_positive_contract_v2::require_current_public_origin_v1(frame.origin_v1(), point)
+            .map_err(|_| bad("protected service publication changes the original inclusion point"))?;
+        // Require the dedicated writer's actual four-insertion suffix, with
+        // no intervening mutation after it checked fresh escrow. A historical
+        // frame from the same DAA does not establish this publication order.
+        let suffix = self.entries.get(self.entries.len().saturating_sub(4)..).unwrap_or(&[]);
+        let [
+            PalwDeltaEntryV2::StagedCourtSeed {
+                key: PalwStagedCourtKeyV1::PublicTfp1FrameV1(frame_claim),
+                old: None,
+                new: Some(PalwStagedCourtRowV1::PublicTfp1FrameV1(written_frame)),
+            },
+            PalwDeltaEntryV2::KernelRouteRow { table: PUBLIC_ORIGINAL_ADMISSION_TABLE_V1, key: original_key, old: None, new: Some(_) },
+            PalwDeltaEntryV2::KernelRouteRow { table: PUBLIC_TFP1_LINK_TABLE_V1, key: link_key, old: None, new: Some(_) },
+            PalwDeltaEntryV2::KernelRouteRow {
+                table: PUBLIC_TFP1_HISTORY_TABLE_V1,
+                key: history_key,
+                old: None,
+                new: Some(history_bytes),
+            },
+        ] = suffix
+        else {
+            return Err(bad("protected service publication must follow the four original insertions"));
+        };
+        if *frame_claim != claim
+            || written_frame.identity_v1() != frame.identity_v1()
+            || original_key.as_slice() != frame.original_id_v1().0.0
+            || link_key.as_slice() != claim.as_byte_slice()
+            || history_key.as_slice() != claim.as_byte_slice()
+        {
+            return Err(bad("protected service publication follows another original"));
+        }
+        let history = Tfp1OriginalHistoryBoundaryV1::decode_row(history_key, history_bytes)
+            .map_err(|_| bad("protected service publication has invalid history"))?;
+        let prefix = self.tfp1_original_prefix.ok_or_else(|| bad("protected service publication has no live prefix"))?;
+        if self.tfp1_history_journal_parent != Some(prefix.parent_v1())
+            || prefix.claim_v1() != claim
+            || prefix.point_v1() != *point
+            || prefix.carrier_v1().as_bytes() != history.origin.carrier_transaction.0
+            || prefix.parent_v1().as_bytes() != history.selected_parent.0
+            || prefix.root_v1().as_bytes() != history.pre_event_root.0
+            || usize::try_from(history.before_delta_end).ok() != Some(prefix.end_v1())
+            || prefix.end_v1() > self.entries.len() - 4
+        {
+            return Err(bad("protected service publication changes the accepting prefix"));
+        }
+        let row = prepared.row_v1();
+        let scratch = writer_scratch_requests_v1(prepared.before_v1().expect("prepared service prior"), row)
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let _scratch =
+            crate::palw_native_resource_v1::reserve_native_pending_requests_v1(scratch).map_err(PalwStateV2Error::NativeResource)?;
+        // LastPoint is still the parent here. Authenticate 206 -> 204 -> 198
+        // against the native accepting point rather than the archival getter.
+        history.check_state_at_v1(&self.state, point).map_err(|_| bad("protected service publication has invalid original links"))?;
+        let binding = row.state.claims.get(&claim).ok_or_else(|| bad("protected service publication has no binding"))?;
+        frame
+            .check_service_binding_v1(&self.state, binding)
+            .map_err(|_| bad("protected service publication changes its native original"))?;
+        let (_before, row, _book_lease) = prepared.into_parts_v1();
+        let (row, _metadata_lease) = row.into_parts_v1();
+        // Existing forward validation, context checks and deadline indices
+        // remain authoritative. Propagate every failure to the outer paired
+        // checkpoint; never recover by dropping this original's reservation.
+        self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService, Some(PalwStagedCourtRowV1::CourtServiceV3(Box::new(row).into())))
+    }
+
     /// Only the paid registration fold and its expiry sweep call this writer.
     /// Validate and reserve every dependent write before changing any row.
     pub(super) fn commit_tokenizer_rows_v1(

@@ -464,6 +464,14 @@ fn check_companion_booking_parity(
     assert_eq!(unsigned_booking.quotes_v1(), signed_booking.quotes_v1());
     assert_eq!(unsigned_booking.graph_v1(), signed_booking.graph_v1());
     for booking in [&unsigned_booking, &signed_booking] {
+        assert_eq!(booking.check_book_v1(&protected_signed), Ok(()));
+        assert!(booking.check_book_v1(&protected_empty).is_err());
+        let mut substituted = protected_signed.clone();
+        substituted.budget.work += 1;
+        assert!(booking.check_book_v1(&substituted).is_err());
+        let mut substituted = protected_signed.clone();
+        *substituted.assignments.values_mut().next().unwrap() += 1;
+        assert!(booking.check_book_v1(&substituted).is_err());
         assert_eq!(booking.original_v1(), protected_companion.id());
         assert_eq!(booking.obligation_v1(), protected_obligation);
         assert!(booking.matches_acceptance_v1(at.daa_score, at.blue_score));
