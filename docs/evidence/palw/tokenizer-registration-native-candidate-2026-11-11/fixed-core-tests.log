@@ -1,0 +1,40 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/t12-main-recovery/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 55s
+     Running unittests src/lib.rs (/tmp/misaka-public-contract-test.fd7edK/debug/deps/kaspa_consensus_core-ebc1ac4bccc82a08)
+
+running 26 tests
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::measure_tokenizer_registration_native_workload ... ignored, opt-in native resource measurement
+test palw_tokenizer_registration_carriage_v1::local_work::tests::tokenizer_registration_local_meter_charges_invalid_source_before_refusing ... ok
+test palw_tokenizer_registration_carriage_v1::tests::source_partition_bounds_any_legal_mergeset_and_refusal_is_atomic ... ok
+test palw_tokenizer_registration_carriage_v1::local_work::tests::tokenizer_registration_local_meter_charges_maximum_finish_and_retries ... ok
+test palw_tokenizer_registration_snapshot_v1::tests::equal_blue_score_requires_the_exact_accepted_point ... ok
+test palw_tokenizer_registration_carriage_v1::tests::candidate_preflight_meters_physical_finish_copies_and_sweeps_once ... ok
+test palw_tokenizer_registration_snapshot_v1::tests::tokenizer_journal_binds_session_progress_and_terminal_point ... ok
+test palw_tokenizer_registration_carriage_v1::tests::real_fee_context_and_zero_service_burn_for_parts ... ok
+test palw_tokenizer_registration_snapshot_v1::tests::historical_snapshot_needs_no_tokenizer_book ... ok
+test palw_tokenizer_registration_v1::tests::bookkeeping_bounds_scale_and_reject_underfunded_metadata ... ok
+test palw_tokenizer_registration_carriage_v1::tests::new_open_burns_once_and_duplicate_projection_keeps_ordinary_fee ... ok
+test palw_tokenizer_registration_v1::tests::finish_work_rehashes_parent_parts_in_every_pass_but_parses_once ... ok
+test palw_tokenizer_registration_v1::tests::invalid_tokenizer_input_is_priced_before_a_small_declared_limit_can_refuse_it ... ok
+test palw_tokenizer_registration_v1::tests::quote_pins_indexed_parts_and_fixed_retention ... ok
+test palw_tokenizer_registration_v1::tests::finish_reuses_registered_eog_opening_and_rejects_oversized_lists ... ok
+test config::params::tokenizer_registration_v1::tests::schedule_fingerprint_and_header_gate_preserve_dormant_rules ... ok
+test palw_tokenizer_registration_state_v1::tests::tokenizer_registration_book_rejects_oversized_restore_before_rebuilding_indices ... ok
+test palw_tokenizer_registration_state_v1::tests::reservation_rejects_corruption_and_expiry_preserves_other_slots ... ok
+test palw_tokenizer_registration_snapshot_v1::tests::tokenizer_journal_preserves_surviving_assignments ... ok
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::funded_tokenizer_registration_native_releases_no_op_reservations ... test palw_tokenizer_registration_v1::tests::signed_open_and_bounded_wire_are_scope_bound ... ok
+test palw_tokenizer_registration_state_v1::tests::signed_finish_cannot_reuse_an_attempt_consumed_by_a_failed_parse ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::verified_tokenizer_registration_root_replay_and_carriage_require_native_context ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::funded_tokenizer_registration_native_open_parts_finish_and_expiry ... ok
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5987 filtered out; finished in 0.49s
+
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::funded_tokenizer_registration_native_releases_no_op_reservations ... ok
+test palw_tokenizer_rendering_v2::differential_tests::tokenizer_registration_differential_invalid_json_and_authenticated_eof ... ok
+test palw_tokenizer_rendering_v2::differential_tests::tokenizer_registration_differential_rendering_eog_and_key_work ... ok
+
+test result: ok. 25 passed; 0 failed; 1 ignored; 0 measured; 5962 filtered out; finished in 1.85s
+

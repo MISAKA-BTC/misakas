@@ -1,0 +1,25 @@
+
+thread '<unnamed>' (1623608) panicked at tools/tokenizer-registration-probe/src/native_run.rs:258:14:
+called `Result::unwrap()` on an `Err` value: NativeResource(Unsupported { component: "logical native capacity", native_type: "kaspa_consensus_core::palw_native_resource_v1::demand::NativeDemandCheckerV1", reason: "typed requests exceed logical capacity (RAM bytes: outstanding 4290166219, request 5179808, limit 4294967296; DB bytes: outstanding 0, request 0, limit 4294967296)" })
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'main' (1623607) panicked at tools/tokenizer-registration-probe/src/main.rs:176:18:
+called `Result::unwrap()` on an `Err` value: Any { .. }
+       66.61 real        66.47 user         0.12 sys
+           148078592  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                9366  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+                 334  involuntary context switches
+        895487279473  instructions retired
+        214475940329  cycles elapsed
+           104661592  peak memory footprint

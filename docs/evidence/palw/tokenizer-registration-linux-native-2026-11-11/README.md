@@ -14,3 +14,5 @@
 全体秒数には fixture の期待値照合と追加の状態root計算が含まれる。合意処理1回の時間や公開1 BPSの能力には読み替えない。最大rawは8 MiBの空白padding付き小語彙入力で、最大語彙・EOGを同時に満たす入力ではない。物理quotaは未設定、共有ホスト上の5回でp99や最悪遅延を保証しない。
 
 [集計・制約](summary.json)、[source provenance](build-provenance.json)、各mode配下のmeasurement.json・JSONL・time・stderrを保存する。先行する[parser測定](../tokenizer-registration-linux-parser-2026-11-11/README.md)、[実nodeの物理DB測定](../tokenizer-registration-physical-db-actual-2026-11-11/README.md)とは範囲を分ける。
+
+計測ツールは明示的に64 MiBのworker thread stackを使う。これは本番ノードの最小stack要件の採択ではない。

@@ -254,3 +254,6 @@ RPC/CLI、snapshot 検査と mempool/peer work の残る境界、実ブロック
 
 
 [Linux native 2パス測定](../../../evidence/palw/tokenizer-registration-linux-native-2026-11-11/README.md)は、core `8a6923139`・tool `4d0aee958` の release binaryで計20プロセスが期待値と一致した。論理RAM/DB各4 GiBの5回では、実入力69操作のharness全体が2.38〜2.52秒・最大RSS47.14 MiB、8 MiB入力259操作が29.67〜31.29秒・96.69 MiBだった。fixture照合や追加root計算を含む全体時間と、Finish/parser・snapshotなど各APIの時間を別々に保存した。M=1、2 session、Finish1件の基準値であり、最大5パス・M=780候補、物理quota、公開料金/性能の適格性には昇格させない。後に発見した共通writerの一時予約返却修正はこのcoreに含まない。
+
+
+`ebefd0152` の[M=780 native candidate検査](../../../evidence/palw/tokenizer-registration-native-candidate-2026-11-11/README.md)で、一時予約が状態不変のFinish再送でも累積し、最大8 MiB入力が論理RAM 4 GiBに達する不具合を検出した。`098da5e04` はjournal長・容量が不変でfee照合が成功した場合の返却を共通writerへ移した。同じ上限・入力で実24.08秒／最大70.48秒の機能検査が成功し、確定foldのFinish成立1件・slot消費1件・再送779件の状態不変を確認した。通常コア回帰25件も成功。macOS opt-level 0のモデル化した候補であり、実780-source DAG、公開障害の原因、Linux性能や公開profileの適格性とは区別する。

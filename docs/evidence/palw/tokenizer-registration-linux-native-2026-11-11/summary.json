@@ -139,6 +139,7 @@
     "Two signed sessions on M=1 with one eventual Finish; maximum_raw is space-padded small-vocabulary JSON, not maximum raw/vocab/EOG simultaneously. Parser stress combinations are separately recorded.",
     "Two native passes, one fee rollback and one journal undo/redo; not five-pass maximum candidate, actual UTXO/node/P2P or physical RocksDB/quota.",
     "Logical limits 4 GiB RAM and DB are an explicit measurement envelope; physical resource admission false in all runs. Native-default also has logical admission false.",
-    "No public policy, fee, hardware minimum or activation adopted; no TFP1 quote/admission/Final or main push."
+    "No public policy, fee, hardware minimum or activation adopted; no TFP1 quote/admission/Final or main push.",
+    "The standalone native runner uses an explicit 64 MiB worker-thread stack. Its stack configuration is not a minimum production-node requirement."
   ]
 }
