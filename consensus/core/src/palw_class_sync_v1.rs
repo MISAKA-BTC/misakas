@@ -47,6 +47,41 @@ pub fn t12_legacy_class_declaration_matches_v1(
         && crate::palw_class_registration_origin_v1::palw_class_admission_bytes_digest_v1(bytes) == T12_LEGACY_ADMISSION_DIGEST
 }
 
+/// Recover an omitted genesis declaration from this network's compiled genesis
+/// objects. Only the exact original registration is eligible; a matching class
+/// label, a later registration, or a changed economic/semantic row is not enough.
+/// The snapshot's consensus root is still checked by its importer.
+pub fn snapshot_genesis_declaration_v1<'a>(
+    objects: &'a [crate::palw_state_v2::PalwConsensusObjectV2],
+    class_id: Hash64,
+    class: &PalwClassStateV2,
+    semantics: Option<&PalwClassSemanticsV1>,
+) -> Result<Option<&'a PalwClassAdmissionCarriageV2>, String> {
+    use crate::palw_state_v2::PalwConsensusObjectV2;
+    if class.registered_daa != 0 || class.registrant_bond.is_some() {
+        return Ok(None);
+    }
+    for object in objects {
+        if let PalwConsensusObjectV2::ClassRegistered {
+            class_id: id,
+            artifact_root,
+            pwu_rule,
+            slash_value_per_pwu,
+            admission: Some(admission),
+            ..
+        } = object
+            && *id == class_id
+            && *artifact_root == class.artifact_root
+            && *pwu_rule == class.pwu_rule
+            && *slash_value_per_pwu == class.slash_value_per_pwu
+        {
+            validate_class_context_v1(class_id, class, semantics, &admission.profile, &admission.canonical)?;
+            return Ok(Some(admission.as_ref()));
+        }
+    }
+    Ok(None)
+}
+
 pub fn validate_class_declaration_v1(
     class_id: Hash64,
     class: &PalwClassStateV2,
@@ -98,6 +133,70 @@ pub fn validate_class_context_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn snapshot_genesis_recovery_requires_exact_registration_and_semantics() {
+        let params = crate::config::params::palw_t12_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = params.palw_consensus_mode else { panic!("V2") };
+        let mut recovered = 0;
+        for object in &bundle.genesis_objects {
+            let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                class_id,
+                artifact_root,
+                pwu_rule,
+                slash_value_per_pwu,
+                admission: Some(admission),
+                ..
+            } = object
+            else {
+                continue;
+            };
+            let class = PalwClassStateV2 {
+                artifact_root: *artifact_root,
+                pwu_rule: *pwu_rule,
+                slash_value_per_pwu: *slash_value_per_pwu,
+                status: crate::palw_state_v2::PalwClassStatusV2::Active,
+                registered_daa: 0,
+                registrant_bond: None,
+                fused_attention: crate::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&admission.profile),
+            };
+            let read = |id, row: &PalwClassStateV2, semantics: Option<&PalwClassSemanticsV1>| {
+                snapshot_genesis_declaration_v1(&bundle.genesis_objects, id, row, semantics)
+                    .map(|v| v.map(|a| borsh::to_vec(a).unwrap()))
+            };
+            let expected = Some(borsh::to_vec(admission.as_ref()).unwrap());
+            assert_eq!(read(*class_id, &class, None).unwrap(), expected);
+            let mut semantics = PalwClassSemanticsV1::of_registration(*class_id, *artifact_root, &admission.canonical, 0);
+            assert_eq!(read(*class_id, &class, Some(&semantics)).unwrap(), expected);
+            semantics.tokenizer_id = Hash64::from_u64_word(999);
+            assert!(read(*class_id, &class, Some(&semantics)).is_err());
+            assert_eq!(read(Hash64::default(), &class, None).unwrap(), None);
+            assert!(snapshot_genesis_declaration_v1(&[], *class_id, &class, None).unwrap().is_none());
+            for change in 0..5 {
+                let mut row = class.clone();
+                match change {
+                    0 => row.registered_daa = 1,
+                    1 => row.artifact_root = Hash64::default(),
+                    2 => row.slash_value_per_pwu += 1,
+                    3 => row.pwu_rule = PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 1 },
+                    _ => {
+                        row.registrant_bond = Some(crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint {
+                            transaction_id: Hash64::default(),
+                            index: 0,
+                        }))
+                    }
+                }
+                assert_eq!(read(*class_id, &row, None).unwrap(), None);
+            }
+            let mut row = class.clone();
+            row.fused_attention = !row.fused_attention;
+            assert!(read(*class_id, &row, None).is_err());
+            // Frozen economic status does not erase authentic sync material.
+            // Execution remains gated by the existing status checks.
+            recovered += 1;
+        }
+        assert_eq!(recovered, 2, "both held genesis declarations, including the reported 2M class");
+    }
+
     #[test]
     fn t12_legacy_pin_matches_only_the_archived_registration() {
         let bytes = include_bytes!("../tests/corpus/t12-daa508-class-admission.borsh");

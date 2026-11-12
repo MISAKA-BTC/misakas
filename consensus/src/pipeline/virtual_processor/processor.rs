@@ -7494,7 +7494,13 @@ impl VirtualStateProcessor {
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return Ok(()); // not a ConsensusV2 network — nothing reads this store.
         };
-        let declaration_rows = if let Some((offered, complete)) = declarations {
+        let declaration_rows = if let Some((mut offered, complete)) = declarations {
+            self.palw_restore_snapshot_genesis_declarations_v1(&carriage, &mut offered).map_err(|why| {
+                PruningImportError::PruningPointImportContextUnavailable(
+                    pruning_point,
+                    format!("snapshot genesis declarations: {why}"),
+                )
+            })?;
             self.palw_validate_snapshot_declarations_v1_impl(&carriage, &offered, complete).map_err(|why| {
                 PruningImportError::PruningPointImportContextUnavailable(pruning_point, format!("snapshot declarations: {why}"))
             })?;

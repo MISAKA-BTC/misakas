@@ -533,3 +533,78 @@ async fn pruning_snapshot_checked_reader_preserves_absence_corruption_and_recove
     let inactive = TestContext::new(TestConsensus::new(&config));
     assert!(inactive.consensus.try_pruning_point_palw_state_shared_v1(inactive.consensus.get_sink()).unwrap().is_none());
 }
+
+#[tokio::test]
+async fn snapshot_missing_genesis_declarations_are_restored_without_accepting_bad_offers() {
+    let ctx = rfc37_context();
+    let vp = ctx.consensus.virtual_processor();
+    let point = ctx.consensus.get_sink();
+    vp.capture_pruning_point_palw_state(point).unwrap();
+    let snapshot = ctx.consensus.pruning_point_palw_state_shared_v1(point).unwrap();
+    assert!(vp.palw_validate_snapshot_declarations_v1_impl(&snapshot, &[], true).is_err());
+    let mut declarations = Vec::new();
+    vp.palw_restore_snapshot_genesis_declarations_v1(&snapshot, &mut declarations).unwrap();
+    assert_eq!(declarations.len(), 2);
+    vp.palw_validate_snapshot_declarations_v1_impl(&snapshot, &declarations, true).unwrap();
+    let expected = declarations.clone();
+    vp.palw_restore_snapshot_genesis_declarations_v1(&snapshot, &mut declarations).unwrap();
+    assert_eq!(declarations, expected, "repair is idempotent");
+    declarations[0].1[0] ^= 1;
+    let bad = declarations.clone();
+    vp.palw_restore_snapshot_genesis_declarations_v1(&snapshot, &mut declarations).unwrap();
+    assert_eq!(declarations, bad, "never replace offered bytes with trusted local bytes");
+    assert!(vp.palw_validate_snapshot_declarations_v1_impl(&snapshot, &declarations, true).is_err());
+    let mut duplicates = expected.clone();
+    duplicates.push(expected[0].clone());
+    vp.palw_restore_snapshot_genesis_declarations_v1(&snapshot, &mut duplicates).unwrap();
+    assert!(vp.palw_validate_snapshot_declarations_v1_impl(&snapshot, &duplicates, true).is_err());
+}
+
+#[tokio::test]
+async fn snapshot_missing_genesis_declarations_survive_import_and_cold_readback() {
+    use crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore;
+    let mut ctx = rfc37_context();
+    let points = rfc37_build_points(&mut ctx).await;
+    let point = points[1];
+    let vp = ctx.consensus.virtual_processor();
+    vp.capture_pruning_point_palw_state(point).unwrap();
+    let snapshot = ctx.consensus.pruning_point_palw_state_shared_v1(point).unwrap();
+    let expected = ctx.consensus.palw_class_carriages_for_snapshot_v1(&snapshot, true).unwrap();
+    assert_eq!(expected.len(), 2);
+    // Reproduce a node whose older import retained the state but omitted the
+    // declarations. Drop its positive cache as a process restart would.
+    for (id, _) in &expected {
+        vp.db.delete(DbKey::new(&Vec::<u8>::from(DatabaseStorePrefixes::PalwClassCarriages), *id)).unwrap();
+    }
+    *vp.palw_class_carriage_store.write() = DbPalwClassCarriageStore::new(vp.db.clone(), CachePolicy::Empty);
+    for (id, _) in &expected {
+        assert!(vp.palw_class_carriage_store.read().get(*id).is_none());
+    }
+    assert_eq!(ctx.consensus.palw_class_carriages_for_snapshot_v1(&snapshot, true).unwrap(), expected);
+    ctx.consensus
+        .import_pruning_points(vec![
+            ctx.consensus.get_header(ctx.consensus.params().genesis.hash).unwrap(),
+            ctx.consensus.get_header(point).unwrap(),
+        ])
+        .unwrap();
+    vp.palw_state_v2_store.write().delete_tip_for_tests().unwrap();
+    let session = ctx.consensus.begin_pruning_point_import(point).unwrap();
+    let mut tampered = (**snapshot).clone();
+    tampered.pending_payouts.insert(
+        kaspa_hashes::Hash64::from_u64_word(0x128),
+        kaspa_consensus_core::palw_state_v2::PalwPayoutV2 { payload: kaspa_hashes::Hash64::from_u64_word(0x127), amount: 1 },
+    );
+    assert!(ctx.consensus.import_pruning_point_palw_snapshot_for_session(session, tampered, vec![], true).is_err());
+    assert!(vp.palw_state_v2_store.read().tip_record().unwrap().is_none());
+    for (id, _) in &expected {
+        assert!(vp.palw_class_carriage_store.read().get(*id).is_none(), "failed root check must not publish recovered bytes");
+    }
+    ctx.consensus.import_pruning_point_palw_snapshot_for_session(session, (**snapshot).clone(), vec![], true).unwrap();
+    let cold = DbPalwClassCarriageStore::new(vp.db.clone(), CachePolicy::Empty);
+    for (id, bytes) in expected {
+        let row = cold.get(id).expect("recovered declaration committed with the imported state");
+        assert_eq!(row.carriage, bytes);
+        assert_eq!(row.registered_daa, 0);
+        assert_eq!(row.artifact_root, snapshot.classes[&id].artifact_root);
+    }
+}

@@ -3679,11 +3679,30 @@ impl VirtualStateProcessor {
             if self.palw_snapshot_builtin_class_v1(*id, class, snapshot.class_semantics.get(id))? {
                 continue;
             }
-            let Some(record) = store.get(*id) else {
-                if complete {
-                    return Err(format!("snapshot class {id} has no declaration index row"));
+            let record = match store.get(*id) {
+                Some(record) => record,
+                None => {
+                    // Older pruning imports could omit genesis declarations.
+                    // Repair only from the exact compiled network registration;
+                    // never synthesize post-genesis or peer-supplied identities.
+                    let Some(admission) = kaspa_consensus_core::palw_class_sync_v1::snapshot_genesis_declaration_v1(
+                        &self.palw_genesis_objects_v2,
+                        *id,
+                        class,
+                        snapshot.class_semantics.get(id),
+                    )?
+                    else {
+                        if complete {
+                            return Err(format!("snapshot class {id} has no declaration index row"));
+                        }
+                        continue;
+                    };
+                    std::sync::Arc::new(crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                        registered_daa: class.registered_daa,
+                        artifact_root: class.artifact_root,
+                        carriage: borsh::to_vec(admission).map_err(|e| e.to_string())?,
+                    })
                 }
-                continue;
             };
             if record.artifact_root != class.artifact_root || record.registered_daa != class.registered_daa {
                 if complete {
@@ -3719,6 +3738,42 @@ impl VirtualStateProcessor {
             }
         }
         Ok(declarations)
+    }
+
+    /// Supply missing genesis bytes before validation and atomic import. Offered
+    /// declarations remain untouched so duplicates or altered bytes still fail.
+    pub(crate) fn palw_restore_snapshot_genesis_declarations_v1(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: &mut Vec<(kaspa_hashes::Hash64, Vec<u8>)>,
+    ) -> Result<(), String> {
+        // The compiled genesis set is bounded independently of peer input.
+        for object in &self.palw_genesis_objects_v2 {
+            let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                class_id: id, admission: Some(_), ..
+            } = object
+            else {
+                continue;
+            };
+            let Some(class) = snapshot.classes.get(id) else {
+                continue;
+            };
+            if declarations.iter().any(|(offered, _)| offered == id)
+                || snapshot.tir_classes.contains_key(id)
+                || snapshot.gen_classes.contains_key(id)
+            {
+                continue;
+            }
+            if let Some(admission) = kaspa_consensus_core::palw_class_sync_v1::snapshot_genesis_declaration_v1(
+                &self.palw_genesis_objects_v2,
+                *id,
+                class,
+                snapshot.class_semantics.get(id),
+            )? {
+                declarations.push((*id, borsh::to_vec(admission).map_err(|e| e.to_string())?));
+            }
+        }
+        Ok(())
     }
 
     /// Validate the offered set before a durable pruning-state installation.
