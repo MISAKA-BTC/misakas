@@ -106,6 +106,7 @@ pub(crate) fn exercise_native_plan_v3(
         },
         request_service: ServiceCost { bytes: 1_000_000, work: 1_000_000, io: 1_000_000, controls: 1 },
         request_retained_bytes: request_retained,
+        request_max_gap_daa: 256,
         notice: FirstNoticeDemand {
             draw_ready_by: at.daa_score + 1,
             material_ready_by: at.daa_score + 1,

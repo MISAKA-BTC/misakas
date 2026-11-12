@@ -15,7 +15,7 @@ use crate::{
     palw_native_resource_v1::{NativeCoverageV1, NativeRetainedV1, TirNativeRequestsV1, reserve_native_pending_requests_v1},
     palw_positive_contract_v2::{PublicOriginalAdmissionV1, PublicOriginalProspectiveReservationV2},
 };
-use initial_request::InitialMaterialRequestPlanV1;
+use initial_request::{InitialMaterialRequestPlanV1, MaterialRequestSeriesV2};
 use misaka_palw_positive_contract::{
     ContractError,
     public_one_honest::{OriginalCommit, OriginalId, ProtectedRescueDemand, VerificationSchedule},
@@ -137,6 +137,7 @@ pub(crate) struct DrawnBatchPreclaimTermsV1 {
     rescue: ProtectedRescueDemand,
     obligation: Tfp1PublicOriginalObligationV1,
     initial_request: Option<InitialMaterialRequestPlanV1>,
+    request_series: Option<MaterialRequestSeriesV2>,
     relative_graph: Hash64,
 }
 
@@ -152,10 +153,11 @@ impl DrawnBatchPreclaimTermsV1 {
         )
         .map_err(|_| ContractError::NonCanonical)?;
         let obligation = (*projected.obligation_v2().facts_v1()).service_obligation_v1(projected.profile_id_v2(), resource)?;
-        Ok(Self { projected, rescue, obligation, initial_request: None, relative_graph: projected.relative_graph_id_v2() })
+        Ok(Self { projected, rescue, obligation, initial_request: None, request_series: None, relative_graph: projected.relative_graph_id_v2() })
     }
 
     pub(crate) fn with_initial_request_v2(mut self, plan: InitialMaterialRequestPlanV1) -> Result<Self, ContractError> {
+        if self.request_series.is_some() { return Err(ContractError::Scope); }
         let facts = *self.projected.obligation_v2().facts_v1();
         let relative_graph = plan
             .request_v1(facts.native_identity_v1().0, Hash64::from_u64_word(1), self.projected.accepted_daa_v2())
@@ -170,6 +172,39 @@ impl DrawnBatchPreclaimTermsV1 {
         self.relative_graph = relative_graph;
         self.initial_request = Some(plan);
         Ok(self)
+    }
+
+    fn with_request_series_v3(mut self, series: MaterialRequestSeriesV2) -> Result<Self, ContractError> {
+        let a = self.projected.accepted_daa_v2();
+        let facts = *self.projected.obligation_v2().facts_v1();
+        let claim = facts.native_identity_v1().0;
+        let mut graph = self.projected.relative_graph_id_v2();
+        for slot in 0..series.count_v2() {
+            graph = series.request_v2(claim, Hash64::from_u64_word(1), a, slot)
+                .and_then(|request| request.relative_graph_id_v1(graph, a)).map_err(|_| ContractError::Budget)?;
+        }
+        let resource = crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/tfp1-request-series-resource/v3",
+            &(self.projected.resource_id_v2(), graph, self.rescue, series),
+        ).map_err(|_| ContractError::NonCanonical)?;
+        self.obligation = facts.service_obligation_v1(self.projected.profile_id_v2(), resource)?;
+        self.relative_graph = graph;
+        self.initial_request = Some(series.first_v2());
+        self.request_series = Some(series);
+        Ok(self)
+    }
+
+    fn request_count_v2(&self) -> usize {
+        self.request_series.map_or(usize::from(self.initial_request.is_some()), MaterialRequestSeriesV2::count_v2)
+    }
+
+    fn request_v2(&self, claim: Hash64, scope: Hash64, slot: usize) -> Result<crate::palw_court_shared_material_intake_v1::batch::admission::protected::BatchInitialRequestV1, BatchCourtErrorV1> {
+        let a = self.projected.accepted_daa_v2();
+        match self.request_series {
+            Some(series) => series.request_v2(claim, scope, a, slot),
+            None if slot == 0 => self.initial_request.ok_or(BatchCourtErrorV1::CaseGraph)?.request_v1(claim, scope, a),
+            None => Err(BatchCourtErrorV1::CaseGraph),
+        }
     }
 
     pub(crate) fn obligation_v1(&self) -> Tfp1PublicOriginalObligationV1 {
@@ -220,7 +255,7 @@ impl ProtectedBatchPreclaimTermsV1 {
         rescue: ProtectedRescueDemand,
         initial_request: Option<InitialMaterialRequestPlanV1>,
     ) -> Result<Self, ContractError> {
-        Self::new_inner_v1(projected, rescue, initial_request, None)
+        Self::new_inner_v1(projected, rescue, initial_request, None, None)
     }
 
     pub(crate) fn new_with_original_duties_v2(
@@ -229,7 +264,16 @@ impl ProtectedBatchPreclaimTermsV1 {
         initial_request: InitialMaterialRequestPlanV1,
         duties: ProtectedOriginalDutiesV1,
     ) -> Result<Self, ContractError> {
-        Self::new_inner_v1(projected, rescue, Some(initial_request), Some(duties))
+        Self::new_inner_v1(projected, rescue, Some(initial_request), Some(duties), None)
+    }
+
+    pub(crate) fn new_with_request_series_v3(
+        projected: PlainBatchProspectiveOriginalTermsV2,
+        rescue: ProtectedRescueDemand,
+        series: MaterialRequestSeriesV2,
+        duties: ProtectedOriginalDutiesV1,
+    ) -> Result<Self, ContractError> {
+        Self::new_inner_v1(projected, rescue, Some(series.first_v2()), Some(duties), Some(series))
     }
 
     fn new_inner_v1(
@@ -237,16 +281,25 @@ impl ProtectedBatchPreclaimTermsV1 {
         rescue: ProtectedRescueDemand,
         initial_request: Option<InitialMaterialRequestPlanV1>,
         duties: Option<ProtectedOriginalDutiesV1>,
+        series: Option<MaterialRequestSeriesV2>,
     ) -> Result<Self, ContractError> {
         let mut terms = DrawnBatchPreclaimTermsV1::new_v1(projected, rescue)?;
-        if let Some(plan) = initial_request {
+        if let Some(series) = series {
+            if initial_request != Some(series.first_v2()) { return Err(ContractError::Scope); }
+            terms = terms.with_request_series_v3(series)?;
+        } else if let Some(plan) = initial_request {
             terms = terms.with_initial_request_v2(plan)?;
         }
-        let resource = crate::palw_court_shared_tir_stream_v1::stream_digest(
-            b"misaka-palw/tfp1-protected-batch-resource/v1",
-            &(projected.resource_id_v2(), terms.relative_graph, rescue, initial_request),
-        )
-        .map_err(|_| ContractError::NonCanonical)?;
+        let resource = match series {
+            Some(series) => crate::palw_court_shared_tir_stream_v1::stream_digest(
+                b"misaka-palw/tfp1-protected-request-series-resource/v2",
+                &(projected.resource_id_v2(), terms.relative_graph, rescue, series),
+            ),
+            None => crate::palw_court_shared_tir_stream_v1::stream_digest(
+                b"misaka-palw/tfp1-protected-batch-resource/v1",
+                &(projected.resource_id_v2(), terms.relative_graph, rescue, initial_request),
+            ),
+        }.map_err(|_| ContractError::NonCanonical)?;
         let resource = if let Some(duties) = duties {
             crate::palw_court_shared_tir_stream_v1::stream_digest(
                 b"misaka-palw/tfp1-protected-batch-with-early-duties/v2",
@@ -279,6 +332,12 @@ impl ProtectedBatchPreclaimTermsV1 {
 
     pub(super) fn initial_request_v1(&self) -> Option<InitialMaterialRequestPlanV1> {
         self.batch.initial_request
+    }
+
+    pub(super) fn request_count_v2(&self) -> usize { self.batch.request_count_v2() }
+
+    pub(super) fn request_v2(&self, claim: Hash64, scope: Hash64, slot: usize) -> Result<crate::palw_court_shared_material_intake_v1::batch::admission::protected::BatchInitialRequestV1, BatchCourtErrorV1> {
+        self.batch.request_v2(claim, scope, slot)
     }
 
     pub(super) fn rescue_v1(&self) -> ProtectedRescueDemand {
@@ -644,7 +703,7 @@ fn reserve_batch_v1(
     // Compile only one graph until the entire set's structural cap is known.
     let first_scope = scope(0)?;
     let first = projection.compile_before_allocation_v2(first_scope, &terms.projected, &mut price)?;
-    let width = first.packet_count_v1().checked_add(usize::from(terms.initial_request.is_some())).ok_or(CaseGraph)?;
+    let width = first.packet_count_v1().checked_add(terms.request_count_v2()).ok_or(CaseGraph)?;
     if width == 0 || width.checked_mul(count).and_then(|n| n.checked_add(early_count)).is_none_or(|n| n > maximum_packets) {
         return Err(CaseGraph);
     }
@@ -653,7 +712,7 @@ fn reserve_batch_v1(
     scratch.exact_v1::<(Hash64, &CompiledBatchAdmissionV1)>(count as u64).map_err(LocalResource)?;
     if terms.initial_request.is_some() {
         scratch
-            .exact_v1::<crate::palw_court_shared_material_intake_v1::batch::admission::protected::BatchInitialRequestV1>(count as u64)
+            .exact_v1::<crate::palw_court_shared_material_intake_v1::batch::admission::protected::BatchInitialRequestV1>((count as u64).checked_mul(terms.request_count_v2() as u64).ok_or(CaseGraph)?)
             .map_err(LocalResource)?;
     }
     let _owner = reserve_native_pending_requests_v1(scratch.bytes_v1()).map_err(LocalResource)?;
@@ -662,7 +721,7 @@ fn reserve_batch_v1(
     for rank in 1..count {
         let namespace = scope(rank)?;
         let next = projection.compile_before_allocation_v2(namespace, &terms.projected, &mut price)?;
-        if next.packet_count_v1().checked_add(usize::from(terms.initial_request.is_some())) != Some(width) {
+        if next.packet_count_v1().checked_add(terms.request_count_v2()) != Some(width) {
             return Err(CaseGraph);
         }
         compiled.push((namespace, next));
@@ -677,18 +736,20 @@ fn reserve_batch_v1(
         // The common kernel also binds the last slot to the original clock.
         plan.check_deadline_v1(a, schedule)?;
         let claim = terms.obligation.facts_v1().native_identity_v1().0;
-        let mut requests = exact_vec(count)?;
+        let mut requests = exact_vec(count.checked_mul(terms.request_count_v2()).ok_or(CaseGraph)?)?;
         for (namespace, _) in &cases {
-            requests.push(plan.request_v1(claim, *namespace, a)?);
+            for slot in 0..terms.request_count_v2() {
+                requests.push(terms.request_v2(claim, *namespace, slot)?);
+            }
         }
         Some(requests)
     } else {
         None
     };
     let early_graph = early.map(|(duties, _)| duties.graph_v1(original)).transpose()?;
-    CompiledBatchAdmissionV1::reserve_protected_with_early_duties_v1(
+    CompiledBatchAdmissionV1::reserve_protected_with_request_series_v2(
         &cases,
-        initial.as_deref(),
+        initial.as_deref().map(|requests| crate::palw_court_shared_material_intake_v1::batch::admission::protected::BatchRequestSetV2 { requests, per_case: terms.request_count_v2() }),
         early_graph.as_ref().map_or(&[], |graph| graph.as_slice()),
         book,
         maximum_packets,

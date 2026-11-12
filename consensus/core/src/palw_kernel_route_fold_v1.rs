@@ -405,7 +405,7 @@ impl TransitionBuilder<'_> {
         };
         let mut candidate = seed.candidate_at_v1(parent_root, point).map_err(map_error)?;
         self.install_paid_manifest_request_with_v1(point, prepared, &mut candidate, |candidate, charge| {
-            seed.project_after_candidate_v1(candidate, charge).map_err(map_error)
+            seed.project_after_prepared_v2(candidate, charge, prepared).map_err(map_error)
         })
     }
 

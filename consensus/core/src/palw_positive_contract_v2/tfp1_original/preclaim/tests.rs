@@ -464,6 +464,13 @@ fn check_companion_booking_parity(
         let duties = ProtectedOriginalDutiesV1::reservation_fixture_v1(terms, at.blue_score, schedule);
         let combined =
             ProtectedBatchPreclaimTermsV1::new_with_original_duties_v2(terms.projected, terms.rescue, initial, duties).unwrap();
+        let last_notice = FirstNoticeDemand { missing_material_detected_by: at.daa_score + 3119, material_request_inclusion_daa: 1, ..notice };
+        let first_packet = initial.request_v1(fp_claim_id_v3(fp), Hash64::from_u64_word(1), at.daa_score).unwrap();
+        let last = InitialMaterialRequestPlanV1::new_v1(at.daa_score, last_notice, first_packet.packet.cost, first_packet.retained_bytes).unwrap();
+        let single = ProtectedBatchPreclaimTermsV1::new_with_original_duties_v2(terms.projected, terms.rescue, last, duties).unwrap();
+        let series = ProtectedBatchPreclaimTermsV1::new_with_request_series_v3(terms.projected, terms.rescue, MaterialRequestSeriesV2::new_v2(last, 256).unwrap(), duties).unwrap();
+        assert_eq!(single.relative_graph_id_v1(), series.relative_graph_id_v1());
+        assert_ne!(single.obligation_v1(), series.obligation_v1(), "series receipt semantics must be signed even with one slot");
         let obligation = combined.obligation_v1();
         assert_ne!(obligation, protected_obligation);
         let notice_packets = usize::try_from(terms.rescue.max_drawn_bonds + terms.rescue.max_outsiders).unwrap();

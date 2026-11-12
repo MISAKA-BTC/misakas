@@ -11,7 +11,7 @@ use super::{
     initial_supply::{InitialSupplyErrorV1, PublicTfp1InitialSupplyV1, reserve_identity_writers_v3},
     preclaim::{
         ProtectedBatchPreclaimTermsV1,
-        initial_request::InitialMaterialRequestPlanV1,
+        initial_request::{InitialMaterialRequestPlanV1, MaterialRequestSeriesV2},
         original_duties::{ProtectedEarlyDutyPolicyV1, ProtectedOriginalDutiesV1},
     },
 };
@@ -75,6 +75,7 @@ pub(crate) struct Tfp1NativePlanningPolicyV3<'a> {
     pub early: ProtectedEarlyDutyPolicyV1,
     pub request_service: ServiceCost,
     pub request_retained_bytes: u64,
+    pub request_max_gap_daa: u64,
     pub notice: FirstNoticeDemand,
     pub case: MaterialCaseDemand,
     pub initial_supply: RemainingCapacity,
@@ -145,6 +146,7 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
             VerificationSchedule::new(OriginalClock::new(daa).map_err(contract)?, policy.notice, policy.case).map_err(contract)?;
         let request = InitialMaterialRequestPlanV1::new_v1(daa, policy.notice, policy.request_service, policy.request_retained_bytes)
             .map_err(batch_error)?;
+        let requests = MaterialRequestSeriesV2::new_v2(request, policy.request_max_gap_daa).map_err(batch_error)?;
         let projection = PlainBatchOriginalProjectionV2::derive_at_clocks_v2(
             parent,
             extras,
@@ -218,7 +220,7 @@ impl<'a> NativeTfp1OriginalPlanV3<'a> {
             ProtectedOriginalDutiesV1::derive_v1(projected, &supply, blue, policy.notice, schedule, policy.rescue, policy.early)
                 .map_err(batch_error)?;
         let terms =
-            ProtectedBatchPreclaimTermsV1::new_with_original_duties_v2(projected, policy.rescue, request, early).map_err(contract)?;
+            ProtectedBatchPreclaimTermsV1::new_with_request_series_v3(projected, policy.rescue, requests, early).map_err(contract)?;
         Ok(Self { projection, class, terms, policy, clocks: (daa, blue), supply, parent, extras, prompt_form })
     }
 

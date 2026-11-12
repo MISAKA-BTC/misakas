@@ -117,25 +117,34 @@ impl PreparedTfp1PublicOriginalV1 {
         };
         let bytes = handoff.request_at_v1(&carrier).map_err(|_| ContractError::Scope)?;
         let pending = self.companion.prepare_drawn_manifest_storage_record(link.reservation_v1(), draw, bytes, context)?;
-        let packet = plan
-            .request_v1(scope.claim, scope.reservation_scope, self.companion.carrier.origin.accepted_daa)
-            .map_err(|_| ContractError::Scope)?
-            .packet;
+        let request = match protected {
+            Some(terms) => {
+                let service = state.court_service_row_v3_v1().ok_or(ContractError::Scope)?;
+                let mut selected = None;
+                for slot in 0..terms.request_count_v2() {
+                    let request = terms.request_v2(scope.claim, scope.reservation_scope, slot).map_err(|_| ContractError::Scope)?;
+                    if service.state.book.assigned_daa(&request.packet.id) == Some(at.daa_score) {
+                        if selected.is_some() { return Err(ContractError::Scope); }
+                        selected = Some(request);
+                    }
+                }
+                selected.ok_or(ContractError::Scope)?
+            },
+            None => plan.request_v1(scope.claim, scope.reservation_scope, self.companion.carrier.origin.accepted_daa)
+                .map_err(|_| ContractError::Scope)?,
+        };
+        let packet = request.packet;
         check_slot(state, &link, &packet, &at)?;
-        let charge = quote_charge(packet.cost, plan.retained_bytes_v1())?;
+        let charge = quote_charge(packet.cost, request.retained_bytes)?;
         if charge == 0 || handoff.remaining_fee_v1() < charge {
             return Err(ContractError::Budget);
         }
         let purpose = manifest_request_charge_purpose_v1(link.original_v1(), packet.id)?;
-        let paid = PaidManifestRequestRowV1::new_v1(
-            scope,
-            link.original_v1(),
-            pending.case,
-            context.origin,
-            pending.row.request_digest(),
-            purpose,
-            charge,
-        )?;
+        let paid = if protected.is_some() {
+            PaidManifestRequestRowV1::new_for_slot_v2(scope, link.original_v1(), pending.case, context.origin, pending.row.request_digest(), packet.id, charge)?
+        } else {
+            PaidManifestRequestRowV1::new_v1(scope, link.original_v1(), pending.case, context.origin, pending.row.request_digest(), purpose, charge)?
+        };
         let prepared = PreparedPaidManifestRequestV1 { link, pending, paid, carrier, packet, purpose };
         prepared.storage_rows_at_v1(state, &at)?;
         Ok(prepared)

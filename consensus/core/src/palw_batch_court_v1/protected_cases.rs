@@ -69,13 +69,40 @@ pub(crate) fn reserve_batch_and_early_duties_v1(
     maximum_packets: usize,
     check_assignments: impl FnOnce(&ServiceReservations) -> Result<(), ServiceRefusal>,
 ) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), Error> {
+    reserve_batch_and_early_duties_with_request_series_v2(
+        window,
+        book,
+        cases,
+        requests.map(|requests| (requests, 1)),
+        early,
+        recovery_daa,
+        maximum_packets,
+        check_assignments,
+    )
+}
+
+/// The flat request list is ordered by case and then by opportunity. Every
+/// request in a case precedes its post-notice work for capacity planning.
+/// These edges do not require every opportunity to carry an actual request.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reserve_batch_and_early_duties_with_request_series_v2(
+    window: BatchCourtWindowV1,
+    book: &mut ServiceReservations,
+    cases: &[BatchCaseGraphV2<'_>],
+    requests: Option<(&[ServicePacket], usize)>,
+    early: &[CausalServicePacketV1],
+    recovery_daa: u64,
+    maximum_packets: usize,
+    check_assignments: impl FnOnce(&ServiceReservations) -> Result<(), ServiceRefusal>,
+) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), Error> {
     if cases.is_empty() || cases.len() > maximum_packets {
         return Err(Error::CaseGraph);
     }
-    if requests.is_some_and(|requests| requests.len() != cases.len()) {
+    if requests.is_some_and(|(requests, per_case)| per_case == 0 || cases.len().checked_mul(per_case) != Some(requests.len())) {
         return Err(Error::CaseGraph);
     }
-    let initial_count = early.len().checked_add(requests.map_or(0, |requests| requests.len())).ok_or(Error::CaseGraph)?;
+    let requests_for = |index: usize| requests.map_or(&[][..], |(requests, per_case)| &requests[index * per_case..][..per_case]);
+    let initial_count = early.len().checked_add(requests.map_or(0, |(requests, _)| requests.len())).ok_or(Error::CaseGraph)?;
     if initial_count > maximum_packets {
         return Err(Error::CaseGraph);
     }
@@ -88,8 +115,8 @@ pub(crate) fn reserve_batch_and_early_duties_v1(
     let early_edges =
         early.iter().try_fold(0u64, |sum, node| sum.checked_add(node.predecessors.len() as u64)).ok_or(Error::CaseGraph)?;
     let edges = cases.iter().flat_map(|case| case.graph).try_fold(early_edges, |sum, node| {
-        let count = node.predecessors.len() as u64 + u64::from(requests.is_some() && node.predecessors.is_empty());
-        sum.checked_add(count).ok_or(Error::CaseGraph)
+        let count = if node.predecessors.is_empty() { requests.map_or(0, |(_, per_case)| per_case) } else { node.predecessors.len() };
+        sum.checked_add(count as u64).ok_or(Error::CaseGraph)
     })?;
     let mut owned = TirNativeRequestsV1::new();
     owned.exact_v1::<Vec<CausalServicePacketV1>>(1).map_err(Error::LocalResource)?;
@@ -125,8 +152,8 @@ pub(crate) fn reserve_batch_and_early_duties_v1(
         if opportunities.insert(case.opportunity, ()).is_some() {
             return Err(Error::CaseGraph);
         }
-        if let Some(requests) = requests {
-            let id = requests[index].id;
+        for request in requests_for(index) {
+            let id = request.id;
             if membership.insert(id, index).is_some() {
                 return Err(Error::CaseGraph);
             }
@@ -153,14 +180,15 @@ pub(crate) fn reserve_batch_and_early_duties_v1(
         graph.push(CausalServicePacketV1 { packet: node.packet.clone(), predecessors });
     }
     for (index, case) in cases.iter().enumerate() {
-        if let Some(requests) = requests {
-            graph.push(CausalServicePacketV1 { packet: requests[index].clone(), predecessors: Vec::new() });
+        let requests = requests_for(index);
+        for request in requests {
+            graph.push(CausalServicePacketV1 { packet: request.clone(), predecessors: Vec::new() });
         }
         for node in case.graph {
-            let initial = requests.filter(|_| node.predecessors.is_empty()).map(|requests| requests[index].id);
-            let mut predecessors = exact_vec(node.predecessors.len() + usize::from(initial.is_some()))?;
+            let initial = if node.predecessors.is_empty() { requests } else { &[] };
+            let mut predecessors = exact_vec(node.predecessors.len().checked_add(initial.len()).ok_or(Error::CaseGraph)?)?;
             predecessors.extend_from_slice(&node.predecessors);
-            predecessors.extend(initial);
+            predecessors.extend(initial.iter().map(|request| request.id));
             graph.push(CausalServicePacketV1 { packet: node.packet.clone(), predecessors });
         }
     }

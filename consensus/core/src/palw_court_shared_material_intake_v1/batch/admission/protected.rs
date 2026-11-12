@@ -2,12 +2,26 @@
 //! expiry and retained-control checks. The caller still authenticates the
 //! complete selected/outsider/defense opportunity set before compilation.
 use super::*;
-use crate::palw_batch_court_v1::protected_cases::{BatchCaseGraphV2, reserve_batch_and_early_duties_v1};
+use crate::palw_batch_court_v1::protected_cases::{BatchCaseGraphV2, reserve_batch_and_early_duties_with_request_series_v2};
 use crate::palw_native_resource_v1::reserve_native_pending_requests_v1;
 
 pub(crate) struct BatchInitialRequestV1 {
     pub packet: ServicePacket,
     pub retained_bytes: u64,
+}
+
+/// Fixed-width groups ordered by case and then by opportunity ordinal.
+#[derive(Clone, Copy)]
+pub(crate) struct BatchRequestSetV2<'a> {
+    pub requests: &'a [BatchInitialRequestV1],
+    pub per_case: usize,
+}
+
+impl<'a> BatchRequestSetV2<'a> {
+    // Called after the checked group count has been validated.
+    fn for_case_v2(self, index: usize) -> &'a [BatchInitialRequestV1] {
+        &self.requests[index * self.per_case..][..self.per_case]
+    }
 }
 
 pub(crate) fn manifest_request_packet_id_v1(claim: Hash64, reservation_scope: Hash64) -> Result<[u8; 64], BatchCourtErrorV1> {
@@ -17,6 +31,22 @@ pub(crate) fn manifest_request_packet_id_v1(claim: Hash64, reservation_scope: Ha
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/tfp1-manifest-request-service/v1", &(claim, reservation_scope))
         .map(|id| id.as_bytes())
         .map_err(|_| BatchCourtErrorV1::CaseGraph)
+}
+
+pub(crate) fn manifest_request_packet_id_v2(
+    claim: Hash64,
+    reservation_scope: Hash64,
+    ordinal: u32,
+) -> Result<[u8; 64], BatchCourtErrorV1> {
+    if claim == Hash64::default() || reservation_scope == Hash64::default() || ordinal == 0 {
+        return Err(BatchCourtErrorV1::CaseGraph);
+    }
+    crate::palw_court_shared_tir_stream_v1::stream_digest(
+        b"misaka-palw/tfp1-manifest-request-service/v2",
+        &(claim, reservation_scope, ordinal),
+    )
+    .map(|id| id.as_bytes())
+    .map_err(|_| BatchCourtErrorV1::CaseGraph)
 }
 
 impl BatchInitialRequestV1 {
@@ -70,6 +100,24 @@ impl CompiledBatchAdmissionV1 {
         maximum_packets: usize,
         check: impl FnOnce(&[BatchAdmissionQuoteV1], &ServiceReservations) -> Result<(), ServiceRefusal>,
     ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+        Self::reserve_protected_with_request_series_v2(
+            cases,
+            requests.map(|requests| BatchRequestSetV2 { requests, per_case: 1 }),
+            early,
+            book,
+            maximum_packets,
+            check,
+        )
+    }
+
+    pub(crate) fn reserve_protected_with_request_series_v2(
+        cases: &[(Hash64, &Self)],
+        requests: Option<BatchRequestSetV2<'_>>,
+        early: &[CausalServicePacketV1],
+        book: &mut ServiceReservations,
+        maximum_packets: usize,
+        check: impl FnOnce(&[BatchAdmissionQuoteV1], &ServiceReservations) -> Result<(), ServiceRefusal>,
+    ) -> Result<(NativeRetainedV1<Vec<BatchAdmissionQuoteV1>>, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, LocalResource};
         let first = cases.first().ok_or(CaseGraph)?.1;
         if cases.len() > maximum_packets
@@ -80,16 +128,26 @@ impl CompiledBatchAdmissionV1 {
             return Err(CaseGraph);
         }
         if let Some(requests) = requests {
-            if requests.len() != cases.len() {
+            if requests.per_case == 0
+                || u32::try_from(requests.per_case - 1).is_err()
+                || cases.len().checked_mul(requests.per_case) != Some(requests.requests.len())
+                || requests.requests.len().checked_add(early.len()).is_none_or(|count| count > maximum_packets)
+            {
                 return Err(CaseGraph);
             }
-            for ((opportunity, case), request) in cases.iter().zip(requests) {
-                if case.scope != *opportunity
-                    || request.packet.id != manifest_request_packet_id_v1(case.claim, *opportunity)?
-                    || request.retained_bytes == 0
-                    || request.retained_bytes > request.packet.cost.bytes
-                {
+            for (index, (opportunity, case)) in cases.iter().enumerate() {
+                if case.scope != *opportunity {
                     return Err(CaseGraph);
+                }
+                for (ordinal, request) in requests.for_case_v2(index).iter().enumerate() {
+                    let id = if ordinal == 0 {
+                        manifest_request_packet_id_v1(case.claim, *opportunity)?
+                    } else {
+                        manifest_request_packet_id_v2(case.claim, *opportunity, ordinal as u32)?
+                    };
+                    if request.packet.id != id || request.retained_bytes == 0 || request.retained_bytes > request.packet.cost.bytes {
+                        return Err(CaseGraph);
+                    }
                 }
             }
         }
@@ -100,22 +158,22 @@ impl CompiledBatchAdmissionV1 {
         let owner = reserve_native_pending_requests_v1(quote_memory.bytes_v1()).map_err(LocalResource)?;
         let mut scratch = TirNativeRequestsV1::new();
         scratch.vec_v1::<BatchCaseGraphV2<'_>>(cases.len() as u64).map_err(LocalResource)?;
-        scratch.vec_v1::<ServicePacket>(requests.map_or(0, |requests| requests.len()) as u64).map_err(LocalResource)?;
+        scratch.vec_v1::<ServicePacket>(requests.map_or(0, |requests| requests.requests.len()) as u64).map_err(LocalResource)?;
         let _scratch_owner = reserve_native_pending_requests_v1(scratch.bytes_v1()).map_err(LocalResource)?;
         let graphs = cases
             .iter()
             .map(|(opportunity, case)| BatchCaseGraphV2 { opportunity: *opportunity, graph: &case.graph, terminal: case.terminal })
             .collect::<Vec<_>>();
-        let initial = requests.map(|requests| requests.iter().map(|request| request.packet.clone()).collect::<Vec<_>>());
+        let initial = requests.map(|requests| requests.requests.iter().map(|request| request.packet.clone()).collect::<Vec<_>>());
         let mut quotes = Vec::new();
         // These are aggregate economic quantities, not a new service capacity.
         // Overflow must refuse the entire candidate before it commits.
         let mut totals = [0u64; 10];
-        let (_, graph) = reserve_batch_and_early_duties_v1(
+        let (_, graph) = reserve_batch_and_early_duties_with_request_series_v2(
             first.window,
             book,
             &graphs,
-            initial.as_deref(),
+            initial.as_deref().zip(requests.map(|requests| requests.per_case)),
             early,
             first.recovery_daa,
             maximum_packets,
@@ -147,8 +205,7 @@ impl CompiledBatchAdmissionV1 {
                     let mut retained_payload_bytes = case.retained_payload_bytes;
                     let mut carrier_storage_rent_sompi = case.carrier_storage_rent_sompi;
                     let mut relative_graph_id = case.relative_graph_id;
-                    if let Some(requests) = requests {
-                        let request = &requests[index];
+                    for request in requests.map_or(&[][..], |requests| requests.for_case_v2(index)) {
                         account(
                             candidate.assigned_daa(&request.packet.id).ok_or(ServiceRefusal::InvalidState)?,
                             request.retained_bytes,
@@ -439,6 +496,106 @@ mod tests {
             assert!(matches!(result, Err(BatchCourtErrorV1::CaseGraph)));
             assert_eq!(book, initial);
         }
+    }
+
+    #[test]
+    fn protected_request_series_reserves_each_slot_and_accounts_for_its_case() {
+        let h = Hash64::from_u64_word;
+        let a = compiled(2);
+        let b = compiled(3);
+        let cases = [(h(2), &*a), (h(3), &*b)];
+        let notice_end = a.window.challenge_opened_daa;
+        let request = |scope, ordinal| {
+            let (id, daa) = if ordinal == 0 {
+                (manifest_request_packet_id_v1(h(1), scope).unwrap(), 20)
+            } else {
+                (manifest_request_packet_id_v2(h(1), scope, ordinal).unwrap(), notice_end)
+            };
+            BatchInitialRequestV1 {
+                packet: ServicePacket {
+                    id,
+                    release_daa: daa,
+                    service_before: daa + 1,
+                    cost: ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 },
+                },
+                retained_bytes: 1,
+            }
+        };
+        let mut requests = [request(h(2), 0), request(h(2), 1), request(h(3), 0), request(h(3), 1)];
+        let reserve = |requests: &[BatchInitialRequestV1], maximum_packets, book: &mut ServiceReservations| {
+            CompiledBatchAdmissionV1::reserve_protected_with_request_series_v2(
+                &cases,
+                Some(BatchRequestSetV2 { requests, per_case: 2 }),
+                &[],
+                book,
+                maximum_packets,
+                |_, _| Ok(()),
+            )
+        };
+        let initial = ServiceReservations::new(ServiceCost { bytes: 65536, work: 2, io: 2, controls: 2 }).unwrap();
+        let mut baseline = initial.clone();
+        let (single, _) = CompiledBatchAdmissionV1::reserve_protected_with_requests_v3(
+            &cases,
+            Some(&[request(h(2), 0), request(h(3), 0)]),
+            &mut baseline,
+            16,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        let mut booked = initial.clone();
+        let (quotes, graph) = reserve(&requests, 18, &mut booked).unwrap();
+        booked.check_causal_v1(&graph).unwrap();
+        assert_eq!(graph.len(), 18);
+        for (index, (_, case)) in cases.iter().enumerate() {
+            let [early, late] = &requests[index * 2..][..2] else { unreachable!() };
+            assert_eq!(booked.assigned_daa(&early.packet.id), Some(20));
+            assert_eq!(booked.assigned_daa(&late.packet.id), Some(notice_end));
+            for root in case.graph.iter().filter(|node| node.predecessors.is_empty()) {
+                let bound = graph.iter().find(|node| node.packet.id == root.packet.id).unwrap();
+                assert_eq!(bound.predecessors.len(), 2);
+                assert!(bound.predecessors.contains(&early.packet.id));
+                assert!(bound.predecessors.contains(&late.packet.id));
+            }
+            let prior = &single[index];
+            let quote = &quotes[index];
+            assert_eq!(
+                quote.service,
+                ServiceCost {
+                    bytes: prior.service.bytes + 1,
+                    work: prior.service.work + 1,
+                    io: prior.service.io + 1,
+                    controls: prior.service.controls + 1,
+                }
+            );
+            assert_eq!(quote.retained_payload_bytes, prior.retained_payload_bytes + 1);
+            assert_eq!(quote.retained_payload_byte_daa, prior.retained_payload_byte_daa + case.window.material_until_daa - notice_end);
+            assert_eq!(quote.carrier_storage_rent_sompi, prior.carrier_storage_rent_sompi + 2);
+            assert_eq!(
+                quote.relative_graph_id,
+                late.relative_graph_id_v1(prior.relative_graph_id, case.window.claim_accepted_daa).unwrap()
+            );
+        }
+
+        let mut candidate = initial.clone();
+        assert!(matches!(reserve(&requests, 17, &mut candidate), Err(BatchCourtErrorV1::CaseGraph)));
+        requests.swap(0, 1);
+        assert!(matches!(reserve(&requests, 18, &mut candidate), Err(BatchCourtErrorV1::CaseGraph)));
+        requests.swap(0, 1);
+        assert_eq!(candidate, initial);
+
+        let mut occupied = initial;
+        occupied
+            .reserve_causal_v1(
+                &[CausalServicePacketV1 {
+                    packet: ServicePacket { id: [99; 64], ..requests[1].packet.clone() },
+                    predecessors: vec![],
+                }],
+                notice_end + 1,
+            )
+            .unwrap();
+        let saved = occupied.clone();
+        assert!(reserve(&requests, 18, &mut occupied).is_err());
+        assert_eq!(occupied, saved);
     }
 
     #[test]

@@ -111,6 +111,34 @@ impl ManifestRequestReplaySeedV1 {
         candidate: &ValidatedManifestRequestCarrierV1,
         charged: u64,
     ) -> Result<ManifestRequestFeeV1, ManifestRequestCarrierErrorV1> {
+        use ManifestRequestCarrierErrorV1::Charge;
+        let signed = SignedManifestRequestV1::decode(&self.initial.request).map_err(|_| Charge)?;
+        let packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v1(
+            self.initial.context.scope.claim,
+            self.initial.context.scope.reservation_scope,
+        ).map_err(|_| Charge)?;
+        let purpose = super::super::manifest_paid::manifest_request_charge_purpose_v1(signed.request.original, packet).map_err(|_| Charge)?;
+        self.project_with_purpose_v2(candidate, charged, purpose)
+    }
+
+    pub(crate) fn project_after_prepared_v2(
+        &self,
+        candidate: &ValidatedManifestRequestCarrierV1,
+        charged: u64,
+        prepared: &super::super::manifest_request::PreparedPaidManifestRequestV1,
+    ) -> Result<ManifestRequestFeeV1, ManifestRequestCarrierErrorV1> {
+        if prepared.carrier_v1() != &candidate.context {
+            return Err(ManifestRequestCarrierErrorV1::Context);
+        }
+        self.project_with_purpose_v2(candidate, charged, prepared.charge_purpose_v1())
+    }
+
+    fn project_with_purpose_v2(
+        &self,
+        candidate: &ValidatedManifestRequestCarrierV1,
+        charged: u64,
+        purpose: Hash64,
+    ) -> Result<ManifestRequestFeeV1, ManifestRequestCarrierErrorV1> {
         use ManifestRequestCarrierErrorV1::{Charge, Context};
         if candidate.replay_parent_root != Some(self.parent_root)
             || candidate.context != self.initial.context
@@ -123,14 +151,6 @@ impl ManifestRequestReplaySeedV1 {
         if available.checked_sub(charged) != Some(candidate.budget.remaining_v1()) || candidate.charged != (charged != 0) {
             return Err(Charge);
         }
-        let signed = SignedManifestRequestV1::decode(&self.initial.request).map_err(|_| Charge)?;
-        let packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v1(
-            self.initial.context.scope.claim,
-            self.initial.context.scope.reservation_scope,
-        )
-        .map_err(|_| Charge)?;
-        let purpose =
-            super::super::manifest_paid::manifest_request_charge_purpose_v1(signed.request.original, packet).map_err(|_| Charge)?;
         if candidate.charge_purpose != (charged != 0).then_some(purpose) {
             return Err(Charge);
         }

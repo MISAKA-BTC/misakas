@@ -23,6 +23,7 @@ use misaka_palw_positive_contract::{
 use std::io::{self, Read};
 
 const VERSION: u16 = 1;
+const SERIES_VERSION: u16 = 2;
 
 pub(super) fn manifest_request_charge_purpose_v1(original: OriginalId, packet_id: [u8; 64]) -> Result<Hash64, ContractError> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/manifest-request-payment/v1", &(original, packet_id))
@@ -78,7 +79,40 @@ impl PaidManifestRequestRowV1 {
     }
 
     pub(crate) fn key_v1(&self) -> [u8; Self::KEY_BYTES] {
-        self.packet_id
+        // One receipt per role/rank, even when several temporal slots were
+        // reserved. Legacy rows already use this exact key.
+        manifest_request_packet_id_v1(self.claim, self.reservation_scope).expect("validated manifest request scope")
+    }
+
+    /// The native preparer has matched this packet to the authenticated
+    /// terms and the actual assigned slot. The stable receipt key remains
+    /// separate from the consumed slot, preventing a second request at a
+    /// later opportunity from creating another receipt for the same rank.
+    pub(super) fn new_for_slot_v2(
+        scope: ManifestRequestCarrierScopeV1,
+        original: OriginalId,
+        case: CaseId,
+        origin: AcceptedOrigin,
+        request_digest: Digest,
+        packet_id: [u8; 64],
+        charged_sompi: u64,
+    ) -> Result<Self, ContractError> {
+        let row = Self {
+            version: SERIES_VERSION,
+            claim: scope.claim,
+            source: scope.source,
+            reservation_scope: scope.reservation_scope,
+            packet_id,
+            original,
+            case,
+            origin,
+            request_digest,
+            charge_purpose: manifest_request_charge_purpose_v1(original, packet_id)?,
+            charged_sompi,
+        };
+        let key = manifest_request_packet_id_v1(row.claim, row.reservation_scope).map_err(|_| ContractError::Identity)?;
+        row.check_shape_v1(&key)?;
+        Ok(row)
     }
 
     pub(crate) fn charged_sompi_v1(&self) -> u64 {
@@ -120,10 +154,12 @@ impl PaidManifestRequestRowV1 {
     }
 
     fn check_shape_v1(&self, key: &[u8]) -> Result<(), ContractError> {
-        if self.version != VERSION || key != self.packet_id.as_slice() {
+        let stable = manifest_request_packet_id_v1(self.claim, self.reservation_scope).map_err(|_| ContractError::Identity)?;
+        if !matches!(self.version, VERSION | SERIES_VERSION) || key != stable.as_slice() {
             return Err(ContractError::Identity);
         }
-        if self.packet_id != manifest_request_packet_id_v1(self.claim, self.reservation_scope).map_err(|_| ContractError::Identity)?
+        if (self.version == VERSION && self.packet_id != stable)
+            || self.packet_id == [0; 64]
             || self.charge_purpose != manifest_request_charge_purpose_v1(self.original, self.packet_id)?
             || [self.source, self.charge_purpose].contains(&Hash64::default())
             || [self.original.0, self.case.0, self.request_digest].contains(&Digest([0; 64]))
@@ -141,7 +177,8 @@ impl PaidManifestRequestRowV1 {
     }
 
     pub(crate) fn check_state_at_v1(&self, state: &PalwChainStateV2, point: &PalwBlockContextV2) -> Result<(), ContractError> {
-        self.check_shape_v1(&self.packet_id)?;
+        let stable = manifest_request_packet_id_v1(self.claim, self.reservation_scope).map_err(|_| ContractError::Identity)?;
+        self.check_shape_v1(&stable)?;
         check_public_origin_point_v1(self.origin, point)?;
         let route = state.kernel_route_state_v1().ok_or(ContractError::Scope)?;
         let link_key = self.claim.as_bytes();
@@ -150,6 +187,19 @@ impl PaidManifestRequestRowV1 {
         link.check_state_at_v1(state, point)?;
         if link.source_v1() != self.source || link.original_v1() != self.original {
             return Err(ContractError::Scope);
+        }
+        if self.version == SERIES_VERSION {
+            if !link.uses_public_frame_v1() { return Err(ContractError::Scope); }
+            let service = state.court_service_row_v3_v1().ok_or(ContractError::Scope)?;
+            let binding = service.state.claims.get(&self.claim).ok_or(ContractError::Scope)?;
+            let packet = service.state.book.packet(&self.packet_id).ok_or(ContractError::Scope)?;
+            if binding.source_id != self.source
+                || binding.allocation_id != link.service_frame_reference_v1()
+                || !binding.packet_ids.contains(&self.packet_id)
+                || service.causal.contains_key(&self.packet_id)
+                || service.state.book.assigned_daa(&self.packet_id) != Some(self.origin.accepted_daa)
+                || !(packet.release_daa..packet.service_before).contains(&self.origin.accepted_daa)
+            { return Err(ContractError::Scope); }
         }
         let key = PendingManifestCaseRecordV1::key(self.original, self.case);
         let bytes = route.aux.get(&(PUBLIC_PENDING_MANIFEST_TABLE_V1, key.to_vec())).ok_or(ContractError::Scope)?;
@@ -186,7 +236,8 @@ impl PaidManifestRequestRowV1 {
 impl NativeWireScanV1 for PaidManifestRequestRowV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         let row = Self::read_wire_v1(reader)?;
-        row.check_shape_v1(&row.packet_id).map_err(|_| wire_bad("invalid paid ManifestRequest row"))?;
+        let stable = manifest_request_packet_id_v1(row.claim, row.reservation_scope).map_err(|_| wire_bad("invalid paid ManifestRequest scope"))?;
+        row.check_shape_v1(&stable).map_err(|_| wire_bad("invalid paid ManifestRequest row"))?;
         Ok(NativeWireShapeV1::default())
     }
 }
@@ -237,7 +288,7 @@ mod tests {
         assert!(preflight(&key, &[bytes.as_slice(), &[0]].concat()).is_err());
 
         for wrong in [
-            PaidManifestRequestRowV1 { version: 2, ..row },
+            PaidManifestRequestRowV1 { version: 3, ..row },
             PaidManifestRequestRowV1 { reservation_scope: h(14), ..row },
             PaidManifestRequestRowV1 { origin: AcceptedOrigin { carrier_transaction: NativeHash64([0; 64]), ..origin }, ..row },
             PaidManifestRequestRowV1 { charged_sompi: 0, ..row },
@@ -250,5 +301,19 @@ mod tests {
         let at = PalwBlockContextV2 { block: h(4), daa_score: 7, blue_score: 8, subsidy: 0 };
         assert_eq!(row.check_insert_at_v1(&at), Ok(()));
         assert!(row.check_insert_at_v1(&PalwBlockContextV2 { blue_score: 9, ..at }).is_err());
+        let late_packet = crate::palw_court_shared_material_intake_v1::batch::admission::protected::manifest_request_packet_id_v2(
+            scope.claim, scope.reservation_scope, 1,
+        ).unwrap();
+        let late = PaidManifestRequestRowV1::new_for_slot_v2(scope, row.original, row.case, origin, row.request_digest, late_packet, 13).unwrap();
+        let late_bytes = borsh::to_vec(&late).unwrap();
+        assert_eq!(late_bytes.len(), PaidManifestRequestRowV1::WIRE_BYTES);
+        assert_eq!(late.key_v1(), row.key_v1(), "another slot must not create a second rank key");
+        assert_ne!(late.charge_purpose, row.charge_purpose);
+        assert_eq!(PaidManifestRequestRowV1::decode_row(&key, &late_bytes), Ok(late));
+        assert!(PaidManifestRequestRowV1::decode_row(&late_packet, &late_bytes).is_err());
+        assert!(preflight(&key, &late_bytes).is_ok());
+        assert!(PaidManifestRequestRowV1::scan_native_wire_v1(&mut NativeWireReaderV1::new(&late_bytes[..], late_bytes.len() as u64)).is_ok());
+        let forged_legacy = PaidManifestRequestRowV1 { version: VERSION, ..late };
+        assert!(PaidManifestRequestRowV1::decode_row(&key, &borsh::to_vec(&forged_legacy).unwrap()).is_err());
     }
 }
