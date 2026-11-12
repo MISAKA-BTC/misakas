@@ -1,9 +1,0 @@
-{
-  "controller_pid": 3019,
-  "paused_for": "shared disk pressure and A6 build scheduling",
-  "paused_during_stage": "08.log",
-  "stage_process_exited_while_paused": true,
-  "resumed_utc": "2026-10-31T13:09:05.681255+00:00",
-  "timeout_includes_pause": true,
-  "normalization_applied": false
-}

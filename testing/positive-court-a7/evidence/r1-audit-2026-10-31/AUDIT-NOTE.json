@@ -1,8 +1,0 @@
-{
-  "status": "FAILED_HARNESS_STACK_RETAINED",
-  "tested_commit": "1db6fcc2bf000ba47cc20140413a218520fe5a2a",
-  "reason": "unoptimized legacy fence test thread stack overflow on default stack",
-  "rules_changed": false,
-  "manual_retry_same_binary": "RUST_MIN_STACK=16777216; all 9 fence tests passed",
-  "next_action": "fresh same-candidate full run with explicit stack recorded"
-}
