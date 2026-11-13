@@ -105,6 +105,17 @@ fn walk_fault_v1(error: crate::processes::palw_state_walk::PalwStateWalkError) -
 }
 
 impl VirtualStateProcessor {
+    /// Retire only memo owners when the virtual writer cannot reserve capacity.
+    /// A template may hold the single-flight lock while loading from the store,
+    /// so a writer must never wait for it. Active readers retain their own leases.
+    pub(in crate::pipeline::virtual_processor) fn release_palw_reader_memos_for_transition_v1(&self) -> bool {
+        let template = self.template_parent_snapshot_v1.entry.try_lock().and_then(|mut entry| entry.take());
+        let reader = self.palw_reader_snapshot.try_lock().and_then(|mut entry| entry.take());
+        let released = template.is_some() || reader.is_some();
+        drop((template, reader));
+        released
+    }
+
     fn template_parent_key_v1(&self, target: BlockHash) -> Result<ParentKeyV1, PalwWeighFaultV2> {
         let meta = self.pruning_meta_stores.try_read().ok_or(PalwWeighFaultV2::NoOpinion)?;
         let import = meta.import_session().map_err(store_fault_v1)?;

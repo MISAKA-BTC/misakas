@@ -2198,7 +2198,20 @@ impl VirtualStateProcessor {
         let mut palw_state = match self.palw_state_params_v2.as_ref() {
             None => None,
             Some(params) => {
-                let loaded = match self.palw_state_v2_store.read().take_tip_for_transition_v1(params) {
+                let loaded = self.palw_state_v2_store.read().take_tip_for_transition_v1(params);
+                // Idle template/sink memos can keep an old generation alive
+                // indefinitely, even with no active reader. Give up those cache
+                // owners before one bounded retry; live readers and all typed
+                // capacity checks remain in force.
+                let loaded = match loaded {
+                    Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(_))
+                        if self.release_palw_reader_memos_for_transition_v1() =>
+                    {
+                        self.palw_state_v2_store.read().take_tip_for_transition_v1(params)
+                    }
+                    other => other,
+                };
+                let loaded = match loaded {
                     Ok(loaded) => loaded,
                     Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(reason)) => {
                         return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<

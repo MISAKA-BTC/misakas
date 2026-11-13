@@ -1,7 +1,42 @@
 use super::*;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-use std::sync::atomic::Ordering;
+use std::sync::{Arc, atomic::Ordering};
+
+#[tokio::test]
+async fn virtual_capacity_retry_releases_idle_memos_but_preserves_active_readers() {
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    let reader = vp.palw_template_parent_checked_v1(sink).unwrap();
+    let root = reader.state_root();
+    *vp.palw_reader_snapshot.lock() = Some((sink, Arc::clone(&reader)));
+    let decoded = vp.palw_state_v2_store.read().tip_bytes_decoded();
+    assert!(vp.release_palw_reader_memos_for_transition_v1());
+    assert!(!vp.release_palw_reader_memos_for_transition_v1(), "retry is bounded when no memo owner was released");
+    let (at, copy) = vp.palw_state_v2_store.read().take_tip_for_transition_v1(&bundle.state).unwrap().unwrap();
+    assert_eq!(at, sink);
+    assert_eq!(copy.state_root(), root);
+    assert_eq!(reader.state_root(), root, "eviction cannot revoke a caller's authenticated snapshot");
+    drop(copy);
+    let weak = Arc::downgrade(&reader);
+    drop(reader);
+    let (at, owned) = vp.palw_state_v2_store.read().take_tip_for_transition_v1(&bundle.state).unwrap().unwrap();
+    assert_eq!(at, sink);
+    assert_eq!(owned.state_root(), root);
+    assert!(weak.upgrade().is_none(), "without memo/caller aliases the writer transfers the resident owner");
+    assert_eq!(vp.palw_state_v2_store.read().tip_bytes_decoded(), decoded, "neither retry may cold-decode the same generation");
+}
 
 #[tokio::test]
 async fn template_parent_snapshot_reuses_exact_root_across_tip_walks_without_blocking_writer() {
