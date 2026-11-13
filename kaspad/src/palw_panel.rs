@@ -1347,7 +1347,8 @@ impl Drop for PalwTickGuardV1 {
 ///   back, so counting only the running ones let a re-attach put two 2M replays in both slots (the
 ///   SEAT-R review, MEDIUM). And a light replay (the floor, the 8k row) may start whenever no light
 ///   replay runs, whatever the heavy and the detached ones hold: no mix of days-long replays,
-///   detached or not, keeps a floor claim behind it. The duty loop hands slots out by receipt
+///   detached or not, keeps a floor claim behind it while the total held-task bound has room.
+///   Detached light replays still count toward that bound. The duty loop hands slots out by receipt
 ///   deadline ([`palw_seat_duty_order_v1`]).
 /// * **Timing** ([`Self::fits`]). A replay is not started when the last replay of its class this
 ///   host ran to a result would return after the claim's deadline: a class's first replay on a host
@@ -1568,8 +1569,11 @@ impl PalwSeatReplaysV1 {
         let light_running = self.running.values().filter(|run| !run.heavy && !run.overdue).count();
         let slot_holders = self.running.values().filter(|run| !run.overdue).count();
         let heavy_held = self.running.values().chain(self.detached.values()).filter(|run| run.heavy).count();
-        let open = slot_holders < slots && self.running.len() + self.detached.len() < 2 * slots;
-        if heavy { heavy_held < Self::HEAVY_IN_FLIGHT && open } else { light_running == 0 || open }
+        // Detached and overdue blocking tasks still own their memory. The
+        // light-seat exception must not bypass this bound during catch-up.
+        let below_held_limit = self.running.len() + self.detached.len() < 2 * slots;
+        let open = slot_holders < slots;
+        below_held_limit && if heavy { heavy_held < Self::HEAVY_IN_FLIGHT && open } else { light_running == 0 || open }
     }
 
     /// **Whether a replay of `class` started at `now_daa` returns by `deadline`**, as far as this host

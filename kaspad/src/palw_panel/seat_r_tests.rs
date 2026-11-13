@@ -982,7 +982,7 @@ async fn runs_for_claim_is_true_while_a_task_runs_or_is_detached_and_false_once_
 
 /// **(g) A claim that leaves the duties detaches its running replay**: it stops holding a slot at
 /// once, so the queue moves; it is taken back, not started twice, if the claim returns; the
-/// running and detached together stay bounded for a second light replay; and one that returns
+/// running and detached together stay bounded even with no active light replay; and one that returns
 /// while detached is dropped.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_claim_that_leaves_the_duties_detaches_its_replay_and_frees_its_slot() {
@@ -1007,7 +1007,7 @@ async fn a_claim_that_leaves_the_duties_detaches_its_replay_and_frees_its_slot()
     replays.retain_live(|claim| *claim != h(3));
     assert!(!replays.has_room(false), "three detached and one light running: a second light replay waits");
     replays.retain_live(|_| false);
-    assert!(replays.has_room(false), "four detached and none running: a light replay always has its slot");
+    assert!(!replays.has_room(false), "four detached still own memory: no fifth task may start");
     for _ in 0..4 {
         release.send(()).unwrap();
     }
@@ -1048,6 +1048,9 @@ async fn a_replay_past_its_timing_yields_its_slot_and_a_loaded_host_runs_one() {
     replays.start(c, floor_class(), false, 130, None, Box::new(floor_backend()), gated(&gate));
     replays.start(d, floor_class(), false, 130, None, Box::new(floor_backend()), gated(&gate));
     assert!(!replays.has_room(false), "four held: a thrashing host cannot pile up more");
+    replays.mark_overdue(130 + PalwSeatReplaysV1::OVERDUE_UNTIMED_DAA);
+    assert_eq!(replays.occupancy().overdue, 4);
+    assert!(!replays.has_room(false), "all four overdue: the absence of a fresh light task cannot bypass the held bound");
     // A heavy replay is never relaxed.
     let mut replays_h = PalwSeatReplaysV1::default();
     replays_h.start((h(9), h(1)), floor_class(), true, 100, None, Box::new(floor_backend()), gated(&gate));
@@ -1137,8 +1140,8 @@ fn a_big_replay_of_a_slow_class_is_held_back_only_while_lighter_work_waits() {
 /// **(g) C7 replays, running or detached, never keep a floor replay waiting** (the review,
 /// MEDIUM). One C7 replay held at a time, and a detached one counts: its claim leaving does not
 /// let a second 2M replay start, so the first coming back cannot put two in both slots. And a
-/// light replay starts whenever none runs — beside a running C7 replay, behind any number of
-/// detached ones, and after a detached C7 replay is taken back.
+/// light replay can start beside a running C7 replay or after a detached C7 replay is taken back,
+/// while the total held-task bound has room. Detached light jobs cannot accumulate without limit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn a_heavy_replay_never_holds_every_slot() {
     assert_eq!((PalwSeatReplaysV1::IN_FLIGHT, PalwSeatReplaysV1::HEAVY_IN_FLIGHT), (2, 1));
@@ -1160,14 +1163,15 @@ async fn a_heavy_replay_never_holds_every_slot() {
     assert!(!replays.has_room(false) && !replays.has_room(true), "both slots held, one light");
     // The review's second scenario: detached replays pile up behind a days-long C7 replay.
     replays.retain_live(|claim| *claim == h(0x2E));
-    for n in 0..3u64 {
+    for n in 0..2u64 {
+        assert!(replays.has_room(false), "a light task fits below the held bound");
         let key = (h(0x100 + n), h(n));
         replays.start(key, floor_class(), false, 12, None, Box::new(floor_backend()), gated(&gate));
         replays.retain_live(|claim| *claim == h(0x2E));
     }
-    assert!(replays.has_room(false), "one C7 replay running, four light ones detached: the floor still starts");
+    assert!(!replays.has_room(false), "one C7 replay and three detached light tasks fill the held bound");
     assert!(!replays.has_room(true));
-    for _ in 0..5 {
+    for _ in 0..4 {
         release.send(()).unwrap();
     }
     assert!(returned(&mut replays, &heavy, 13).await.is_err());
