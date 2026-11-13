@@ -13402,8 +13402,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     // because nothing made the boundary visible.
     const OWNED_STATE_CALLERS: &[&str] = &[
         "calculate_utxo_state_relatively",
-        "calculate_virtual_state",
-        "palw_candidate_state_v2_checked",
+        "palw_candidate_state_v2_checked_until",
         "palw_weighing_point_v2_checked",
         "palw_pruning_point_allowed_v2",
         // The 10-13 split moved the template's and the pruning capture's owned reads into their own files (RFC-0008 retained
@@ -13445,7 +13444,8 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         }
         // `load_tip_retained_v1` is the same uncached owned materialization, returning its native allocation ticket with it
         // (RFC-0008 retained ownership): the walk-or-write paths take it now.
-        if line.contains(".load_tip(") || line.contains(".load_tip_retained_v1(") {
+        // Taking an exclusively cached owner is also a writer operation.
+        if line.contains(".load_tip(") || line.contains(".load_tip_retained_v1(") || line.contains(".take_tip_for_transition_v1(") {
             found.push(enclosing.clone());
         }
     }

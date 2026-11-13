@@ -608,3 +608,37 @@ async fn snapshot_missing_genesis_declarations_survive_import_and_cold_readback(
         assert_eq!(row.artifact_root, snapshot.classes[&id].artifact_root);
     }
 }
+
+#[tokio::test]
+async fn virtual_state_reuses_authenticated_parent_without_second_decode() {
+    use crate::model::stores::{utxo_multisets::UtxoMultisetsStoreReader, virtual_state::VirtualStateStoreReader};
+    let mut ctx = context();
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let params = vp.palw_state_params_v2.as_ref().unwrap();
+    // Keep an independent read owner live, as RPC/IBD readers do in production.
+    let (parent, resident) = vp.palw_state_v2_store.read().load_tip_cached(params).unwrap().unwrap();
+    let baseline = vp.palw_state_v2_store.read().tip_bytes_decoded();
+    let virtual_read = vp.virtual_stores.read();
+    let before = virtual_read.state.get().unwrap();
+    assert_eq!(before.ghostdag_data.selected_parent, parent);
+    let recomputed = vp
+        .calculate_virtual_state(
+            &virtual_read,
+            before.parents.clone(),
+            before.ghostdag_data.clone(),
+            vp.utxo_multisets_store.get(parent).unwrap(),
+            &mut before.utxo_diff.clone().to_reversed(),
+            &vp.initial_active_bond_view(),
+        )
+        .unwrap();
+    assert_eq!(recomputed.ghostdag_data.selected_parent, parent);
+    assert_eq!(recomputed.daa_score, before.daa_score);
+    assert_eq!(recomputed.bits, before.bits);
+    assert_eq!(recomputed.accepted_tx_ids, before.accepted_tx_ids);
+    assert_eq!(vp.palw_state_v2_store.read().tip_bytes_decoded(), baseline);
+    let (_, after) = vp.palw_state_v2_store.read().load_tip_cached(params).unwrap().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&resident, &after));
+}

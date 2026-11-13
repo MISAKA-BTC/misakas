@@ -472,11 +472,11 @@ fn native_store_capacity_v1(
 /// either EXEC anchoring or UTXO acceptance can use it.
 fn virtual_palw_parent_from_tip_v2(
     loaded: kaspa_database::prelude::StoreResult<
-        Option<(BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>,
+        Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>,
     >,
     parent: BlockHash,
     required: bool,
-) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>, RuleError> {
+) -> Result<Option<Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>>, RuleError> {
     use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
     match loaded {
         Ok(Some((block, state))) if block == parent => Ok(Some(state)),
@@ -499,7 +499,7 @@ fn virtual_palw_parent_requires_the_matching_tip_for_armed_money() {
     let parent = BlockHash::from_u64_word(1);
     let other = BlockHash::from_u64_word(2);
     let genesis = PalwChainStateV2::genesis();
-    let state = || NativeChainStateV1::try_from_clone_v1(&genesis).unwrap();
+    let state = || Arc::new(NativeChainStateV1::try_from_clone_v1(&genesis).unwrap());
     assert!(virtual_palw_parent_from_tip_v2(Ok(Some((parent, state()))), parent, true).unwrap().is_some());
     assert!(virtual_palw_parent_from_tip_v2(Ok(Some((other, state()))), parent, false).unwrap().is_none());
     for loaded in [Ok(None), Ok(Some((other, state())))] {
@@ -4346,8 +4346,11 @@ impl VirtualStateProcessor {
             self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
                 && params.palw_positive_assignment_v2_at(daa).is_some()
         });
+        // Virtual only reads this exact parent. Reuse its authenticated owner:
+        // decoding beside an already resident RPC/IBD reader can otherwise
+        // permanently exceed capacity while both readers need the same state.
         let loaded =
-            self.palw_state_params_v2.as_ref().map_or(Ok(None), |params| self.palw_state_v2_store.read().load_tip_retained_v1(params));
+            self.palw_state_params_v2.as_ref().map_or(Ok(None), |params| self.palw_state_v2_store.read().load_tip_cached(params));
         let virtual_palw_state =
             virtual_palw_parent_from_tip_v2(loaded, virtual_ghostdag_data.selected_parent, self.palw_state_params_v2.is_some())?;
 
@@ -4456,8 +4459,14 @@ impl VirtualStateProcessor {
         let relay_parent_multiset = ctx.positive_relay_preview_point.map(|_| ctx.multiset_hash.clone());
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, daa, virtual_palw_state.as_deref())
-            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+        self.calculate_utxo_state(
+            &mut ctx,
+            &selected_parent_utxo_view,
+            selected_parent_bond_view,
+            daa,
+            virtual_palw_state.as_ref().map(|state| &***state),
+        )
+        .map_err(RuleError::LocalNativeCapacityUnavailable)?;
         if let (Some(point), Some(parent_multiset), Some(state)) =
             (ctx.positive_relay_preview_point, relay_parent_multiset, virtual_palw_state.as_ref())
         {

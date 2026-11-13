@@ -1022,7 +1022,16 @@ impl DbPalwStateV2Store {
         {
             match Arc::try_unwrap(state) {
                 Ok(state) => return Ok(Some((block, state))),
-                Err(shared) => *self.tip_cache.lock() = Some((block, root, shared)),
+                Err(shared) => {
+                    // A reader still owns this authenticated generation. Keep
+                    // its cache owner and reserve only a typed state copy for
+                    // the writer, rather than a second wire decode/rebuild.
+                    *self.tip_cache.lock() = Some((block, root, Arc::clone(&shared)));
+                    return shared
+                        .try_clone_v1()
+                        .map(|state| Some((block, state)))
+                        .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()));
+                }
             }
         }
         self.load_tip_retained_v1(params)
@@ -1380,9 +1389,16 @@ mod tests {
 
         const CALLS: u64 = 64;
         let uncached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        let mut expected = None;
         for _ in 0..CALLS {
-            uncached.load_tip(&p).unwrap().expect("the tip is there");
+            expected = Some(uncached.load_tip(&p).unwrap().expect("the tip is there").1);
         }
+        let expected = expected.unwrap();
+        // Cold restoration may leave derived census caches lazy. Compare all
+        // restored fields with the uncached reader, and canonical state/root
+        // with the machine's result, rather than requiring equal cache warmth.
+        assert_eq!(PalwStateCarriageV2::from_state(&expected), PalwStateCarriageV2::from_state(&child));
+        assert_eq!(expected.state_root(), child.state_root());
         let per_call = uncached.tip_bytes_decoded() / CALLS;
 
         let cached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
@@ -1391,7 +1407,7 @@ mod tests {
         for _ in 0..CALLS {
             let (block, state) = cached.load_tip_cached(&p).unwrap().expect("the tip is there");
             assert_eq!(block, c1.block);
-            assert_eq!(*state, child, "the cached tip is not the state the machine produced");
+            assert_eq!(*state, expected, "the cached tip is not the state the machine produced");
         }
         println!(
             "[M-7] {CALLS} getPalwPendingChunkGroup-shaped reads: {} B of carriage decoded before ({per_call} B per call), \
@@ -1403,13 +1419,21 @@ mod tests {
         for _ in 0..CALLS {
             let (at, resident) = cached.load_tip_resident_v1().unwrap().unwrap();
             assert_eq!(at, c1.block);
-            assert_eq!(*resident, child);
+            assert_eq!(*resident, expected);
         }
         assert_eq!(cached.tip_bytes_decoded(), per_call, "healthy GC borrows cached native state without decoding/cloning it");
         assert_eq!(uncached.tip_bytes_decoded(), per_call * CALLS, "the uncached path is the per-call cost this test measures");
+        let (_, reader) = cached.load_tip_cached(&p).unwrap().unwrap();
+        let (shared_block, shared_copy) = cached.take_tip_for_transition_v1(&p).unwrap().unwrap();
+        assert_eq!(shared_block, c1.block);
+        assert_eq!(shared_copy, expected);
+        assert_eq!(cached.tip_bytes_decoded(), per_call, "a live reader must not force the writer to decode again");
+        let (_, still_cached) = cached.load_tip_resident_v1().unwrap().unwrap();
+        assert!(Arc::ptr_eq(&reader, &still_cached), "the shared reader retains its original owner");
+        drop((shared_copy, reader, still_cached));
         let (block, state) = cached.take_tip_for_transition_v1(&p).unwrap().unwrap();
         assert_eq!(block, c1.block);
-        assert_eq!(state, child);
+        assert_eq!(state, expected);
         assert_eq!(cached.tip_bytes_decoded(), per_call, "the writer must reuse the exclusively cached tip");
         assert!(cached.load_tip_resident_v1().is_err(), "the writer now owns the cached state");
 
@@ -1422,10 +1446,13 @@ mod tests {
         store.set_tip_batch(&mut batch, c2.block, &grand).unwrap();
         db.write(batch).unwrap();
 
+        let expected_grand = store.load_tip(&p).unwrap().unwrap().1;
+        assert_eq!(PalwStateCarriageV2::from_state(&expected_grand), PalwStateCarriageV2::from_state(&grand));
+        assert_eq!(expected_grand.state_root(), grand.state_root());
         let moved = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
         let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
         assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
-        assert_eq!(*state, grand);
+        assert_eq!(*state, expected_grand);
     }
 
     #[test]
