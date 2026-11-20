@@ -40,5 +40,16 @@
         "matchingSupportSize": 43
       }
     ]
+  },
+  "unusedReservationReplay": {
+    "target": "aarch64-unknown-linux-gnu",
+    "features": [
+      "private-integration-clock"
+    ],
+    "testsPassed": [
+      "protected_filer_reads_the_generated_ids_from_the_original_trace",
+      "matching_all_tir_roots_keep_budgeted_ids_and_require_public_bundle_completion",
+      "bootstrap_verdicts_release_only_after_honesty_or_final_host_failure_and_reset_on_job_change"
+    ]
   }
 }

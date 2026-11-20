@@ -1340,7 +1340,16 @@ fn protected_filer_reads_the_generated_ids_from_the_original_trace() {
     let context = super::palw_fraud_filer::FilerTirContextV1 { view, header: Box::new(header) };
     let first = PalwDaUnitV1::Event { row: 0, tile: 0 };
     let good = PalwDaAnswerV1::TirEvent(Box::new(event.clone()));
-    assert_eq!(context.row_zero_ids(&first, &good).unwrap().len(), job.exact_decode_tokens as usize);
+    let ids = context.row_zero_ids(&first, &good).unwrap();
+    assert_eq!(ids.len(), job.exact_decode_tokens as usize);
+    let disclosure = crate::palw_panel::PalwDaBuiltAnswerV1::Rcore(good.clone());
+    assert!(context.reservation_disclosure_matches(0, None, ids));
+    assert!(!context.reservation_disclosure_matches(1, None, ids));
+    assert!(context.reservation_disclosure_matches(1, Some(&disclosure), ids));
+    let mut different = ids.to_vec();
+    different[0] ^= 1;
+    assert!(!context.reservation_disclosure_matches(0, Some(&disclosure), &different));
+    assert!(!context.reservation_disclosure_matches(1, Some(&disclosure), &different));
     assert!(context.row_zero_ids(&PalwDaUnitV1::Event { row: 0, tile: 1 }, &good).is_none());
     let PalwTirTraceEventDisclosureV1::Tiled { generated_token_ids, .. } = &mut event else { panic!("expected tiled capture") };
     generated_token_ids[0] ^= 1;

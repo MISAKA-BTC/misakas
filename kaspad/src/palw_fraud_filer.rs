@@ -131,6 +131,23 @@ pub(super) struct FilerTirContextV1 {
 }
 
 impl FilerTirContextV1 {
+    /// A used reservation must open the received first tile. An unused reservation
+    /// has no such obligation. Both paths separately verify the full replay and carrier.
+    pub(super) fn reservation_disclosure_matches(
+        &self,
+        sessions_opened: u8,
+        answer: Option<&PalwDaBuiltAnswerV1>,
+        replayed_ids: &[u32],
+    ) -> bool {
+        match answer {
+            Some(PalwDaBuiltAnswerV1::Rcore(answer)) => {
+                self.row_zero_ids(&PalwDaUnitV1::Event { row: 0, tile: 0 }, answer) == Some(replayed_ids)
+            }
+            None => sessions_opened == 0,
+            _ => false,
+        }
+    }
+
     /// Open the entire generated-ID sequence from the first public tile against
     /// the locally admitted header. The carried class supplies no verification parameters.
     pub(super) fn row_zero_ids<'a>(&self, unit: &PalwDaUnitV1, answer: &'a PalwDaAnswerV1) -> Option<&'a [u32]> {
@@ -3469,15 +3486,15 @@ impl PalwPanelService {
                         && current_daa >= case.input_retry_at
                         && matches!(case.verdict, PalwFraudFilerVerdictV1::SemanticPending)
                 })
-                && let Some(PalwDaBuiltAnswerV1::Rcore(answer @ PalwDaAnswerV1::TirEvent(_))) =
-                    book.answers.get(&(claim, PalwDaUnitV1::Event { row: 0, tile: 0 }))
             {
+                let answer = book.answers.get(&(claim, PalwDaUnitV1::Event { row: 0, tile: 0 }));
                 let result = self.protected_filer_withdrawal(session, &book.cases[&claim], answer, bond_key).await;
                 let case = book.cases.get_mut(&claim).expect("pursued");
                 match result {
                     Ok(Some(checked)) => {
                         info!(
-                            "[{PALW_PANEL}] claim {claim}: public bond {bond_key:?} reproduced the protected prompt, execution, output, stop and tokenizer; withdrawing its answered reservation"
+                            "[{PALW_PANEL}] claim {claim}: public bond {bond_key:?} reproduced the protected prompt, execution, output, stop and tokenizer; withdrawing its reservation ({} DA sessions opened)",
+                            checked.sessions_opened
                         );
                         case.protected_withdrawal = Some(checked);
                         case.release_pending = true;

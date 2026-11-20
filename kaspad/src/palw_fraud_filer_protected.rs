@@ -1,4 +1,4 @@
-//! Owner-side checks for withdrawing an answered reservation on a plain protected
+//! Owner-side checks for withdrawing a reservation on a plain protected
 //! FP claim. The selected Panel, native courts and receipt consumers run independently.
 use super::*;
 use kaspa_consensus_core::{
@@ -173,7 +173,7 @@ impl PalwPanelService {
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         case: &PalwFraudFilerCaseV1,
-        answer: &PalwDaAnswerV1,
+        answer: Option<&PalwDaBuiltAnswerV1>,
         owner: PalwBondKeyV2,
     ) -> Result<Option<ProtectedFilerReservationV1>, String> {
         let claim = case.candidate.claim_id;
@@ -183,11 +183,13 @@ impl PalwPanelService {
             || !matches!(case.verdict, PalwFraudFilerVerdictV1::SemanticPending)
             || case.constraint_stage_pending
             || case.prefix_stage_pending
-            || tir.row_zero_ids(&PalwDaUnitV1::Event { row: 0, tile: 0 }, answer) != Some(own.ids.as_slice())
         {
             return Ok(None);
         }
         let Some(context) = owner_context(session, claim, owner)? else { return Ok(None) };
+        if !tir.reservation_disclosure_matches(context.sessions_opened, answer, &own.ids) {
+            return Ok(None);
+        }
         if case.protected_replay_origin != Some(context.origin)
             || context.origin.accepting_block != case.candidate.job.accepted_block
             || context.origin.accepted_daa != case.candidate.accepted_daa

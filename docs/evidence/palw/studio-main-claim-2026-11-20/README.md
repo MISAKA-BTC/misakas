@@ -12,6 +12,8 @@
 | 同じ claim の受付 | epoch 6 の DAA 4429 で必要な21,000,000単位に対して21,142,278単位が貯まった。再提出した取引 `dcb4a75f…22c7b175` をブロック `99ea4ea7…9a7718166` が受理し、3ピアとも同じ claim、execution root、受付 DAA を返した。[配分枠と3ピアの受付記録](claim-admission.json) |
 | Panel 検証 | 選出 seat 1 の再実行承認を DAA 4444 の選択鎖で確認した。3ピアの `fullReplayApprovalRecorded` が true となり、同じ claim が `receipt_licensed` に移った。異議申立期間は DAA 7549 まで。[承認取引と3ピアの状態](panel-approval.json) |
 | 独立再実行 | 受付取引の TFO3 本文と登録済み artifact を用いて、17 入力から生成した1トークンの execution・trace・output root を再計算し、3つとも一致した。Studio の照合器は、同じ記録に対する4種類の ID・root の差替えを拒否した。[再実行ログ](accepted-original-replay.log)・[入力ハッシュと拒否理由](replay-identity.json)・[受付取引の本文](accepted-original.bin) |
+| 予約の返上 | 資料要求を開いていなかった6件について、各所有者が元の署名済み取引・prompt・実行・出力・停止条件・tokenizer を照合して返上した。DAA 7607、7613、7614 の返上取引と包含順が隔離3ピアで一致した。3件の再送も選択鎖に入ったが、返上済み件数は増えていない。[所有者・受付取引・前後の状態](unused-reservation-releases.json) |
+| Final | DAA 7615 で3ピアが同じ claim の Final を返した。未処理の予約と Court はともに0、認証は pending、21 quanta の消費数は0だった。[Final のノード応答](final.json) |
 
 別入力 “Hi” も Studio main の queue で実行した。入力は10トークン、価格は同じ21 quanta だった。この比較用 claim の処理は outbox までで、上表はすべて元の claim を追跡している。[比較用の実行記録](short-prompt-price.json)
 

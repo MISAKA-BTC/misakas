@@ -126,7 +126,7 @@ pub fn protected_filer_tir_view_v1(
     Ok(Some((view, Box::new(header.clone()))))
 }
 
-/// Selected-chain operands for a public bond checking its own answered DA
+/// Selected-chain operands for a public bond checking its own protected
 /// reservation. Reading these facts does not release the reservation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtectedFilerReservationV1 {
@@ -152,8 +152,7 @@ pub fn protected_filer_reservation_v1(
     };
     let Some(record) = state.legacy_dispute_v1(&claim) else { return Ok(None) };
     let Some(row) = record.live.get(&owner) else { return Ok(None) };
-    if row.sessions_opened == 0
-        || row.lanes_joined != 0
+    if row.lanes_joined != 0
         || !record.courts.is_empty()
         || !record.reacquiring.is_empty()
         || state.da_sessions_of(&claim).next().is_some()
@@ -176,9 +175,10 @@ pub fn protected_filer_reservation_v1(
         || fp.job.tail.is_some()
         || fp.job.prompt_mode != crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER
         || fp.job.decode.is_none()
-        || state
-            .da_claim(&claim)
-            .is_none_or(|da| !palw_da_unit_answered_v1(da, &PalwDaUnitV1::Event { row: 0, tile: 0 }, fp.decode_tokens_executed))
+        || (row.sessions_opened > 0
+            && state
+                .da_claim(&claim)
+                .is_none_or(|da| !palw_da_unit_answered_v1(da, &PalwDaUnitV1::Event { row: 0, tile: 0 }, fp.decode_tokens_executed)))
         || state.has_public_pending_manifest_v1(frame.original_id_v1()).map_err(|e| format!("protected manifest: {e:?}"))?
     {
         return Ok(None);
