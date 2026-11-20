@@ -1,5 +1,6 @@
 """Reader adversarial tests with fake RPC replies, not native-chain evidence."""
 import copy
+import io
 import json
 from pathlib import Path
 import sys
@@ -352,6 +353,43 @@ class ObservationTests(unittest.TestCase):
                         expectation_from_studio(queue, artifact, rail, chain)
                 finally:
                     record[field] = old
+
+    def test_studio_queue_id_waits_for_its_own_job_and_complete_rail_record(self):
+        import protected_private_registration_run as runner
+        selected = dict(id='from-chat', status='committed', fp_job_id=h(20))
+        other = dict(id='other', status='committed', fp_job_id=h(21))
+        def response(*rows):
+            return io.BytesIO(json.dumps({'jobs': rows}).encode())
+
+        with tempfile.TemporaryDirectory() as temp, patch.object(runner.urllib.request, 'build_opener') as opener:
+            outbox = Path(temp)
+            summary = outbox / ('fp-job-' + h(20)[:16] + '.rail.json')
+            # The queue may appear first, then the rail directory entry, then its complete contents.
+            opener.return_value.open.side_effect = [response(other), response(dict(selected, status='running'), other),
+                                                   response(other, selected)]
+            rail = {'submitted': h(22)}
+            writes = iter((None, None, '{', json.dumps(rail)))
+            def complete_rail_write(_seconds):
+                content = next(writes)
+                if content is not None:
+                    summary.write_text(content)
+            with patch.object(runner.time, 'sleep', side_effect=complete_rail_write):
+                handoff = runner.read_studio_main_job(1234, ('from-chat', temp, h(11)), runner.time.monotonic() + 1)
+            self.assertEqual(handoff, dict(studioRun=selected, rail=rail, outbox=temp, scanFromBlock=h(11)))
+            self.assertEqual(opener.return_value.open.call_args.args[0], 'http://127.0.0.1:1234/api/v1/network/mining-queue')
+
+    def test_studio_queue_id_propagates_terminal_queue_and_rail_outcomes(self):
+        import protected_private_registration_run as runner
+        with tempfile.TemporaryDirectory() as temp, patch.object(runner.urllib.request, 'build_opener') as opener:
+            row = dict(id='mine', fp_job_id=h(20), status='committed')
+            failed = Path(temp) / ('fp-job-' + h(20)[:16] + '.json.submit-failed')
+            failed.touch()
+            for rows, message in (([dict(row, status='refused')], 'ended with refused'),
+                                  ([row, row], 'duplicate Studio queue ID'), ([row], 'rail stopped')):
+                with self.subTest(message=message):
+                    opener.return_value.open.return_value = io.BytesIO(json.dumps({'jobs': rows}).encode())
+                    with self.assertRaisesRegex(ValueError, message):
+                        runner.read_studio_main_job(1234, ('mine', temp, h(11)), runner.time.monotonic() + 1)
 
     def test_main_submission_uses_the_gateway_outbox_and_preserves_native_admission(self):
         import protected_private_registration_run as runner

@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 from misaka_wrpc_json import WsRpc
@@ -495,6 +496,9 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
         for peer in peers:
             client = wait_until(startup_deadline, lambda: connect(peer))
             stack.callback(client.close)
+            # The handshake timeout is only for startup probes. A retained block can need
+            # a full native validation step when the databases have just reopened.
+            client.sock.settimeout(step_timeout)
             clients.append(client)
             chain_identity(client, expected)
         for client in clients[1:]:
@@ -734,12 +738,59 @@ def receipt_peer_view(rpc, expected, producer, receipt, quantum):
     return observed
 
 
-def follow_studio_queue_submission(config, output, registration, clients, step, logs, executor_bond, submission):
+def read_studio_main_job(port, main_job, deadline):
+    """Join the queue row chosen in Studio and the rail's on-disk submission for that row."""
+    queue_id, directory, scan_from = main_job
+    scan_from = hash64(scan_from)
+    outbox = Path(directory)
+    require(outbox.is_absolute() and outbox.is_dir(), 'Studio gateway outbox is unavailable')
+    require(unsigned(port, 16) > 0, 'Studio needs an explicit loopback port')
+    http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    url = f'http://127.0.0.1:{port}/api/v1/network/mining-queue'
+
+    def selected_row():
+        try:
+            with http.open(url, timeout=5) as response:
+                matches = [row for row in json.load(response)['jobs'] if row['id'] == queue_id]
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, (ConnectionError, TimeoutError)):
+                return None
+            raise
+        require(len(matches) <= 1, 'duplicate Studio queue ID')
+        if not matches:
+            return None
+        row = matches[0]
+        if row['status'] in ('queued', 'running'):
+            return None
+        require(row['status'] == 'committed', f"Studio job {queue_id} ended with {row['status']}: {row.get('error')}")
+        return row
+
+    queue = wait_until(deadline, selected_row)
+    stem = outbox / ('fp-job-' + hash64(queue['fp_job_id'])[:16])
+    summary = stem.with_suffix('.rail.json')
+
+    def signed_rail():
+        if summary.is_file():
+            # The rail can still be writing its JSON when the directory entry becomes visible.
+            try:
+                return json.loads(summary.read_text())
+            except json.JSONDecodeError:
+                return None
+        require(not stem.with_suffix('.json.submit-failed').is_file(), f'rail stopped submitting Studio job {queue_id}')
+        require(not stem.with_suffix('.commitment-unsigned.borsh.expired').is_file(), f'Studio job {queue_id} expired')
+        return None
+
+    return dict(studioRun=queue, outbox=str(outbox), rail=wait_until(deadline, signed_rail), scanFromBlock=scan_from)
+
+
+def follow_studio_queue_submission(config, output, registration, clients, step, logs, executor_bond, submission=None, *, main_job=None):
     """Join a Studio main queue job submitted by its gateway and protected rail."""
     timeout = unsigned(config['studio']['timeoutSeconds'])
     deadline = time.monotonic() + timeout
-    # The operator publishes this small JSON file atomically after the rail has submitted.
-    bundle = wait_until(deadline, lambda: json.loads(submission.read_text()) if submission.is_file() else None)
+    if main_job is not None:
+        bundle = read_studio_main_job(config['studio']['port'], main_job, deadline)
+    else:
+        bundle = wait_until(deadline, lambda: json.loads(submission.read_text()) if submission.is_file() else None)
     queue = bundle['studioRun']
     job_id = hash64(queue['fp_job_id'])
     outbox = Path(bundle['outbox'])
@@ -1186,12 +1237,16 @@ def main():
     parser.add_argument('--resume-studio', type=Path, help='stopped run with registration complete and no Studio claim sent')
     parser.add_argument('--resume-settlement', type=Path, help='verify a completed receipt and follow its native payout and settlement')
     parser.add_argument('--resume-claim', type=Path, help='continue the same admitted Studio claim from a stopped run')
-    parser.add_argument('--studio-queue-submission', type=Path,
+    queue = parser.add_mutually_exclusive_group()
+    queue.add_argument('--studio-main-job', nargs=3, metavar=('QUEUE_ID', 'OUTBOX', 'SCAN_FROM_BLOCK'),
+                       help='follow a Studio main queue ID through its local gateway outbox and signed rail record')
+    queue.add_argument('--studio-queue-submission', type=Path,
                         help='join Studio main using a JSON file with studioRun, outbox, rail and scanFromBlock')
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
-    if args.studio_queue_submission is not None and ('studio' not in config or args.resume_claim or args.resume_settlement):
-        parser.error('--studio-queue-submission requires a Studio run before claim admission')
+    queue_requested = args.studio_queue_submission is not None or args.studio_main_job is not None
+    if queue_requested and ('studio' not in config or args.resume_claim or args.resume_settlement):
+        parser.error('the Studio queue source requires a Studio run before claim admission')
     continuation = None
     if 'studio' in config:
         def continuation(registration, clients, step, logs, executor_bond):
@@ -1199,9 +1254,9 @@ def main():
                 return resume_receipt_settlement(config, args.output, args.resume_settlement, registration, clients, step)
             if args.resume_claim is not None:
                 return resume_admitted_studio(config, args.output, args.resume_claim, registration, clients, step, logs, executor_bond)
-            if args.studio_queue_submission is not None:
+            if queue_requested:
                 return follow_studio_queue_submission(config, args.output, registration, clients, step, logs, executor_bond,
-                                                      args.studio_queue_submission)
+                                                      args.studio_queue_submission, main_job=args.studio_main_job)
             return studio_lifecycle(config, args.output, registration, clients, step, logs, executor_bond)
     print(json.dumps(run(config, args.output, continuation, args.resume_warmup, resume_inventory=args.resume_inventory,
                          resume_tokenizer=args.resume_tokenizer,

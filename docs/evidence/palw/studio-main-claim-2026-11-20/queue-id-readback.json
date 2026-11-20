@@ -1,0 +1,13 @@
+{
+  "studioCommit": "c9257516b23b14527ef9cef06af143756a422e8f",
+  "studioBinarySha256": "a186e3b10d0ed537d1280e283e624f067dcffdd65762686ac685fca1210128f9",
+  "queueId": "1a1f8c8c241c3fc5588",
+  "job": "5853ff54e729b61478f57f47299d2b0bb469bdb0575acd451bb7918f5b2927ffd356838b24fcf87d9d91533bf013fa89364ae5c88d99aec98551b65602213406",
+  "status": "committed",
+  "claim": "05ba473f3d5e4cfa37065a0790a864542e19492d9bf7b8011edc98581df9951f1bcaf34cab0b9b17879eabdd4eca59326be3cc57a553ff492290c6efe1c0cce9",
+  "executionRoot": "c2382428ffed5f043c36c754e3aafb9661e5e0cd8e6be1b1376cdf3df9458e652877c76e6997c85dd5afe4363c0505f4b18d6a9b1c0e495b1e8fb96ed84d6cda",
+  "signedTransaction": "dcb4a75f2b2ecaae7928929ccf99d625f80fb01643894a303b4ca95b1c5f7670260092a7318fffc015b07dac96b7dc2b2a5fb4b3a192acc16396f93122c7b175",
+  "acceptingBlock": "99ea4ea71ed05efbc95666a58b827680bce989cfb798ccabba19d5f21c6546c58386a547449744eda3c00121dbac1ffe2b8d3438727995ec4e026a59a7718166",
+  "acceptedDaa": 4429,
+  "readFrom": "Studio GET /api/v1/network/mining-queue and saved native rail summary"
+}

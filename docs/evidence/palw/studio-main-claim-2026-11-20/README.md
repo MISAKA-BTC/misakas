@@ -44,6 +44,16 @@ cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- --
 
 ### Studio main の提出済みジョブから再開する
 
+Studio のキューで追加したジョブは、起動中の Studio main の queue ID を指定して直接追跡できる。`--config` の `studio.port` をその Studio のループバック HTTP ポートに合わせ、gateway と署名済み rail のファイルがある outbox と、提出直前の選択先端を渡す。
+
+```sh
+python3 scripts/drills/protected_private_registration_run.py \
+  --config "$CONFIG" --output "$FRESH_OUTPUT" --resume-studio "$REGISTERED_RUN" \
+  --studio-main-job "$QUEUE_ID" "$OUTBOX" "$SCAN_FROM_BLOCK"
+```
+
+drill は指定 ID が `committed` になるまで待ち、該当する gateway ファイルと `.rail.json` を読み、署名済み取引から先を追跡する。Studio main の実バイナリで保存済みの queue ID `1a1f8c8c241c3fc5588` を再読し、この経路が DAA 4429 に受け付けた同じ取引 `dcb4a75f…` に結び付くことを確認した。[queue ID・取引・受付ブロックの照合](queue-id-readback.json)
+
 隔離3ピアを起動する `scripts/drills/protected_private_registration_run.py` に `--studio-queue-submission /absolute/path/to/submission.json` を渡すと、外部で起動した Studio main、gateway、rail の結果を受け取れる。通常の `--config` と `--output` に対応し、登録済みの隔離チェーンなら `--resume-studio` も使える。ジョブを送信した側で、次の4フィールドを持つ JSON を rail の提出後に rename で配置する。
 
 | フィールド | 入力 |
