@@ -97,3 +97,31 @@ pub fn protected_original_readback_v1(state: &PalwChainStateV2, id: Hash64) -> R
     readback.check_carrier_v1(id, readback.carrier_transaction, claim.execution_root)?;
     Ok(Some(readback))
 }
+
+/// Read the protected original's own TIR header for a public verifier. This
+/// frame has its own admission and service booking, independently of the
+/// legacy staged ClaimBundle. Reading the header opens no court or authority.
+#[allow(clippy::type_complexity)]
+pub fn protected_filer_tir_view_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    maximum_leaves: u64,
+) -> Result<
+    Option<(crate::palw_decode_view_v1::PalwDecodeViewV1, Box<crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1>)>,
+    String,
+> {
+    let Some(frame) = state.public_tfp1_frame_v1(claim).map_err(|e| format!("protected frame: {e:?}"))? else { return Ok(None) };
+    let accepted = state.claim(&claim).ok_or("protected frame has no accepted claim")?;
+    crate::palw_state_v2::palw_protected_admission_reads_back_v1(state, &claim, accepted).map_err(|e| e.to_string())?;
+    let header = frame.header_v1();
+    let record = state.tir_class_v1(&accepted.class_id).ok_or("protected TIR class record is absent")?;
+    let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, maximum_leaves)?;
+    if view.committed_execution_root != accepted.execution_root
+        || view.full_logits_trace_root != accepted.trace_root
+        || view.step_leaf_count != accepted.work_leaves
+        || view.class_id != accepted.class_id
+    {
+        return Err("protected TIR view differs from the accepted claim".into());
+    }
+    Ok(Some((view, Box::new(header.clone()))))
+}

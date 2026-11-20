@@ -352,6 +352,14 @@ pub(crate) fn exercise_included_replay_v1(
     let draws = protected_draws_for_point_v1(&state, &draw_point);
     assert_eq!(draws.len(), 1);
     let original = state.public_tfp1_frame_v1(claim).unwrap().unwrap().original_id_v1();
+    let read_view = crate::palw_protected_original_readback_v1::protected_filer_tir_view_v1;
+    let leaves = state.claim(&claim).unwrap().work_leaves;
+    assert!(state.staged_bundle_contract_v1(claim).is_none());
+    let (view, header) = read_view(&state, claim, leaves).unwrap().unwrap();
+    assert_eq!(header.as_ref(), state.public_tfp1_frame_v1(claim).unwrap().unwrap().header_v1());
+    assert_eq!(view.committed_execution_root, state.claim(&claim).unwrap().execution_root);
+    assert!(read_view(&state, claim, leaves - 1).is_err());
+    assert!(read_view(&state, Hash64::default(), leaves).unwrap().is_none());
     let (drawn, draw_delta) = apply_palw_transition_v2_with_extras(
         &state,
         params,

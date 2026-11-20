@@ -660,6 +660,12 @@ pub(super) struct PalwFraudFilerCaseV1 {
 impl PalwFraudFilerCaseV1 {
     pub(super) fn new(candidate: PalwFraudFilerCandidateV1) -> Self {
         let release_pending = candidate.unused_reservation_after_replay;
+        if candidate.job.free_prompt {
+            debug!(
+                "[{PALW_PANEL}] claim {}: public filer discovered FP acceptance at DAA {} (Panel seat: {}, unused pre-draw reservation: {})",
+                candidate.claim_id, candidate.accepted_daa, candidate.seat, release_pending
+            );
+        }
         Self {
             candidate,
             verdict: PalwFraudFilerVerdictV1::Pending,
@@ -6421,7 +6427,7 @@ impl PalwPanelService {
                 })
                 .ok_or("public prefix own artifact resource profile unavailable")?;
             let ticket = self.reserve_replay_v1("public-prefix-own-parameters", &need, target.class_id, claim)?;
-            Some((self.resolve_backend(session, target.class_id, target.artifact_root)?, ticket))
+            Some((self.resolve_backend_for_claim_v1(session, target.class_id, target.artifact_root, Some(claim))?, ticket))
         } else {
             None
         };
@@ -7162,7 +7168,7 @@ impl PalwPanelService {
             return;
         };
         let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> =
-            match self.resolve_backend(session, job.class_id, artifact_root) {
+            match self.resolve_backend_for_claim_v1(session, job.class_id, artifact_root, Some(claim)) {
                 Ok(backend) => Arc::from(backend),
                 Err(why) => {
                     book.settle(
@@ -7242,23 +7248,45 @@ impl PalwPanelService {
         let candidate = case.candidate.clone();
         let job = candidate.job.clone();
         let producer = candidate.producer;
-        // A TIR required-family claim has no legacy binding: its discovery, replay and verdict are
-        // native (the decode view from native state, the verifier's own TIR replay).
-        if job.free_prompt
-            && let Ok(Some((view, header))) = session.palw_staged_tir_view_v1(claim, self.class_step_ladder(job.class_id))
-        {
-            self.fraud_filer_tir_replay_v1(
-                session,
-                book,
-                claim,
-                FilerTirContextV1 { view, header },
-                network_domain,
-                current_daa,
-                public_material,
-                replay_room,
-            )
-            .await;
-            return;
+        if job.free_prompt {
+            let limit = self.class_step_ladder(job.class_id);
+            // Protected TFO3 admits a PublicTfp1Frame of its own. Do not
+            // interpret it as a legacy binding when there is no ClaimBundle.
+            let context = session.palw_staged_tir_view_v1(claim, limit).and_then(|staged| {
+                if staged.is_some() {
+                    return Ok(staged);
+                }
+                let mut protected = None;
+                session.palw_tir_public_read_v1(&mut |state| {
+                    protected =
+                        kaspa_consensus_core::palw_protected_original_readback_v1::protected_filer_tir_view_v1(state, claim, limit)?;
+                    Ok(())
+                })?;
+                Ok(protected)
+            });
+            match context {
+                Ok(Some((view, header))) => {
+                    self.fraud_filer_tir_replay_v1(
+                        session,
+                        book,
+                        claim,
+                        FilerTirContextV1 { view, header },
+                        network_domain,
+                        current_daa,
+                        public_material,
+                        replay_room,
+                    )
+                    .await;
+                    return;
+                }
+                Err(why) => {
+                    book.cases.get_mut(&claim).expect("selected case").input_retry_at =
+                        current_daa.saturating_add(PALW_FRAUD_FILER_RESEND_DAA_V1);
+                    debug!("[{PALW_PANEL}] claim {claim}: native public replay context unavailable: {why}");
+                    return;
+                }
+                Ok(None) => {}
+            }
         }
         let unjudged = |book: &mut PalwFraudFilerBookV1, why: String| {
             debug!("[{PALW_PANEL}] claim {claim}: the fraud filer does not judge it — {why}");
@@ -7342,7 +7370,7 @@ impl PalwPanelService {
             return;
         }
         let Some(artifact_root) = job.artifact_root else { return unjudged(book, "its class is gone from the registry".into()) };
-        let mut backend = match self.resolve_backend(session, job.class_id, artifact_root) {
+        let mut backend = match self.resolve_backend_for_claim_v1(session, job.class_id, artifact_root, Some(claim)) {
             Ok(backend) => backend,
             Err(why) => {
                 if book.cases.get(&claim).is_some_and(|case| case.fp_job_pending) {
