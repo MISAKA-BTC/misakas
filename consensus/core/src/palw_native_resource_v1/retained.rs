@@ -108,7 +108,7 @@ impl<T: NativeHeapV1> NativeRetainedV1<T> {
         let lease = reserve_native_requests_v1(value_requests_v1(&value)?)?;
         Ok(Self::from_owner_reserved_v1(value, lease))
     }
-    /// Release reconstruction workspace after decoding and validation have returned.
+    /// Release temporary workspace after reconstruction and validation have returned.
     pub fn release_decode_workspace_v1(&mut self) -> Result<(), NativeCoverageV1> {
         if let Some(lease) = &mut self._lease {
             let retained = tracked_value_requests_v1(&self.value)?;
@@ -533,7 +533,7 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
             crate::palw_state_v2::apply_delta_v2(&self.value, delta, params)
         }
         .map_err(NativeDecodeErrorV1::Decode)?;
-        Ok(Self::from_owner_reserved_v1(value, lease))
+        Self::finish_delta_replay_v1(value, lease)
     }
 
     /// Replay consumes a private owner: on failure no partially changed value escapes. Keep the
@@ -568,7 +568,18 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
         let Self { value, _lease: source_lease } = self;
         let value = crate::palw_state_v2::replay_delta_owned_v1(value, delta, params, revert).map_err(NativeDecodeErrorV1::Decode)?;
         drop(source_lease);
-        Ok(Self::from_owner_reserved_v1(value, lease))
+        Self::finish_delta_replay_v1(value, lease)
+    }
+
+    fn finish_delta_replay_v1(
+        value: crate::palw_state_v2::PalwChainStateV2,
+        lease: Option<NativeDemandLeaseV1>,
+    ) -> Result<Self, NativeStateMutationErrorV1> {
+        // Index rebuilds and row decoding have returned. Subsequent readers and
+        // walks share only this state, so retain its audited allocation.
+        let mut state = Self::from_owner_reserved_v1(value, lease);
+        state.release_decode_workspace_v1().map_err(NativeDecodeErrorV1::Resource)?;
+        Ok(state)
     }
 }
 
@@ -764,7 +775,11 @@ mod owned_replay_tests {
             })
             .unwrap();
         assert_eq!(output.last_point(), Some(&d.point));
-        assert_eq!(checker.outstanding(), (replay_request, 0), "source ticket replaced only after success");
+        let retained = tracked_value_requests_v1(&*output).unwrap();
+        assert!(retained < replay_request);
+        assert_eq!(checker.outstanding(), (retained, 0), "a completed walk retains only its state");
+        let next_workspace = checker.reserve_requests_v1(limit - retained, 0).unwrap();
+        drop(next_workspace);
         drop(output);
         assert_eq!(checker.outstanding(), (0, 0));
 
