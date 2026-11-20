@@ -26679,7 +26679,83 @@ mod model_market_virtual {
         assert_eq!(book.model(&additional).unwrap().allocation, Moe2ModelAllocation::Additional(*funded.model_market(&additional).unwrap()));
         assert_eq!(funded.model_market(&additional).unwrap().msk_reserve, 100 * MSK);
         assert_eq!(book.register_block(&funded, &catalog, &moved), Err(Moe2SettlementError::UnknownRegistration));
+    }
 
+    #[test]
+    fn moe2_registered_market_settles_a_reserved_fixture_reward() {
+        use crate::palw_model_market_v1::moe2::{
+            Moe2PriceLimits, Moe2QuantityLimits, Moe2WorkerPlan,
+            settlement::{Moe2Position, Moe2SettlementBook, Moe2SettlementFunding, Moe2SettlementTerms},
+        };
+        use crate::palw_settlement_liability_v1::PalwSettlementTermsSourcedV1;
+
+        let (params, state, model, registration) =
+            registration_block(&PalwTransitionExtrasV1 { private_moe2_registration: true, ..armed() });
+        let mut book = Moe2SettlementBook::default();
+        book.register_block(&state, params.model_tier_v1.as_ref().unwrap(), &registration).unwrap();
+        let registered = *book.model(&model).unwrap();
+        let reward = V / 10;
+        let terms = Moe2SettlementTerms {
+            claim: h64(31),
+            model,
+            artifact_root: registered.artifact_root,
+            policy: h64(4),
+            quote_anchor: registration.point.block,
+            valid_from: 200,
+            deadline: 205,
+            limits: Moe2QuantityLimits {
+                max_reward: reward,
+                max_purchase_sompi: 3 * reward / 10,
+                min_out: 1,
+                max_purchase_units: SUPPLY,
+                max_lp_sompi: reward / 5,
+                max_lp_units: SUPPLY,
+            },
+            plan: Moe2WorkerPlan::MinerAndPanel20,
+            price_limits: Moe2PriceLimits { max_output_slippage_bps: 0, max_purchase_impact_bps: 1000 },
+        };
+        book.admit(terms, |anchor, id| (anchor == registration.point.block && id == model).then_some(registered)).unwrap();
+        let (_, delta) = fold(&state, &params, &ctx(2, 201, 2), &[]).unwrap();
+        let at = Moe2Position { point: delta.point, ordinal: 0 };
+        // Funding and claimant are supplied to the isolated settlement kernel.
+        let funding = Moe2SettlementFunding {
+            claim: terms.claim,
+            position: at,
+            miner_now: reward * 4 / 10,
+            panel_now: reward / 10,
+            liability: PalwSettlementTermsSourcedV1 {
+                reserved_reward: Ok(reward),
+                consumed_reward: Ok(0),
+                draw: reward,
+                payment: reward,
+                paid_now: reward,
+                exported_before: Ok(0),
+                export_cap: Ok(reward),
+                liability_sompi: Ok(2000),
+                bond_collateral: Ok(3000),
+                other_live_liability: Ok(1000),
+                bond_locked_until: Ok(204),
+                liability_until: Ok(204),
+                signed_hard_deadline: Ok(terms.deadline),
+                material_ttl_until: Ok(terms.deadline),
+                vest_until: None,
+                retire_not_before: Ok(terms.deadline),
+                now: at.point.daa_score,
+            },
+        };
+        let paid = book.settle(terms.claim, at, terms.quote_anchor, &funding).unwrap();
+        let receipt = book.receipt(&terms.claim).unwrap();
+        assert_eq!(receipt.purchase, 3 * reward / 10);
+        assert_eq!(receipt.liquidity, reward / 5);
+        assert_eq!((receipt.purchased_units, receipt.liquidity_units, receipt.retired_units), (14563, 9425, 5138));
+        assert_eq!(receipt.after.position_units + receipt.after.retired_units, SUPPLY);
+        assert_eq!(receipt.after.msk_reserve, receipt.purchase + receipt.liquidity);
+        assert_eq!(paid.miner_now + paid.panel_now + receipt.after.msk_reserve, reward);
+        assert!(book.has_permanent_lp(model, registered.artifact_root));
+        eprintln!(
+            "MOE2 registration root {}, buy {}, LP {}, burned {}, miner {}, panel {}",
+            state.state_root(), receipt.purchase, receipt.liquidity, receipt.retired_units, paid.miner_now, paid.panel_now
+        );
     }
 
     /// **I-V9 and I-V10 at the fold, and the seed's window between them.** A class registered past
