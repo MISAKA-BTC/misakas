@@ -9,6 +9,7 @@
 | 初回の提出 | rail が元の claim と実行 root に署名した。取引 `d964e427…721d4b6` は選択鎖で受理された。再起動後の3ピアはいずれも、この取引による claim の受付を `found=false` と報告した。[取引の受理と claim の照会結果](carrier-acceptance.json) |
 | 初回の受付拒否 | 実行者 bond のクラスは21ブロック分の枠を必要とした。epoch 4 の最終 DAA 3679 でも配分比率から得られる上限は13.61ブロック分だった。[ノードの拒否理由](allocation-refusal.log) |
 | 資本割当 | 実行者が隔離チェーン上で、既存 bond の 10,000,000,000 sompi をこのクラスに割り当てた。3ピアとも sequence 1 を epoch 4 の pending として記録した。[署名済み取引の ID と3ピアでの照会結果](capital-assignment.json) |
+| 同じ claim の受付 | epoch 6 の DAA 4429 で必要な21,000,000単位に対して21,142,278単位が貯まった。再提出した取引 `dcb4a75f…22c7b175` をブロック `99ea4ea7…9a7718166` が受理し、3ピアとも同じ claim、execution root、受付 DAA を返した。[配分枠と3ピアの受付記録](claim-admission.json) |
 
 別入力 “Hi” も Studio main の queue で実行した。入力は10トークン、価格は同じ21 quanta だった。この比較用 claim の処理は outbox までで、上表はすべて元の claim を追跡している。[比較用の実行記録](short-prompt-price.json)
 
