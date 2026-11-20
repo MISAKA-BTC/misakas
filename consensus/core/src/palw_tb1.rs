@@ -1,6 +1,8 @@
 //! RFC-0061 public dealer-certificate arithmetic. Verifying these equations
 //! is only one part of TB1. The caller authenticates the frozen roster, signed
 //! releases, VSS qualification, purpose, position and limits before using them.
+pub mod reconstruction;
+
 use kaspa_math::{Uint576, Uint3072};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,6 +55,7 @@ pub enum Tb1PolynomialError {
     Support,
     InconsistentPoint,
     QualifiedSet,
+    ReconstructionBudget,
 }
 
 /// Check the disclosed candidate polynomial at every signed supporting point.

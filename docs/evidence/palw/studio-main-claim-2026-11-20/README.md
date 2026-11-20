@@ -23,9 +23,11 @@ misaka-palw-fp-rail --artifact ./fp-job-5853ff54e729b614 --print-claim
 
 隔離 VM の再起動後、3ピアで同じ bond・金額・sequence の割当を再読した。3ピアに共通して残っていた直後の子ブロックを通常の `submitBlock` で各ピアに再提出すると、3ピアすべてで選択鎖に戻り、以降のブロック生成も再開した。[再起動後の子ブロックの照会結果](retained-child-after-restart.json)
 
-見積もり RPC は、同じ epoch の bond 指定時に、受付側と共通の関数でクラスの残り配分枠を照合する。テストで空の初期配分、必要量ちょうど、枠不足、epoch 切替を確認した。Rust の bond budget 91件、TB1 3件、MOE2 5件、Python の protected drill 66件、Studio main の mining queue 5件が通った。ノード側は `cargo check --locked -p kaspa-consensus --lib` も通った。
+見積もり RPC は、同じ epoch の bond 指定時に、受付側と共通の関数でクラスの残り配分枠を照合する。テストで空の初期配分、必要量ちょうど、枠不足、epoch 切替を確認した。Rust の bond budget 91件、TB1 5件、MOE2 5件、Python の protected drill 68件、Studio main の mining queue 5件が通った。ノード側は `cargo check --locked -p kaspa-consensus --lib` も通った。
 
 再編成（reorg）を対象とする Rust テスト59件が通った。現在の形式は native 行を cold restore してから巻き戻し、旧形式は当時の writer が保存した liability frame を照合した。Court の検査には直前のチェーン位置を持つ fixture を使った。[対象と結果](targeted-tests.json)
+
+RFC-0061 の TB1 については、公開済みの share から dealer 多項式を再構成するライブラリを個別に検証した。7名中2名までの欠落・誤値の全99通りで、係数と整合する slot が一致した。7・16・64名の独立した Python 入力でも同じ結果を得た。この Studio claim の抽選には受付時の TFO3 規則を適用する。[試験件数と入力条件](targeted-tests.json)
 
 DAA 4689 で同じ親の子ブロック2件が全ピアに到着し、各ピアの選択先が分かれた。両方を通常のブロック検証に再提出した後、3ピアは同じ先端に収束し、元の claim の受付・Panel 承認を読み戻せた。[分岐前後の3ピアと6件の再検証応答](sibling-resolution.json)
 

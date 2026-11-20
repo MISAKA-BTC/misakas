@@ -8,13 +8,37 @@
     "model market": 25,
     "reorg": 59,
     "MOE2": 5,
-    "TB1": 3
+    "TB1": 5
   },
-  "protectedPythonTests": 66,
+  "protectedPythonTests": 68,
   "upstreamStudioQueueTests": 5,
   "upstreamStudioCommit": "c9257516b23b14527ef9cef06af143756a422e8f",
   "regressions": [
     "rfc23s2_native_only_fold_retains_actual_rows_through_restore_and_reorg",
     "rfc23s2_owner_local_signed_family_transport_matches_full_expected_cold_and_reorg"
-  ]
+  ],
+  "tb1PublicShareReconstruction": {
+    "testFilter": "palw_tb1::",
+    "n7DistinctOmissionAndCorruptionPatterns": 99,
+    "independentPythonFieldInputs": [
+      {
+        "slots": 7,
+        "corrupted": 2,
+        "matchingCoefficients": 3,
+        "matchingSupportSize": 5
+      },
+      {
+        "slots": 16,
+        "corrupted": 5,
+        "matchingCoefficients": 6,
+        "matchingSupportSize": 11
+      },
+      {
+        "slots": 64,
+        "corrupted": 21,
+        "matchingCoefficients": 22,
+        "matchingSupportSize": 43
+      }
+    ]
+  }
 }
