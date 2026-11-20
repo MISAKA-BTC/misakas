@@ -10,7 +10,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from protected_claim_observation import ContextMoved, expectation_from_studio, observe, observe_claim_progress, receipt_from_producer_log
 from protected_claim_observation import validate_receipt_observation
-from protected_private_registration_run import receipt_peer_view, receipt_window_elapsed, require_gate_c_status, studio_admission
+from protected_private_registration_run import receipt_peer_view, receipt_window_elapsed, require_gate_c_status, retain_studio_claim, studio_admission
 
 
 def h(n):
@@ -61,6 +61,29 @@ class Rpc:
 
 
 class ObservationTests(unittest.TestCase):
+    def test_only_the_executor_receives_its_matching_studio_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            outbox, executor = root / 'studio', root / 'executor'
+            (outbox / 'retention').mkdir(parents=True)
+            executor.mkdir()
+            claim = h(4)
+            rail = {}
+            for field, suffix in [('material_file', '.material'), ('answer_file', '.answer')]:
+                source = outbox / 'retention' / (claim + suffix)
+                source.write_bytes(field.encode())
+                rail[field] = str(source)
+            with patch.object(Rpc, 'call', return_value={'palwRetentionDir': str(executor)}):
+                first = retain_studio_claim(Rpc(), rail, claim, outbox)
+                self.assertEqual(retain_studio_claim(Rpc(), rail, claim, outbox), first)
+                self.assertEqual((executor / (claim + '.material')).read_bytes(), b'material_file')
+                (executor / (claim + '.answer')).write_bytes(b'prior')
+                with self.assertRaisesRegex(ValueError, 'bytes differ'):
+                    retain_studio_claim(Rpc(), rail, claim, outbox)
+                self.assertEqual((executor / (claim + '.answer')).read_bytes(), b'prior')
+                with self.assertRaisesRegex(ValueError, 'unexpected Studio retention'):
+                    retain_studio_claim(Rpc(), rail, h(6), outbox)
+
     def test_studio_carrier_pending_dropped_and_admitted(self):
         rpc = Rpc()
         real_call = rpc.call

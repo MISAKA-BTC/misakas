@@ -5,6 +5,7 @@ from functools import partial
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -12,6 +13,7 @@ import time
 import urllib.request
 
 from misaka_wrpc_json import WsRpc
+from rfc12_acceptance_observe import sha256_file
 from protected_claim_observation import (
     block_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
     require, unsigned, validate_receipt_observation,
@@ -542,6 +544,37 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
         return result
 
 
+def retain_studio_claim(rpc, rail, claim, outbox):
+    """Make the Studio executor's own carrier material available to its local responder."""
+    claim = hash64(claim)
+    facts = rpc.call('getPalwProducerFacts', dict(classId='', bondTransactionId='', bondIndex=0, withBond=False))
+    target = Path(facts['palwRetentionDir'])
+    require(target.is_absolute() and target.is_dir(), 'executor retention directory is unavailable')
+    root = (outbox / 'retention').resolve()
+    require(root.is_relative_to(outbox.resolve()), 'retention source escapes the Studio outbox')
+    copied = {}
+    for key, suffix in [('material_file', '.material'), ('answer_file', '.answer')]:
+        name = claim + suffix
+        source = Path(rail[key])
+        require(source.resolve() == root / name and source.is_file(), 'unexpected Studio retention file')
+        destination = target / name
+        digest = sha256_file(source)
+        # Publish only complete files, including when outbox and peer DB are on different volumes.
+        if not destination.exists():
+            with tempfile.NamedTemporaryFile(dir=target) as scratch:
+                with source.open('rb') as stream:
+                    shutil.copyfileobj(stream, scratch)
+                scratch.flush()
+                try:
+                    os.link(scratch.name, destination)
+                except FileExistsError:
+                    pass
+        require(not destination.is_symlink(), 'executor retention file is a symlink')
+        require(sha256_file(destination) == digest, 'executor retention bytes differ')
+        copied[name] = digest
+    return dict(claim=claim, files=copied)
+
+
 def studio_admission(rpc, expected, scan_from, data):
     """Keep a selected carrier and a refused native claim distinguishable after submission."""
     _, before = chain_identity(rpc, expected)
@@ -732,6 +765,8 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
                     return None
                 rail = json.loads(rail_path.read_text())
                 expected = expectation_from_studio(run_result, job, rail, registration['chain'])
+                retained = retain_studio_claim(rpc, rail, expected['claim'], outbox)
+                write_new(data / 'executor-retention.json', retained)
                 write_new(data / 'studio-evidence.json',
                           dict(studioRun=run_result, studioJob=job, rail=rail, chain=registration['chain']))
                 return expected
