@@ -184,5 +184,15 @@
     "acceptedWithRegisteredProgram": true,
     "wrongTraceRootRejected": true,
     "wrongExecutionRootRejected": true
+  },
+  "remainingWindowBound": {
+    "useWindowDaa": 600,
+    "lastEligibleDaa": 4153,
+    "epochLengthDaa": 1000,
+    "maximumFactor": 4,
+    "remainingRetargetBoundaries": [
+      4000
+    ],
+    "maximumEffectiveTarget": "10374232822945565001587766497427006"
   }
 }

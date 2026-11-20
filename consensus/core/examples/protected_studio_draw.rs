@@ -34,6 +34,13 @@ struct Report {
     tickets: Vec<String>,
     target: String,
     winning_indices: Vec<u32>,
+    remaining_window_bound: WindowBound,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowBound {
+    last_eligible_daa: u64,
+    maximum_effective_target: String,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,6 +128,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     let winners: Vec<_> = (0..quanta).filter(|i| palw_ticket_admits_v1(tickets[*i as usize], target)).collect();
     if target.to_string() != r.target || tickets.iter().map(u128::to_string).ne(r.tickets) || winners != r.winning_indices {
         return Err("native draw differs from report".into());
+    }
+    // This private T12 profile shortened receipt maturity only. Its use window,
+    // epoch period and maximum per-epoch retarget factor are the T12 rules.
+    let end = beacon.beacon_daa.checked_add(600).ok_or("window overflow")?;
+    let start = c.last_point.ok_or("missing native point")?.daa_score;
+    if start < beacon.beacon_daa || start > end || end != r.remaining_window_bound.last_eligible_daa {
+        return Err("capture is outside the draw window".into());
+    }
+    let mut upper = pool.target;
+    for _ in (start / 1000)..(end / 1000) {
+        upper = upper.saturating_mul(4);
+    }
+    let maximum = fp_quantum_target_of_compute_v1(upper, u128::from(claim.pwu) / u128::from(quanta), quantum);
+    if maximum.to_string() != r.remaining_window_bound.maximum_effective_target
+        || tickets.iter().any(|&t| palw_ticket_admits_v1(t, maximum))
+    {
+        return Err("draw could still win under a future retarget".into());
     }
     let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&answer_bytes)?;
     let PalwConsensusObjectV2::MaterialDisclosedV2 { claim: answered, unit, answer, discloser, signature } = payload.object else {

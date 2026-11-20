@@ -1,0 +1,50 @@
+{
+  "binarySha256": "943fff6f04fab970907ca136cb6d01b8f6a059f1ba9841c2462b797525451fed",
+  "peers": [
+    {
+      "peer": 0,
+      "tip": "1d910ff68aff527a781d9c2a8ac7ec151f1b6c87c0466636dee23f7e8d4d14f4ce2ab6f7fadfd9871e60e734baa7a3f52d066cb3854526ea23f0aeb0b7ce7b37",
+      "daa": 3616,
+      "phase": "final",
+      "certification": "certified",
+      "claim": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "beacon": "06c279d27e1b511e5fae7b2495b97ac237debd74a37ba9be57f07659a931bf493fe3764a923f6c6a8d1a6bf178d7586c884f60f01fae520cb95b73aed2b3a0d3"
+    },
+    {
+      "peer": 1,
+      "tip": "1d910ff68aff527a781d9c2a8ac7ec151f1b6c87c0466636dee23f7e8d4d14f4ce2ab6f7fadfd9871e60e734baa7a3f52d066cb3854526ea23f0aeb0b7ce7b37",
+      "daa": 3616,
+      "phase": "final",
+      "certification": "certified",
+      "claim": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "beacon": "06c279d27e1b511e5fae7b2495b97ac237debd74a37ba9be57f07659a931bf493fe3764a923f6c6a8d1a6bf178d7586c884f60f01fae520cb95b73aed2b3a0d3"
+    },
+    {
+      "peer": 2,
+      "tip": "1d910ff68aff527a781d9c2a8ac7ec151f1b6c87c0466636dee23f7e8d4d14f4ce2ab6f7fadfd9871e60e734baa7a3f52d066cb3854526ea23f0aeb0b7ce7b37",
+      "daa": 3616,
+      "phase": "final",
+      "certification": "certified",
+      "claim": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+      "quanta": {
+        "spentCount": 0,
+        "spentIndices": [],
+        "spentIndicesComplete": true,
+        "total": 21
+      },
+      "beacon": "06c279d27e1b511e5fae7b2495b97ac237debd74a37ba9be57f07659a931bf493fe3764a923f6c6a8d1a6bf178d7586c884f60f01fae520cb95b73aed2b3a0d3"
+    }
+  ]
+}
