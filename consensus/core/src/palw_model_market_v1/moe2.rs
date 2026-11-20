@@ -1,5 +1,7 @@
 //! RFC-0064 reward quote for the MOE2 cohort. The caller supplies the market
 //! at the canonical settlement position and the limits bound at admission.
+pub mod settlement;
+
 use super::{PALW_MODEL_SUPPLY_UNITS_V1, PalwModelMarketV1};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,7 +181,7 @@ impl Moe2ModelAllocation {
 mod tests {
     use super::*;
 
-    const LIMITS: Moe2QuantityLimits = Moe2QuantityLimits {
+    pub(super) const LIMITS: Moe2QuantityLimits = Moe2QuantityLimits {
         max_reward: u64::MAX,
         min_out: 0,
         max_purchase_units: u64::MAX,
@@ -187,7 +189,7 @@ mod tests {
         max_lp_units: u64::MAX,
     };
 
-    fn market() -> PalwModelMarketV1 {
+    pub(super) fn market() -> PalwModelMarketV1 {
         // The worked RFC example has 1,000 real BILI, no virtual BILI and 10,000 units in the curve.
         let mut market = PalwModelMarketV1::seed_v1(1, 1_000, Default::default());
         market.position_units = 10_000;
