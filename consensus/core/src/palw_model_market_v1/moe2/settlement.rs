@@ -123,7 +123,7 @@ pub struct Moe2SettlementBook {
 }
 
 impl Moe2SettlementBook {
-    /// Apply the registrations of a completed native block in one batch. The
+    /// Apply new registrations and native repricing of existing pairs in one batch. The
     /// owning fold commits this projection together with that block's class
     /// delta. A second registration in a block cannot leave the first half-installed.
     pub fn register_block(
@@ -152,6 +152,52 @@ impl Moe2SettlementBook {
             }
             if self.models.contains_key(key) || registered.insert(*key, model).is_some() {
                 return Err(DuplicateRegistration);
+            }
+        }
+        // Later entries in the registration block can fund or trade the new
+        // pair. Begin the book at the actual native post-state, checking that
+        // the native delta opened the prescribed market before its first move.
+        let mut unopened: BTreeSet<_> = registered
+            .iter()
+            .filter_map(|(&key, row)| matches!(row.allocation, Moe2ModelAllocation::Additional(_)).then_some(key))
+            .collect();
+        let mut seen_classes = BTreeSet::new();
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::Class { key, old: None, new: Some(_) } = entry {
+                seen_classes.insert(*key);
+            }
+            let PalwDeltaEntryV2::ModelMarket { key, old, new } = entry else { continue };
+            // Keep previously registered pairs at the canonical execution price
+            // when ordinary trades appear in later blocks. Skip legacy pairs.
+            let model = match registered.entry(*key) {
+                std::collections::btree_map::Entry::Occupied(row) => row.into_mut(),
+                std::collections::btree_map::Entry::Vacant(row) => {
+                    let Some(prior) = self.models.get(key) else { continue };
+                    row.insert(*prior)
+                }
+            };
+            let Moe2ModelAllocation::Additional(current) = &mut model.allocation else { return Err(UnknownRegistration) };
+            if unopened.remove(key) {
+                if !seen_classes.contains(key) || old.is_some() || new.as_ref() != Some(current) {
+                    return Err(UnknownRegistration);
+                }
+            } else {
+                if old.as_ref() != Some(current) {
+                    return Err(UnknownRegistration);
+                }
+                *current = new.ok_or(UnknownRegistration)?;
+            }
+        }
+        if !unopened.is_empty() {
+            return Err(UnknownRegistration);
+        }
+        for (key, model) in &registered {
+            let expected = match &model.allocation {
+                Moe2ModelAllocation::Additional(current) => Some(current),
+                Moe2ModelAllocation::Core => None,
+            };
+            if state.model_market(key) != expected {
+                return Err(UnknownRegistration);
             }
         }
         self.models.append(&mut registered);

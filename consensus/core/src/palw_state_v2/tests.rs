@@ -26563,7 +26563,12 @@ mod model_market_virtual {
     /// A model class (h64(2)) registered at DAA 100 by bond 1, to activate at DAA 200 — h64(1) is
     /// the floor, which has no line and so no market.
     fn registration_block(e: &PalwTransitionExtrasV1) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, PalwStateDeltaV2) {
-        let p = economy_params();
+        let mut p = economy_params();
+        if e.private_moe2_registration {
+            p.model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierMirrorV1 {
+                from_daa: 0, catalogs: Default::default(), registered_permille: 300, registered_cap_permille: 300,
+            });
+        }
         let class = h64(2);
         let mut objects = register_class_and_bond();
         let mut future = registration(class, 100, Some(bond_key(1)));
@@ -26601,6 +26606,38 @@ mod model_market_virtual {
     }
 
     #[test]
+    fn moe2_native_registration_market_replays_and_reverts_with_the_class() {
+        let mut p = economy_params();
+        let parent = PalwChainStateV2::genesis();
+        let mut objects = register_class_and_bond();
+        let additional = h64(2);
+        let mut future = registration(additional, 100, Some(bond_key(1)));
+        if let PalwConsensusObjectV2::ClassRegistered { activation_daa, slash_value_per_pwu, .. } = &mut future {
+            *activation_daa = 200;
+            *slash_value_per_pwu = 5;
+        }
+        objects.push(future);
+        let extras = PalwTransitionExtrasV1 { private_moe2_registration: true, ..armed() };
+        let point = ctx(1, 100, 1);
+        assert!(matches!(fold_with(&parent, &p, &point, &objects, &extras), Err(PalwStateV2Error::InvalidParams(_))));
+        p.model_tier_v1 = Some(crate::palw_model_tier_v1::PalwModelTierMirrorV1 {
+            from_daa: 100, catalogs: Default::default(), registered_permille: 300, registered_cap_permille: 300,
+        });
+        let (state, delta) = fold_with(&parent, &p, &point, &objects, &extras).unwrap();
+        let initial = PalwModelMarketV1::open_virtual_v2(100, V);
+        assert_eq!(state.model_market(&additional), Some(&initial));
+        assert!(state.model_market(&h64(1)).is_none());
+        assert_eq!(delta.entries.iter().filter(|e| matches!(e, PalwDeltaEntryV2::ModelMarket { .. })).count(), 1);
+        let replay = apply_delta_v2(&parent, &delta, &p).unwrap();
+        assert_eq!(replay.state_root(), state.state_root());
+        let reverted = revert_delta_v2(&replay, &delta, &p).unwrap();
+        assert_eq!(reverted.state_root(), parent.state_root());
+        assert!(reverted.model_market(&additional).is_none() && reverted.class(&additional).is_none());
+        let (legacy, _) = fold_with(&parent, &p, &point, &objects, &armed()).unwrap();
+        assert!(legacy.model_market(&additional).is_none());
+    }
+
+    #[test]
     fn moe2_opens_only_new_additional_registrations_in_the_native_delta() {
         use crate::palw_model_market_v1::moe2::{
             Moe2ModelAllocation,
@@ -26608,7 +26645,7 @@ mod model_market_virtual {
         };
         use crate::palw_model_tier_v1::PalwModelTierMirrorV1;
 
-        let (_, state, additional, delta) = registration_block(&armed());
+        let (p, state, additional, delta) = registration_block(&PalwTransitionExtrasV1 { private_moe2_registration: true, ..armed() });
         let core = h64(1);
         let catalog = PalwModelTierMirrorV1 {
             from_daa: 0,
@@ -26626,6 +26663,10 @@ mod model_market_virtual {
         assert_eq!(book.register_block(&state, &catalog, &changed), Err(Moe2SettlementError::UnknownRegistration));
         assert!(book.model(&core).is_none() && book.model(&additional).is_none());
 
+        let mut missing_market = delta.clone();
+        missing_market.entries.retain(|e| !matches!(e, PalwDeltaEntryV2::ModelMarket { key, .. } if *key == additional));
+        assert_eq!(book.register_block(&state, &catalog, &missing_market), Err(Moe2SettlementError::UnknownRegistration));
+        assert!(book.model(&core).is_none() && book.model(&additional).is_none());
         book.register_block(&state, &catalog, &delta).unwrap();
         assert_eq!(book.model(&core).unwrap().allocation, Moe2ModelAllocation::Core);
         let registered = book.model(&additional).unwrap();
@@ -26633,6 +26674,12 @@ mod model_market_virtual {
         assert_eq!(registered.artifact_root, state.class(&additional).unwrap().artifact_root);
         assert_eq!(registered.allocation, Moe2ModelAllocation::Additional(PalwModelMarketV1::open_virtual_v2(100, V)));
         assert_eq!(book.register_block(&state, &catalog, &delta), Err(Moe2SettlementError::DuplicateRegistration));
+        let (funded, moved) = fold_with(&state, &p, &ctx(2, 101, 2), &[seed(additional, holder(5), 100 * MSK)], &armed()).unwrap();
+        book.register_block(&funded, &catalog, &moved).unwrap();
+        assert_eq!(book.model(&additional).unwrap().allocation, Moe2ModelAllocation::Additional(*funded.model_market(&additional).unwrap()));
+        assert_eq!(funded.model_market(&additional).unwrap().msk_reserve, 100 * MSK);
+        assert_eq!(book.register_block(&funded, &catalog, &moved), Err(Moe2SettlementError::UnknownRegistration));
+
     }
 
     /// **I-V9 and I-V10 at the fold, and the seed's window between them.** A class registered past
@@ -28962,6 +29009,7 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            private_moe2_registration: false,
             protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,
@@ -29285,6 +29333,7 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            private_moe2_registration: false,
             protected_planning_v3: None,
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,

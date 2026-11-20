@@ -20399,6 +20399,7 @@ fn apply_class_registration_v1(
     // could exist holding a root it does not own would have its own attribution paid to a
     // stranger, which is the defect, not a milder form of it.
     builder.claim_artifact_root(artifact_root, class_id, *class_id, 1)?;
+    let open_moe2 = builder.extras.private_moe2_registration && builder.state.class(class_id).is_none();
     builder.write_class(
         *class_id,
         Some(PalwClassStateV2 {
@@ -20438,6 +20439,18 @@ fn apply_class_registration_v1(
             fused_attention,
         }),
     )?;
+    if open_moe2 {
+        use crate::palw_model_market_v1::moe2::{Moe2ModelAllocation, Moe2RegisteredModel};
+        let catalog = builder.params.model_tier_v1.as_ref().ok_or(PalwStateV2Error::InvalidParams("MOE2 requires a native catalog"))?;
+        let registered = Moe2RegisteredModel::at_registration(&builder.state, catalog, *class_id, ctx.daa_score)
+            .ok_or(PalwStateV2Error::InvalidParams("MOE2 catalog is inactive at registration"))?;
+        if builder.state.model_market(class_id).is_some() {
+            return Err(PalwStateV2Error::ModelMarketAlreadySeeded(*class_id));
+        }
+        if let Moe2ModelAllocation::Additional(market) = registered.allocation {
+            builder.write_model_market(*class_id, Some(market))?;
+        }
+    }
     // The canonical registration is signed, but pruning previously discarded its semantic
     // identities. Persist one immutable row at the independent semantic fence; no local model
     // or tokenizer file participates in the fold. Dormant re-registration cannot relabel it.
@@ -21656,6 +21669,9 @@ pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Ha
 /// transition before the struct existed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwTransitionExtrasV1 {
+    /// Isolated RFC-0064 registration cohort. No shipped network selects this
+    /// path. Classification uses the active catalog in the native state params.
+    pub private_moe2_registration: bool,
     /// Node-owned planning declaration selected at this block's inclusion DAA.
     /// Archive replay resolves it at the original point, never today's tip.
     pub protected_planning_v3: Option<crate::palw_positive_contract_v2::ProtectedPlanningDeclarationV3>,
