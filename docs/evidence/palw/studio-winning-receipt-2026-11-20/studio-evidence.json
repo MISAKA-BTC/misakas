@@ -1,0 +1,39 @@
+{
+  "studioRun": {
+    "answer": "Continue",
+    "cu": null,
+    "work_leaves": "85938",
+    "fp_job_id": "9e8670f106045982594d87ed7b4bf282892db2c4b6bd247e8b3d40c01bec1ef0c323365761870070dc5303ec21ca6436860e2b04bcaa3a8a6cd6ff2d785ee065",
+    "trace_root": "676b27d9fa2c5334c591724fd3a88a5df8672814ca95fb6407d398b39ada343e3f9750640788ad921cebdffbe757c24c0ec0104ad39e47cecefa02668ccc032c",
+    "output_root": "d569a8176817139ede32e6a9d63c3b0c3fd82a4bdf882368e88475fa29b23cf71ad48f5c14990952545a6d0462498ae838ee4367f4e94be05f7e975caf331a02",
+    "schedule_root": "64675b2cd0304fe5d8a0c8489fa0726f4a65dcb9e8160d153b4d733d7ac78512f9d9682b2938cbd2fff0c9816e9ac0835615e311c604db7bf70f735592b0e4fd",
+    "artifact": "/dev/shm/misaka-protected200-capacity6/execution-studio-draft7/studio/fp-outbox/testnet-12/private/4d4953414b412f503230302f56312f979f7c7750733ee778802328a69f17eba6/7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625/fp-job-9e8670f106045982.json",
+    "prompt_tokens": 17,
+    "completion_tokens": 1,
+    "chain": "committed_not_submitted"
+  },
+  "studioJob": {
+    "object": "misaka.request",
+    "job_id": "9e8670f106045982594d87ed7b4bf282892db2c4b6bd247e8b3d40c01bec1ef0c323365761870070dc5303ec21ca6436860e2b04bcaa3a8a6cd6ff2d785ee065",
+    "output_root": "d569a8176817139ede32e6a9d63c3b0c3fd82a4bdf882368e88475fa29b23cf71ad48f5c14990952545a6d0462498ae838ee4367f4e94be05f7e975caf331a02",
+    "claim_id": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+    "submission_txid": "3a989cfc95014170d270399eaee1e78491d6f51f302968a1d359f10c76fa512c0d2e90fd43b0c890a23c3790c526a09a649f92ecadfa6afd02c74928a54f08de"
+  },
+  "rail": {
+    "schema": "misaka.palw.fp-rail-tx.v1",
+    "submitted": "3a989cfc95014170d270399eaee1e78491d6f51f302968a1d359f10c76fa512c0d2e90fd43b0c890a23c3790c526a09a649f92ecadfa6afd02c74928a54f08de",
+    "fp_claim_id": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+    "protected_execution_root": "37674e698d7e11a48d2026d6e6c466d482d3920e4677d86a360f35fe6b5771c2963a0e31ae91a242be0a1572ab17100973d68d9a867c843be12174abe734718c",
+    "protected_funding_sompi": 193119700,
+    "quanta": 21,
+    "work_leaves": 85938,
+    "trace_manifest_root": "07726a599cb3e7cc599681e46779c06c80fc88b3bd0d0a63f3422a8a4a7b99b3947ab1abac8a7c3ea031ed3c219f0cf184c3ddf968d65f17a7285252fb7c0341",
+    "trace_retention_daa": 500318
+  },
+  "chain": {
+    "version": 1,
+    "genesisHash": "3b4233aee0ffa89811d939d4048362926bb93d21b86905fabc72ea4e3d4fc023f68c8de3c6b89e161a660b67191a1239e87b64ef96a00f003d6afa767b717b9d",
+    "consensusParamsId": "ab561ca8997430974c993004330a51cecc662f774b2b32acf74d989626c3112b",
+    "networkDomain": "e8721ed44c1f304d4b0f701e223872c758ebb174ac6766e1da1c3552f9fc627cdd77a6d7b5d9daccbb2beb59f4e2a67d71ee224312b9b626d7154e9e9775f9c6"
+  }
+}

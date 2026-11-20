@@ -1,0 +1,13 @@
+{
+  "answer": "Continue",
+  "cu": null,
+  "work_leaves": "85938",
+  "fp_job_id": "9e8670f106045982594d87ed7b4bf282892db2c4b6bd247e8b3d40c01bec1ef0c323365761870070dc5303ec21ca6436860e2b04bcaa3a8a6cd6ff2d785ee065",
+  "trace_root": "676b27d9fa2c5334c591724fd3a88a5df8672814ca95fb6407d398b39ada343e3f9750640788ad921cebdffbe757c24c0ec0104ad39e47cecefa02668ccc032c",
+  "output_root": "d569a8176817139ede32e6a9d63c3b0c3fd82a4bdf882368e88475fa29b23cf71ad48f5c14990952545a6d0462498ae838ee4367f4e94be05f7e975caf331a02",
+  "schedule_root": "64675b2cd0304fe5d8a0c8489fa0726f4a65dcb9e8160d153b4d733d7ac78512f9d9682b2938cbd2fff0c9816e9ac0835615e311c604db7bf70f735592b0e4fd",
+  "artifact": "/dev/shm/misaka-protected200-capacity6/execution-studio-draft7/studio/fp-outbox/testnet-12/private/4d4953414b412f503230302f56312f979f7c7750733ee778802328a69f17eba6/7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625/fp-job-9e8670f106045982.json",
+  "prompt_tokens": 17,
+  "completion_tokens": 1,
+  "chain": "committed_not_submitted"
+}
