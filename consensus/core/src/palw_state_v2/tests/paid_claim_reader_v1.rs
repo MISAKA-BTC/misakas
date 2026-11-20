@@ -12,10 +12,13 @@ fn setup() -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, Palw
     setup_mode(false)
 }
 fn setup_mode(fs: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2) {
-    use fixture::{
-        chain::{T, block_of, salted, seals_for},
-        ledger_world::World,
-    };
+    setup_world(fs, fixture::ledger_world::World::new())
+}
+fn setup_world(
+    fs: bool,
+    mut w: fixture::ledger_world::World,
+) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2) {
+    use fixture::chain::{T, block_of, salted, seals_for};
     let producer = bond_key(300);
     let producer_id = palw_kernel_bond_id_v1(&producer);
     let network = h64(1);
@@ -23,7 +26,6 @@ fn setup_mode(fs: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionE
     let policy = palw_kernel_route_policy_v1(network, rules);
     let mut route = PalwKernelRouteStateV1::new(policy, None, Default::default());
     let mut l = route.template();
-    let mut w = World::new();
     let candidates: Vec<_> =
         (301..304).map(|i| PalwPaidCheckerCandidateV2 { bond: bond_key(i), operator: h64(i), weight: 1 }).collect();
     let mut txs = vec![

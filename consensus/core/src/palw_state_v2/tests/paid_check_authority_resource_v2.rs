@@ -17,10 +17,20 @@ const LOGICAL_TEST_LIMIT: u64 = 1 << 60;
 fn native(b: &mut TransitionBuilder<'_>, signer: &PalwBondKeyV2, o: &PaidClaimObjectV2) -> Result<(), PalwStateV2Error> {
     super::super::super::palw_claim_challenge_fold_v2::apply_paid_claim_v2(b, &ctx(6, 6, 6), signer, o)
 }
+// Exercise contention at the second authority read on a real registered Program.
+// The dense fixture alone quotes over 125 GB for its cold ledger expansion,
+// which can exhaust the host ceiling before this test introduces its second owner.
+fn resource_setup(fs: bool) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2) {
+    let mut w = fixture::ledger_world::World::new();
+    let fixture = misaka_palw_tir_sketch::fixture::memory_v1(7);
+    w.program = fixture.program;
+    w.params = fixture.params;
+    setup_world(fs, w)
+}
 fn lock_state(
-    fs: bool,
+    setup: (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2),
 ) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, PalwPaidClaimAuthorityV2, PalwPaidClaimLockV2) {
-    let (state, p, extras, a) = setup_mode(fs);
+    let (state, p, extras, a) = setup;
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
     super::super::super::palw_claim_challenge_fold_v2::apply_paid_claim_v2(
         &mut b,
@@ -94,7 +104,7 @@ fn paid_check_authority_native_resource_after_first_reads_keeps_receipt_atomic()
         isolated_child("paid_check_authority_native_resource_after_first_reads_keeps_receipt_atomic", CHILD);
         return;
     }
-    let (state, p, extras, a, lock) = lock_state(false);
+    let (state, p, extras, a, lock) = lock_state(resource_setup(false));
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
     let seat = lock.seats[0];
     let object = PaidClaimObjectV2::Receipt { receipt: receipt(&a, &lock, &seat) };
@@ -132,7 +142,7 @@ fn paid_check_authority_native_resource_after_first_reads_keeps_receipt_atomic()
 }
 #[test]
 fn paid_check_authority_native_positive_quorum_and_outsider_preserve_approval_rules() {
-    let (state, p, extras, a, lock) = lock_state(false);
+    let (state, p, extras, a, lock) = lock_state(setup_mode(false));
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
     let root = b.state.state_root();
     let journal_len = b.entries.len();
@@ -167,7 +177,7 @@ fn paid_check_authority_fs_second_read_resource_is_not_a_source_approval() {
     // Storage-path negative only, like the existing FS projection fixture.
     // An interactive class cannot obtain this bootstrap lock through Lock; do
     // not turn the row's source_valid flag into a valid source/approval claim.
-    let (mut state, p, extras, a) = setup_mode(true);
+    let (mut state, p, extras, a) = resource_setup(true);
     let lock = PalwPaidClaimLockV2 {
         enrollment: a.enrollment.id(),
         context: a.context.id(),
@@ -219,7 +229,7 @@ fn paid_check_authority_fs_second_read_resource_is_not_a_source_approval() {
 #[test]
 fn paid_check_authority_present_corruption_and_true_absence_are_decode_errors() {
     use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
-    let (mut state, _, _, a, _) = lock_state(false);
+    let (mut state, _, _, a, _) = lock_state(setup_mode(false));
     let route = state.kernel_route.as_mut().unwrap();
     let saved = route.aux.remove(&(PAID_CLAIM_ENROLLMENTS_V2, a.context.id().to_vec())).unwrap();
     assert!(matches!(route.paid_claim_check_authority_checked_v2(&a.context.id(), 6), Err(E::Decode(_))));

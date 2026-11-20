@@ -108,5 +108,21 @@
       "palw_settlement_liability_v1::": 4,
       "palw_model_market_v1::": 25
     }
+  },
+  "paidAuthorityContention": {
+    "scope": "Native paid Program receipt and FS authority tests on local fixtures",
+    "previousDenseFixtureFirstReadRequestedBytes": 125503921236,
+    "availableBytesAtRefusal": 23917395038,
+    "quotaTestProgram": "memory_v1(7)",
+    "covered": [
+      "a second-reader resource refusal restores the prior state root and journal length",
+      "release permits a single ordinary receipt",
+      "capacity recovery preserves FS source eligibility checks"
+    ],
+    "passedByFilter": {
+      "paid_check_authority_resource_v2": 5,
+      "receipt": 101,
+      "reorg": 59
+    }
   }
 }
