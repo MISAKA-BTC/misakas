@@ -19,11 +19,12 @@ impl Moe2RewardSplit {
     }
 }
 
-/// Quantity limits in units of the purchased Position, contributed BILI and
-/// returned Position respectively. A higher min_out than the quote is a hold.
+/// Separate limits on the reward, the BILI spent on each market leg and the
+/// Position quantities it moves. The minimum output is in purchased Positions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Moe2QuantityLimits {
     pub max_reward: u64,
+    pub max_purchase_sompi: u64,
     pub min_out: u64,
     pub max_purchase_units: u64,
     pub max_lp_sompi: u64,
@@ -67,7 +68,7 @@ pub fn quote_additional_reward(
         return Err(InvalidMarket);
     }
     let split = Moe2RewardSplit::additional(reward);
-    if reward > limits.max_reward || split.liquidity > limits.max_lp_sompi {
+    if reward > limits.max_reward || split.purchase > limits.max_purchase_sompi || split.liquidity > limits.max_lp_sompi {
         return Err(OutsideQuote);
     }
     let x1 = market.curve_x() + u128::from(split.purchase);
@@ -183,6 +184,7 @@ mod tests {
 
     pub(super) const LIMITS: Moe2QuantityLimits = Moe2QuantityLimits {
         max_reward: u64::MAX,
+        max_purchase_sompi: u64::MAX,
         min_out: 0,
         max_purchase_units: u64::MAX,
         max_lp_sompi: u64::MAX,
@@ -230,6 +232,11 @@ mod tests {
             quote_additional_reward(&m, 1000, Moe2QuantityLimits { min_out: 2308, ..LIMITS }),
             Err(Moe2QuoteRefusal::OutsideQuote)
         );
+        let exact = Moe2QuantityLimits { max_purchase_sompi: 300, max_lp_sompi: 200, ..LIMITS };
+        assert!(quote_additional_reward(&m, 1000, exact).is_ok());
+        for short in [Moe2QuantityLimits { max_purchase_sompi: 299, ..exact }, Moe2QuantityLimits { max_lp_sompi: 199, ..exact }] {
+            assert_eq!(quote_additional_reward(&m, 1000, short), Err(Moe2QuoteRefusal::OutsideQuote));
+        }
         m.position_units = 2;
         assert_eq!(quote_additional_reward(&m, 10_000, LIMITS), Err(Moe2QuoteRefusal::LiquidityDust));
         m.position_units = PALW_MODEL_SUPPLY_UNITS_V1;

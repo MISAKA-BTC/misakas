@@ -4,6 +4,9 @@
 use super::{Moe2ModelAllocation, Moe2QuantityLimits, Moe2QuoteRefusal, Moe2RegisteredModel, Moe2RewardAllocation, Moe2WorkerPlan};
 use crate::Hash64;
 use crate::palw_model_market_v1::PalwModelMarketV1;
+use crate::palw_settlement_liability_v1::{
+    PalwSettlementLiabilityRefusalV1, PalwSettlementTermsSourcedV1, palw_settlement_liability_sourced_v1,
+};
 use crate::palw_state_v2::PalwBlockContextV2;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -55,6 +58,41 @@ pub struct LockedLiquidityReceipt {
     pub retired_units: u64,
 }
 
+/// The owning fold sources these terms and worker releases from this claim's
+/// funding and vesting rows at the canonical settlement position.
+#[derive(Clone, Copy, Debug)]
+pub struct Moe2SettlementFunding {
+    pub claim: Hash64,
+    pub position: Moe2Position,
+    pub liability: PalwSettlementTermsSourcedV1,
+    pub miner_now: u64,
+    pub panel_now: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Moe2SettledReward {
+    pub allocation: Moe2RewardAllocation,
+    pub miner_now: u64,
+    pub panel_now: u64,
+    pub vest_until: Option<u64>,
+}
+
+impl Moe2SettlementFunding {
+    fn check(&self, allocation: Moe2RewardAllocation) -> Result<Moe2SettledReward, Moe2SettlementError> {
+        let t = &self.liability;
+        let market_export = allocation.market.map_or(0, |q| q.split.purchase + q.split.liquidity);
+        if self.miner_now > allocation.miner
+            || self.panel_now > allocation.panel_pool
+            || t.paid_now != market_export + self.miner_now + self.panel_now
+            || (t.paid_now < t.payment && t.vest_until.is_none())
+        {
+            return Err(Moe2SettlementError::Liability(PalwSettlementLiabilityRefusalV1::Malformed));
+        }
+        palw_settlement_liability_sourced_v1(t).map_err(Moe2SettlementError::Liability)?;
+        Ok(Moe2SettledReward { allocation, miner_now: self.miner_now, panel_now: self.panel_now, vest_until: t.vest_until })
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Moe2SettlementError {
     UnknownRegistration,
@@ -66,13 +104,14 @@ pub enum Moe2SettlementError {
     PositionOutOfOrder,
     OutsideWindow,
     Quote(Moe2QuoteRefusal),
+    Liability(PalwSettlementLiabilityRefusalV1),
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Moe2SettlementBook {
     models: BTreeMap<Hash64, Moe2RegisteredModel>,
     admitted: BTreeMap<Hash64, Moe2SettlementTerms>,
-    settled: BTreeMap<Hash64, Moe2RewardAllocation>,
+    settled: BTreeMap<Hash64, Moe2SettledReward>,
     receipts: BTreeMap<Hash64, LockedLiquidityReceipt>,
     permanent_lp_models: BTreeSet<Hash64>,
     permanent_lp_roots: BTreeSet<Hash64>,
@@ -118,7 +157,7 @@ impl Moe2SettlementBook {
     pub fn model(&self, model: &Hash64) -> Option<&Moe2RegisteredModel> {
         self.models.get(model)
     }
-    pub fn entitlement(&self, claim: &Hash64) -> Option<&Moe2RewardAllocation> {
+    pub fn entitlement(&self, claim: &Hash64) -> Option<&Moe2SettledReward> {
         self.settled.get(claim)
     }
     pub fn receipt(&self, claim: &Hash64) -> Option<&LockedLiquidityReceipt> {
@@ -158,13 +197,16 @@ impl Moe2SettlementBook {
         claim: Hash64,
         position: Moe2Position,
         anchor: Hash64,
-        reward: u64,
-    ) -> Result<Moe2RewardAllocation, Moe2SettlementError> {
+        funding: &Moe2SettlementFunding,
+    ) -> Result<Moe2SettledReward, Moe2SettlementError> {
         use Moe2SettlementError::*;
         if self.settled.contains_key(&claim) {
             return Err(AlreadySettled);
         }
         let terms = *self.admitted.get(&claim).ok_or(UnknownClaimContext)?;
+        if funding.claim != claim || funding.position != position || funding.liability.now != position.point.daa_score {
+            return Err(UnknownClaimContext);
+        }
         if self.last_settlement.is_some_and(|last| !position.follows(last)) {
             return Err(PositionOutOfOrder);
         }
@@ -175,7 +217,8 @@ impl Moe2SettlementBook {
         if model.artifact_root != terms.artifact_root || anchor != terms.quote_anchor || terms.valid_from < model.registration_daa {
             return Err(UnknownClaimContext);
         }
-        let allocation = model.allocation.quote_reward(reward, terms.plan, terms.limits).map_err(Quote)?;
+        let allocation = model.allocation.quote_reward(funding.liability.payment, terms.plan, terms.limits).map_err(Quote)?;
+        let payment = funding.check(allocation)?;
         if let (Moe2ModelAllocation::Additional(before), Some(q)) = (model.allocation, allocation.market) {
             if q.split.liquidity > 0 {
                 let receipt = LockedLiquidityReceipt {
@@ -199,9 +242,9 @@ impl Moe2SettlementBook {
             model.allocation = Moe2ModelAllocation::Additional(q.after);
         }
         self.admitted.remove(&claim);
-        self.settled.insert(claim, allocation);
+        self.settled.insert(claim, payment);
         self.last_settlement = Some(position);
-        Ok(allocation)
+        Ok(payment)
     }
 }
 
@@ -211,6 +254,35 @@ mod tests {
     use super::*;
     fn h(id: u64) -> Hash64 {
         Hash64::from_u64_word(id)
+    }
+
+    fn funding(claim: Hash64, position: Moe2Position, reward: u64) -> Moe2SettlementFunding {
+        let split = super::super::Moe2RewardSplit::additional(reward);
+        Moe2SettlementFunding {
+            claim,
+            position,
+            miner_now: split.workers - split.workers / 5,
+            panel_now: split.workers / 5,
+            liability: PalwSettlementTermsSourcedV1 {
+                reserved_reward: Ok(reward),
+                consumed_reward: Ok(0),
+                draw: reward,
+                payment: reward,
+                paid_now: reward,
+                exported_before: Ok(0),
+                export_cap: Ok(reward),
+                liability_sompi: Ok(2000),
+                bond_collateral: Ok(3000),
+                other_live_liability: Ok(1000),
+                bond_locked_until: Ok(5),
+                liability_until: Ok(5),
+                signed_hard_deadline: Ok(8),
+                material_ttl_until: Ok(8),
+                vest_until: None,
+                retire_not_before: Ok(8),
+                now: position.point.daa_score,
+            },
+        }
     }
 
     #[test]
@@ -239,40 +311,74 @@ mod tests {
         let mut child = parent.clone();
         let block = PalwBlockContextV2 { block: h(20), blue_score: 10, daa_score: 3, subsidy: 1000 };
         let at = Moe2Position { point: block, ordinal: 1 };
-        assert_eq!(child.settle(terms.claim, at, h(6), 1000), Err(Moe2SettlementError::UnknownClaimContext));
+        let funds = funding(terms.claim, at, 1000);
+        assert_eq!(child.settle(terms.claim, at, h(6), &funds), Err(Moe2SettlementError::UnknownClaimContext));
         let high_min = Moe2SettlementTerms { claim: h(11), limits: Moe2QuantityLimits { min_out: 2308, ..LIMITS }, ..terms };
         child.admit(high_min).unwrap();
         assert_eq!(child.admit(Moe2SettlementTerms { claim: high_min.claim, ..terms }), Err(Moe2SettlementError::AlreadyAdmitted));
-        assert_eq!(child.settle(high_min.claim, at, h(5), 1000), Err(Moe2SettlementError::Quote(Moe2QuoteRefusal::OutsideQuote)));
+        assert_eq!(
+            child.settle(high_min.claim, at, h(5), &funding(high_min.claim, at, 1000)),
+            Err(Moe2SettlementError::Quote(Moe2QuoteRefusal::OutsideQuote))
+        );
         assert_eq!(child.model(&model.model), Some(&model));
         assert!(child.entitlement(&h(3)).is_none());
-        let pay = child.settle(terms.claim, at, h(5), 1000).unwrap();
-        assert_eq!((pay.miner, pay.panel_pool), (400, 100));
+        let mut held = funds;
+        held.miner_now = 0;
+        held.panel_now = 0;
+        held.liability.vest_until = Some(6);
+        held.liability.exported_before = Ok(100);
+        held.liability.export_cap = Ok(599);
+        // The buy and permanent LP together export 500 even with both workers vested.
+        held.liability.paid_now = 300;
+        assert_eq!(
+            child.settle(terms.claim, at, h(5), &held),
+            Err(Moe2SettlementError::Liability(PalwSettlementLiabilityRefusalV1::Malformed))
+        );
+        held.liability.paid_now = 500;
+        assert_eq!(
+            child.settle(terms.claim, at, h(5), &held),
+            Err(Moe2SettlementError::Liability(PalwSettlementLiabilityRefusalV1::ExportBeyondCap))
+        );
+        assert!(child.receipt(&terms.claim).is_none() && child.entitlement(&terms.claim).is_none());
+        assert_eq!(child.model(&model.model), Some(&model));
+        held.liability.export_cap = Ok(600);
+        let mut vested_branch = child.clone();
+        let vested = vested_branch.settle(terms.claim, at, h(5), &held).unwrap();
+        assert_eq!((vested.miner_now, vested.panel_now, vested.vest_until), (0, 0, Some(6)));
+        assert_eq!(vested_branch.entitlement(&terms.claim), Some(&vested));
+        let pay = child.settle(terms.claim, at, h(5), &funds).unwrap();
+        assert_eq!((pay.allocation.miner, pay.allocation.panel_pool), (400, 100));
         assert_eq!(child.receipt(&h(3)).unwrap().liquidity_units, 1183);
         assert_eq!(child.check_core_designation(h(7), model.artifact_root), Err(Moe2SettlementError::PermanentLiquidityHistory));
         assert_eq!(child.check_core_designation(model.model, h(8)), Err(Moe2SettlementError::PermanentLiquidityHistory));
         assert!(parent.check_core_designation(h(7), model.artifact_root).is_ok());
-        assert_eq!(child.settle(terms.claim, at, h(5), 1000), Err(Moe2SettlementError::AlreadySettled));
+        assert_eq!(child.settle(terms.claim, at, h(5), &funds), Err(Moe2SettlementError::AlreadySettled));
         let second = Moe2SettlementTerms { claim: h(9), ..terms };
         child.admit(second).unwrap();
-        assert_eq!(child.settle(second.claim, at, h(5), 1000), Err(Moe2SettlementError::PositionOutOfOrder));
         assert_eq!(
-            child.settle(
-                second.claim,
-                Moe2Position { point: PalwBlockContextV2 { block: h(21), blue_score: 11, daa_score: 5, ..block }, ordinal: 0 },
-                h(5),
-                1000
-            ),
+            child.settle(second.claim, at, h(5), &funding(second.claim, at, 1000)),
+            Err(Moe2SettlementError::PositionOutOfOrder)
+        );
+        let late = Moe2Position { point: PalwBlockContextV2 { block: h(21), blue_score: 11, daa_score: 5, ..block }, ordinal: 0 };
+        assert_eq!(
+            child.settle(second.claim, late, h(5), &funding(second.claim, late, 1000)),
             Err(Moe2SettlementError::OutsideWindow)
         );
         let successor = Moe2Position { point: PalwBlockContextV2 { block: h(22), blue_score: 11, ..block }, ordinal: 0 };
         let sibling = Moe2Position { point: PalwBlockContextV2 { block: h(23), ..block }, ordinal: 2 };
-        assert_eq!(child.settle(second.claim, sibling, h(5), 1000), Err(Moe2SettlementError::PositionOutOfOrder));
-        child.settle(second.claim, successor, h(5), 1000).unwrap();
+        assert_eq!(
+            child.settle(second.claim, sibling, h(5), &funding(second.claim, sibling, 1000)),
+            Err(Moe2SettlementError::PositionOutOfOrder)
+        );
+        assert_eq!(
+            child.settle(second.claim, successor, h(5), &funding(second.claim, sibling, 1000)),
+            Err(Moe2SettlementError::UnknownClaimContext)
+        );
+        child.settle(second.claim, successor, h(5), &funding(second.claim, successor, 1000)).unwrap();
         assert_eq!(child.receipt(&second.claim).unwrap().position, successor);
         assert!(parent.entitlement(&h(3)).is_none());
-        let dust = parent.settle(terms.claim, at, h(5), 3).unwrap();
-        assert_eq!((dust.miner, dust.panel_pool), (3, 0));
+        let dust = parent.settle(terms.claim, at, h(5), &funding(terms.claim, at, 3)).unwrap();
+        assert_eq!((dust.allocation.miner, dust.allocation.panel_pool), (3, 0));
         assert!(parent.receipt(&h(3)).is_none() && !parent.has_permanent_lp(model.model, model.artifact_root));
     }
 }

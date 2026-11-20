@@ -71,5 +71,42 @@
     "historicalTicketsChecked": 21,
     "historicalSignedCourtEventVerified": true,
     "substitutedTransactionIdRejectedOnBoth": "Error: \"protected original carrier or accepting point differs from the claim\""
+  },
+  "moe2CombinedExport": {
+    "scope": "Local MOE2 settlement book using the native sourced liability predicate",
+    "nativeTestFilter": "moe2",
+    "amountUnit": "sompi",
+    "reward": 1000,
+    "purchase": 300,
+    "permanentLpDeposit": 200,
+    "priorExport": 100,
+    "minerNow": 0,
+    "panelNow": 0,
+    "cases": [
+      {
+        "reportedPaidNow": 300,
+        "exportCap": 599,
+        "result": "Malformed"
+      },
+      {
+        "reportedPaidNow": 500,
+        "exportCap": 599,
+        "result": "ExportBeyondCap"
+      },
+      {
+        "reportedPaidNow": 500,
+        "exportCap": 600,
+        "result": "Accepted",
+        "deferredMiner": 400,
+        "deferredPanel": 100,
+        "vestUntilDaa": 6
+      }
+    ],
+    "onRefusal": "Market, permanent receipt and worker entitlements stay at their prior state.",
+    "passedByFilter": {
+      "moe2": 5,
+      "palw_settlement_liability_v1::": 4,
+      "palw_model_market_v1::": 25
+    }
   }
 }
