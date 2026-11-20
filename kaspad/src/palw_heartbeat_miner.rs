@@ -533,6 +533,16 @@ impl PalwHeartbeatMinerService {
         if let HeartbeatYieldHintV1::SlotTaken(opens) = hint {
             let now = kaspa_core::time::unix_now();
             let away = opens.saturating_sub(now);
+            #[cfg(feature = "private-integration-clock")]
+            if let Some(path) = &self.historical_permit_path
+                && let Ok(permit) = read_historical_heartbeat_permit(path)
+                && permit.transaction_id.is_none()
+                && session.async_get_sink().await == permit.sink
+                && session.get_virtual_daa_score() == permit.daa
+                && session.heartbeat_yield_hint() == HeartbeatYieldHintV1::SlotTaken(opens)
+            {
+                private_heartbeat::report_slot_request(path, &permit, opens);
+            }
             // Two intervals is more than any honest reference can put between now and the next
             // slot — an honest beat is stamped at its miner's clock or at the slot; say so, because
             // a clock held that far out is a reference stamped in the future and an operator should

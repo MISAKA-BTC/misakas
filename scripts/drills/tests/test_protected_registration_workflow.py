@@ -43,6 +43,29 @@ class Rpc(BaseRpc):
 
 
 class RegistrationTests(unittest.TestCase):
+    def test_admitted_clock_only_acknowledges_a_bounded_slot_for_its_current_permit(self):
+        from protected_private_registration_run import acknowledge_requested_slot, HEARTBEAT_INTERVAL_MS
+
+        class Clock:
+            current = 1000
+
+            def advance_to(self, target):
+                self.current = target
+                return target
+
+        before = dict(sink='a' * 128, virtualDaaScore=42)
+        with tempfile.TemporaryDirectory() as directory:
+            clock = Clock()
+            clock.directory = Path(directory)
+            reply = clock.directory / 'heartbeat-slot.json'
+            self.assertIsNone(acknowledge_requested_slot(clock, before))
+            for fields in [dict(sink='b' * 128), dict(daa=43), dict(opensMs=1000),
+                           dict(opensMs=1001 + HEARTBEAT_INTERVAL_MS), dict(opensMs='2000'), {}]:
+                value = dict(sink=before['sink'], daa=42, opensMs=2000)
+                reply.write_text(json.dumps(dict(value, **fields)))
+                self.assertEqual(acknowledge_requested_slot(clock, before), None if fields else 2000)
+            self.assertIsNone(acknowledge_requested_slot(clock, before))
+
     def test_moving_snapshot_does_not_advance_past_current_control_slot(self):
         workflow = object.__new__(RegistrationWorkflow)
         workflow.deadline = time.monotonic() + 5

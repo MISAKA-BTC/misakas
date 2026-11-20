@@ -11,6 +11,32 @@ use kaspa_consensus_core::{
 use kaspa_math::Uint512;
 use sha3::{Digest, Sha3_512};
 
+fn publish_private_file(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+    let written = file.write_all(bytes);
+    drop(file);
+    let result = written.and_then(|_| std::fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result
+}
+
+/// Report the ordinary slot and attempt-priority rule's absolute timestamp
+/// once, for the controller's current parent and DAA score.
+pub(super) fn report_slot_request(path: &std::path::Path, permit: &super::HistoricalHeartbeatPermit, opens_ms: u64) {
+    let request = path.with_file_name(format!("heartbeat-slot-{}-{}.request", permit.sink, permit.daa));
+    if !request.is_file() {
+        return;
+    }
+    let reply = serde_json::json!({"sink": permit.sink, "daa": permit.daa, "opensMs": opens_ms});
+    if publish_private_file(&path.with_file_name("heartbeat-slot.json"), reply.to_string().as_bytes()).is_ok() {
+        let _ = std::fs::remove_file(request);
+    }
+}
+
 /// Optional local nonce source for the isolated clock's heartbeat miner. Only the
 /// public prehash and PoW fields leave the process. A missing or stale reply
 /// leaves the ordinary CPU search running. The caller verifies every proposed
@@ -30,15 +56,7 @@ impl PrivateNonceSource {
             "version": 1, "network": network_id, "prehash": faster_hex::hex_string(prehash.as_byte_slice()),
             "timestamp": header.timestamp, "bits": header.bits, "algo": header.pow_algo_id,
         });
-        let temporary = directory.join(format!("work-{}.tmp", std::process::id()));
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary).ok()?;
-        let written = file.write_all(work.to_string().as_bytes());
-        drop(file);
-        if written.and_then(|_| std::fs::rename(&temporary, directory.join("work.json"))).is_err() {
-            let _ = std::fs::remove_file(temporary);
-            return None;
-        }
+        publish_private_file(&directory.join("work.json"), work.to_string().as_bytes()).ok()?;
         Some(Self { answer: directory.join("nonce.le64") })
     }
 
@@ -117,6 +135,23 @@ impl PreparedHeartbeat {
 mod tests {
     use super::*;
     use kaspa_pow::StateLayer0;
+
+    #[test]
+    fn slot_report_requires_a_request_for_this_selected_parent_and_score() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("heartbeat-permit.json");
+        let reply = dir.path().join("heartbeat-slot.json");
+        let permit = super::super::HistoricalHeartbeatPermit { sink: Default::default(), daa: 17, transaction_id: None };
+        std::fs::write(dir.path().join(format!("heartbeat-slot-{}-16.request", permit.sink)), []).unwrap();
+        report_slot_request(&path, &permit, 250_000);
+        assert!(!reply.exists());
+        let current = dir.path().join(format!("heartbeat-slot-{}-17.request", permit.sink));
+        std::fs::write(&current, []).unwrap();
+        report_slot_request(&path, &permit, 250_000);
+        let actual: serde_json::Value = serde_json::from_slice(&std::fs::read(reply).unwrap()).unwrap();
+        assert_eq!(actual, serde_json::json!({"sink": permit.sink, "daa": 17, "opensMs": 250_000}));
+        assert!(!current.exists());
+    }
 
     #[test]
     fn optional_nonce_requires_a_complete_reply_and_current_header_verification() {

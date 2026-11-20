@@ -31,6 +31,25 @@ PROTECTED_HARD_WINDOW_DAA = 10_000
 PROTECTED_LIFECYCLE_SCAN_BLOCKS = 50_000
 
 
+def acknowledge_requested_slot(clock, before):
+    """Acknowledge the miner's own slot boundary on the same private chain."""
+    try:
+        with (clock.directory / 'heartbeat-slot.json').open('rb') as stream:
+            raw = stream.read(1025)
+        if len(raw) > 1024:
+            return None
+        reply = json.loads(raw)
+    except (ValueError, OSError):
+        return None
+    if not isinstance(reply, dict) or reply.get('sink') != before['sink'] or reply.get('daa') != before['virtualDaaScore']:
+        return None
+    target = reply.get('opensMs')
+    if (type(target) is not int or not clock.current < target <= clock.current + HEARTBEAT_INTERVAL_MS
+            or target > time.time_ns() // 1_000_000):
+        return None
+    return clock.advance_to(target)
+
+
 def wait_until(deadline, read):
     while time.monotonic() < deadline:
         result = read()
@@ -462,6 +481,11 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
                     json.dump(dict(sink=before['sink'], daa=before['virtualDaaScore'], transactionId=txid), stream)
                 os.replace(temporary, permit_path)
             acknowledgement = clock.advance_to(clock.current + HEARTBEAT_INTERVAL_MS)
+            request = None
+            if (resume_claim is not None and permit_path is not None and pending_control is None
+                    and (output / 'studio/panel-approval.json').is_file() and not (output / 'studio/final.json').exists()):
+                request = clock.directory / f"heartbeat-slot-{before['sink']}-{before['virtualDaaScore']}.request"
+                request.touch()
             steps += 1
             after = before
             deadline = time.monotonic() + settle_seconds
@@ -471,7 +495,13 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
                     after = candidate
                     if after['sink'] != before['sink']:
                         break
+                    if request is not None and 'slotAcknowledgement' not in acknowledgement:
+                        slot = acknowledge_requested_slot(clock, before)
+                        if slot is not None:
+                            acknowledgement['slotAcknowledgement'] = slot
                 time.sleep(0.1)
+            if request is not None:
+                request.unlink(missing_ok=True)
             write_new(output / f'clock-{steps:06}.json', dict(acknowledgement, before=before, after=after))
             if permit_path is not None and pending_control is not None and before['sink'] != after['sink']:
                 txid, slot = pending_control
