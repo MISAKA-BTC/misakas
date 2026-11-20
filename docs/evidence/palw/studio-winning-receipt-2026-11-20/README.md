@@ -31,3 +31,7 @@ PublicDA 入力をメタデータだけで先読みした場合に、検証用�
 ## 同一 claim の再開
 
 3 ピアを停止して各 DB を保存し、異議申立て側の公開入力読み取りを修正したノードで各自の DB を再開した。各ピアの RPC で元の受付の全識別子と、抽選された seat 7 の承認取引・包含点を照合した。DAA 374 で3ピアとも `receipt_licensed`、Gate C は `pending`、消費済みは 0/21。未応答の DA session は 0 件、存続している公開異議の予約は 7 件だった。[再開後のピア別観測](restart-peers.json)
+
+## Panel 抽選前の未使用予約の返上
+
+全再実行を承認した seat 7 は、抽選前に公開異議を予約していた。この予約で開いた session と参加した lane はともに0件だった。再開後、seat 7 の worker が自分の鍵で通常の `DisputeReleasedV1` を送信した。3ピアとも選択鎖上の同一ブロックで、取引 `75f3a31d…f59bbd1` の受理を DAA 421、ordinal 6 に確認した。seat 7 の予約は閉じ、預託は `dismissedHeld` に1件残った。資料要求を行ったほかの6件は継続している。この時点で同じ claim の phase は `receipt_licensed`、Gate C は `pending`、消費済みは 0/21。[3ピアでの返上取引と異議状態](seat-reservation-release.json)

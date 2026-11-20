@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "source": "getVirtualChainFromBlock and getPalwClaimDetail on three private peers",
+  "claim": "9d08847f64f5cbb5ea5ab2df7ec4a512fcc26c0fb15bf3e3198f6eae7155529751597d078a121d44bef4c2aadca88e83eba2ff92719e072e3b8afe5b26ccb68c",
+  "original": "1effee96e1e68c51d203e8554be865e64f75a20e02fab4c1657d8d3851ee2e1426f98794f9a880f40a6d4de09cbd2cccb9074f060a778db01a9143e1b25936fc",
+  "panelApproval": {
+    "acceptedDaa": 325,
+    "acceptedTxOrdinal": 1,
+    "acceptingBlock": "db95051c4cc6c813c6a3bb82a0f0748fa5c863d01eca7367b46c414d4bd414ea202da0a8da3d92fe269a0b1e07a57c4ec703ef8299724ccfea64ce519cecccef",
+    "bond": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7",
+    "carrierBlock": "00d7bd3357bb8cd549deae45e18676e1aca727f1faad236d4deb96fbd9896bdbd1a1c09d6063044921d79e7b760393615ad9e989797f2451171db3958e8dc115",
+    "carrierTransaction": "50fbc44848031017a608482abb42a12fae925cd7c8bb3eb074b6fafecfadd68ec402fe279b98ea19648c45501c83845e4608de81f3f9b49a299e2407e43498bc"
+  },
+  "owner": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7",
+  "releaseTransaction": "75f3a31d44348bb6da15ed902184fa1931d617ed52fe151d41768fe92b87168716357f0d960252d9fd8c83b6c35adeadfe7043b9833bd991edef55d9cf59bbd1",
+  "peers": [
+    {
+      "peer": 0,
+      "tipBlock": "edd8bc25a030887d2987801fe870591a034ee7c06be96c45cb1a0aef3ea5275dfd08e08267990b278976c19ec15fc596d1aad1f446238700850c036c6c7d061f",
+      "tipDaa": 422,
+      "acceptingBlock": "4afd49a5e57672714cbef3e635f9ee51ea4c5ccfaca543934687a742df00a0961bf5ed6166da38c3456ee2e13c1a6e3fbe64ada835cf873edf2db1099aa48e19",
+      "acceptedDaa": 421,
+      "acceptedTxOrdinal": 6,
+      "phase": "receipt_licensed",
+      "gateC": "pending",
+      "spentCount": 0,
+      "closedReservers": [
+        "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+      ],
+      "dismissedHeld": 1,
+      "live": [
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+          "sessionsOpened": 3
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:2",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:3",
+          "sessionsOpened": 3
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:4",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:5",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:6",
+          "sessionsOpened": 3
+        }
+      ],
+      "fullReplayApprovalRecorded": true
+    },
+    {
+      "peer": 1,
+      "tipBlock": "edd8bc25a030887d2987801fe870591a034ee7c06be96c45cb1a0aef3ea5275dfd08e08267990b278976c19ec15fc596d1aad1f446238700850c036c6c7d061f",
+      "tipDaa": 422,
+      "acceptingBlock": "4afd49a5e57672714cbef3e635f9ee51ea4c5ccfaca543934687a742df00a0961bf5ed6166da38c3456ee2e13c1a6e3fbe64ada835cf873edf2db1099aa48e19",
+      "acceptedDaa": 421,
+      "acceptedTxOrdinal": 6,
+      "phase": "receipt_licensed",
+      "gateC": "pending",
+      "spentCount": 0,
+      "closedReservers": [
+        "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+      ],
+      "dismissedHeld": 1,
+      "live": [
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+          "sessionsOpened": 3
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:2",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:3",
+          "sessionsOpened": 3
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:4",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:5",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:6",
+          "sessionsOpened": 3
+        }
+      ],
+      "fullReplayApprovalRecorded": true
+    },
+    {
+      "peer": 2,
+      "tipBlock": "edd8bc25a030887d2987801fe870591a034ee7c06be96c45cb1a0aef3ea5275dfd08e08267990b278976c19ec15fc596d1aad1f446238700850c036c6c7d061f",
+      "tipDaa": 422,
+      "acceptingBlock": "4afd49a5e57672714cbef3e635f9ee51ea4c5ccfaca543934687a742df00a0961bf5ed6166da38c3456ee2e13c1a6e3fbe64ada835cf873edf2db1099aa48e19",
+      "acceptedDaa": 421,
+      "acceptedTxOrdinal": 6,
+      "phase": "receipt_licensed",
+      "gateC": "pending",
+      "spentCount": 0,
+      "closedReservers": [
+        "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:7"
+      ],
+      "dismissedHeld": 1,
+      "live": [
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:1",
+          "sessionsOpened": 3
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:2",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:3",
+          "sessionsOpened": 3
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:4",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:5",
+          "sessionsOpened": 5
+        },
+        {
+          "courtCapacity": null,
+          "depositSompi": "5133323",
+          "lanesJoined": 0,
+          "reservedDaa": 320,
+          "reserver": "ab2ffbe1d9372b524ff6ca3dae7084892a84aa082c34a2dceb7130bb72c17be39507cb2bbb52ee1b7fdfc655e4d533edf3460c91cc2fcd3e0195612bcc5ab3eb:6",
+          "sessionsOpened": 3
+        }
+      ],
+      "fullReplayApprovalRecorded": true
+    }
+  ]
+}
