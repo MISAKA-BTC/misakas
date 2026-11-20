@@ -633,6 +633,14 @@ fn original_archive_native_quote_internal_v2(
         return Err(refused("archive quote requires actual public original"));
     };
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(job);
+    if let Some(gate) = &extras.cad1_route_gate_v1 {
+        use crate::palw_claim_admission_difficulty_v1::{Cad1IngressRouteFamilyV1, Cad1IngressRouteKindV1};
+        gate.check_route_entry_v1(
+            Cad1IngressRouteKindV1::NewOriginalCandidate(Cad1IngressRouteFamilyV1::QuoteRpcDetailed),
+            Some(claim),
+        )
+        .map_err(refused)?;
+    }
     let b = TransitionBuilder::try_new(state, params, false, false, false, false, extras)?.with_native_original_parent_v19(state);
     let prepared = prepare_paired_original_v1(&b, ctx, object, Some(job))?
         .ok_or_else(|| refused("archive quote lacks actual signed paired original"))?;
@@ -676,6 +684,14 @@ fn palw_original_archive_native_quote_legacy_oar2_v3(
         return Err(refused("archive quote requires actual public original"));
     };
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(job);
+    if let Some(gate) = &extras.cad1_route_gate_v1 {
+        use crate::palw_claim_admission_difficulty_v1::{Cad1IngressRouteFamilyV1, Cad1IngressRouteKindV1};
+        gate.check_route_entry_v1(
+            Cad1IngressRouteKindV1::NewOriginalCandidate(Cad1IngressRouteFamilyV1::QuoteRpcDetailed),
+            Some(claim),
+        )
+        .map_err(refused)?;
+    }
     let b = TransitionBuilder::try_new(state, params, false, false, false, false, extras)?.with_native_original_parent_v19(state);
     let prepared = prepare_paired_original_v1(&b, ctx, object, Some(job))?
         .ok_or_else(|| refused("archive quote lacks actual signed paired original"))?;

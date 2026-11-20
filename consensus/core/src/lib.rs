@@ -1281,3 +1281,13 @@ pub mod palw_verifier_fee_consent_v1;
 pub mod palw_verifier_watch_v1;
 
 pub mod palw_logits_q24_v2;
+/// RFC-0059 / ADR-0227 / RFC-0056 §17 / RFC-0057 §17 / RFC-0058 §16 (`PALW-AN1`): Miner nonce-derived input binding (`s -> input_root`), single-pass trace root (`trace_root`), `output_root`, `ticket < theta(D_e)`, Panel full re-execution, and model-free Node local Court.
+pub mod palw_an1_input_binding_and_panel_court_v1;
+/// RFC-0055 / RFC-0056 (`UAI1` / `CAD1`): Common pre-admission compact `Preseal` / `WorkTicket <= T(D)` gate, 10-dimensional flow calendar, and 120s `D_(b+2)` difficulty controller.
+pub mod palw_claim_admission_difficulty_v1;
+/// RFC-0057 (`CPN1`) & RFC-0058 §12: `ObligationKey`, `PositiveNonce` (`R_panel` bound), `ActionNonce` (no future-seed wait), sparse partial Fisher–Yates challenge selector, and split part assembly.
+pub mod palw_court_nonce_binding_v1;
+/// RFC-0058 (`SWC1`): Staged work commitments (`RegistrationId` / `OpportunityId` -> `R_job` / `JobSeed` -> `ComputationalWorkKey` -> `OriginalId` -> `R_ticket` / `WorkTicket` -> `R_panel`) and 5 one-time ledgers (`TrialUse`, `WorkUse`, `StageUse`, `OriginalState`, `RightsUse`).
+pub mod palw_staged_work_commitments_v1;
+/// RFC-0048 / 0049 / 0050 / 0055 / 0058: Unified consensus eligibility gate (`MatureEligible` / `EligibilitySnapshot`), 5-phase same-batch refutation priority, and global 1 BPS carrier permit book (`UnifiedCarrierV1`).
+pub mod palw_unified_carrier_and_eligibility_v1;

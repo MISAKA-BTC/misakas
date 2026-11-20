@@ -505,6 +505,45 @@ pub fn native_facts_of_block_v1(
     native_facts_and_skips_v1(rules, evidence, voided, accepting).0
 }
 
+/// **RFC-0048 / 0049 / 0050 / 0055 / 0058 (`SWC1` §10.2–§10.4)**: [`native_facts_and_skips_v1`] filtered through the
+/// unified `Swc1EligibilitySnapshotV1` (`MatureEligible`) gate when `swc1_engine` is active.
+///
+/// Any candidate whose `source_original` (first 32 bytes of `identity`) is not in `MatureEligible` state,
+/// is held in quarantine `Q`, or has an invalidated ancestor in its transitive dependency closure is
+/// excluded from settlement facts and counted in `skipped.uncertified`.
+pub fn native_facts_and_skips_with_swc1_eligibility_v1(
+    rules: &NativeFactRulesV1<'_>,
+    swc1_engine: Option<&crate::palw_unified_carrier_and_eligibility_v1::UnifiedConsensusEligibilityEngineV1>,
+    evidence: &NativeDeltaEvidenceV1,
+    voided: &BTreeSet<Hash64>,
+    accepting: (u64, u64),
+    original_expiry_daa: u64,
+) -> (Vec<MatureUsefulWorkV1>, SkippedEvidenceV1) {
+    let (facts, mut skipped) = native_facts_and_skips_v1(rules, evidence, voided, accepting);
+    let Some(engine) = swc1_engine else {
+        return (facts, skipped);
+    };
+    let mut eligible_facts = Vec::with_capacity(facts.len());
+    for fact in facts {
+        let mut orig32 = [0u8; 32];
+        orig32.copy_from_slice(&fact.identity.as_bytes()[..32]);
+        if engine
+            .derive_eligibility_snapshot(
+                orig32,
+                crate::palw_staged_work_commitments_v1::Swc1RightKindV1::SettlementDepth,
+                accepting.0,
+                original_expiry_daa,
+            )
+            .is_ok()
+        {
+            eligible_facts.push(fact);
+        } else {
+            skipped.uncertified = skipped.uncertified.saturating_add(1);
+        }
+    }
+    (eligible_facts, skipped)
+}
+
 /// [`native_facts_and_skips_v1`] plus the native39 receipt revocations gathered from the whole selected chain.
 /// A legacy `voided` claim id does not retract a native39 quantum, and a native39 conviction does not enter `voided`.
 pub fn native_facts_and_skips_with_native39_v1(

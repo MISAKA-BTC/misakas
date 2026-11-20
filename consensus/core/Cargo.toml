@@ -59,6 +59,7 @@ sha3.workspace = true
 serde_json.workspace = true
 serde-wasm-bindgen.workspace = true
 serde.workspace = true
+sha2.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
 # ADR-0075 §7: devnet's genesis bonds are ML-DSA-87 keys derived from public seeds at assembly

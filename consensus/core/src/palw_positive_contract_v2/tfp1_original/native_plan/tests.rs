@@ -361,24 +361,36 @@ pub(crate) fn exercise_native_plan_v3(
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(Some(
         crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1 { draft_ttl_daa: 0, ..stored_schedule },
     ));
-    let pinned = super::super::public_policy::resolve_protected_planning_policy_v3(
-        parent,
-        &pinned_extras,
-        &pinned_params,
-        at.daa_score,
-        at.blue_score,
-        fp,
-        header,
-        &literal_material.prompt,
-        &descriptor_bytes,
-        form,
-        true,
-        literal_material.prompt_encoding,
-        schedules,
-    );
+    let resolve = |state_params: &PalwStateParamsV2| {
+        super::super::public_policy::resolve_protected_planning_policy_v3(
+            parent,
+            &pinned_extras,
+            state_params,
+            at.daa_score,
+            at.blue_score,
+            fp,
+            header,
+            &literal_material.prompt,
+            &descriptor_bytes,
+            form,
+            true,
+            literal_material.prompt_encoding,
+            schedules,
+        )
+    };
+    let pinned = resolve(&pinned_params);
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(Some(stored_schedule));
     let pinned = pinned.expect("the selected policy resolves for the native registered fixture without re-reading TTL");
     let pinned_policy = pinned.policy();
+    // Submit and install must agree on the material horizon at the original's acceptance fence.
+    let hard = at.daa_score + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA;
+    let disclose = crate::palw_state_v2::palw_da_disclose_window_daa_v1(&pinned_params);
+    let reorg = crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(pinned_extras.staged_public_court.as_ref());
+    assert!(disclose.max(reorg) > 0);
+    for (fence, horizon) in [(at.daa_score + 1, hard), (at.daa_score, hard + disclose.max(reorg))] {
+        let params = pinned_params.clone().with_court_clock_v2_from_daa(Some(fence));
+        assert_eq!(resolve(&params).unwrap().policy().budget.retention_until, horizon);
+    }
     // The resolver must cover the actual final native projection, including
     // requests and retained faults, before the unchanged rooted capacity gate.
     let accounting_plan = NativeTfp1OriginalPlanV3::derive_v3(
