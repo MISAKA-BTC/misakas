@@ -31,6 +31,65 @@ pub struct Moe2QuantityLimits {
     pub max_lp_units: u64,
 }
 
+/// Admission-selected limits for this local quote rule. Slippage measures a
+/// shortfall in bought units from the anchor quote for the same B. Impact
+/// measures the premium of B/q over the current pre-buy spot price X/U.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Moe2PriceLimits {
+    pub max_output_slippage_bps: u16,
+    pub max_purchase_impact_bps: u32,
+}
+
+const BASIS_POINTS: u128 = 10_000;
+
+#[derive(Clone, Copy, Debug)]
+struct PurchaseCurve {
+    x: u128,
+    inventory: u64,
+}
+
+impl PurchaseCurve {
+    fn from_market(market: &PalwModelMarketV1) -> Result<Self, Moe2QuoteRefusal> {
+        let inventory = market.position_units;
+        if !market.is_open()
+            || market.closed_to_buys
+            || market.curve_x() == 0
+            || inventory == 0
+            || inventory > PALW_MODEL_SUPPLY_UNITS_V1
+            || market.retired_units > PALW_MODEL_SUPPLY_UNITS_V1 - inventory
+            || market.msk_reserve < market.seed_sompi
+        {
+            return Err(Moe2QuoteRefusal::InvalidMarket);
+        }
+        Ok(Self { x: market.curve_x(), inventory })
+    }
+
+    fn units(self, purchase: u64) -> u64 {
+        (u128::from(purchase) * u128::from(self.inventory) / (self.x + u128::from(purchase))) as u64
+    }
+}
+
+impl Moe2PriceLimits {
+    fn check(self, anchor: PurchaseCurve, current: &PalwModelMarketV1, quote: &Moe2MarketQuote) -> Result<(), Moe2QuoteRefusal> {
+        let buy = quote.split.purchase;
+        if buy == 0 {
+            return Ok(());
+        }
+        let q = u128::from(quote.purchased_units);
+        let reference = u128::from(anchor.units(buy));
+        // X is the sum of two u64 reserves, U <= 500,000 and the impact
+        // tolerance is u32. Both cross products fit in u128, without rounding.
+        let minimum_fraction = BASIS_POINTS - u128::from(self.max_output_slippage_bps);
+        if q * BASIS_POINTS < reference * minimum_fraction
+            || u128::from(buy) * u128::from(current.position_units) * BASIS_POINTS
+                > q * current.curve_x() * (BASIS_POINTS + u128::from(self.max_purchase_impact_bps))
+        {
+            return Err(Moe2QuoteRefusal::OutsideQuote);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Moe2MarketQuote {
     pub split: Moe2RewardSplit,
@@ -57,22 +116,13 @@ pub fn quote_additional_reward(
 ) -> Result<Moe2MarketQuote, Moe2QuoteRefusal> {
     use Moe2QuoteRefusal::*;
     let inventory = market.position_units;
-    if !market.is_open()
-        || market.closed_to_buys
-        || market.curve_x() == 0
-        || inventory == 0
-        || inventory > PALW_MODEL_SUPPLY_UNITS_V1
-        || market.retired_units > PALW_MODEL_SUPPLY_UNITS_V1 - inventory
-        || market.msk_reserve < market.seed_sompi
-    {
-        return Err(InvalidMarket);
-    }
+    let curve = PurchaseCurve::from_market(market)?;
     let split = Moe2RewardSplit::additional(reward);
     if reward > limits.max_reward || split.purchase > limits.max_purchase_sompi || split.liquidity > limits.max_lp_sompi {
         return Err(OutsideQuote);
     }
-    let x1 = market.curve_x() + u128::from(split.purchase);
-    let purchased_units = (u128::from(split.purchase) * u128::from(inventory) / x1) as u64;
+    let x1 = curve.x + u128::from(split.purchase);
+    let purchased_units = curve.units(split.purchase);
     let remaining = inventory - purchased_units;
     let liquidity_units = (u128::from(split.liquidity) * u128::from(remaining) / x1) as u64;
     if (split.purchase > 0 && purchased_units == 0) || (split.liquidity > 0 && liquidity_units == 0) {

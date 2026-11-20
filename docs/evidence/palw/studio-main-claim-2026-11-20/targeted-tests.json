@@ -229,5 +229,50 @@
       "the expired unspent branch records peer agreement without payout"
     ],
     "independentNativeUtxo": "../studio-winning-receipt-2026-11-20/worker-utxo-acceptance.json"
+  },
+  "moe2QuotePrices": {
+    "scope": "Unactivated local economic settlement book. Native quote and integer price checks compared with an independent Python Fraction calculation.",
+    "regression": "anchored_slippage_and_current_price_impact_hold_both_legs_and_worker_reward",
+    "market": {
+      "virtualReserve": 0,
+      "startingRealReserve": 1000,
+      "startingUnits": 10000,
+      "reward": 1000,
+      "purchase": 300,
+      "firstUnits": 2307,
+      "secondUnits": 1479
+    },
+    "firstPurchaseImpactBps": {
+      "3003": "OutsideQuote",
+      "3004": "accepted"
+    },
+    "secondPurchaseSlippageBps": {
+      "3589": "OutsideQuote",
+      "3590": "accepted"
+    },
+    "reference": "Same signed quote anchor and same gross purchase B across both settlements",
+    "oracle": {
+      "file": "moe2-quote-price-vectors.txt.gz",
+      "format": "gzip of space-delimited ASCII, one row per case, newline terminated",
+      "columns": [
+        "virtualReserve",
+        "anchorRealReserve",
+        "currentRealReserve",
+        "anchorUnits",
+        "currentUnits",
+        "reward",
+        "maxOutputSlippageBps",
+        "maxPurchaseImpactBps",
+        "outcome"
+      ],
+      "uncompressedSha256": "40be1f41f3a5617655a022d0a7a16394db0b24b0f17258a420428d7bd3935ccc",
+      "cases": 1024,
+      "outcomes": {
+        "LiquidityDust": 563,
+        "OutsideQuote": 47,
+        "Overflow": 29,
+        "accepted": 385
+      }
+    }
   }
 }

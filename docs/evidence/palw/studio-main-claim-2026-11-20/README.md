@@ -95,3 +95,11 @@ drill は指定 ID が `committed` になるまで待ち、該当する gateway 
 drill は queue の job ID から gateway のファイルを開き、claim、executor bond、output root、execution root、network domain と rail の署名済み取引 ID を照合する。受付ブロック以降は従来と同じ Panel・Final・Gate C・受賞ブロックの観測を使用する。既に受付記録のある実行には `--resume-claim` を使用する。
 
 当選時は同じ実行で receipt、選択鎖の子ブロック、その worker の coinbase UTXO を追跡し、各ピアがその UTXO の受理 DAA まで決済済みと返すまで待つ。途中停止時は、`studio/receipt-checkpoint.json` がある実行ディレクトリを `--resume-settlement` に指定して同じ receipt から再開できる。従来の receipt 監査済み `result.json` からも再開できる。原受付からのハード期限を過ぎた場合は、全ピアで認証済み・未消費を照合して `receipt-deadline-passed-unspent` を記録して終了コード3を返す。決済確認時の状態は `receipt-settled`、終了コードは0となる。期限切れの記録だけからは ticket が閾値を通ったかどうかは判定できない。元の Studio claim の落選は別途、保存した全 ticket から確認した。[抽選結果](result.json)
+
+## MOE2 の価格制約を確認した隔離試験
+
+MOE2 の経済処理は、受付条件が指定した履歴上の市場から、決済時と同額の買付で得られる Position 数を計算する。この隔離実装では、その数量に対する不足率を slippage、実際の平均買値 `B/q` が買付直前の価格 `X/U` を上回る率を price impact とした。両方の許容幅を claim の受付時に固定し、整数の積で比較する。
+
+RFC の初期市場で 300 を買い付けると 2,307 Position となり、その後の同額の買付では 1,479 となった。後者は元の見積もりに対する許容幅が 3,589 basis points なら保留、3,590 なら成立する。保留時には市場、永久 LP receipt、worker の報酬権利のどれにも書き込みがなかった。独立した有理数計算と Rust の照合に使った 1,024 件の入力・期待値と列定義を保存した。[比較データ](moe2-quote-price-vectors.txt.gz)・[試験条件と結果](targeted-tests.json)
+
+この試験の原資・参照市場は隔離用に与えた。実際の Studio claim の観測結果は、受付時の TFO3 規則による[抽選記録](result.json)にある。
