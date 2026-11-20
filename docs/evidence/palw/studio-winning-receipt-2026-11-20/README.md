@@ -47,3 +47,21 @@ PublicDA 入力をメタデータだけで先読みした場合に、検証用�
 DAA 3438 の通知期限を通過し、DAA 3439 で3ピアが claim `9d08847f…26ccb68c` の `final` を返した。元の DAA 318 の受付と DAA 325 の抽選 Panel 承認は同じ選択鎖上にある。Final の観測時点では Gate C は `pending`、消費済みは 0/21 だった。[Final と受付・承認の照合](final.json)
 
 この区間では隔離時計がノードの提示した次の heartbeat 時刻を3ピアで確認した。ローカル GPU が探索した algo 8 の nonce はノードが通常の PoW 規則で検査した。DAA 747 における再開時は、履歴差分の再計算に使ったメモリ予約のうち、完了後の状態が占める分を残して一時分を解放した。生成ピアが既に保持していたブロックを通常の RPC で再提出し、3ピアの選択鎖が揃ってから観測を継続した。
+
+## Gate C、旧規則での抽選と Court の回答
+
+7つの抽選鍵の承認と公開異議期間の経過を受け、DAA 3509 で3ピアが同じ claim の `SecurityCertified` を返した。7鍵の担当位置は合計75、閾値は41だった。認証は抽選された stake の正直割合を前提とする。ピアと鍵はいずれも同一ホストの隔離試験に属する。[Gate C の状態](gate-c-certification.json)
+
+認証後40 DAA の抽選位置は3549。旧規則が選ぶ最初の attempt ブロックは DAA 3553 の `06c279d2…aed2b3a0d3` だった。DAA 3559 のネイティブ状態で21枚の ticket を再計算すると、最小値は index 9 の `18566322049877804318042812783364979989`、有効な target は `2593558205736391250396941624356751` で、当選数は0。3ピアとも同じ固定ブロックから同一バイト列を返し、その後も DAA 3575・3577・3578 で消費は 0/21 だった。この記録で確認できたのは落選時の挙動までである。[抽選値と各ピアの読み取り](draw-and-court.json)
+
+同じ claim の row 0・tile 0 に対する公開回答を3ピアの取引本体と照合した。登録済みの開示者の鍵で署名を検証し、登録された TIR program を補って元の trace root と execution root に対する局所開示を検証できた。各 root を一つずつゼロに置換すると同じ検査がそれぞれ拒否した。[署名済み回答](court-answer.bin)・[固定したチェーン状態](draw-state.borsh.zst)
+
+リポジトリのルートから次のコマンドで読み取りを再検査できる。
+
+```sh
+evidence=docs/evidence/palw/studio-winning-receipt-2026-11-20
+state=$(mktemp)
+zstd -dc "$evidence/draw-state.borsh.zst" > "$state"
+cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- \
+  "$evidence/draw-and-court.json" "$state" "$evidence/court-answer.bin"
+```
