@@ -33,7 +33,7 @@ DAA 4689 で同じ親の子ブロック2件が全ピアに到着し、各ピア�
 
 DAA 5213 の状態を同じブロックに固定して再読した。3ピアとも7,147,447バイトが一致し、Panel 承認済みの claim は `receipt_licensed`、Gate C は `pending` だった。抽選の照合器はこの状態を `claim is not Final` で終了した。当落はまだ確定していない。[3ピアの固定ブロックと照会結果](before-final-capture.json)・[固定した状態（Borsh、zstd）](before-final-state.borsh.zst)
 
-この検査はリポジトリのルートから次のコマンドで再現できる。照合器は当該 claim の Final、Gate C の行、異議申立中の時計停止を照合し、成熟後に各 ticket と target を計算する。Court への申立てがない claim にも使える。
+この検査はリポジトリのルートから次のコマンドで再現できる。照合器は当該 claim の Final、Gate C の行、異議申立中の時計停止を照合し、成熟後に各 ticket と target を計算する。Court への申立てがない claim にも使える。 保存済みの旧抽選では、従来の署名付き Court 応答の照合と全21枚の ticket 再現も通った。同じ資料の network domain、価格基準クラス、成熟期間、親ブロックの DAA、単一ピアの attempt 列をそれぞれ差し替えると、照合器は全5件を拒否した。
 
 ```sh
 d=docs/evidence/palw/studio-main-claim-2026-11-20

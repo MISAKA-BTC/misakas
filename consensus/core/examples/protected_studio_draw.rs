@@ -57,14 +57,22 @@ struct Expected {
     claim: Hash64,
     execution_root: Hash64,
     network_domain: Hash64,
+    genesis_hash: Hash64,
 }
 #[derive(Deserialize)]
 struct Pinned {
     pinned: Hash64,
+    parent: Parent,
     root: Hash64,
     bytes: usize,
     sha256: String,
     attempts: Vec<Attempt>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Parent {
+    hash: Hash64,
+    daa_score: u64,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,8 +84,9 @@ struct Peer {
     phase: String,
     certification: String,
     court_answer_payload_sha256: Option<String>,
+    attempts: Option<Vec<Attempt>>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq, Eq)]
 struct Attempt {
     block: Hash64,
     daa: u64,
@@ -116,7 +125,23 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         return Err("capture does not match all three peer reads".into());
     }
+    if r.readback_peers.iter().any(|peer| peer.attempts.as_ref().is_some_and(|facts| facts != &r.pinned.attempts)) {
+        return Err("peers disagree on the selected attempt blocks".into());
+    }
+    // Only this historical private T12 cohort uses these draw rules.
+    let network = kaspa_consensus_core::config::drill::palw_drill_network_v1().to_string();
+    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(network.as_bytes(), Some(r.expected.genesis_hash));
+    let floor_id =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)?
+            .shape_profile_id();
+    if domain != r.expected.network_domain || floor_id != r.base_class || r.maturity_daa != 40 {
+        return Err("capture differs from the private T12 draw profile".into());
+    }
     let c: PalwStateCarriageV2 = borsh::from_slice(&state_bytes)?;
+    let point = c.last_point.ok_or("missing native point")?;
+    if point.block != r.pinned.parent.hash || point.daa_score != r.pinned.parent.daa_score {
+        return Err("carriage does not name the pinned parent".into());
+    }
     let id = r.expected.claim;
     let claim = c.claims.get(&id).ok_or("unknown claim")?;
     let PalwClaimSourceV2::FreePrompt { quanta, .. } = claim.source else {
@@ -169,7 +194,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // This private T12 profile shortened receipt maturity only. Its use window,
     // epoch period and maximum per-epoch retarget factor are the T12 rules.
     let end = beacon.beacon_daa.checked_add(600).ok_or("window overflow")?;
-    let start = c.last_point.ok_or("missing native point")?.daa_score;
+    let start = point.daa_score;
     if start < beacon.beacon_daa || start > end {
         return Err("capture is outside the draw window".into());
     }
