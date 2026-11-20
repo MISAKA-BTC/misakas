@@ -410,6 +410,7 @@ pub mod palw_fp_admission_v3;
 /// RFC-0001 §2.6 stage 2: FP job version 11 — the prefix-state receipt; dormant behind `palw_fp_prefix_state`.
 pub mod palw_fp_answer_accounting_v1;
 pub mod palw_fp_beacon_v3;
+pub mod palw_tb1;
 pub mod palw_fp_constraint_job_v1;
 /// RFC-0001 §2.5: the decode constraint's second subset and automaton bounds; dormant behind `palw_fp_constraint_v2`.
 pub mod palw_fp_constraint_v2;
