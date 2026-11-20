@@ -8,7 +8,7 @@
     "model market": 25,
     "reorg": 59,
     "MOE2": 5,
-    "TB1": 5
+    "TB1": 7
   },
   "protectedPythonTests": 68,
   "upstreamStudioQueueTests": 5,
@@ -124,5 +124,96 @@
       "receipt": 101,
       "reorg": 59
     }
+  },
+  "tb1WholeReleaseAssembly": {
+    "nativeTestFilter": "palw_tb1::",
+    "scope": "Assembly and direct verification against resolved public holder releases. Native VSS, owner signature verification, release timing and FOW1 execution are separate prerequisites.",
+    "negativeCases": [
+      "foreign RoundRef",
+      "foreign QualRoot",
+      "foreign FreezeId",
+      "incomplete or reordered Q",
+      "out-of-roster holder",
+      "same holder at two references",
+      "substituted support value",
+      "substituted coefficient",
+      "omitted dealer",
+      "insufficient aggregate matrix budget"
+    ],
+    "independentFieldOracle": {
+      "encoding": "132 lowercase hex digits per field element, most significant byte first",
+      "number": "1 + int.from_bytes(SHAKE256(UTF8(\"q-release-test/\" + label)).digest(80), \"big\") % (2**521 - 2)",
+      "coordinateLabel": "x/{f}/{holder_slot}",
+      "coefficientLabel": "c/{f}/{dealer_slot}/{coefficient_index}",
+      "qualifiedSlots": "All zero-based dealer slots d with d % 3 != 2, in ascending order.",
+      "views": "For v missing holders, omit slots h < v. Add 1 modulo p to each evaluation for which (h - v + d) % (n - v) < f - v. Reverse delivery order for v == f.",
+      "digest": "SHA-256 of lines \"<decimal dealer slot> <hex constant>\\n\" in Q order for this independent comparison.",
+      "results": [
+        {
+          "slots": 7,
+          "qualified": 5,
+          "missingHolders": 0,
+          "errorsPerDealer": 2,
+          "orderedConstantsSha256": "167ff8a69fcd00237133dfb667a770b0e925211a78e733e91762f1563d8e4614"
+        },
+        {
+          "slots": 7,
+          "qualified": 5,
+          "missingHolders": 1,
+          "errorsPerDealer": 1,
+          "orderedConstantsSha256": "167ff8a69fcd00237133dfb667a770b0e925211a78e733e91762f1563d8e4614"
+        },
+        {
+          "slots": 7,
+          "qualified": 5,
+          "missingHolders": 2,
+          "errorsPerDealer": 0,
+          "orderedConstantsSha256": "167ff8a69fcd00237133dfb667a770b0e925211a78e733e91762f1563d8e4614"
+        },
+        {
+          "slots": 16,
+          "qualified": 11,
+          "missingHolders": 0,
+          "errorsPerDealer": 5,
+          "orderedConstantsSha256": "77e0f007f07d13deccf6834c9d2b8b998d99ad00ec3b84f7213335411a2a7cb2"
+        },
+        {
+          "slots": 16,
+          "qualified": 11,
+          "missingHolders": 1,
+          "errorsPerDealer": 4,
+          "orderedConstantsSha256": "77e0f007f07d13deccf6834c9d2b8b998d99ad00ec3b84f7213335411a2a7cb2"
+        },
+        {
+          "slots": 16,
+          "qualified": 11,
+          "missingHolders": 5,
+          "errorsPerDealer": 0,
+          "orderedConstantsSha256": "77e0f007f07d13deccf6834c9d2b8b998d99ad00ec3b84f7213335411a2a7cb2"
+        },
+        {
+          "slots": 64,
+          "qualified": 43,
+          "missingHolders": 0,
+          "errorsPerDealer": 21,
+          "orderedConstantsSha256": "c7809dcab889b0a4e94097fcf0c82aeffaa41341004c6e2169ae3ba9935aeff8"
+        },
+        {
+          "slots": 64,
+          "qualified": 43,
+          "missingHolders": 1,
+          "errorsPerDealer": 20,
+          "orderedConstantsSha256": "c7809dcab889b0a4e94097fcf0c82aeffaa41341004c6e2169ae3ba9935aeff8"
+        },
+        {
+          "slots": 64,
+          "qualified": 43,
+          "missingHolders": 21,
+          "errorsPerDealer": 0,
+          "orderedConstantsSha256": "c7809dcab889b0a4e94097fcf0c82aeffaa41341004c6e2169ae3ba9935aeff8"
+        }
+      ]
+    },
+    "passed": 7
   }
 }

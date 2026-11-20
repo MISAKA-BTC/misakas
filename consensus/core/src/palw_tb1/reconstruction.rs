@@ -19,6 +19,15 @@ pub struct Tb1RecoveredDealer {
     pub support: Vec<Tb1DealerPoint>,
 }
 
+pub(super) fn matrix_cells(f: usize, errors: usize, releases: usize) -> Result<usize, Tb1PolynomialError> {
+    errors
+        .checked_mul(2)
+        .and_then(|twice| f.checked_add(twice))
+        .and_then(|terms| terms.checked_add(2))
+        .and_then(|width| width.checked_mul(releases))
+        .ok_or(Tb1PolynomialError::ReconstructionBudget)
+}
+
 /// Recover the unique degree-at-most-f polynomial supported by at least n-f distinct releases.
 /// With m available releases there may be at most m-(n-f) errors. The assembler's matrix budget
 /// limits its own work and has no effect on how a node verifies an already assembled certificate.
@@ -36,8 +45,11 @@ pub fn reconstruct_dealer(
     }
     let errors = releases.len() - quorum;
     let numerator_terms = f + errors + 1;
-    let width = numerator_terms.checked_add(errors + 1).ok_or(ReconstructionBudget)?;
-    let cells = width.checked_mul(releases.len()).filter(|&n| n <= max_matrix_cells).ok_or(ReconstructionBudget)?;
+    let cells = matrix_cells(f, errors, releases.len())?;
+    if cells > max_matrix_cells {
+        return Err(ReconstructionBudget);
+    }
+    let width = cells / releases.len();
     let mut matrix = Vec::new();
     matrix.try_reserve_exact(cells).map_err(|_| ReconstructionBudget)?;
     matrix.resize(cells, ZERO);

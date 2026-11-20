@@ -37,6 +37,8 @@ misaka-palw-fp-rail --artifact ./fp-job-5853ff54e729b614 --print-claim
 
 RFC-0061 の TB1 については、公開済みの share から dealer 多項式を再構成するライブラリを個別に検証した。7名中2名までの欠落・誤値の全99通りで、係数と整合する slot が一致した。7・16・64名の独立した Python 入力でも同じ結果を得た。この Studio claim の抽選には受付時の TFO3 規則を適用する。[試験件数と入力条件](targeted-tests.json)
 
+TB1 の全 dealer をまとめる検査では、各 holder の公開行を RoundRef・QualRoot・FreezeId と照合し、証明書が参照した行から該当 dealer の share を読み戻した。7枠・16枠・64枠で誤値と欠落の組み合わせを変えた計9ケースすべてで、全 dealer の定数が独立した Python 計算と一致した。この試験は公開行の解決後の処理を対象とし、署名の受理と release 時刻の判定は native 側の接続項目として残る。[再計算条件と結果](targeted-tests.json)
+
 DAA 4689 で同じ親の子ブロック2件が全ピアに到着し、各ピアの選択先が分かれた。両方を通常のブロック検証に再提出した後、3ピアは同じ先端に収束し、元の claim の受付・Panel 承認を読み戻せた。[分岐前後の3ピアと6件の再検証応答](sibling-resolution.json)
 
 異議申立期間中の DAA 4859 で隔離VMを正常停止し、検証用ディスクの上限を42 GiBから54 GiBに拡張した。同じノードバイナリと3つのデータベースで再開し、DAA 4864 に全ピアが元の受付ブロック、Panel 承認と未消費の権利を返した。[再起動後の3ピアの照会](notice-window-restart.json)

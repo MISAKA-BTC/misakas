@@ -2,6 +2,7 @@
 //! is only one part of TB1. The caller authenticates the frozen roster, signed
 //! releases, VSS qualification, purpose, position and limits before using them.
 pub mod reconstruction;
+pub mod releases;
 
 use kaspa_math::{Uint576, Uint3072};
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,6 +56,7 @@ pub enum Tb1PolynomialError {
     Support,
     InconsistentPoint,
     QualifiedSet,
+    ReleaseContext,
     ReconstructionBudget,
 }
 
@@ -111,6 +113,19 @@ fn check_points(
     Ok(())
 }
 
+// Caller has already checked the roster and its threshold.
+fn check_qualified(roster: &[Tb1Field], f: usize, qualified: &[usize]) -> Result<(), Tb1PolynomialError> {
+    use Tb1PolynomialError::QualifiedSet;
+    if qualified.len() < roster.len() - f
+        || qualified.len() > roster.len()
+        || !qualified.is_sorted_by(|a, b| a < b)
+        || qualified.last().is_none_or(|&slot| slot >= roster.len())
+    {
+        return Err(QualifiedSet);
+    }
+    Ok(())
+}
+
 pub struct Tb1DealerPolynomial<'a> {
     pub dealer_slot: usize,
     pub coefficients: &'a [Tb1Field],
@@ -128,12 +143,8 @@ pub fn qualified_constants(
 ) -> Result<Vec<(usize, Tb1Field)>, Tb1PolynomialError> {
     use Tb1PolynomialError::QualifiedSet;
     check_roster(roster, f)?;
-    if qualified.len() < roster.len() - f
-        || qualified.len() > roster.len()
-        || dealers.len() != qualified.len()
-        || !qualified.is_sorted_by(|a, b| a < b)
-        || qualified.last().is_none_or(|&slot| slot >= roster.len())
-    {
+    check_qualified(roster, f, qualified)?;
+    if dealers.len() != qualified.len() {
         return Err(QualifiedSet);
     }
     let mut by_slot = BTreeMap::new();
