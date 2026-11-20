@@ -469,7 +469,9 @@ fn rfc23s2_owner_local_signed_family_transport_matches_full_expected_cold_and_re
 
     use super::super::{palw_claim_local_checkpoint_fold_v1 as fold,palw_claim_local_checkpoint_descriptor_v3 as d3,palw_claim_local_context_store_v2 as store};
     let params=params.with_claim_local_settlement_from_daa(Some(0));
-    let p0=at(frame,start-1);let(cp,bases)=fold::prepared_expected_for_test_v3(&state,&params,&p0).unwrap();
+    let p0 = at(frame, start - 1);
+    state.set_last_point_for_tests(Some(p0));
+    let (cp, bases) = fold::prepared_expected_for_test_v3(&state, &params, &p0).unwrap();
     let mut seed=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);d3::write_prepared_v3(&mut seed,&cp,&bases).unwrap();
     let old=seed.state.last_point;seed.state.last_point=Some(p0);seed.entries.push(PalwDeltaEntryV2::LastPoint{old,new:Some(p0)});
     let mut parent=seed.state;

@@ -1,0 +1,20 @@
+{
+  "rustToolchain": "1.93.0",
+  "nativeLibrary": "kaspa-consensus-core",
+  "nativeTestFilters": {
+    "bond budget": 91,
+    "receipt": 14,
+    "Court": 240,
+    "model market": 25,
+    "reorg": 59,
+    "MOE2": 5,
+    "TB1": 3
+  },
+  "protectedPythonTests": 65,
+  "upstreamStudioQueueTests": 5,
+  "upstreamStudioCommit": "c9257516b23b14527ef9cef06af143756a422e8f",
+  "regressions": [
+    "rfc23s2_native_only_fold_retains_actual_rows_through_restore_and_reorg",
+    "rfc23s2_owner_local_signed_family_transport_matches_full_expected_cold_and_reorg"
+  ]
+}

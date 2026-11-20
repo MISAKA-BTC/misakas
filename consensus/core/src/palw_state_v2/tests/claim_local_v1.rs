@@ -653,9 +653,23 @@ fn rfc23s2_native_only_fold_retains_actual_rows_through_restore_and_reorg() {
     let p = rules();
     let before = parent(&p);
     let point = ctx(2, 100, 2);
-    let (after, delta) =
-        apply_palw_transition_v2_with_extras(&before, &p, &point, &[native_exit()], None, false, false, false, false, &extra())
-            .unwrap();
+    let fold = |x: &PalwTransitionExtrasV1| {
+        apply_palw_transition_v2_with_extras(&before, &p, &point, &[native_exit()], None, false, false, false, false, x).unwrap()
+    };
+    let (current, current_delta) = fold(&extra());
+    assert!(current_delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::KernelRouteRow { table, .. }
+        if *table == misaka_palw_kernel::rows::TABLE_BONDS_V1)));
+    assert_eq!(apply_delta_v2(&before, &current_delta, &p).unwrap().state_root(), current.state_root());
+    let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&current)).unwrap();
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&carriage)
+        .unwrap()
+        .into_state_v3(&p, Some(current.state_root()), false, None)
+        .unwrap();
+    assert_eq!(revert_delta_v2(&restored, &current_delta, &p).unwrap().state_root(), before.state_root());
+
+    // Only the historical writer emitted a whole liability frame for this native exit.
+    let historical = PalwTransitionExtrasV1 { claim_local_legacy_retention_fixture_v50: true, ..extra() };
+    let (after, delta) = fold(&historical);
     let f = frame(&after, point);
     assert!(f.claims.is_empty());
     assert!(!f.native_changes.is_empty());

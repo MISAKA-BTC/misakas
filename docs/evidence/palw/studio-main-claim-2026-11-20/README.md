@@ -23,7 +23,9 @@ misaka-palw-fp-rail --artifact ./fp-job-5853ff54e729b614 --print-claim
 
 隔離 VM の再起動後、3ピアで同じ bond・金額・sequence の割当を再読した。3ピアに共通して残っていた直後の子ブロックを通常の `submitBlock` で各ピアに再提出すると、3ピアすべてで選択鎖に戻り、以降のブロック生成も再開した。[再起動後の子ブロックの照会結果](retained-child-after-restart.json)
 
-見積もり RPC は、同じ epoch の bond 指定時に、受付側と共通の関数でクラスの残り配分枠を照合する。テストで空の初期配分、必要量ちょうど、枠不足、epoch 切替を確認した。Rust の bond budget 91件、TB1 3件、MOE2 5件、Python の protected drill 62件、Studio main の mining queue 5件が通った。ノード側は `cargo check --locked -p kaspa-consensus --lib` も通った。
+見積もり RPC は、同じ epoch の bond 指定時に、受付側と共通の関数でクラスの残り配分枠を照合する。テストで空の初期配分、必要量ちょうど、枠不足、epoch 切替を確認した。Rust の bond budget 91件、TB1 3件、MOE2 5件、Python の protected drill 65件、Studio main の mining queue 5件が通った。ノード側は `cargo check --locked -p kaspa-consensus --lib` も通った。
+
+再編成（reorg）を対象とする Rust テスト59件が通った。現在の形式は native 行を cold restore してから巻き戻し、旧形式は当時の writer が保存した liability frame を照合した。Court の検査には直前のチェーン位置を持つ fixture を使った。[対象と結果](targeted-tests.json)
 
 ### Studio main の提出済みジョブから再開する
 
