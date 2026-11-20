@@ -255,15 +255,21 @@ class ObservationTests(unittest.TestCase):
         from unittest.mock import Mock
         from protected_claim_observation import HostClaimReadBusy, read_claim_detail
         rpc = Mock()
-        message = 'getPalwClaimDetail: local resource unavailable: host audited byte capacity refused 700: {} held by other reservations'
-        rpc.call.side_effect = RuntimeError(message.format(300))
-        with self.assertRaises(HostClaimReadBusy):
-            read_claim_detail(rpc, h(4))
-        error = RuntimeError(message.format(0))
-        rpc.call.side_effect = error
-        with self.assertRaises(RuntimeError) as result:
-            read_claim_detail(rpc, h(4))
-        self.assertIs(result.exception, error)
+        messages = [
+            'host audited byte capacity refused 700: {} held by other reservations',
+            'host unmaterialized bytes refused 2373089562: {} pending in other processes',
+        ]
+        for message in messages:
+            with self.subTest(message=message):
+                prefix = 'getPalwClaimDetail: local resource unavailable: '
+                rpc.call.side_effect = RuntimeError(prefix + message.format(11395497704))
+                with self.assertRaises(HostClaimReadBusy):
+                    read_claim_detail(rpc, h(4))
+                error = RuntimeError(prefix + message.format(0))
+                rpc.call.side_effect = error
+                with self.assertRaises(RuntimeError) as result:
+                    read_claim_detail(rpc, h(4))
+                self.assertIs(result.exception, error)
 
     def test_progress_reads_current_state_without_scanning_notice_history(self):
         rpc = Rpc()

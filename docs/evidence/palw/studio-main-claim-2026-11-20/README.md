@@ -48,6 +48,8 @@ cargo run --locked -p kaspa-consensus-core --example protected_studio_draw -- --
 
 DAA 5474 で3ピアをいったん停止し、コンセンサス DB の全327ファイルを圧縮ストレージに移した。各ピアの個別アーカイブを元ファイルと比較し、移動先でも全件の SHA-256 を照合した。同じノードバイナリを再起動すると、3ピアとも DAA 5477 で元の受付ブロック、Panel 承認、未消費を返した。再起動直後のブロック再検証には drill 設定の `stepTimeoutSeconds` を適用する。[ファイル照合と再起動後の3ピアの記録](compressed-storage-restart.json)
 
+DAA 6779 の後、claim 照会はホスト上で他プロセスが 11,395,497,704 バイトを予約中だったため、一時拒否された。同じ DB で再開すると DAA 6781 で3ピアの元の受付、Panel 承認、消費数 0 が一致した。この形式の一時拒否に対する再試行は同じ時計位置で行い、待機時間に上限を設ける。[RPC の応答と再起動後の3ピア照会](host-reservation-restart.json)
+
 ### Studio main の提出済みジョブから再開する
 
 Studio のキューで追加したジョブは、起動中の Studio main の queue ID を指定して直接追跡できる。`--config` の `studio.port` をその Studio のループバック HTTP ポートに合わせ、gateway と署名済み rail のファイルがある outbox を指定する。

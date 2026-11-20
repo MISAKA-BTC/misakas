@@ -156,6 +156,8 @@ def read_claim_detail(rpc, claim):
     except RuntimeError as error:
         message = str(error)
         host = re.search(r'host audited byte capacity refused (\d+): (\d+) held by other reservations', message)
+        if host is None:
+            host = re.search(r'host unmaterialized bytes refused (\d+): (\d+) pending in other processes', message)
         if 'local resource unavailable:' in message and host and int(host[1]) > 0 and int(host[2]) > 0:
             raise HostClaimReadBusy(message) from error
         capacity = re.search(
