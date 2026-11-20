@@ -13,6 +13,7 @@ use kaspa_consensus_core::trusted::ExternalGhostdagData;
 #[derive(Default)]
 struct Chain {
     sink: BlockHash,
+    protected: Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>,
     headers: HashMap<BlockHash, Arc<Header>>,
     parents: HashMap<BlockHash, BlockHash>,
     acceptance: HashMap<BlockHash, Arc<AcceptanceData>>,
@@ -29,6 +30,12 @@ struct Chain {
 }
 
 impl kaspa_consensus_core::api::ConsensusApi for Chain {
+    fn palw_protected_original_readback_v1(
+        &self,
+        claim: Hash64,
+    ) -> Result<Option<kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1>, String> {
+        Ok(self.protected.clone().filter(|origin| origin.claim == claim))
+    }
     fn palw_legacy_answer_history_v2(
         &self,
         block: BlockHash,
@@ -143,11 +150,15 @@ fn repeated_daa_chain() -> Chain {
     chain
 }
 
-#[test]
-fn the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_job_field() {
-    use super::palw_fraud_filer::{input::tests::payload, palw_fraud_filer_fp_payload_v1 as read};
+fn fp_discovery(
+    payload: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3,
+    accepted_block: BlockHash,
+    accepted_daa: u64,
+) -> (
+    kaspa_consensus_core::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1,
+) {
     use kaspa_consensus_core::palw_offence_attribution_v1::{PalwClaimSourceKindV1, PalwOffenceTargetV1};
-    let payload = payload();
     let c = &payload.commitment;
     let claim = payload.claim_id();
     let target = PalwOffenceTargetV1 {
@@ -164,13 +175,13 @@ fn the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_j
         output_root: c.output_root,
         registered_semantics: None,
     };
-    let mut candidate = kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
+    let candidate = kaspa_consensus_core::palw_state_v2::PalwFraudFilerCandidateV1 {
         claim_id: claim,
         producer: target.executor_bond,
-        accepted_daa: 101,
+        accepted_daa,
         seat: false,
         job: kaspa_consensus_core::palw_operator_da_v1::PalwOperatorDaJobV1 {
-            accepted_block: hash(2),
+            accepted_block,
             class_id: c.job.class_id,
             artifact_root: Some(target.artifact_root),
             execution_root: c.execution_root,
@@ -181,6 +192,59 @@ fn the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_j
             held_to_final: false,
         },
     };
+    (target, candidate)
+}
+
+#[test]
+fn retained_studio_tfo3_supplies_public_ids_only_for_its_native_origin() {
+    use super::palw_fraud_filer::{palw_fraud_filer_fp_metadata_v1, palw_fraud_filer_fp_payload_v1};
+    let evidence: serde_json::Value =
+        serde_json::from_str(include_str!("../../../docs/evidence/palw/studio-winning-receipt-2026-11-20/original.json")).unwrap();
+    let origin: kaspa_consensus_core::palw_protected_original_readback_v1::ProtectedOriginalReadbackV1 =
+        serde_json::from_value(evidence["detail"]["protectedOriginal"].clone()).unwrap();
+    let raw = evidence["carrierBlock"]["transactions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tx| tx["verboseData"]["transactionId"].as_str() == Some(&origin.carrier_transaction.to_string()))
+        .unwrap();
+    let rpc: kaspa_rpc_core::RpcTransaction = serde_json::from_value(raw.clone()).unwrap();
+    let tx = Transaction::try_from(rpc).unwrap();
+    assert_eq!(tx.id(), origin.carrier_transaction);
+    let fp = kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_accounting_original_decode_v1(&tx.payload).unwrap();
+    let domain = fp.commitment.job.network_domain;
+    let (target, candidate) = fp_discovery(&fp, origin.accepting_block, origin.accepted_daa);
+    assert_eq!(candidate.claim_id, origin.claim);
+    let mut chain = Chain::default();
+    chain.targets.insert(origin.claim, target);
+    chain.blocks.insert(origin.carrier_block, Block::new(Header::from_precomputed_hash(origin.carrier_block, vec![]), vec![tx]));
+    chain.acceptance.insert(
+        origin.accepting_block,
+        Arc::new(vec![MergesetBlockAcceptanceData {
+            block_hash: origin.carrier_block,
+            accepted_transactions: vec![AcceptedTxEntry { transaction_id: origin.carrier_transaction, index_within_block: 0 }],
+        }]),
+    );
+    assert!(palw_fraud_filer_fp_payload_v1(&chain, &candidate, domain).is_err());
+    chain.protected = Some(origin.clone());
+    let full = palw_fraud_filer_fp_payload_v1(&chain, &candidate, domain).unwrap();
+    assert_eq!(full.prompt_token_ids.len(), 17);
+    assert_eq!(full, *fp);
+    let metadata = palw_fraud_filer_fp_metadata_v1(&chain, &candidate, domain).unwrap();
+    assert_eq!(metadata.commitment, full.commitment);
+    assert!(metadata.signature.is_empty() && metadata.prompt_token_ids.is_empty());
+    chain.protected.as_mut().unwrap().accepting_block = hash(999);
+    assert!(palw_fraud_filer_fp_payload_v1(&chain, &candidate, domain).is_err());
+}
+
+#[test]
+fn the_fp_bootstrap_reads_only_the_recorded_accepted_commitment_and_pins_every_job_field() {
+    use super::palw_fraud_filer::{input::tests::payload, palw_fraud_filer_fp_payload_v1 as read};
+    use kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1;
+    let payload = payload();
+    let c = &payload.commitment;
+    let claim = payload.claim_id();
+    let (target, mut candidate) = fp_discovery(&payload, hash(2), 101);
     let commitment_tx = |p: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3| {
         Transaction::new(
             TX_VERSION,

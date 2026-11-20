@@ -137,7 +137,27 @@ fn palw_fraud_filer_fp_payload_read_v1(
                 if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
                     continue;
                 }
-                let Ok(payload) = public_fp_payload_projection(&tx.payload, include_witnesses) else { continue };
+                let wire = match kaspa_consensus_core::palw_tir_funded_original_envelope_v1::actual_funded_payload_v1(tx) {
+                    Ok(funded) if funded.starts_with(kaspa_consensus_core::palw_tir_funded_original_envelope_v3::MAGIC) => {
+                        let Some(origin) = consensus.palw_protected_original_readback_v1(candidate.claim_id)? else { continue };
+                        if origin.carrier_block != merged.block_hash || origin.carrier_transaction != entry.transaction_id {
+                            continue;
+                        }
+                        origin.check_carrier_v1(candidate.claim_id, tx.id(), candidate.job.execution_root)?;
+                        if origin.accepting_block != candidate.job.accepted_block
+                            || origin.accepted_daa != candidate.accepted_daa
+                            || !tx.id_is_current()
+                        {
+                            return Err("protected FP carrier changed since discovery".into());
+                        }
+                        // Native admission binds the entire carrier. Borrow its checked literal FP
+                        // body so metadata-only probes never copy the prompt or signature.
+                        kaspa_consensus_core::palw_fp_answer_accounting_v1::palw_fp_accounting_original_bytes_v1(funded)
+                            .ok_or("protected FP carrier has no complete original")?
+                    }
+                    _ => tx.payload.as_slice(),
+                };
+                let Ok(payload) = public_fp_payload_projection(wire, include_witnesses) else { continue };
                 if payload.claim_id() != candidate.claim_id {
                     continue;
                 }
@@ -306,6 +326,35 @@ pub(in crate::palw_panel) async fn palw_fraud_filer_read_user_input_v1(
         }
     }
     Err("the FP job's authenticated public input is not available yet".into())
+}
+
+/// A metadata-only probe can outlive the busy replay lane. Reacquire the same
+/// accepted public IDs under its input ticket when the cached descriptor has none.
+pub(in crate::palw_panel) async fn read_retained_user_input_v1(
+    session: &kaspa_consensusmanager::ConsensusProxy,
+    candidate: PalwFraudFilerCandidateV1,
+    payload: Arc<PalwFraudFilerFpDescriptorV1>,
+    form: PalwPromptIdsFormV1,
+    public_material: &[Vec<u8>],
+) -> Result<Vec<u32>, String> {
+    let why = match palw_fraud_filer_read_user_input_v1(payload.clone(), form, public_material).await {
+        Ok(ids) => return Ok(ids),
+        Err(why) => why,
+    };
+    if payload.job().privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA || !payload.inline_ids().is_empty() {
+        return Err(why);
+    }
+    session
+        .clone()
+        .spawn_blocking(move |consensus| {
+            let fresh = palw_fraud_filer_fp_payload_v1(consensus, &candidate, payload.job().network_domain)?;
+            if &fresh.commitment.job != payload.job() || fresh.prompt_token_ids.is_empty() {
+                return Err(why);
+            }
+            palw_fp_prompt_ids_admit_v1(payload.job(), &fresh.prompt_token_ids, form).map_err(|e| e.to_string())?;
+            Ok(fresh.prompt_token_ids)
+        })
+        .await
 }
 
 #[derive(Debug)]

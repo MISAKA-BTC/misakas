@@ -7358,7 +7358,15 @@ impl PalwPanelService {
                 if user {
                     let input = book.cases.get(&claim).and_then(|case| case.fp_bootstrap.as_ref()).expect("held above");
                     if !input.ready() {
-                        match input::palw_fraud_filer_read_user_input_v1(input.payload.clone(), prompt_form, public_material).await {
+                        match input::read_retained_user_input_v1(
+                            session,
+                            candidate.clone(),
+                            input.payload.clone(),
+                            prompt_form,
+                            public_material,
+                        )
+                        .await
+                        {
                             Ok(ids) => {
                                 book.cases.get_mut(&claim).expect("held above").fp_bootstrap.as_mut().expect("held above").ids = ids
                             }
