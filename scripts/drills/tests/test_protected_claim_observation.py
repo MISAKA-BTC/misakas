@@ -63,6 +63,21 @@ class Rpc:
 
 
 class ObservationTests(unittest.TestCase):
+    def test_resume_retries_only_the_existing_body_at_the_lagging_peer(self):
+        from unittest.mock import Mock
+        from protected_private_registration_run import retry_retained_sink
+        clients = [Mock() for _ in range(3)]
+        block = dict(header=dict(hash=h(8)), verboseData=dict(hash=h(8), isChainBlock=True, isHeaderOnly=False))
+        clients[0].call.return_value = dict(block=block)
+        clients[1].call.return_value = dict(report=dict(type='success'))
+        views = [dict(sink=h(8), virtualDaaScore=8, tipHashes=[h(8)]),
+                 dict(sink=h(7), virtualDaaScore=7, tipHashes=[h(8)]),
+                 dict(sink=h(7), virtualDaaScore=7, tipHashes=[h(7)])]
+        retry_retained_sink(clients, views)
+        clients[0].call.assert_called_once_with('getBlock', dict(hash=h(8), includeTransactions=True))
+        clients[1].call.assert_called_once_with('submitBlock', dict(block=block, allowNonDAABlocks=False))
+        clients[2].call.assert_not_called()
+
     def test_resume_keeps_original_carrier_and_rechecks_each_peer_without_submission(self):
         from protected_private_registration_run import resume_admitted_studio
         clients = [Rpc(), Rpc()]

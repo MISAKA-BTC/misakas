@@ -59,6 +59,23 @@ def wait_until(deadline, read):
     raise TimeoutError('isolated peer readiness or DAA progression timed out')
 
 
+def retry_retained_sink(clients, views):
+    """Retry native resolution when a resumed peer already has the selected block body."""
+    index = max(range(len(views)), key=lambda i: views[i]['virtualDaaScore'])
+    best = views[index]
+    sink = best['sink']
+    targets = [client for client, view in zip(clients, views)
+               if view['virtualDaaScore'] < best['virtualDaaScore'] and sink in view['tipHashes']]
+    if not targets:
+        return
+    block = block_read(clients[index], sink, transactions=True)
+    if not block['verboseData']['isChainBlock']:
+        return
+    for client in targets:
+        reply = client.call('submitBlock', dict(block=block, allowNonDAABlocks=False))
+        require(reply['report']['type'] == 'success', f'native retry refused the retained block: {reply}')
+
+
 def relay_registered_control(source, miner, txid, timeout, check_context):
     """Relay the exact signed transaction, including any unconfirmed change it spends."""
     until = time.monotonic() + timeout
@@ -453,7 +470,10 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
         wait_until(time.monotonic() + step_timeout, lambda:
                    True if all(rpc.call('getConnectedPeerInfo')['peerInfo'] for rpc in clients) else None)
 
-        def agreement():
+        next_retained_retry = 0.0
+
+        def agreement(*, recover_retained=False):
+            nonlocal next_retained_retry
             clock._alive()
             try:
                 views = [chain_identity(rpc, expected)[0] for rpc in clients]
@@ -461,6 +481,9 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
                 return None
             if len({(view['sink'], view['virtualDaaScore']) for view in views}) == 1:
                 return views[0]
+            if recover_retained and time.monotonic() >= next_retained_retry:
+                retry_retained_sink(clients, views)
+                next_retained_retry = time.monotonic() + 2
             return None
 
         steps = 0
@@ -516,7 +539,7 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
 
         # Registration supplies the normal signed carriers. The owned clock
         # advances only between reads, so it cannot race a control send.
-        view = wait_until(time.monotonic() + step_timeout, agreement)
+        view = wait_until(time.monotonic() + step_timeout, partial(agreement, recover_retained=resume_claim is not None))
         registration_budget = sum(unsigned(registration[field]) for field in (
             'maximumCarrierBatchFeeSompi', 'maximumInventoryPrepaidSompi',
             'maximumTkrFeeSompi', 'maximumRegistrationChargeSompi'))
