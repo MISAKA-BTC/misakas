@@ -231,6 +231,20 @@ class ObservationTests(unittest.TestCase):
             self.assertIs(raised.exception, error)
             self.assertNotIsInstance(raised.exception, ClaimReadBusy)
 
+    def test_native_host_contention_retries_positive_competing_bytes(self):
+        from unittest.mock import Mock
+        from protected_claim_observation import HostClaimReadBusy, read_claim_detail
+        rpc = Mock()
+        message = 'getPalwClaimDetail: local resource unavailable: host audited byte capacity refused 700: {} held by other reservations'
+        rpc.call.side_effect = RuntimeError(message.format(300))
+        with self.assertRaises(HostClaimReadBusy):
+            read_claim_detail(rpc, h(4))
+        error = RuntimeError(message.format(0))
+        rpc.call.side_effect = error
+        with self.assertRaises(RuntimeError) as result:
+            read_claim_detail(rpc, h(4))
+        self.assertIs(result.exception, error)
+
     def test_progress_reads_current_state_without_scanning_notice_history(self):
         rpc = Rpc()
         original = observe(rpc, rpc.expected)

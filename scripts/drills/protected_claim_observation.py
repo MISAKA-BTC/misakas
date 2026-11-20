@@ -146,11 +146,18 @@ class ClaimReadBusy(ContextMoved):
     """An otherwise admissible native read is competing with another reservation."""
 
 
+class HostClaimReadBusy(ClaimReadBusy):
+    """The host ledger reports other reservations without giving their aggregate limit."""
+
+
 def read_claim_detail(rpc, claim):
     try:
         return rpc.call('getPalwClaimDetail', {'claimHex': claim})
     except RuntimeError as error:
         message = str(error)
+        host = re.search(r'host audited byte capacity refused (\d+): (\d+) held by other reservations', message)
+        if 'local resource unavailable:' in message and host and int(host[1]) > 0 and int(host[2]) > 0:
+            raise HostClaimReadBusy(message) from error
         capacity = re.search(
             r'typed requests exceed logical capacity \(RAM bytes: outstanding (\d+), request (\d+), limit (\d+); '
             r'DB bytes: outstanding (\d+), request (\d+), limit (\d+)\)', message)

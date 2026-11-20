@@ -15,7 +15,7 @@ import urllib.request
 from misaka_wrpc_json import WsRpc
 from rfc12_acceptance_observe import rfc12_state_value, sha256_file
 from protected_claim_observation import (
-    ClaimReadBusy, block_read, chain_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
+    ClaimReadBusy, HostClaimReadBusy, read_claim_detail, block_read, chain_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
     require, require_gate_c_status, unsigned, validate_receipt_observation,
 )
 from protected_historical_clock import HEARTBEAT_INTERVAL_MS, ProtectedHistoricalClock
@@ -675,7 +675,7 @@ def retain_studio_claim(rpc, rail, claim, outbox):
 def studio_admission(rpc, expected, scan_from, data):
     """Keep a selected carrier and a refused native claim distinguishable after submission."""
     _, before = chain_identity(rpc, expected)
-    response = rpc.call('getPalwClaimDetail', {'claimHex': expected['claim']})
+    response = read_claim_detail(rpc, expected['claim'])
     require(response['available'] is True, 'native claim details unavailable')
     if response['found']:
         return observe(rpc, expected, maximum_chain_blocks=PROTECTED_LIFECYCLE_SCAN_BLOCKS)
@@ -887,6 +887,7 @@ def studio_lifecycle(config, output, registration, clients, step, logs, executor
 
 def until_claim_observation(stage, read, *, step, timeout, deadline, check_alive, admitted=False):
     stage_deadline = time.monotonic() + timeout if admitted else deadline
+    host_busy_since = None
     highest_daa = None
     retry_moved_snapshot = True
     while time.monotonic() < stage_deadline:
@@ -894,6 +895,16 @@ def until_claim_observation(stage, read, *, step, timeout, deadline, check_alive
             check_alive(stage)
         try:
             value = read()
+            host_busy_since = None
+        except HostClaimReadBusy:
+            # Older nodes report actual competing leases but omit the host limit. Give those
+            # leases a bounded chance to drain while retaining the original refusal on timeout.
+            if host_busy_since is None:
+                host_busy_since = time.monotonic()
+            if time.monotonic() - host_busy_since >= min(timeout, 120):
+                raise
+            time.sleep(0.5)
+            continue
         except ClaimReadBusy:
             # Retry this observation on the same clock slot after native leases can drain.
             time.sleep(0.25)
