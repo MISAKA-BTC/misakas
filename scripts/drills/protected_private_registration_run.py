@@ -13,9 +13,9 @@ import time
 import urllib.request
 
 from misaka_wrpc_json import WsRpc
-from rfc12_acceptance_observe import sha256_file
+from rfc12_acceptance_observe import rfc12_state_value, sha256_file
 from protected_claim_observation import (
-    ClaimReadBusy, block_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
+    ClaimReadBusy, block_read, chain_read, expectation_from_studio, hash64, observe, observe_claim_progress, receipt_from_producer_log,
     require, require_gate_c_status, unsigned, validate_receipt_observation,
 )
 from protected_historical_clock import HEARTBEAT_INTERVAL_MS, ProtectedHistoricalClock
@@ -280,14 +280,14 @@ def studio_peer_plan(config, bootstrap):
     return producer, bond['bondOutpoint'], artifact
 
 
-def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer=False, studio=False, admitted=False):
+def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer=False, studio=False, admitted=False, settlement=False):
     """Resume only native warmup from the original owned databases."""
     require(previous.is_absolute() and previous.is_dir(), 'warmup run must be an absolute existing directory')
     require(json.loads((previous / 'run.json').read_text()) == config,
             'warmup configuration differs from the original run')
     if studio or admitted:
-        require((previous / 'registration-result.json').is_file() and not (previous / 'result.json').exists(),
-                'Studio resume requires a completed registration and an unfinished run')
+        require((previous / 'registration-result.json').is_file() and (previous / 'result.json').is_file() == settlement,
+                'Studio checkpoint completion does not match the requested lifecycle stage')
         studio_dir = previous / 'studio'
         if admitted:
             require(all((studio_dir / name).is_file() for name in ('studio-run.json', 'studio-evidence.json', 'original.json')),
@@ -331,10 +331,12 @@ def warmup_checkpoint(config, previous, bootstrap, *, inventory=False, tokenizer
 
 
 def run(config, output, after_registration=None, resume_warmup=None, *, resume_inventory=None,
-        resume_tokenizer=None, tokenizer_clock_checkpoint=None, isolated_node=None, resume_studio=None, resume_claim=None):
-    require(sum(path is not None for path in (resume_warmup, resume_inventory, resume_tokenizer, resume_studio, resume_claim)) <= 1, 'choose one checkpoint')
+        resume_tokenizer=None, tokenizer_clock_checkpoint=None, isolated_node=None, resume_studio=None, resume_claim=None, resume_settlement=None):
+    require(sum(path is not None for path in (resume_warmup, resume_inventory, resume_tokenizer, resume_studio, resume_claim, resume_settlement)) <= 1, 'choose one checkpoint')
     require(tokenizer_clock_checkpoint is None or resume_tokenizer is not None,
             'a separate clock checkpoint requires a tokenizer resume')
+    if resume_settlement is not None:
+        resume_claim = resume_settlement
     require(resume_claim is None or ('studio' in config and after_registration is not None),
             'claim resume requires the Studio lifecycle')
     checkpoint = resume_claim or resume_studio or resume_tokenizer or resume_inventory or resume_warmup
@@ -381,7 +383,7 @@ def run(config, output, after_registration=None, resume_warmup=None, *, resume_i
         appdirs = [output / f'peer-{index}' for index in range(len(peers))]
         initial_timestamp = config['initialTimestampMs']
     else:
-        appdirs, initial_timestamp = warmup_checkpoint(config, checkpoint, bootstrap, inventory=resume_inventory is not None, tokenizer=resume_tokenizer is not None, studio=resume_studio is not None, admitted=resume_claim is not None)
+        appdirs, initial_timestamp = warmup_checkpoint(config, checkpoint, bootstrap, inventory=resume_inventory is not None, tokenizer=resume_tokenizer is not None, studio=resume_studio is not None, admitted=resume_claim is not None, settlement=resume_settlement is not None)
     if tokenizer_clock_checkpoint is not None:
         clock_resume = json.loads((tokenizer_clock_checkpoint / 'warmup-resume.json').read_text())
         require(clock_resume['source'] == str(resume_tokenizer),
@@ -993,6 +995,107 @@ def resume_admitted_studio(config, output, checkpoint, registration, clients, st
     return observe_admitted_studio(config, registration, clients, until, log_dirs, data, original, executor_bond)
 
 
+def receipt_payout(rpc, receipt):
+    """Locate the source worker output on the selected chain of this private run."""
+    block = block_read(rpc, receipt, transactions=True)
+    require(block['header']['powAlgoId'] == 7 and block['verboseData']['isChainBlock'],
+            'audited receipt is no longer a selected PFS3 block')
+    page = chain_read(rpc, receipt, PROTECTED_LIFECYCLE_SCAN_BLOCKS, include_transactions=False)
+    if not page['addedChainBlockHashes']:
+        return None
+    child = block_read(rpc, page['addedChainBlockHashes'][0], transactions=True)
+    info = child['verboseData']
+    require(info['isChainBlock'] and info['selectedParentHash'] == receipt
+            and info['mergeSetBluesHashes'][0] == receipt, 'receipt is not the first blue reward source')
+    payload = bytes.fromhex(block['transactions'][0]['payload'])
+    require(len(payload) >= 19 and len(payload) >= 19 + payload[18] and payload[18] > 0,
+            'receipt coinbase has no complete worker script')
+    script = payload[16:18][::-1].hex() + payload[19:19 + payload[18]].hex()
+    coinbase = child['transactions'][0]
+    # The private linear merge has one blue and no reds. Native validation of
+    # the child checks every coinbase output against the selected parent's subsidy and fees.
+    require(info['mergeSetBluesHashes'] == [receipt] and not info['mergeSetRedsHashes'],
+            'ambiguous reward attribution outside the private linear merge')
+    require(coinbase['outputs'] and coinbase['outputs'][0]['scriptPublicKey'] == script,
+            'selected child did not pay the receipt worker as its first output')
+    value = unsigned(coinbase['outputs'][0]['value'])
+    require(value > 0, 'receipt worker reward is empty')
+    outpoint = hash64(coinbase['verboseData']['transactionId']) + ':0'
+    utxos = rfc12_state_value(rpc, [outpoint])
+    entry = utxos['pointStates'][outpoint]
+    if entry is None:
+        return None
+    require(entry['isCoinbase'] and entry['amount'] == value and entry['scriptPublicKey'] == script,
+            'worker UTXO differs from the accepted coinbase')
+    return dict(block=receipt, receiptDaa=block['header']['daaScore'], child=child['header']['hash'],
+                childDaa=child['header']['daaScore'], outpoint=outpoint, output=entry,
+                receiptSubsidy=int.from_bytes(payload[8:16], 'little'))
+
+
+def resume_receipt_settlement(config, output, checkpoint, registration, clients, step):
+    previous = json.loads((checkpoint / 'result.json').read_text())
+    prior = checkpoint / 'studio'
+    evidence = json.loads((prior / 'studio-evidence.json').read_text())
+    job = json.loads((prior / 'studio-run.json').read_text())
+    expected = expectation_from_studio(job, evidence['studioJob'], evidence['rail'], registration['chain'])
+    audit = previous['receiptAudit']
+    require(previous['expected'] == expected and job == evidence['studioRun'] and audit['claim'] == expected['claim']
+            and previous['registration'] == registration and audit['nativeReceiptEnvelopeValidated'] is True,
+            'completed receipt belongs to another Studio job or chain')
+    observed = json.loads((prior / previous['receiptObservation']).read_text())
+    receipt, quantum = hash64(audit['block']), unsigned(audit['quantumIndex'], 32)
+    require(receipt == observed['receiptBlock']['header']['hash'] and observed['expected'] == expected,
+            'completed receipt observation differs from the native audit')
+    data = output / 'studio'
+    data.mkdir(mode=0o700)
+    timeout = unsigned(config['studio']['timeoutSeconds'])
+    until = partial(until_claim_observation, step=step, timeout=timeout, deadline=time.monotonic() + timeout,
+                    admitted=True, check_alive=None)
+
+    def recovered():
+        details = [observe_claim_progress(client, expected, observed) for client in clients]
+        for detail in details:
+            quanta = detail['receiptQuanta']
+            require(detail['claim']['phase'] == 'final' and require_gate_c_status(detail)
+                    and quanta['spentIndicesComplete'] and quantum in quanta['spentIndices']
+                    and len(set(quanta['spentIndices'])) == quanta['spentCount'] == len(quanta['spentIndices']),
+                    'resumed peer lost the certified receipt spend')
+        return details
+
+    write_new(data / 'restarted-claim.json', until('persisted same-claim spend', recovered))
+
+    def paid():
+        rows = [receipt_payout(client, receipt) for client in clients]
+        if any(row is None for row in rows):
+            return None
+        require(all(row == rows[0] for row in rows), 'peer receipt payouts differ')
+        return rows
+
+    payouts = until('selected child and included worker coinbase', paid)
+    write_new(data / 'receipt-payout.json', payouts)
+
+    def settled():
+        rows = []
+        for client in clients:
+            dag, stamp = chain_identity(client, expected)
+            for block in (receipt, payouts[0]['child']):
+                if not block_read(client, block)['verboseData']['isChainBlock']:
+                    raise ContextMoved('receipt or reward child moved off chain')
+            row = client.call('getPalwSettlement', dict(daaScore=payouts[0]['childDaa']))
+            if chain_identity(client, expected)[1] != stamp or row['sinkDaa'] != block_read(client, dag['sink'])['header']['daaScore']:
+                raise ContextMoved('settlement generation changed')
+            if not row['available'] or not row['settled']:
+                return None
+            rows.append(dict(sink=dag['sink'], settlement=row))
+        if any(row != rows[0] for row in rows):
+            raise ContextMoved('peers have different settlement generations')
+        return rows
+
+    rows = until('native settlement through worker payout', settled)
+    write_new(data / 'receipt-settlement.json', rows)
+    return dict(expected=expected, receiptAudit=audit, payout=payouts[0], settlement=rows[0], peers=len(rows))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
@@ -1006,19 +1109,22 @@ def main():
     parser.add_argument('--isolated-node', type=Path,
                         help='private node executable with operator-controlled heartbeat templates')
     parser.add_argument('--resume-studio', type=Path, help='stopped run with registration complete and no Studio claim sent')
+    parser.add_argument('--resume-settlement', type=Path, help='verify a completed receipt and follow its native payout and settlement')
     parser.add_argument('--resume-claim', type=Path, help='continue the same admitted Studio claim from a stopped run')
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     continuation = None
     if 'studio' in config:
         def continuation(registration, clients, step, logs, executor_bond):
+            if args.resume_settlement is not None:
+                return resume_receipt_settlement(config, args.output, args.resume_settlement, registration, clients, step)
             if args.resume_claim is not None:
                 return resume_admitted_studio(config, args.output, args.resume_claim, registration, clients, step, logs, executor_bond)
             return studio_lifecycle(config, args.output, registration, clients, step, logs, executor_bond)
     print(json.dumps(run(config, args.output, continuation, args.resume_warmup, resume_inventory=args.resume_inventory,
                          resume_tokenizer=args.resume_tokenizer,
                          tokenizer_clock_checkpoint=args.tokenizer_clock_checkpoint, isolated_node=args.isolated_node,
-                         resume_studio=args.resume_studio, resume_claim=args.resume_claim)))
+                         resume_studio=args.resume_studio, resume_claim=args.resume_claim, resume_settlement=args.resume_settlement)))
 
 
 if __name__ == '__main__':
